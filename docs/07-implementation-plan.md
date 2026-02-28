@@ -165,13 +165,13 @@ Context assembly: work item + documentation + repo file trees (depth-filtered). 
 
 ## Phase 8: Implementation Orchestrator (Week 6-7)
 
-Sub-plan dependency ordering via topological sort (cycle detection → `ErrCyclicDependency`). Worktree creation per sub-plan (emits `WorktreeCreated`). Agent sessions spawned with sub-plan + cross-repo plan + docs. Independent sub-plans execute concurrently (`errgroup`). All events forwarded to bus. Per-repo validation is handled by the agent itself, guided by the repo's AGENTS.md which specifies the appropriate build/test commands to run before marking work complete.
+Sub-plan wave scheduling via `BuildWaves` (see `05-orchestration.md` §3): sub-plans with equal `Order` form a wave and run in parallel; waves execute sequentially. Worktree creation per sub-plan (emits `WorktreeCreated`). Agent sessions spawned with sub-plan + cross-repo plan + docs. Independent sub-plans execute concurrently (`errgroup`). All events forwarded to bus. Per-repo validation is handled by the agent itself, guided by the repo's AGENTS.md which specifies the appropriate build/test commands to run before marking work complete.
 
-**Gate:** `{A:[], B:[A], C:[A], D:[B,C]}` → A first, D last. `{A:[B], B:[A]}` → error. Independent sub-plans start within 100ms of each other. Dependent waits. `go test ./internal/orchestrator/... -race`
+**Gate:** `BuildWaves` with `Order` values `[0,0,1]` produces 2 waves: 2 parallel sub-plans then 1. Sub-plans in the same wave start within 100ms of each other. Wave 1 does not start until all wave 0 sub-plans reach `completed`. `go test ./internal/orchestrator/... -race`
 
 ## Phase 9: Foreman + Review Pipeline (Week 7-8)
 
-**Foreman:** monitors agent events for questions (heuristic: `?` suffix or `QUESTION:` prefix). Answers from plan/docs or escalates to human. **Review:** on `SessionCompleted`, diff vs `main/`, spawn review agent, parse `[]Critique{Severity, File, LineRange, Description}`. Major critiques → re-implementation. Cycle limit (default 3) → escalate. Post-review documentation staleness check.
+**Foreman:** receives `SessionEventQuestion` events from the bridge (emitted when the agent calls the `ask_foreman` tool). No text-pattern heuristics — question detection is type-based. Answers from plan/docs or escalates to human. **Review:** on `SessionCompleted`, diff vs `main/`, spawn review agent, parse `[]Critique{Severity, File, LineRange, Description}`. Major critiques → re-implementation. Cycle limit (default 3) → escalate. Post-review documentation staleness check.
 
 **Gate:** Answerable question resolved without human. Unanswerable question escalated. 2 major critiques → re-implement → 0 major → done at round 2. 3 rounds of majors → `escalated`. `go test ./internal/orchestrator/... -race`
 
@@ -284,3 +284,4 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 | Linear API schema changes break project/initiative queries | Low | Medium | Typed response structs catch at compile time, integration tests catch at runtime, graceful degradation (fall back to issues-only scope) |
 | Agent output log growth (unbounded log files for long sessions) | Low | Low | Rolling log segments during session: rotate at 10 MB threshold, rename current log to `session-id.log.N`, open new segment. TUI tailing follows newest segment by tracking which file is active. No correctness impact — disk space only. |
 | go-atomic SQLITE_BUSY retry not yet in isRetryable | Low | Low | go-atomic is a first-party library. Add SQLITE_BUSY (5) and SQLITE_LOCKED (6) to isRetryable() as part of Phase 0. No external dependency risk. |
+| Foreman context degrades gradually from Q&A history | Medium | Medium | Periodic compacted restart: after N questions (configurable, default 20), restart the Foreman session with a summarized FAQ as system prompt instead of full history. Prevents slow context saturation before the hard window limit is hit. Note: compaction is disabled in the bridge (`compaction.enabled: false`), so Go-side restart with summary is the only mitigation. |

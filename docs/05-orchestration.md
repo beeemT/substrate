@@ -359,7 +359,7 @@ func (f *Foreman) Run(ctx context.Context) error {
         err := f.answerOne(ctx, pq)
         if err != nil {
             // session died: re-queue the question and restart the session
-            f.requeueQuestion(pq)
+            f.requeueQuestion(ctx, pq)
             if restartErr := f.restartSession(ctx); restartErr != nil {
                 return restartErr
             }
@@ -368,18 +368,40 @@ func (f *Foreman) Run(ctx context.Context) error {
     }
 }
 
-// requeueQuestion puts the question back at the front of questionCh
-// so the restarted session answers it first.
-func (f *Foreman) requeueQuestion(pq pendingQuestion) {
+// requeueQuestion puts the in-flight question onto questionFront so the
+// restarted session answers it before any new question.
+// The goroutine respects ctx cancellation to avoid leaking on shutdown.
+func (f *Foreman) requeueQuestion(ctx context.Context, pq pendingQuestion) {
     go func() {
         select {
-        case f.questionFront <- pq: // priority channel, drained first
+        case f.questionFront <- pq:
+        case <-ctx.Done():
         }
     }()
 }
 ```
 
-The `Foreman.Run` loop drains `questionFront` before `questionCh` on each iteration (select with priority). The sub-agent's `ask_foreman` tool call remains blocked on `answerCh` throughout the restart; it unblocks only when the restarted Foreman writes to `answerCh`.
+The `Foreman.Run` loop checks `questionFront` first with a non-blocking receive, then falls through to a blocking `select` on both channels. Go `select` has no channel priority, so an explicit non-blocking check is required:
+
+```go
+for {
+    // Drain priority re-queue first.
+    var pq pendingQuestion
+    var ok bool
+    select {
+    case pq, ok = <-f.questionFront:
+    default:
+        select {
+        case pq, ok = <-f.questionCh:
+        case pq, ok = <-f.questionFront:
+        }
+    }
+    if !ok { return nil }
+    // ... answer pq
+}
+```
+
+The sub-agent's `ask_foreman` tool call remains blocked on `answerCh` throughout the restart; it unblocks only when the restarted Foreman writes to `answerCh`.
 
 **Restart protocol (unchanged):**
 1. Detect termination via `Wait()` returning.
@@ -606,17 +628,19 @@ The `shutdown_at` timestamp distinguishes a clean shutdown (timestamp present) f
 ```go
 func (s *OrchestrationService) Shutdown(ctx context.Context) {
     s.mu.Lock()
-    defer s.mu.Unlock()
-
+    // Snapshot active sessions and mark them interrupted while holding the lock.
+    sessions := make([]*activeSession, 0, len(s.activeSessions))
     for _, sess := range s.activeSessions {
         sess.Status = StatusInterrupted
         sess.ShutdownAt = ptr(time.Now())
         s.agents.Update(ctx, sess)
         syscall.Kill(sess.PID, syscall.SIGTERM)
+        sessions = append(sessions, sess)
     }
+    s.mu.Unlock() // Release before blocking wait — prevents deadlock with heartbeat and event handlers.
 
     deadline := time.After(10 * time.Second)
-    for _, sess := range s.activeSessions {
+    for _, sess := range sessions {
         select {
         case <-sess.Done:
         case <-deadline:

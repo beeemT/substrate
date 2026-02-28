@@ -13,7 +13,7 @@ type BaseEvent struct {
     ID        string    // ULID
     Type      EventType
     Timestamp time.Time
-    Workspace string    // workspace slug, empty for global events
+    Workspace string    // workspace ID (ULID from .substrate-workspace), empty for global events; used as workspace_id FK in system_events
 }
 
 type SystemEvent interface {
@@ -31,8 +31,9 @@ type SystemEvent interface {
 | `PlanApproved` | `Plan` | Human accepts plan |
 | `ImplementationStarted` | `WorkItem`, `Plan` | Plan approved, worktrees being created |
 | `PlanRejected` | `Plan`, `Reason string` | Human rejects with feedback |
+| `PlanRevised` | `Plan`, `Feedback string` | Human requests changes; agent produces revised plan |
 | `WorktreeCreating` | `Workspace`, `RepositoryName`, `Branch` | Pre-hook before git-work checkout |
-| `WorktreeCreated` | `Workspace`, `RepositoryName`, `Branch`, `WorktreePath` | Post-hook after checkout |
+| `WorktreeCreated` | `Workspace`, `RepositoryName`, `Branch`, `WorktreePath`, `WorkItemTitle` | Post-hook after checkout |
 | `WorktreeRemoved` | `Workspace`, `RepositoryName`, `Branch` | Worktree removed via git-work rm |
 | `AgentSessionStarted` | `AgentSession` | Agent harness spawned |
 | `AgentSessionCompleted` | `AgentSession`, `Result` | Agent exits 0 |
@@ -61,6 +62,7 @@ const (
     EventPlanApproved           EventType = "plan.approved"
     EventImplementationStarted   EventType = "work_item.implementation_started"
     EventPlanRejected           EventType = "plan.rejected"
+    EventPlanRevised             EventType = "plan.revised"
     EventWorktreeCreating       EventType = "worktree.creating"
     EventWorktreeCreated        EventType = "worktree.created"
     EventWorktreeRemoved        EventType = "worktree.removed"
@@ -127,6 +129,7 @@ func (s *subscriber) Unsubscribe() { s.cancel() }
 type channelEventBus struct {
     mu           sync.RWMutex
     subscribers  map[string]*subscriber
+    preHookSubs  []*subscriber // ordered; used for deterministic pre-hook execution
     repo         EventRepository
     preHookTypes map[EventType]bool
     wg           sync.WaitGroup
@@ -150,22 +153,31 @@ func NewEventBus(repo EventRepository, opts ...BusOption) EventBus {
 }
 
 func (b *channelEventBus) Publish(ctx context.Context, event SystemEvent) error {
-    if err := b.repo.Save(ctx, event); err != nil {
-        return fmt.Errorf("persisting event: %w", err)
-    }
     b.mu.RLock()
     defer b.mu.RUnlock()
     if b.preHookTypes[event.Base().Type] {
-        for _, sub := range b.subscribers {
+        // Pre-hooks run BEFORE persistence. If a pre-hook rejects, nothing is written to SQLite.
+        // Pre-hooks MUST be idempotent: if the process crashes after a pre-hook passes but
+        // before the event is persisted, the operation will be retried on restart and the
+        // pre-hook will run again with the same inputs.
+        for _, sub := range b.preHookSubs {
             if sub.matches(event) {
                 if err := sub.handler(ctx, event); err != nil {
                     return fmt.Errorf("pre-hook %s rejected: %w", sub.id, err)
                 }
             }
         }
+        // All pre-hooks passed; persist now for audit and crash-recovery.
+        if err := b.repo.Save(ctx, event); err != nil {
+            return fmt.Errorf("persisting event: %w", err)
+        }
         return nil
     }
 
+    // Non-pre-hook: persist first, then async fan-out.
+    if err := b.repo.Save(ctx, event); err != nil {
+        return fmt.Errorf("persisting event: %w", err)
+    }
     for _, sub := range b.subscribers {
         if sub.matches(event) {
             select {
@@ -188,6 +200,14 @@ func (b *channelEventBus) subscribe(types map[EventType]bool, handler EventHandl
     }
     b.mu.Lock()
     b.subscribers[sub.id] = sub
+    if sub.types != nil {
+        for t := range sub.types {
+            if b.preHookTypes[t] {
+                b.preHookSubs = append(b.preHookSubs, sub)
+                break
+            }
+        }
+    }
     b.mu.Unlock()
     b.wg.Add(1)
     go func() {
@@ -265,7 +285,7 @@ func (a *LinearAdapter) RegisterHooks(bus EventBus) {
 }
 func (a *GlabAdapter) RegisterHooks(bus EventBus) {
     bus.SubscribeType(EventWorktreeCreated, a.OnEvent)
-    bus.SubscribeType(EventWorktreeCreated, a.OnEvent)
+    bus.SubscribeType(EventWorkItemCompleted, a.OnEvent)
 }
 ```
 ---

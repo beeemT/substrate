@@ -108,10 +108,29 @@ Renders based on the selected session's state. There is no navigation stack. The
 
 > Within `implementing`, the content panel switches to **Agent question** sub-mode when the active `AgentSession.Status` is `waiting_for_answer`, and to **Interruption notice** sub-mode when it is `interrupted`. These are driven by `AgentSessionStatus`, not `WorkItemState`.
 ```go
+type ContentMode int
+
+const (
+    ContentModeEmpty        ContentMode = iota // no session selected
+    ContentModeReadyToPlan                     // ingested: work item ready for planning
+    ContentModePlanning                         // planning: agent running
+    ContentModePlanReview                       // plan_review: awaiting human review
+    ContentModeAwaitingImpl                     // approved: plan approved, awaiting implementation start
+    ContentModeImplementing                     // implementing: agents running
+    ContentModeReviewing                        // reviewing: review agent running
+    ContentModeCompleted                        // completed: all repos passed review
+    ContentModeFailed                           // failed: unrecoverable error
+    ContentModeInterrupted                      // sub-mode of implementing: session interrupted
+    ContentModeQuestion                         // sub-mode of implementing: waiting for human answer
+)
+```
+```go
 type ContentModel struct {
     mode        ContentMode
     // per-mode sub-models
-    planOutput  viewport.Model
+    readyToPlan  viewport.Model   // ingested: static info panel
+    awaitingImpl viewport.Model   // approved: static info panel
+    planOutput   viewport.Model
     planReview  PlanReviewModel
     implementing ImplementingModel
     reviewing   ReviewModel
@@ -223,13 +242,10 @@ type ReviewModel struct {
     activeRepo int
 }
 
-type Critique struct {
-    Severity   string  // "critical", "major", "minor", "nit"
-    File       string
-    Line       int
-    Message    string
-    Suggestion string
-}
+// Critique: use domain.Critique from 01-domain-model.md.
+// Rendering maps: FilePath → display path, Description → message text,
+// LineNumber → optional line indicator, Suggestion → optional fix hint.
+// Severity constants (CritiqueSeverityCritical etc.) map to theme colors.
 ```
 
 **Keys**: `j`/`k` navigate critiques, `Enter` expand/collapse detail+diff, `Tab` switch repo tabs, `r` re-implement, `o` override accept (with confirm).

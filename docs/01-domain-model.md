@@ -73,6 +73,19 @@ type ManualWorkItemInput struct {
 	Description  string          `json:"description"`
 }
 
+// WorkItemEvent is emitted on the channel returned by WorkItemAdapter.Watch.
+type WatchEventType string
+const (
+	WorkItemDiscovered WatchEventType = "discovered" // newly seen issue matching filter
+	WorkItemUpdated    WatchEventType = "updated"    // previously seen issue changed state
+	WatchError         WatchEventType = "error"      // poll error; Err field is set
+)
+
+type WorkItemEvent struct {
+	Type WatchEventType `json:"type"`
+	Item WorkItem       `json:"item,omitempty"`
+	Err  error          `json:"-"`              // non-nil only when Type == WatchError
+}
 type AdapterCapabilities struct {
 	CanWatch     bool             `json:"can_watch"`
 	CanBrowse    bool             `json:"can_browse"`
@@ -173,6 +186,7 @@ type AgentSession struct {
 	PID            *int               `json:"pid"`             // OS process ID for liveness checks
 	StartedAt      *time.Time         `json:"started_at"`
 	CompletedAt    *time.Time         `json:"completed_at"`
+	ShutdownAt     *time.Time         `json:"shutdown_at"`  // set on clean shutdown; nil if process crashed
 	ExitCode       *int               `json:"exit_code"`
 	OwnerInstanceID *string            `json:"owner_instance_id"` // nil until session starts; set to spawning instance's ID
 }
@@ -228,8 +242,11 @@ One review pass over an agent session's output. A session may go through multipl
 ```go
 type ReviewCycle struct {
 	ID              string            `json:"id"`
+	CycleNumber     int               `json:"cycle_number"`
 	AgentSessionID  string            `json:"agent_session_id"`
+	ReimplementationSessionID *string  `json:"reimplementation_session_id"` // nil until reimplementation starts
 	ReviewerHarness string            `json:"reviewer_harness"` // harness used for review
+	Summary         string            `json:"summary"`
 	Status          ReviewCycleStatus `json:"status"`
 	Critiques       []Critique        `json:"critiques"`
 	StartedAt       time.Time         `json:"started_at"`
@@ -253,7 +270,9 @@ type Critique struct {
 	ID            string          `json:"id"`
 	ReviewCycleID string          `json:"review_cycle_id"`
 	FilePath      string          `json:"file_path"`
+	LineNumber   *int            `json:"line_number"`  // nil for file-level critiques
 	Description   string          `json:"description"`
+	Suggestion   string          `json:"suggestion"`   // optional improvement suggestion from review agent
 	Severity      CritiqueSeverity `json:"severity"`
 	Status        CritiqueStatus  `json:"status"`
 }
@@ -327,8 +346,9 @@ stateDiagram-v2
     Ingested --> Planning : work_item.planning_started
     Planning --> PlanReview : work_item.plan_submitted
     PlanReview --> Approved : work_item.plan_approved
-    PlanReview --> Planning : work_item.plan_rejected
-    note right of PlanReview : Human reviews plan.\nCan request changes (-> Planning)\nor approve (-> Approved).
+    PlanReview --> Planning : work_item.plan_changes_requested
+    PlanReview --> Ingested : work_item.plan_rejected
+    note right of PlanReview : Human reviews plan.\nCan request changes (-> Planning),\napprove (-> Approved),\nor reject (-> Ingested).
     Approved --> Implementing : work_item.implementation_started
     Implementing --> Reviewing : work_item.review_started
     Reviewing --> Implementing : work_item.review_critiques_found
@@ -350,7 +370,8 @@ stateDiagram-v2
 | Ingested | Planning | `work_item.planning_started` | Planner invoked, reads repos from `main/` worktrees |
 | Planning | PlanReview | `work_item.plan_submitted` | Plan generation complete |
 | PlanReview | Approved | `work_item.plan_approved` | Human approves via TUI |
-| PlanReview | Planning | `work_item.plan_rejected` | Human requests changes |
+| PlanReview | Planning | `work_item.plan_changes_requested` | Human requests changes — new planning session started |
+| PlanReview | Ingested | `work_item.plan_rejected` | Human rejects plan outright |
 | Approved | Implementing | `work_item.implementation_started` | Worktrees created, agents spawned |
 | Implementing | Reviewing | `work_item.review_started` | All agent sessions completed |
 | Reviewing | Implementing | `work_item.review_critiques_found` | Open critiques require reimplementation |
@@ -448,7 +469,6 @@ erDiagram
 	SubPlan ||--o{ AgentSession : drives
     AgentSession ||--o{ ReviewCycle : reviewed_by
     ReviewCycle ||--o{ Critique : contains
-    AgentSession ||--o{ Question : raises
     AgentSession ||--o{ Question : raises
     Workspace ||--o{ DocumentationSource : references
     Workspace ||--o{ SubstrateInstance : has

@@ -1,0 +1,54 @@
+// Package main is the entry point for the Substrate CLI.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/jmoiron/sqlx"
+	_ "modernc.org/sqlite"
+
+	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/migrations"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	cfgPath := "substrate.toml"
+	if p := os.Getenv("SUBSTRATE_CONFIG"); p != "" {
+		cfgPath = p
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if err := os.MkdirAll(cfg.GlobalDir(), 0o755); err != nil {
+		return fmt.Errorf("creating global directory: %w", err)
+	}
+
+	db, err := sqlx.Open("sqlite", cfg.GlobalDBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	db.MustExec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
+
+	ctx := context.Background()
+	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	fmt.Println("substrate: initialized successfully")
+	return nil
+}

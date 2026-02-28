@@ -164,10 +164,13 @@ Linear work items use a prefixed external ID: `LIN-{teamKey}-{issueNumber}` (e.g
 - `{issueNumber}` is the numeric suffix of the issue identifier (e.g. `identifier = "FOO-123"` → number = `"123"`)
 
 ```go
-func linearExternalID(issue linearIssue) string {
+func linearExternalID(issue linearIssue) (string, error) {
 		// issue.Team.Key = "FOO", issue.Identifier = "FOO-123"
 		parts := strings.SplitN(issue.Identifier, "-", 2)
-		return "LIN-" + issue.Team.Key + "-" + parts[1] // "LIN-FOO-123"
+		if len(parts) != 2 {
+				return "", fmt.Errorf("unexpected Linear identifier format %q: expected TEAM-N", issue.Identifier)
+		}
+		return "LIN-" + issue.Team.Key + "-" + parts[1], nil // "LIN-FOO-123"
 }
 ```
 
@@ -190,6 +193,10 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter domain.WorkItemFilter)
                 var issues []domain.WorkItem
                 var err error
                 if len(filter.ExternalIDs) > 0 {
+                // NOTE: filter.ExternalIDs are substrate-format ("LIN-FOO-123").
+                // fetchIssuesByIDs must strip the "LIN-{teamKey}-" prefix and query
+                // Linear by identifier ("FOO-123") or by internal UUID (stored at ingestion time),
+                // NOT by passing the substrate ExternalID directly to issue(id: $id).
                     issues, err = a.fetchIssuesByIDs(ctx, filter.ExternalIDs)
                 } else {
                     issues, err = a.fetchAssignedIssues(ctx)
@@ -330,12 +337,40 @@ type GlabAdapter struct {
 **WorktreeCreated** -- create draft MR from worktree directory:
 ```sh
 glab mr create --source-branch <branch> --target-branch <default> \
-  --title "<from-plan>" --draft --push --yes \
+  --title "<WorkItemTitle; fallback: title-cased slug from branch name>" --draft --push --yes \
   --reviewer @alice --reviewer @bob --label substrate
 ```
 
 **WorkItemCompleted** -- mark MR ready: `glab mr update <id> --draft=false`.
 
+
+```go
+func (a *GlabAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
+    switch e := event.(type) {
+    case WorktreeCreatedEvent:
+        // Prefer the plan title carried in the event; fall back to a human-readable
+        // title derived from the branch slug (e.g. "sub-LIN-FOO-123-fix-auth-flow" →
+        // "Fix auth flow [LIN-FOO-123]").
+        title := e.WorkItemTitle
+        if title == "" {
+            title = titleFromBranch(e.Branch) // strips prefix, capitalises slug
+        }
+        return a.createDraftMR(ctx, e.RepositoryName, e.Branch, title)
+    case WorkItemCompletedEvent:
+        // Mark all MRs for repos in this work item ready for review.
+        for _, repo := range e.WorkItem.Repos {
+            if err := a.markMRReady(ctx, repo.Branch); err != nil {
+                slog.Warn("failed to mark MR ready", "repo", repo.RepoName, "err", err)
+            }
+        }
+        return nil
+    default:
+        return nil
+    }
+}
+```
+
+`markMRReady` shells out to `glab mr update --source-branch <branch> --draft=false`. Failures are logged at WARN and do not block completion (matching the glab error policy).
 ### Error Policy
 
 glab failures log at WARN and **never block** the workflow. Users can always manage MRs manually.
@@ -467,7 +502,8 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts SessionOpts) (Har
     if workDir == "" { workDir = h.workspaceRoot } // foreman uses workspace root
     var cmd *exec.Cmd
     if runtime.GOOS == "darwin" {
-        profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "/tmp"))(allow file-write* (literal "/dev/null"))`, workDir)
+        sessionTmpDir := fmt.Sprintf("/tmp/substrate-%s", opts.SessionID)
+        profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`, workDir, sessionTmpDir)
         cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, h.bunPath, "run", h.bridgePath)
     } else {
         cmd = exec.CommandContext(ctx, h.bunPath, "run", h.bridgePath)
@@ -560,7 +596,7 @@ let lastAssistantText = "";
 session.subscribe((event: AgentSessionEvent) => {
     const mapped = mapEvent(event);
     if (mapped !== null) {
-        emit({ type: "event", event: mapped });
+        emit(mapped);
     }
     // accumulate text for foreman_proposed / complete emission
     if (event.type === "message_update" && (event as any).assistantMessageEvent?.type === "text_delta") {
@@ -596,9 +632,9 @@ async function runPrompt(text: string): Promise<void> {
     // session.prompt() resolves when the turn is complete
     if (mode === "foreman") {
         const { text: answer, uncertain } = extractConfidence(lastAssistantText);
-        emit({ type: "event", event: { type: "foreman_proposed", text: answer, uncertain } });
+        emit({ type: "foreman_proposed", text: answer, uncertain });
     } else {
-        emit({ type: "event", event: { type: "complete", summary: "Turn completed" } });
+        emit({ type: "complete", summary: "Turn completed" });
     }
 }
 

@@ -44,9 +44,10 @@ type WorkItemRepository interface {
 }
 
 type WorkItemFilter struct {
-    State    *domain.WorkItemState
-    Source   *string
-    Labels   []string
+    WorkspaceID *string
+    State       *domain.WorkItemState
+    Source      *string
+    Labels      []string
     Limit, Offset int
 }
 ```
@@ -57,6 +58,7 @@ type WorkItemFilter struct {
 // workItemRow is unexported. Never leaves this package.
 // Fields use db tags for sqlx automatic scanning.
 type workItemRow struct {
+	WorkspaceID string  `db:"workspace_id"`
 	ID          string  `db:"id"`
 	ExternalID  *string `db:"external_id"`
 	Source      string  `db:"source"`
@@ -74,7 +76,7 @@ type workItemRow struct {
 
 func (r *workItemRow) toDomain() (domain.WorkItem, error) {
 	item := domain.WorkItem{
-		ID: r.ID, Source: r.Source, Title: r.Title,
+		ID: r.ID, WorkspaceID: r.WorkspaceID, Source: r.Source, Title: r.Title,
 		State: domain.WorkItemState(r.State),
 		CreatedAt: mustParseTime(r.CreatedAt), UpdatedAt: mustParseTime(r.UpdatedAt),
 	}
@@ -115,6 +117,10 @@ func (r WorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, erro
 func (r WorkItemRepo) List(ctx context.Context, filter WorkItemFilter) ([]domain.WorkItem, error) {
 	query := `SELECT * FROM work_items WHERE 1=1`
 	args := map[string]any{}
+	if filter.WorkspaceID != nil {
+		query += ` AND workspace_id = :workspace_id`
+		args["workspace_id"] = *filter.WorkspaceID
+	}
 	if filter.State != nil {
 		query += ` AND state = :state`
 		args["state"] = string(*filter.State)
@@ -147,10 +153,10 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 	row := rowFromWorkItem(item)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO work_items
-		 (id, external_id, source, source_scope, title, description, assignee_id,
+		 (id, workspace_id, external_id, source, source_scope, title, description, assignee_id,
 		  state, labels, source_item_ids, metadata, created_at, updated_at)
 		 VALUES
-		 (:id, :external_id, :source, :source_scope, :title, :description, :assignee_id,
+		 (:id, :workspace_id, :external_id, :source, :source_scope, :title, :description, :assignee_id,
 		  :state, :labels, :source_item_ids, :metadata, :created_at, :updated_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create work item %s: %w", item.ID, err)
@@ -166,7 +172,11 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 All repos are grouped into a `Resources` struct, instantiated together via `ResourcesFactory`. When business logic calls `transacter.Transact`, the factory creates every repo bound to the same `*sqlx.Tx`.
 
 ```go
+// Resources groups all transaction-bound repos AND services constructed from them.
+// Every field is bound to the same *sqlx.Tx; business logic calls service methods
+// directly inside Transact — state-machine guards run transactionally.
 type Resources struct {
+	// Repositories (transaction-bound)
 	WorkItems  WorkItemRepo
 	Plans      PlanRepo
 	SubPlans   SubPlanRepo
@@ -176,6 +186,12 @@ type Resources struct {
 	Docs       DocumentationRepo
 	Events     EventRepo
 	Instances  InstanceRepo
+	// Services (constructed from the transaction-bound repos above).
+	// Business logic calls these; repos are an implementation detail.
+	PlanSvc     *service.PlanService
+	WorkItemSvc *service.WorkItemService
+	SessionSvc  *service.SessionService
+	ReviewSvc   *service.ReviewService
 }
 
 func ResourcesFactory(
@@ -183,16 +199,25 @@ func ResourcesFactory(
 	_ *generic.Transacter[generic.SQLXRemote, Resources],
 	tx generic.SQLXRemote,
 ) (Resources, error) {
+	plans    := NewPlanRepo(tx)
+	subPlans := NewSubPlanRepo(tx)
+	workItems := NewWorkItemRepo(tx)
+	sessions := NewSessionRepo(tx)
+	reviews  := NewReviewRepo(tx)
 	return Resources{
-		WorkItems:  NewWorkItemRepo(tx),
-		Plans:      NewPlanRepo(tx),
-		SubPlans:   NewSubPlanRepo(tx),
+		WorkItems:  workItems,
+		Plans:      plans,
+		SubPlans:   subPlans,
 		Workspaces: NewWorkspaceRepo(tx),
-		Sessions:   NewSessionRepo(tx),
-		Reviews:    NewReviewRepo(tx),
+		Sessions:   sessions,
+		Reviews:    reviews,
 		Docs:       NewDocumentationRepo(tx),
 		Events:     NewEventRepo(tx),
 		Instances:  NewInstanceRepo(tx),
+		PlanSvc:    service.NewPlanService(plans, subPlans),
+		WorkItemSvc: service.NewWorkItemService(workItems),
+		SessionSvc: service.NewSessionService(sessions),
+		ReviewSvc:  service.NewReviewService(reviews),
 	}, nil
 }
 ```
@@ -244,7 +269,7 @@ func (s *PlanService) SubmitForReview(ctx context.Context, planID string) (domai
 }
 
 // Approve: guards pending_review -> approved. Same fetch-guard-transition-persist pattern.
-// Reject:  guards pending_review -> revision. Sets feedback, bumps version.
+// Reject:  guards pending_review -> rejected. Resets work item to Ingested.
 // AttachSubPlan: sets PlanID + timestamps, delegates to subPlans.Create().
 ```
 
@@ -254,7 +279,7 @@ State transitions are explicit and guarded. The service delegates persistence to
 
 **Rules:** (1) Composes multiple services into workflows. (2) Orchestrates sequencing, error handling, rollback. (3) Emits system events via `EventService` (see `03-event-system.md`). (4) Invokes adapter hooks (Linear status, GitLab MR). (5) Owns cross-cutting concerns like "on plan approval → create worktrees → spawn agents."
 
-The Orchestrator receives a `generic.Transacter` and uses `Transact` to wrap multi-repo mutations in a single atomic transaction. Events are emitted **after** the transaction commits to avoid publishing side effects from rolled-back writes.
+The Orchestrator receives a `generic.Transacter` and uses `Transact` to wrap multi-repo mutations in a single atomic transaction. Inside each `Transact` closure, business logic calls **service methods** (available on `Resources`) whose repos are bound to the same transaction — so state-machine guards and persistence are always atomic. Events are emitted **after** the transaction commits.
 
 ```go
 package orchestrator
@@ -266,19 +291,13 @@ type Orchestrator struct {
 	// adapters...
 }
 
-// OnPlanApproved: guard pending_review → approved transition, persist, then emit event.
-// Event emission is outside the transaction to avoid publishing side effects from rolled-back writes.
+// OnPlanApproved delegates to PlanService.Approve inside a transaction so the
+// state-machine guard and the DB write are atomic. Event emission is after commit.
 func (o *Orchestrator) OnPlanApproved(ctx context.Context, planID string) error {
 	var approvedPlan domain.Plan
-	if err := o.transacter.Transact(ctx, func(ctx context.Context, repos Resources) error {
-		plan, err := repos.Plans.Get(ctx, planID)
-		if err != nil { return fmt.Errorf("get plan: %w", err) }
-		if plan.Status != domain.PlanPendingReview {
-			return fmt.Errorf("%w: cannot approve plan with status %s", ErrInvalidTransition, plan.Status)
-		}
-		plan.Status = domain.PlanApproved
-		plan.UpdatedAt = domain.Now()
-		if err := repos.Plans.Update(ctx, plan); err != nil { return err }
+	if err := o.transacter.Transact(ctx, func(ctx context.Context, res Resources) error {
+		plan, err := res.PlanSvc.Approve(ctx, planID) // guards pending_review → approved
+		if err != nil { return err }
 		approvedPlan = plan
 		return nil
 	}); err != nil {
@@ -425,13 +444,13 @@ CREATE INDEX idx_questions_status ON questions(status);
 CREATE TABLE IF NOT EXISTS documentation_sources (
     id           TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    source_type  TEXT NOT NULL CHECK (source_type IN ('repo_embedded','dedicated_repo')),
+    source_type  TEXT NOT NULL CHECK (source_type IN ('repo_embedded','dedicated_repo')), -- domain field: Type; db tag: db:"source_type"
     path         TEXT,
     repo_url     TEXT,
     repository_name TEXT,                  -- for repo_embedded: name of the workspace repo; empty for dedicated_repo
     branch       TEXT,
-    description  TEXT,
-    last_synced  TEXT,
+    description  TEXT,                      -- not in domain struct; excluded from row scanning (use NamedQueryContext, not SELECT *)
+    last_synced  TEXT,                       -- domain field: LastSyncedAt; db tag: db:"last_synced"
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX idx_docs_workspace ON documentation_sources(workspace_id);
@@ -497,8 +516,9 @@ func main() {
 	executor := sqlxexec.NewExecuter(db)
 	transacter := generic.NewTransacter[generic.SQLXRemote, Resources](executor, ResourcesFactory)
 
-	// Services receive transacter (not individual repos)
-	// Business logic uses transacter.Transact for atomic operations
+	// ResourcesFactory creates repos AND services bound to the same *sqlx.Tx.
+	// Business logic (Orchestrator, Pipelines) calls service methods inside Transact:
+	// state-machine guards + persistence are always atomic. No separate service injection.
 
 	// Adapters
 	linearAdapter := linear.NewAdapter(cfg.Linear)
