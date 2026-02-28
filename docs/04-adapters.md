@@ -37,7 +37,7 @@ func (a *LinearAdapter) Capabilities() domain.AdapterCapabilities {
 
 Three selection scopes for TUI session creation, each determining how work items are discovered and aggregated.
 
-**Issues** (`ScopeIssues`): Query issues from the configured team; user selects 1+. On `Resolve`: if 1 issue, WorkItem mirrors it directly. If N issues, title = first issue title + `(+N-1 more)`, description concatenates all with `---` separators, labels merged. Note: the adapter does NOT populate the `Repositories` field -- repos are discovered by the planning agent by scanning the workspace for git-work managed repos.
+**Issues** (`ScopeIssues`): Query issues from the configured team; user selects 1+. On `Resolve`: if 1 issue, WorkItem mirrors it directly. If N issues, title = first issue title + `(+N-1 more)`, description concatenates all with `---` separators, labels merged.
 
 **Projects** (`ScopeProjects`): Query projects accessible to the team; user selects 1+. `Resolve` fetches all non-completed issues from selected projects, builds WorkItem with project context + all issue details in description.
 
@@ -196,7 +196,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter domain.WorkItemFilter)
                 }
                 if err != nil { ch <- domain.WorkItemEvent{Type: domain.WatchError, Err: err}; continue }
                 for _, issue := range issues {
-                    if len(filter.States) > 0 && !filter.States.Contains(issue.State) { continue }
+                    if len(filter.States) > 0 && !slices.Contains(filter.States, issue.State) { continue } // requires Go 1.21+ slices package
                     prev, seen := known[issue.ID]
                     known[issue.ID] = issue.StateID
                     if !seen { ch <- domain.WorkItemEvent{Type: domain.WorkItemDiscovered, Item: issue} }
@@ -245,7 +245,7 @@ Package: `internal/adapter/manual`. Creates work items without an external track
 
 ```go
 type ManualAdapter struct {
-		store WorkspaceStore // for sequential ExternalID generation
+		store WorkspaceStore // *sqlx.Tx from the enclosing Transact call; COUNT and subsequent Create always share the same transaction
 }
 
 func (a *ManualAdapter) Name() string { return "manual" }
@@ -270,7 +270,7 @@ func (a *ManualAdapter) Resolve(ctx context.Context, sel domain.Selection) (doma
 		if err != nil { return domain.WorkItem{}, fmt.Errorf("generate manual ID: %w", err) }
 		return domain.WorkItem{
 				ID:           ulid.Make().String(),
-				ExternalID:   externalID, // "MAN-001", "MAN-002", ...
+				ExternalID:   externalID, // "MAN-1", "MAN-2", ...
 				Source:       "manual",
 				SourceScope:  domain.ScopeManual,
 				Title:        sel.ManualInput.Title,
@@ -281,12 +281,13 @@ func (a *ManualAdapter) Resolve(ctx context.Context, sel domain.Selection) (doma
 		}, nil
 }
 
-// nextManualID returns the next sequential MAN-NNN identifier for this workspace.
-// Counter is derived from the count of existing manual work items in the DB for this workspace.
+// nextManualID returns the next sequential MAN-N identifier for this workspace.
+// store is always a *sqlx.Tx supplied by ResourcesFactory, so this COUNT and
+// the caller's subsequent WorkItem.Create execute in the same transaction.
 func (a *ManualAdapter) nextManualID(ctx context.Context) (string, error) {
 		n, err := a.store.CountManualWorkItems(ctx)
 		if err != nil { return "", err }
-		return fmt.Sprintf("MAN-%03d", n+1), nil
+		return fmt.Sprintf("MAN-%d", n+1), nil
 }
 
 func (a *ManualAdapter) Watch(_ context.Context, _ domain.WorkItemFilter) (<-chan domain.WorkItemEvent, error) {
@@ -299,14 +300,14 @@ func (a *ManualAdapter) Fetch(_ context.Context, id string) (domain.WorkItem, er
     return domain.WorkItem{}, ErrNotSupported // state lives only in substrate DB
 }
 
-func (a *ManualAdapter) UpdateState(_ context.Context, _ string, _ domain.WorkItemState) error { return nil }
+func (a *ManualAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error { return nil }
 func (a *ManualAdapter) AddComment(_ context.Context, _ string, _ string) error              { return nil }
 func (a *ManualAdapter) OnEvent(_ context.Context, _ domain.SystemEvent) error                { return nil }
 ```
 
 No TOML configuration needed. The manual adapter is always available as a built-in option, registered unconditionally at startup in `internal/app/wire.go`.
 
-ExternalID format: `MAN-NNN` (zero-padded 3-digit sequence, e.g. `MAN-001`, `MAN-042`). The counter is derived by counting existing manual work items in the DB for the current workspace — no separate counter column is required.
+ExternalID format: `MAN-N` (incrementing sequence with no fixed width, e.g. `MAN-1`, `MAN-42`, `MAN-1000`). The counter is derived by counting existing manual work items in the DB for the current workspace — no separate counter column is required.
 
 ---
 
@@ -330,10 +331,8 @@ type GlabAdapter struct {
 ```sh
 glab mr create --source-branch <branch> --target-branch <default> \
   --title "<from-plan>" --draft --push --yes \
-  --title "<from-plan>" --draft --push --yes \
   --reviewer @alice --reviewer @bob --label substrate
-
-**BranchPushed** -- MR already exists; optionally update description via `glab mr update`. Otherwise no-op.
+```
 
 **WorkItemCompleted** -- mark MR ready: `glab mr update <id> --draft=false`.
 
@@ -385,7 +384,6 @@ type SessionOpts struct {
     SubPlan              SubPlan
     CrossRepoPlan        string
     SystemPrompt         string
-    AllowCommit          bool
     AllowPush            bool
     DocumentationContext string
 }
@@ -401,18 +399,14 @@ type SubPlan struct {
 type SessionResult struct {
     ExitCode int
     Summary  string
-    Commits  []CommitInfo
     Errors   []string
 }
-
-type CommitInfo struct { SHA, Message string }
 
 type SessionEventType int
 const (
     SessionEventProgress        SessionEventType = iota
     SessionEventQuestion        // sub-agent called ask_foreman
     SessionEventForemanProposed // foreman session produced a proposed answer
-    SessionEventCommit
     SessionEventPush
     SessionEventError
     SessionEventComplete
@@ -442,7 +436,7 @@ Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge 
 
 **Go -> Bun (stdin):**
 ```json
-{"type":"prompt","text":"...","system":"..."}
+{"type":"prompt","text":"..."}
 {"type":"message","text":"..."}          
 {"type":"answer","text":"..."}           
 {"type":"abort"}
@@ -452,13 +446,15 @@ Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge 
 ```json
 {"type":"event","event":{"type":"progress","text":"Reading src/main.go..."}}          
 {"type":"event","event":{"type":"question","question":"...","context":"..."}}   
-{"type":"event","event":{"type":"foreman_proposed","text":"..."}}               
-{"type":"event","event":{"type":"commit","sha":"a1b2c3d","message":"fix: auth flow"}}
+    {"type":"event","event":{"type":"foreman_proposed","text":"...","uncertain":true}}
 {"type":"event","event":{"type":"complete","summary":"3 files, 2 commits"}}       
 ```
 
 The `answer` stdin message resolves a pending `ask_foreman` tool call in an agent session.
 The `foreman_proposed` event carries the Foreman LLM's proposed answer; the orchestrator renders it in the TUI and may loop with further `message` sends before approving.
+`uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain`. The bridge strips the confidence marker line from `text` before emitting.
+
+`mapEvent` returns `null` for unhandled event types; the caller filters before emitting (no null events reach Go).
 
 Stderr is logged but not parsed as protocol.
 
@@ -469,96 +465,159 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts SessionOpts) (Har
     if opts.Mode == "" { opts.Mode = SessionModeAgent }
     workDir := opts.WorktreePath
     if workDir == "" { workDir = h.workspaceRoot } // foreman uses workspace root
-    cmd := exec.CommandContext(ctx, h.bunPath, "run", h.bridgePath)
+    var cmd *exec.Cmd
+    if runtime.GOOS == "darwin" {
+        profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "/tmp"))(allow file-write* (literal "/dev/null"))`, workDir)
+        cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, h.bunPath, "run", h.bridgePath)
+    } else {
+        cmd = exec.CommandContext(ctx, h.bunPath, "run", h.bridgePath)
+    }
     cmd.Dir = workDir
     cmd.Env = append(os.Environ(),
         "SUBSTRATE_BRIDGE_MODE="+string(opts.Mode),
-        "SUBSTRATE_REASONING_LEVEL="+h.cfg.ReasoningLevel,
-        "SUBSTRATE_ALLOW_COMMIT="+strconv.FormatBool(opts.AllowCommit),
-        "SUBSTRATE_ALLOW_PUSH="+strconv.FormatBool(opts.AllowPush))
+        "SUBSTRATE_THINKING_LEVEL="+h.cfg.ThinkingLevel,
+        "SUBSTRATE_ALLOW_PUSH="+strconv.FormatBool(opts.AllowPush),
+        "SUBSTRATE_SYSTEM_PROMPT="+base64.StdEncoding.EncodeToString([]byte(opts.SystemPrompt)))
     stdin, _ := cmd.StdinPipe()
     stdout, _ := cmd.StdoutPipe()
     if err := cmd.Start(); err != nil { return nil, fmt.Errorf("start bridge: %w", err) }
-    s := &ohMyPiSession{id: uuid.NewString(), cmd: cmd, stdin: stdin, events: make(chan SessionEvent, 64)}
+    s := &ohMyPiSession{id: opts.SessionID, cmd: cmd, stdin: stdin, events: make(chan SessionEvent, 64)}
     go s.readEvents(stdout)
     if opts.Mode == SessionModeAgent {
-        s.send(bridgeMsg{Type: "prompt", Text: opts.SubPlan.RawMarkdown, System: opts.SystemPrompt})
+        s.send(bridgeMsg{Type: "prompt", Text: opts.SubPlan.RawMarkdown})
     }
     // Foreman session receives its first question via SendMessage after startup.
     return s, nil
 }
 ```
 
+### Subprocess Sandboxing
+
+Agent subprocess file writes are restricted to the worktree directory at the OS level, preventing accidental or adversarial modification of `main/` worktrees or other workspace directories.
+
+**macOS (`sandbox-exec`):** The bridge subprocess is wrapped with `sandbox-exec` using a profile that allows reads everywhere but restricts `file-write*` to the session worktree path (shown in the `StartSession` sketch above).
+
+**Linux:** Mount namespaces (`unshare --mount`) with bind mounts achieve equivalent isolation. **Planning sessions** (no worktree) restrict writes to the `.substrate/sessions/<id>/` scratch directory only. **Review and foreman sessions** use `toolNames: ["read", "grep", "find"]` — no write tools are registered, making sandboxing redundant but retained for defence-in-depth.
+
+Network-level git remote policy (preventing `git push origin HEAD:main`) is enforced by remote branch protection rules, not by Substrate. Substrate sets the agent's working directory to the feature worktree; `git push` from that worktree pushes only the feature branch.
+
 ```typescript
-import { createAgentSession, SessionManager, type AgentEvent } from "@anthropic-ai/pi-coding-agent";
+import {
+    createAgentSession,
+    SessionManager,
+    Settings,
+    type AgentSessionEvent,
+    type CustomTool,
+} from "@oh-my-pi/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
 
-const mode           = process.env.SUBSTRATE_BRIDGE_MODE    ?? "agent";     // "agent" | "foreman"
-const reasoningLevel = process.env.SUBSTRATE_REASONING_LEVEL ?? "xhigh";
-const allowCommit    = process.env.SUBSTRATE_ALLOW_COMMIT   === "true";
+const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";  // "agent" | "foreman"
+const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL ?? "xhigh";
+const systemPromptEnv = process.env.SUBSTRATE_SYSTEM_PROMPT ?? "";
+const systemPrompt = systemPromptEnv
+    ? Buffer.from(systemPromptEnv, "base64").toString("utf-8")
+    : undefined;
 
-const agentTools = mode === "agent"
+const agentToolNames = mode === "agent"
     ? ["read", "grep", "find", "edit", "write", "bash"]
-    : ["read", "grep", "find"]; // foreman: read-only, no write/bash/commits
+    : ["read", "grep", "find"]; // foreman and review: read-only, no write/bash
 
-const session = await createAgentSession(SessionManager.inMemory(), {
-    reasoningLevel,
-    allowModelPromotion: false, // disabled for ALL modes — no silent context window expansion
-    // Foreman: also disable auto-compaction; on context full, terminate cleanly and restart
-    // with the amended plan (including FAQ). Agent sessions (planning + sub-agents) allow
-    // auto-compaction; planning continuity is handled via plan-draft.md.
-    ...(mode === "foreman" && {
-        allowAutoCompaction: false,
+// ask_foreman tool: only registered in agent mode.
+// Blocks until the orchestrator sends {type:"answer"} on stdin.
+let pendingAnswerResolve: ((text: string) => void) | null = null;
+
+const askForemanTool: CustomTool = {
+    name: "ask_foreman",
+    description: "Ask the foreman a question you cannot resolve from the plan or codebase.",
+    parameters: Type.Object({
+        question: Type.String({ description: "The question" }),
+        context:  Type.Optional(Type.String({ description: "Surrounding context from your work" })),
     }),
-    // Note: exact option names confirmed during Phase 0 oh-my-pi SDK integration.
+    execute: async (_toolCallId, args) => {
+        emit({ type: "question", question: args.question, context: args.context ?? "" });
+        const answer = await new Promise<string>(resolve => { pendingAnswerResolve = resolve; });
+        return answer;
+    },
+};
+
+const { session } = await createAgentSession({
+    cwd: process.cwd(),
+    sessionManager: mode === "foreman" ? SessionManager.inMemory() : SessionManager.create(process.cwd()),
+    thinkingLevel: thinkingLevel as any,
+    toolNames: agentToolNames,
+    spawns: "",         // prevent agent from spawning unmonitored sub-agents
+    enableMCP: false,
+    systemPrompt,
+    customTools: mode === "agent" ? [askForemanTool] : [],
+    ...(mode === "foreman" && {
+        settings: Settings.isolated({ "compaction.enabled": false }),
+    }),
 });
 
-// ask_foreman tool: agent mode only. Blocks until substrate sends {type:"answer"} on stdin.
-let pendingAnswerResolve: ((text: string) => void) | null = null;
-if (mode === "agent") {
-    registerTool("ask_foreman", async (args: { question: string; context: string }) => {
-        emit({ type: "question", question: args.question, context: args.context });
-        return new Promise<string>(resolve => { pendingAnswerResolve = resolve; });
-    });
-}
+let lastAssistantText = "";
+
+session.subscribe((event: AgentSessionEvent) => {
+    const mapped = mapEvent(event);
+    if (mapped !== null) {
+        emit({ type: "event", event: mapped });
+    }
+    // accumulate text for foreman_proposed / complete emission
+    if (event.type === "message_update" && (event as any).assistantMessageEvent?.type === "text_delta") {
+        lastAssistantText += (event as any).assistantMessageEvent.delta;
+    }
+});
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", async (line: string) => {
     const msg = JSON.parse(line);
-    if (msg.type === "abort")   { await session.dispose(); process.exit(0); }
-    if (msg.type === "answer")  { pendingAnswerResolve?.(msg.text); pendingAnswerResolve = null; return; }
-    if (msg.type === "prompt" || msg.type === "message") await runPrompt(msg.text, msg.system);
+    if (msg.type === "abort") { process.exit(0); }
+    if (msg.type === "answer") { pendingAnswerResolve?.(msg.text); pendingAnswerResolve = null; return; }
+    if (msg.type === "prompt" || msg.type === "message") {
+        await runPrompt(msg.text);
+    }
 });
 
-async function runPrompt(text: string, system?: string) {
-    const stream = session.prompt(text, { systemPrompt: system, toolNames: agentTools });
-    for await (const event of stream) emit(mapEvent(event));
-    // In foreman mode, each completed turn is a proposed answer.
-    if (mode === "foreman") emit({ type: "foreman_proposed", text: await getLastAssistantText(stream) });
-    else emit({ type: "complete", summary: "Prompt finished" });
+function extractConfidence(text: string): { text: string; uncertain: boolean } {
+    const lines = text.split("\n");
+    const last = lines[lines.length - 1].trim();
+    if (last === "CONFIDENCE: high") {
+        return { text: lines.slice(0, -1).join("\n").trimEnd(), uncertain: false };
+    }
+    if (last === "CONFIDENCE: uncertain") {
+        return { text: lines.slice(0, -1).join("\n").trimEnd(), uncertain: true };
+    }
+    return { text, uncertain: true }; // missing marker → conservative escalation
 }
 
-function mapEvent(e: AgentEvent): object {
-    if (e.type === "message_update") return { type: "progress", text: e.delta };
-    if (e.type === "tool_execution_start") return { type: "progress", text: `tool: ${e.toolName}` };
-    if (e.type === "tool_execution_end" && allowCommit && e.toolName === "bash"
-        && e.args?.command?.startsWith("git commit"))
-        return { type: "commit", sha: "pending", message: e.args.command };
-    return { type: "progress", text: e.type };
+async function runPrompt(text: string): Promise<void> {
+    lastAssistantText = "";
+    await session.prompt(text, { expandPromptTemplates: false });
+    // session.prompt() resolves when the turn is complete
+    if (mode === "foreman") {
+        const { text: answer, uncertain } = extractConfidence(lastAssistantText);
+        emit({ type: "event", event: { type: "foreman_proposed", text: answer, uncertain } });
+    } else {
+        emit({ type: "event", event: { type: "complete", summary: "Turn completed" } });
+    }
+}
+
+function mapEvent(e: AgentSessionEvent): object | null {
+    if (e.type === "message_update" && (e as any).assistantMessageEvent?.type === "text_delta")
+        return { type: "progress", text: (e as any).assistantMessageEvent.delta };
+    if (e.type === "tool_execution_start")
+        return { type: "progress", text: `tool: ${(e as any).toolName}` };
+    return null; // filtered by caller before emitting
 }
 
 function emit(event: object) { process.stdout.write(JSON.stringify({ type: "event", event }) + "\n"); }
 ```
 
-> **Note:** `getLastAssistantText` reads the accumulated assistant message from the stream.
-> The exact oh-my-pi API for `reasoningLevel` and the `registerTool` signature are confirmed during
-> Phase 0 integration; the shape above reflects intent.
-
 ```toml
 [adapters.ohmypi]
 bun_path        = "bun"
 bridge_path     = "scripts/omp-bridge.ts"
-reasoning_level = "xhigh"  # oh-my-pi reasoning level; applied to all sessions (sub-agents + foreman)
+thinking_level = "xhigh"  # oh-my-pi thinkingLevel; applied to all sessions (sub-agents + foreman)
                             # valid values are defined by oh-my-pi (e.g. xhigh, high, medium)
                             # maps to model-specific settings (extended thinking budget, etc.)
 ```
@@ -592,7 +651,6 @@ type DocumentationSource interface {
     Fetch(ctx context.Context, opts DocFetchOpts) ([]Document, error)
     Search(ctx context.Context, query string) ([]DocumentMatch, error)
     Sync(ctx context.Context) error
-    CheckStale(ctx context.Context, changes []FileChange) ([]StaleDoc, error)
 }
 
 type DocFetchOpts struct {
@@ -617,8 +675,6 @@ type DocumentMatch struct {
     Score     float64
 }
 
-type FileChange struct { RepoName, FilePath, ChangeType string }
-type StaleDoc struct { Document Document; Reason string; RelatedFiles []string }
 ```
 
 ### RepoEmbeddedSource
@@ -653,4 +709,4 @@ globs     = ["**/*.md"]
 
 ### Planning Integration & Registration
 
-All sources are synced, fetched, and concatenated (with `--- path ---` boundaries) into the planner's context. Sub-plans receive only docs filtered by `RepoName` and keyword matching. After implementation, `CheckStale` is called with changed files; `StaleDoc` results emit `DocumentationStale` events routed to work item adapter and TUI. Adapters are wired at startup in `internal/app/wire.go` based on config. Domain logic depends only on interfaces -- no adapter is hard-coded.
+All sources are synced, fetched, and concatenated (with `--- path ---` boundaries) into the planner's context. Sub-plans receive only docs filtered by `RepoName` and keyword matching. After implementation, a short documentation harness session (foreman mode, read-only tools) is spawned with the list of changed files and documentation sources as context; the agent determines whether any docs are stale and optionally updates them. Results are reported in the completion summary as advisory info and do not block completion. Adapters are wired at startup in `internal/app/wire.go` based on config. Domain logic depends only on interfaces -- no adapter is hard-coded.

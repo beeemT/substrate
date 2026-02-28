@@ -45,7 +45,6 @@ type SystemEvent interface {
 | `ReviewCompleted` | `ReviewCycle` | Review passes, no critiques |
 | `CritiquesFound` | `ReviewCycle`, `[]Critique` | Review produces critiques |
 | `ReimplementationStarted` | `AgentSession`, `[]Critique` | Re-impl session spawned |
-| `BranchPushed` | `Workspace`, `RepositoryName`, `Branch`, `Remote` | Branch pushed to remote |
 | `DocumentationStale` | `DocumentationSource`, `Reason` | Impl diverged from docs |
 | `WorkItemCompleted` | `WorkItem` | All repos pass review |
 | `WorkItemFailed` | `WorkItem`, `Error string` | Unrecoverable error in any phase |
@@ -76,7 +75,6 @@ const (
     EventReviewCompleted        EventType = "review.completed"
     EventCritiquesFound         EventType = "review.critiques_found"
     EventReimplementationStarted EventType = "reimplementation.started"
-    EventBranchPushed           EventType = "branch.pushed"
     EventDocumentationStale     EventType = "documentation.stale"
     EventWorkItemCompleted      EventType = "work_item.completed"
     EventWorkItemFailed          EventType = "work_item.failed"
@@ -111,7 +109,7 @@ type EventBus interface {
 
 ### Implementation
 
-The bus is in-process, no external broker. Each subscriber gets a buffered channel (cap 64). SQLite persistence is the first step in `Publish`, so events survive crashes. Pre-hook events run handlers synchronously; post-hook events fan out to channels asynchronously.
+The bus is in-process, no external broker. Each subscriber gets a buffered channel (cap 256). SQLite persistence is the first step in `Publish`, so events survive crashes. Pre-hook events run handlers synchronously; post-hook events fan out to channels asynchronously.
 
 ```go
 type subscriber struct {
@@ -132,11 +130,23 @@ type channelEventBus struct {
     repo         EventRepository
     preHookTypes map[EventType]bool
     wg           sync.WaitGroup
+    onDrop       func(subscriberID string, event SystemEvent) // nil = log only; set by TUI to enqueue a warning toast
 }
 
-func NewEventBus(repo EventRepository) EventBus {
-    return &channelEventBus{subscribers: make(map[string]*subscriber), repo: repo,
-        preHookTypes: map[EventType]bool{EventWorktreeCreating: true}}
+type BusOption func(*channelEventBus)
+
+func WithDropHandler(fn func(subscriberID string, event SystemEvent)) BusOption {
+    return func(b *channelEventBus) { b.onDrop = fn }
+}
+
+func NewEventBus(repo EventRepository, opts ...BusOption) EventBus {
+    b := &channelEventBus{
+        subscribers:  make(map[string]*subscriber),
+        repo:         repo,
+        preHookTypes: map[EventType]bool{EventWorktreeCreating: true},
+    }
+    for _, o := range opts { o(b) }
+    return b
 }
 
 func (b *channelEventBus) Publish(ctx context.Context, event SystemEvent) error {
@@ -162,6 +172,9 @@ func (b *channelEventBus) Publish(ctx context.Context, event SystemEvent) error 
             case sub.ch <- event:
             default:
                 slog.Warn("event dropped", "subscriber", sub.id, "event", event.Base().Type)
+                if b.onDrop != nil {
+                    b.onDrop(sub.id, event)
+                }
             }
         }
     }
@@ -171,7 +184,7 @@ func (b *channelEventBus) subscribe(types map[EventType]bool, handler EventHandl
     ctx, cancel := context.WithCancel(context.Background())
     sub := &subscriber{
         id: ulid.Make().String(), types: types,
-        ch: make(chan SystemEvent, 64), handler: handler, cancel: cancel,
+        ch: make(chan SystemEvent, 256), handler: handler, cancel: cancel,
     }
     b.mu.Lock()
     b.subscribers[sub.id] = sub
@@ -179,15 +192,27 @@ func (b *channelEventBus) subscribe(types map[EventType]bool, handler EventHandl
     b.wg.Add(1)
     go func() {
         defer b.wg.Done()
+        defer func() {
+            b.mu.Lock()
+            delete(b.subscribers, sub.id)
+            b.mu.Unlock()
+        }()
         for {
             select {
             case <-ctx.Done(): return
             case evt := <-sub.ch:
-                hCtx, hCancel := context.WithTimeout(ctx, 30*time.Second)
-                if err := handler(hCtx, evt); err != nil {
-                    slog.Error("handler failed", "sub", sub.id, "err", err)
-                }
-                hCancel()
+                func() {
+                    defer func() {
+                        if r := recover(); r != nil {
+                            slog.Error("handler panic recovered", "sub", sub.id, "panic", r)
+                        }
+                    }()
+                    hCtx, hCancel := context.WithTimeout(ctx, 30*time.Second)
+                    defer hCancel()
+                    if err := handler(hCtx, evt); err != nil {
+                        slog.Error("handler failed", "sub", sub.id, "err", err)
+                    }
+                }()
             }
         }
     }()
@@ -220,11 +245,11 @@ type EventRepository interface {
 
 ```sql
 CREATE TABLE system_events (
-    id TEXT PRIMARY KEY, type TEXT NOT NULL, workspace TEXT,
+    id TEXT PRIMARY KEY, type TEXT NOT NULL, workspace_id TEXT REFERENCES workspaces(id),
     payload TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX idx_events_type ON system_events(type);
-CREATE INDEX idx_events_workspace ON system_events(workspace);
+CREATE INDEX idx_events_workspace ON system_events(workspace_id);
 ```
 ---
 ## 3. Hook Mechanism
@@ -240,27 +265,28 @@ func (a *LinearAdapter) RegisterHooks(bus EventBus) {
 }
 func (a *GlabAdapter) RegisterHooks(bus EventBus) {
     bus.SubscribeType(EventWorktreeCreated, a.OnEvent)
-    bus.SubscribeType(EventBranchPushed, a.OnEvent)
+    bus.SubscribeType(EventWorktreeCreated, a.OnEvent)
 }
 ```
 ---
 ## 4. Work Item Adapter Interface
 
 ```go
-type WorkItemState string
+type TrackerState string
 
 const (
-    WorkItemStateTodo       WorkItemState = "todo"
-    WorkItemStateInProgress WorkItemState = "in_progress"
-    WorkItemStateInReview   WorkItemState = "in_review"
-    WorkItemStateDone       WorkItemState = "done"
+    TrackerStateTodo       TrackerState = "todo"
+    TrackerStateInProgress TrackerState = "in_progress"
+    TrackerStateInReview   TrackerState = "in_review"
+    TrackerStateDone       TrackerState = "done"
 )
 
 type WorkItemFilter struct {
-    ProjectIDs []string
-    States     []WorkItemState
-    Labels     []string
-    AssigneeID string
+    ExternalIDs []string      // filter by specific external IDs (e.g. "LIN-FOO-123")
+    ProjectIDs  []string
+    States      []TrackerState
+    Labels      []string
+    AssigneeID  string
 }
 
 type WorkItemAdapter interface {
@@ -276,7 +302,7 @@ type WorkItemAdapter interface {
 
     // External tracker mutations
     Fetch(ctx context.Context, externalID string) (WorkItem, error)
-    UpdateState(ctx context.Context, externalID string, state WorkItemState) error
+    UpdateState(ctx context.Context, externalID string, state TrackerState) error
     AddComment(ctx context.Context, externalID string, body string) error
 
     // System event hooks
@@ -290,7 +316,7 @@ The adapter methods serve distinct roles:
 - `ListSelectable` + `Resolve` is the interactive selection path: the TUI calls `ListSelectable` to populate a searchable list, then `Resolve` to aggregate selections into a `WorkItem`.
 - `Watch` is the reactive auto-assignment path, independent of interactive selection.
 - Adapters that lack browsing return `ErrNotSupported` from `ListSelectable`.
-- `OnEvent` dispatches via type switch. `UpdateState` maps `WorkItemState` to Linear's state IDs (configured per-project in TOML). `AddComment` creates an `IssueComment` via GraphQL mutation.
+- `OnEvent` dispatches via type switch. `UpdateState` maps `TrackerState` to Linear's state IDs (configured per-project in TOML). `AddComment` creates an `IssueComment` via GraphQL mutation.
 
 See `01-domain-model.md` for the full type definitions of `AdapterCapabilities`, `ListOpts`, `ListResult`, `Selection`, and `SelectableItem`.
 
@@ -307,13 +333,13 @@ func (a *LinearAdapter) Capabilities() AdapterCapabilities {
 func (a *LinearAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
     switch e := event.(type) {
     case PlanApprovedEvent:
-        if err := a.UpdateState(ctx, e.Plan.WorkItemID, WorkItemStateInProgress); err != nil {
+        if err := a.UpdateState(ctx, e.Plan.WorkItemID, TrackerStateInProgress); err != nil {
             return err
         }
         return a.AddComment(ctx, e.Plan.WorkItemID,
             fmt.Sprintf("Plan approved. Starting across %d repos.", len(e.Plan.SubPlans)))
     case WorkItemCompletedEvent:
-        return a.UpdateState(ctx, e.WorkItem.ExternalID, WorkItemStateDone)
+        return a.UpdateState(ctx, e.WorkItem.ExternalID, TrackerStateDone)
     default:
         return nil
     }
@@ -340,8 +366,6 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
     switch e := event.(type) {
     case WorktreeCreatedEvent:
         return a.createDraftMR(ctx, e.RepositoryName, e.Branch)
-    case BranchPushedEvent:
-        return a.updateMRDescription(ctx, e.RepositoryName, e.Branch)
     default:
         return nil
     }
@@ -407,4 +431,4 @@ sequenceDiagram
 
 **Single `OnEvent` dispatch.** Adapters register for specific types via `SubscribeType`. Adding event types never changes adapter interfaces.
 
-**Buffer size 64.** Conservative. Dropped-event warnings signal slow handlers. Preferable to unbounded memory growth.
+**Buffer size 256.** Conservative but generous. Dropped-event warnings (`slog.Warn`) signal pathologically slow handlers. When an `onDrop` handler is registered (the TUI does this), a warning toast is enqueued: e.g. `"Linear update skipped — event queue full"`. Preferable to unbounded memory growth.

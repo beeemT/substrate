@@ -8,7 +8,9 @@ Covers the full lifecycle: planning, approval, implementation, oversight, review
 
 Triggered when a work item enters the `Planning` state.
 
-**Flow:** `WorkItemReady → PreflightCheck → DiscoverRepos → BuildContext → RunPlanningAgent → ReadPlanDraft → ParseOutput → ValidateRepoNames → PersistDraft → PlanGenerated`
+**Flow:** `WorkItemReady → PullMainWorktrees → PreflightCheck → DiscoverRepos → BuildContext → RunPlanningAgent → ReadPlanDraft → ParseOutput → ValidateRepoNames → PersistDraft → PlanGenerated`
+
+**0. Pull main worktrees.** Before discovery, run `git pull --ff-only` in the `main/` worktree of every git-work managed repo found in the workspace. This ensures planning operates on the current default branch state. If a pull fails (e.g. upstream conflict), surface as a workspace health warning requiring acknowledgement — do not fail hard. Continue with whatever state is present.
 
 **a. Pre-flight workspace check.** Scan all direct child directories of the workspace root. For each:
 - **git-work initialized** (`.bare/` present) → will be discovered in step b; no action
@@ -170,7 +172,7 @@ stateDiagram-v2
 
 **Approve:** Status → Approved. Emit `PlanApproved { PlanID, WorkItemID }`. Triggers implementation.
 
-**Request Changes:** Inline text input for feedback. A **new** planning session is started — the original session is not resumed; it may be long-lived and compacted. The new session receives the current plan text (read from DB) and the human's feedback embedded in its prompt:
+**Request Changes:** Inline text input for feedback. The existing plan record is updated in place (content replaced, version incremented, status reset to `draft`). A new planning session is started — the original session is not resumed. The new session receives the current plan text (read from DB) and the human's feedback embedded in its prompt:
 ```
 The human has requested changes to this plan:
 {{.Feedback}}
@@ -182,7 +184,7 @@ The current plan is below. Apply the requested changes and write your revised pl
 {{.CurrentPlan}}
 ---
 ```
-Output parsed, version incremented, old version retained. Emit `PlanRevised`. TUI refreshes.
+Output parsed. The existing `Plan` record is updated in-place: `OrchestratorPlan` and `SubPlan` contents replaced, `Version` incremented, `UpdatedAt` refreshed. The previous session directory is retained on disk as an audit trail. Emit `PlanRevised`.
 
 **Reject:** Emit `PlanRejected { PlanID, Reason }`. Work item → `Ingested`. Workspace retained.
 
@@ -221,7 +223,7 @@ execution_groups:          →  Wave 0: [backend-api, shared-lib]  parallel
 
 ### Per Sub-Plan Execution
 
-**i. Create worktree.** Branch: `sub/<workItemID>/<short-slug>` where the slug is derived from the work item title (lowercased, spaces→dashes, stripped to `[a-z0-9-]`, consecutive dashes collapsed, leading/trailing dashes trimmed, max 30 chars). The same branch name is used in every repo touched by this work item. git-work converts `/`→`-` for the directory name, so the worktree directory becomes e.g. `sub-LIN-FOO-123-fix-auth-flow`. Before creating, check if worktree already exists via `git-work list` (idempotency guard — see section 7). Emit `WorktreeCreating` (pre-hook, can abort), then `WorktreeCreated` (post-hook, e.g. glab creates draft MR).
+**i. Create worktree.** Branch: `sub-<externalID>-<short-slug>` where `externalID` is `WorkItem.ExternalID` (e.g. `LIN-FOO-123` or `MAN-001`) and the slug is derived from the work item title (lowercased, spaces→dashes, stripped to `[a-z0-9-]`, consecutive dashes collapsed, leading/trailing dashes trimmed, max 30 chars). Example: `sub-LIN-FOO-123-fix-auth-flow`. All dashes, no slashes — avoids git ref namespace collisions. The same branch name is used in every repo touched by this work item. Before creating, check if worktree already exists via `git-work list` (idempotency guard — see section 7). Emit `WorktreeCreating` (pre-hook, can abort), then `WorktreeCreated` (post-hook, e.g. glab creates draft MR).
 
 ```go
 cmd := exec.CommandContext(ctx, "git-work", "checkout", "-b", branch)
@@ -234,7 +236,7 @@ cmd.Dir = repoDir
 type AgentSessionConfig struct {
     WorkDir   string         // worktree path
     Prompt    string         // assembled prompt
-    SubPlanID uuid.UUID
+		SubPlanID string
     EventCh   chan AgentEvent // events → orchestrator
     MessageCh chan string     // orchestrator → session
 }
@@ -246,7 +248,7 @@ Each session runs in its own goroutine. Events multiplexed to foreman + orchestr
 
 **iv. On completion:** Emit `AgentSessionCompleted`, trigger review cycle (section 5).
 
-**v. Validation command.** After the session exits, check for `validation_command` in the workspace config (`substrate.toml`) for this repo. If configured, run it in the feature worktree. On non-zero exit: feed `stdout`+`stderr` back to a new agent session as a critique, using the same retry loop as review critiques (section 5). On success or if not configured: proceed to review.
+**v. Build and test validation.** Each repo's `AGENTS.md` is the canonical source for build and test validation instructions. The agent reads `AGENTS.md` at session start and runs whatever build, format, and test checks are specified there. No separate validation command is configured in `substrate.toml`.
 
 ### Commit Strategy
 
@@ -292,41 +294,37 @@ func (f *Foreman) Ask(q AgentQuestion) <-chan string // enqueues; returns answer
 
 Questions are **serialized**: one at a time through the single persistent session. A sub-agent calling `ask_foreman` blocks on the tool call until the answer arrives on `answerCh`. The second question waits in `questionCh` — it is already blocked on a tool call, so extra wait is inconsequential. The persistent session accumulates full conversation history across all questions: later questions can be answered from earlier Q&A context without any external lookup.
 
-### Three-Tier Resolution
+### Two-Tier Resolution
 
 ```mermaid
 flowchart TD
-    Q[Question arrives] --> T1[Tier 1: plan entity lookup]
-    T1 --> Hit{Direct match?}
-    Hit -->|Yes| AutoT1[Auto-answer, no FAQ entry]
-    Hit -->|No| T2[Tier 2: Foreman LLM turn]
-    T2 --> Conf{Confidence?}
-    Conf -->|high| AutoT2[Auto-answer, append to FAQ]
-    Conf -->|uncertain| T3[Tier 3: surface to human]
-    T3 --> Loop[Human ↔ Foreman back-and-forth]
+    Q[Question arrives] --> Foreman[Foreman LLM turn]
+    Foreman --> Conf{Confidence?}
+    Conf -->|high| Auto[Auto-answer, append to FAQ]
+    Conf -->|uncertain| Human[Surface to human]
+    Human --> Loop[Human ↔ Foreman back-and-forth]
     Loop --> Approve[Human approves]
     Approve --> Forward[Send answer to sub-agent, append to FAQ]
 ```
 
-**Tier 1 — Plan text lookup (synchronous, no LLM)**
+**Foreman — LLM answer (persistent session)**
 
-At plan approval time, build an in-memory entity index from the plan: endpoint paths, interface names, shared contracts, config keys, type definitions — anything explicitly specified in the orchestration or sub-plan sections. On question arrival, extract entities from the question and look them up. A direct match with surrounding context → auto-answer with cited quote. No session turn consumed, no FAQ entry (the answer already exists in the plan).
-
-**Tier 2 — Foreman LLM (persistent session)**
-
-For questions tier 1 misses: send the question as a user message to the persistent Foreman session. The session holds full context: plan + docs + all prior Q&A in conversation history. The Foreman LLM emits a `foreman_proposed` event with its answer.
+Send the question as a user message to the persistent Foreman session. The session holds full context: plan + docs + all prior Q&A in conversation history. The Foreman LLM emits a `foreman_proposed` event with its answer.
 
 The Foreman system prompt instructs explicit confidence signalling:
 ```
 If you can answer with high confidence from the plan and prior Q&A, answer directly.
 If uncertain, state what you do not know and propose your best answer with caveats.
 Do not fabricate facts about the codebase.
+End every response with exactly one line: `CONFIDENCE: high` or `CONFIDENCE: uncertain`.
+Choose `high` only if the answer is fully supported by the plan and prior Q&A.
+Choose `uncertain` if you are extrapolating, guessing, or lack information.
 ```
 
-High-confidence response → auto-answer, append to FAQ.
-Uncertain response → escalate to tier 3.
+Response ends with `CONFIDENCE: high` → auto-answer, append to FAQ.
+Response ends with `CONFIDENCE: uncertain` → escalate to human.
 
-**Tier 3 — Human, with Foreman context**
+**Human escalation**
 
 Surface to the TUI `waiting_question` panel. The human sees the question, the Foreman's proposed answer pre-filled, and the Foreman's stated uncertainty. The human may respond directly or iterate: each human message is forwarded to the Foreman session via `SendMessage()`, producing a refined `foreman_proposed`. This loop continues until the human presses `[A]pprove`. Only on approval is the answer written to `answerCh` and forwarded to the blocked sub-agent. Append to FAQ.
 
@@ -336,45 +334,74 @@ A `faq` section is appended to the live plan document (stored as a DB field, ren
 
 ```go
 type FAQEntry struct {
-    ID             string    `json:"id"          db:"id"`
-    PlanID         string    `json:"plan_id"      db:"plan_id"`
-    AgentSessionID string    `json:"session_id"   db:"agent_session_id"`
-    RepoName       string    `json:"repo_name"    db:"repo_name"`
-    Question       string    `json:"question"     db:"question"`
-    Answer         string    `json:"answer"       db:"answer"`
-    AnsweredBy     string    `json:"answered_by"  db:"answered_by"` // "foreman" | "human"
-    CreatedAt      time.Time `json:"created_at"  db:"created_at"`
+    ID             string    `json:"id"`
+    PlanID         string    `json:"plan_id"`
+    AgentSessionID string    `json:"session_id"`
+    RepoName       string    `json:"repo_name"`
+    Question       string    `json:"question"`
+    Answer         string    `json:"answer"`
+    AnsweredBy     string    `json:"answered_by"` // "foreman" | "human"
+    CreatedAt      time.Time `json:"created_at"`
 }
 ```
 
-Only tier 2 and tier 3 answers produce FAQ entries. Tier 1 answers are omitted — the information is already present in the plan.
+All answered questions produce FAQ entries.
 
 ### Recovery
 
-**Context overflow** is the expected termination path for long implementation runs. Model promotion to a larger context window and auto-compaction are both disabled (see `04-adapters.md`). When the Foreman session reaches full context it terminates cleanly.
+**In-flight question on Foreman restart:** When the Foreman session terminates (context overflow or crash) while actively answering a question (the question was already dequeued from `questionCh`), the orchestrator detects the exit via `Wait()` and re-queues the in-flight question before restarting the Foreman:
 
-Restart protocol:
-1. Orchestrator detects termination via `Wait()` returning (error or clean exit after context full).
-2. Load the **current plan from DB** — which includes all FAQ entries appended — and use it as the initial system prompt for the new session. This is not a special replay step: the FAQ is already part of the plan document, so the current plan state provides complete prior-decision context without injecting synthetic conversation turns.
-3. Send the next question from `questionCh` as the first user message.
-4. No questions are lost — sub-agents remain blocked on their tool calls throughout.
+```go
+func (f *Foreman) Run(ctx context.Context) error {
+    for {
+        pq, ok := <-f.questionCh
+        if !ok { return nil }
+        err := f.answerOne(ctx, pq)
+        if err != nil {
+            // session died: re-queue the question and restart the session
+            f.requeueQuestion(pq)
+            if restartErr := f.restartSession(ctx); restartErr != nil {
+                return restartErr
+            }
+            continue
+        }
+    }
+}
 
-**Actual crash** (unexpected process exit, network failure): handled identically — same restart path, same FAQ-in-plan restoration.
+// requeueQuestion puts the question back at the front of questionCh
+// so the restarted session answers it first.
+func (f *Foreman) requeueQuestion(pq pendingQuestion) {
+    go func() {
+        select {
+        case f.questionFront <- pq: // priority channel, drained first
+        }
+    }()
+}
+```
 
-**Unrecoverable edge case**: a single question whose combined context (plan + FAQ + question text) saturates the full context window. Not realistically expected for any question in a typical implementation run. If it occurs, the session terminates immediately after receiving the question. The orchestrator detects the pattern (3+ immediate restarts on the same question without producing a `foreman_proposed` event), marks the question unanswerable via Foreman, and surfaces it directly to the human as a tier 3 escalation.
+The `Foreman.Run` loop drains `questionFront` before `questionCh` on each iteration (select with priority). The sub-agent's `ask_foreman` tool call remains blocked on `answerCh` throughout the restart; it unblocks only when the restarted Foreman writes to `answerCh`.
+
+**Restart protocol (unchanged):**
+1. Detect termination via `Wait()` returning.
+2. Load the **current plan from DB** (includes all FAQ entries) — use as system prompt for the new session.
+3. Drain `questionFront` first, then `questionCh`, delivering the re-queued question as the first user message.
+4. No questions are lost.
+
+**Unrecoverable edge case:** A question whose combined context (plan + FAQ + question text) saturates the full context window produces 3+ immediate restarts without a `foreman_proposed` event. The orchestrator detects this pattern and escalates directly to the human, bypassing the Foreman entirely.
 ---
 
 ## 5. Review Pipeline
 
 Triggered by `AgentSessionCompleted` for each sub-plan.
 
-**a. Compute diff.** `git diff main...<branch>` in repo's `.bare/` dir. Empty diff → emit `ReviewCompleted` with note, skip.
+**a. Start review agent session.** Spawn a harness session in **foreman mode** (read-only tools: `read`, `grep`, `find`). The session's `cwd` is the repo's feature worktree. The system prompt instructs the agent to compare its worktree against `main`, evaluate against the sub-plan, and output structured critiques or `NO_CRITIQUES`.
 
-**b. Start review agent session.** Prompt:
+The review agent decides for itself what to read: it may run `git diff main`, read specific changed files, or run build/test commands via grep/find. The orchestrator does not dump a diff into the prompt — the agent explores the worktree and forms its own picture.
 
+Prompt template:
 ````
 ## Task
-Review changes against the plan. Identify correctness, completeness, style issues.
+Review the changes in this repository against the plan. Compare the feature branch against `main`. Identify correctness, completeness, and quality issues.
 
 ## Sub-Plan
 {{.SubPlan.Content}}
@@ -382,48 +409,39 @@ Review changes against the plan. Identify correctness, completeness, style issue
 ## Cross-Repo Plan (Orchestration)
 {{.Plan.Orchestration}}
 
-## Documentation Context
-{{range .Documentation}}### {{.Source}}: {{.Title}}
-{{.Content}}
-{{end}}
-
-## Diff
-```diff
-{{.Diff}}
-```
+## FAQ
+{{.Plan.FAQ}}
 
 ## Output Format
-If no issues: "NO_CRITIQUES"
-Otherwise, repeat:
+If no issues (or only nit-level issues that do not require fixing): output exactly `NO_CRITIQUES`.
+Otherwise, for each issue output:
 
 CRITIQUE
-File: <path>
+File: <path or "general">
 Severity: critical | major | minor | nit
 Description: <what is wrong and what to do>
 END_CRITIQUE
 ````
 
-**c. Parse critiques** via regex on `CRITIQUE`/`END_CRITIQUE` markers into domain objects:
+**b. Parse critiques** via regex on `CRITIQUE`/`END_CRITIQUE` markers.
 
-```go
-type Critique struct {
-    ID          uuid.UUID
-    ReviewID    uuid.UUID
-    File        string
-    Severity    CritiqueSeverity // Critical, Major, Minor, Nit
-    Description string
-}
+**c. Correction loop.** If the output neither contains `NO_CRITIQUES` nor any valid `CRITIQUE` blocks, send a correction message to the review session (same session — full history preserved):
 ```
+Your output was not parseable. Output either:
+- Exactly "NO_CRITIQUES" if there are no issues requiring fixes, or
+- One or more CRITIQUE / END_CRITIQUE blocks (see format above).
+Do not include explanatory prose outside these markers.
+```
+Retry up to `plan.max_parse_retries` (default 2). On exhaustion: treat as zero critiques and log a warning.
 
 **d. Decision logic.**
 
 | Condition | Action |
 |---|---|
-| No critiques | `ReviewCompleted` |
-| Only Minor/Nit | `ReviewCompleted` (critiques logged) |
-| Any Major/Critical | `CritiquesFound` → re-implementation |
+| `NO_CRITIQUES` or only `minor`/`nit` | `ReviewCompleted` |
+| Any `major` or `critical` critique | `CritiquesFound` → re-implementation |
 
-Configurable: `review.pass_threshold` = `nit_only` | `minor_ok` (default) | `no_critiques`.
+Configurable via `review.pass_threshold` in `substrate.toml`: `nit_only` \| `minor_ok` (default) \| `no_critiques`.
 
 ### Re-Implementation Loop
 
@@ -442,8 +460,7 @@ New session runs in **same worktree** (builds on previous commits). Prompt: orig
 
 ### Documentation Staleness Check
 
-After final review passes, call `CheckStale` on all `DocumentationSource` implementations with the changed files list. Emit `DocumentationStale` for any flagged docs. Advisory only — does not block completion. Collected and shown in the completion summary.
-
+After final review passes, spawn a short documentation agent session (foreman mode, read-only tools) with the list of changed files and the workspace's documentation sources as context. The agent decides whether any docs are stale and, if so, may update them directly. Results are reported in the completion summary as advisory info — they do not block completion.
 ---
 
 ## 6. Completion
@@ -456,8 +473,8 @@ Triggered when **all** sub-plans pass review.
 
 ```go
 type WorkItemCompleted struct {
-    WorkItemID uuid.UUID
-    PlanID     uuid.UUID
+		WorkItemID string
+		PlanID     string
     Repos      []RepoResult
     StaleDocs  []DocumentationStale
     Duration   time.Duration
@@ -466,7 +483,6 @@ type WorkItemCompleted struct {
 type RepoResult struct {
     RepoName       string
     Branch         string
-    CommitCount    int
     ReviewCycles   int
     CritiquesFixed int
 }
@@ -474,9 +490,9 @@ type RepoResult struct {
 
 **c.** Adapter hooks fire (see `03-event-system.md`): Linear moves to Done, glab marks MRs ready.
 
-**d.** TUI completion summary: work item ID, per-repo stats (branch, commits, review cycles, MR link), stale doc warnings, elapsed time.
+**d.** TUI completion summary: work item ID, per-repo stats (branch, review cycles, MR link), stale doc warnings, elapsed time.
 
-**e.** Workspace retained. Worktrees persist for manual inspection. Cleanup is manual or via retention policy. DB record updated to `Completed`.
+**e.** Workspace retained. Worktrees persist until `gw sync` is run to prune merged or no-longer-needed worktrees. DB record updated to `Completed`.
 
 ---
 
@@ -491,31 +507,41 @@ On TUI launch or `substrate` CLI invocation:
 1. **Find workspace.** Walk from cwd upward looking for `.substrate-workspace` file. If not found, prompt user or error.
 2. **Load workspace.** Read workspace ID (ULID) from `.substrate-workspace`. Look up workspace in `~/.substrate/state.db` by ID.
 3. **Path reconciliation.** If the workspace path stored in DB differs from the current filesystem path (i.e. the user moved the folder), update the DB record. The workspace ID is the stable identity, not the path.
-4. **Scan running sessions.** Query `agent_sessions` where `status = 'running'` and `workspace_id` matches:
-   - For each: check PID liveness via `kill -0 pid`
-   - **PID alive:** Another substrate instance may be running against this workspace. Emit a warning, do not modify the session.
-   - **PID dead:** Process crashed or was killed. Transition session to `interrupted`. Emit `AgentSessionInterrupted { SessionID, SubPlanID, WorktreeDir }`.
+4. **Check instance liveness via lock table.** Query `substrate_instances` for the current workspace:
+   - For each `agent_sessions` row with `status = 'running'`:
+     - If `owner_instance_id` is NULL or its row is missing from `substrate_instances`: transition to `interrupted`.
+     - If `owner_instance_id` row exists but `last_heartbeat` is older than 15 seconds: transition to `interrupted` and DELETE the stale instance row.
+     - If `last_heartbeat` is within 15 seconds: another live instance owns this session. This instance can observe via session log but cannot send inputs. Skip.
 5. **Surface state.** Dashboard shows all work items for this workspace. Interrupted sessions appear with `[R]esume` / `[A]bandon` actions.
 
 ```go
-func (s *OrchestrationService) Reconcile(ctx context.Context, wsID string) error {
-    sessions, _ := s.agents.ListByStatus(ctx, wsID, StatusRunning)
-    for _, sess := range sessions {
-        alive := isProcessAlive(sess.PID)
-        if alive {
-            log.Warn("session %s PID %d still alive, skipping", sess.ID, sess.PID)
-            continue
-        }
-        sess.Status = StatusInterrupted
-        sess.InterruptedAt = time.Now()
-        s.agents.Update(ctx, sess)
-        s.events.Publish(AgentSessionInterrupted{SessionID: sess.ID, SubPlanID: sess.SubPlanID})
+// On startup: register this instance in the lock table.
+func (s *OrchestrationService) RegisterInstance(ctx context.Context, wsID string) error {
+    instance := domain.SubstrateInstance{
+        ID:            ulid.Make().String(),
+        WorkspaceID:   wsID,
+        PID:           os.Getpid(),
+        Hostname:      hostname(),
+        LastHeartbeat: time.Now(),
     }
+    if err := s.instances.Create(ctx, instance); err != nil {
+        return err
+    }
+    s.instanceID = instance.ID
+    go s.heartbeatLoop(ctx) // updates last_heartbeat every 5s
     return nil
 }
 
-func isProcessAlive(pid int) bool {
-    return syscall.Kill(pid, 0) == nil
+func (s *OrchestrationService) heartbeatLoop(ctx context.Context) {
+    ticker := time.NewTicker(5 * time.Second)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ctx.Done(): return
+        case <-ticker.C:
+            _ = s.instances.UpdateHeartbeat(ctx, s.instanceID, time.Now())
+        }
+    }
 }
 ```
 
@@ -523,9 +549,12 @@ func isProcessAlive(pid int) bool {
 
 When a human selects `[R]esume` on an interrupted session:
 
+**Availability:** `[R]esume` is offered when the session's `owner_instance_id` is NULL, the owner instance row is missing from `substrate_instances`, its `last_heartbeat` is older than 15 seconds, or the current instance is the owner.
+
+**On resume:** update `agent_sessions.owner_instance_id` to the current instance ID before spawning the new session.
 1. The old session stays in DB as `interrupted` (audit trail).
 2. Substrate starts a **new** agent harness session in the **same worktree** — the partial work is already on disk.
-3. The new session receives: original sub-plan + orchestration context + resume preamble:
+3. The new session receives: original sub-plan + orchestration context + the last 50 lines from `~/.substrate/sessions/<interrupted-session-id>.log` (prior activity context) + resume preamble:
 
 ```
 You are continuing work on this sub-plan. The worktree may contain partial
@@ -559,7 +588,7 @@ All side-effecting operations must be idempotent to support resume without corru
 | Worktree creation | Before `git-work checkout -b <branch>`, run `git-work list` and check if the worktree already exists. Skip creation if present. |
 | MR creation | glab adapter calls `glab mr list --source-branch <branch>` before creating. If MR exists, skip. |
 | Linear state updates | Setting the same status is inherently a no-op. |
-| Plan persistence | Upsert by plan ID + version. Re-persisting the same version is safe. |
+| Plan persistence | Update in place by plan ID. Version is incremented atomically on each revision. |
 
 ### Graceful Shutdown
 
@@ -570,6 +599,7 @@ On SIGINT, SIGTERM, or TUI quit:
 3. **Wait.** Up to 10 seconds for subprocesses to exit.
 4. **Force kill.** Any surviving subprocesses receive SIGKILL.
 5. **Clean exit.**
+6. **Deregister instance.** DELETE the row from `substrate_instances` for the current instance.
 
 The `shutdown_at` timestamp distinguishes a clean shutdown (timestamp present) from a crash (no timestamp, detected on next startup by finding `running` sessions with dead PIDs).
 
@@ -600,6 +630,12 @@ func (s *OrchestrationService) Shutdown(ctx context.Context) {
 
 The `agent_sessions` table includes a `pid INTEGER` column (nullable). Populated when the subprocess starts, cleared on clean completion. Used exclusively by the startup reconciliation protocol to detect crashed sessions.
 
+
+### Session Logging and Log Rotation
+
+Session log files are written to `~/.substrate/sessions/<session-id>.log`. Log segments are rotated **during** the session: when the current segment exceeds 10 MB, it is compressed and a new segment opened. A maximum of 5 compressed segments are retained per session. After session completion the final segment is compressed. This prevents disk exhaustion on multi-hour sessions.
+
+Plan draft files are written to `<workspace-root>/.substrate/sessions/<session-id>/plan-draft.md` and are not subject to rotation.
 ---
 
 ## Orchestration Service Interface
@@ -619,13 +655,13 @@ type OrchestrationService struct {
     config     *OrchestratorConfig
 }
 
-func (s *OrchestrationService) Run(ctx context.Context, workItemID uuid.UUID) error
-func (s *OrchestrationService) Plan(ctx context.Context, workItemID uuid.UUID) (*Plan, error)
-func (s *OrchestrationService) ApprovePlan(ctx context.Context, planID uuid.UUID) error
-func (s *OrchestrationService) RejectPlan(ctx context.Context, planID uuid.UUID, reason string) error
-func (s *OrchestrationService) RequestPlanChanges(ctx context.Context, planID uuid.UUID, feedback string) (*Plan, error)
-func (s *OrchestrationService) Implement(ctx context.Context, planID uuid.UUID) error
-func (s *OrchestrationService) ReviewSubPlan(ctx context.Context, subPlanID uuid.UUID) (*ReviewResult, error)
+func (s *OrchestrationService) Run(ctx context.Context, workItemID string) error
+func (s *OrchestrationService) Plan(ctx context.Context, workItemID string) (*Plan, error)
+func (s *OrchestrationService) ApprovePlan(ctx context.Context, planID string) error
+func (s *OrchestrationService) RejectPlan(ctx context.Context, planID string, reason string) error
+func (s *OrchestrationService) RequestPlanChanges(ctx context.Context, planID string, feedback string) (*Plan, error)
+func (s *OrchestrationService) Implement(ctx context.Context, planID string) error
+func (s *OrchestrationService) ReviewSubPlan(ctx context.Context, subPlanID string) (*ReviewResult, error)
 ```
 
 `Run` composes phases with event-driven transitions. TUI calls individual methods (`ApprovePlan`, etc.) directly. `Run` is for non-interactive/test execution.

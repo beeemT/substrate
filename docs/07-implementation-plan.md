@@ -31,16 +31,20 @@ migrations/001_initial.sql
 
 ## Phase 0: Project Bootstrap (Week 1)
 
-Go module init, scaffold all packages, dependencies (`jmoiron/sqlx`, `modernc.org/sqlite`, `pelletier/go-toml`, `charmbracelet/bubbletea`, `go-atomic`). SQLite migration runner (embedded SQL via `embed.FS`, `_migrations` tracking table), TOML config loader into typed `config.Config`, `cmd/substrate/main.go` that loads config + opens DB via `sqlx.Open` + runs migrations. **Note:** `go-atomic`'s `isRetryable()` must be extended to include `SQLITE_BUSY` (error code 5) and `SQLITE_LOCKED` (error code 6) for SQLite retry support. This requires a PR to go-atomic before Substrate can use it for concurrent DB access; submit this PR as part of Phase 0.
+Go module init, scaffold all packages, dependencies (`jmoiron/sqlx`, `modernc.org/sqlite`, `pelletier/go-toml`, `charmbracelet/bubbletea`, `go-atomic`). SQLite migration runner (embedded SQL via `embed.FS`, `_migrations` tracking table), TOML config loader into typed `config.Config`, `cmd/substrate/main.go` that loads config + opens DB via `sqlx.Open` + runs migrations.
 
-Config loading also validates the `[commit]` block: `strategy` enum (`granular` | `semi-regular` | `single`, default `semi-regular`), `message_format` enum (`ai-generated` | `conventional` | `custom`, default `ai-generated`), optional `message_template` string (required when `message_format = "custom"`). Commit config is passed to the agent session factory so it is included in session context — agents receive commit cadence and message-format instructions alongside the sub-plan.
+Config loading also validates the `[commit]` block: `strategy` enum (`granular` | `semi-regular` | `single`, default `semi-regular`), `message_format` enum (`ai-generated` | `conventional` | `custom`, default `ai-generated`), optional `message_template` string (required when `message_format = "custom"`). Commit config is passed to the agent session factory so it is included in session context — agents receive commit cadence and message-format instructions alongside the sub-plan. Config loading also validates the `[plan]` block (`max_parse_retries` int, default 2) and `[review]` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3). Per-repo `[repos.<name>]` sections are optional.
+
+**First-start flow:** Detect absence of `~/.substrate/`, create directory, run migrations. If cwd has no `.substrate-workspace`, present the Workspace Initialization Modal (see `06-tui-design.md` §4c). `substrate init` is the programmatic equivalent of the modal flow: creates `.substrate-workspace` with a ULID, scans for git-work repos, warns about plain clones, inserts workspace into DB.
+
+`go-atomic`'s `isRetryable()` must be extended to include `SQLITE_BUSY` (error code 5) and `SQLITE_LOCKED` (error code 6). go-atomic is a first-party library; add this in Phase 0 as a minor internal change.
 
 **Gate:** `go build ./...` passes. `go test ./...` passes (config loads, migrations run on fresh DB). `go vet ./...` clean.
 **Test:** `go test ./internal/config/... ./internal/repository/...`
 
 ## Phase 1: Core Domain + Persistence (Week 2)
 
-Domain structs in `internal/domain/`. Repository interfaces in `internal/repository/`. SQLite implementations using go-atomic's `generic.SQLXRemote` interface (satisfied by both `*sqlx.DB` and `*sqlx.Tx`) with `db:"column"` tagged row structs, pointer types for nullable columns, `GetContext`/`SelectContext`/`NamedExecContext` for queries. Explicit `toDomain`/`toRow` conversions. Migration `001_initial.sql` with all tables (scoped by `workspace_id` FK), indexes, CHECK constraints for state enums.
+Domain structs in `internal/domain/`. Repository interfaces in `internal/repository/`. SQLite implementations using go-atomic's `generic.SQLXRemote` interface (satisfied by both `*sqlx.DB` and `*sqlx.Tx`) with `db:"column"` tagged row structs, pointer types for nullable columns, `GetContext`/`SelectContext`/`NamedExecContext` for queries. Explicit `toDomain`/`toRow` conversions. Migration `001_initial.sql` with all tables (scoped by `workspace_id` FK), indexes, CHECK constraints for state enums. `substrate_instances` table: `id, workspace_id, pid, hostname, last_heartbeat, started_at`.
 
 **go-atomic Resources pattern:** Each repo struct accepts `generic.SQLXRemote` in its constructor (e.g., `NewWorkItemRepo(remote generic.SQLXRemote)`). A `Resources` struct aggregates all repos. `ResourcesFactory` creates a `Resources` from a transaction handle. Business logic in the orchestrator uses `Transacter.Transact()` to wrap multi-repo operations in a single atomic transaction with automatic retry and backoff on transient errors. Transaction flattening: nested `Transact` calls reuse the outer transaction.
 
@@ -117,7 +121,7 @@ func (c *Client) List(ctx context.Context, repoDir string) ([]Worktree, error)
 func (c *Client) Remove(ctx context.Context, repoDir, branch string) error
 ```
 
-Stdout parsed for machine-readable paths, stderr captured for diagnostics. **Workspace discovery:** `substrate init` creates a `.substrate-workspace` file (YAML with ULID, name, timestamp) in the current directory. On startup, Substrate scans the workspace folder for git-work repos (directories containing a `.bare/` subdirectory). The planning agent reads all discovered repos from their `main/` worktrees to determine which are relevant to the work item. Work items create feature worktrees only in repos the plan touches. Multiple work items coexist in the same workspace as separate worktrees/branches in shared repos.
+Stdout parsed for machine-readable paths, stderr captured for diagnostics. **Workspace discovery:** `substrate init` creates a `.substrate-workspace` file (YAML with ULID, name, timestamp) in the current directory. On startup, Substrate scans the workspace folder for git-work repos (directories containing a `.bare/` subdirectory). The planning agent reads all discovered repos from their `main/` worktrees to determine which are relevant to the work item. Work items create feature worktrees only in repos the plan touches. Multiple work items coexist in the same workspace as separate worktrees/branches in shared repos. Workspaces are permanent and long-lived; run `gw sync` to prune worktrees for completed/merged work items.
 
 **Gate:** Unit: canned output parsed correctly. Integration: `substrate init` creates `.substrate-workspace` with valid ULID. Workspace scan discovers repos with `.bare/`. Checkout → `test-branch/` exists. Remove → gone. `go test ./internal/gitwork/...` and `go test -tags=integration ./internal/gitwork/...`
 
@@ -151,15 +155,17 @@ Go side (`internal/adapter/harness/omp/`): spawns `bun run bridge/omp-bridge.ts`
 
 The Go harness adapter opens the log file on session start (`O_CREATE|O_APPEND`), writes each received event, and closes it when the session exits or is aborted.
 
+**Log rotation** runs during session execution: rotate at 10 MB segments, compressing the previous segment. Keep maximum 5 compressed segments. After session completion, compress the final segment.
+
 ## Phase 7: Planning Pipeline (Week 5-6)
 
-Context assembly: work item + documentation + repo file trees (depth-filtered). Token budget enforcement. Go `text/template` prompt (embedded file). Plan parsing: heading-based (`## Sub-plan: <repo>`) → `domain.Plan` + `[]domain.SubPlan`. Malformed input → `ErrPlanParseFailed`. Plan review loop: approve/reject/revise, feedback appended, version incremented, all versions preserved.
+Context assembly: work item + documentation + repo file trees (depth-filtered). Go `text/template` prompt (embedded file). Plan parsing: heading-based (`## Sub-plan: <repo>`) → `domain.Plan` + `[]domain.SubPlan`. Malformed input → `ErrPlanParseFailed`. Plan review loop: approve/reject/revise, feedback appended, version incremented. Plan revision updates the existing Plan record in-place (content replaced, version incremented). The planning session directory is retained on disk as an audit trail.
 
-**Gate:** 3-repo markdown → exactly 3 SubPlans. Missing headings → `ErrPlanParseFailed`. After 2 revisions, version is 3 and all retrievable. `go test ./internal/orchestrator/...`
+**Gate:** 3-repo markdown → exactly 3 SubPlans. Missing headings → `ErrPlanParseFailed`. After 2 revisions, the same plan record has version 3. `go test ./internal/orchestrator/...`
 
 ## Phase 8: Implementation Orchestrator (Week 6-7)
 
-Sub-plan dependency ordering via topological sort (cycle detection → `ErrCyclicDependency`). Worktree creation per sub-plan (emits `WorktreeCreated`). Agent sessions spawned with sub-plan + cross-repo plan + docs. Independent sub-plans execute concurrently (`errgroup`). All events forwarded to bus.
+Sub-plan dependency ordering via topological sort (cycle detection → `ErrCyclicDependency`). Worktree creation per sub-plan (emits `WorktreeCreated`). Agent sessions spawned with sub-plan + cross-repo plan + docs. Independent sub-plans execute concurrently (`errgroup`). All events forwarded to bus. Per-repo validation is handled by the agent itself, guided by the repo's AGENTS.md which specifies the appropriate build/test commands to run before marking work complete.
 
 **Gate:** `{A:[], B:[A], C:[A], D:[B,C]}` → A first, D last. `{A:[B], B:[A]}` → error. Independent sub-plans start within 100ms of each other. Dependent waits. `go test ./internal/orchestrator/... -race`
 
@@ -171,19 +177,7 @@ Sub-plan dependency ordering via topological sort (cycle detection → `ErrCycli
 
 ## Phase 9b: Resume & Recovery (Week 8)
 
-**PID tracking:** Add `pid` column (INTEGER, nullable) to `agent_sessions` table. Store subprocess PID when agent session starts. New session status: `"interrupted"` — means the session was running but Substrate crashed or was closed and the process is gone.
-
-**Startup reconciliation protocol:**
-1. Find workspace: look for `.substrate-workspace` in cwd or ancestors.
-2. Load workspace from global DB by ID from the file.
-3. Update workspace path in DB if the folder moved.
-4. For any `agent_sessions` in `"running"` state:
-   a. Check stored PID: is process still alive? (`kill -0 pid`)
-   b. If alive: another Substrate instance owns this session. This instance can observe via session log but cannot send inputs. Skip.
-   c. If dead: mark session as `"interrupted"`.
-5. For any work items in `"implementing"` or `"reviewing"` state with ALL sessions completed/failed/interrupted:
-   a. Check if any sessions are `"interrupted"` → surface in TUI with resume option.
-6. Present state in dashboard.
+**Instance lock table:** Replace PID-based crash detection with the `substrate_instances` table. Each instance inserts its row on startup, updates `last_heartbeat` every 5s, deletes on clean exit. Session ownership is tracked via `agent_sessions.owner_instance_id`. On startup reconciliation: for any `running` session whose owner instance row is missing or has a stale heartbeat (>15s), transition to `interrupted`. No more `kill -0 pid` calls; no PID reuse hazard.
 
 **Resume protocol:** TUI shows interrupted sessions with `[R]esume [A]bandon`. Resume starts a fresh agent session in the SAME worktree with context: *"You are continuing work on this sub-plan. The worktree contains partial changes from a previous session. Review the current state via `git diff` and `git status`, then continue implementing the remaining items from the sub-plan."* On resume, the orchestrator reads the last 50 lines of the interrupted session's `.log` file and prepends them to the new session preamble so the agent has immediate context on what was last happening. Abandon marks the session failed; human can manually fix.
 
@@ -194,7 +188,7 @@ Sub-plan dependency ordering via topological sort (cycle detection → `ErrCycli
 - MR creation: glab adapter checks if MR exists for branch before creating.
 - Linear state updates: inherently idempotent.
 
-**Gate:** Kill Substrate mid-session, restart, verify interrupted detection, resume session, verify continuation picks up partial work. Verify `.log` file contains partial JSONL output after kill. Verify resumed session preamble contains last-50-lines context from the interrupted log. Graceful shutdown completes within 15s. `go test ./internal/orchestrator/... -race` and `go test -tags=integration ./internal/orchestrator/...`
+**Gate:** Launch two Substrate instances against the same workspace. Instance A starts a session. Kill instance A (simulating crash). Instance B detects stale heartbeat within 20s, marks session interrupted, offers Resume. Resumed session continues in the same worktree. Clean shutdown: instance row deleted, no false interrupts.
 
 ## Phase 10: Linear Adapter + Selection Model (Week 8)
 
@@ -217,7 +211,7 @@ Implement `ManualAdapter` struct in `internal/adapter/manual/`. This is a lightw
 - `Name()` returns `"manual"`.
 - `Capabilities()` returns `CanWatch: false, CanBrowse: false, CanMutate: false, BrowseScopes: nil`.
 - `ListSelectable` returns empty result (not supported).
-- `Resolve` takes `Selection` with `ManualWorkItemInput` (title, description, repositories) and creates a `WorkItem` directly from user input.
+- `Resolve` takes `Selection` with `ManualWorkItemInput` (title, description) and creates a `WorkItem` directly from user input.
 - `Watch` returns a closed channel immediately.
 - `Fetch`, `UpdateState`, `AddComment` are no-ops (return nil or zero values).
 - `OnEvent` is a no-op.
@@ -228,7 +222,7 @@ This is a small phase, likely 1-2 days of effort.
 
 ## Phase 11: glab Adapter (Week 8-9)
 
-Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create --draft --source-branch ... --reviewer ... --label ...`, parse MR URL. `OnEvent(BranchPushedEvent)`: update MR description, mark `--ready` if applicable. `OnEvent(WorkItemCompletedEvent)`: `glab mr view --output json`, finalize MR status.
+Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create --draft --source-branch ... --reviewer ... --label ...`, parse MR URL. `OnEvent(WorkItemCompletedEvent)`: `glab mr view --output json`, finalize MR status.
 
 **Gate:** WorktreeCreated event → OnEvent fires → MR created. JSON parsing from `mr view`. Integration (requires glab auth): event fires → MR created. `go test ./internal/adapter/glab/...`
 
@@ -241,8 +235,9 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 | 12c | Agent sessions (live streaming, multi-session split, tool indicators) | Events render real-time |
 | 12d | Review view (diff + critiques with severity) + notifications | Critiques render, toast on escalation |
 | 12e | Config view (view/edit TOML, validate on save) | Changes persist without restart |
+| 12f | First-start modal (global init + workspace init) | Modal displays on fresh install, workspace registers in DB |
 
-**New Session wizard** (part of 12a): triggered by `[N]ew` from Dashboard. Adapter selection view (Linear / Manual). If Linear: scope selection (Issues / Projects / Initiatives), then a searchable paginated list with fuzzy filtering and multi-select (toggle with space, confirm with enter), then aggregated work item preview before confirmation. If Manual: form view with Title (required), Description (text area), and Repositories (add/remove list with clone URLs), then confirm to start. Requires a multi-select list component for Linear browsing and a form component for Manual input.
+**New Session wizard** (part of 12a): triggered by `[N]ew` from Dashboard. Adapter selection view (Linear / Manual). If Linear: scope selection (Issues / Projects / Initiatives), then a searchable paginated list with fuzzy filtering and multi-select (toggle with space, confirm with enter), then aggregated work item preview before confirmation. If Manual: form view with Title (required) and Description (text area), then confirm to start. Requires a multi-select list component for Linear browsing and a form component for Manual input.
 
 **Gate:** Full walkthrough: launch → dashboard → select item → view plan → approve → see sessions → view review → completion. `go test ./internal/tui/...`
 
@@ -287,6 +282,5 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 | Bridge subprocess zombies | Medium | Medium | PID tracking, watchdog reaper, SIGTERM → 10s → SIGKILL |
 | git-work not installed | High | High | Startup PATH check, actionable error with install instructions, fail fast |
 | Linear API schema changes break project/initiative queries | Low | Medium | Typed response structs catch at compile time, integration tests catch at runtime, graceful degradation (fall back to issues-only scope) |
-
-| go-atomic SQLITE_BUSY retry not yet implemented | Certain | High | Contribute PR to go-atomic adding `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) to `isRetryable()` before Phase 1, or fork temporarily |
-| Agent output log growth (unbounded log files for long sessions) | Low | Low | Log rotation after session completes: keep last 10 MB, compress older segments. Clean up on workspace prune command. No correctness impact — disk space only. |
+| Agent output log growth (unbounded log files for long sessions) | Low | Low | Rolling log segments during session: rotate at 10 MB threshold, rename current log to `session-id.log.N`, open new segment. TUI tailing follows newest segment by tracking which file is active. No correctness impact — disk space only. |
+| go-atomic SQLITE_BUSY retry not yet in isRetryable | Low | Low | go-atomic is a first-party library. Add SQLITE_BUSY (5) and SQLITE_LOCKED (6) to isRetryable() as part of Phase 0. No external dependency risk. |

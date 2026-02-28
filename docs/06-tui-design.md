@@ -17,7 +17,7 @@ type App struct {
     statusBar   StatusBarModel
     toasts      ToastModel
     services    *service.Container
-    windowSize  tea.WindowSize
+    windowSize  tea.WindowSizeMsg
 }
 ```
 
@@ -47,7 +47,7 @@ The main chrome is always visible. The sidebar lists all work item sessions. The
 │                        │                                                          │
 │ ✓ LIN-FOO-100          │                                                          │
 │   Update docs          │                                                          │
-│   2h ago · 12 commits  │                                                          │
+│   2h ago               │                                                          │
 │                        │                                                          │
 │ ⊘ LIN-FOO-099          │                                                          │
 │   Refactor billing     │                                                          │
@@ -73,7 +73,7 @@ Fixed ~26 characters wide. Lists all work item sessions, grouped by status (acti
 - Line 1: `{icon} {workItemID}`
 - Line 2: `  {short title}`
 - Line 3 (implementing only): `  {progress bar} {n}/{m} repos`
-- Line 3 (otherwise): `  {subtitle}` — e.g. "Plan review needed", "2h ago · 12 commits", "Interrupted"
+- Line 3 (otherwise): `  {subtitle}` — e.g. "Plan review needed", "2h ago", "Interrupted"
 
 **Keys:**
 - `↑`/`↓` or `j`/`k` — navigate sessions
@@ -95,16 +95,18 @@ type SidebarModel struct {
 
 Renders based on the selected session's state. There is no navigation stack. The panel switches mode in place.
 
-| Session state     | Content panel mode      |
-|-------------------|------------------------|
-| `planning`        | Planning output        |
-| `plan_review`     | Plan review            |
-| `implementing`    | Implementing           |
-| `reviewing`       | Review output + diff   |
-| `completed`       | Completion summary     |
-| `interrupted`     | Interruption notice    |
-| `waiting_question`| Agent question         |
+| WorkItem state    | Content panel mode      |
+|-------------------|-------------------------|
+| `ingested`        | Ready to plan           |
+| `planning`        | Planning output         |
+| `plan_review`     | Plan review             |
+| `approved`        | Awaiting implementation |
+| `implementing`    | Implementing            |
+| `reviewing`       | Review output + diff    |
+| `completed`       | Completion summary      |
+| `failed`          | Failure detail          |
 
+> Within `implementing`, the content panel switches to **Agent question** sub-mode when the active `AgentSession.Status` is `waiting_for_answer`, and to **Interruption notice** sub-mode when it is `interrupted`. These are driven by `AgentSessionStatus`, not `WorkItemState`.
 ```go
 type ContentModel struct {
     mode        ContentMode
@@ -114,6 +116,7 @@ type ContentModel struct {
     implementing ImplementingModel
     reviewing   ReviewModel
     completed   CompletedModel
+    failed      FailedModel
     interrupted InterruptedModel
     question    QuestionModel
 }
@@ -125,7 +128,7 @@ type ContentModel struct {
 
 ### 3a. Planning Mode
 
-Tails `~/.substrate/sessions/<id>.log` (JSONL) as the planning agent runs. New lines are appended in real time via `fsnotify`.
+Tails `~/.substrate/sessions/<session-id>.log` (JSONL) as the planning agent runs. New lines are appended in real time via `fsnotify`.
 
 ```
 │ LIN-FOO-789 · Update docs · Planning                                              │
@@ -159,12 +162,17 @@ Full plan markdown rendered in a scrollable viewport. All sub-plans shown in seq
 │ Wire RateLimiter to API gateway middleware...                                     │
 │                                                                                   │
 │ ─────────────────────────────────────────────────────────────────────────────── │
-│ [a] Approve  [e] Edit in $EDITOR  [r] Reject with feedback  [↑↓] Scroll          │
+│ [a] Approve  [c] Request changes  [e] Edit in $EDITOR  [r] Reject  [↑↓] Scroll  │
 ```
 
-**Model**: `viewport.Model` for scrollable content, `textinput.Model` for rejection feedback (appears at bottom on `r`, `Enter` submits, `Esc` cancels).
+**Model**: `viewport.Model` for scrollable content, `textinput.Model` for feedback input — used for both `c` (request changes) and `r` (reject); appears at bottom on activation, `Enter` submits, `Esc` cancels.
 
-**Keys**: `↑`/`↓` scroll, `a` approve, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject with feedback.
+- `[a]` **Approve** — status → Approved; emits `PlanApproved`; triggers implementation pipeline.
+- `[c]` **Request changes** — opens inline feedback input (textinput at bottom). On `Enter`, spawns a new planning agent session with the current plan text and feedback embedded in the prompt. The plan version is incremented on the revision.
+- `[e]` **Edit in $EDITOR** — opens the plan markdown in `$EDITOR` via `tea.ExecProcess`. On editor exit, the modified file is read back and the plan is updated in the DB. Presents the revised plan for re-review.
+- `[r]` **Reject** — opens inline rejection input. On `Enter`, work item returns to `Ingested` state; emits `PlanRejected`.
+
+**Keys**: `↑`/`↓` scroll, `a` approve, `c` request changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject.
 
 ### 3c. Implementing Mode
 
@@ -173,7 +181,7 @@ Two parts: a repo status row at the top, and the output stream for the currently
 ```
 │ LIN-FOO-123 · Fix auth flow · Implementing                                        │
 │──────────────────────────────────────────────────────────────────────────────── │
-│ Repos:  ✓ shared-lib (14 commits)   ● backend-api (running)   ◌ frontend (queued)│
+│ Repos:  ✓ shared-lib   ● backend-api (running)   ◌ frontend (queued)              │
 │                                                                                   │
 │ ─── backend-api ──────────────────────────────────────────────────────────────── │
 │ > Analyzing auth middleware in internal/auth/handler.go...                        │
@@ -216,7 +224,7 @@ type ReviewModel struct {
 }
 
 type Critique struct {
-    Severity   string  // "error", "warning", "info"
+    Severity   string  // "critical", "major", "minor", "nit"
     File       string
     Line       int
     Message    string
@@ -228,7 +236,7 @@ type Critique struct {
 
 ### 3e. Completed Mode
 
-Summary of what was done: repos changed, total commits, MR/PR links, any stale documentation warnings.
+Summary of what was done: repos changed, MR/PR links, any stale documentation warnings.
 
 ```
 │ LIN-FOO-100 · Update docs · Completed  ✓ 2h ago                                  │
@@ -236,8 +244,8 @@ Summary of what was done: repos changed, total commits, MR/PR links, any stale d
 │ Completed 2h ago                                                                  │
 │                                                                                   │
 │ Repos:                                                                            │
-│   ✓ backend-api       8 commits  MR !142 (open)                                  │
-│   ✓ frontend-app      4 commits  MR !87  (open)                                  │
+│   ✓ backend-api       MR !142 (open)                                              │
+│   ✓ frontend-app      MR !87  (open)                                              │
 │                                                                                   │
 │ [↑↓] Scroll                                                                       │
 ```
@@ -266,7 +274,10 @@ Resuming starts a fresh agent session in the same worktree. The session context 
 
 ### 3g. Waiting for Human Question
 
-Surfaced when the foreman agent (see `05-orchestration.md`) cannot resolve an agent question automatically and escalates to the human.
+Surfaced when the Foreman agent escalates to the human (Tier 3). The human sees the sub-agent's question, the Foreman's proposed answer pre-filled (highlighted, read-only), and the Foreman's stated uncertainty. The human may:
+- Press `[A]` to approve the Foreman's answer directly — it is forwarded to the blocked sub-agent and appended to the FAQ.
+- Type a reply and press `[Enter]` — the message is sent to the Foreman session via `SendMessage()`, producing a refined `foreman_proposed` event which updates the pre-filled answer. This loop continues until the human presses `[A]`.
+- Press `[Esc]` to skip — the question is forwarded without an answer; the sub-agent continues and may make its own decision.
 
 ```
 │ LIN-FOO-123 · Fix auth flow · Implementing  ◐ Question from backend-api agent    │
@@ -280,14 +291,31 @@ Surfaced when the foreman agent (see `05-orchestration.md`) cannot resolve an ag
 │ Context: Sub-plan says 'use standard library JWT validation'. Current code uses   │
 │ github.com/corp/jwtlib v2.3.1 in 4 files.                                        │
 │                                                                                   │
-│ Your answer: ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │
+│ Foreman's proposed answer (uncertain):                                            │
+│ ┌──────────────────────────────────────────────────────────────────────────────┐ │
+│ │ Replace the dependency. The orchestration plan specifies standard library     │ │
+│ │ JWT only. I'm uncertain whether corp/jwtlib has specific behaviour your       │ │
+│ │ team relies on — check with your team if unsure.                             │ │
+│ └──────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                   │
-│ [Enter] Send answer  [Esc] Cancel (agent continues without answer)                │
+│ Your reply (or press [A] to approve Foreman's answer):                            │
+│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │
+│                                                                                   │
+│ [Enter] Send to Foreman  [A] Approve & forward to agent  [Esc] Skip               │
 ```
 
-The answer is forwarded to the foreman agent, which relays it to the sub-agent session via stdin.
+**Model**:
+```go
+type QuestionModel struct {
+    question        domain.Question
+    foremanProposed string          // Foreman's current proposed answer; updated on each foreman_proposed event
+    foremanUncertain bool           // set from foreman_proposed event's `uncertain` field (CONFIDENCE: uncertain marker)
+    input           textinput.Model // human reply input
+    inputActive     bool
+}
+```
 
-**Keys**: type answer, `Enter` send, `Esc` cancel (agent proceeds without an answer).
+**Keys**: `[A]` approve (capital A), `[Enter]` send to Foreman, `[Esc]` skip.
 
 ---
 
@@ -359,6 +387,75 @@ Settings editor for adapter configs, workspace root, and `substrate.toml` defaul
 
 **Keys**: `j`/`k` navigate, `Enter` edit inline, `e` open in `$EDITOR`, `s` save, `Esc` close (prompt if dirty).
 
+
+### 4c. First-Start Initialization Modal
+
+Triggered when Substrate is launched for the first time — detected when no `~/.substrate/` global directory exists. Before any workspace context is shown, a full-screen initialization modal explains what Substrate needs and sets up global resources.
+
+```
+┌─ Welcome to Substrate ──────────────────────────────────────────────────────┐
+│                                                                             │
+│  Substrate manages AI-driven development tasks across git repositories.     │
+│                                                                             │
+│  First-time setup will create:                                              │
+│    ~/.substrate/                global configuration directory              │
+│    ~/.substrate/state.db        SQLite database (all workspace state)       │
+│    ~/.substrate/sessions/       agent session logs                          │
+│                                                                             │
+│  Press [Enter] to continue.                                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+After global init, if the current directory is not a registered workspace, the `Workspace Initialization Modal` is shown:
+
+```
+┌─ Initialize Workspace ──────────────────────────────────────────────────────┐
+│                                                                             │
+│  No workspace found at:                                                     │
+│    ~/myproject/                                                             │
+│                                                                             │
+│  Initialize this directory as a Substrate workspace?                        │
+│                                                                             │
+│  This will:                                                                 │
+│    • Create .substrate-workspace  (workspace identity file)                 │
+│    • Scan for git-work repos      (directories with .bare/)                 │
+│    • Warn about plain git clones  (require gw init conversion)              │
+│    • Register workspace in        ~/.substrate/state.db                     │
+│                                                                             │
+│  git-work repos detected: backend-api/, frontend-app/                      │
+│  Plain git clones (need conversion): legacy-service/                       │
+│                                                                             │
+│  [y] Initialize  [n] Cancel                                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Model:**
+```go
+type FirstStartModal struct {
+    phase    firstStartPhase    // globalInit | workspaceInit
+    cwd      string
+    detected []RepoPointer      // discovered git-work repos
+    warnings []string           // plain git clones
+}
+
+type firstStartPhase int
+const (
+    phaseGlobalInit firstStartPhase = iota
+    phaseWorkspaceInit
+)
+```
+
+**Workspace init on `[y]`:** calls `substrate.InitWorkspace(cwd)` which:
+1. Creates `~/.substrate/` if not present and runs schema migrations.
+2. Creates `.substrate-workspace` (YAML: ULID, name from dir basename, created_at).
+3. Inserts workspace record into DB.
+4. Returns discovered repos and warnings.
+
+If `[n]` is pressed, Substrate exits cleanly.
+
+**Keys:** `y` / `Enter` confirm, `n` / `Esc` cancel.
 ---
 
 ## 5. Layout System
@@ -431,7 +528,7 @@ var DefaultTheme = Theme{
 - Borders: `Border` color, rounded style
 - Progress bars: `Muted` (incomplete), `Active` (in progress), `Success` (done)
 - Agent questions: `Warning` fg + bold
-- Critique severity: error=`Error`, warning=`Warning`, info=`Muted`
+- Critique severity: critical=`Error`, major=`Warning`, minor=`Muted`, nit=`Muted` (extra dim)
 - Diffs: additions=`DiffAdd`, deletions=`DiffDel`
 - Interrupted state: `Interrupted` fg
 
@@ -439,28 +536,22 @@ var DefaultTheme = Theme{
 
 ## 7. Multi-Instance Support
 
-Multiple substrate instances can open the same workspace simultaneously. There are no exclusive locks. The global DB (`~/.substrate/state.db`) is the shared state source — both instances see the same sessions.
+Multiple substrate instances can open the same workspace simultaneously. The global DB (`~/.substrate/state.db`) is the shared state source.
 
-**Instance ownership**: The instance that starts an agent session owns the subprocess. Other instances see the session's state from the DB but cannot send inputs to a running subprocess they didn't start. The `[a]nswer` and `[r]esume` keybinds are only active when the current instance owns the session.
+**Instance registration:** On startup each instance registers a row in `substrate_instances` (ULID, PID, hostname, last_heartbeat). A background goroutine updates `last_heartbeat` every 5 seconds. On clean shutdown the row is deleted. An instance is live if its `last_heartbeat` is within 15 seconds of the current time.
 
-**Agent output**: All agent output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL, timestamped). Any instance can tail this file to render live or historical output in the content panel. The TUI uses `fsnotify` to detect new lines appended to the log, feeding them into the appropriate `viewport.Model` via a `tea.Cmd`.
+**Session ownership:** When an instance starts an agent session it writes its own `id` into `agent_sessions.owner_instance_id`. Only the owning instance can:
+- Send messages / answers to the running subprocess
+- Resume an interrupted session
+- Trigger `[a]bandon`
 
-```go
-func tailSessionLogCmd(logPath string, since int64) tea.Cmd {
-    return func() tea.Msg {
-        // fsnotify watcher fires; read new bytes from offset `since`
-        lines, nextOffset := readNewLines(logPath, since)
-        return SessionLogLinesMsg{Lines: lines, NextOffset: nextOffset}
-    }
-}
-```
+If the owning instance is dead (row missing or heartbeat stale >15s), any other instance may take over: it updates `owner_instance_id` to its own ID and proceeds as if it were the original owner.
 
-After receiving `SessionLogLinesMsg`, the view re-subscribes with the updated offset. This pattern is the same one-event-per-Cmd loop used for streaming agent events.
+**Keybind gating:** `[a]nswer`, `[r]esume`, `[a]bandon` are active only when `currentInstanceOwnsSession || ownerIsDead`.
 
-**State visibility**: Session state transitions written to the DB are visible to all instances within a poll interval (default 2s). Running sessions show their current status without coordination.
+**Agent output:** All output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL). Any instance can tail this file via `fsnotify`. The tailing logic handles log rotation: on detecting a size regression or inode change at the watched path, the offset is reset to 0 to follow the new segment.
 
-**PID reconciliation** (unchanged): On startup, any session marked `running` whose PID is no longer alive is transitioned to `interrupted`. This is a startup-only check and does not prevent concurrent instances from operating.
-
+**State visibility:** Session state changes in the DB are visible to all instances within a poll interval (2s).
 ---
 
 ## 8. Interaction Model
@@ -537,6 +628,25 @@ func (v *ContentModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
     case AgentSessionEndedMsg:
         v.markComplete(msg.SessionID)
         return v, nil
+    }
+}
+```
+
+```go
+// tailSessionLogCmd tracks inode changes to handle log rotation.
+// If the file at logPath is smaller than `since` (rotation occurred),
+// the offset resets to 0 and reading resumes from the new segment start.
+func tailSessionLogCmd(logPath string, since int64) tea.Cmd {
+    return func() tea.Msg {
+        stat, err := os.Stat(logPath)
+        if err != nil {
+            return SessionLogLinesMsg{Lines: nil, NextOffset: since}
+        }
+        if stat.Size() < since {
+            since = 0 // file rotated; restart from beginning of new segment
+        }
+        lines, nextOffset := readNewLines(logPath, since)
+        return SessionLogLinesMsg{Lines: lines, NextOffset: nextOffset}
     }
 }
 ```

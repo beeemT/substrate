@@ -66,28 +66,38 @@ type workItemRow struct {
 	AssigneeID  *string `db:"assignee_id"`
 	State       string  `db:"state"`
 	Labels      *string `db:"labels"`          // JSON array
-	Repositories *string `db:"repositories"`   // JSON array of RepositoryRef
 	SourceItemIDs *string `db:"source_item_ids"` // JSON array
 	Metadata    *string `db:"metadata"`        // JSON object
 	CreatedAt   string  `db:"created_at"`
 	UpdatedAt   string  `db:"updated_at"`
 }
 
-func (r *workItemRow) toDomain() domain.WorkItem {
+func (r *workItemRow) toDomain() (domain.WorkItem, error) {
 	item := domain.WorkItem{
 		ID: r.ID, Source: r.Source, Title: r.Title,
 		State: domain.WorkItemState(r.State),
 		CreatedAt: mustParseTime(r.CreatedAt), UpdatedAt: mustParseTime(r.UpdatedAt),
 	}
-	if r.ExternalID != nil { item.ExternalID = *r.ExternalID }
+	if r.ExternalID != nil  { item.ExternalID = *r.ExternalID }
 	if r.SourceScope != nil { item.SourceScope = domain.SelectionScope(*r.SourceScope) }
 	if r.Description != nil { item.Description = *r.Description }
-	if r.AssigneeID != nil { item.AssigneeID = *r.AssigneeID }
-	if r.Labels != nil { json.Unmarshal([]byte(*r.Labels), &item.Labels) }
-	if r.Repositories != nil { json.Unmarshal([]byte(*r.Repositories), &item.Repositories) }
-	if r.SourceItemIDs != nil { json.Unmarshal([]byte(*r.SourceItemIDs), &item.SourceItemIDs) }
-	if r.Metadata != nil { json.Unmarshal([]byte(*r.Metadata), &item.Metadata) }
-	return item
+	if r.AssigneeID != nil  { item.AssigneeID = *r.AssigneeID }
+	if r.Labels != nil {
+		if err := json.Unmarshal([]byte(*r.Labels), &item.Labels); err != nil {
+			return domain.WorkItem{}, fmt.Errorf("unmarshal labels: %w", err)
+		}
+	}
+	if r.SourceItemIDs != nil {
+		if err := json.Unmarshal([]byte(*r.SourceItemIDs), &item.SourceItemIDs); err != nil {
+			return domain.WorkItem{}, fmt.Errorf("unmarshal source_item_ids: %w", err)
+		}
+	}
+	if r.Metadata != nil {
+		if err := json.Unmarshal([]byte(*r.Metadata), &item.Metadata); err != nil {
+			return domain.WorkItem{}, fmt.Errorf("unmarshal metadata: %w", err)
+		}
+	}
+	return item, nil
 }
 
 // WorkItemRepo accepts generic.SQLXRemote -- works with both *sqlx.DB and *sqlx.Tx.
@@ -99,7 +109,7 @@ func (r WorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, erro
 	var row workItemRow
 	err := r.remote.GetContext(ctx, &row, `SELECT * FROM work_items WHERE id = ?`, id)
 	if err != nil { return domain.WorkItem{}, fmt.Errorf("get work item %s: %w", id, err) }
-	return row.toDomain(), nil
+	item, err := row.toDomain(); if err != nil { return domain.WorkItem{}, err }; return item, nil
 }
 
 func (r WorkItemRepo) List(ctx context.Context, filter WorkItemFilter) ([]domain.WorkItem, error) {
@@ -128,7 +138,7 @@ func (r WorkItemRepo) List(ctx context.Context, filter WorkItemFilter) ([]domain
 		if err := rows.StructScan(&row); err != nil {
 			return nil, fmt.Errorf("scan work item: %w", err)
 		}
-		items = append(items, row.toDomain())
+		item, err := row.toDomain(); if err != nil { return nil, fmt.Errorf("convert work item: %w", err) }; items = append(items, item)
 	}
 	return items, nil
 }
@@ -138,10 +148,10 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO work_items
 		 (id, external_id, source, source_scope, title, description, assignee_id,
-		  state, labels, repositories, source_item_ids, metadata, created_at, updated_at)
+		  state, labels, source_item_ids, metadata, created_at, updated_at)
 		 VALUES
 		 (:id, :external_id, :source, :source_scope, :title, :description, :assignee_id,
-		  :state, :labels, :repositories, :source_item_ids, :metadata, :created_at, :updated_at)`, row)
+		  :state, :labels, :source_item_ids, :metadata, :created_at, :updated_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create work item %s: %w", item.ID, err)
 	}
@@ -165,6 +175,7 @@ type Resources struct {
 	Reviews    ReviewRepo
 	Docs       DocumentationRepo
 	Events     EventRepo
+	Instances  InstanceRepo
 }
 
 func ResourcesFactory(
@@ -181,6 +192,7 @@ func ResourcesFactory(
 		Reviews:    NewReviewRepo(tx),
 		Docs:       NewDocumentationRepo(tx),
 		Events:     NewEventRepo(tx),
+		Instances:  NewInstanceRepo(tx),
 	}, nil
 }
 ```
@@ -208,8 +220,8 @@ func NewPlanService(plans repository.PlanRepository, subPlans repository.SubPlan
 
 func (s *PlanService) CreateDraft(ctx context.Context, workItemID, content string) (domain.Plan, error) {
     plan := domain.Plan{
-        ID: domain.NewID(), WorkItemID: workItemID, Content: content,
-        Status: domain.PlanStatusDraft, Version: 1,
+		ID: domain.NewID(), WorkItemID: workItemID, OrchestratorPlan: content,
+		Status: domain.PlanDraft, Version: 1,
         CreatedAt: domain.Now(), UpdatedAt: domain.Now(),
     }
     if err := plan.Validate(); err != nil {
@@ -223,10 +235,10 @@ func (s *PlanService) SubmitForReview(ctx context.Context, planID string) (domai
     if err != nil {
         return domain.Plan{}, ErrPlanNotFound
     }
-    if plan.Status != domain.PlanStatusDraft && plan.Status != domain.PlanStatusRejected {
+	if plan.Status != domain.PlanDraft && plan.Status != domain.PlanRejected {
         return domain.Plan{}, fmt.Errorf("%w: cannot submit %s", ErrInvalidTransition, plan.Status)
     }
-    plan.Status = domain.PlanStatusPendingReview
+	plan.Status = domain.PlanPendingReview
     plan.UpdatedAt = domain.Now()
     return plan, s.plans.Update(ctx, plan)
 }
@@ -254,19 +266,29 @@ type Orchestrator struct {
 	// adapters...
 }
 
-// OnPlanApproved: approve → emit event → create worktrees → spawn agents.
+// OnPlanApproved: guard pending_review → approved transition, persist, then emit event.
+// Event emission is outside the transaction to avoid publishing side effects from rolled-back writes.
 func (o *Orchestrator) OnPlanApproved(ctx context.Context, planID string) error {
-	return o.transacter.Transact(ctx, func(ctx context.Context, repos Resources) error {
+	var approvedPlan domain.Plan
+	if err := o.transacter.Transact(ctx, func(ctx context.Context, repos Resources) error {
 		plan, err := repos.Plans.Get(ctx, planID)
 		if err != nil { return fmt.Errorf("get plan: %w", err) }
+		if plan.Status != domain.PlanPendingReview {
+			return fmt.Errorf("%w: cannot approve plan with status %s", ErrInvalidTransition, plan.Status)
+		}
 		plan.Status = domain.PlanApproved
 		plan.UpdatedAt = domain.Now()
 		if err := repos.Plans.Update(ctx, plan); err != nil { return err }
-		// event emission happens AFTER transaction commits (outside Transact)
+		approvedPlan = plan
 		return nil
+	}); err != nil {
+		return err
+	}
+	// Transaction committed. Safe to emit — adapter side effects (Linear, glab) run after this.
+	return o.eventBus.Publish(ctx, PlanApprovedEvent{
+		BaseEvent: newBaseEvent(EventPlanApproved),
+		Plan:      approvedPlan,
 	})
-	// After successful transaction, emit event:
-	// o.eventBus.Publish(ctx, PlanApprovedEvent{...})
 }
 ```
 
@@ -285,7 +307,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS workspaces (
     id           TEXT PRIMARY KEY,
     name         TEXT NOT NULL,
-    root_dir     TEXT NOT NULL,
+    root_path    TEXT NOT NULL,
     status       TEXT NOT NULL CHECK (status IN ('creating','ready','archived','error')),
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -294,7 +316,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE TABLE IF NOT EXISTS work_items (
     id              TEXT PRIMARY KEY,
     workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
-    external_id     TEXT UNIQUE,
+    external_id     TEXT,
     source          TEXT NOT NULL,
     source_scope    TEXT,
     title           TEXT NOT NULL,
@@ -304,7 +326,6 @@ CREATE TABLE IF NOT EXISTS work_items (
                         'ingested','planning','plan_review','approved',
                         'implementing','reviewing','completed','failed')),
     labels          TEXT,  -- JSON array
-    repositories    TEXT,  -- JSON array
     source_item_ids TEXT,  -- JSON array
     metadata        TEXT,  -- JSON object
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -313,12 +334,12 @@ CREATE TABLE IF NOT EXISTS work_items (
 CREATE INDEX idx_work_items_state ON work_items(state);
 CREATE INDEX idx_work_items_source ON work_items(source);
 CREATE INDEX idx_work_items_workspace ON work_items(workspace_id);
+CREATE UNIQUE INDEX idx_work_items_external_id ON work_items(workspace_id, external_id) WHERE external_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS plans (
     id                TEXT PRIMARY KEY,
-    work_item_id      TEXT NOT NULL REFERENCES work_items(id),
-    content           TEXT NOT NULL,
-    orchestrator_plan TEXT,
+    work_item_id      TEXT NOT NULL UNIQUE REFERENCES work_items(id),
+	orchestrator_plan TEXT NOT NULL,
     status            TEXT NOT NULL CHECK (status IN (
                           'draft','pending_review','approved','rejected')),
     version           INTEGER NOT NULL DEFAULT 1,
@@ -352,8 +373,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
                         'pending','running','waiting_for_answer','completed','failed','interrupted')),
     exit_code       INTEGER,
     started_at      TEXT,
-    finished_at     TEXT,
+    shutdown_at     TEXT,
+    completed_at    TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    owner_instance_id TEXT REFERENCES substrate_instances(id) ON DELETE SET NULL,
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX idx_sessions_sub_plan ON agent_sessions(sub_plan_id);
@@ -378,8 +401,8 @@ CREATE TABLE IF NOT EXISTS critiques (
     review_cycle_id TEXT NOT NULL REFERENCES review_cycles(id) ON DELETE CASCADE,
     file_path       TEXT,
     line_number     INTEGER,
-    severity        TEXT NOT NULL CHECK (severity IN ('error','warning','info')),
-    message         TEXT NOT NULL,
+		severity        TEXT NOT NULL CHECK (severity IN ('critical','major','minor','nit')),
+    description     TEXT NOT NULL,
     status          TEXT NOT NULL CHECK (status IN ('open','resolved')) DEFAULT 'open',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -391,9 +414,8 @@ CREATE TABLE IF NOT EXISTS questions (
     content          TEXT NOT NULL,
     context          TEXT,
     answer           TEXT,
-    answered_by      TEXT,
-    source           TEXT CHECK (source IN ('foreman','human')),
-    status           TEXT NOT NULL CHECK (status IN ('pending','answered','escalated')),
+    answered_by      TEXT CHECK (answered_by IN ('foreman','human')),
+    status           TEXT NOT NULL CHECK (status IN ('pending','answered','escalated')) DEFAULT 'pending',
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     answered_at      TEXT
 );
@@ -406,6 +428,7 @@ CREATE TABLE IF NOT EXISTS documentation_sources (
     source_type  TEXT NOT NULL CHECK (source_type IN ('repo_embedded','dedicated_repo')),
     path         TEXT,
     repo_url     TEXT,
+    repository_name TEXT,                  -- for repo_embedded: name of the workspace repo; empty for dedicated_repo
     branch       TEXT,
     description  TEXT,
     last_synced  TEXT,
@@ -414,15 +437,25 @@ CREATE TABLE IF NOT EXISTS documentation_sources (
 CREATE INDEX idx_docs_workspace ON documentation_sources(workspace_id);
 
 CREATE TABLE IF NOT EXISTS system_events (
-    id           TEXT PRIMARY KEY,
-    event_type   TEXT NOT NULL,
-    payload      TEXT NOT NULL,
-    work_item_id TEXT REFERENCES work_items(id),
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	id         TEXT PRIMARY KEY,
+	event_type TEXT NOT NULL,
+	workspace_id TEXT REFERENCES workspaces(id),
+	payload    TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX idx_events_type ON system_events(event_type);
-CREATE INDEX idx_events_work_item ON system_events(work_item_id);
+CREATE INDEX idx_events_workspace ON system_events(workspace_id);
 CREATE INDEX idx_events_created ON system_events(created_at);
+
+CREATE TABLE IF NOT EXISTS substrate_instances (
+    id              TEXT PRIMARY KEY,
+    workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    pid             INTEGER NOT NULL,
+    hostname        TEXT NOT NULL,
+    last_heartbeat  TEXT NOT NULL,
+    started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX idx_instances_workspace ON substrate_instances(workspace_id);
 ```
 
 ## 6. Dependency Injection
@@ -436,15 +469,22 @@ strategy        = "semi-regular"   # "granular" | "semi-regular" | "single"
 message_format  = "ai-generated"   # "ai-generated" | "conventional" | "custom"
 message_template = ""              # used when message_format = "custom"
 
+[plan]
+max_parse_retries = 2              # correction loop attempts before surfacing to human
+
+[review]
+pass_threshold = "minor_ok"        # "nit_only" | "minor_ok" | "no_critiques"
+max_cycles     = 3                 # max re-implementation cycles before human escalation
+
 [adapters.ohmypi]
 bun_path        = "bun"
 bridge_path     = "scripts/omp-bridge.ts"
-reasoning_level = "xhigh"          # oh-my-pi reasoning level for all sessions
+thinking_level  = "xhigh"          # oh-my-pi thinkingLevel for all sessions
 
 [foreman]
 enabled          = true
 question_timeout = "0"             # duration string; "0" = wait indefinitely
-```
+
 
 ```go
 func main() {
@@ -469,7 +509,8 @@ func main() {
 	orch := orchestrator.New(transacter, linearAdapter, glabAdapter, agentHarness)
 
 	// Event bus
-	bus := event.NewEventBus()
+	eventRepo := sqlite.NewEventRepo(executor)
+	bus := event.NewEventBus(eventRepo)
 	linearAdapter.RegisterHooks(bus)
 	glabAdapter.RegisterHooks(bus)
 	bus.SubscribeType(domain.EventAgentSessionCompleted, orch.OnSessionCompleted)

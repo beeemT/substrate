@@ -13,7 +13,7 @@ The root aggregate. Represents an external ticket pulled from a work item source
 type WorkItem struct {
 	ID            string            `json:"id"`
 	WorkspaceID   string            `json:"workspace_id"`   // FK to Workspace
-	ExternalID    string            `json:"external_id"`    // format: LIN-{TEAM}-{NUMBER} (e.g. LIN-FOO-123) for adapter-sourced; MAN-{sequential} (e.g. MAN-001) for manual
+	ExternalID    string            `json:"external_id"`    // format: LIN-{TEAM}-{NUMBER} (e.g. LIN-FOO-123) for adapter-sourced; MAN-{n} (e.g. MAN-1, MAN-42) for manual
 	Source        string            `json:"source"`          // adapter name, e.g. "linear"
 	Title         string            `json:"title"`
 	Description   string            `json:"description"`
@@ -21,7 +21,6 @@ type WorkItem struct {
 	AssigneeID    string            `json:"assignee_id"`
 	State         WorkItemState     `json:"state"`
 	Metadata      map[string]any    `json:"metadata"`        // adapter-specific fields
-	Repositories  []RepositoryRef   `json:"repositories"`
 	SourceScope   SelectionScope    `json:"source_scope"`    // granularity selected: issues/projects/initiatives/manual
 	SourceItemIDs []string          `json:"source_item_ids"` // external IDs selected to create this work item
 	CreatedAt     time.Time         `json:"created_at"`
@@ -72,7 +71,6 @@ type Selection struct {
 type ManualWorkItemInput struct {
 	Title        string          `json:"title"`
 	Description  string          `json:"description"`
-	Repositories []RepositoryRef `json:"repositories"`
 }
 
 type AdapterCapabilities struct {
@@ -94,17 +92,6 @@ type ListResult struct {
 	Items      []SelectableItem `json:"items"`
 	NextCursor string           `json:"next_cursor"`
 	HasMore    bool             `json:"has_more"`
-}
-```
-
-### RepositoryRef
-A repository associated with a work item. Stored as a value object within `WorkItem`.
-```go
-type RepositoryRef struct {
-	Name          string `json:"name"`           // short name, e.g. "backend-api"
-	CloneURL      string `json:"clone_url"`
-	DefaultBranch string `json:"default_branch"` // e.g. "main", "master"
-	Role          string `json:"role"`           // "primary", "dependency"
 }
 ```
 
@@ -137,7 +124,7 @@ A single repository's portion of the plan. `Order` is the execution group index 
 type SubPlan struct {
 	ID             string        `json:"id"`
 	PlanID         string        `json:"plan_id"`
-	RepositoryName string        `json:"repository_name"` // matches RepositoryRef.Name
+	RepositoryName string        `json:"repository_name"` // matches repo directory name in workspace
 	Content        string        `json:"content"`         // markdown sub-plan
 	Order          int           `json:"order"` // execution group index; equal values run in parallel
 	Status         SubPlanStatus `json:"status"`
@@ -165,6 +152,7 @@ type Workspace struct {
 
 type WorkspaceStatus string
 const (
+	WorkspaceCreating WorkspaceStatus = "creating"
 	WorkspaceReady    WorkspaceStatus = "ready"
 	WorkspaceArchived WorkspaceStatus = "archived"
 	WorkspaceError    WorkspaceStatus = "error"
@@ -186,6 +174,7 @@ type AgentSession struct {
 	StartedAt      *time.Time         `json:"started_at"`
 	CompletedAt    *time.Time         `json:"completed_at"`
 	ExitCode       *int               `json:"exit_code"`
+	OwnerInstanceID *string            `json:"owner_instance_id"` // nil until session starts; set to spawning instance's ID
 }
 
 type AgentSessionStatus string
@@ -197,6 +186,41 @@ const (
 	AgentSessionInterrupted      AgentSessionStatus = "interrupted"
 	AgentSessionFailed           AgentSessionStatus = "failed"
 )
+```
+
+### SubstrateInstance
+A running Substrate process registered for a workspace. Used for multi-instance coordination: session ownership, answer/resume gating, and PID-independent liveness detection.
+```go
+type SubstrateInstance struct {
+	ID            string    `json:"id"`             // ULID generated at startup
+	WorkspaceID   string    `json:"workspace_id"`
+	PID           int       `json:"pid"`
+	Hostname      string    `json:"hostname"`
+	LastHeartbeat time.Time `json:"last_heartbeat"` // updated every 5s; stale after 15s = dead
+	StartedAt     time.Time `json:"started_at"`
+}
+```
+An instance is considered live if `LastHeartbeat` is within 15 seconds of the current time. An instance is considered dead if its row is missing or the heartbeat is stale.
+### SessionSummary
+```go
+// SessionSummary is a TUI projection type for the session sidebar. It aggregates
+// WorkItem and active AgentSession state into a single value for rendering.
+type SessionSummary struct {
+	WorkItemID    string             `json:"work_item_id"`
+	ExternalID    string             `json:"external_id"`   // e.g. "LIN-FOO-123"
+	Title         string             `json:"title"`
+	State         WorkItemState      `json:"state"`
+	ActiveSession *ActiveSessionInfo `json:"active_session,omitempty"`
+	ReposDone     int                `json:"repos_done"`
+	ReposTotal    int                `json:"repos_total"`
+	CompletedAt   *time.Time         `json:"completed_at,omitempty"`
+}
+
+type ActiveSessionInfo struct {
+	ID     string             `json:"id"`
+	Status AgentSessionStatus `json:"status"`
+	Repo   string             `json:"repo"`  // repository being processed
+}
 ```
 
 ### ReviewCycle
@@ -236,9 +260,10 @@ type Critique struct {
 
 type CritiqueSeverity string
 const (
-	CritiqueSeverityError   CritiqueSeverity = "error"   // must fix
-	CritiqueSeverityWarning CritiqueSeverity = "warning" // should fix
-	CritiqueSeverityInfo    CritiqueSeverity = "info"    // nice to have
+	CritiqueSeverityCritical CritiqueSeverity = "critical" // blocking; must fix before merge
+	CritiqueSeverityMajor    CritiqueSeverity = "major"    // significant issue; triggers re-implementation
+	CritiqueSeverityMinor    CritiqueSeverity = "minor"    // style or quality; logged, does not block
+	CritiqueSeverityNit      CritiqueSeverity = "nit"      // trivial preference; always logged, never blocks
 )
 
 type CritiqueStatus string
@@ -254,6 +279,7 @@ An abstracted reference to documentation consumed during planning and flagged fo
 type DocumentationSource struct {
 	ID           string                  `json:"id"`
 	WorkspaceID  string                  `json:"workspace_id"`
+	RepositoryName string                  `json:"repository_name"` // for repo_embedded: name of the containing workspace repo; empty for dedicated_repo
 	Type         DocumentationSourceType `json:"type"`
 	Path         string                  `json:"path"`           // relative path within repo, e.g. "docs/"
 	RepoURL      string                  `json:"repo_url"`       // clone URL (empty for repo_embedded)
@@ -267,6 +293,8 @@ const (
 	DocSourceDedicatedRepo DocumentationSourceType = "dedicated_repo" // separate docs repo
 )
 ```
+`RepoURL` is empty for `repo_embedded`; use `RepositoryName` to identify the containing workspace repo instead.
+
 
 ### Question
 A question surfaced by a sub-agent, routed through the foreman. If the cross-repo plan contains the answer, the foreman responds directly. Otherwise it escalates to the human.
@@ -280,7 +308,15 @@ type Question struct {
 	AskedAt        time.Time  `json:"asked_at"`
 	AnsweredAt     *time.Time `json:"answered_at"`
 	AnsweredBy     string     `json:"answered_by"`        // "foreman" or "human"
+	Status     QuestionStatus `json:"status"`
 }
+
+type QuestionStatus string
+const (
+	QuestionPending   QuestionStatus = "pending"
+	QuestionAnswered  QuestionStatus = "answered"
+	QuestionEscalated QuestionStatus = "escalated"
+)
 ```
 
 ---
@@ -300,6 +336,9 @@ stateDiagram-v2
     Planning --> Failed : work_item.failed
     Implementing --> Failed : work_item.failed
     Reviewing --> Failed : work_item.failed
+	Ingested --> Failed : work_item.failed
+	PlanReview --> Failed : work_item.failed
+	Approved --> Failed : work_item.failed
     Completed --> [*]
     Failed --> [*]
 ```
@@ -340,6 +379,8 @@ stateDiagram-v2
         CritiquesFound --> Reimplementing : review.reimplementation_started
         Reimplementing --> Reviewing : review.reimplementation_completed
         Passed --> [*]
+		CritiquesFound --> Failed : review.max_cycles_exceeded
+		Failed --> [*]
     }
     Completed --> ReviewPhase : review.started
     ReviewPhase --> Completed : review.passed
@@ -358,6 +399,7 @@ stateDiagram-v2
 2. **CritiquesFound** - Review produced open critiques. Agent must address them.
 3. **Reimplementing** - New agent session spawned to fix critiques. Loops back to Reviewing.
 4. **Passed** - No open critiques. Sub-plan marked completed.
+5. **Failed** — Max review cycles exceeded without passing. Work item is paused and escalated to the human with full critique history.
 ---
 
 ## Workspace Layout
@@ -392,25 +434,27 @@ created_at: "2024-..."
 - The `main/` worktree is never modified by agents. It serves as the read-only reference for planning and diffing.
 - Feature worktrees are created via `git-work checkout -b <branch>` only after plan approval.
 - Multiple work items coexist in the same workspace, each with its own branch/worktree per repo.
-- All domain state lives in the global database at `~/.substrate/state.db`, scoped by workspace ID. Session artifacts (plan drafts, logs) live in `<workspace-root>/.substrate/sessions/<session-id>/`.
+- All domain state lives in the global database at `~/.substrate/state.db`, scoped by workspace ID. Plan drafts live in `<workspace-root>/.substrate/sessions/<session-id>/plan-draft.md`. Session logs live in `~/.substrate/sessions/<session-id>.log`.
 - Sessions are scoped to workspace by the ULID in `.substrate-workspace`, not by filesystem path. Moving the folder doesn't break session access.
 ---
 ## Entity Relationships
 ```mermaid
 erDiagram
     Workspace ||--o{ WorkItem : has
-    WorkItem ||--o{ RepositoryRef : has
     WorkItem ||--|| Plan : has
     WorkItem }|--|| SelectionScope : sourced_via
     Plan ||--o{ SubPlan : contains
     Workspace ||--o{ AgentSession : runs
-    SubPlan ||--|| AgentSession : drives
+	SubPlan ||--o{ AgentSession : drives
     AgentSession ||--o{ ReviewCycle : reviewed_by
     ReviewCycle ||--o{ Critique : contains
     AgentSession ||--o{ Question : raises
+    AgentSession ||--o{ Question : raises
     Workspace ||--o{ DocumentationSource : references
+    Workspace ||--o{ SubstrateInstance : has
+    SubstrateInstance ||--o{ AgentSession : owns
 ```
-Each `Workspace` contains one or more `WorkItem`s. Each `WorkItem` drives exactly one `Plan`. The `Plan` decomposes into `SubPlan`s, each mapped to a `RepositoryRef`. An `AgentSession` executes a `SubPlan` within a feature worktree. After execution, one or more `ReviewCycle`s evaluate the output, producing `Critique`s that may trigger reimplementation.
+Each `Workspace` contains one or more `WorkItem`s. Each `WorkItem` drives exactly one `Plan`; the plan record is updated in-place on revision, never replaced. The `Plan` decomposes into `SubPlan`s, each mapped to a repository in the workspace. An `AgentSession` executes a `SubPlan` within a feature worktree. After execution, one or more `ReviewCycle`s evaluate the output, producing `Critique`s that may trigger reimplementation.
 
 ---
 ## Commit Strategy Types
