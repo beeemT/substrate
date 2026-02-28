@@ -1,0 +1,924 @@
+package sqlite_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+	_ "modernc.org/sqlite"
+
+	"github.com/beeemT/go-atomic/generic"
+	goatomicsqlx "github.com/beeemT/go-atomic/generic/sqlx"
+	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	repocore "github.com/beeemT/substrate/internal/repository"
+	reposqlite "github.com/beeemT/substrate/internal/repository/sqlite"
+	"github.com/beeemT/substrate/migrations"
+)
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+func setupDB(t *testing.T) *sqlx.DB {
+	t.Helper()
+	db, err := sqlx.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			t.Fatalf("pragma %s: %v", pragma, err)
+		}
+	}
+
+	if err := repocore.Migrate(context.Background(), db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return db
+}
+
+func beginTx(t *testing.T, db *sqlx.DB) *sqlx.Tx {
+	t.Helper()
+	tx, err := db.Beginx()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return tx
+}
+
+func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
+
+func makeWorkspace(t *testing.T, tx generic.SQLXRemote) domain.Workspace {
+	t.Helper()
+	ws := domain.Workspace{
+		ID:        domain.NewID(),
+		Name:      "test-workspace",
+		RootPath:  "/tmp/test-ws",
+		Status:    domain.WorkspaceReady,
+		CreatedAt: now(),
+		UpdatedAt: now(),
+	}
+	if err := reposqlite.NewWorkspaceRepo(tx).Create(context.Background(), ws); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	return ws
+}
+
+func makeWorkItem(t *testing.T, tx generic.SQLXRemote, wsID string) domain.WorkItem {
+	t.Helper()
+	item := domain.WorkItem{
+		ID:          domain.NewID(),
+		WorkspaceID: wsID,
+		Source:      "github",
+		Title:       "test-item",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+	}
+	if err := reposqlite.NewWorkItemRepo(tx).Create(context.Background(), item); err != nil {
+		t.Fatalf("create work item: %v", err)
+	}
+	return item
+}
+
+func makePlan(t *testing.T, tx generic.SQLXRemote, wiID string) domain.Plan {
+	t.Helper()
+	plan := domain.Plan{
+		ID:               domain.NewID(),
+		WorkItemID:       wiID,
+		OrchestratorPlan: "plan-content",
+		Status:           domain.PlanDraft,
+		Version:          1,
+		CreatedAt:        now(),
+		UpdatedAt:        now(),
+	}
+	if err := reposqlite.NewPlanRepo(tx).Create(context.Background(), plan); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	return plan
+}
+
+func makeSubPlan(t *testing.T, tx generic.SQLXRemote, planID string) domain.SubPlan {
+	t.Helper()
+	sp := domain.SubPlan{
+		ID:             domain.NewID(),
+		PlanID:         planID,
+		RepositoryName: "test-repo",
+		Content:        "sub-plan-content",
+		Order:          1,
+		Status:         domain.SubPlanPending,
+		CreatedAt:      now(),
+		UpdatedAt:      now(),
+	}
+	if err := reposqlite.NewSubPlanRepo(tx).Create(context.Background(), sp); err != nil {
+		t.Fatalf("create sub-plan: %v", err)
+	}
+	return sp
+}
+
+func makeInstance(t *testing.T, tx generic.SQLXRemote, wsID string) domain.SubstrateInstance {
+	t.Helper()
+	inst := domain.SubstrateInstance{
+		ID:            domain.NewID(),
+		WorkspaceID:   wsID,
+		PID:           12345,
+		Hostname:      "localhost",
+		LastHeartbeat: now(),
+		StartedAt:     now(),
+	}
+	if err := reposqlite.NewInstanceRepo(tx).Create(context.Background(), inst); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	return inst
+}
+
+func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.AgentSession {
+	t.Helper()
+	s := domain.AgentSession{
+		ID:             domain.NewID(),
+		SubPlanID:      spID,
+		WorkspaceID:    wsID,
+		RepositoryName: "test-repo",
+		HarnessName:    "claude",
+		WorktreePath:   "/tmp/worktree",
+		Status:         domain.AgentSessionPending,
+		CreatedAt:      now(),
+		UpdatedAt:      now(),
+	}
+	if err := reposqlite.NewSessionRepo(tx).Create(context.Background(), s); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return s
+}
+
+// ---------------------------------------------------------------------------
+// Workspace CRUD
+// ---------------------------------------------------------------------------
+
+func TestWorkspaceCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	repo := reposqlite.NewWorkspaceRepo(tx)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+
+	got, err := repo.Get(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != ws.Name {
+		t.Errorf("name = %q, want %q", got.Name, ws.Name)
+	}
+
+	ws.Name = "updated"
+	ws.UpdatedAt = now()
+	if err := repo.Update(ctx, ws); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, _ = repo.Get(ctx, ws.ID)
+	if got.Name != "updated" {
+		t.Errorf("name after update = %q, want %q", got.Name, "updated")
+	}
+
+	if err := repo.Delete(ctx, ws.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_, err = repo.Get(ctx, ws.ID)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected sql.ErrNoRows after delete, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WorkItem CRUD + List
+// ---------------------------------------------------------------------------
+
+func TestWorkItemCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewWorkItemRepo(tx)
+
+	item := domain.WorkItem{
+		ID:          domain.NewID(),
+		WorkspaceID: ws.ID,
+		Source:      "github",
+		Title:       "my-item",
+		Description: "desc",
+		State:       domain.WorkItemIngested,
+		Labels:      []string{"bug", "p0"},
+		Metadata:    map[string]any{"key": "val"},
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+	}
+	if err := repo.Create(ctx, item); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Title != item.Title {
+		t.Errorf("title = %q, want %q", got.Title, item.Title)
+	}
+	if len(got.Labels) != 2 || got.Labels[0] != "bug" {
+		t.Errorf("labels = %v, want [bug p0]", got.Labels)
+	}
+
+	item.State = domain.WorkItemPlanning
+	item.UpdatedAt = now()
+	if err := repo.Update(ctx, item); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, _ = repo.Get(ctx, item.ID)
+	if got.State != domain.WorkItemPlanning {
+		t.Errorf("state = %q, want %q", got.State, domain.WorkItemPlanning)
+	}
+
+	if err := repo.Delete(ctx, item.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestWorkItemListFilter(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewWorkItemRepo(tx)
+
+	for i := 0; i < 3; i++ {
+		makeWorkItem(t, tx, ws.ID)
+	}
+
+	wsID := ws.ID
+	state := domain.WorkItemIngested
+	items, err := repo.List(ctx, repository.WorkItemFilter{
+		WorkspaceID: &wsID,
+		State:       &state,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 3 {
+		t.Errorf("len = %d, want 3", len(items))
+	}
+}
+
+func TestWorkItemListEmpty(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	repo := reposqlite.NewWorkItemRepo(tx)
+	items, err := repo.List(ctx, repository.WorkItemFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("len = %d, want 0", len(items))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan CRUD
+// ---------------------------------------------------------------------------
+
+func TestPlanCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	repo := reposqlite.NewPlanRepo(tx)
+
+	plan := makePlan(t, tx, wi.ID)
+
+	got, err := repo.Get(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.OrchestratorPlan != plan.OrchestratorPlan {
+		t.Errorf("plan content mismatch")
+	}
+
+	gotByWI, err := repo.GetByWorkItemID(ctx, wi.ID)
+	if err != nil {
+		t.Fatalf("get by work item: %v", err)
+	}
+	if gotByWI.ID != plan.ID {
+		t.Errorf("id mismatch on get by work item")
+	}
+
+	plan.Status = domain.PlanApproved
+	plan.UpdatedAt = now()
+	if err := repo.Update(ctx, plan); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := repo.Delete(ctx, plan.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SubPlan CRUD
+// ---------------------------------------------------------------------------
+
+func TestSubPlanCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	repo := reposqlite.NewSubPlanRepo(tx)
+
+	sp := makeSubPlan(t, tx, plan.ID)
+
+	got, err := repo.Get(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.RepositoryName != sp.RepositoryName {
+		t.Errorf("repo name mismatch")
+	}
+
+	list, err := repo.ListByPlanID(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("len = %d, want 1", len(list))
+	}
+
+	sp.Status = domain.SubPlanInProgress
+	sp.UpdatedAt = now()
+	if err := repo.Update(ctx, sp); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := repo.Delete(ctx, sp.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Instance CRUD
+// ---------------------------------------------------------------------------
+
+func TestInstanceCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewInstanceRepo(tx)
+
+	inst := makeInstance(t, tx, ws.ID)
+
+	got, err := repo.Get(ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.PID != inst.PID {
+		t.Errorf("pid = %d, want %d", got.PID, inst.PID)
+	}
+
+	list, err := repo.ListByWorkspaceID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("len = %d, want 1", len(list))
+	}
+
+	inst.Hostname = "other-host"
+	if err := repo.Update(ctx, inst); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := repo.Delete(ctx, inst.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session CRUD
+// ---------------------------------------------------------------------------
+
+func TestSessionCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	repo := reposqlite.NewSessionRepo(tx)
+
+	sess := makeSession(t, tx, sp.ID, ws.ID)
+
+	got, err := repo.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.HarnessName != sess.HarnessName {
+		t.Errorf("harness = %q, want %q", got.HarnessName, sess.HarnessName)
+	}
+
+	list, err := repo.ListBySubPlanID(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("list by sub-plan: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("len = %d, want 1", len(list))
+	}
+
+	listByWs, err := repo.ListByWorkspaceID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("list by workspace: %v", err)
+	}
+	if len(listByWs) != 1 {
+		t.Errorf("len = %d, want 1", len(listByWs))
+	}
+
+	sess.Status = domain.AgentSessionRunning
+	startedAt := now()
+	sess.StartedAt = &startedAt
+	sess.UpdatedAt = now()
+	if err := repo.Update(ctx, sess); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := repo.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReviewCycle + Critique CRUD
+// ---------------------------------------------------------------------------
+
+func TestReviewCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	sess := makeSession(t, tx, sp.ID, ws.ID)
+	repo := reposqlite.NewReviewRepo(tx)
+
+	rc := domain.ReviewCycle{
+		ID:              domain.NewID(),
+		AgentSessionID:  sess.ID,
+		CycleNumber:     1,
+		ReviewerHarness: "claude-reviewer",
+		Status:          domain.ReviewCycleReviewing,
+		CreatedAt:       now(),
+		UpdatedAt:       now(),
+	}
+	if err := repo.CreateCycle(ctx, rc); err != nil {
+		t.Fatalf("create cycle: %v", err)
+	}
+
+	got, err := repo.GetCycle(ctx, rc.ID)
+	if err != nil {
+		t.Fatalf("get cycle: %v", err)
+	}
+	if got.ReviewerHarness != rc.ReviewerHarness {
+		t.Errorf("harness mismatch")
+	}
+
+	cycles, err := repo.ListCyclesBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list cycles: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Errorf("len = %d, want 1", len(cycles))
+	}
+
+	rc.Status = domain.ReviewCyclePassed
+	rc.UpdatedAt = now()
+	if err := repo.UpdateCycle(ctx, rc); err != nil {
+		t.Fatalf("update cycle: %v", err)
+	}
+
+	lineNo := 42
+	crit := domain.Critique{
+		ID:            domain.NewID(),
+		ReviewCycleID: rc.ID,
+		FilePath:      "main.go",
+		LineNumber:    &lineNo,
+		Severity:      domain.CritiqueMajor,
+		Description:   "needs fix",
+		Status:        domain.CritiqueOpen,
+		CreatedAt:     now(),
+	}
+	if err := repo.CreateCritique(ctx, crit); err != nil {
+		t.Fatalf("create critique: %v", err)
+	}
+
+	gotCrit, err := repo.GetCritique(ctx, crit.ID)
+	if err != nil {
+		t.Fatalf("get critique: %v", err)
+	}
+	if gotCrit.Description != crit.Description {
+		t.Errorf("description mismatch")
+	}
+
+	crits, err := repo.ListCritiquesByReviewCycleID(ctx, rc.ID)
+	if err != nil {
+		t.Fatalf("list critiques: %v", err)
+	}
+	if len(crits) != 1 {
+		t.Errorf("len = %d, want 1", len(crits))
+	}
+
+	crit.Status = domain.CritiqueResolved
+	if err := repo.UpdateCritique(ctx, crit); err != nil {
+		t.Fatalf("update critique: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Question CRUD
+// ---------------------------------------------------------------------------
+
+func TestQuestionCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	sess := makeSession(t, tx, sp.ID, ws.ID)
+	repo := reposqlite.NewQuestionRepo(tx)
+
+	q := domain.Question{
+		ID:             domain.NewID(),
+		AgentSessionID: sess.ID,
+		Content:        "what should I do?",
+		Context:        "some context",
+		Status:         domain.QuestionPending,
+		CreatedAt:      now(),
+	}
+	if err := repo.Create(ctx, q); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, q.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Content != q.Content {
+		t.Errorf("content mismatch")
+	}
+
+	list, err := repo.ListBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("len = %d, want 1", len(list))
+	}
+
+	answeredAt := now()
+	q.Answer = "do this"
+	q.AnsweredBy = "foreman"
+	q.Status = domain.QuestionAnswered
+	q.AnsweredAt = &answeredAt
+	if err := repo.Update(ctx, q); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Documentation CRUD
+// ---------------------------------------------------------------------------
+
+func TestDocumentationCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewDocumentationRepo(tx)
+
+	ds := domain.DocumentationSource{
+		ID:          domain.NewID(),
+		WorkspaceID: ws.ID,
+		Type:        domain.DocSourceRepoEmbedded,
+		Path:        "docs/",
+		Description: "main docs",
+		CreatedAt:   now(),
+	}
+	if err := repo.Create(ctx, ds); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, ds.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Path != ds.Path {
+		t.Errorf("path mismatch")
+	}
+
+	list, err := repo.ListByWorkspaceID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("len = %d, want 1", len(list))
+	}
+
+	ds.Description = "updated docs"
+	if err := repo.Update(ctx, ds); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := repo.Delete(ctx, ds.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Event CRUD
+// ---------------------------------------------------------------------------
+
+func TestEventCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewEventRepo(tx)
+
+	ev := domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   "workspace_created",
+		WorkspaceID: ws.ID,
+		Payload:     `{"name":"test"}`,
+		CreatedAt:   now(),
+	}
+	if err := repo.Create(ctx, ev); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	byType, err := repo.ListByType(ctx, "workspace_created", 10)
+	if err != nil {
+		t.Fatalf("list by type: %v", err)
+	}
+	if len(byType) != 1 {
+		t.Errorf("len = %d, want 1", len(byType))
+	}
+
+	byWs, err := repo.ListByWorkspaceID(ctx, ws.ID, 10)
+	if err != nil {
+		t.Fatalf("list by workspace: %v", err)
+	}
+	if len(byWs) != 1 {
+		t.Errorf("len = %d, want 1", len(byWs))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FK constraint enforcement
+// ---------------------------------------------------------------------------
+
+func TestFKConstraintWorkItem(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	repo := reposqlite.NewWorkItemRepo(tx)
+	item := domain.WorkItem{
+		ID:          domain.NewID(),
+		WorkspaceID: "nonexistent",
+		Source:      "github",
+		Title:       "orphan",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+	}
+	err := repo.Create(ctx, item)
+	if err == nil {
+		t.Fatal("expected FK error for nonexistent workspace_id")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetNotFound returns sql.ErrNoRows
+// ---------------------------------------------------------------------------
+
+func TestGetNotFound(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	_, err := reposqlite.NewWorkspaceRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("workspace get not found: got %v, want sql.ErrNoRows", err)
+	}
+
+	_, err = reposqlite.NewWorkItemRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("work item get not found: got %v, want sql.ErrNoRows", err)
+	}
+
+	_, err = reposqlite.NewPlanRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("plan get not found: got %v, want sql.ErrNoRows", err)
+	}
+
+	_, err = reposqlite.NewSubPlanRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("sub-plan get not found: got %v, want sql.ErrNoRows", err)
+	}
+
+	_, err = reposqlite.NewSessionRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("session get not found: got %v, want sql.ErrNoRows", err)
+	}
+
+	_, err = reposqlite.NewInstanceRepo(tx).Get(ctx, "nope")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("instance get not found: got %v, want sql.ErrNoRows", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transact: commit + rollback
+// ---------------------------------------------------------------------------
+
+func TestTransactCommit(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+
+	executer := goatomicsqlx.NewExecuter(db)
+	transacter := generic.NewTransacter[generic.SQLXRemote, reposqlite.Resources](
+		executer, reposqlite.ResourcesFactory,
+	)
+
+	var wsID string
+	err := transacter.Transact(ctx, func(ctx context.Context, res reposqlite.Resources) error {
+		ws := domain.Workspace{
+			ID:        domain.NewID(),
+			Name:      "transact-ws",
+			RootPath:  "/tmp/transact",
+			Status:    domain.WorkspaceReady,
+			CreatedAt: now(),
+			UpdatedAt: now(),
+		}
+		wsID = ws.ID
+		return res.Workspaces.Create(ctx, ws)
+	})
+	if err != nil {
+		t.Fatalf("transact commit: %v", err)
+	}
+
+	// Verify committed: read outside transaction
+	tx := beginTx(t, db)
+	got, err := reposqlite.NewWorkspaceRepo(tx).Get(ctx, wsID)
+	if err != nil {
+		t.Fatalf("read committed: %v", err)
+	}
+	if got.Name != "transact-ws" {
+		t.Errorf("name = %q, want %q", got.Name, "transact-ws")
+	}
+}
+
+func TestTransactRollback(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+
+	executer := goatomicsqlx.NewExecuter(db)
+	transacter := generic.NewTransacter[generic.SQLXRemote, reposqlite.Resources](
+		executer, reposqlite.ResourcesFactory,
+	)
+
+	deliberateErr := errors.New("deliberate")
+	var wsID string
+	err := transacter.Transact(ctx, func(ctx context.Context, res reposqlite.Resources) error {
+		ws := domain.Workspace{
+			ID:        domain.NewID(),
+			Name:      "rollback-ws",
+			RootPath:  "/tmp/rollback",
+			Status:    domain.WorkspaceReady,
+			CreatedAt: now(),
+			UpdatedAt: now(),
+		}
+		wsID = ws.ID
+		if err := res.Workspaces.Create(ctx, ws); err != nil {
+			return err
+		}
+		return deliberateErr
+	})
+	if err == nil {
+		t.Fatal("expected error from transact")
+	}
+
+	// Verify rolled back
+	tx := beginTx(t, db)
+	_, err = reposqlite.NewWorkspaceRepo(tx).Get(ctx, wsID)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected sql.ErrNoRows after rollback, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Empty list returns empty slice, not nil
+// ---------------------------------------------------------------------------
+
+func TestEmptyLists(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	sess := makeSession(t, tx, sp.ID, ws.ID)
+
+	subPlans, err := reposqlite.NewSubPlanRepo(tx).ListByPlanID(ctx, "nonexistent-plan")
+	if err != nil {
+		t.Fatalf("sub-plans: %v", err)
+	}
+	if subPlans == nil {
+		t.Error("sub-plans should be non-nil empty slice")
+	}
+
+	sessions, err := reposqlite.NewSessionRepo(tx).ListBySubPlanID(ctx, "nonexistent-sp")
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+	if sessions == nil {
+		t.Error("sessions should be non-nil empty slice")
+	}
+
+	cycles, err := reposqlite.NewReviewRepo(tx).ListCyclesBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("review cycles: %v", err)
+	}
+	if cycles == nil {
+		t.Error("review cycles should be non-nil empty slice")
+	}
+
+	questions, err := reposqlite.NewQuestionRepo(tx).ListBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("questions: %v", err)
+	}
+	if questions == nil {
+		t.Error("questions should be non-nil empty slice")
+	}
+
+	docs, err := reposqlite.NewDocumentationRepo(tx).ListByWorkspaceID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("docs: %v", err)
+	}
+	if docs == nil {
+		t.Error("docs should be non-nil empty slice")
+	}
+
+	events, err := reposqlite.NewEventRepo(tx).ListByType(ctx, "nonexistent", 10)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if events == nil {
+		t.Error("events should be non-nil empty slice")
+	}
+
+	instances, err := reposqlite.NewInstanceRepo(tx).ListByWorkspaceID(ctx, "nonexistent-ws")
+	if err != nil {
+		t.Fatalf("instances: %v", err)
+	}
+	if instances == nil {
+		t.Error("instances should be non-nil empty slice")
+	}
+}

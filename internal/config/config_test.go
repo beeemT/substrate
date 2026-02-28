@@ -30,14 +30,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Commit.MessageFormat != CommitMessageAIGenerated {
 		t.Errorf("commit.message_format = %q, want %q", cfg.Commit.MessageFormat, CommitMessageAIGenerated)
 	}
-	if cfg.Plan.MaxParseRetries != 2 {
-		t.Errorf("plan.max_parse_retries = %d, want 2", cfg.Plan.MaxParseRetries)
+	if *cfg.Plan.MaxParseRetries != 2 {
+		t.Errorf("plan.max_parse_retries = %d, want 2", *cfg.Plan.MaxParseRetries)
 	}
 	if cfg.Review.PassThreshold != PassThresholdMinorOK {
 		t.Errorf("review.pass_threshold = %q, want %q", cfg.Review.PassThreshold, PassThresholdMinorOK)
 	}
-	if cfg.Review.MaxCycles != 3 {
-		t.Errorf("review.max_cycles = %d, want 3", cfg.Review.MaxCycles)
+	if *cfg.Review.MaxCycles != 3 {
+		t.Errorf("review.max_cycles = %d, want 3", *cfg.Review.MaxCycles)
 	}
 }
 
@@ -65,14 +65,14 @@ max_cycles = 7
 	if cfg.Commit.MessageFormat != CommitMessageConventional {
 		t.Errorf("commit.message_format = %q, want %q", cfg.Commit.MessageFormat, CommitMessageConventional)
 	}
-	if cfg.Plan.MaxParseRetries != 5 {
-		t.Errorf("plan.max_parse_retries = %d, want 5", cfg.Plan.MaxParseRetries)
+	if *cfg.Plan.MaxParseRetries != 5 {
+		t.Errorf("plan.max_parse_retries = %d, want 5", *cfg.Plan.MaxParseRetries)
 	}
 	if cfg.Review.PassThreshold != PassThresholdNoCritiques {
 		t.Errorf("review.pass_threshold = %q, want %q", cfg.Review.PassThreshold, PassThresholdNoCritiques)
 	}
-	if cfg.Review.MaxCycles != 7 {
-		t.Errorf("review.max_cycles = %d, want 7", cfg.Review.MaxCycles)
+	if *cfg.Review.MaxCycles != 7 {
+		t.Errorf("review.max_cycles = %d, want 7", *cfg.Review.MaxCycles)
 	}
 }
 
@@ -168,7 +168,10 @@ func TestLoadWithRepos(t *testing.T) {
 
 func TestGlobalDBPath(t *testing.T) {
 	cfg := &Config{}
-	path := cfg.GlobalDBPath()
+	path, err := cfg.GlobalDBPath()
+	if err != nil {
+		t.Fatalf("GlobalDBPath() error = %v", err)
+	}
 	if filepath.Base(path) != "state.db" {
 		t.Errorf("GlobalDBPath() = %q, want to end with state.db", path)
 	}

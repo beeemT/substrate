@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+func ptr[T any](v T) *T { return &v }
 
 // CommitStrategy controls how often agents commit during a session.
 type CommitStrategy string
@@ -38,12 +41,12 @@ const (
 
 // Config is the top-level configuration loaded from substrate.toml.
 type Config struct {
-	Commit   CommitConfig            `toml:"commit"`
-	Plan     PlanConfig              `toml:"plan"`
-	Review   ReviewConfig            `toml:"review"`
-	Adapters AdaptersConfig          `toml:"adapters"`
-	Foreman  ForemanConfig           `toml:"foreman"`
-	Repos    map[string]RepoConfig   `toml:"repos"`
+	Commit   CommitConfig          `toml:"commit"`
+	Plan     PlanConfig            `toml:"plan"`
+	Review   ReviewConfig          `toml:"review"`
+	Adapters AdaptersConfig        `toml:"adapters"`
+	Foreman  ForemanConfig         `toml:"foreman"`
+	Repos    map[string]RepoConfig `toml:"repos"`
 }
 
 // CommitConfig controls agent commit behavior.
@@ -55,13 +58,13 @@ type CommitConfig struct {
 
 // PlanConfig controls the planning pipeline.
 type PlanConfig struct {
-	MaxParseRetries int `toml:"max_parse_retries"`
+	MaxParseRetries *int `toml:"max_parse_retries"`
 }
 
 // ReviewConfig controls the review pipeline.
 type ReviewConfig struct {
 	PassThreshold PassThreshold `toml:"pass_threshold"`
-	MaxCycles     int           `toml:"max_cycles"`
+	MaxCycles     *int          `toml:"max_cycles"`
 }
 
 // AdaptersConfig contains per-adapter configuration.
@@ -86,15 +89,21 @@ type ForemanConfig struct {
 type RepoConfig struct{}
 
 // GlobalDBPath returns the path to the global SQLite database.
-func (c *Config) GlobalDBPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".substrate", "state.db")
+func (c *Config) GlobalDBPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home directory: %w", err)
+	}
+	return filepath.Join(home, ".substrate", "state.db"), nil
 }
 
 // GlobalDir returns the path to the global Substrate directory.
-func (c *Config) GlobalDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".substrate")
+func (c *Config) GlobalDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home directory: %w", err)
+	}
+	return filepath.Join(home, ".substrate"), nil
 }
 
 // Load reads and validates a substrate.toml configuration file.
@@ -126,14 +135,14 @@ func applyDefaults(cfg *Config) {
 	if cfg.Commit.MessageFormat == "" {
 		cfg.Commit.MessageFormat = CommitMessageAIGenerated
 	}
-	if cfg.Plan.MaxParseRetries == 0 {
-		cfg.Plan.MaxParseRetries = 2
+	if cfg.Plan.MaxParseRetries == nil {
+		cfg.Plan.MaxParseRetries = ptr(2)
 	}
 	if cfg.Review.PassThreshold == "" {
 		cfg.Review.PassThreshold = PassThresholdMinorOK
 	}
-	if cfg.Review.MaxCycles == 0 {
-		cfg.Review.MaxCycles = 3
+	if cfg.Review.MaxCycles == nil {
+		cfg.Review.MaxCycles = ptr(3)
 	}
 }
 
@@ -154,8 +163,8 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("commit.message_template is required when commit.message_format is %q", CommitMessageCustom)
 	}
 
-	if cfg.Plan.MaxParseRetries < 0 {
-		return fmt.Errorf("plan.max_parse_retries must be non-negative, got %d", cfg.Plan.MaxParseRetries)
+	if *cfg.Plan.MaxParseRetries < 0 {
+		return fmt.Errorf("plan.max_parse_retries must be non-negative, got %d", *cfg.Plan.MaxParseRetries)
 	}
 
 	switch cfg.Review.PassThreshold {
@@ -164,8 +173,14 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("invalid review.pass_threshold: %q (must be nit_only, minor_ok, or no_critiques)", cfg.Review.PassThreshold)
 	}
 
-	if cfg.Review.MaxCycles < 1 {
-		return fmt.Errorf("review.max_cycles must be at least 1, got %d", cfg.Review.MaxCycles)
+	if *cfg.Review.MaxCycles < 1 {
+		return fmt.Errorf("review.max_cycles must be at least 1, got %d", *cfg.Review.MaxCycles)
+	}
+
+	if cfg.Foreman.Enabled && cfg.Foreman.QuestionTimeout != "" {
+		if _, err := time.ParseDuration(cfg.Foreman.QuestionTimeout); err != nil {
+			return fmt.Errorf("invalid foreman.question_timeout: %w", err)
+		}
 	}
 
 	return nil
