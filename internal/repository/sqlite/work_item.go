@@ -66,7 +66,19 @@ func (r *workItemRow) toDomain() (domain.WorkItem, error) {
 	}, nil
 }
 
-func rowFromWorkItem(item domain.WorkItem) workItemRow {
+func rowFromWorkItem(item domain.WorkItem) (workItemRow, error) {
+	labels, err := marshalStringSlice(item.Labels)
+	if err != nil {
+		return workItemRow{}, fmt.Errorf("marshal labels: %w", err)
+	}
+	sourceItemIDs, err := marshalStringSlice(item.SourceItemIDs)
+	if err != nil {
+		return workItemRow{}, fmt.Errorf("marshal source_item_ids: %w", err)
+	}
+	metadata, err := marshalMap(item.Metadata)
+	if err != nil {
+		return workItemRow{}, fmt.Errorf("marshal metadata: %w", err)
+	}
 	return workItemRow{
 		ID:            item.ID,
 		WorkspaceID:   item.WorkspaceID,
@@ -77,12 +89,12 @@ func rowFromWorkItem(item domain.WorkItem) workItemRow {
 		Description:   strPtr(item.Description),
 		AssigneeID:    strPtr(item.AssigneeID),
 		State:         string(item.State),
-		Labels:        marshalStringSlice(item.Labels),
-		SourceItemIDs: marshalStringSlice(item.SourceItemIDs),
-		Metadata:      marshalMap(item.Metadata),
+		Labels:        labels,
+		SourceItemIDs: sourceItemIDs,
+		Metadata:      metadata,
 		CreatedAt:     formatTime(item.CreatedAt),
 		UpdatedAt:     formatTime(item.UpdatedAt),
-	}
+	}, nil
 }
 
 // WorkItemRepo implements repository.WorkItemRepository using SQLite.
@@ -141,8 +153,11 @@ func (r WorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter
 }
 
 func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
-	row := rowFromWorkItem(item)
-	_, err := r.remote.NamedExecContext(ctx,
+	row, err := rowFromWorkItem(item)
+	if err != nil {
+		return fmt.Errorf("create work item %s: %w", item.ID, err)
+	}
+	_, err = r.remote.NamedExecContext(ctx,
 		`INSERT INTO work_items
 		 (id, workspace_id, external_id, source, source_scope, title, description, assignee_id,
 		  state, labels, source_item_ids, metadata, created_at, updated_at)
@@ -156,7 +171,10 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 }
 
 func (r WorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
-	row := rowFromWorkItem(item)
+	row, err := rowFromWorkItem(item)
+	if err != nil {
+		return fmt.Errorf("update work item %s: %w", item.ID, err)
+	}
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE work_items SET
 		 workspace_id = :workspace_id, external_id = :external_id, source = :source,

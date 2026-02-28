@@ -134,6 +134,22 @@ func (r SessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) 
 	return sessions, nil
 }
 
+func (r SessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
+	var rows []sessionRow
+	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM agent_sessions WHERE owner_instance_id = ? ORDER BY created_at`, instanceID); err != nil {
+		return nil, fmt.Errorf("list sessions for instance %s: %w", instanceID, err)
+	}
+	sessions := make([]domain.AgentSession, len(rows))
+	for i := range rows {
+		s, err := rows[i].toDomain()
+		if err != nil {
+			return nil, fmt.Errorf("convert session: %w", err)
+		}
+		sessions[i] = s
+	}
+	return sessions, nil
+}
+
 func (r SessionRepo) Create(ctx context.Context, s domain.AgentSession) error {
 	row := rowFromSession(s)
 	_, err := r.remote.NamedExecContext(ctx,

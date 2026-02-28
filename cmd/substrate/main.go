@@ -22,7 +22,7 @@ func main() {
 }
 
 func run() error {
-	cfgPath := "substrate.toml"
+	cfgPath := "~/.substrate/config.toml"
 	if p := os.Getenv("SUBSTRATE_CONFIG"); p != "" {
 		cfgPath = p
 	}

@@ -6,6 +6,13 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// ErrNotFound is returned when an entity is not found.
+var ErrNotFound = error(notFound{})
+
+type notFound struct{}
+
+func (notFound) Error() string { return "not found" }
+
 // WorkItemFilter constrains WorkItemRepository.List results.
 type WorkItemFilter struct {
 	WorkspaceID   *string
@@ -54,6 +61,7 @@ type SessionRepository interface {
 	Get(ctx context.Context, id string) (domain.AgentSession, error)
 	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error)
+	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error)
 	Create(ctx context.Context, s domain.AgentSession) error
 	Update(ctx context.Context, s domain.AgentSession) error
 	Delete(ctx context.Context, id string) error

@@ -45,28 +45,28 @@ func formatTimePtr(t *time.Time) *string {
 	return &s
 }
 
-func marshalJSON(v any) *string {
+func marshalJSON(v any) (*string, error) {
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("marshal JSON: %w", err)
 	}
 	s := string(b)
-	return &s
+	return &s, nil
 }
 
-func marshalStringSlice(v []string) *string {
+func marshalStringSlice(v []string) (*string, error) {
 	if len(v) == 0 {
-		return nil
+		return nil, nil
 	}
 	return marshalJSON(v)
 }
 
-func marshalMap(v map[string]any) *string {
+func marshalMap(v map[string]any) (*string, error) {
 	if len(v) == 0 {
-		return nil
+		return nil, nil
 	}
 	return marshalJSON(v)
 }
