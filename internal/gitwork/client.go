@@ -1,0 +1,188 @@
+package gitwork
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// Client wraps the git-work CLI for worktree management.
+type Client struct {
+	// BinPath is the path to the git-work binary.
+	// If empty, "git-work" is looked up in PATH.
+	BinPath string
+}
+
+// NewClient creates a new git-work client.
+func NewClient(binPath string) *Client {
+	return &Client{BinPath: binPath}
+}
+
+// bin returns the path to the git-work binary.
+func (c *Client) bin() string {
+	if c.BinPath != "" {
+		return c.BinPath
+	}
+	return "git-work"
+}
+
+// Checkout creates a new worktree for the given branch and returns its path.
+// The branch is created from the current HEAD if it doesn't exist.
+// The worktree is created in a subdirectory named after the branch.
+func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, error) {
+	// Use -b to create a new worktree for the branch
+	args := []string{"checkout", "-b", branch}
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
+
+	// git-work checkout -b outputs the path to stdout
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("git-work checkout -b %s: %w (stderr: %s)", branch, err, string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("git-work checkout -b %s: %w", branch, err)
+	}
+
+	path := strings.TrimSpace(string(output))
+	if path == "" {
+		return "", fmt.Errorf("git-work checkout -b %s: empty output", branch)
+	}
+
+	return path, nil
+}
+
+// List returns all worktrees in the given repository directory.
+// Context cancellation is honored: if ctx is cancelled, the command will be
+// terminated and an error returned. Partial JSON output on cancellation is
+// handled by parseListJSON which returns an empty slice for empty input.
+func (c *Client) List(ctx context.Context, repoDir string) ([]Worktree, error) {
+	args := []string{"list", "--format=json"}
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
+
+	// git-work outputs JSON to stderr with --format=json
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git-work list: %w (output: %s)", err, string(output))
+	}
+
+	return parseListJSON(output, repoDir)
+}
+
+// gitWorkListResponse represents the top-level JSON structure from git-work list --format=json.
+type gitWorkListResponse struct {
+	Data struct {
+		Worktrees []worktreeJSON `json:"worktrees"`
+	} `json:"data"`
+	Messages []struct {
+		Level string `json:"level"`
+		Text  string `json:"text"`
+	} `json:"messages"`
+}
+
+// worktreeJSON represents a single worktree entry from git-work list --format=json.
+type worktreeJSON struct {
+	Dir     string `json:"dir"`
+	Branch  string `json:"branch"`
+	Current bool   `json:"current"`
+}
+
+// parseListJSON parses the JSON output from git-work list --format=json.
+func parseListJSON(data []byte, repoDir string) ([]Worktree, error) {
+	if len(data) == 0 {
+		return []Worktree{}, nil
+	}
+
+	var resp gitWorkListResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parse git-work list JSON: %w", err)
+	}
+
+	entries := resp.Data.Worktrees
+	worktrees := make([]Worktree, len(entries))
+	for i, e := range entries {
+		// Convert to full path if not already absolute
+		path := e.Dir
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(repoDir, path)
+		}
+
+		worktrees[i] = Worktree{
+			Path:   path,
+			Branch: e.Branch,
+			// Current worktree is main if it's the default branch (typically 'main' or 'master')
+			// We also check if the branch is named 'main' or 'master' as a fallback
+			IsMain: e.Current || e.Branch == "main" || e.Branch == "master",
+		}
+	}
+
+	return worktrees, nil
+}
+
+// Remove deletes the worktree for the given branch.
+func (c *Client) Remove(ctx context.Context, repoDir, branch string) error {
+	args := []string{"rm", "--yes", branch}
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git-work rm %s: %w (output: %s)", branch, err, string(output))
+	}
+
+	return nil
+}
+
+// Sync synchronizes worktrees with remote state, pruning deleted branches.
+func (c *Client) Sync(ctx context.Context, repoDir string) error {
+	args := []string{"sync"}
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git-work sync: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
+// CheckInstalled verifies that git-work is available in PATH or at BinPath.
+func (c *Client) CheckInstalled() error {
+	bin := c.bin()
+	if _, err := exec.LookPath(bin); err != nil {
+		return fmt.Errorf("git-work not found in PATH: %w", err)
+	}
+	return nil
+}
+
+// GetMainWorktree returns the path to the main worktree for a repository.
+func (c *Client) GetMainWorktree(ctx context.Context, repoDir string) (string, error) {
+	worktrees, err := c.List(ctx, repoDir)
+	if err != nil {
+		return "", err
+	}
+
+	for _, wt := range worktrees {
+		if wt.IsMain {
+			return wt.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("no main worktree found in %s", repoDir)
+}
+
+// IsGitWorkRepo checks if the given directory is a git-work repository
+// by looking for a .bare subdirectory.
+func IsGitWorkRepo(dir string) bool {
+	barePath := filepath.Join(dir, ".bare")
+	info, err := os.Stat(barePath)
+	return err == nil && info.IsDir()
+}
