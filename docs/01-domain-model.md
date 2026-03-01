@@ -292,28 +292,6 @@ const (
 )
 ```
 
-### DocumentationSource
-An abstracted reference to documentation consumed during planning and flagged for update during implementation. See `04-adapters.md` for the interface definition.
-```go
-type DocumentationSource struct {
-	ID           string                  `json:"id"`
-	WorkspaceID  string                  `json:"workspace_id"`
-	RepositoryName string                  `json:"repository_name"` // for repo_embedded: name of the containing workspace repo; empty for dedicated_repo
-	Type         DocumentationSourceType `json:"type"`
-	Path         string                  `json:"path"`           // relative path within repo, e.g. "docs/"
-	RepoURL      string                  `json:"repo_url"`       // clone URL (empty for repo_embedded)
-	Branch       string                  `json:"branch"`
-	LastSyncedAt *time.Time              `json:"last_synced_at"`
-}
-
-type DocumentationSourceType string
-const (
-	DocSourceRepoEmbedded  DocumentationSourceType = "repo_embedded"  // lives in project repo
-	DocSourceDedicatedRepo DocumentationSourceType = "dedicated_repo" // separate docs repo
-)
-```
-`RepoURL` is empty for `repo_embedded`; use `RepositoryName` to identify the containing workspace repo instead.
-
 
 ### Question
 A question surfaced by a sub-agent, routed through the foreman. If the cross-repo plan contains the answer, the foreman responds directly. Otherwise it escalates to the human.
@@ -470,7 +448,6 @@ erDiagram
     AgentSession ||--o{ ReviewCycle : reviewed_by
     ReviewCycle ||--o{ Critique : contains
     AgentSession ||--o{ Question : raises
-    Workspace ||--o{ DocumentationSource : references
     Workspace ||--o{ SubstrateInstance : has
     SubstrateInstance ||--o{ AgentSession : owns
 ```

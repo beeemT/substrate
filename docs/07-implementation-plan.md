@@ -18,7 +18,6 @@ internal/
         ohmypi/        # oh-my-pi agent harness (renamed from harness/omp)
     event/             # pub/sub bus, hook dispatch
     gitwork/           # git-work CLI wrapper
-    docsource/         # documentation source interface + impls
     config/            # TOML config loading
     tui/
         views/         # bubbletea view models
@@ -78,7 +77,6 @@ The config file is self-healing: if deleted, Substrate recreates it on next laun
 **[UPDATED - IMPLEMENTED]** Additional columns vs. original spec:
 - `critiques.suggestion TEXT` — optional improvement suggestion from review agent.
 - `questions.context TEXT` — surrounding context from agent.
-- `documentation_sources.repository_name TEXT` — for repo_embedded: name of the workspace repo.
 
 **[UPDATED - IMPLEMENTED]** go-atomic Resources pattern: Each repo struct accepts `generic.SQLXRemote` in its constructor. A `Resources` struct aggregates all repos AND services constructed from them. `ResourcesFactory` creates a `Resources` from a transaction handle. Business logic in the orchestrator uses `Transacter.Transact()` to wrap multi-repo operations in a single atomic transaction with automatic retry and backoff on transient errors. Transaction flattening: nested `Transact` calls reuse the outer transaction.
 
@@ -96,7 +94,7 @@ transacter := generic.NewTransacter[generic.SQLXRemote, Resources](executor, Res
 
 ## Phase 2: Service Layer (Week 2-3)
 
-**[UPDATED - IMPLEMENTED]** `WorkItemService`, `PlanService`, `WorkspaceService`, `SessionService`, `ReviewService`, `DocumentationService`, `EventService`. State machine enforcement: invalid transitions return typed `ErrInvalidTransition{From, To, Entity}`. Mock repositories (interface-based, hand-written or `moq`-generated).
+**[UPDATED - IMPLEMENTED]** `WorkItemService`, `PlanService`, `WorkspaceService`, `SessionService`, `ReviewService`, `EventService`. State machine enforcement: invalid transitions return typed `ErrInvalidTransition{From, To, Entity}`. Mock repositories (interface-based, hand-written or `moq`-generated).
 
 **[UPDATED - IMPLEMENTED]** Services own domain model types. Services depend on repository interfaces (injected). Services never call other services — cross-service coordination belongs in business logic layer. Services return domain errors, not SQL errors.
 
@@ -206,32 +204,6 @@ func (c *Client) Remove(ctx context.Context, repoDir, branch string) error
 **[UPDATED - IMPLEMENTED]** Pre-flight check (before each plan): re-verify git-work repos, surface any new plain clones as warnings.
 
 **Gate:** Unit: canned output parsed correctly. Integration: `substrate init` creates `.substrate-workspace` with valid ULID. Workspace scan discovers repos with `.bare/`. Checkout → `test-branch/` exists. Remove → gone. `go test ./internal/gitwork/...` and `go test -tags=integration ./internal/gitwork/...`
-
-## Phase 5: Documentation Source System (Week 4)
-
-**[UPDATED - IMPLEMENTED]**
-
-```go
-type DocSourceType int
-const (
-    DocSourceRepoEmbedded DocSourceType = iota
-    DocSourceDedicatedRepo
-)
-
-type DocumentationSource interface {
-    Name() string
-    Type() DocSourceType
-    Fetch(ctx context.Context, opts DocFetchOpts) ([]Document, error)
-    Search(ctx context.Context, query string) ([]DocumentMatch, error)
-    Sync(ctx context.Context) error
-}
-```
-
-**[UPDATED - IMPLEMENTED]** `RepoEmbeddedSource`: glob-based discovery in `main/` worktrees. `DedicatedRepoSource`: separate doc repo via git-work; `Sync` runs `git pull --ff-only` in its main worktree before every planning phase.
-
-**[UPDATED - IMPLEMENTED]** Documentation staleness check: After final review passes, spawn a short documentation harness session (foreman mode, read-only tools) with list of changed files and documentation sources as context. Agent decides whether docs are stale and may update them. Results are advisory and do not block completion.
-
-**Gate:** Glob finds `docs/arch.md` but not `vendor/README.md`. Changing `internal/auth/handler.go` flags `docs/auth.md`; changing `internal/billing/invoice.go` does not. `go test ./internal/docsource/...`
 
 ## Phase 6: Agent Harness + oh-my-pi Bridge (Week 4-5)
 
@@ -446,7 +418,6 @@ go vet ./...
 
 # Integration (tagged, nightly CI with secrets)
 go test -tags=integration ./internal/gitwork/...          # needs git-work + network
-go test -tags=integration ./internal/docsource/...        # needs git-work + network
 go test -tags=integration ./internal/adapter/ohmypi/...   # needs bun + omp creds
 go test -tags=integration ./internal/adapter/linear/...   # needs SUBSTRATE_LINEAR_API_KEY
 go test -tags=integration ./internal/adapter/glab/...     # needs glab auth

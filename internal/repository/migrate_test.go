@@ -151,9 +151,11 @@ func TestMigrateWithRealMigrations(t *testing.T) {
 	}
 
 	// Verify key tables exist
-	tables := []string{"workspaces", "work_items", "plans", "sub_plans", "agent_sessions",
-		"review_cycles", "critiques", "questions", "documentation_sources",
-		"system_events", "substrate_instances"}
+	tables := []string{
+		"workspaces", "work_items", "plans", "sub_plans", "agent_sessions",
+		"review_cycles", "critiques", "questions",
+		"system_events", "substrate_instances",
+	}
 
 	for _, table := range tables {
 		var count int

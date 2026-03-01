@@ -72,7 +72,4 @@ const (
 	EventReviewCompleted         EventType = "review.completed"
 	EventCritiquesFound          EventType = "review.critiques_found"
 	EventReimplementationStarted EventType = "reimplementation.started"
-
-	// Documentation events
-	EventDocumentationStale EventType = "documentation.stale"
 )

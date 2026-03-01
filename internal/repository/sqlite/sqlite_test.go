@@ -618,56 +618,6 @@ func TestQuestionCRUD(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Documentation CRUD
-// ---------------------------------------------------------------------------
-
-func TestDocumentationCRUD(t *testing.T) {
-	db := setupDB(t)
-	tx := beginTx(t, db)
-	ctx := context.Background()
-
-	ws := makeWorkspace(t, tx)
-	repo := reposqlite.NewDocumentationRepo(tx)
-
-	ds := domain.DocumentationSource{
-		ID:          domain.NewID(),
-		WorkspaceID: ws.ID,
-		Type:        domain.DocSourceRepoEmbedded,
-		Path:        "docs/",
-		Description: "main docs",
-		CreatedAt:   now(),
-	}
-	if err := repo.Create(ctx, ds); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	got, err := repo.Get(ctx, ds.ID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Path != ds.Path {
-		t.Errorf("path mismatch")
-	}
-
-	list, err := repo.ListByWorkspaceID(ctx, ws.ID)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(list) != 1 {
-		t.Errorf("len = %d, want 1", len(list))
-	}
-
-	ds.Description = "updated docs"
-	if err := repo.Update(ctx, ds); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-
-	if err := repo.Delete(ctx, ds.ID); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Event CRUD
 // ---------------------------------------------------------------------------
 
@@ -896,14 +846,6 @@ func TestEmptyLists(t *testing.T) {
 	}
 	if questions == nil {
 		t.Error("questions should be non-nil empty slice")
-	}
-
-	docs, err := reposqlite.NewDocumentationRepo(tx).ListByWorkspaceID(ctx, ws.ID)
-	if err != nil {
-		t.Fatalf("docs: %v", err)
-	}
-	if docs == nil {
-		t.Error("docs should be non-nil empty slice")
 	}
 
 	events, err := reposqlite.NewEventRepo(tx).ListByType(ctx, "nonexistent", 10)

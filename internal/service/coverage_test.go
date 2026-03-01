@@ -527,21 +527,6 @@ func TestErrors(t *testing.T) {
 	})
 }
 
-func TestDocumentationService_MarkStale(t *testing.T) {
-	ctx := context.Background()
-	repo := NewMockDocumentationRepository()
-	svc := NewDocumentationService(repo)
-
-	// MarkStale is a placeholder - just verify it returns empty list
-	result, err := svc.MarkStale(ctx, "ws-1", []string{"file1.go"})
-	if err != nil {
-		t.Fatalf("MarkStale failed: %v", err)
-	}
-	if len(result) != 0 {
-		t.Errorf("got %d items, want 0 (placeholder)", len(result))
-	}
-}
-
 func TestSessionService_FindRunningByOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
@@ -732,56 +717,6 @@ func TestInstanceService_NotFoundErrors(t *testing.T) {
 
 	t.Run("IsAlive not found", func(t *testing.T) {
 		_, err := svc.IsAlive(ctx, "nonexistent", 15*time.Second)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
-			t.Errorf("error type = %T, want ErrNotFound", err)
-		}
-	})
-}
-
-func TestDocumentationService_NotFoundErrors(t *testing.T) {
-	ctx := context.Background()
-	repo := NewMockDocumentationRepository()
-	svc := NewDocumentationService(repo)
-
-	t.Run("Get not found", func(t *testing.T) {
-		_, err := svc.Get(ctx, "nonexistent")
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
-			t.Errorf("error type = %T, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("Update not found", func(t *testing.T) {
-		err := svc.Update(ctx, domain.DocumentationSource{ID: "nonexistent"})
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
-			t.Errorf("error type = %T, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("UpdateLastSynced not found", func(t *testing.T) {
-		err := svc.UpdateLastSynced(ctx, "nonexistent")
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
-			t.Errorf("error type = %T, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("Delete not found", func(t *testing.T) {
-		err := svc.Delete(ctx, "nonexistent")
 		if err == nil {
 			t.Fatal("expected error")
 		}

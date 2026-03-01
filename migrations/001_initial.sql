@@ -117,20 +117,6 @@ CREATE TABLE IF NOT EXISTS questions (
 CREATE INDEX idx_questions_session ON questions(agent_session_id);
 CREATE INDEX idx_questions_status ON questions(status);
 
-CREATE TABLE IF NOT EXISTS documentation_sources (
-    id              TEXT PRIMARY KEY,
-    workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
-    source_type     TEXT NOT NULL CHECK (source_type IN ('repo_embedded','dedicated_repo')),
-    path            TEXT,
-    repo_url        TEXT,
-    repository_name TEXT,
-    branch          TEXT,
-    description     TEXT,
-    last_synced     TEXT,
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-CREATE INDEX idx_docs_workspace ON documentation_sources(workspace_id);
-
 CREATE TABLE IF NOT EXISTS system_events (
     id           TEXT PRIMARY KEY,
     event_type   TEXT NOT NULL,

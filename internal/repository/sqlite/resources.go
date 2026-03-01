@@ -9,16 +9,15 @@ import (
 // Resources groups all transaction-bound repos. Every field is bound to the
 // same *sqlx.Tx when created via ResourcesFactory inside a Transact call.
 type Resources struct {
-	WorkItems     WorkItemRepo
-	Plans         PlanRepo
-	SubPlans      SubPlanRepo
-	Workspaces    WorkspaceRepo
-	Sessions      SessionRepo
-	Reviews       ReviewRepo
-	Questions     QuestionRepo
-	Docs          DocumentationRepo
-	Events        EventRepo
-	Instances     InstanceRepo
+	WorkItems  WorkItemRepo
+	Plans      PlanRepo
+	SubPlans   SubPlanRepo
+	Workspaces WorkspaceRepo
+	Sessions   SessionRepo
+	Reviews    ReviewRepo
+	Questions  QuestionRepo
+	Events     EventRepo
+	Instances  InstanceRepo
 }
 
 // ResourcesFactory creates a Resources from a transaction handle.
@@ -36,7 +35,6 @@ func ResourcesFactory(
 		Sessions:   NewSessionRepo(tx),
 		Reviews:    NewReviewRepo(tx),
 		Questions:  NewQuestionRepo(tx),
-		Docs:       NewDocumentationRepo(tx),
 		Events:     NewEventRepo(tx),
 		Instances:  NewInstanceRepo(tx),
 	}, nil

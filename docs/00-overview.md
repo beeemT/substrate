@@ -10,7 +10,7 @@ Substrate is an AI-powered work item orchestration tool built in Go. It automate
 
 1. **Ingest** — Pull a work item from a tracker (Linear or adapter) when assignment or status conditions are met, OR create one manually.
 2. **Discovery** — Operates within a pre-existing workspace folder where repos are already cloned via git-work. Scans workspace repos (`main/` worktrees), gathers documentation from architecture docs, API specs, and conventions.
-3. **Plan Generation** — Reads from `main/` worktrees across all repos. Consults documentation sources. Produces a cross-repo orchestration plan and per-repo sub-plans.
+3. **Plan Generation** — Reads from `main/` worktrees across all repos. Produces a cross-repo orchestration plan and per-repo sub-plans.
 4. **Human Approval** — Presents the plan in the TUI. The human reviews, requests changes, or approves. Back-and-forth refinement until accepted.
 5. **Worktree Creation** — Runs `git-work checkout -b <branch>` in each repo that needs changes, creating isolated feature worktrees within the shared workspace.
 6. **Agent Execution** — Spawns one agent harness session per sub-plan/repo in its feature worktree. Agents implement changes, commit per the configured strategy, and push.
@@ -49,7 +49,7 @@ flowchart TD
 | Commit strategy | substrate.toml [commit] | Configurable: granular/semi-regular/single; AI-generated messages by default |
 ## Key Design Principles
 
-**Adapter pattern everywhere.** Every external system — work item trackers, repository hosts, agent harnesses, documentation sources — sits behind a Go interface. Swapping Linear for Jira, GitLab for GitHub, or oh-my-pi for another agent means implementing one interface. No core logic changes. See `02-layered-architecture.md`.
+**Adapter pattern everywhere.** Every external system — work item trackers, repository hosts, agent harnesses — sits behind a Go interface. Swapping Linear for Jira, GitLab for GitHub, or oh-my-pi for another agent means implementing one interface. No core logic changes. See `02-layered-architecture.md`.
 
 **Event-driven hooks.** System mutations (plan approved, worktree created, review passed) emit events. Adapters subscribe to act on them — move a ticket to "In Progress," create a merge request, notify a channel. Decouples workflow progression from side effects. See `03-event-system.md`.
 
@@ -69,7 +69,7 @@ flowchart TD
 | `01-domain-model.md` | Domain Model | Core entities, enums, state machines, workspace layout |
 | `02-layered-architecture.md` | Layered Architecture | Repository / Service / Business Logic layers, SQLite schema |
 | `03-event-system.md` | Event System & Hooks | Event bus, adapter interfaces, hook dispatch |
-| `04-adapters.md` | Adapter Implementations | Linear, Manual, glab, agent harness, documentation sources |
+| `04-adapters.md` | Adapter Implementations | Linear, Manual, glab, agent harness |
 | `05-orchestration.md` | Orchestration | Planning pipeline, implementation, foreman, review cycle |
 | `06-tui-design.md` | TUI Design | bubbletea views, interaction model, async patterns |
 | `07-implementation-plan.md` | Implementation Plan | Phased build-out, quality gates, risk register |

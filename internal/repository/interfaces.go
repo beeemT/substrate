@@ -88,15 +88,6 @@ type QuestionRepository interface {
 	Update(ctx context.Context, q domain.Question) error
 }
 
-// DocumentationRepository provides CRUD for documentation sources.
-type DocumentationRepository interface {
-	Get(ctx context.Context, id string) (domain.DocumentationSource, error)
-	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.DocumentationSource, error)
-	Create(ctx context.Context, ds domain.DocumentationSource) error
-	Update(ctx context.Context, ds domain.DocumentationSource) error
-	Delete(ctx context.Context, id string) error
-}
-
 // EventRepository provides persistence for system events.
 type EventRepository interface {
 	Create(ctx context.Context, e domain.SystemEvent) error

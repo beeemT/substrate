@@ -46,7 +46,6 @@ type SystemEvent interface {
 | `ReviewCompleted` | `ReviewCycle` | Review passes, no critiques |
 | `CritiquesFound` | `ReviewCycle`, `[]Critique` | Review produces critiques |
 | `ReimplementationStarted` | `AgentSession`, `[]Critique` | Re-impl session spawned |
-| `DocumentationStale` | `DocumentationSource`, `Reason` | Impl diverged from docs |
 | `WorkItemCompleted` | `WorkItem` | All repos pass review |
 | `WorkItemFailed` | `WorkItem`, `Error string` | Unrecoverable error in any phase |
 
@@ -77,7 +76,6 @@ const (
     EventReviewCompleted        EventType = "review.completed"
     EventCritiquesFound         EventType = "review.critiques_found"
     EventReimplementationStarted EventType = "reimplementation.started"
-    EventDocumentationStale     EventType = "documentation.stale"
     EventWorkItemCompleted      EventType = "work_item.completed"
     EventWorkItemFailed          EventType = "work_item.failed"
 )

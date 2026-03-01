@@ -23,7 +23,6 @@ Uninitialized repos are not prevented from proceeding — the user may have inte
 - Record `Name` (directory name), `Path`, `MainDir` (absolute path to `main/` worktree)
 - Detect language and framework from manifest file existence (`go.mod` → Go, `package.json` → TypeScript/JS, `Cargo.toml` → Rust, `pyproject.toml`/`setup.py` → Python); detect framework from key dependencies in the manifest if useful
 - Check for `AGENTS.md` in `MainDir`; record its path if present
-- Collect configured doc paths from `DocumentationSource` config entries scoped to this repo
 
 Read the workspace-root `AGENTS.md` content (if present) as `WorkspaceAgentsMd`. This is the only file content read before the planning agent starts.
 
@@ -34,7 +33,6 @@ type RepoPointer struct {
     Language     string   // "go", "typescript", "rust", "python", "unknown"
     Framework    string   // "gin", "next", "axum", etc.; empty if not detected
     AgentsMdPath string   // absolute path to AGENTS.md if present; else empty
-    DocPaths     []string // configured documentation paths for this repo
 }
 ```
 
@@ -49,7 +47,7 @@ type PlanningContext struct {
 }
 ```
 
-**d. Run planning agent.** Substrate generates a session ULID, creates `.substrate/sessions/<session-id>/` in the workspace root, and starts an agent harness session (see `04-adapters.md`) with cwd = workspace root and full filesystem access to all repos' `main/` worktrees. The session ID and draft path are recorded in `SessionOpts.SessionID` and `SessionOpts.DraftPath` respectively. The agent explores the workspace, determines which repos need changes, and writes its plan progressively to `SessionOpts.DraftPath`. All repos — including documentation repos — may receive sub-plans.
+**d. Run planning agent.** Substrate generates a session ULID, creates `.substrate/sessions/<session-id>/` in the workspace root, and starts an agent harness session (see `04-adapters.md`) with cwd = workspace root and full filesystem access to all repos' `main/` worktrees. The session ID and draft path are recorded in `SessionOpts.SessionID` and `SessionOpts.DraftPath` respectively. The agent explores the workspace, determines which repos need changes, and writes its plan progressively to `SessionOpts.DraftPath`.
 
 **Context stability rule**: The agent's filesystem access covers `main/` worktrees only. Feature worktrees from other active work items are not visible during planning.
 
@@ -230,7 +228,7 @@ cmd := exec.CommandContext(ctx, "git-work", "checkout", "-b", branch)
 cmd.Dir = repoDir
 ```
 
-**ii. Start agent session.** Prompt = sub-plan + orchestration section + documentation. Session config:
+**ii. Start agent session.** Prompt = sub-plan + orchestration section. Session config:
 
 ```go
 type AgentSessionConfig struct {
@@ -480,10 +478,8 @@ flowchart TD
 
 New session runs in **same worktree** (builds on previous commits). Prompt: original sub-plan + critique list. Max cycles configurable (default 3). Exceeded → pause, notify human with full critique history.
 
-### Documentation Staleness Check
 
-After final review passes, spawn a short documentation agent session (foreman mode, read-only tools) with the list of changed files and the workspace's documentation sources as context. The agent decides whether any docs are stale and, if so, may update them directly. Results are reported in the completion summary as advisory info — they do not block completion.
----
+## 6. Completion
 
 ## 6. Completion
 
@@ -498,7 +494,6 @@ type WorkItemCompleted struct {
 		WorkItemID string
 		PlanID     string
     Repos      []RepoResult
-    StaleDocs  []DocumentationStale
     Duration   time.Duration
 }
 
@@ -674,7 +669,6 @@ type OrchestrationService struct {
     agents     AgentHarnessService
     reviews    ReviewService
     foreman    *Foreman
-    docSources []DocumentationSource
     events     EventBus
     config     *OrchestratorConfig
 }

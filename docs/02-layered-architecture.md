@@ -9,21 +9,21 @@ graph TD
     end
     subgraph "Service Layer (owns domain models)"
         WIS[WorkItemService] & PS[PlanService] & WSS[WorkspaceService]
-        SS[SessionService] & DS[DocumentationService] & RS[ReviewService] & ES[EventService]
+        SS[SessionService] & RS[ReviewService] & ES[EventService]
     end
     subgraph "Repository Layer (interfaces)"
         WIR[WorkItemRepo] & PR[PlanRepo] & WSR[WorkspaceRepo]
-        SR[SessionRepo] & DR[DocumentationRepo] & RR[ReviewRepo] & ER[EventRepo]
+        SR[SessionRepo] & RR[ReviewRepo] & ER[EventRepo]
     end
     subgraph "Storage"
         DB[(~/.substrate/state.db)]
     end
-    ORCH --> WIS & PS & WSS & SS & DS & RS & ES
-    PP --> PS & DS & WIS
+    ORCH --> WIS & PS & WSS & SS & RS & ES
+    PP --> PS & WIS
     RP --> RS & SS & PS
     WIS --> WIR; PS --> PR; WSS --> WSR; SS --> SR
     DS --> DR; RS --> RR; ES --> ER
-    WIR & PR & WSR & SR & DR & RR & ER --> DB
+    WIR & PR & WSR & SR & RR & ER --> DB
 ```
 
 Dependencies flow downward only. The TUI (see `06-tui-design.md`) sits above business logic; it calls in but is never called by it.
@@ -183,7 +183,6 @@ type Resources struct {
 	Workspaces WorkspaceRepo
 	Sessions   SessionRepo
 	Reviews    ReviewRepo
-	Docs       DocumentationRepo
 	Events     EventRepo
 	Instances  InstanceRepo
 	// Services (constructed from the transaction-bound repos above).
@@ -211,7 +210,6 @@ func ResourcesFactory(
 		Workspaces: NewWorkspaceRepo(tx),
 		Sessions:   sessions,
 		Reviews:    reviews,
-		Docs:       NewDocumentationRepo(tx),
 		Events:     NewEventRepo(tx),
 		Instances:  NewInstanceRepo(tx),
 		PlanSvc:    service.NewPlanService(plans, subPlans),
@@ -440,21 +438,6 @@ CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX idx_questions_session ON questions(agent_session_id);
 CREATE INDEX idx_questions_status ON questions(status);
-
-CREATE TABLE IF NOT EXISTS documentation_sources (
-    id           TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    source_type  TEXT NOT NULL CHECK (source_type IN ('repo_embedded','dedicated_repo')), -- domain field: Type; db tag: db:"source_type"
-    path         TEXT,
-    repo_url     TEXT,
-    repository_name TEXT,                  -- for repo_embedded: name of the workspace repo; empty for dedicated_repo
-    branch       TEXT,
-    description  TEXT,                      -- not in domain struct; excluded from row scanning (use NamedQueryContext, not SELECT *)
-    last_synced  TEXT,                       -- domain field: LastSyncedAt; db tag: db:"last_synced"
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-CREATE INDEX idx_docs_workspace ON documentation_sources(workspace_id);
-
 CREATE TABLE IF NOT EXISTS system_events (
 	id         TEXT PRIMARY KEY,
 	event_type TEXT NOT NULL,
