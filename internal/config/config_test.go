@@ -167,8 +167,7 @@ func TestLoadWithRepos(t *testing.T) {
 }
 
 func TestGlobalDBPath(t *testing.T) {
-	cfg := &Config{}
-	path, err := cfg.GlobalDBPath()
+	path, err := GlobalDBPath()
 	if err != nil {
 		t.Fatalf("GlobalDBPath() error = %v", err)
 	}

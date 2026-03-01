@@ -61,6 +61,7 @@ type critiqueRow struct {
 	LineNumber    *int    `db:"line_number"`
 	Severity      string  `db:"severity"`
 	Description   string  `db:"description"`
+	Suggestion    *string `db:"suggestion"`
 	Status        string  `db:"status"`
 	CreatedAt     string  `db:"created_at"`
 }
@@ -77,6 +78,7 @@ func (r *critiqueRow) toDomain() (domain.Critique, error) {
 		LineNumber:    r.LineNumber,
 		Severity:      domain.CritiqueSeverity(r.Severity),
 		Description:   r.Description,
+		Suggestion:    derefStr(r.Suggestion),
 		Status:        domain.CritiqueStatus(r.Status),
 		CreatedAt:     createdAt,
 	}, nil
@@ -90,6 +92,7 @@ func rowFromCritique(c domain.Critique) critiqueRow {
 		LineNumber:    c.LineNumber,
 		Severity:      string(c.Severity),
 		Description:   c.Description,
+		Suggestion:    strPtr(c.Suggestion),
 		Status:        string(c.Status),
 		CreatedAt:     formatTime(c.CreatedAt),
 	}
@@ -183,8 +186,8 @@ func (r ReviewRepo) ListCritiquesByReviewCycleID(ctx context.Context, cycleID st
 func (r ReviewRepo) CreateCritique(ctx context.Context, c domain.Critique) error {
 	row := rowFromCritique(c)
 	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO critiques (id, review_cycle_id, file_path, line_number, severity, description, status, created_at)
-		 VALUES (:id, :review_cycle_id, :file_path, :line_number, :severity, :description, :status, :created_at)`, row)
+		`INSERT INTO critiques (id, review_cycle_id, file_path, line_number, severity, description, suggestion, status, created_at)
+		 VALUES (:id, :review_cycle_id, :file_path, :line_number, :severity, :description, :suggestion, :status, :created_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create critique %s: %w", c.ID, err)
 	}
@@ -196,7 +199,7 @@ func (r ReviewRepo) UpdateCritique(ctx context.Context, c domain.Critique) error
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE critiques SET review_cycle_id = :review_cycle_id, file_path = :file_path,
 		 line_number = :line_number, severity = :severity, description = :description,
-		 status = :status WHERE id = :id`, row)
+		 suggestion = :suggestion, status = :status WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update critique %s: %w", c.ID, err)
 	}

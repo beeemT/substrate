@@ -34,9 +34,9 @@ type WorkItemAdapter interface {
 	Fetch(ctx context.Context, externalID string) (domain.WorkItem, error)
 
 	// UpdateState updates the work item's state in the external tracker.
-	// Maps domain.WorkItemState to the tracker's native states.
+	// Maps TrackerState to the tracker's native states.
 	// Returns ErrMutateNotSupported if CanMutate is false.
-	UpdateState(ctx context.Context, externalID string, state domain.WorkItemState) error
+	UpdateState(ctx context.Context, externalID string, state domain.TrackerState) error
 	// AddComment adds a comment to the work item in the external tracker.
 	// Returns ErrMutateNotSupported if CanMutate is false.
 	AddComment(ctx context.Context, externalID string, body string) error
@@ -69,20 +69,24 @@ type AgentHarness interface {
 
 // AgentSession represents a running agent interaction.
 type AgentSession interface {
-	// Prompt sends additional instructions to the running agent.
-	Prompt(ctx context.Context, text string) error
+	// ID returns the unique identifier for this session.
+	ID() string
+
+	// Wait blocks until the session completes (done or error).
+	// Returns nil on successful completion, or the error that caused failure.
+	Wait(ctx context.Context) error
 
 	// Events returns a channel emitting agent events.
 	// The channel closes when the session ends.
 	Events() <-chan AgentEvent
 
+	// SendMessage sends a message to the running agent.
+	// Used for foreman iteration and critique feedback.
+	SendMessage(ctx context.Context, msg string) error
+
 	// Abort terminates the agent session gracefully.
 	// Returns an error if the session cannot be aborted.
-	Abort() error
-
-	// Wait blocks until the session completes (done or error).
-	// Returns nil on successful completion, or the error that caused failure.
-	Wait() error
+	Abort(ctx context.Context) error
 }
 
 // Adapter errors.

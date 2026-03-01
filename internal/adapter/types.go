@@ -79,16 +79,32 @@ type WorkItemEvent struct {
 	Timestamp time.Time
 }
 
+// SessionMode determines the behavior of an agent session.
+type SessionMode string
+
+const (
+	// SessionModeAgent is a coding sub-agent with full tool set.
+	SessionModeAgent SessionMode = "agent"
+	// SessionModeForeman is a question-answering session with read-only tools.
+	SessionModeForeman SessionMode = "foreman"
+)
+
 // SessionOpts configures a new agent session.
 type SessionOpts struct {
-	WorkspaceID   string
-	SubPlanID     string
-	Repository    string
-	WorktreePath  string
-	SystemPrompt  string
-	UserPrompt    string
-	SessionLogDir string // Directory for session output logs
-	CommitConfig  CommitConfig
+	SessionID            string      // Substrate-generated ULID; used for DB record and session directory
+	Mode                 SessionMode // Agent or Foreman; defaults to Agent
+	WorkspaceID          string
+	SubPlanID            string
+	Repository           string
+	WorktreePath         string // Empty for foreman sessions (uses workspace root)
+	DraftPath            string // Absolute path to plan-draft.md; set for planning sessions
+	CrossRepoPlan        string // Full cross-repo orchestration plan
+	DocumentationContext string // Concatenated documentation for the session
+	SystemPrompt         string
+	UserPrompt           string
+	SessionLogDir        string // Directory for session output logs
+	CommitConfig         CommitConfig
+	AllowPush            bool // Whether agent is allowed to push to remote
 }
 
 // CommitConfig contains commit strategy settings.

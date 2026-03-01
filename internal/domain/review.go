@@ -32,6 +32,7 @@ type Critique struct {
 	FilePath      string
 	LineNumber    *int
 	Description   string
+	Suggestion    string // optional improvement suggestion from review agent
 	Severity      CritiqueSeverity
 	Status        CritiqueStatus
 	CreatedAt     time.Time

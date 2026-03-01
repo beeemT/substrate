@@ -406,24 +406,9 @@ Settings editor for adapter configs, workspace root, and `substrate.toml` defaul
 
 ### 4c. First-Start Initialization Modal
 
-Triggered when Substrate is launched for the first time — detected when no `~/.substrate/` global directory exists. Before any workspace context is shown, a full-screen initialization modal explains what Substrate needs and sets up global resources.
+Global initialization (creating `~/.substrate/`, `config.toml`, `state.db`, `sessions/`) happens automatically on first CLI launch (see `07-implementation-plan.md` Phase 0). The TUI modal handles **workspace initialization** only.
 
-```
-┌─ Welcome to Substrate ──────────────────────────────────────────────────────┐
-│                                                                             │
-│  Substrate manages AI-driven development tasks across git repositories.     │
-│                                                                             │
-│  First-time setup will create:                                              │
-│    ~/.substrate/                global configuration directory              │
-│    ~/.substrate/state.db        SQLite database (all workspace state)       │
-│    ~/.substrate/sessions/       agent session logs                          │
-│                                                                             │
-│  Press [Enter] to continue.                                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-After global init, if the current directory is not a registered workspace, the `Workspace Initialization Modal` is shown:
+When Substrate launches and the current directory is not a registered workspace, the Workspace Initialization Modal is shown:
 
 ```
 ┌─ Initialize Workspace ──────────────────────────────────────────────────────┐
@@ -449,25 +434,19 @@ After global init, if the current directory is not a registered workspace, the `
 
 **Model:**
 ```go
-type FirstStartModal struct {
-    phase    firstStartPhase    // globalInit | workspaceInit
+type WorkspaceInitModal struct {
     cwd      string
     detected []RepoPointer      // discovered git-work repos
     warnings []string           // plain git clones
 }
-
-type firstStartPhase int
-const (
-    phaseGlobalInit firstStartPhase = iota
-    phaseWorkspaceInit
-)
 ```
 
+Note: Global init is handled automatically by CLI bootstrap before TUI starts. The modal only handles workspace initialization.
+
 **Workspace init on `[y]`:** calls `substrate.InitWorkspace(cwd)` which:
-1. Creates `~/.substrate/` if not present and runs schema migrations.
-2. Creates `.substrate-workspace` (YAML: ULID, name from dir basename, created_at).
-3. Inserts workspace record into DB.
-4. Returns discovered repos and warnings.
+1. Creates `.substrate-workspace` (YAML: ULID, name from dir basename, created_at).
+2. Inserts workspace record into DB.
+3. Returns discovered repos and warnings.
 
 If `[n]` is pressed, Substrate exits cleanly.
 

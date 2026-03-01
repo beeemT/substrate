@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -88,22 +89,65 @@ type ForemanConfig struct {
 // RepoConfig contains per-repo overrides.
 type RepoConfig struct{}
 
-// GlobalDBPath returns the path to the global SQLite database.
-func (c *Config) GlobalDBPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get home directory: %w", err)
+// GlobalDir returns the path to the global Substrate directory.
+// It respects the SUBSTRATE_HOME environment variable if set.
+// Tilde (~) is expanded and relative paths are resolved to absolute.
+func GlobalDir() (string, error) {
+	home := os.Getenv("SUBSTRATE_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("get home directory: %w", err)
+		}
+		return filepath.Join(userHome, ".substrate"), nil
 	}
-	return filepath.Join(home, ".substrate", "state.db"), nil
+
+	// Expand tilde if present
+	if strings.HasPrefix(home, "~") {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("get home directory: %w", err)
+		}
+		if home == "~" {
+			return userHome, nil
+		}
+		// Handle ~/path or ~user (latter not supported, treat as ~/path)
+		return filepath.Join(userHome, home[2:]), nil
+	}
+
+	// Resolve to absolute path
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+	return abs, nil
 }
 
-// GlobalDir returns the path to the global Substrate directory.
-func (c *Config) GlobalDir() (string, error) {
-	home, err := os.UserHomeDir()
+// GlobalDBPath returns the path to the global SQLite database.
+func GlobalDBPath() (string, error) {
+	dir, err := GlobalDir()
 	if err != nil {
-		return "", fmt.Errorf("get home directory: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".substrate"), nil
+	return filepath.Join(dir, "state.db"), nil
+}
+
+// ConfigPath returns the path to the configuration file.
+func ConfigPath() (string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.toml"), nil
+}
+
+// SessionsDir returns the path to the sessions directory.
+func SessionsDir() (string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "sessions"), nil
 }
 
 // Load reads and validates a substrate.toml configuration file.

@@ -163,3 +163,21 @@ func ValidateWorkspaceID(id string) error {
 	}
 	return nil
 }
+
+// ResolveWorkspacePath attempts to read the workspace file from the given path
+// and returns the absolute path. This is used for path reconciliation when
+// a workspace directory may have been moved.
+// Returns the absolute path, workspace file, and error if the workspace cannot be found.
+func ResolveWorkspacePath(storedPath string) (string, *WorkspaceFile, error) {
+	absPath, err := filepath.Abs(storedPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve absolute path: %w", err)
+	}
+
+	ws, err := ReadWorkspaceFile(absPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return absPath, ws, nil
+}

@@ -41,8 +41,29 @@ Config loading validates:
 - `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bun_path`, `bridge_path`, `thinking_level` (maps to oh-my-pi thinkingLevel for all sessions).
 - Per-repo `[repos.<name>]` sections are optional.
 
-**First-start flow:** Detect absence of `~/.substrate/`, create directory, run migrations. If cwd has no `.substrate-workspace`, present the Workspace Initialization Modal (see `06-tui-design.md` §4c). `substrate init` is the programmatic equivalent of the modal flow: creates `.substrate-workspace` with a ULID, scans for git-work repos, warns about plain clones, inserts workspace into DB.
+**[UPDATED - IMPLEMENTED] Global Self-Initialization:** On first start, the CLI auto-initializes global resources without user interaction:
 
+The `SUBSTRATE_HOME` environment variable controls the location of all global resources (defaults to `~/.substrate/`). The directory contains:
+- `config.toml` — user configuration (auto-generated with comments on first run)
+- `state.db` — SQLite database (all workspace state)
+- `sessions/` — agent session log storage
+
+Self-initialization flow:
+1. Resolve `SUBSTRATE_HOME` (env var or `~/.substrate`)
+2. Ensure directory exists
+3. If `config.toml` missing, write default with helpful comments
+4. Load and validate config
+5. Ensure `sessions/` directory exists
+6. Open/create `state.db` (SQLite handles file creation)
+7. Run migrations (idempotent via `schema_migrations` table)
+
+The config file is self-healing: if deleted, Substrate recreates it on next launch. User customizations are preserved when the file exists.
+
+**First-start flow (two-phase):**
+- **Phase A — Global Init (automatic):** Above self-initialization runs transparently on every launch.
+- **Phase B — Workspace Init (TUI-driven, Phase 12f):** If cwd has no `.substrate-workspace`, the TUI presents the Workspace Initialization Modal (see `06-tui-design.md` §4c) to create workspace identity, scan for git-work repos, and register in DB.
+
+`substrate init` is the CLI equivalent of Phase B: creates `.substrate-workspace` with a ULID, scans for git-work repos, warns about plain clones, inserts workspace into DB.
 **[UPDATED - IMPLEMENTED]** `go-atomic`'s `isRetryable()` must be extended to include `SQLITE_BUSY` (error code 5) and `SQLITE_LOCKED` (error code 6). go-atomic is a first-party library; add this in Phase 0 as a minor internal change.
 
 **Gate:** `go build ./...` passes. `go test ./...` passes (config loads, migrations run on fresh DB). `go vet ./...` clean.
@@ -384,7 +405,7 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 | 12c | Implementing mode (repo status row, output stream per repo, Tab cycling), Question sub-mode (Foreman proposed answer, human iteration) | Events render real-time, question escalation works |
 | 12d | Reviewing mode (diff summaries, critiques with severity, per-repo tabs) + toast notifications | Critiques render, toast on escalation |
 | 12e | Configuration overlay (view/edit TOML, validate on save, `$EDITOR` for complex blocks) | Changes persist without restart |
-| 12f | First-start modal (global init + workspace init with repo discovery and warnings) | Modal displays on fresh install, workspace registers in DB |
+| 12f | Workspace init modal (repo discovery, plain clone warnings, workspace registration) | Modal displays on fresh install in non-workspace directory, workspace registers in DB |
 
 **[NEW] Persistent two-pane layout:** Fixed-width (~26 char) session sidebar on left, dynamic content panel on right. No navigation stack — content panel re-renders in place based on selected session state.
 
@@ -407,7 +428,7 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 - Dead owner (missing row or stale heartbeat >15s) → any instance may take over.
 - Agent output tailed from session log file; TUI handles log rotation via inode/size detection.
 
-**Gate:** Full walkthrough: launch → first-start modal → dashboard → select item → view plan → approve → see sessions → answer question → view review → completion. `go test ./internal/tui/...`
+**Gate:** Full walkthrough: launch (global init automatic) → workspace init modal (if not in workspace) → dashboard → select item → view plan → approve → see sessions → answer question → view review → completion. `go test ./internal/tui/...`
 
 ## Phase 13: End-to-End Integration (Week 11-12)
 

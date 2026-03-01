@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS critiques (
     line_number     INTEGER,
     severity        TEXT NOT NULL CHECK (severity IN ('critical','major','minor','nit')),
     description     TEXT NOT NULL,
+    suggestion      TEXT,
     status          TEXT NOT NULL CHECK (status IN ('open','resolved')) DEFAULT 'open',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
