@@ -1,0 +1,465 @@
+package omp
+
+import (
+	"bufio"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/beeemT/substrate/internal/adapter"
+)
+
+// ohMyPiSession implements adapter.AgentSession for oh-my-pi.
+type ohMyPiSession struct {
+	id      string
+	mode    adapter.SessionMode
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.Reader
+	stderr  io.Reader
+	events  chan adapter.AgentEvent
+	logFile *os.File
+	logPath string
+	logDir  string
+	workDir string
+
+	mu            sync.Mutex
+	aborted       bool
+	pendingAnswer chan string
+	closeOnce     sync.Once // ensures events channel is only closed once
+}
+
+// closeEvents safely closes the events channel exactly once.
+func (s *ohMyPiSession) closeEvents() {
+	s.closeOnce.Do(func() {
+		close(s.events)
+	})
+}
+
+// ID returns the session identifier.
+func (s *ohMyPiSession) ID() string {
+	return s.id
+}
+
+// Wait blocks until the session completes (done or error).
+func (s *ohMyPiSession) Wait(ctx context.Context) error {
+	// Wait for the subprocess to exit
+	done := make(chan error, 1)
+	go func() {
+		done <- s.cmd.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Context cancelled, abort the session
+		s.Abort(ctx)
+		return ctx.Err()
+	case err := <-done:
+		// Subprocess exited
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// Close the log file
+		if s.logFile != nil {
+			s.logFile.Close()
+			s.logFile = nil
+
+			// Compress the final log segment
+			compressedPath := s.logPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
+			go compressFile(s.logPath, compressedPath)
+		}
+
+		s.closeEvents()
+
+		if err != nil {
+			// Check if it was aborted
+			if s.aborted {
+				return nil // Graceful abort, not an error
+			}
+			return fmt.Errorf("bridge subprocess exited: %w", err)
+		}
+
+		return nil
+	}
+}
+
+// Events returns a channel emitting agent events.
+func (s *ohMyPiSession) Events() <-chan adapter.AgentEvent {
+	return s.events
+}
+
+// SendMessage sends a message to the running agent.
+// Used for foreman iteration and critique feedback.
+func (s *ohMyPiSession) SendMessage(ctx context.Context, msg string) error {
+	return s.sendMessage(msg)
+}
+
+// Abort terminates the agent session gracefully.
+// Returns an error if the session cannot be aborted.
+func (s *ohMyPiSession) Abort(ctx context.Context) error {
+	s.mu.Lock()
+	if s.aborted {
+		s.mu.Unlock()
+		return nil // Already aborted
+	}
+	s.aborted = true
+	s.mu.Unlock()
+
+	// Send abort message to bridge
+	msg := bridgeMsg{Type: "abort"}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal abort message: %w", err)
+	}
+
+	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
+		slog.Debug("failed to send abort message", "err", err)
+	}
+
+	// Give the subprocess time to exit gracefully
+	timeout := time.After(5 * time.Second)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.cmd.Wait()
+	}()
+
+	select {
+	case <-timeout:
+		// Timeout, force kill
+		if s.cmd.Process != nil {
+			slog.Warn("bridge subprocess did not exit gracefully, sending SIGKILL")
+			s.cmd.Process.Kill()
+		}
+	case <-done:
+		// Subprocess exited gracefully
+	}
+
+	// Close stdin
+	s.stdin.Close()
+
+	// Close the log file
+	if s.logFile != nil {
+		s.logFile.Close()
+		s.logFile = nil
+	}
+
+	s.closeEvents()
+
+	return nil
+}
+
+// sendPrompt sends a prompt message to the bridge.
+func (s *ohMyPiSession) sendPrompt(text string) error {
+	msg := bridgeMsg{Type: "prompt", Text: text}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal prompt message: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write prompt: %w", err)
+	}
+
+	return nil
+}
+
+// sendMessage sends a message to the bridge.
+func (s *ohMyPiSession) sendMessage(text string) error {
+	msg := bridgeMsg{Type: "message", Text: text}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write message: %w", err)
+	}
+
+	return nil
+}
+
+// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+func (s *ohMyPiSession) SendAnswer(ctx context.Context, answer string) error {
+	msg := bridgeMsg{Type: "answer", Text: answer}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal answer message: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write answer: %w", err)
+	}
+
+	return nil
+}
+
+// readEvents reads JSON-line events from stdout and emits them to the events channel.
+func (s *ohMyPiSession) readEvents() {
+	scanner := bufio.NewScanner(s.stdout)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024) // 10MB max line size
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		// Write to session log with timestamp
+		if s.logFile != nil {
+			timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+			logEntry := fmt.Sprintf("%s %s\n", timestamp, string(line))
+			if _, err := s.logFile.WriteString(logEntry); err != nil {
+				slog.Warn("failed to write to session log", "err", err)
+			}
+
+			// Check for log rotation
+			if info, err := s.logFile.Stat(); err == nil {
+				if info.Size() >= 10*1024*1024 {
+					s.rotateLog()
+				}
+			}
+		}
+
+		// Parse the event
+		var rawEvent struct {
+			Type  string          `json:"type"`
+			Event json.RawMessage `json:"event"`
+		}
+		if err := json.Unmarshal(line, &rawEvent); err != nil {
+			slog.Warn("failed to parse bridge event", "line", string(line), "err", err)
+			continue
+		}
+
+		// Map the event
+		event, err := s.mapBridgeEvent(rawEvent)
+		if err != nil {
+			slog.Warn("failed to map bridge event", "err", err)
+			continue
+		}
+
+		if event != nil {
+			select {
+			case s.events <- *event:
+				// Event sent
+			default:
+				// Channel full, skip (should be rare)
+				slog.Warn("event channel full, dropping event", "type", event.Type)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		slog.Error("error reading bridge stdout", "err", err)
+	}
+}
+
+// mapBridgeEvent maps a bridge event to an adapter.AgentEvent.
+func (s *ohMyPiSession) mapBridgeEvent(raw struct {
+	Type  string          `json:"type"`
+	Event json.RawMessage `json:"event"`
+},
+) (*adapter.AgentEvent, error) {
+	if raw.Type != "event" || raw.Event == nil {
+		return nil, nil
+	}
+
+	var eventMap map[string]any
+	if err := json.Unmarshal(raw.Event, &eventMap); err != nil {
+		return nil, fmt.Errorf("parse event payload: %w", err)
+	}
+
+	eventType, ok := eventMap["type"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing event type")
+	}
+
+	switch eventType {
+	case "progress":
+		text, ok := eventMap["text"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing progress text")
+		}
+		return &adapter.AgentEvent{
+			Type:      "text_delta",
+			Timestamp: time.Now(),
+			Payload:   text,
+		}, nil
+
+	case "question":
+		question, ok := eventMap["question"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing question text")
+		}
+		context, _ := eventMap["context"].(string)
+		return &adapter.AgentEvent{
+			Type:      "question",
+			Timestamp: time.Now(),
+			Payload:   question,
+			Metadata:  map[string]any{"context": context},
+		}, nil
+
+	case "foreman_proposed":
+		text, ok := eventMap["text"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing foreman_proposed text")
+		}
+		uncertain, _ := eventMap["uncertain"].(bool)
+		return &adapter.AgentEvent{
+			Type:      "foreman_proposed",
+			Timestamp: time.Now(),
+			Payload:   text,
+			Metadata:  map[string]any{"uncertain": uncertain},
+		}, nil
+
+	case "complete":
+		summary, _ := eventMap["summary"].(string)
+		return &adapter.AgentEvent{
+			Type:      "done",
+			Timestamp: time.Now(),
+			Payload:   summary,
+		}, nil
+
+	case "error":
+		msg, ok := eventMap["message"].(string)
+		if !ok {
+			msg = "unknown error"
+		}
+		return &adapter.AgentEvent{
+			Type:      "error",
+			Timestamp: time.Now(),
+			Payload:   msg,
+		}, nil
+
+	case "session_ready":
+		return &adapter.AgentEvent{
+			Type:      "started",
+			Timestamp: time.Now(),
+			Payload:   "session ready",
+		}, nil
+
+	default:
+		// Unknown event type, ignore
+		return nil, nil
+	}
+}
+
+// readStderr reads stderr and logs it for debugging.
+func (s *ohMyPiSession) readStderr() {
+	scanner := bufio.NewScanner(s.stderr)
+	for scanner.Scan() {
+		slog.Debug("bridge stderr", "line", scanner.Text())
+	}
+}
+
+// checkLogRotation checks if log rotation is needed.
+func (s *ohMyPiSession) checkLogRotation() {
+	if s.logFile == nil {
+		return
+	}
+	// Use stat to avoid race with file operations
+	info, err := s.logFile.Stat()
+	if err != nil {
+		return
+	}
+	// Rotate at 10 MB
+	if info.Size() >= 10*1024*1024 {
+		s.rotateLog()
+	}
+}
+
+// rotateLog performs log rotation.
+func (s *ohMyPiSession) rotateLog() {
+	if s.logFile == nil {
+		return
+	}
+
+	// Close current file
+	s.logFile.Close()
+
+	// Compress the current segment
+	compressedPath := s.logPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
+	if err := compressFile(s.logPath, compressedPath); err != nil {
+		slog.Warn("failed to compress log segment", "err", err)
+	}
+
+	// Clean up old segments (keep max 5)
+	cleanupOldSegments(s.logDir, s.id)
+
+	// Open new log file
+	newFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		slog.Error("failed to open new log file after rotation", "err", err)
+		return
+	}
+	s.logFile = newFile
+}
+
+// compressFile compresses a file using gzip.
+func compressFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	gzWriter := gzip.NewWriter(dstFile)
+	defer gzWriter.Close()
+
+	if _, err := io.Copy(gzWriter, srcFile); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// cleanupOldSegments removes old compressed segments, keeping max 5.
+func cleanupOldSegments(logDir, sessionID string) {
+	pattern := filepath.Join(logDir, sessionID+"*.log.*.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+
+	// Sort by modification time (oldest first)
+	sort.Slice(files, func(i, j int) bool {
+		fi, err := os.Stat(files[i])
+		if err != nil {
+			return false
+		}
+		fj, err := os.Stat(files[j])
+		if err != nil {
+			return false
+		}
+		return fi.ModTime().Before(fj.ModTime())
+	})
+
+	if len(files) > 5 {
+		for _, f := range files[:len(files)-5] {
+			if err := os.Remove(f); err != nil {
+				slog.Warn("failed to remove old log segment", "file", f, "err", err)
+			}
+		}
+	}
+}

@@ -188,6 +188,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Review.MaxCycles == nil {
 		cfg.Review.MaxCycles = ptr(3)
 	}
+	// Foreman defaults
+	if cfg.Foreman.QuestionTimeout == "" {
+		cfg.Foreman.QuestionTimeout = "0"
+	}
 }
 
 func validate(cfg *Config) error {

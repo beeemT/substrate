@@ -121,3 +121,10 @@ type AgentEvent struct {
 	Payload   string // JSON or text payload depending on type
 	Metadata  map[string]any
 }
+
+// HarnessCapabilities describes what an agent harness supports.
+type HarnessCapabilities struct {
+	SupportsStreaming bool     // Supports real-time event streaming
+	SupportsMessaging bool     // Supports SendMessage for iteration
+	SupportedTools    []string // List of supported tool names
+}

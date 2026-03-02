@@ -90,7 +90,6 @@ type Bus struct {
 	onDrop       DropHandler     // called when subscriber buffer is full; nil returns ErrRetryLater
 	preHookTypes map[string]bool // event types that are pre-hook events
 	closed       bool
-	closeCh      chan struct{}
 }
 
 type preHookEntry struct {
@@ -120,7 +119,6 @@ func NewBus(cfg BusConfig, opts ...BusOption) *Bus {
 		postHooks:    make([]postHookEntry, 0),
 		eventRepo:    cfg.EventRepo,
 		preHookTypes: prehookTypes,
-		closeCh:      make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(b)
@@ -168,6 +166,11 @@ func (b *Bus) Subscribe(id string, topics ...string) (*Subscriber, error) {
 		Topics: topicSet,
 		C:      make(chan domain.SystemEvent, 100), // buffered to avoid blocking
 	}
+
+	// Close existing subscriber channel if present to prevent goroutine leak
+	if existing, ok := b.subscribers[id]; ok {
+		close(existing.C)
+	}
 	b.subscribers[id] = sub
 	return sub, nil
 }
@@ -198,6 +201,9 @@ func (b *Bus) Unsubscribe(id string) {
 // Go cannot forcefully kill goroutines. Hook implementations should check
 // ctx.Done() and return promptly to avoid goroutine leaks.
 func (b *Bus) RegisterPreHook(config HookConfig, hook PreHook) {
+	if hook == nil {
+		panic("event: RegisterPreHook called with nil hook")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -210,6 +216,9 @@ func (b *Bus) RegisterPreHook(config HookConfig, hook PreHook) {
 // RegisterPostHook registers an asynchronous post-hook.
 // Post-hooks are called after event dispatch with the configured timeout.
 func (b *Bus) RegisterPostHook(config HookConfig, hook PostHook) {
+	if hook == nil {
+		panic("event: RegisterPostHook called with nil hook")
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -396,7 +405,6 @@ func (b *Bus) Close() error {
 		return nil
 	}
 	b.closed = true
-	close(b.closeCh)
 
 	for id, sub := range b.subscribers {
 		close(sub.C)

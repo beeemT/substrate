@@ -36,10 +36,9 @@ func (c *Client) bin() string {
 // The worktree is created in a subdirectory named after the branch.
 func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, error) {
 	// Use -b to create a new worktree for the branch
-	args := []string{"checkout", "-b", branch}
+	// Use -- to prevent flag injection from branch names starting with -
+	args := []string{"checkout", "-b", "--", branch}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
-	cmd.Dir = repoDir
-
 	// git-work checkout -b outputs the path to stdout
 	output, err := cmd.Output()
 	if err != nil {
@@ -128,10 +127,9 @@ func parseListJSON(data []byte, repoDir string) ([]Worktree, error) {
 
 // Remove deletes the worktree for the given branch.
 func (c *Client) Remove(ctx context.Context, repoDir, branch string) error {
-	args := []string{"rm", "--yes", branch}
+	// Use -- to prevent flag injection from branch names starting with -
+	args := []string{"rm", "--yes", "--", branch}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
-	cmd.Dir = repoDir
-
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git-work rm %s: %w (output: %s)", branch, err, string(output))

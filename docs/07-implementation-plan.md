@@ -445,3 +445,16 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 | Agent output log growth (unbounded log files for long sessions) | Low | Low | Rolling log segments during session: rotate at 10 MB threshold, compress previous segment. TUI tailing follows newest segment by tracking inode/size. |
 | go-atomic SQLITE_BUSY retry not yet in isRetryable | Low | Low | **[RESOLVED - IMPLEMENTED]** go-atomic isRetryable extended in Phase 0 to include SQLITE_BUSY (5) and SQLITE_LOCKED (6). |
 | Foreman context degrades gradually from Q&A history | Medium | Medium | Periodic compacted restart: after N questions (configurable, default 20), restart the Foreman session with a summarized FAQ as system prompt instead of full history. Note: compaction is disabled in the bridge (`compaction.enabled: false`), so Go-side restart with summary is the only mitigation. |
+
+## Known Gaps
+
+The following gaps are acknowledged and accepted as design tradeoffs or deferred work:
+
+| Gap | Category | Status | Notes |
+|-----|----------|--------|-------|
+| Event bus partial delivery semantics | Design | Accepted | `ErrRetryLater` returned after partial delivery can cause duplicates on retry. Callers must handle idempotency. Documented via `ErrRetryLater` error type. |
+| Event bus pre-hook goroutine leak | Design | Accepted | When a pre-hook times out, the goroutine continues if the hook ignores context cancellation. Go cannot forcefully kill goroutines. Documented in `RegisterPreHook` docstring. |
+| Adapter log file race condition | Concurrency | Deferred | `readEvents()` goroutine writes to `logFile` without mutex while `Abort()`/`Wait()` access under mutex. Fix requires significant synchronization redesign. Low impact in practice. |
+| Linux sandbox not implemented | Security | Deferred | Bridge subprocess runs without namespace isolation on Linux. macOS uses `sandbox-exec`. Implementing Linux namespaces (`unshare --mount`) requires careful testing. |
+| Git work IsMain heuristic | Edge case | Accepted | `IsMain` relies on branch name matching `main` or `master` as fallback. A feature branch named `main` could be incorrectly marked. Works for typical workflows. |
+| Mock ignoring filtering params | Test quality | Deferred | `mockEventRepo` ignores `eventType`, `workspaceID`, and `limit` params in List methods. Tests using mocks don't verify filtering behavior. |

@@ -3,6 +3,7 @@ package gitwork
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -46,7 +47,8 @@ func DiscoverRepos(workspaceDir string) ([]string, error) {
 		// Use os.Stat to follow symlinks when checking if entry is a directory
 		info, err := os.Stat(filepath.Join(workspaceDir, entry.Name()))
 		if err != nil {
-			continue // Skip entries that can't be stat'd
+			slog.Warn("failed to stat entry, skipping", "path", entry.Name(), "err", err)
+			continue
 		}
 		if !info.IsDir() {
 			continue
