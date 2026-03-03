@@ -87,7 +87,10 @@ type ForemanConfig struct {
 }
 
 // RepoConfig contains per-repo overrides.
-type RepoConfig struct{}
+type RepoConfig struct {
+	// DocPaths are documentation paths to include in planning context.
+	DocPaths []string `toml:"doc_paths"`
+}
 
 // GlobalDir returns the path to the global Substrate directory.
 // It respects the SUBSTRATE_HOME environment variable if set.
@@ -225,7 +228,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("review.max_cycles must be at least 1, got %d", *cfg.Review.MaxCycles)
 	}
 
-	if cfg.Foreman.Enabled && cfg.Foreman.QuestionTimeout != "" {
+	if cfg.Foreman.QuestionTimeout != "" {
 		if _, err := time.ParseDuration(cfg.Foreman.QuestionTimeout); err != nil {
 			return fmt.Errorf("invalid foreman.question_timeout: %w", err)
 		}

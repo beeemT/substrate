@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -83,17 +84,18 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 
 	if runtime.GOOS == "darwin" {
 		// macOS sandbox-exec profile
+		// Escape paths to prevent profile injection
+		escapedWorkDir := escapeSandboxPath(workDir)
+		escapedTmpDir := escapeSandboxPath(sessionTmpDir)
 		profile := fmt.Sprintf(
 			`(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`,
-			workDir, sessionTmpDir,
+			escapedWorkDir, escapedTmpDir,
 		)
 		cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, bunPath, "run", bridgePath)
-	} else if runtime.GOOS == "linux" {
+	} else {
 		// Linux: use unshare for mount namespace isolation
 		// This is a simplified version; production would need more sophisticated setup
-		cmd = exec.CommandContext(ctx, bunPath, "run", bridgePath)
 		// TODO: Implement Linux namespace isolation with unshare --mount
-	} else {
 		cmd = exec.CommandContext(ctx, bunPath, "run", bridgePath)
 	}
 
@@ -155,20 +157,19 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 
 	// Create the session object
 	session := &ohMyPiSession{
-		id:            opts.SessionID,
-		mode:          opts.Mode,
-		cmd:           cmd,
-		stdin:         stdin,
-		stdout:        stdout,
-		stderr:        stderr,
-		events:        make(chan adapter.AgentEvent, 64),
-		logFile:       logFile,
-		logPath:       sessionLogPath,
-		logDir:        sessionLogDir,
-		workDir:       workDir,
-		mu:            sync.Mutex{},
-		aborted:       false,
-		pendingAnswer: make(chan string, 1),
+		id:      opts.SessionID,
+		mode:    opts.Mode,
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  stdout,
+		stderr:  stderr,
+		events:  make(chan adapter.AgentEvent, 64),
+		logFile: logFile,
+		logPath: sessionLogPath,
+		logDir:  sessionLogDir,
+		workDir: workDir,
+		mu:      sync.Mutex{},
+		aborted: false,
 	}
 
 	// Start reading events in background
@@ -190,4 +191,13 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 type bridgeMsg struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// escapeSandboxPath escapes a path for use in a sandbox-exec profile.
+// It replaces backslashes and double quotes to prevent profile injection.
+func escapeSandboxPath(path string) string {
+	// Replace backslashes first, then double quotes
+	path = strings.ReplaceAll(path, "\\", "\\\\")
+	path = strings.ReplaceAll(path, "\"", "\\\"")
+	return path
 }

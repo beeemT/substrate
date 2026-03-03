@@ -321,9 +321,13 @@ func (b *Bus) runPreHooks(ctx context.Context, event domain.SystemEvent) error {
 		// Run hook in goroutine to enforce timeout
 		resultCh := make(chan error, 1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					resultCh <- fmt.Errorf("pre-hook %q panicked: %v", entry.config.Name, r)
+				}
+			}()
 			resultCh <- entry.hook(hookCtx, event)
 		}()
-
 		select {
 		case <-hookCtx.Done():
 			cancel()
@@ -386,6 +390,12 @@ func (b *Bus) runPostHooks(event domain.SystemEvent) {
 		wg.Add(1)
 		go func(e postHookEntry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					// Post-hook panicked - log but don't crash
+					// TODO: Integrate with structured logging
+				}
+			}()
 			ctx, cancel := context.WithTimeout(context.Background(), e.config.Timeout)
 			defer cancel()
 

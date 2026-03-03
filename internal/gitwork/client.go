@@ -39,6 +39,7 @@ func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, 
 	// Use -- to prevent flag injection from branch names starting with -
 	args := []string{"checkout", "-b", "--", branch}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
 	// git-work checkout -b outputs the path to stdout
 	output, err := cmd.Output()
 	if err != nil {
@@ -57,7 +58,6 @@ func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, 
 	return path, nil
 }
 
-// List returns all worktrees in the given repository directory.
 // Context cancellation is honored: if ctx is cancelled, the command will be
 // terminated and an error returned. Partial JSON output on cancellation is
 // handled by parseListJSON which returns an empty slice for empty input.
@@ -113,6 +113,18 @@ func parseListJSON(data []byte, repoDir string) ([]Worktree, error) {
 			path = filepath.Join(repoDir, path)
 		}
 
+		// Validate that resolved path is under repoDir (prevent path traversal)
+		// Only check relative paths - absolute paths are used as-is
+		if !filepath.IsAbs(e.Dir) {
+			rel, err := filepath.Rel(repoDir, path)
+			if err != nil {
+				return nil, fmt.Errorf("resolve worktree path: %w", err)
+			}
+			if strings.HasPrefix(rel, "..") {
+				return nil, fmt.Errorf("invalid worktree path %q: escapes repo directory", e.Dir)
+			}
+		}
+
 		worktrees[i] = Worktree{
 			Path:   path,
 			Branch: e.Branch,
@@ -130,6 +142,7 @@ func (c *Client) Remove(ctx context.Context, repoDir, branch string) error {
 	// Use -- to prevent flag injection from branch names starting with -
 	args := []string{"rm", "--yes", "--", branch}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = repoDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git-work rm %s: %w (output: %s)", branch, err, string(output))
@@ -183,4 +196,30 @@ func IsGitWorkRepo(dir string) bool {
 	barePath := filepath.Join(dir, ".bare")
 	info, err := os.Stat(barePath)
 	return err == nil && info.IsDir()
+}
+
+// PullMainWorktree runs git pull --ff-only in the main worktree of the given repo.
+// It returns the output and any error. Unlike other methods, this does not wrap
+// the error - the caller should handle it appropriately (as a warning, not a failure).
+func (c *Client) PullMainWorktree(ctx context.Context, repoDir string) (string, error) {
+	// First get the main worktree path
+	mainDir, err := c.GetMainWorktree(ctx, repoDir)
+	if err != nil {
+		return "", fmt.Errorf("get main worktree: %w", err)
+	}
+
+	// Run git pull --ff-only in the main worktree
+	cmd := exec.CommandContext(ctx, "git", "pull", "--ff-only")
+	cmd.Dir = mainDir
+
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// PullResult represents the result of pulling a single repo's main worktree.
+type PullResult struct {
+	RepoName string
+	Success  bool
+	Output   string
+	Error    error
 }

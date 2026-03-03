@@ -33,10 +33,9 @@ type ohMyPiSession struct {
 	logDir  string
 	workDir string
 
-	mu            sync.Mutex
-	aborted       bool
-	pendingAnswer chan string
-	closeOnce     sync.Once // ensures events channel is only closed once
+	mu        sync.Mutex
+	aborted   bool
+	closeOnce sync.Once // ensures events channel is only closed once
 }
 
 // closeEvents safely closes the events channel exactly once.
@@ -148,10 +147,12 @@ func (s *ohMyPiSession) Abort(ctx context.Context) error {
 	s.stdin.Close()
 
 	// Close the log file
+	s.mu.Lock()
 	if s.logFile != nil {
 		s.logFile.Close()
 		s.logFile = nil
 	}
+	s.mu.Unlock()
 
 	s.closeEvents()
 
@@ -221,20 +222,21 @@ func (s *ohMyPiSession) readEvents() {
 		line := scanner.Bytes()
 
 		// Write to session log with timestamp
+		s.mu.Lock()
 		if s.logFile != nil {
 			timestamp := time.Now().UTC().Format(time.RFC3339Nano)
 			logEntry := fmt.Sprintf("%s %s\n", timestamp, string(line))
 			if _, err := s.logFile.WriteString(logEntry); err != nil {
 				slog.Warn("failed to write to session log", "err", err)
 			}
-
 			// Check for log rotation
 			if info, err := s.logFile.Stat(); err == nil {
 				if info.Size() >= 10*1024*1024 {
-					s.rotateLog()
+					s.rotateLogLocked()
 				}
 			}
 		}
+		s.mu.Unlock()
 
 		// Parse the event
 		var rawEvent struct {
@@ -368,23 +370,12 @@ func (s *ohMyPiSession) readStderr() {
 }
 
 // checkLogRotation checks if log rotation is needed.
-func (s *ohMyPiSession) checkLogRotation() {
-	if s.logFile == nil {
-		return
-	}
-	// Use stat to avoid race with file operations
-	info, err := s.logFile.Stat()
-	if err != nil {
-		return
-	}
-	// Rotate at 10 MB
-	if info.Size() >= 10*1024*1024 {
-		s.rotateLog()
-	}
-}
+// Deprecated: rotation is now handled inline in readEvents.
+func (s *ohMyPiSession) checkLogRotation() {}
 
-// rotateLog performs log rotation.
-func (s *ohMyPiSession) rotateLog() {
+// rotateLogLocked performs log rotation.
+// Must be called with s.mu held.
+func (s *ohMyPiSession) rotateLogLocked() {
 	if s.logFile == nil {
 		return
 	}
@@ -429,6 +420,21 @@ func compressFile(src, dst string) error {
 
 	if _, err := io.Copy(gzWriter, srcFile); err != nil {
 		return err
+	}
+
+	// Ensure gzip writer is flushed before closing
+	if err := gzWriter.Close(); err != nil {
+		return err
+	}
+
+	// Close files before deleting
+	srcFile.Close()
+	dstFile.Close()
+
+	// Delete original file after successful compression
+	if err := os.Remove(src); err != nil {
+		// Log warning but don't fail - compression succeeded
+		// This is a cleanup issue, not a data loss issue
 	}
 
 	return nil

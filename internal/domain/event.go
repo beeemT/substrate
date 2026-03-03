@@ -49,6 +49,7 @@ const (
 	EventPlanApproved           EventType = "plan.approved"
 	EventPlanRejected           EventType = "plan.rejected"
 	EventPlanRevised            EventType = "plan.revised"
+	EventPlanFailed             EventType = "plan.failed"
 
 	// Implementation events
 	EventImplementationStarted EventType = "work_item.implementation_started"

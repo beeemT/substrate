@@ -63,17 +63,8 @@ func DiscoverRepos(workspaceDir string) ([]string, error) {
 	return repos, nil
 }
 
-// InitWorkspace creates a .substrate-workspace file in the given directory.
-// It returns an error if the file already exists.
 func InitWorkspace(dir, name string) (*WorkspaceFile, error) {
 	workspacePath := filepath.Join(dir, WorkspaceFileName)
-
-	// Check if workspace file already exists
-	if _, err := os.Stat(workspacePath); err == nil {
-		return nil, ErrWorkspaceExists
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("check workspace file: %w", err)
-	}
 
 	ws := &WorkspaceFile{
 		ID:        ulid.Make().String(),
@@ -81,7 +72,24 @@ func InitWorkspace(dir, name string) (*WorkspaceFile, error) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	if err := WriteWorkspaceFile(dir, ws); err != nil {
+	data, err := yaml.Marshal(ws)
+	if err != nil {
+		return nil, fmt.Errorf("marshal workspace file: %w", err)
+	}
+
+	// Use O_EXCL for atomic creation - fails if file already exists
+	f, err := os.OpenFile(workspacePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, ErrWorkspaceExists
+		}
+		return nil, fmt.Errorf("create workspace file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil {
+		f.Close() // Close before remove
+		os.Remove(workspacePath)
 		return nil, fmt.Errorf("write workspace file: %w", err)
 	}
 
