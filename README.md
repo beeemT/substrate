@@ -2,7 +2,7 @@
 
 # Substrate
 
-**the filling between all the gaps**
+**fill all the gaps**
 
 *AI-powered work item orchestration for multi-repo development*
 
