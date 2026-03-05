@@ -1,0 +1,124 @@
+package linear
+
+import "time"
+
+// linearIssue is the GraphQL response shape for a single issue.
+type linearIssue struct {
+	ID          string        `json:"id"`
+	Identifier  string        `json:"identifier"` // e.g. "FOO-123"
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Priority    int           `json:"priority"`
+	URL         string        `json:"url"`
+	State       linearState   `json:"state"`
+	Labels      linearLabels  `json:"labels"`
+	Assignee    *linearUser   `json:"assignee"`
+	Team        linearTeamRef `json:"team"`
+	CreatedAt   *time.Time    `json:"createdAt"`
+	UpdatedAt   *time.Time    `json:"updatedAt"`
+}
+
+type linearState struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"` // e.g. "triage","backlog","started","completed","cancelled"
+}
+
+type linearLabels struct {
+	Nodes []linearLabel `json:"nodes"`
+}
+
+type linearLabel struct {
+	Name string `json:"name"`
+}
+
+type linearUser struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type linearTeamRef struct {
+	ID  string `json:"id"`
+	Key string `json:"key"`
+}
+
+type linearProject struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	State       string          `json:"state"`
+	Icon        string          `json:"icon"`
+	Color       string          `json:"color"`
+	Issues      linearIssueConn `json:"issues"`
+}
+
+type linearIssueConn struct {
+	Nodes []linearIssue `json:"nodes"`
+}
+
+type linearProjectConn struct {
+	Nodes []linearProject `json:"nodes"`
+}
+
+type linearInitiative struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Status      string            `json:"status"`
+	Projects    linearProjectConn `json:"projects"`
+}
+
+type linearInitiativeConn struct {
+	Nodes []linearInitiative `json:"nodes"`
+}
+
+// GraphQL envelope types
+
+type gqlResponse struct {
+	Data   interface{} `json:"data"`
+	Errors []gqlError  `json:"errors"`
+}
+
+type gqlError struct {
+	Message string `json:"message"`
+}
+
+type issuesResponse struct {
+	Issues struct {
+		Nodes []linearIssue `json:"nodes"`
+	} `json:"issues"`
+}
+
+type issueResponse struct {
+	Issue *linearIssue `json:"issue"`
+}
+
+type projectsResponse struct {
+	Projects linearProjectConn `json:"projects"`
+}
+
+type projectResponse struct {
+	Project *linearProject `json:"project"`
+}
+
+type initiativesResponse struct {
+	Initiatives linearInitiativeConn `json:"initiatives"`
+}
+
+type updateIssueStateResponse struct {
+	IssueUpdate struct {
+		Success bool `json:"success"`
+	} `json:"issueUpdate"`
+}
+
+type addCommentResponse struct {
+	CommentCreate struct {
+		Success bool `json:"success"`
+	} `json:"commentCreate"`
+}
+
+type viewerResponse struct {
+	Viewer struct {
+		ID string `json:"id"`
+	} `json:"viewer"`
+}

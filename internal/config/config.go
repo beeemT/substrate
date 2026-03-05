@@ -71,6 +71,26 @@ type ReviewConfig struct {
 // AdaptersConfig contains per-adapter configuration.
 type AdaptersConfig struct {
 	OhMyPi OhMyPiConfig `toml:"ohmypi"`
+	Linear LinearConfig `toml:"linear"`
+	Glab   GlabConfig   `toml:"glab"`
+}
+
+// LinearConfig configures the Linear GraphQL adapter.
+type LinearConfig struct {
+	APIKey         string            `toml:"api_key"`
+	TeamID         string            `toml:"team_id"`
+	AssigneeFilter string            `toml:"assignee_filter"` // "me" or explicit user ID
+	PollInterval   string            `toml:"poll_interval"`   // e.g. "30s"; default "30s"
+	StateMappings  map[string]string `toml:"state_mappings"`  // TrackerState -> Linear workflow state UUID
+}
+
+// GlabConfig configures the glab CLI adapter.
+// All fields are optional; the adapter is always registered regardless.
+type GlabConfig struct {
+	// Reviewers is a list of GitLab usernames added as reviewers to created MRs.
+	Reviewers []string `toml:"reviewers"`
+	// Labels is a list of GitLab label names added to created MRs.
+	Labels []string `toml:"labels"`
 }
 
 // OhMyPiConfig configures the oh-my-pi agent harness.
@@ -194,6 +214,10 @@ func applyDefaults(cfg *Config) {
 	// Foreman defaults
 	if cfg.Foreman.QuestionTimeout == "" {
 		cfg.Foreman.QuestionTimeout = "0"
+	}
+	// Linear defaults
+	if cfg.Adapters.Linear.PollInterval == "" {
+		cfg.Adapters.Linear.PollInterval = "30s"
 	}
 }
 
