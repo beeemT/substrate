@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -297,9 +298,8 @@ func TestGenerateBranchName(t *testing.T) {
 				t.Errorf("GenerateBranchName() = %q, want prefix %q", got, tt.wantPrefix)
 			}
 
-			if tt.wantContains != "" && got != "" {
-				// Check that the generated branch contains expected content
-				// (exact match not required due to truncation)
+			if tt.wantContains != "" && !strings.Contains(got, tt.wantContains) {
+				t.Errorf("GenerateBranchName() = %q, want it to contain %q", got, tt.wantContains)
 			}
 		})
 	}
@@ -349,45 +349,6 @@ func TestValidateBranchName(t *testing.T) {
 			got := ValidateBranchName(tt.branch)
 			if got != tt.wantValid {
 				t.Errorf("ValidateBranchName(%q) = %v, want %v", tt.branch, got, tt.wantValid)
-			}
-		})
-	}
-}
-
-// TestParseBranchName tests extracting external ID from branch names.
-func TestParseBranchName(t *testing.T) {
-	tests := []struct {
-		name           string
-		branch         string
-		wantExternalID string
-	}{
-		{
-			name:           "Linear issue",
-			branch:         "sub-LIN-FOO-123-fix-auth",
-			wantExternalID: "LIN-FOO-123",
-		},
-		{
-			name:           "Manual work item",
-			branch:         "sub-MAN-42-update-docs",
-			wantExternalID: "MAN-42",
-		},
-		{
-			name:           "Invalid branch",
-			branch:         "feature/test",
-			wantExternalID: "",
-		},
-		{
-			name:           "No prefix",
-			branch:         "LIN-FOO-123-fix-auth",
-			wantExternalID: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ParseBranchName(tt.branch)
-			if got != tt.wantExternalID {
-				t.Errorf("ParseBranchName(%q) = %q, want %q", tt.branch, got, tt.wantExternalID)
 			}
 		})
 	}
@@ -449,5 +410,14 @@ func TestGetWaveSubPlans(t *testing.T) {
 	invalidIDs := state.GetWaveSubPlans(10)
 	if invalidIDs != nil {
 		t.Errorf("expected nil for invalid wave index, got %v", invalidIDs)
+	}
+}
+
+// TestAllWavesCompletedEmptyPlan verifies that a plan with no sub-plans does not
+// vacuously report completion.
+func TestAllWavesCompletedEmptyPlan(t *testing.T) {
+	state := NewExecutionState("plan-empty", []domain.SubPlan{})
+	if state.AllWavesCompleted() {
+		t.Error("AllWavesCompleted() = true for empty plan, want false")
 	}
 }

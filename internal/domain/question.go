@@ -9,6 +9,7 @@ type Question struct {
 	Content        string
 	Context        string
 	Answer         string
+	ProposedAnswer string
 	AnsweredBy     string
 	Status         QuestionStatus
 	CreatedAt      time.Time

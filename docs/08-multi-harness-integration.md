@@ -254,6 +254,218 @@ goose run "Implement authentication middleware" --no-tui
 
 ---
 
+
+### 2.6 Codex CLI (OpenAI)
+
+**Vendor:** OpenAI  
+**License:** Apache 2.0  
+**Language:** Go
+**GitHub Stars:** ~63,000+
+
+Codex CLI is OpenAI's official coding agent that runs locally on your computer.
+
+**Integration Characteristics:**
+| Aspect | Details |
+|--------|---------|
+| **Non-interactive mode** | Full headless mode via `codex` CLI |
+| **Approval mode** | `--approval-mode` for autonomous execution |
+| **Model selection** | `-m` flag for model choice (o4, o3, etc.) |
+| **Working directory** | `-w` flag for workspace isolation |
+| **Full auto mode** | `--full-auto` for complete autonomy |
+| **Sandboxing** | Built-in filesystem isolation |
+| **Quiet mode** | `-q` for minimal output |
+| **IDE integration** | Also available as VS Code, Cursor, Windsurf extension |
+
+**CLI Example (non-interactive):**
+```bash
+codex -w /path/to/project -m o4 \\
+    --approval-mode full-auto \\
+    "Implement the authentication middleware as described"
+```
+
+**Strengths:**
+- First-class headless/autonomous mode
+- Go-based (same as Substrate) - natural fit
+- Built-in filesystem sandboxing
+- Native approval modes (suggest, auto, full-auto)
+- Strong model support (GPT-4o, o3, etc.)
+- Apache 2.0 licensed
+- Native to OpenAI ecosystem
+
+**Challenges:**
+- Requires OpenAI API access
+- Newer tool (2025), API stability uncertain
+- Output format needs investigation for structured parsing
+- No MCP support (unlike Claude Code)
+
+**Integration Pattern:** CLI with stdout parsing, potentially structured output
+
+**Integration Readiness:** ✅ High - Full headless support makes this a first-class candidate
+
+---
+
+### 2.7 Cline (VSCode Extension)
+
+**Vendor:** Cline Bot Inc  
+**License:** Apache 2.0  
+**Type:** VSCode Extension (not CLI-first)  
+**GitHub Stars:** ~58,600+
+
+**Note:** Cline is primarily a VSCode extension, not a standalone CLI. This makes direct integration challenging, but it's worth tracking due to its popularity.
+
+**Integration Characteristics:**
+| Aspect | Details |
+|--------|---------|
+| **Primary interface** | VSCode extension with TUI |
+| **MCP support** | Yes - can extend with custom tools |
+| **Multi-provider** | Yes - OpenAI, Anthropic, Gemini, etc. |
+| **Agent SDK** | Available for programmatic usage |
+| **Non-interactive mode** | Limited - primarily interactive |
+| **Browser automation** | Yes - can use browser for testing |
+
+**Integration Pattern:** Not directly integratable as a harness. Could potentially:
+1. Use the Agent SDK if it exposes a CLI or programmatic interface
+2. Fork the extension core and wrap it
+3. Wait for official CLI support
+
+**Recommendation:** Monitor for CLI/SDK support. Mark as "not currently integratable."
+
+---
+
+### 2.8 Roo Code (Cline Fork)
+
+**Vendor:** Roo Code, Inc  
+**License:** Apache 2.0  
+**Type:** VSCode Extension  
+**GitHub Stars:** ~22,500+
+
+Roo Code is a popular fork of Cline with additional features and modes.
+
+**Integration Characteristics:** Similar to Cline - primarily VSCode extension with no standalone CLI.
+
+**Recommendation:** Same as Cline - monitor for CLI support.
+
+---
+
+### 2.9 Continue.dev
+
+**Vendor:** Continue Dev, Inc  
+**License:** Apache 2.0  
+**Type:** IDE Extension + CLI  
+**GitHub Stars:** ~31,600+
+
+Continue is an open-source AI code assistant with IDE extensions and a CLI component.
+
+**Integration Characteristics:**
+| Aspect | Details |
+|--------|---------|
+| **Primary interface** | VSCode/JetBrains extension |
+| **CLI component** | `cn` CLI available |
+| **MCP support** | Yes - source-controlled AI checks |
+| **Multi-provider** | Yes - many providers supported |
+| **CI integration** | Yes - checks can run in CI |
+
+**CLI Example:**
+```bash
+# Install CLI
+curl -fsSL https://raw.githubusercontent.com/continuedev/continue/main/extensions/cli/scripts/install.sh | bash
+
+# Run checks
+cn
+```
+
+**Strengths:**
+- Open source with permissive license
+- CLI component exists
+- CI integration possible
+- Source-controlled checks
+
+**Challenges:**
+- CLI is primarily for checks, not full coding sessions
+- Output format needs investigation
+
+**Integration Pattern:** CLI with stdout parsing - needs investigation of headless capabilities
+
+**Recommendation:** Medium priority - investigate CLI capabilities further.
+
+---
+
+## 2.10 AI Coding Assistant Popularity Ranking
+
+Below is a comprehensive ranking of AI coding assistants by estimated user base and GitHub popularity. This helps prioritize integration efforts based on market reach.
+
+### Tier 1: Market Leaders (1M+ users)
+
+| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
+|------|------|------|------------|--------------|----------------------|
+| 1 | **GitHub Copilot** | IDE Plugin + CLI | ~15M+ | N/A (proprietary) | Medium (interactive-first) |
+| 2 | **Cursor** | Standalone IDE | ~5M+ | ~25K | Low (IDE-only, no CLI) |
+| 3 | **ChatGPT/Claude Web** | Web Chat | ~200M+ | N/A | N/A (not coding-specific) |
+
+### Tier 2: CLI-Native Tools (High Integration Priority)
+
+| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
+|------|------|------|------------|--------------|----------------------|
+| 1 | **Claude Code CLI** | CLI + IDE | ~500K+ | ~70K+ (refs) | ✅ **Highest** |
+| 2 | **Codex CLI (OpenAI)** | CLI | ~100K+ | ~63K | ✅ **High** |
+| 3 | **Aider** | CLI | ~200K+ | ~15K | ✅ **High** |
+| 4 | **Cline** | VSCode Ext | ~400K+ | ~58.6K | ⚠️ Medium (no CLI) |
+| 5 | **Goose** | CLI + Desktop | ~100K+ | ~32K | 🔶 Medium |
+| 6 | **Roo Code** | VSCode Ext | ~150K+ | ~22.5K | ⚠️ Medium (fork of Cline) |
+| 7 | **Copilot CLI** | CLI | ~200K+ | N/A | ⚠️ Medium (interactive-first) |
+
+### Tier 3: IDE Extensions (Lower Integration Priority)
+
+| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
+|------|------|------|------------|--------------|----------------------|
+| 1 | **Continue** | IDE Extension + CLI | ~300K+ | ~31.6K | 🔶 Medium (has CLI) |
+| 2 | **Codeium/Windsurf** | IDE + Web | ~1M+ | N/A | Low (proprietary) |
+| 3 | **Amazon Q Developer** | IDE + CLI | ~100K+ | ~1.9K | Low (deprecated → Kiro) |
+| 4 | **Tabnine** | IDE Plugin | ~500K+ | N/A | Low (proprietary) |
+
+### Tier 4: Web-Based / Specialized
+
+| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
+|------|------|------|------------|--------------|----------------------|
+| 1 | **Bolt.new** | Web IDE | ~1M+ | ~16.2K | Low (web-only) |
+| 2 | **Replit AI** | Web IDE | ~2M+ | N/A | Low (web-only) |
+| 3 | **v0.dev** | Web Component Gen | ~500K+ | N/A | N/A (component-focused) |
+| 4 | **Devin** | Cloud Agent | ~10K+ | N/A | Low (closed, cloud-only) |
+
+### Tier 5: Emerging / Open Source
+
+| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
+|------|------|------|------------|--------------|----------------------|
+| 1 | **Crush (ex-OpenCode)** | CLI | ~50K+ | ~11K (archived) | Medium (monitoring) |
+| 2 | **Open Interpreter** | CLI | ~100K+ | ~58K | Low (general-purpose) |
+| 3 | **GPT-Pilot** | CLI | ~50K+ | ~32K | Low (Pythagora) |
+| 4 | **Devika** | CLI | ~30K+ | ~18K | Low (experimental) |
+
+### Integration Priority Summary
+
+**Immediate Integration (Phase 1-3):**
+1. ✅ **Claude Code CLI** - Best non-interactive support, structured output
+2. ✅ **Codex CLI (OpenAI)** - Full headless mode, Go-based, Apache 2.0
+3. ✅ **Aider** - Excellent scripting support, open source
+
+**Secondary Integration (Phase 4-6):**
+4. 🔶 **Goose** - Open source, Rust-based, growing fast
+5. 🔶 **Continue** - Has CLI component, investigate headless
+6. ⚠️ **Copilot CLI** - Experimental (interactive-first design)
+7. 🔶 **Crush** - Monitor for stable release
+
+**Not Currently Integratable:**
+- **Cline / Roo Code** - VSCode extensions, no standalone CLI
+- **Cursor** - Standalone IDE, no CLI
+- **Bolt.new** - Web-based only
+
+**Legend:**
+- ✅ High priority, clear integration path
+- 🔶 Medium priority, needs investigation
+- ⚠️ Low priority, significant challenges
+- Low/Not integratable = IDE/web-only or proprietary
+
+---
 ## 3. Integration Architecture
 
 ### 3.1 Enhanced Harness Interface
@@ -1157,20 +1369,19 @@ func TestE2E_Aider_FullWorkflow(t *testing.T) {
 
 ## 8. Harness Comparison Matrix
 
-| Feature | oh-my-pi | Claude Code | Aider | Copilot CLI | Goose |
-|---------|----------|-------------|-------|-------------|-------|
-| **Non-interactive mode** | ✅ Native | ✅ `-p` flag | ✅ `--message` | ⚠️ Limited | ✅ `--no-tui` |
-| **Streaming output** | ✅ JSON | ✅ `stream-json` | ⚠️ Text | ❌ TUI only | ✅ |
-| **Question escalation** | ✅ Custom tool | ⚠️ Via MCP | ⚠️ Pattern detect | ✅ Built-in | ❓ TBD |
-| **Tool restriction** | ✅ | ✅ `--tools` | ❌ | ⚠️ Agent-based | ❓ TBD |
-| **Session resume** | ✅ | ✅ `--resume` | ✅ | ✅ `--resume` | ❓ TBD |
-| **Multi-provider** | ❌ Claude only | ❌ Claude only | ✅ Many | ❌ GitHub only | ✅ Many |
-| **MCP support** | ❌ | ✅ Native | ❌ | ✅ Native | ✅ Native |
-| **Open source** | ✅ | ❌ | ✅ Apache 2.0 | ❌ | ✅ Apache 2.0 |
-| **Auto-commit** | ✅ Configurable | ✅ | ✅ Native | ⚠️ Via git | ❓ TBD |
-| **Cost tracking** | ❌ | ✅ | ⚠️ Via provider | ✅ Dashboard | ❓ TBD |
-| **Integration maturity** | Preferred | Target: Stable | Target: Stable | Experimental | Target: Beta |
-
+| Feature | oh-my-pi | Claude Code | Codex CLI | Aider | Copilot CLI | Goose |
+|---------|----------|-------------|-----------|-------|-------------|-------|
+| **Non-interactive mode** | ✅ Native | ✅ `-p` flag | ✅ Full headless | ✅ `--message` | ⚠️ Limited | ✅ `--no-tui` |
+| **Streaming output** | ✅ JSON | ✅ `stream-json` | ⚠️ Text (TBD) | ⚠️ Text | ❌ TUI only | ✅ |
+| **Question escalation** | ✅ Custom tool | ⚠️ Via MCP | ❓ TBD | ⚠️ Pattern detect | ✅ Built-in | ❓ TBD |
+| **Tool restriction** | ✅ | ✅ `--tools` | ✅ Approval modes | ❌ | ⚠️ Agent-based | ❓ TBD |
+| **Session resume** | ✅ | ✅ `--resume` | ✅ | ✅ | ✅ `--resume` | ❓ TBD |
+| **Multi-provider** | ❌ Claude only | ❌ Claude only | ❌ OpenAI only | ✅ Many | ❌ GitHub only | ✅ Many |
+| **MCP support** | ❌ | ✅ Native | ❌ | ❌ | ✅ Native | ✅ Native |
+| **Open source** | ✅ | ❌ | ✅ Apache 2.0 | ✅ Apache 2.0 | ❌ | ✅ Apache 2.0 |
+| **Auto-commit** | ✅ Configurable | ✅ | ✅ | ✅ Native | ⚠️ Via git | ❓ TBD |
+| **Cost tracking** | ❌ | ✅ | ✅ | ⚠️ Via provider | ✅ Dashboard | ❓ TBD |
+| **Integration maturity** | Preferred | Target: Stable | Target: Stable | Target: Stable | Experimental | Target: Beta |
 ---
 
 ## 9. Risk Register

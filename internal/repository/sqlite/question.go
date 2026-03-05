@@ -19,6 +19,7 @@ type questionRow struct {
 	Status         string  `db:"status"`
 	CreatedAt      string  `db:"created_at"`
 	AnsweredAt     *string `db:"answered_at"`
+	ProposedAnswer *string `db:"proposed_answer"`
 }
 
 func (r *questionRow) toDomain() (domain.Question, error) {
@@ -37,6 +38,7 @@ func (r *questionRow) toDomain() (domain.Question, error) {
 		Context:        derefStr(r.Context),
 		Answer:         derefStr(r.Answer),
 		AnsweredBy:     derefStr(r.AnsweredBy),
+		ProposedAnswer: derefStr(r.ProposedAnswer),
 		Status:         domain.QuestionStatus(r.Status),
 		CreatedAt:      createdAt,
 		AnsweredAt:     answeredAt,
@@ -51,6 +53,7 @@ func rowFromQuestion(q domain.Question) questionRow {
 		Context:        strPtr(q.Context),
 		Answer:         strPtr(q.Answer),
 		AnsweredBy:     strPtr(q.AnsweredBy),
+		ProposedAnswer: strPtr(q.ProposedAnswer),
 		Status:         string(q.Status),
 		CreatedAt:      formatTime(q.CreatedAt),
 		AnsweredAt:     formatTimePtr(q.AnsweredAt),
@@ -91,8 +94,8 @@ func (r QuestionRepo) ListBySessionID(ctx context.Context, sessionID string) ([]
 func (r QuestionRepo) Create(ctx context.Context, q domain.Question) error {
 	row := rowFromQuestion(q)
 	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO questions (id, agent_session_id, content, context, answer, answered_by, status, created_at, answered_at)
-		 VALUES (:id, :agent_session_id, :content, :context, :answer, :answered_by, :status, :created_at, :answered_at)`, row)
+		`INSERT INTO questions (id, agent_session_id, content, context, answer, proposed_answer, answered_by, status, created_at, answered_at)
+		 VALUES (:id, :agent_session_id, :content, :context, :answer, :proposed_answer, :answered_by, :status, :created_at, :answered_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create question %s: %w", q.ID, err)
 	}
@@ -103,7 +106,7 @@ func (r QuestionRepo) Update(ctx context.Context, q domain.Question) error {
 	row := rowFromQuestion(q)
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE questions SET agent_session_id = :agent_session_id, content = :content,
-		 context = :context, answer = :answer, answered_by = :answered_by, status = :status,
+		 context = :context, answer = :answer, proposed_answer = :proposed_answer, answered_by = :answered_by, status = :status,
 		 answered_at = :answered_at WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update question %s: %w", q.ID, err)

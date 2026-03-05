@@ -60,6 +60,7 @@ func TestQuestionService_ValidTransitions(t *testing.T) {
 	}{
 		{domain.QuestionPending, domain.QuestionAnswered, "pending -> answered"},
 		{domain.QuestionPending, domain.QuestionEscalated, "pending -> escalated"},
+		{domain.QuestionEscalated, domain.QuestionAnswered, "escalated -> answered (human approval)"},
 	}
 
 	for _, tc := range validTransitions {
@@ -102,7 +103,6 @@ func TestQuestionService_InvalidTransitions(t *testing.T) {
 		{domain.QuestionAnswered, domain.QuestionPending, "answered -> pending"},
 		{domain.QuestionAnswered, domain.QuestionEscalated, "answered -> escalated"},
 		{domain.QuestionEscalated, domain.QuestionPending, "escalated -> pending"},
-		{domain.QuestionEscalated, domain.QuestionAnswered, "escalated -> answered"},
 	}
 
 	for _, tc := range invalidTransitions {

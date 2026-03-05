@@ -70,86 +70,11 @@ func slugFromTitle(title string) string {
 	return s
 }
 
-// ParseBranchName extracts external ID from a branch name.
-// Returns empty string if the branch name doesn't match the expected format.
-//
-// Example:
-//   - branch: "sub-LIN-FOO-123-fix-auth-flow"
-//   - returns: "LIN-FOO-123"
-func ParseBranchName(branch string) (externalID string) {
-	// Branch format: sub-<externalID>-<slug>
-	// ExternalID format: PREFIX-IDENTIFIER (e.g., LIN-FOO-123, MAN-1)
-
-	if !strings.HasPrefix(branch, "sub-") {
-		return ""
-	}
-
-	// Remove "sub-" prefix
-	rest := strings.TrimPrefix(branch, "sub-")
-
-	// Find the first segment that looks like a slug (all lowercase)
-	// The external ID is everything before the last segment that starts with lowercase
-	parts := strings.Split(rest, "-")
-
-	// External IDs have format: PREFIX-IDENTIFIER where PREFIX is uppercase
-	// So we look for: PREFIX-...-SLUG
-	// The external ID is PREFIX-... up until we hit a lowercase segment
-
-	var idParts []string
-	for i, part := range parts {
-		// Check if this part is all uppercase (part of external ID)
-		if isAllUppercase(part) || isNumeric(part) {
-			idParts = append(idParts, part)
-		} else {
-			// Found the slug - everything before this is the external ID
-			// But we need at least 2 parts for a valid ID
-			if i >= 1 {
-				return strings.Join(parts[:i], "-")
-			}
-			break
-		}
-	}
-
-	// If we got here and have parts, return what we found
-	if len(idParts) >= 2 {
-		return strings.Join(idParts, "-")
-	}
-
-	return ""
-}
-
-// isAllUppercase checks if a string is all uppercase letters.
-func isAllUppercase(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.IsUpper(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
-// isNumeric checks if a string is all digits.
-func isNumeric(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
 // ValidateBranchName checks if a branch name is valid.
 // A valid branch name:
 // - Starts with "sub-"
-// - Contains an external ID (uppercase prefix + identifier)
-// - Contains a slug (lowercase alphanumeric with dashes)
-// - Has no slashes (avoids git ref namespace collisions)
+// - Contains no slashes (avoids git ref namespace collisions)
+// - Has non-empty content after "sub-" with no leading or trailing dash
 func ValidateBranchName(branch string) bool {
 	if !strings.HasPrefix(branch, "sub-") {
 		return false
@@ -157,18 +82,6 @@ func ValidateBranchName(branch string) bool {
 	if strings.Contains(branch, "/") {
 		return false
 	}
-
-	externalID := ParseBranchName(branch)
-	if externalID == "" {
-		return false
-	}
-
-	// Check that there's a slug after the external ID
-	prefix := "sub-" + externalID + "-"
-	if len(branch) <= len(prefix) {
-		return false
-	}
-
-	slug := strings.TrimPrefix(branch, prefix)
-	return slug != "" && slug == strings.ToLower(slug)
+	rest := strings.TrimPrefix(branch, "sub-")
+	return rest != "" && !strings.HasPrefix(rest, "-") && !strings.HasSuffix(rest, "-")
 }

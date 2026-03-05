@@ -174,6 +174,14 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (*
 		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
+	// Pre-create all worktrees sequentially before fan-out to eliminate the
+	// TOCTOU race where two sub-plans in the same wave could race to create
+	// a worktree for the same repository.
+	worktreePaths, err := s.prepareWorktrees(ctx, &workspace, workItem.Title, subPlans, branch, repoPaths)
+	if err != nil {
+		return nil, fmt.Errorf("prepare worktrees: %w", err)
+	}
+
 	// Execute each wave sequentially
 	for waveIndex, wave := range BuildWaves(subPlans) {
 		if ctx.Err() != nil {
@@ -189,7 +197,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (*
 			"plan_id", planID)
 
 		// Execute sub-plans in this wave concurrently
-		sessionResults, warnings := s.executeWave(ctx, wave, &workspace, &plan, &workItem, branch, repoPaths, state)
+		sessionResults, warnings := s.executeWave(ctx, wave, &workspace, &plan, &workItem, branch, worktreePaths, state)
 		result.Sessions = append(result.Sessions, sessionResults...)
 		result.Warnings = append(result.Warnings, warnings...)
 
@@ -238,7 +246,7 @@ func (s *ImplementationService) executeWave(
 	plan *domain.Plan,
 	workItem *domain.WorkItem,
 	branch string,
-	repoPaths map[string]string,
+	worktreePaths map[string]string,
 	state *ExecutionState,
 ) ([]SessionResult, []ImplementationWarning) {
 	var results []SessionResult
@@ -251,7 +259,7 @@ func (s *ImplementationService) executeWave(
 		sp := sp // capture loop variable
 
 		g.Go(func() error {
-			result, warning := s.executeSubPlan(ctx, sp, workspace, plan, workItem, branch, repoPaths, state)
+			result, warning := s.executeSubPlan(ctx, sp, workspace, plan, workItem, branch, worktreePaths, state)
 
 			mu.Lock()
 			results = append(results, result)
@@ -282,7 +290,7 @@ func (s *ImplementationService) executeSubPlan(
 	plan *domain.Plan,
 	workItem *domain.WorkItem,
 	branch string,
-	repoPaths map[string]string,
+	worktreePaths map[string]string,
 	state *ExecutionState,
 ) (SessionResult, *ImplementationWarning) {
 	result := SessionResult{
@@ -302,29 +310,16 @@ func (s *ImplementationService) executeSubPlan(
 		slog.Warn("failed to update sub-plan status", "error", err, "sub_plan_id", subPlan.ID)
 	}
 
-	// Get repo path
-	repoPath, ok := repoPaths[subPlan.RepositoryName]
+	// Look up pre-created worktree path (created by prepareWorktrees before fan-out).
+	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
 	if !ok {
+		// Defensive: should not happen if prepareWorktrees succeeded.
 		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("repository %s not found in workspace", subPlan.RepositoryName)
+		result.Summary = fmt.Sprintf("worktree for repository %s not found", subPlan.RepositoryName)
 		result.CompletedAt = ptrTime(time.Now())
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("%s", result.Summary))
 		return result, &ImplementationWarning{
-			Type:     "repo_not_found",
-			Message:  result.Summary,
-			RepoName: subPlan.RepositoryName,
-		}
-	}
-
-	// Create or verify worktree
-	worktreePath, err := s.ensureWorktree(ctx, workspace, subPlan.RepositoryName, repoPath, branch, workItem.Title)
-	if err != nil {
-		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("failed to create worktree: %v", err)
-		result.CompletedAt = ptrTime(time.Now())
-		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
-		return result, &ImplementationWarning{
-			Type:     "worktree_failed",
+			Type:     "worktree_not_found",
 			Message:  result.Summary,
 			RepoName: subPlan.RepositoryName,
 		}
@@ -341,10 +336,8 @@ func (s *ImplementationService) executeSubPlan(
 		WorktreePath:   worktreePath,
 		HarnessName:    s.harness.Name(),
 		Status:         domain.AgentSessionPending,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
 	}
-	if err := s.sessionRepo.Create(ctx, session); err != nil {
+	if err := s.sessionSvc.Create(ctx, session); err != nil {
 		result.Status = domain.AgentSessionFailed
 		result.Summary = fmt.Sprintf("failed to create session record: %v", err)
 		result.CompletedAt = ptrTime(time.Now())
@@ -363,12 +356,9 @@ func (s *ImplementationService) executeSubPlan(
 		slog.Warn("failed to emit session started event", "error", err)
 	}
 
-	// Update session to running
-	session.Status = domain.AgentSessionRunning
-	now := time.Now()
-	session.StartedAt = &now
-	if err := s.sessionRepo.Update(ctx, session); err != nil {
-		slog.Warn("failed to update session status to running", "error", err)
+	// Transition session to running
+	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
+		slog.Warn("failed to start session", "error", err)
 	}
 
 	// Build session options
@@ -380,9 +370,7 @@ func (s *ImplementationService) executeSubPlan(
 		result.Status = domain.AgentSessionFailed
 		result.Summary = fmt.Sprintf("failed to start agent: %v", err)
 		result.CompletedAt = ptrTime(time.Now())
-		session.Status = domain.AgentSessionFailed
-		session.CompletedAt = result.CompletedAt
-		_ = s.sessionRepo.Update(ctx, session)
+		_ = s.sessionSvc.Fail(ctx, sessionID, ptrInt(1))
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
 		return result, &ImplementationWarning{
 			Type:      "harness_start_failed",
@@ -404,13 +392,16 @@ func (s *ImplementationService) executeSubPlan(
 		result.Status = domain.AgentSessionFailed
 		result.Summary = waitErr.Error()
 		result.ExitCode = ptrInt(1)
-		session.Status = domain.AgentSessionFailed
-		session.ExitCode = result.ExitCode
+		if err := s.sessionSvc.Fail(ctx, sessionID, ptrInt(1)); err != nil {
+			slog.Warn("failed to fail session", "error", err)
+		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), waitErr)
 	} else {
 		result.Status = domain.AgentSessionCompleted
 		result.Summary = "Session completed successfully"
-		session.Status = domain.AgentSessionCompleted
+		if err := s.sessionSvc.Complete(ctx, sessionID); err != nil {
+			slog.Warn("failed to complete session", "error", err)
+		}
 		state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
 
 		// Update sub-plan to completed
@@ -419,11 +410,6 @@ func (s *ImplementationService) executeSubPlan(
 		if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
 			slog.Warn("failed to update sub-plan status to completed", "error", err)
 		}
-	}
-
-	session.CompletedAt = result.CompletedAt
-	if err := s.sessionRepo.Update(ctx, session); err != nil {
-		slog.Warn("failed to update session on completion", "error", err)
 	}
 
 	// Emit session completed/failed event
@@ -474,7 +460,7 @@ func (s *ImplementationService) ensureWorktree(
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventWorktreeCreating),
 		WorkspaceID: workspace.ID,
-		Payload:     mustMarshalJSON(creatingPayload),
+		Payload:     marshalJSONOrEmpty(creatingPayload),
 		CreatedAt:   time.Now(),
 	}
 	if err := s.eventBus.Publish(ctx, creatingEvent); err != nil {
@@ -499,7 +485,7 @@ func (s *ImplementationService) ensureWorktree(
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventWorktreeCreated),
 		WorkspaceID: workspace.ID,
-		Payload:     mustMarshalJSON(createdPayload),
+		Payload:     marshalJSONOrEmpty(createdPayload),
 		CreatedAt:   time.Now(),
 	}
 	if err := s.eventBus.Publish(ctx, createdEvent); err != nil {
@@ -507,6 +493,38 @@ func (s *ImplementationService) ensureWorktree(
 	}
 
 	return worktreePath, nil
+}
+
+// prepareWorktrees creates worktrees for all unique repositories referenced by
+// the sub-plans before any goroutine fan-out. Sequential execution here
+// eliminates the TOCTOU race that would arise if two sub-plans in the same
+// wave targeted the same repository and called ensureWorktree concurrently.
+func (s *ImplementationService) prepareWorktrees(
+	ctx context.Context,
+	workspace *domain.Workspace,
+	workItemTitle string,
+	subPlans []domain.SubPlan,
+	branch string,
+	repoPaths map[string]string,
+) (map[string]string, error) {
+	seen := make(map[string]bool)
+	worktreePaths := make(map[string]string, len(repoPaths))
+	for _, sp := range subPlans {
+		if seen[sp.RepositoryName] {
+			continue
+		}
+		seen[sp.RepositoryName] = true
+		repoPath, ok := repoPaths[sp.RepositoryName]
+		if !ok {
+			return nil, fmt.Errorf("repository %s not found in workspace", sp.RepositoryName)
+		}
+		wt, err := s.ensureWorktree(ctx, workspace, sp.RepositoryName, repoPath, branch, workItemTitle)
+		if err != nil {
+			return nil, fmt.Errorf("prepare worktree for %s: %w", sp.RepositoryName, err)
+		}
+		worktreePaths[sp.RepositoryName] = wt
+	}
+	return worktreePaths, nil
 }
 
 // buildSessionOpts builds session options for an agent session.
@@ -608,7 +626,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 				ID:          domain.NewID(),
 				EventType:   string(evt.Type),
 				WorkspaceID: workspaceID,
-				Payload:     mustMarshalJSON(evt.Payload),
+				Payload:     marshalJSONOrEmpty(evt.Payload),
 				CreatedAt:   time.Now(),
 			}
 			if err := s.eventBus.Publish(ctx, sysEvent); err != nil {
@@ -666,7 +684,7 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventImplementationStarted),
 		WorkspaceID: workspaceID,
-		Payload:     mustMarshalJSON(payload),
+		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
 	return s.eventRepo.Create(ctx, evt)
@@ -683,7 +701,7 @@ func (s *ImplementationService) emitSessionStarted(ctx context.Context, session 
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionStarted),
 		WorkspaceID: workspaceID,
-		Payload:     mustMarshalJSON(payload),
+		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
 	return s.eventRepo.Create(ctx, evt)
@@ -700,7 +718,7 @@ func (s *ImplementationService) emitSessionCompleted(ctx context.Context, sessio
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionCompleted),
 		WorkspaceID: workspaceID,
-		Payload:     mustMarshalJSON(payload),
+		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
 	return s.eventRepo.Create(ctx, evt)
@@ -718,7 +736,7 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionFailed),
 		WorkspaceID: workspaceID,
-		Payload:     mustMarshalJSON(payload),
+		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
 	return s.eventRepo.Create(ctx, evt)
@@ -726,9 +744,12 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 
 // Helper functions
 
-func mustMarshalJSON(v interface{}) string {
+func marshalJSONOrEmpty(v interface{}) string {
 	b, err := json.Marshal(v)
 	if err != nil {
+		slog.Error("marshalJSONOrEmpty: failed to marshal event payload",
+			"type", fmt.Sprintf("%T", v),
+			"error", err)
 		return "{}"
 	}
 	return string(b)

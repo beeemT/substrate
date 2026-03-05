@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS plans (
                           'draft','pending_review','approved','rejected')),
     version           INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    faq               TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX idx_plans_work_item ON plans(work_item_id);
 
@@ -97,7 +98,9 @@ CREATE TABLE IF NOT EXISTS critiques (
     line_number     INTEGER,
     severity        TEXT NOT NULL CHECK (severity IN ('critical','major','minor','nit')),
     description     TEXT NOT NULL,
+    suggestion      TEXT,
     status          TEXT NOT NULL CHECK (status IN ('open','resolved')) DEFAULT 'open',
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX idx_critiques_review ON critiques(review_cycle_id);
 
@@ -110,7 +113,8 @@ CREATE TABLE IF NOT EXISTS questions (
     answered_by      TEXT CHECK (answered_by IN ('foreman','human')),
     status           TEXT NOT NULL CHECK (status IN ('pending','answered','escalated')) DEFAULT 'pending',
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    answered_at      TEXT
+    answered_at      TEXT,
+    proposed_answer  TEXT
 );
 CREATE INDEX idx_questions_session ON questions(agent_session_id);
 CREATE INDEX idx_questions_status ON questions(status);

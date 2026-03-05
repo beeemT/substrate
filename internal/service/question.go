@@ -21,8 +21,8 @@ func NewQuestionService(repo repository.QuestionRepository) *QuestionService {
 // Question state transitions
 var validQuestionTransitions = map[domain.QuestionStatus][]domain.QuestionStatus{
 	domain.QuestionPending:   {domain.QuestionAnswered, domain.QuestionEscalated},
-	domain.QuestionAnswered:  {}, // Terminal state
-	domain.QuestionEscalated: {}, // Terminal state
+	domain.QuestionAnswered:  {},                        // Terminal state
+	domain.QuestionEscalated: {domain.QuestionAnswered}, // Human can still answer an escalated question
 }
 
 func canTransitionQuestion(from, to domain.QuestionStatus) bool {
@@ -116,6 +116,25 @@ func (s *QuestionService) Answer(ctx context.Context, id string, answer string, 
 // Escalate transitions a question from pending to escalated.
 func (s *QuestionService) Escalate(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.QuestionEscalated)
+}
+
+// EscalateWithProposal transitions a question from pending to escalated and records
+// the Foreman's proposed answer so the TUI can pre-fill the human review form.
+func (s *QuestionService) EscalateWithProposal(ctx context.Context, id string, proposedAnswer string) error {
+	q, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("question", id)
+	}
+	if !canTransitionQuestion(q.Status, domain.QuestionEscalated) {
+		return newInvalidTransitionError(
+			questionStatusName(q.Status),
+			questionStatusName(domain.QuestionEscalated),
+			"question",
+		)
+	}
+	q.Status = domain.QuestionEscalated
+	q.ProposedAnswer = proposedAnswer
+	return s.repo.Update(ctx, q)
 }
 
 // UpdateContext updates the context for a pending question.

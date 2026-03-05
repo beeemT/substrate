@@ -9,8 +9,21 @@ type Plan struct {
 	Status           PlanStatus
 	OrchestratorPlan string
 	Version          int
+	FAQ              []FAQEntry
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// FAQEntry represents a question-answer pair from the foreman.
+type FAQEntry struct {
+	ID             string
+	PlanID         string
+	AgentSessionID string
+	RepoName       string
+	Question       string
+	Answer         string
+	AnsweredBy     string
+	CreatedAt      time.Time
 }
 
 // PlanStatus represents the lifecycle state of a plan.

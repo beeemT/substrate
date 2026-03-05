@@ -116,6 +116,9 @@ func NewExecutionState(planID string, subPlans []domain.SubPlan) *ExecutionState
 
 // AllWavesCompleted returns true if all waves have completed successfully.
 func (s *ExecutionState) AllWavesCompleted() bool {
+	if len(s.WaveStates) == 0 {
+		return false
+	}
 	for _, ws := range s.WaveStates {
 		if ws.Status != WaveCompleted {
 			return false

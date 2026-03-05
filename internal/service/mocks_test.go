@@ -149,6 +149,13 @@ func (m *MockPlanRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *MockPlanRepository) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
+	if m.err != nil {
+		return m.err
+	}
+	return nil
+}
+
 // MockSubPlanRepository implements repository.SubPlanRepository for testing.
 type MockSubPlanRepository struct {
 	subPlans map[string]domain.SubPlan
