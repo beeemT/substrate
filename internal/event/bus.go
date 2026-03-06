@@ -3,6 +3,7 @@ package event
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -392,8 +393,7 @@ func (b *Bus) runPostHooks(event domain.SystemEvent) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					// Post-hook panicked - log but don't crash
-					// TODO: Integrate with structured logging
+				slog.Error("post-hook panicked", "hook", e.config.Name, "panic", r)
 				}
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), e.config.Timeout)

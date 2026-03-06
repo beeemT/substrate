@@ -375,68 +375,85 @@ func (s *ohMyPiSession) checkLogRotation() {}
 
 // rotateLogLocked performs log rotation.
 // Must be called with s.mu held.
+// The file swap (close old, open new) happens under the lock.
+// Compression and segment cleanup are launched asynchronously so the lock
+// is not held during I/O-intensive operations, which would block Abort.
 func (s *ohMyPiSession) rotateLogLocked() {
 	if s.logFile == nil {
 		return
 	}
 
-	// Close current file
+	// Close the current log file before rotating.
 	s.logFile.Close()
+	s.logFile = nil
 
-	// Compress the current segment
-	compressedPath := s.logPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
-	if err := compressFile(s.logPath, compressedPath); err != nil {
-		slog.Warn("failed to compress log segment", "err", err)
+	// Rename the closed file to a stable temp name so the new active log
+	// can be opened at s.logPath immediately (still under lock).
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	rotateSrc := s.logPath + "." + ts + ".rotating"
+	compressedPath := s.logPath + "." + ts + ".gz"
+	if err := os.Rename(s.logPath, rotateSrc); err != nil {
+		slog.Warn("failed to rename log segment for rotation", "err", err)
+		rotateSrc = "" // skip async compress; can't safely rename
 	}
 
-	// Clean up old segments (keep max 5)
-	cleanupOldSegments(s.logDir, s.id)
-
-	// Open new log file
-	newFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// Open fresh log file (still under lock so writers don't see a nil logFile).
+	newFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		slog.Error("failed to open new log file after rotation", "err", err)
 		return
 	}
 	s.logFile = newFile
+
+	if rotateSrc == "" {
+		return // rename failed; skip compression
+	}
+
+	// Compress and clean up old segment outside the lock.
+	logDir := s.logDir
+	sessionID := s.id
+	go func() {
+		if err := compressFile(rotateSrc, compressedPath); err != nil {
+			slog.Warn("failed to compress log segment", "err", err)
+			return
+		}
+		cleanupOldSegments(logDir, sessionID)
+	}()
 }
 
-// compressFile compresses a file using gzip.
+// compressFile compresses src to dst using gzip, then removes src.
+// No defers are used to prevent double-close on the happy path.
+// On failure, dst is removed to avoid leaving incomplete output on disk.
 func compressFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
 
 	dstFile, err := os.Create(dst)
 	if err != nil {
+		srcFile.Close()
 		return err
 	}
-	defer dstFile.Close()
 
 	gzWriter := gzip.NewWriter(dstFile)
-	defer gzWriter.Close()
+	_, err = io.Copy(gzWriter, srcFile)
+	if closeErr := gzWriter.Close(); err == nil {
+		err = closeErr
+	}
+	if closeErr := dstFile.Close(); err == nil {
+		err = closeErr
+	}
+	srcFile.Close() // read-only; ignore close error
 
-	if _, err := io.Copy(gzWriter, srcFile); err != nil {
+	if err != nil {
+		os.Remove(dst) // remove incomplete output
 		return err
 	}
 
-	// Ensure gzip writer is flushed before closing
-	if err := gzWriter.Close(); err != nil {
-		return err
-	}
-
-	// Close files before deleting
-	srcFile.Close()
-	dstFile.Close()
-
-	// Delete original file after successful compression
 	if err := os.Remove(src); err != nil {
-		// Log warning but don't fail - compression succeeded
-		// This is a cleanup issue, not a data loss issue
+		slog.Warn("failed to remove log file after compression", "path", src, "err", err)
 	}
-
 	return nil
 }
 

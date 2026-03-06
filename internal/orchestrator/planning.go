@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -262,6 +263,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	// 10. Build and persist plan + sub-plans
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem)
 	if err != nil {
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
@@ -330,19 +332,23 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		WorktreePath: "", // Planning uses workspace root
 	}
 
+	// Apply session timeout — bounds the entire planning session lifetime.
+	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.cfg.SessionTimeout)
+	defer sessionCancel()
+
 	// Start the session
-	session, err := s.harness.StartSession(ctx, sessionOpts)
+	session, err := s.harness.StartSession(sessionCtx, sessionOpts)
 	if err != nil {
 		return "", 0, warnings, &PlanningError{Err: fmt.Errorf("start planning session: %w", err)}
 	}
-	defer session.Abort(ctx)
+	defer session.Abort(sessionCtx)
 
 	parser := NewPlanParser()
 	attempt := 0
 
 	for attempt <= maxRetries {
 		// Wait for session to produce output or complete
-		if err := s.waitForDraftOrCompletion(ctx, session, draftPath); err != nil {
+		if err := s.waitForDraftOrCompletion(sessionCtx, session, draftPath); err != nil {
 			return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("wait for draft: %w", err)}
 		}
 
@@ -353,7 +359,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 				// Draft file doesn't exist - send correction
 				if attempt < maxRetries {
 					correctionMsg := s.buildCorrectionMessage(domain.ParseErrors{MissingBlock: true}, discoveredRepoNames, draftPath)
-					if sendErr := session.SendMessage(ctx, correctionMsg); sendErr != nil {
+					if sendErr := session.SendMessage(sessionCtx, correctionMsg); sendErr != nil {
 						slog.Warn("failed to send correction message", "error", sendErr)
 					}
 					attempt++
@@ -383,7 +389,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			})
 
 			correctionMsg := s.buildCorrectionMessage(parseErrors, discoveredRepoNames, draftPath)
-			if sendErr := session.SendMessage(ctx, correctionMsg); sendErr != nil {
+			if sendErr := session.SendMessage(sessionCtx, correctionMsg); sendErr != nil {
 				slog.Warn("failed to send correction message", "error", sendErr)
 			}
 			attempt++
@@ -400,17 +406,32 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("max retries exceeded")}
 }
 
-// waitForDraftOrCompletion waits for the draft file to exist or the session to complete.
+// waitForDraftOrCompletion waits for the draft file to appear or the session to end.
+// It returns nil as soon as the draft file exists.
+// It returns an error if the context is cancelled or if the agent session terminates
+// without having produced the draft file.
 func (s *PlanningService) waitForDraftOrCompletion(ctx context.Context, session adapter.AgentSession, draftPath string) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
+	events := session.Events()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case _, ok := <-events:
+			if !ok {
+				// Session has ended; do one final check for the draft.
+				if _, err := os.Stat(draftPath); err == nil {
+					return nil
+				}
+				return fmt.Errorf("agent session ended without producing a draft")
+			}
+			// Event received; opportunistically check for the draft.
+			if _, err := os.Stat(draftPath); err == nil {
+				return nil
+			}
 		case <-ticker.C:
-			// Check if draft file exists
 			if _, err := os.Stat(draftPath); err == nil {
 				return nil
 			}
@@ -526,15 +547,25 @@ func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, wo
 
 // emitPlanFailedEvent emits a PlanFailed event.
 func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors) error {
-	errPayload := ""
+	type planFailedPayload struct {
+		WorkItemID  string  `json:"work_item_id"`
+		SessionID   string  `json:"session_id"`
+		ParseErrors *string `json:"parse_errors,omitempty"`
+	}
+	p := planFailedPayload{WorkItemID: workItemID, SessionID: sessionID}
 	if parseErrors != nil {
-		errPayload = fmt.Sprintf(`, "parse_errors":"%s"`, parseErrors.Error())
+		errStr := parseErrors.Error()
+		p.ParseErrors = &errStr
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal plan failed payload: %w", err)
 	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanFailed),
 		WorkspaceID: workspaceID,
-		Payload:     fmt.Sprintf(`{"work_item_id":"%s","session_id":"%s"%s}`, workItemID, sessionID, errPayload),
+		Payload:     string(data),
 		CreatedAt:   time.Now().UTC(),
 	}
 	return s.eventRepo.Create(ctx, evt)

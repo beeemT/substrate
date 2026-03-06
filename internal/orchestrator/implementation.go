@@ -35,6 +35,7 @@ type ImplementationService struct {
 	sessionRepo  repository.SessionRepository
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
+	sessTimeout  time.Duration
 }
 
 // ImplementationConfig contains configuration for the implementation service.
@@ -63,6 +64,7 @@ func NewImplementationService(
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 ) *ImplementationService {
+	implCfg := DefaultImplementationConfig()
 	return &ImplementationService{
 		cfg:          cfg,
 		harness:      harness,
@@ -75,6 +77,7 @@ func NewImplementationService(
 		sessionRepo:  sessionRepo,
 		eventRepo:    eventRepo,
 		workspaceSvc: workspaceSvc,
+		sessTimeout:  implCfg.SessionTimeout,
 	}
 }
 
@@ -380,11 +383,14 @@ func (s *ImplementationService) executeSubPlan(
 		}
 	}
 
+	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
+	defer sessionCancel()
+
 	// Forward events to bus while session runs
-	go s.forwardEvents(ctx, harnessSession.Events(), workspace.ID)
+	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID)
 
 	// Wait for session completion
-	waitErr := harnessSession.Wait(ctx)
+	waitErr := harnessSession.Wait(sessionCtx)
 
 	result.CompletedAt = ptrTime(time.Now())
 

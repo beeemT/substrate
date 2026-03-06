@@ -223,15 +223,15 @@ func (d *Discoverer) detectJSFramework(mainDir string, pointer *domain.RepoPoint
 		name string
 		pkgs []string
 	}{
-		{"next", []string{"next", "\"next\""}},
-		{"react", []string{"react", "\"react\""}},
-		{"vue", []string{"vue", "\"vue\""}},
-		{"svelte", []string{"svelte", "\"svelte\""}},
-		{"express", []string{"express", "\"express\""}},
-		{"fastify", []string{"fastify", "\"fastify\""}},
+		{"next", []string{"\"next\""}},
+		{"react", []string{"\"react\""}},
+		{"vue", []string{"\"vue\""}},
+		{"svelte", []string{"\"svelte\""}},
+		{"express", []string{"\"express\""}},
+		{"fastify", []string{"\"fastify\""}},
 		{"nestjs", []string{"@nestjs/core"}},
 		{"remix", []string{"@remix-run/react"}},
-		{"astro", []string{"astro", "\"astro\""}},
+		{"astro", []string{"\"astro\""}},
 	}
 
 	for _, fw := range frameworks {
@@ -340,11 +340,11 @@ func (d *Discoverer) isPlainGitClone(dir string) bool {
 	gitPath := filepath.Join(dir, ".git")
 	barePath := filepath.Join(dir, ".bare")
 
-	gitInfo, gitErr := os.Stat(gitPath)
+	_, gitErr := os.Stat(gitPath)
 	bareInfo, bareErr := os.Stat(barePath)
 
 	// Has .git (file or dir) and no .bare dir
-	hasGit := gitErr == nil && (gitInfo.IsDir() || !gitInfo.IsDir()) // .git can be a file (worktree) or dir
+	hasGit := gitErr == nil // .git can be a file (worktree) or dir
 	hasBare := bareErr == nil && bareInfo.IsDir()
 
 	return hasGit && !hasBare

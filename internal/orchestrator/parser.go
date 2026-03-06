@@ -1,10 +1,8 @@
 package orchestrator
 
 import (
-	"bytes"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -121,33 +119,6 @@ func (p *PlanParser) ParseAndValidate(content string, discoveredRepos []domain.R
 
 	validationErrors := p.Validate(output, discoveredRepos)
 	return output, validationErrors
-}
-
-// BuildCorrectionMessage creates a correction message for the planning agent.
-func BuildCorrectionMessage(errors domain.ParseErrors, discoveredRepos []domain.RepoPointer, draftPath string) string {
-	var buf bytes.Buffer
-
-	buf.WriteString("Your plan had structural errors that prevent execution:\n")
-	buf.WriteString(errors.Error())
-	buf.WriteString("\n\n")
-
-	// List valid repos
-	buf.WriteString("Valid repos in this workspace:\n")
-	var names []string
-	for _, repo := range discoveredRepos {
-		names = append(names, repo.Name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		buf.WriteString(fmt.Sprintf("  - %s\n", name))
-	}
-
-	buf.WriteString("\n")
-	buf.WriteString(fmt.Sprintf("Re-read %s to see your current plan, then address the errors above.\n", draftPath))
-	buf.WriteString(fmt.Sprintf("Rewrite %s with your complete revised plan. The substrate-plan YAML\n", draftPath))
-	buf.WriteString("block must appear first, before any prose.")
-
-	return buf.String()
 }
 
 // extractYAMLBlock extracts a fenced code block with the given info string.
