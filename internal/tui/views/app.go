@@ -25,6 +25,7 @@ const (
 	overlayNewSession
 	overlayConfig
 	overlayWorkspaceInit
+	overlayHelp
 )
 
 // App is the top-level bubbletea model.
@@ -42,6 +43,7 @@ type App struct {
 	newSession     NewSessionOverlay
 	configOverlay  ConfigOverlay
 	workspaceModal WorkspaceInitModal
+	helpOverlay    HelpOverlay
 	hasWorkspace   bool
 
 	// Toasts
@@ -58,6 +60,9 @@ type App struct {
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
 	prevContentMode   ContentMode
+	// reviewSessionLogs maps implementation session ID → review agent log path.
+	// Populated when RunReviewSessionCmd returns a ReviewCompleteMsg.
+	reviewSessionLogs map[string]string
 
 	// Live instance cache for dead-owner detection
 	liveInstanceIDs map[string]bool
@@ -75,6 +80,9 @@ type App struct {
 	// Terminal size
 	windowWidth  int
 	windowHeight int
+
+	// Foreman lifecycle
+	foremanPlanID string // plan ID the Foreman was last started for
 }
 
 // NewApp creates a new App from the given Services.
@@ -91,12 +99,14 @@ func NewApp(svcs Services) App {
 		statusBar:         NewStatusBarModel(st),
 		newSession:        NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
 		configOverlay:     NewConfigOverlay(svcs.Cfg, st),
+		helpOverlay:       NewHelpOverlay(st),
 		subPlans:          make(map[string][]domain.SubPlan),
 		plans:             make(map[string]*domain.Plan),
 		questions:         make(map[string][]domain.Question),
 		reviews:           make(map[string]ReviewsLoadedMsg),
 		tailingSessionIDs: make(map[string]bool),
 		liveInstanceIDs:   make(map[string]bool),
+		reviewSessionLogs: make(map[string]string),
 		sessionsDir:       sessionsDir,
 		hasWorkspace:      svcs.WorkspaceID != "",
 	}
@@ -183,6 +193,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
 		a.configOverlay.Close()
+		a.activeOverlay = overlayNone
 		return a, nil
 
 	case PollTickMsg:
@@ -301,6 +312,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Implementation != nil {
 			cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, msg.PlanID))
 		}
+		if a.svcs.Foreman != nil {
+			a.foremanPlanID = msg.PlanID
+			cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, msg.PlanID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case PlanRequestChangesMsg:
@@ -316,32 +331,48 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
-		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID, msg.Answer, msg.AnsweredBy))
 		return a, tea.Batch(cmds...)
 
 	case SendToForemanMsg:
-		a.toasts.AddToast("Message sent to Foreman", components.ToastInfo)
-		return a, nil
+		if a.svcs.Foreman != nil {
+			cmds = append(cmds, SendToForemanCmd(a.svcs.Foreman, msg.QuestionID, msg.Message))
+		} else {
+			a.toasts.AddToast("Foreman not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
 
 	case SkipQuestionMsg:
-		a.toasts.AddToast("Question skipped", components.ToastInfo)
-		return a, nil
+		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID))
+		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:
-		a.toasts.AddToast("Resuming session...", components.ToastInfo)
-		return a, nil
+		if a.svcs.Resumption != nil {
+			cmds = append(cmds, ResumeSessionCmd(a.svcs.Resumption, a.svcs.Session, msg.OldSessionID, a.svcs.InstanceID))
+		} else {
+			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
 
 	case AbandonSessionMsg:
 		cmds = append(cmds, abandonSessionCmd(a.svcs.Session, msg.SessionID))
 		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
-		a.toasts.AddToast("Re-implementation queued", components.ToastInfo)
-		return a, nil
+		if a.svcs.Implementation != nil {
+			if plan := a.plans[msg.WorkItemID]; plan != nil {
+				cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, plan.ID))
+			} else {
+				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
+			}
+		} else {
+			a.toasts.AddToast("Implementation service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
 
 	case OverrideAcceptMsg:
-		a.toasts.AddToast("Review overridden — accepted", components.ToastSuccess)
-		return a, nil
+		cmds = append(cmds, OverrideAcceptCmd(a.svcs.WorkItem, msg.WorkItemID))
+		return a, tea.Batch(cmds...)
 
 	case NewSessionManualMsg:
 		a.activeOverlay = overlayNone
@@ -363,10 +394,45 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Configuration saved", components.ToastSuccess)
 		return a, tea.Batch(cmds...)
 
+	case ForemanReplyMsg:
+		// Find the question in the session-keyed map and refresh the model.
+	questionLoop:
+		for _, qs := range a.questions {
+			for _, q := range qs {
+				if q.ID == msg.QuestionID {
+					a.content.question.SetQuestion(q, msg.NewProposal, msg.Uncertain)
+					break questionLoop
+				}
+			}
+		}
+		return a, nil
+
 	case ActionDoneMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, nil
 
+	case ImplementationCompleteMsg:
+		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
+		if a.svcs.ReviewPipeline != nil {
+			for _, sID := range msg.SessionIDs {
+				cmds = append(cmds, RunReviewSessionCmd(a.svcs.ReviewPipeline, a.svcs.Session, sID))
+			}
+		}
+		if a.svcs.Foreman != nil {
+			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+		}
+		return a, tea.Batch(cmds...)
+
+	case ReviewCompleteMsg:
+		// Store the review log path; WorkItemReviewing updateContentFromState will tail it.
+		if msg.ReviewSessionID != "" && a.sessionsDir != "" {
+			a.reviewSessionLogs[msg.ImplSessionID] = filepath.Join(a.sessionsDir, msg.ReviewSessionID+".log")
+		}
+		// Trigger a content refresh so tailing starts immediately if still on reviewing view.
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
 	case ErrMsg:
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
@@ -433,6 +499,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.configOverlay, cmd = a.configOverlay.Update(msg)
 		return a, cmd
 	}
+	// Help overlay: any key press dismisses it.
+	if a.activeOverlay == overlayHelp {
+		a.activeOverlay = overlayNone
+		return a, nil
+	}
 
 	switch msg.String() {
 	case "q":
@@ -472,7 +543,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "?":
-		a.toasts.AddToast("Keys: n=new  c=config  j/k=nav  q=quit  ?=this", components.ToastInfo)
+		a.activeOverlay = overlayHelp
 		return a, nil
 	}
 
@@ -621,6 +692,27 @@ func (a *App) updateContentFromState() tea.Cmd {
 		}
 		a.content.reviewing.SetRepos(repoResults)
 		a.content.reviewing.SetWorkItemID(wi.ID)
+		// Tail the review agent log for each implementation session if available.
+		var tailCmds []tea.Cmd
+		if plan := a.plans[wi.ID]; plan != nil {
+			for _, sp := range a.subPlans[plan.ID] {
+				for _, s := range a.sessions {
+					if s.SubPlanID != sp.ID {
+						continue
+					}
+					if logPath, ok := a.reviewSessionLogs[s.ID]; ok {
+						reviewTailID := "review-" + s.ID
+						if !a.tailingSessionIDs[reviewTailID] {
+							a.tailingSessionIDs[reviewTailID] = true
+							tailCmds = append(tailCmds, TailSessionLogCmd(logPath, reviewTailID, 0))
+						}
+					}
+				}
+			}
+		}
+		if len(tailCmds) > 0 {
+			return tea.Batch(tailCmds...)
+		}
 
 	case domain.WorkItemCompleted:
 		a.content.SetMode(ContentModeCompleted)
@@ -765,6 +857,9 @@ func (a App) View() string {
 	}
 	if a.activeOverlay == overlayConfig {
 		return renderOverlay(a.configOverlay.View(), a.windowWidth, a.windowHeight)
+	}
+	if a.activeOverlay == overlayHelp {
+		return renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
 	}
 
 	return base

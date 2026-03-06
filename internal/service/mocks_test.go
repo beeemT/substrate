@@ -556,6 +556,22 @@ func (m *MockQuestionRepository) Update(ctx context.Context, q domain.Question) 
 	return nil
 }
 
+func (m *MockQuestionRepository) UpdateProposedAnswer(ctx context.Context, id, proposedAnswer string) error {
+	if m.err != nil {
+		return m.err
+	}
+	q, ok := m.questions[id]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if q.Status != domain.QuestionEscalated {
+		return nil // no-op, matches conditional SQL behaviour
+	}
+	q.ProposedAnswer = proposedAnswer
+	m.questions[id] = q
+	return nil
+}
+
 // MockInstanceRepository implements repository.InstanceRepository for testing.
 type MockInstanceRepository struct {
 	instances   map[string]domain.SubstrateInstance

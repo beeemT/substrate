@@ -88,6 +88,11 @@ type QuestionRepository interface {
 	ListBySessionID(ctx context.Context, sessionID string) ([]domain.Question, error)
 	Create(ctx context.Context, q domain.Question) error
 	Update(ctx context.Context, q domain.Question) error
+	// UpdateProposedAnswer atomically updates only the proposed_answer column for an
+	// escalated question. Uses a conditional WHERE status='escalated' clause so a
+	// concurrent ResolveEscalated that already transitioned the row to 'answered'
+	// will cause a no-op (0 rows affected) rather than reverting the status.
+	UpdateProposedAnswer(ctx context.Context, id, proposedAnswer string) error
 }
 
 // EventRepository provides persistence for system events.

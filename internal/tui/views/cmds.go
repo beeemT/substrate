@@ -3,7 +3,9 @@ package views
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -117,9 +119,23 @@ func ApprovePlanCmd(workItemSvc *service.WorkItemService, planSvc *service.PlanS
 	}
 }
 
-// AnswerQuestionCmd records a human answer for a question.
-func AnswerQuestionCmd(svc *service.QuestionService, questionID, answer, answeredBy string) tea.Cmd {
+// AnswerQuestionCmd approves a human answer for an escalated question.
+// When foreman is non-nil, ResolveEscalated is used so the blocked sub-agent goroutine
+// is unblocked via its answer channel in addition to the DB write.
+// Falls back to direct questionSvc.Answer on ErrQuestionNotEscalated (Foreman was
+// restarted and cleared in-flight channels, or no Foreman is configured).
+func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
+		if foreman != nil {
+			err := foreman.ResolveEscalated(context.Background(), questionID, answer)
+			if err == nil {
+				return ActionDoneMsg{Message: "Answer submitted"}
+			}
+			// If the channel is gone (Foreman restarted), fall through to direct write.
+			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
+				return ErrMsg{Err: err}
+			}
+		}
 		if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -284,11 +300,118 @@ func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, 
 }
 
 // RunImplementationCmd executes the implementation pipeline for an approved plan.
+// On success it returns ImplementationCompleteMsg so the caller can trigger review.
 func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := svc.Implement(context.Background(), planID); err != nil {
+		result, err := svc.Implement(context.Background(), planID)
+		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return ActionDoneMsg{Message: "Implementation complete"}
+		var sessionIDs []string
+		for _, s := range result.Sessions {
+			if s.Status == domain.AgentSessionCompleted {
+				sessionIDs = append(sessionIDs, s.SessionID)
+			}
+		}
+		return ImplementationCompleteMsg{
+			PlanID:     planID,
+			WorkItemID: result.WorkItemID,
+			SessionIDs: sessionIDs,
+		}
+	}
+}
+
+// RunReviewSessionCmd runs the review pipeline for a single completed implementation session.
+// Returns ReviewCompleteMsg so the TUI can tail the review agent's log.
+func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *service.SessionService, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := sessionSvc.Get(context.Background(), sessionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		result, err := pipeline.ReviewSession(context.Background(), session)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ReviewCompleteMsg{ImplSessionID: sessionID, ReviewSessionID: result.SessionID}
+	}
+}
+
+// ResumeSessionCmd resumes an interrupted agent session.
+func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.SessionService, oldSessionID, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := sessionSvc.Get(context.Background(), oldSessionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		if _, err := resumption.ResumeSession(context.Background(), session, instanceID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Session resumed"}
+	}
+}
+
+// OverrideAcceptCmd marks a work item completed despite outstanding critiques.
+func OverrideAcceptCmd(workItemSvc *service.WorkItemService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := workItemSvc.CompleteWorkItem(context.Background(), workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Work item accepted"}
+	}
+}
+
+// SkipQuestionCmd marks a question as skipped — the sub-agent continues without an answer.
+// Calls ResolveEscalated with an empty string so the blocked goroutine is unblocked.
+// Falls back to direct questionSvc.Answer when Foreman channels are not available.
+func SkipQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
+	return func() tea.Msg {
+		if foreman != nil {
+			err := foreman.ResolveEscalated(context.Background(), questionID, "")
+			if err == nil {
+				return ActionDoneMsg{Message: "Question skipped"}
+			}
+			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
+				return ErrMsg{Err: err}
+			}
+		}
+		if err := svc.Answer(context.Background(), questionID, "", "human"); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Question skipped"}
+	}
+}
+
+// SendToForemanCmd sends human follow-up text to the running Foreman session and
+// returns a ForemanReplyMsg carrying the refreshed proposed answer.
+func SendToForemanCmd(foreman *orchestrator.Foreman, questionID, text string) tea.Cmd {
+	return func() tea.Msg {
+		newProposal, uncertain, err := foreman.SendUserMessage(context.Background(), questionID, text)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ForemanReplyMsg{QuestionID: questionID, NewProposal: newProposal, Uncertain: uncertain}
+	}
+}
+
+// StartForemanCmd starts the Foreman session for a given plan.
+// Uses a background context; Stop() is the proper shutdown mechanism.
+func StartForemanCmd(foreman *orchestrator.Foreman, planID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := foreman.Start(context.Background(), planID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Foreman started"}
+	}
+}
+
+// StopForemanCmd stops the Foreman session after implementation ends.
+func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
+	return func() tea.Msg {
+		// Error is logged but not surfaced: a failed Stop should not block the TUI.
+		if err := foreman.Stop(context.Background()); err != nil {
+			slog.Warn("foreman stop returned an error", "err", err)
+		}
+		return nil
 	}
 }

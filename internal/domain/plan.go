@@ -52,8 +52,9 @@ type SubPlan struct {
 type SubPlanStatus string
 
 const (
-	SubPlanPending    SubPlanStatus = "pending"
-	SubPlanInProgress SubPlanStatus = "in_progress"
-	SubPlanCompleted  SubPlanStatus = "completed"
-	SubPlanFailed     SubPlanStatus = "failed"
+	SubPlanPending     SubPlanStatus = "pending"
+	SubPlanInProgress  SubPlanStatus = "in_progress"
+	SubPlanCompleted   SubPlanStatus = "completed"
+	SubPlanFailed      SubPlanStatus = "failed"
+	SubPlanInterrupted SubPlanStatus = "interrupted"
 )

@@ -16,16 +16,16 @@ const SidebarWidth = 26
 
 // SessionSummary aggregates all display info for one sidebar entry.
 type SessionSummary struct {
-	WorkItemID   string
-	ExternalID   string
-	Title        string
-	State        domain.WorkItemState
+	WorkItemID      string
+	ExternalID      string
+	Title           string
+	State           domain.WorkItemState
 	TotalSubPlans   int
 	DoneSubPlans    int
 	HasOpenQuestion bool
 	HasInterrupted  bool
-	CompletedAt *time.Time
-	FailedAt    *time.Time
+	CompletedAt     *time.Time
+	FailedAt        *time.Time
 }
 
 // StatusIcon returns the styled status icon for this session.
@@ -35,12 +35,12 @@ func (s SessionSummary) StatusIcon(st styles.Styles) string {
 		return st.Success.Render("✓")
 	case s.State == domain.WorkItemFailed:
 		return st.Error.Render("✗")
-	case s.State == domain.WorkItemImplementing && s.HasInterrupted:
-		return st.Interrupted.Render("⊘")
+	case (s.State == domain.WorkItemImplementing || s.State == domain.WorkItemReviewing) && s.HasInterrupted:
+		return st.Interrupted.Render("\u2298")
 	case s.State == domain.WorkItemPlanReview, s.State == domain.WorkItemImplementing && s.HasOpenQuestion:
-		return st.Warning.Render("◐")
+		return st.Warning.Render("\u25d0")
 	case s.State == domain.WorkItemImplementing || s.State == domain.WorkItemPlanning || s.State == domain.WorkItemReviewing:
-		return st.Active.Render("●")
+		return st.Active.Render("\u25cf")
 	case s.HasOpenQuestion || s.HasInterrupted:
 		return st.Warning.Render("◐")
 	default:

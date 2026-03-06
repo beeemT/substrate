@@ -188,6 +188,12 @@ func run() error {
 		cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc,
 		sessionRepo, planRepo, bus,
 	)
+	resumption := orchestrator.NewResumption(
+		harness, sessionSvc, planSvc, sessionRepo, bus,
+	)
+	foreman := orchestrator.NewForeman(
+		cfg, harness, planSvc, questionSvc, sessionSvc, planRepo, bus,
+	)
 
 	svcs := views.Services{
 		WorkItem:       workItemSvc,
@@ -208,6 +214,8 @@ func run() error {
 		Planning:       planningSvc,
 		Implementation: implSvc,
 		ReviewPipeline: reviewPipeline,
+		Resumption:     resumption,
+		Foreman:        foreman,
 	}
 
 	return views.RunTUI(svcs)

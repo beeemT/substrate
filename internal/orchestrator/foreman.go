@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -80,6 +81,11 @@ func (f *Foreman) Start(ctx context.Context, planID string) error {
 		return nil // Already running
 	}
 
+	// Re-arm stopCh for this start cycle.
+	// Stop() closes it; Start() must allocate a fresh one so the new run() goroutine
+	// is not already-exited on the first select.
+	f.stopCh = make(chan struct{})
+
 	f.planID = planID
 
 	// Get plan with FAQ
@@ -156,6 +162,8 @@ func (f *Foreman) run(ctx context.Context) {
 			case pq, ok = <-f.questionFront:
 			case pq, ok = <-f.questionCh:
 			case <-ctx.Done():
+				return
+			case <-f.stopCh:
 				return
 			}
 		}
@@ -380,6 +388,12 @@ Do not fabricate facts about the codebase.
 	return prompt
 }
 
+// ErrQuestionNotEscalated is returned by ResolveEscalated and SendUserMessage
+// when no in-flight answer channel exists for the given question ID.
+// This happens if the Foreman was restarted after escalation, or if the question
+// was not escalated through the Foreman at all.
+var ErrQuestionNotEscalated = errors.New("question not in escalated channels")
+
 // ResolveEscalated delivers a human-approved answer for a previously escalated question.
 // Called by the TUI after the human iterates with the Foreman and presses [A]pprove.
 // Records the answer in the DB and unblocks the waiting sub-agent.
@@ -392,7 +406,7 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 	f.escalatedMu.Unlock()
 
 	if !ok {
-		return fmt.Errorf("no escalated question with ID %s", questionID)
+		return fmt.Errorf("%w: %s", ErrQuestionNotEscalated, questionID)
 	}
 
 	// Persist the human-approved answer; also appends to FAQ (AnsweredBy="human").
@@ -406,7 +420,18 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 }
 
 // Stop stops the foreman session.
+// Idempotent: safe to call multiple times (e.g. re-implementation cycles where
+// ImplementationCompleteMsg fires StopForemanCmd each time).
 func (f *Foreman) Stop(ctx context.Context) error {
+	// Guard against double-close of stopCh (which would panic).
+	// Check session under mu; if nil we were already stopped.
+	f.mu.Lock()
+	if f.session == nil {
+		f.mu.Unlock()
+		return nil
+	}
+	f.mu.Unlock()
+
 	close(f.stopCh)
 	f.wg.Wait()
 
@@ -421,4 +446,44 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// SendUserMessage sends human follow-up text to the running Foreman session,
+// waits for an updated proposed answer, persists it with UpdateProposal, and
+// returns the new proposal so the TUI can refresh the question UI.
+// The answer channel remains registered — the human must still call
+// ResolveEscalated (or SkipQuestion) to actually unblock the sub-agent.
+func (f *Foreman) SendUserMessage(ctx context.Context, questionID, text string) (newProposal string, uncertain bool, err error) {
+	// Verify the question is still tracked before touching the session.
+	f.escalatedMu.Lock()
+	_, ok := f.escalatedChs[questionID]
+	f.escalatedMu.Unlock()
+	if !ok {
+		return "", false, fmt.Errorf("%w: %s", ErrQuestionNotEscalated, questionID)
+	}
+
+	f.mu.Lock()
+	session := f.session
+	f.mu.Unlock()
+
+	if session == nil {
+		return "", false, fmt.Errorf("foreman session not started")
+	}
+
+	if err := session.SendMessage(ctx, text); err != nil {
+		return "", false, fmt.Errorf("send user message to foreman: %w", err)
+	}
+
+	newProposal, uncertain, err = f.waitForAnswer(ctx, session)
+	if err != nil {
+		return "", false, err
+	}
+
+	if updateErr := f.questionSvc.UpdateProposal(ctx, questionID, newProposal); updateErr != nil {
+		// Log but don't fail: the proposal is in-memory and the TUI will display it.
+		slog.Warn("failed to persist updated foreman proposal",
+			"question_id", questionID, "error", updateErr)
+	}
+
+	return newProposal, uncertain, nil
 }

@@ -34,8 +34,8 @@ func NewReviewModel(st styles.Styles) ReviewModel {
 	return ReviewModel{styles: st}
 }
 
-func (m *ReviewModel) SetSize(w, h int) { m.width = w; m.height = h }
-func (m *ReviewModel) SetTitle(t string) { m.title = t }
+func (m *ReviewModel) SetSize(w, h int)        { m.width = w; m.height = h }
+func (m *ReviewModel) SetTitle(t string)       { m.title = t }
 func (m *ReviewModel) SetWorkItemID(id string) { m.workItemID = id }
 
 func (m *ReviewModel) SetRepos(repos []RepoReviewResult) {
@@ -89,7 +89,7 @@ func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 				m.cursor = 0
 			}
 		case "r":
-			return m, func() tea.Msg { return ReimplementMsg{} }
+			return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.workItemID} }
 		case "o":
 			return m, func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: m.workItemID} }
 		}

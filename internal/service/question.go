@@ -153,6 +153,14 @@ func (s *QuestionService) UpdateContext(ctx context.Context, id string, context 
 	return s.repo.Update(ctx, q)
 }
 
+// UpdateProposal replaces the Foreman's proposed answer for an already-escalated question.
+// Uses UpdateProposedAnswer (conditional SQL: WHERE status='escalated') so a concurrent
+// ResolveEscalated that already answered the question results in a no-op rather than
+// reverting the row's status back to 'escalated'.
+func (s *QuestionService) UpdateProposal(ctx context.Context, id, proposedAnswer string) error {
+	return s.repo.UpdateProposedAnswer(ctx, id, proposedAnswer)
+}
+
 // HasPendingQuestions checks if there are any pending questions for a session.
 func (s *QuestionService) HasPendingQuestions(ctx context.Context, sessionID string) (bool, error) {
 	questions, err := s.repo.ListBySessionID(ctx, sessionID)

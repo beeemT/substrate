@@ -138,11 +138,6 @@ type ErrMsg struct{ Err error }
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 
-// --- FSNotify ---
-
-// LogFileChangedMsg is sent when the watched log file changes.
-type LogFileChangedMsg struct{ SessionID string }
-
 // --- Overlay control ---
 
 // ShowNewSessionMsg opens the New Session overlay.
@@ -189,3 +184,26 @@ type LiveInstancesLoadedMsg struct {
 
 // ConfirmCloseConfigMsg requests a confirmation dialog before discarding unsaved config changes.
 type ConfirmCloseConfigMsg struct{}
+
+// ImplementationCompleteMsg is sent when RunImplementationCmd finishes successfully.
+// SessionIDs holds the IDs of completed implementation sessions that need review.
+type ImplementationCompleteMsg struct {
+	PlanID     string
+	WorkItemID string
+	SessionIDs []string // completed session IDs; may be empty on partial failure
+}
+
+// ForemanReplyMsg delivers a refreshed Foreman proposal after a human follow-up message.
+// The TUI should update the QuestionModel with the new proposal without clearing the question.
+type ForemanReplyMsg struct {
+	QuestionID  string
+	NewProposal string
+	Uncertain   bool
+}
+
+// ReviewCompleteMsg is sent when RunReviewSessionCmd finishes.
+// The TUI uses ReviewSessionID to tail/display the review agent's log.
+type ReviewCompleteMsg struct {
+	ImplSessionID   string // implementation session that was reviewed
+	ReviewSessionID string // review agent session whose log to display
+}

@@ -64,6 +64,7 @@ type ReviewResult struct {
 	CycleNumber int
 	NeedsReimpl bool
 	Escalated   bool
+	SessionID   string // review agent session ID — log at config.SessionsDir()/<SessionID>.log
 }
 
 // ReviewStartedPayload is the payload for EventReviewStarted.
@@ -163,8 +164,8 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Agent
 		return nil, fmt.Errorf("get plan: %w", err)
 	}
 
-	// Start review agent session - now returns session too
-	reviewSession, reviewOutput, err := p.startReviewAgent(ctx, session, subPlan, plan, cycle)
+	// Start review agent session - now returns (session, output, sessionID, error)
+	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, session, subPlan, plan, cycle)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
@@ -189,6 +190,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Agent
 
 	// Decision logic
 	result := p.makeDecision(ctx, cycle, critiques)
+	result.SessionID = reviewSessionID
 
 	// Emit review outcome events
 	if p.eventBus != nil {
@@ -229,13 +231,14 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Agent
 }
 
 // startReviewAgent starts a review agent session and returns the session (still alive) along with output.
-func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.AgentSession, subPlan domain.SubPlan, plan domain.Plan, cycle domain.ReviewCycle) (adapter.AgentSession, string, error) {
+func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.AgentSession, subPlan domain.SubPlan, plan domain.Plan, cycle domain.ReviewCycle) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
 
 	// Start review session in foreman mode (read-only tools)
+	reviewSessionID := domain.NewID()
 	opts := adapter.SessionOpts{
-		SessionID:    domain.NewID(),
+		SessionID:    reviewSessionID,
 		Mode:         adapter.SessionModeForeman,
 		WorkspaceID:  session.WorkspaceID,
 		SubPlanID:    session.SubPlanID,
@@ -247,7 +250,7 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ag
 
 	reviewSession, err := p.harness.StartSession(ctx, opts)
 	if err != nil {
-		return nil, "", fmt.Errorf("start review session: %w", err)
+		return nil, "", "", fmt.Errorf("start review session: %w", err)
 	}
 	// Watch for done event instead of calling Wait()
 	// Add 5-minute timeout to prevent hanging
@@ -257,21 +260,21 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ag
 	for {
 		select {
 		case <-timeoutCtx.Done():
-			return reviewSession, "", fmt.Errorf("review session timed out: %w", timeoutCtx.Err())
+			return reviewSession, "", reviewSessionID, fmt.Errorf("review session timed out: %w", timeoutCtx.Err())
 		case evt, ok := <-reviewSession.Events():
 			if !ok {
-				return reviewSession, "", fmt.Errorf("review session events channel closed unexpectedly")
+				return reviewSession, "", reviewSessionID, fmt.Errorf("review session events channel closed unexpectedly")
 			}
 			if evt.Type == "done" {
 				// Read output from session log file
-				output, err := p.readSessionOutputFromLog(ctx, opts.SessionID)
+				output, err := p.readSessionOutputFromLog(ctx, reviewSessionID)
 				if err != nil {
 					slog.Warn("failed to read session log, returning NO_CRITIQUES", "error", err)
-					return reviewSession, "NO_CRITIQUES", nil
+					return reviewSession, "NO_CRITIQUES", reviewSessionID, nil
 				}
-				return reviewSession, output, nil
+				return reviewSession, output, reviewSessionID, nil
 			} else if evt.Type == "error" {
-				return reviewSession, "", fmt.Errorf("review session error: %s", evt.Payload)
+				return reviewSession, "", reviewSessionID, fmt.Errorf("review session error: %s", evt.Payload)
 			}
 		}
 	}

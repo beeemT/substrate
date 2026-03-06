@@ -120,3 +120,27 @@ func (r QuestionRepo) Update(ctx context.Context, q domain.Question) error {
 	}
 	return nil
 }
+
+// UpdateProposedAnswer atomically updates proposed_answer only when the question is
+// still in the 'escalated' state. If the question was already answered (concurrent
+// ResolveEscalated), the conditional WHERE clause makes this a no-op (0 rows affected),
+// which is treated as success — the sub-agent is already unblocked.
+func (r QuestionRepo) UpdateProposedAnswer(ctx context.Context, id, proposedAnswer string) error {
+	type args struct {
+		ID             string `db:"id"`
+		ProposedAnswer string `db:"proposed_answer"`
+		Status         string `db:"status"`
+	}
+	res, err := r.remote.NamedExecContext(ctx,
+		`UPDATE questions SET proposed_answer = :proposed_answer WHERE id = :id AND status = :status`,
+		args{ID: id, ProposedAnswer: proposedAnswer, Status: string(domain.QuestionEscalated)},
+	)
+	if err != nil {
+		return fmt.Errorf("update proposed answer %s: %w", id, err)
+	}
+	if _, err = res.RowsAffected(); err != nil {
+		return fmt.Errorf("update proposed answer %s: get rows affected: %w", id, err)
+	}
+	// 0 rows means the question was already answered by ResolveEscalated — that is fine.
+	return nil
+}

@@ -22,6 +22,8 @@ type Services struct {
 	Planning       *orchestrator.PlanningService
 	Implementation *orchestrator.ImplementationService
 	ReviewPipeline *orchestrator.ReviewPipeline
+	Resumption     *orchestrator.Resumption
+	Foreman        *orchestrator.Foreman
 	Cfg            *config.Config
 	Adapters       []adapter.WorkItemAdapter
 	GitClient      *gitwork.Client
