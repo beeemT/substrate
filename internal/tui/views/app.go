@@ -193,7 +193,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
 		a.configOverlay.Close()
-		a.activeOverlay = overlayNone
 		return a, nil
 
 	case PollTickMsg:
@@ -309,6 +308,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanApproveMsg:
 		cmds = append(cmds, ApprovePlanCmd(a.svcs.WorkItem, a.svcs.Plan, msg.PlanID, msg.WorkItemID))
+		return a, tea.Batch(cmds...)
+
+	case PlanApprovedMsg:
 		if a.svcs.Implementation != nil {
 			cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, msg.PlanID))
 		}
@@ -362,6 +364,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Implementation != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
 				cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, plan.ID))
+				if a.svcs.Foreman != nil {
+					a.foremanPlanID = plan.ID
+					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
+				}
 			} else {
 				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
 			}

@@ -34,6 +34,7 @@ type Foreman struct {
 	eventBus    *event.Bus
 
 	mu            sync.Mutex
+	sessionMu     sync.Mutex           // serializes SendMessage+waitForAnswer; prevents concurrent Events() readers
 	session       adapter.AgentSession // Current persistent foreman session
 	planID        string
 	questionCh    chan pendingQuestion
@@ -204,12 +205,14 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 	// Send question to foreman.
 	questionText := fmt.Sprintf("Question from %s: %s\nContext: %s",
 		agentSession.RepositoryName, pq.question.Content, pq.question.Context)
+	f.sessionMu.Lock()
 	if err := session.SendMessage(ctx, questionText); err != nil {
+		f.sessionMu.Unlock()
 		return fmt.Errorf("send message: %w", err)
 	}
-
 	// Wait for the foreman_proposed event.
 	answer, uncertain, err := f.waitForAnswer(ctx, session)
+	f.sessionMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -423,28 +426,25 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 // Idempotent: safe to call multiple times (e.g. re-implementation cycles where
 // ImplementationCompleteMsg fires StopForemanCmd each time).
 func (f *Foreman) Stop(ctx context.Context) error {
-	// Guard against double-close of stopCh (which would panic).
-	// Check session under mu; if nil we were already stopped.
+	// Capture session and stopCh under the lock, then nil f.session atomically.
+	// A concurrent Stop() will see f.session == nil and return early,
+	// preventing double-close of stopCh (which would panic).
 	f.mu.Lock()
 	if f.session == nil {
 		f.mu.Unlock()
 		return nil
 	}
+	session := f.session
+	stopCh := f.stopCh
+	f.session = nil
 	f.mu.Unlock()
 
-	close(f.stopCh)
+	close(stopCh)
 	f.wg.Wait()
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.session != nil {
-		if err := f.session.Abort(ctx); err != nil {
-			return fmt.Errorf("abort session: %w", err)
-		}
-		f.session = nil
+	if err := session.Abort(ctx); err != nil {
+		return fmt.Errorf("abort session: %w", err)
 	}
-
 	return nil
 }
 
@@ -470,11 +470,13 @@ func (f *Foreman) SendUserMessage(ctx context.Context, questionID, text string) 
 		return "", false, fmt.Errorf("foreman session not started")
 	}
 
+	f.sessionMu.Lock()
 	if err := session.SendMessage(ctx, text); err != nil {
+		f.sessionMu.Unlock()
 		return "", false, fmt.Errorf("send user message to foreman: %w", err)
 	}
-
 	newProposal, uncertain, err = f.waitForAnswer(ctx, session)
+	f.sessionMu.Unlock()
 	if err != nil {
 		return "", false, err
 	}

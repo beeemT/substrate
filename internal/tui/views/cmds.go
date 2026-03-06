@@ -115,7 +115,7 @@ func ApprovePlanCmd(workItemSvc *service.WorkItemService, planSvc *service.PlanS
 		if err := workItemSvc.ApprovePlan(context.Background(), workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
-		return ActionDoneMsg{Message: "Plan approved"}
+		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
 	}
 }
 

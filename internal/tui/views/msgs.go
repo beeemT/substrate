@@ -61,6 +61,14 @@ type PlanApproveMsg struct {
 	WorkItemID string
 }
 
+// PlanApprovedMsg is sent after ApprovePlanCmd succeeds.
+// It signals the plan is persisted as approved, so RunImplementationCmd and
+// StartForemanCmd are only dispatched after the DB write commits — not concurrently.
+type PlanApprovedMsg struct {
+	PlanID     string
+	WorkItemID string
+}
+
 // PlanRequestChangesMsg fires when user submits feedback with [c].
 type PlanRequestChangesMsg struct {
 	PlanID   string

@@ -21,7 +21,7 @@ func NewWorkItemService(repo repository.WorkItemRepository) *WorkItemService {
 // validWorkItemTransitions defines the allowed state transitions.
 var validWorkItemTransitions = map[domain.WorkItemState][]domain.WorkItemState{
 	domain.WorkItemIngested:     {domain.WorkItemPlanning},
-	domain.WorkItemPlanning:     {domain.WorkItemPlanReview, domain.WorkItemFailed},
+	domain.WorkItemPlanning:     {domain.WorkItemPlanReview, domain.WorkItemIngested, domain.WorkItemFailed},
 	domain.WorkItemPlanReview:   {domain.WorkItemApproved, domain.WorkItemPlanning, domain.WorkItemFailed},
 	domain.WorkItemApproved:     {domain.WorkItemImplementing, domain.WorkItemFailed},
 	domain.WorkItemImplementing: {domain.WorkItemReviewing, domain.WorkItemFailed},

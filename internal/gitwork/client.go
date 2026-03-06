@@ -35,9 +35,8 @@ func (c *Client) bin() string {
 // The branch is created from the current HEAD if it doesn't exist.
 // The worktree is created in a subdirectory named after the branch.
 func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, error) {
-	// Use -b to create a new worktree for the branch
-	// Use -- to prevent flag injection from branch names starting with -
-	args := []string{"checkout", "-b", "--", branch}
+	// Use -b to create a new worktree for the branch.
+	args := []string{"checkout", "-b", branch}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
 	cmd.Dir = repoDir
 	// git-work checkout -b outputs the path to stdout

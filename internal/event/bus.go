@@ -393,7 +393,7 @@ func (b *Bus) runPostHooks(event domain.SystemEvent) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-				slog.Error("post-hook panicked", "hook", e.config.Name, "panic", r)
+					slog.Error("post-hook panicked", "hook", e.config.Name, "panic", r)
 				}
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), e.config.Timeout)

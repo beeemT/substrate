@@ -252,6 +252,9 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	rawOutput, parseErrors := parser.ParseAndValidate(rawContent, repos)
 	if parseErrors.HasErrors() {
 		slog.Error("plan parsing failed after correction loop", "errors", parseErrors.Error())
+		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
+			slog.Warn("failed to emit plan failed event", "error", emitErr)
+		}
 		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
