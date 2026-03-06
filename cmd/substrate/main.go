@@ -3,15 +3,25 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 
+	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
+	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/repository/sqlite"
+	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/tui/views"
 	"github.com/beeemT/substrate/migrations"
 )
 
@@ -49,9 +59,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	_ = cfg // Config loaded and validated, will be used in future phases
 
-	// Ensure sessions directory exists
+	// Ensure sessions directory exists.
 	sessionsDir, err := config.SessionsDir()
 	if err != nil {
 		return fmt.Errorf("getting sessions directory: %w", err)
@@ -59,7 +68,9 @@ func run() error {
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
+	_ = sessionsDir // used at runtime by TUI log tailing
 
+	// Open database.
 	dbPath, err := config.GlobalDBPath()
 	if err != nil {
 		return fmt.Errorf("getting database path: %w", err)
@@ -85,8 +96,96 @@ func run() error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	fmt.Println("substrate: initialized successfully")
-	return nil
+	// Build repositories.
+	remote := dbRemote{db}
+	workItemRepo := sqlite.NewWorkItemRepo(remote)
+	planRepo := sqlite.NewPlanRepo(remote)
+	subPlanRepo := sqlite.NewSubPlanRepo(remote)
+	workspaceRepo := sqlite.NewWorkspaceRepo(remote)
+	sessionRepo := sqlite.NewSessionRepo(remote)
+	questionRepo := sqlite.NewQuestionRepo(remote)
+	instanceRepo := sqlite.NewInstanceRepo(remote)
+	reviews := sqlite.NewReviewRepo(remote)
+	eventRepo := sqlite.NewEventRepo(remote)
+
+	// Build services.
+	workItemSvc := service.NewWorkItemService(workItemRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
+	sessionSvc := service.NewSessionService(sessionRepo)
+	questionSvc := service.NewQuestionService(questionRepo)
+	instanceSvc := service.NewInstanceService(instanceRepo)
+	reviewSvc := service.NewReviewService(reviews)
+
+	// Build event bus.
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+
+	// Detect workspace from cwd.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting working directory: %w", err)
+	}
+	var workspaceID, workspaceName, workspaceDir string
+	wsDir, wsFile, wsErr := gitwork.FindWorkspace(cwd)
+	if wsErr == nil {
+		ws, getErr := workspaceSvc.Get(context.Background(), wsFile.ID)
+		if getErr != nil {
+			slog.Warn("workspace file found but not in DB; will prompt init", "id", wsFile.ID, "err", getErr)
+		} else {
+			workspaceID = ws.ID
+			workspaceName = ws.Name
+			workspaceDir = wsDir
+		}
+	} else if !gitwork.IsNotInWorkspace(wsErr) {
+		return fmt.Errorf("detecting workspace: %w", wsErr)
+	}
+
+	// Register instance if workspace is known.
+	instanceID := ""
+	if workspaceID != "" {
+		host, _ := os.Hostname()
+		inst := domain.SubstrateInstance{
+			ID:          domain.NewID(),
+			WorkspaceID: workspaceID,
+			PID:         os.Getpid(),
+			Hostname:    host,
+		}
+		if err := instanceSvc.Create(context.Background(), inst); err != nil {
+			slog.Warn("failed to register instance", "err", err)
+		} else {
+			instanceID = inst.ID
+		}
+	}
+
+	// Build adapters.
+	var adapters []adapter.WorkItemAdapter
+	if workspaceID != "" {
+		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemRepo)
+	}
+
+	// Build gitwork client.
+	gitClient := gitwork.NewClient("")
+
+	// Assemble services for TUI.
+	svcs := views.Services{
+		WorkItem:      workItemSvc,
+		Plan:          planSvc,
+		Session:       sessionSvc,
+		Question:      questionSvc,
+		Instance:      instanceSvc,
+		Workspace:     workspaceSvc,
+		Review:        reviewSvc,
+		Cfg:           cfg,
+		Adapters:      adapters,
+		GitClient:     gitClient,
+		Bus:           bus,
+		InstanceID:    instanceID,
+		WorkspaceID:   workspaceID,
+		WorkspaceName: workspaceName,
+		WorkspaceDir:  workspaceDir,
+	}
+
+	return views.RunTUI(svcs)
 }
 
 // initializeGlobalConfig creates the default config file.
@@ -140,4 +239,57 @@ func initializeGlobalConfig(cfgPath string) error {
 
 	fmt.Printf("substrate: created default config at %s\n", cfgPath)
 	return nil
+}
+
+// dbRemote wraps *sqlx.DB to implement generic.SQLXRemote.
+// The repos use generic.SQLXRemote (designed for *sqlx.Tx usage), but for the
+// TUI's direct reads/writes outside explicit transactions we delegate all methods
+// to *sqlx.DB, which supports them identically except NamedStmtContext (a Tx-only
+// method in sqlx that the repos never actually call).
+type dbRemote struct{ db *sqlx.DB }
+
+func (r dbRemote) BindNamed(query string, arg any) (string, []any, error) {
+	return r.db.BindNamed(query, arg)
+}
+func (r dbRemote) DriverName() string { return r.db.DriverName() }
+func (r dbRemote) GetContext(ctx context.Context, dest any, query string, args ...any) error {
+	return r.db.GetContext(ctx, dest, query, args...)
+}
+
+func (r dbRemote) MustExecContext(ctx context.Context, query string, args ...any) sql.Result {
+	return r.db.MustExecContext(ctx, query, args...)
+}
+
+func (r dbRemote) NamedExecContext(ctx context.Context, query string, arg any) (sql.Result, error) {
+	return r.db.NamedExecContext(ctx, query, arg)
+}
+
+func (r dbRemote) NamedQuery(query string, arg any) (*sqlx.Rows, error) {
+	return r.db.NamedQuery(query, arg)
+}
+
+// NamedStmtContext returns stmt unchanged. *sqlx.DB has no transaction to bind
+// the stmt to; the repos never call this method in practice.
+func (r dbRemote) NamedStmtContext(_ context.Context, stmt *sqlx.NamedStmt) *sqlx.NamedStmt {
+	return stmt
+}
+
+func (r dbRemote) PrepareNamedContext(ctx context.Context, query string) (*sqlx.NamedStmt, error) {
+	return r.db.PrepareNamedContext(ctx, query)
+}
+
+func (r dbRemote) PreparexContext(ctx context.Context, query string) (*sqlx.Stmt, error) {
+	return r.db.PreparexContext(ctx, query)
+}
+
+func (r dbRemote) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
+	return r.db.QueryRowxContext(ctx, query, args...)
+}
+
+func (r dbRemote) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	return r.db.QueryxContext(ctx, query, args...)
+}
+func (r dbRemote) Rebind(query string) string { return r.db.Rebind(query) }
+func (r dbRemote) SelectContext(ctx context.Context, dest any, query string, args ...any) error {
+	return r.db.SelectContext(ctx, dest, query, args...)
 }
