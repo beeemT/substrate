@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -90,6 +91,7 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 			RootPath: cwd,
 		}
 		if err := workspaceSvc.Create(context.Background(), ws); err != nil {
+			_ = os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName))
 			return ErrMsg{Err: err}
 		}
 		return WorkspaceInitDoneMsg{

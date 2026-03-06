@@ -8,8 +8,8 @@ import (
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/styles"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -17,7 +17,7 @@ import (
 type ConfigFieldKind int
 
 const (
-	ConfigFieldString  ConfigFieldKind = iota
+	ConfigFieldString ConfigFieldKind = iota
 	ConfigFieldBool
 	ConfigFieldEnum
 	ConfigFieldPath
@@ -82,10 +82,14 @@ func buildConfigSections(cfg *config.Config) []ConfigSection {
 		{
 			Name: "commit",
 			Fields: []ConfigField{
-				{Key: "strategy", Value: string(cfg.Commit.Strategy), Kind: ConfigFieldEnum,
-					Options: []string{"granular", "semi-regular", "single"}},
-				{Key: "message_format", Value: string(cfg.Commit.MessageFormat), Kind: ConfigFieldEnum,
-					Options: []string{"ai-generated", "conventional", "custom"}},
+				{
+					Key: "strategy", Value: string(cfg.Commit.Strategy), Kind: ConfigFieldEnum,
+					Options: []string{"granular", "semi-regular", "single"},
+				},
+				{
+					Key: "message_format", Value: string(cfg.Commit.MessageFormat), Kind: ConfigFieldEnum,
+					Options: []string{"ai-generated", "conventional", "custom"},
+				},
 				{Key: "message_template", Value: cfg.Commit.MessageTemplate, Kind: ConfigFieldString},
 			},
 		},
@@ -98,8 +102,10 @@ func buildConfigSections(cfg *config.Config) []ConfigSection {
 		{
 			Name: "review",
 			Fields: []ConfigField{
-				{Key: "pass_threshold", Value: string(cfg.Review.PassThreshold), Kind: ConfigFieldEnum,
-					Options: []string{"nit_only", "minor_ok", "no_critiques"}},
+				{
+					Key: "pass_threshold", Value: string(cfg.Review.PassThreshold), Kind: ConfigFieldEnum,
+					Options: []string{"nit_only", "minor_ok", "no_critiques"},
+				},
 				{Key: "max_cycles", Value: intPtrStr(cfg.Review.MaxCycles), Kind: ConfigFieldString},
 			},
 		},
@@ -232,6 +238,7 @@ func (m ConfigOverlay) Update(msg tea.Msg) (ConfigOverlay, tea.Cmd) {
 	case ConfigSaveMsg:
 		m.rawContent = msg.NewContent
 		m.dirty = false
+		return m, m.saveCmd()
 	}
 	return m, cmd
 }

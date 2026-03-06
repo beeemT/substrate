@@ -13,11 +13,13 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	omp "github.com/beeemT/substrate/internal/adapter/ohmypi"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/internal/service"
@@ -166,23 +168,46 @@ func run() error {
 	// Build gitwork client.
 	gitClient := gitwork.NewClient("")
 
-	// Assemble services for TUI.
+	// Build orchestration services.
+	// planningSvc may be nil if template compilation fails (extremely unlikely).
+	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
+	harness := omp.NewHarness(cfg.Adapters.OhMyPi, workspaceDir)
+	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
+	planningSvc, err := orchestrator.NewPlanningService(
+		planningCfg, discoverer, gitClient, harness,
+		planSvc, workItemSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, cfg,
+	)
+	if err != nil {
+		slog.Warn("failed to build planning service; planning unavailable", "err", err)
+	}
+	implSvc := orchestrator.NewImplementationService(
+		cfg, harness, gitClient, bus,
+		planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc,
+	)
+	reviewPipeline := orchestrator.NewReviewPipeline(
+		cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc,
+		sessionRepo, planRepo, bus,
+	)
+
 	svcs := views.Services{
-		WorkItem:      workItemSvc,
-		Plan:          planSvc,
-		Session:       sessionSvc,
-		Question:      questionSvc,
-		Instance:      instanceSvc,
-		Workspace:     workspaceSvc,
-		Review:        reviewSvc,
-		Cfg:           cfg,
-		Adapters:      adapters,
-		GitClient:     gitClient,
-		Bus:           bus,
-		InstanceID:    instanceID,
-		WorkspaceID:   workspaceID,
-		WorkspaceName: workspaceName,
-		WorkspaceDir:  workspaceDir,
+		WorkItem:       workItemSvc,
+		Plan:           planSvc,
+		Session:        sessionSvc,
+		Question:       questionSvc,
+		Instance:       instanceSvc,
+		Workspace:      workspaceSvc,
+		Review:         reviewSvc,
+		Cfg:            cfg,
+		Adapters:       adapters,
+		GitClient:      gitClient,
+		Bus:            bus,
+		InstanceID:     instanceID,
+		WorkspaceID:    workspaceID,
+		WorkspaceName:  workspaceName,
+		WorkspaceDir:   workspaceDir,
+		Planning:       planningSvc,
+		Implementation: implSvc,
+		ReviewPipeline: reviewPipeline,
 	}
 
 	return views.RunTUI(svcs)

@@ -108,6 +108,9 @@ type WorkspaceCancelMsg struct{}
 // ReimplementMsg fires when user triggers re-implementation from review.
 type ReimplementMsg struct{ WorkItemID string }
 
+// StartPlanMsg fires when the user presses Enter on a work item in the ready-to-plan state.
+type StartPlanMsg struct{ WorkItemID string }
+
 // OverrideAcceptMsg fires when user overrides and accepts critiques.
 type OverrideAcceptMsg struct{ WorkItemID string }
 
@@ -165,7 +168,6 @@ type WorkspaceInitDoneMsg struct {
 	WorkspaceName string
 	WorkspaceDir  string
 }
-
 
 // PlanEditedMsg is sent when the user edits a plan in $EDITOR and saves.
 type PlanEditedMsg struct {

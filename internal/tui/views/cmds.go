@@ -3,6 +3,7 @@ package views
 import (
 	"bufio"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
@@ -129,7 +131,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, questionID, answer, answere
 func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = svc.UpdateHeartbeat(context.Background(), instanceID)
-		return HeartbeatTickMsg(time.Now())
+		return nil
 	}
 }
 
@@ -199,17 +201,23 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		}
 		var lines []string
 		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
+		// Use actual FD position, not stat size, to avoid skipping bytes
+		// written between EOF detection and the stat call.
+		pos, seekErr := f.Seek(0, io.SeekCurrent)
 		newOffset := offset
-		if info, err := f.Stat(); err == nil {
-			newOffset = info.Size()
+		if seekErr == nil {
+			newOffset = pos
 		}
+		// scanner.Err() is non-nil on I/O error or line > 1 MiB.
+		// Return whatever lines were collected; next call resumes from pos.
+		_ = scanner.Err()
 		return SessionLogLinesMsg{SessionID: sessionID, Lines: lines, NextOffset: newOffset}
 	}
 }
-
 
 // SavePlanCmd persists updated plan content to the DB after $EDITOR edit.
 func SavePlanCmd(planSvc *service.PlanService, planID, content string) tea.Cmd {
@@ -241,7 +249,7 @@ func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.
 		const staleness = 15 * time.Second
 		instances, err := svc.ListByWorkspaceID(context.Background(), workspaceID)
 		if err != nil {
-			return LiveInstancesLoadedMsg{AliveIDs: map[string]bool{}}
+			return ErrMsg{Err: err}
 		}
 		alive := make(map[string]bool, len(instances))
 		threshold := time.Now().Add(-staleness)
@@ -251,5 +259,36 @@ func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.
 			}
 		}
 		return LiveInstancesLoadedMsg{AliveIDs: alive}
+	}
+}
+
+// StartPlanningCmd runs the planning pipeline for a work item in the background.
+// On completion it fires ActionDoneMsg; the 2 s poll loop picks up the new plan_review state.
+func StartPlanningCmd(svc *orchestrator.PlanningService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := svc.Plan(context.Background(), workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Planning complete"}
+	}
+}
+
+// PlanWithFeedbackCmd rejects the old plan and starts a revision session.
+func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := svc.PlanWithFeedback(context.Background(), workItemID, planID, feedback); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Plan revised"}
+	}
+}
+
+// RunImplementationCmd executes the implementation pipeline for an approved plan.
+func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := svc.Implement(context.Background(), planID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: "Implementation complete"}
 	}
 }

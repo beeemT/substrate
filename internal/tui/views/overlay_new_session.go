@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -218,7 +219,6 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				m.filterInput, cmd = m.filterInput.Update(msg)
 				cmds = append(cmds, cmd)
 			}
-
 		} else { // SourceManual
 			switch msg.String() {
 			case "esc":
@@ -272,6 +272,8 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 							return NewSessionManualMsg{Adapter: a, Title: title, Desc: desc}
 						}
 					}
+					// No adapter available — surface as error rather than silent no-op.
+					return m, func() tea.Msg { return ErrMsg{Err: fmt.Errorf("no adapter configured")} }
 				}
 
 			default:

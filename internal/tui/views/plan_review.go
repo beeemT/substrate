@@ -18,8 +18,8 @@ type planReviewInputMode int
 
 const (
 	planReviewNormal  planReviewInputMode = iota
-	planReviewChanges // user pressed [c]: request changes
-	planReviewReject  // user pressed [r]: rejection reason
+	planReviewChanges                     // user pressed [c]: request changes
+	planReviewReject                      // user pressed [r]: rejection reason
 )
 
 // PlanReviewModel renders the plan and handles approval flow.
@@ -147,10 +147,10 @@ func (m PlanReviewModel) View() string {
 
 	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width)) + "\n"
 	hints += lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
-		"["+lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("a")+"] Approve  "+
-			"["+lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("c")+"] Changes  "+
-			"["+lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("e")+"] Editor  "+
-			"["+lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("r")+"] Reject")
+		"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("a") + "] Approve  " +
+			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("c") + "] Changes  " +
+			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("e") + "] Editor  " +
+			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("r") + "] Reject")
 
 	parts := []string{header, divider, body}
 	if feedbackRow != "" {
@@ -206,6 +206,14 @@ func NewReadyToPlanModel(st styles.Styles) ReadyToPlanModel {
 func (m *ReadyToPlanModel) SetSize(w, h int) { m.width = w; m.height = h }
 
 func (m *ReadyToPlanModel) SetWorkItem(wi *domain.WorkItem) { m.workItem = wi }
+
+func (m ReadyToPlanModel) Update(msg tea.Msg) (ReadyToPlanModel, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "enter" && m.workItem != nil {
+		id := m.workItem.ID
+		return m, func() tea.Msg { return StartPlanMsg{WorkItemID: id} }
+	}
+	return m, nil
+}
 
 func (m ReadyToPlanModel) View() string {
 	if m.workItem == nil {

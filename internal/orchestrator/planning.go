@@ -61,6 +61,7 @@ type PlanningService struct {
 type PlanningTemplates struct {
 	planning   *template.Template
 	correction *template.Template
+	revision   *template.Template
 }
 
 // NewPlanningTemplates creates compiled templates.
@@ -75,9 +76,15 @@ func NewPlanningTemplates() (*PlanningTemplates, error) {
 		return nil, fmt.Errorf("parse correction template: %w", err)
 	}
 
+	revisionTmpl, err := template.New("revision").Parse(revisionPromptTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse revision template: %w", err)
+	}
+
 	return &PlanningTemplates{
 		planning:   planningTmpl,
 		correction: correctionTmpl,
+		revision:   revisionTmpl,
 	}, nil
 }
 
@@ -116,8 +123,53 @@ func NewPlanningService(
 	}, nil
 }
 
-// Plan executes the planning pipeline for a work item.
+// Plan executes the planning pipeline for a work item in Ingested state.
 func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.PlanningResult, error) {
+	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
+		return nil, fmt.Errorf("transition work item to planning: %w", err)
+	}
+	return s.planRun(ctx, workItemID, "", "")
+}
+
+// PlanWithFeedback runs a revision planning session for a work item in plan_review state.
+// It rejects the existing plan and re-plans with the human's feedback embedded in the prompt.
+func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldPlanID, feedback string) (*domain.PlanningResult, error) {
+	// Capture plan text before rejecting so the revision prompt has context.
+	currentPlanText := s.buildPlanText(ctx, oldPlanID)
+	if err := s.planSvc.RejectPlan(ctx, oldPlanID); err != nil {
+		return nil, fmt.Errorf("reject old plan: %w", err)
+	}
+	if err := s.workItemSvc.RejectPlan(ctx, workItemID); err != nil {
+		return nil, fmt.Errorf("transition work item to planning: %w", err)
+	}
+	return s.planRun(ctx, workItemID, feedback, currentPlanText)
+}
+
+// buildPlanText reconstructs the plan text from DB for use in the revision prompt.
+// Returns empty string on any error (best-effort; revision can proceed without prior context).
+func (s *PlanningService) buildPlanText(ctx context.Context, planID string) string {
+	plan, err := s.planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		return ""
+	}
+	subPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID)
+	if err != nil {
+		return plan.OrchestratorPlan
+	}
+	var sb strings.Builder
+	sb.WriteString(plan.OrchestratorPlan)
+	for _, sp := range subPlans {
+		sb.WriteString("\n\n## SubPlan: ")
+		sb.WriteString(sp.RepositoryName)
+		sb.WriteString("\n")
+		sb.WriteString(sp.Content)
+	}
+	return sb.String()
+}
+
+// planRun executes the planning pipeline for a work item already in the planning state.
+// revisionFeedback and currentPlanText are empty for initial planning.
+func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedback, currentPlanText string) (*domain.PlanningResult, error) {
 	// 1. Get the work item
 	workItem, err := s.workItemSvc.Get(ctx, workItemID)
 	if err != nil {
@@ -130,41 +182,34 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 		return nil, fmt.Errorf("get workspace: %w", err)
 	}
 
-	// 3. Transition work item to planning state
-	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
-		return nil, fmt.Errorf("transition work item to planning: %w", err)
-	}
-
-	// 4. Perform preflight check and pull main worktrees
+	// 3. Perform preflight check and pull main worktrees
 	healthCheck, err := s.discoverer.PreflightCheck(ctx, workspace.RootPath)
 	if err != nil {
 		return nil, fmt.Errorf("preflight check: %w", err)
 	}
-
-	// Pull main worktrees (warnings recorded but don't fail)
 	pullFailures := s.discoverer.PullMainWorktrees(ctx, healthCheck.GitWorkRepos)
 	healthCheck.PullFailures = pullFailures
 
-	// 5. Discover repos with metadata
+	// 4. Discover repos with metadata
 	repos, err := s.discoverer.DiscoverRepos(ctx, workspace.RootPath, healthCheck.GitWorkRepos)
 	if err != nil {
 		return nil, fmt.Errorf("discover repos: %w", err)
 	}
 
-	// 6. Read workspace AGENTS.md
+	// 5. Read workspace AGENTS.md
 	workspaceAgentsMd, err := ReadWorkspaceAgentsMd(workspace.RootPath)
 	if err != nil {
 		slog.Warn("failed to read workspace AGENTS.md", "error", err)
 	}
 
-	// 7. Create session directory
+	// 6. Create session directory
 	sessionID := domain.NewID()
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 
-	// 8. Build planning context
+	// 7. Build planning context
 	planningCtx := &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
 			ID:          workItem.ID,
@@ -179,20 +224,20 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 		SessionID:         sessionID,
 		SessionDraftPath:  sessionDir.DraftPath,
 		MaxParseRetries:   s.cfg.MaxParseRetries,
+		RevisionFeedback:  revisionFeedback,
+		CurrentPlanText:   currentPlanText,
 	}
 
-	// 9. Emit PlanningStarted event
+	// 8. Emit PlanningStarted event
 	if err := s.emitPlanningStartedEvent(ctx, workItemID, sessionID, workspace.ID); err != nil {
 		slog.Warn("failed to emit planning started event", "error", err)
 	}
 
 	rawContent, retries, warnings, planErr := s.runPlanningWithCorrectionLoop(ctx, planningCtx, workItem.WorkspaceID)
 	if planErr != nil {
-		// Emit PlanFailed event
 		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		// On failure, transition work item back to ingested
 		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
@@ -201,11 +246,10 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 		}, planErr
 	}
 
-	// 11. Parse and validate the final plan
+	// 9. Parse and validate the final plan
 	parser := NewPlanParser()
 	rawOutput, parseErrors := parser.ParseAndValidate(rawContent, repos)
 	if parseErrors.HasErrors() {
-		// This shouldn't happen after correction loop succeeded
 		slog.Error("plan parsing failed after correction loop", "errors", parseErrors.Error())
 		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
 		return &domain.PlanningResult{
@@ -215,18 +259,18 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 		}, fmt.Errorf("plan parsing failed: %w", &parseErrors)
 	}
 
-	// 12. Build and persist plan + sub-plans
+	// 10. Build and persist plan + sub-plans
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem)
 	if err != nil {
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
-	// 13. Transition work item to plan_review
+	// 11. Transition work item to plan_review
 	if err := s.workItemSvc.SubmitPlanForReview(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
 	}
 
-	// 14. Emit PlanGenerated event
+	// 12. Emit PlanGenerated event
 	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, workItemID, plan.Version, workspace.ID); err != nil {
 		slog.Warn("failed to emit plan generated event", "error", err)
 	}
@@ -390,7 +434,19 @@ func (s *PlanningService) buildCorrectionMessage(errors domain.ParseErrors, disc
 }
 
 // renderPlanningPrompt renders the planning prompt.
+// When ctx.RevisionFeedback is set, it renders the revision prompt instead.
 func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (string, error) {
+	if ctx.RevisionFeedback != "" {
+		var buf bytes.Buffer
+		if err := s.templates.revision.Execute(&buf, RevisionData{
+			Feedback:            ctx.RevisionFeedback,
+			CurrentPlan:         ctx.CurrentPlanText,
+			NewSessionDraftPath: ctx.SessionDraftPath,
+		}); err != nil {
+			return "", err
+		}
+		return buf.String(), nil
+	}
 	var buf bytes.Buffer
 	if err := s.templates.planning.Execute(&buf, ctx); err != nil {
 		return "", err

@@ -5,6 +5,7 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -17,10 +18,14 @@ type Services struct {
 	Instance  *service.InstanceService
 	Workspace *service.WorkspaceService
 	Review    *service.ReviewService
-	Cfg       *config.Config
-	Adapters  []adapter.WorkItemAdapter
-	GitClient *gitwork.Client
-	Bus       *event.Bus
+	// Orchestration pipelines. Non-nil only when the oh-my-pi harness is configured.
+	Planning       *orchestrator.PlanningService
+	Implementation *orchestrator.ImplementationService
+	ReviewPipeline *orchestrator.ReviewPipeline
+	Cfg            *config.Config
+	Adapters       []adapter.WorkItemAdapter
+	GitClient      *gitwork.Client
+	Bus            *event.Bus
 	// Instance identity
 	InstanceID    string
 	WorkspaceID   string

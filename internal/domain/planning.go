@@ -42,6 +42,12 @@ type PlanningContext struct {
 	SessionDraftPath string
 	// MaxParseRetries is the maximum number of correction attempts (from config).
 	MaxParseRetries int
+	// RevisionFeedback is the human's feedback when requesting plan changes.
+	// Empty for initial planning sessions.
+	RevisionFeedback string
+	// CurrentPlanText is the previous plan content for revision context.
+	// Empty for initial planning sessions.
+	CurrentPlanText string
 }
 
 // RawPlanOutput represents the parsed output from a planning agent.

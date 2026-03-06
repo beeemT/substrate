@@ -26,7 +26,7 @@ const (
 
 // KeybindHint is a label/key pair rendered by the status bar.
 type KeybindHint struct {
-	Key  string
+	Key   string
 	Label string
 }
 
@@ -88,7 +88,7 @@ func (m *ContentModel) SetSize(width, height int) {
 }
 
 func (m *ContentModel) SetMode(mode ContentMode) { m.mode = mode }
-func (m ContentModel) Mode() ContentMode          { return m.mode }
+func (m ContentModel) Mode() ContentMode         { return m.mode }
 
 func (m *ContentModel) SetWorkItem(wi *domain.WorkItem) {
 	m.currentWorkItem = wi
@@ -112,6 +112,9 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch m.mode {
+	case ContentModeReadyToPlan:
+		m.readyToPlan, cmd = m.readyToPlan.Update(msg)
+		cmds = append(cmds, cmd)
 	case ContentModePlanning:
 		m.planOutput, cmd = m.planOutput.Update(msg)
 		cmds = append(cmds, cmd)

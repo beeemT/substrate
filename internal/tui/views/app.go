@@ -50,10 +50,10 @@ type App struct {
 	// State cache (refreshed by DB poll)
 	workItems []domain.WorkItem
 	sessions  []domain.AgentSession
-	subPlans  map[string][]domain.SubPlan   // keyed by planID
-	plans     map[string]*domain.Plan       // keyed by workItemID
-	questions map[string][]domain.Question  // keyed by sessionID
-	reviews   map[string]ReviewsLoadedMsg   // keyed by sessionID
+	subPlans  map[string][]domain.SubPlan  // keyed by planID
+	plans     map[string]*domain.Plan      // keyed by workItemID
+	questions map[string][]domain.Question // keyed by sessionID
+	reviews   map[string]ReviewsLoadedMsg  // keyed by sessionID
 
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
@@ -188,11 +188,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PollTickMsg:
 		a.toasts.Prune()
 		if a.svcs.WorkspaceID != "" {
-		cmds = append(cmds,
-			LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
-			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-			LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
-		)
+			cmds = append(cmds,
+				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
+				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+			)
 		}
 		cmds = append(cmds, PollTickCmd())
 		return a, tea.Batch(cmds...)
@@ -288,13 +288,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		return a, nil
 
+	case StartPlanMsg:
+		if a.svcs.Planning != nil {
+			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItemID))
+		} else {
+			a.toasts.AddToast("Planning service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
+
 	case PlanApproveMsg:
 		cmds = append(cmds, ApprovePlanCmd(a.svcs.WorkItem, a.svcs.Plan, msg.PlanID, msg.WorkItemID))
+		if a.svcs.Implementation != nil {
+			cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, msg.PlanID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case PlanRequestChangesMsg:
-		a.toasts.AddToast("Plan revision requested", components.ToastInfo)
-		return a, nil
+		if a.svcs.Planning != nil {
+			cmds = append(cmds, PlanWithFeedbackCmd(a.svcs.Planning, a.currentWorkItemID, msg.PlanID, msg.Feedback))
+		} else {
+			a.toasts.AddToast("Plan revision requested (no planning service)", components.ToastInfo)
+		}
+		return a, tea.Batch(cmds...)
 
 	case PlanRejectMsg:
 		cmds = append(cmds, RejectPlanCmd(a.svcs.WorkItem, a.svcs.Plan, msg.WorkItemID, msg.PlanID, msg.Reason))
@@ -476,6 +491,7 @@ func (a *App) onSidebarMove() tea.Cmd {
 	if sel.WorkItemID == a.currentWorkItemID {
 		return nil
 	}
+	a.tailingSessionIDs = make(map[string]bool)
 	a.currentWorkItemID = sel.WorkItemID
 	return a.updateContentFromState()
 }
@@ -604,6 +620,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 			}
 		}
 		a.content.reviewing.SetRepos(repoResults)
+		a.content.reviewing.SetWorkItemID(wi.ID)
 
 	case domain.WorkItemCompleted:
 		a.content.SetMode(ContentModeCompleted)
