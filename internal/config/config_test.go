@@ -39,6 +39,15 @@ func TestLoadDefaults(t *testing.T) {
 	if *cfg.Review.MaxCycles != 3 {
 		t.Errorf("review.max_cycles = %d, want 3", *cfg.Review.MaxCycles)
 	}
+	if cfg.Harness.Default != HarnessOhMyPi {
+		t.Errorf("harness.default = %q, want %q", cfg.Harness.Default, HarnessOhMyPi)
+	}
+	if len(cfg.Harness.Fallback) != 2 || cfg.Harness.Fallback[0] != HarnessClaudeCode || cfg.Harness.Fallback[1] != HarnessCodex {
+		t.Errorf("harness.fallback = %v, want [%s %s]", cfg.Harness.Fallback, HarnessClaudeCode, HarnessCodex)
+	}
+	if cfg.Harness.Phase.Planning != HarnessOhMyPi || cfg.Harness.Phase.Implementation != HarnessOhMyPi || cfg.Harness.Phase.Review != HarnessOhMyPi || cfg.Harness.Phase.Foreman != HarnessOhMyPi {
+		t.Errorf("harness phase defaults = %+v, want all ohmypi", cfg.Harness.Phase)
+	}
 	if cfg.Adapters.Linear.PollInterval != "30s" {
 		t.Errorf("adapters.linear.poll_interval = %q, want %q", cfg.Adapters.Linear.PollInterval, "30s")
 	}
@@ -175,6 +184,44 @@ func TestLoadWithRepos(t *testing.T) {
 	}
 	if _, ok := cfg.Repos["myrepo"]; !ok {
 		t.Error("repos.myrepo should exist in config")
+	}
+}
+
+func TestLoadHarnessConfig(t *testing.T) {
+	path := writeTestConfig(t, `
+	[harness]
+	default = "codex"
+	fallback = ["claude-code", "ohmypi"]
+
+	[harness.phase]
+	planning = "claude-code"
+	implementation = "codex"
+	review = "claude-code"
+	foreman = "ohmypi"
+	`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Harness.Default != HarnessCodex {
+		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessCodex)
+	}
+	if len(cfg.Harness.Fallback) != 2 || cfg.Harness.Fallback[0] != HarnessClaudeCode || cfg.Harness.Fallback[1] != HarnessOhMyPi {
+		t.Fatalf("unexpected harness.fallback: %v", cfg.Harness.Fallback)
+	}
+	if cfg.Harness.Phase.Foreman != HarnessOhMyPi {
+		t.Fatalf("harness.phase.foreman = %q, want %q", cfg.Harness.Phase.Foreman, HarnessOhMyPi)
+	}
+}
+
+func TestLoadInvalidHarnessDefault(t *testing.T) {
+	path := writeTestConfig(t, `
+	[harness]
+	default = "invalid"
+	`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() should error on invalid harness.default")
 	}
 }
 

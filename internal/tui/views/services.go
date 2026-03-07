@@ -20,7 +20,7 @@ type Services struct {
 	Instance  *service.InstanceService
 	Workspace *service.WorkspaceService
 	Review    *service.ReviewService
-	// Orchestration pipelines. Non-nil only when the oh-my-pi harness is configured.
+	// Orchestration pipelines backed by the configured agent harnesses.
 	Planning       *orchestrator.PlanningService
 	Implementation *orchestrator.ImplementationService
 	ReviewPipeline *orchestrator.ReviewPipeline

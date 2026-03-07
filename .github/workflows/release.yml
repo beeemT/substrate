@@ -94,7 +94,9 @@ jobs:
             homepage "https://github.com/beeemT/substrate"
             license "MIT"
             version "${VERSION_NUM}"
-          
+
+            depends_on "bun"
+
             on_macos do
               on_arm do
                 url "${BASE_URL}/substrate_${VERSION_NUM}_darwin_arm64.tar.gz"
@@ -115,14 +117,16 @@ jobs:
                 sha256 "${SHA256_LINUX_AMD64}"
               end
             end
-          
+
             def install
               bin.install "substrate"
             end
-          
+
             test do
               assert_match "substrate", shell_output("#{bin}/substrate --help 2>&1", 0).downcase
             end
+          end
+          FORMULA
           end
           FORMULA
           

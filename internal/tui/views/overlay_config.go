@@ -117,11 +117,46 @@ func buildConfigSections(cfg *config.Config) []ConfigSection {
 			},
 		},
 		{
+			Name: "harness",
+			Fields: []ConfigField{
+				{Key: "default", Value: string(cfg.Harness.Default), Kind: ConfigFieldEnum, Options: []string{"ohmypi", "claude-code", "codex"}},
+				{Key: "fallback", Value: strings.Join(harnessNamesToStrings(cfg.Harness.Fallback), ","), Kind: ConfigFieldString},
+			},
+		},
+		{
+			Name: "harness.phase",
+			Fields: []ConfigField{
+				{Key: "planning", Value: string(cfg.Harness.Phase.Planning), Kind: ConfigFieldEnum, Options: []string{"ohmypi", "claude-code", "codex"}},
+				{Key: "implementation", Value: string(cfg.Harness.Phase.Implementation), Kind: ConfigFieldEnum, Options: []string{"ohmypi", "claude-code", "codex"}},
+				{Key: "review", Value: string(cfg.Harness.Phase.Review), Kind: ConfigFieldEnum, Options: []string{"ohmypi", "claude-code", "codex"}},
+				{Key: "foreman", Value: string(cfg.Harness.Phase.Foreman), Kind: ConfigFieldEnum, Options: []string{"ohmypi", "claude-code", "codex"}},
+			},
+		},
+		{
 			Name: "adapters.ohmypi",
 			Fields: []ConfigField{
 				{Key: "bun_path", Value: cfg.Adapters.OhMyPi.BunPath, Kind: ConfigFieldPath},
 				{Key: "bridge_path", Value: cfg.Adapters.OhMyPi.BridgePath, Kind: ConfigFieldPath},
 				{Key: "thinking_level", Value: cfg.Adapters.OhMyPi.ThinkingLevel, Kind: ConfigFieldString},
+			},
+		},
+		{
+			Name: "adapters.claude_code",
+			Fields: []ConfigField{
+				{Key: "binary_path", Value: cfg.Adapters.ClaudeCode.BinaryPath, Kind: ConfigFieldPath},
+				{Key: "model", Value: cfg.Adapters.ClaudeCode.Model, Kind: ConfigFieldString},
+				{Key: "permission_mode", Value: cfg.Adapters.ClaudeCode.PermissionMode, Kind: ConfigFieldString},
+				{Key: "max_turns", Value: strconv.Itoa(cfg.Adapters.ClaudeCode.MaxTurns), Kind: ConfigFieldString},
+			},
+		},
+		{
+			Name: "adapters.codex",
+			Fields: []ConfigField{
+				{Key: "binary_path", Value: cfg.Adapters.Codex.BinaryPath, Kind: ConfigFieldPath},
+				{Key: "model", Value: cfg.Adapters.Codex.Model, Kind: ConfigFieldString},
+				{Key: "approval_mode", Value: cfg.Adapters.Codex.ApprovalMode, Kind: ConfigFieldString},
+				{Key: "full_auto", Value: boolStr(cfg.Adapters.Codex.FullAuto), Kind: ConfigFieldBool},
+				{Key: "quiet", Value: boolStr(cfg.Adapters.Codex.Quiet), Kind: ConfigFieldBool},
 			},
 		},
 		{
@@ -140,6 +175,14 @@ func intPtrStr(p *int) string {
 		return ""
 	}
 	return strconv.Itoa(*p)
+}
+
+func harnessNamesToStrings(names []config.HarnessName) []string {
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		result = append(result, string(name))
+	}
+	return result
 }
 
 func boolStr(b bool) string {

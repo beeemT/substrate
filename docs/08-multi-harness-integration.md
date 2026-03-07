@@ -1,12 +1,21 @@
 # 08 - Multi-Harness Integration Plan
 
-> Integrating multiple AI coding assistants (Claude Code, Copilot CLI, Aider, Goose, Crush, and future tools) as interchangeable harnesses within Substrate.
+> Current implementation status for oh-my-pi, Claude Code, and Codex harness support in Substrate.
 
 ## Executive Summary
 
-Substrate's architecture already defines a clean `AgentHarness` interface (see `04-adapters.md`) that abstracts agent execution from orchestration. This document outlines how to extend this interface to support multiple AI coding assistants as interchangeable "harnesses," enabling users to choose their preferred tool while maintaining Substrate's orchestration, planning, and review capabilities.
+Substrate now has **implemented multi-harness selection infrastructure** in the codebase, but only **oh-my-pi is the default and fully interactive harness** today.
 
-**Key Insight:** The current oh-my-pi harness uses a JSON-over-stdio protocol via a Bun bridge script. This pattern—subprocess with structured I/O—is the natural integration pattern for all CLI-based coding assistants.
+**Current shipped state:**
+1. **oh-my-pi** remains the default harness in config and generated defaults because it is the only harness with proven interactive messaging support for planning correction, review correction, and Foreman question/answer flows.
+2. **Claude Code** and **Codex CLI** now have selectable adapter packages and central wiring, but their implementations currently cover startup, prompt injection, streaming/progress, completion, and fallback selection — not verified interactive `SendMessage` parity.
+3. **Homebrew packaging** now needs to treat Bun as a runtime dependency because the default oh-my-pi bridge depends on it.
+
+**Most important status note:** The multi-harness architecture work is partially complete, but the Claude Code and Codex interactive messaging milestone is blocked on access to the real `claude` and `codex` binaries. They are not installed in the current development environment, and the repo does not contain vendored protocol fixtures for their live follow-up messaging behavior.
+
+**Why this matters:** Substrate's current orchestrator uses `SendMessage` in correctness-critical paths. Without observing the real CLIs, implementing interactive follow-up messaging for Claude Code or Codex would be guesswork, not an engineered integration.
+
+---
 
 ---
 
@@ -14,7 +23,7 @@ Substrate's architecture already defines a clean `AgentHarness` interface (see `
 
 ### 1.1 Existing Harness Interface
 
-From `04-adapters.md`, the current interface:
+From `04-adapters.md`, the current interface is:
 
 ```go
 type AgentHarness interface {
@@ -33,7 +42,7 @@ type HarnessSession interface {
 
 type HarnessCapabilities struct {
     SupportsStreaming  bool
-    SupportsMessaging  bool    // Can receive mid-session messages
+    SupportsMessaging  bool
     SupportedTools     []string
 }
 ```
@@ -45,11 +54,50 @@ The existing implementation uses:
 - **Protocol:** Bidirectional message passing
 - **Messages:** `prompt`, `message`, `answer`, `abort` (stdin) → `event`, `progress`, `question`, `complete` (stdout)
 - **Sandboxing:** macOS `sandbox-exec`, Linux namespaces (deferred)
-- **Session modes:** `agent` (full tools), `foreman` (read-only)
+- **Session modes:** `agent`, `foreman`
+
+### 1.3 Constraints Imposed by Current Contracts
+
+The current contracts matter more than vendor feature lists:
+- `04-adapters.md` defines only two execution modes today: `agent` and `foreman`.
+- `HarnessSession` currently exposes `SendMessage`, but not a first-class `SendAnswer(questionID, answer)` API.
+- `SessionResult` is intentionally small today: `ExitCode`, `Summary`, `Errors`.
+- `03-event-system.md` already covers the orchestration events Substrate needs: session start/completion/failure, questions raised/answered, review start/completion, and reimplementation.
+
+That means the chosen solution should be implemented in two layers:
+1. **Near-term:** add Claude Code and Codex adapters behind the current contracts.
+2. **Follow-on contract evolution:** extend the harness interfaces only where real adapter implementation proves the current surface is insufficient.
+
+This is the main architectural correction to the earlier draft: proposed interface growth is reasonable, but it should not be presented as if Substrate already has those contracts.
+
+### 1.4 What Is Implemented in the Repository Today
+
+The following pieces are now implemented in code:
+- Harness selection config and defaults exist in `internal/config/config.go`.
+- A central harness builder/fallback path exists in `internal/app/harness.go`.
+- Startup wiring in `cmd/substrate/main.go` now builds per-phase harnesses instead of hardcoding oh-my-pi.
+- `internal/adapter/claudecode/` and `internal/adapter/codex/` exist and implement the current `AgentHarness` contract.
+- Review log parsing was generalized so non-oh-my-pi plain-text logs are still consumable by the review pipeline.
+
+### 1.5 What Remains Incomplete
+
+The missing piece is **real interactive messaging support** for Claude Code and Codex. Specifically:
+- `planning.go` uses `SendMessage` for plan correction retries.
+- `review.go` uses `SendMessage` for critique-output correction retries.
+- `foreman.go` uses `SendMessage` and expects a usable answer event flow for question handling.
+
+At the time this note was written, neither `claude` nor `codex` was installed in the working environment, so their live interactive protocols could not be exercised or pinned by tests.
+
+### 1.6 Current Recommendation
+
+Treat the current state as:
+- **Production-ready:** oh-my-pi default path
+- **Infrastructure-ready but not interaction-complete:** Claude Code and Codex selection/wiring
+- **Blocked follow-up:** interactive `SendMessage` parity for Claude Code and Codex once the binaries are available
 
 ---
 
-## 2. Target Harnesses Analysis
+## 2. Target Harnesses
 
 ### 2.1 Claude Code CLI
 
@@ -65,7 +113,7 @@ The existing implementation uses:
 | **Tool control** | `--tools "Bash,Edit,Read"` to restrict available tools |
 | **Session management** | `--resume`, `--continue`, `--session-id` |
 | **MCP support** | Yes - can connect to external MCP servers |
-| **Structured output** | `--json-schema` for validated JSON output |
+| **Structured output** | `stream-json` and schema-oriented output paths |
 | **Permission modes** | `--permission-mode plan`, `--dangerously-skip-permissions` |
 
 **CLI Example (non-interactive):**
@@ -79,566 +127,147 @@ claude -p --output-format stream-json \
 **Strengths:**
 - First-class non-interactive mode with structured output
 - Native MCP support for tool extension
-- Agent SDK for advanced programmatic usage
 - Strong session persistence and resumption
-- Built-in sub-agent spawning capability
+- Built-in tool restriction model fits Substrate's foreman/read-only needs well
 
 **Challenges:**
 - Proprietary, requires Anthropic subscription
-- Output format may change (need version pinning)
-- No built-in way to inject custom tools (relies on MCP)
+- Output format must be version-pinned and parser-tested
+- Question escalation still needs an adapter-specific strategy compatible with Substrate's current `SendMessage`-oriented contract
 
 **Integration Pattern:** Stdout streaming with JSON parsing
 
----
-
-### 2.2 GitHub Copilot CLI
-
-**Vendor:** GitHub/Microsoft  
-**License:** Requires Copilot subscription  
-**Language:** Node.js
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Non-interactive mode** | Limited - primarily interactive TUI |
-| **Custom agents** | Yes - via `.github/agents/` markdown profiles |
-| **Skills system** | Yes - composable command packages |
-| **MCP support** | Yes - GitHub MCP server built-in, extensible |
-| **Custom instructions** | `.github/copilot-instructions.md`, `AGENTS.md` |
-| **Autonomous mode** | `--allow-all` or `--yolo` flags |
-| **Agent selection** | `--agent=<name>` flag |
-
-**CLI Example:**
-```bash
-copilot --agent=task --prompt "Implement auth middleware" --allow-all
-```
-
-**Strengths:**
-- Deep GitHub integration
-- Built-in MCP server for GitHub operations
-- Custom agents via markdown profiles
-- Skills for specialized tasks
-
-**Challenges:**
-- **Primary concern:** Designed for interactive use, non-interactive support is limited
-- No structured JSON output mode documented
-- TUI-centric design makes programmatic integration harder
-- Requires GitHub Copilot subscription
-
-**Integration Pattern:** TUI automation or PTY wrapper (lower confidence)
-
-**Recommendation:** Mark as "experimental" integration due to interactive-first design. Monitor for API/CLI improvements.
+**Integration Readiness:** ✅ Highest
 
 ---
 
-### 2.3 Aider
-
-**Vendor:** Open Source (Apache 2.0)  
-**License:** Apache 2.0  
-**Language:** Python
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Non-interactive mode** | `--message` / `-m` flag for single command |
-| **Auto-accept** | `--yes` flag to skip confirmations |
-| **Multi-provider** | OpenAI, Anthropic, Gemini, Groq, Ollama, etc. |
-| **Git integration** | Native, auto-commits changes |
-| **Python API** | `Coder` class for programmatic usage |
-| **Streaming** | `--stream` / `--no-stream` toggle |
-| **Edit formats** | Multiple (diff-fenced, diff, udiff, etc.) |
-
-**CLI Example:**
-```bash
-aider --yes --message "Implement auth middleware" \
-    --auto-commits auth.py middleware.py
-```
-
-**Python API Example:**
-```python
-from aider.coders import Coder
-from aider.models import Model
-from aider.io import InputOutput
-
-io = InputOutput(yes=True)
-model = Model("claude-3-5-sonnet")
-coder = Coder.create(main_model=model, fnames=["auth.py"], io=io)
-coder.run("Implement authentication middleware")
-```
-
-**Strengths:**
-- Excellent scripting support (CLI and Python)
-- Multi-provider flexibility
-- Open source with active development
-- Strong git integration with auto-commits
-- Repository map for efficient context
-
-**Challenges:**
-- Python API not officially stable
-- No built-in question escalation mechanism
-- Stream output format not structured JSON
-
-**Integration Pattern:** 
-- **Primary:** CLI with `--yes --message` and stdout parsing
-- **Alternative:** Python subprocess with Coder API (more control)
-
----
-
-### 2.4 Goose
-
-**Vendor:** Block (Square)  
-**License:** Apache 2.0  
-**Language:** Rust
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Non-interactive mode** | CLI supports headless execution |
-| **Multi-provider** | OpenAI, Anthropic, and many others |
-| **MCP support** | Yes - first-class extension mechanism |
-| **Extensions** | Rust-based extension system |
-| **Desktop + CLI** | Both available |
-
-**CLI Example:**
-```bash
-goose run "Implement authentication middleware" --no-tui
-```
-
-**Strengths:**
-- Open source with permissive license
-- Rust-based (fast, reliable)
-- Strong MCP support
-- Extensible architecture
-- Multi-provider support
-
-**Challenges:**
-- Newer project, API stability uncertain
-- Less documentation on programmatic usage
-- Rust makes custom bridge scripts harder
-
-**Integration Pattern:** CLI with stdout parsing (needs investigation of headless mode)
-
----
-
-### 2.5 Crush (formerly OpenCode)
-
-**Vendor:** Charmbracelet  
-**License:** MIT  
-**Language:** Go
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Non-interactive mode** | To be determined (project recently moved) |
-| **Multi-provider** | Yes (inherited from OpenCode) |
-| **TUI framework** | Bubble Tea (same as Substrate) |
-| **SQLite storage** | Session persistence |
-| **LSP support** | Yes |
-| **Tools** | bash, edit, file, glob, grep, ls, patch, diagnostics |
-
-**Note:** OpenCode was archived and moved to Charmbracelet as "Crush". Details on the new project's CLI interface are still emerging.
-
-**Strengths:**
-- Go-based (same as Substrate)
-- Bubble Tea TUI (familiar patterns)
-- Multi-provider support
-- MIT license
-
-**Challenges:**
-- Project in transition
-- Non-interactive mode details TBD
-- Documentation still developing
-
-**Integration Pattern:** TBD - monitor project development
-
----
-
-
-### 2.6 Codex CLI (OpenAI)
+### 2.2 Codex CLI (OpenAI)
 
 **Vendor:** OpenAI  
 **License:** Apache 2.0  
 **Language:** Go
-**GitHub Stars:** ~63,000+
 
-Codex CLI is OpenAI's official coding agent that runs locally on your computer.
+Codex CLI is OpenAI's official coding agent that runs locally on the developer's machine.
 
 **Integration Characteristics:**
 | Aspect | Details |
 |--------|---------|
 | **Non-interactive mode** | Full headless mode via `codex` CLI |
 | **Approval mode** | `--approval-mode` for autonomous execution |
-| **Model selection** | `-m` flag for model choice (o4, o3, etc.) |
+| **Model selection** | `-m` flag for model choice |
 | **Working directory** | `-w` flag for workspace isolation |
 | **Full auto mode** | `--full-auto` for complete autonomy |
 | **Sandboxing** | Built-in filesystem isolation |
-| **Quiet mode** | `-q` for minimal output |
-| **IDE integration** | Also available as VS Code, Cursor, Windsurf extension |
+| **Quiet mode** | `-q` for reduced output |
 
 **CLI Example (non-interactive):**
 ```bash
-codex -w /path/to/project -m o4 \\
-    --approval-mode full-auto \\
+codex -w /path/to/project -m o4 \
+    --approval-mode full-auto \
     "Implement the authentication middleware as described"
 ```
 
 **Strengths:**
 - First-class headless/autonomous mode
-- Go-based (same as Substrate) - natural fit
+- Go-based, which makes operational behavior familiar in a Go codebase
 - Built-in filesystem sandboxing
-- Native approval modes (suggest, auto, full-auto)
-- Strong model support (GPT-4o, o3, etc.)
+- Approval modes map reasonably well to Substrate execution policies
 - Apache 2.0 licensed
-- Native to OpenAI ecosystem
 
 **Challenges:**
 - Requires OpenAI API access
-- Newer tool (2025), API stability uncertain
-- Output format needs investigation for structured parsing
-- No MCP support (unlike Claude Code)
+- Output/event contract must be pinned before Substrate depends on it for rich TUI updates
+- No MCP-based extension story comparable to Claude Code
+- Question/clarification flow needs deliberate adapter design rather than assuming parity with oh-my-pi
 
-**Integration Pattern:** CLI with stdout parsing, potentially structured output
+**Integration Pattern:** CLI subprocess with stdout parsing, initially targeting reliable completion semantics before rich event fidelity
 
-**Integration Readiness:** ✅ High - Full headless support makes this a first-class candidate
-
----
-
-### 2.7 Cline (VSCode Extension)
-
-**Vendor:** Cline Bot Inc  
-**License:** Apache 2.0  
-**Type:** VSCode Extension (not CLI-first)  
-**GitHub Stars:** ~58,600+
-
-**Note:** Cline is primarily a VSCode extension, not a standalone CLI. This makes direct integration challenging, but it's worth tracking due to its popularity.
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Primary interface** | VSCode extension with TUI |
-| **MCP support** | Yes - can extend with custom tools |
-| **Multi-provider** | Yes - OpenAI, Anthropic, Gemini, etc. |
-| **Agent SDK** | Available for programmatic usage |
-| **Non-interactive mode** | Limited - primarily interactive |
-| **Browser automation** | Yes - can use browser for testing |
-
-**Integration Pattern:** Not directly integratable as a harness. Could potentially:
-1. Use the Agent SDK if it exposes a CLI or programmatic interface
-2. Fork the extension core and wrap it
-3. Wait for official CLI support
-
-**Recommendation:** Monitor for CLI/SDK support. Mark as "not currently integratable."
+**Integration Readiness:** ✅ High
 
 ---
 
-### 2.8 Roo Code (Cline Fork)
-
-**Vendor:** Roo Code, Inc  
-**License:** Apache 2.0  
-**Type:** VSCode Extension  
-**GitHub Stars:** ~22,500+
-
-Roo Code is a popular fork of Cline with additional features and modes.
-
-**Integration Characteristics:** Similar to Cline - primarily VSCode extension with no standalone CLI.
-
-**Recommendation:** Same as Cline - monitor for CLI support.
-
----
-
-### 2.9 Continue.dev
-
-**Vendor:** Continue Dev, Inc  
-**License:** Apache 2.0  
-**Type:** IDE Extension + CLI  
-**GitHub Stars:** ~31,600+
-
-Continue is an open-source AI code assistant with IDE extensions and a CLI component.
-
-**Integration Characteristics:**
-| Aspect | Details |
-|--------|---------|
-| **Primary interface** | VSCode/JetBrains extension |
-| **CLI component** | `cn` CLI available |
-| **MCP support** | Yes - source-controlled AI checks |
-| **Multi-provider** | Yes - many providers supported |
-| **CI integration** | Yes - checks can run in CI |
-
-**CLI Example:**
-```bash
-# Install CLI
-curl -fsSL https://raw.githubusercontent.com/continuedev/continue/main/extensions/cli/scripts/install.sh | bash
-
-# Run checks
-cn
-```
-
-**Strengths:**
-- Open source with permissive license
-- CLI component exists
-- CI integration possible
-- Source-controlled checks
-
-**Challenges:**
-- CLI is primarily for checks, not full coding sessions
-- Output format needs investigation
-
-**Integration Pattern:** CLI with stdout parsing - needs investigation of headless capabilities
-
-**Recommendation:** Medium priority - investigate CLI capabilities further.
-
----
-
-## 2.10 AI Coding Assistant Popularity Ranking
-
-Below is a comprehensive ranking of AI coding assistants by estimated user base and GitHub popularity. This helps prioritize integration efforts based on market reach.
-
-### Tier 1: Market Leaders (1M+ users)
-
-| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
-|------|------|------|------------|--------------|----------------------|
-| 1 | **GitHub Copilot** | IDE Plugin + CLI | ~15M+ | N/A (proprietary) | Medium (interactive-first) |
-| 2 | **Cursor** | Standalone IDE | ~5M+ | ~25K | Low (IDE-only, no CLI) |
-| 3 | **ChatGPT/Claude Web** | Web Chat | ~200M+ | N/A | N/A (not coding-specific) |
-
-### Tier 2: CLI-Native Tools (High Integration Priority)
-
-| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
-|------|------|------|------------|--------------|----------------------|
-| 1 | **Claude Code CLI** | CLI + IDE | ~500K+ | ~70K+ (refs) | ✅ **Highest** |
-| 2 | **Codex CLI (OpenAI)** | CLI | ~100K+ | ~63K | ✅ **High** |
-| 3 | **Aider** | CLI | ~200K+ | ~15K | ✅ **High** |
-| 4 | **Cline** | VSCode Ext | ~400K+ | ~58.6K | ⚠️ Medium (no CLI) |
-| 5 | **Goose** | CLI + Desktop | ~100K+ | ~32K | 🔶 Medium |
-| 6 | **Roo Code** | VSCode Ext | ~150K+ | ~22.5K | ⚠️ Medium (fork of Cline) |
-| 7 | **Copilot CLI** | CLI | ~200K+ | N/A | ⚠️ Medium (interactive-first) |
-
-### Tier 3: IDE Extensions (Lower Integration Priority)
-
-| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
-|------|------|------|------------|--------------|----------------------|
-| 1 | **Continue** | IDE Extension + CLI | ~300K+ | ~31.6K | 🔶 Medium (has CLI) |
-| 2 | **Codeium/Windsurf** | IDE + Web | ~1M+ | N/A | Low (proprietary) |
-| 3 | **Amazon Q Developer** | IDE + CLI | ~100K+ | ~1.9K | Low (deprecated → Kiro) |
-| 4 | **Tabnine** | IDE Plugin | ~500K+ | N/A | Low (proprietary) |
-
-### Tier 4: Web-Based / Specialized
-
-| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
-|------|------|------|------------|--------------|----------------------|
-| 1 | **Bolt.new** | Web IDE | ~1M+ | ~16.2K | Low (web-only) |
-| 2 | **Replit AI** | Web IDE | ~2M+ | N/A | Low (web-only) |
-| 3 | **v0.dev** | Web Component Gen | ~500K+ | N/A | N/A (component-focused) |
-| 4 | **Devin** | Cloud Agent | ~10K+ | N/A | Low (closed, cloud-only) |
-
-### Tier 5: Emerging / Open Source
-
-| Rank | Tool | Type | Est. Users | GitHub Stars | Integration Priority |
-|------|------|------|------------|--------------|----------------------|
-| 1 | **Crush (ex-OpenCode)** | CLI | ~50K+ | ~11K (archived) | Medium (monitoring) |
-| 2 | **Open Interpreter** | CLI | ~100K+ | ~58K | Low (general-purpose) |
-| 3 | **GPT-Pilot** | CLI | ~50K+ | ~32K | Low (Pythagora) |
-| 4 | **Devika** | CLI | ~30K+ | ~18K | Low (experimental) |
-
-### Integration Priority Summary
-
-**Immediate Integration (Phase 1-3):**
-1. ✅ **Claude Code CLI** - Best non-interactive support, structured output
-2. ✅ **Codex CLI (OpenAI)** - Full headless mode, Go-based, Apache 2.0
-3. ✅ **Aider** - Excellent scripting support, open source
-
-**Secondary Integration (Phase 4-6):**
-4. 🔶 **Goose** - Open source, Rust-based, growing fast
-5. 🔶 **Continue** - Has CLI component, investigate headless
-6. ⚠️ **Copilot CLI** - Experimental (interactive-first design)
-7. 🔶 **Crush** - Monitor for stable release
-
-**Not Currently Integratable:**
-- **Cline / Roo Code** - VSCode extensions, no standalone CLI
-- **Cursor** - Standalone IDE, no CLI
-- **Bolt.new** - Web-based only
-
-**Legend:**
-- ✅ High priority, clear integration path
-- 🔶 Medium priority, needs investigation
-- ⚠️ Low priority, significant challenges
-- Low/Not integratable = IDE/web-only or proprietary
-
----
 ## 3. Integration Architecture
 
-### 3.1 Enhanced Harness Interface
+### 3.1 Recommended Architecture
 
-The current interface needs extension to accommodate diverse harness capabilities:
+Use one adapter package per supported harness, each implementing the existing `AgentHarness` contract first.
+
+```text
+Substrate Orchestrator
+        |
+        v
+  AgentHarness interface
+   /                \
+  v                  v
+ClaudeCodeAdapter   CodexAdapter
+  |                  |
+  v                  v
+claude CLI         codex CLI
+```
+
+This preserves the existing layering described in `04-adapters.md`: orchestration depends on a stable harness interface, while subprocess details remain adapter-private.
+
+### 3.2 Contract Evolution, Carefully Sequenced
+
+The earlier draft proposed a broader interface with extra modes, richer results, and explicit answer routing. That direction is sensible, but it should be staged.
+
+**Recommended sequence:**
+
+1. **Implement adapters against the current contract first**
+   - `Name`
+   - `StartSession`
+   - `Capabilities`
+   - `HarnessSession` with `Wait`, `Events`, `SendMessage`, `Abort`
+
+2. **Promote only proven extensions into shared contracts**
+   - Add richer capability fields only if orchestration actually consumes them.
+   - Add explicit answer APIs only if Claude Code or Codex cannot be made reliable with the current message flow.
+   - Expand `SessionResult` only after the UI, persistence layer, and event consumers have a concrete need.
+
+3. **Keep orchestration events in the event bus, not duplicated in adapter contracts**
+   - `03-event-system.md` already models session lifecycle and question events.
+   - Adapter event translation should feed those orchestration concepts, not redefine the workflow model.
+
+### 3.3 Proposed Future Interface Additions
+
+The following remain reasonable candidates for future contract work, but they are **not current state**:
 
 ```go
-// HarnessMode defines the execution mode for a session
 type HarnessMode string
 
 const (
-    HarnessModeAgent    HarnessMode = "agent"     // Full coding agent
-    HarnessModeForeman  HarnessMode = "foreman"   // Read-only, Q&A
-    HarnessModeReview   HarnessMode = "review"    // Code review
-    HarnessModePlan     HarnessMode = "plan"      // Planning only
+    HarnessModeAgent   HarnessMode = "agent"
+    HarnessModeForeman HarnessMode = "foreman"
+    HarnessModeReview  HarnessMode = "review"
+    HarnessModePlan    HarnessMode = "plan"
 )
 
-// HarnessCapabilities describes what a harness can do
 type HarnessCapabilities struct {
-    // Core capabilities
-    SupportsStreaming    bool          // Real-time progress events
-    SupportsMessaging    bool          // Mid-session message injection
-    SupportsQuestions    bool          // Can escalate questions
-    SupportsResume       bool          // Can resume interrupted sessions
-    
-    // Session modes supported
+    SupportsStreaming    bool
+    SupportsMessaging    bool
+    SupportsQuestions    bool
+    SupportsResume       bool
     SupportedModes       []HarnessMode
-    
-    // Tool restrictions
-    DefaultTools         []string      // Tools available by default
-    CanRestrictTools     bool          // Supports tool restriction
-    
-    // Provider info
-    Providers            []string      // Supported LLM providers
-    RequiresSubscription bool          // Needs paid subscription
-    
-    // Integration quality
-    IntegrationMaturity  MaturityLevel // How well-tested the integration is
-}
-
-type MaturityLevel int
-
-const (
-    MaturityExperimental MaturityLevel = iota  // May have issues
-    MaturityBeta                                // Works for common cases
-    MaturityStable                              // Production-ready
-    MaturityPreferred                           // Recommended default
-)
-
-// SessionOpts contains all configuration for a harness session
-type SessionOpts struct {
-    // Identity
-    SessionID            string            // Substrate-generated ULID
-    
-    // Mode and behavior
-    Mode                 HarnessMode       // Execution mode
-    WorktreePath         string            // Working directory (empty for foreman)
-    DraftPath            string            // Plan draft path (planning sessions)
-    
-    // Context
-    SubPlan              SubPlan           // Repository-specific plan
-    CrossRepoPlan        string            // Full orchestration context
-    SystemPrompt         string            // Custom system prompt
-    DocumentationContext string            // Additional docs
-    
-    // Behavior controls
-    AllowPush            bool              // Can push to remote
-    AutoCommit           bool              // Auto-commit changes
-    Tools                []string          // Restricted tool set (if supported)
-    
-    // Harness-specific configuration
-    HarnessConfig        map[string]any    // Provider-specific options
-}
-
-// HarnessSession represents an active session
-type HarnessSession interface {
-    ID() string
-    
-    // Lifecycle
-    Wait(ctx context.Context) (SessionResult, error)
-    Abort(ctx context.Context) error
-    
-    // Event stream
-    Events() <-chan SessionEvent
-    
-    // Bidirectional communication (if supported)
-    SendMessage(ctx context.Context, msg string) error
-    SendAnswer(ctx context.Context, questionID, answer string) error
-    
-    // Capability query
-    Capabilities() HarnessCapabilities
-}
-
-// SessionEvent types
-type SessionEventType int
-
-const (
-    EventProgress        SessionEventType = iota  // Text/progress update
-    EventQuestion                                  // Agent needs clarification
-    EventToolUse                                   // Tool execution started
-    EventToolResult                                // Tool execution completed
-    EventFileEdit                                  // File modified
-    EventCommit                                    // Commit created
-    EventPush                                      // Pushed to remote
-    EventError                                     // Error occurred
-    EventComplete                                  // Session finished
-)
-
-type SessionEvent struct {
-    Type      SessionEventType
-    Timestamp time.Time
-    Payload   any                   // Type-specific payload
-}
-
-// SessionResult is the final outcome
-type SessionResult struct {
-    ExitCode    int
-    Summary     string
-    FilesChanged []string
-    Commits     []CommitInfo
-    Errors      []string
-    TokensUsed  int64
-    CostUSD     float64
+    DefaultTools         []string
+    CanRestrictTools     bool
+    RequiresSubscription bool
+    IntegrationMaturity  MaturityLevel
 }
 ```
 
-### 3.2 Bridge Adapter Pattern
+Treat this as a target shape for a future refactor, not as an immediate prerequisite.
 
-Each harness gets a "bridge adapter" that translates between Substrate's protocol and the harness's native interface:
+### 3.4 Canonical Adapter Event Shape
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Substrate Core                           │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    AgentHarness Interface                 │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│              ┌───────────────┼───────────────┐                  │
-│              ▼               ▼               ▼                  │
-│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐      │
-│  │  Bridge Adapter│ │  Bridge Adapter│ │  Bridge Adapter│      │
-│  │   (Common)     │ │   (Common)     │ │   (Common)     │      │
-│  └────────┬───────┘ └────────┬───────┘ └────────┬───────┘      │
-│           │                  │                  │               │
-└───────────┼──────────────────┼──────────────────┼───────────────┘
-            │                  │                  │
-     ┌──────▼──────┐    ┌──────▼──────┐    ┌──────▼──────┐
-     │   oh-my-pi  │    │ Claude Code │    │    Aider    │
-     │   Bridge    │    │   Bridge    │    │   Bridge    │
-     │   Script    │    │   Wrapper   │    │   Wrapper   │
-     └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
-            │                  │                  │
-     ┌──────▼──────┐    ┌──────▼──────┐    ┌──────▼──────┐
-     │  oh-my-pi   │    │ Claude Code │    │   Aider     │
-     │   (Bun)     │    │    CLI      │    │   CLI       │
-     └─────────────┘    └─────────────┘    └─────────────┘
-```
-
-### 3.3 Common Bridge Protocol
-
-Define a common internal protocol that all bridges translate to/from:
+Even if the shared Go interfaces stay small initially, adapter implementations still benefit from a canonical internal translation model:
 
 ```go
-// BridgeProtocol defines the canonical event format
-// All adapters translate their harness's output to this format
-
 type BridgeEvent struct {
     Type    string          `json:"type"`
     Time    time.Time       `json:"time"`
     Payload json.RawMessage `json:"payload"`
 }
 
-// Event payloads (canonical forms)
 type ProgressPayload struct {
     Text string `json:"text"`
 }
@@ -649,19 +278,6 @@ type QuestionPayload struct {
     Context string `json:"context,omitempty"`
 }
 
-type FileEditPayload struct {
-    Path        string `json:"path"`
-    Operation   string `json:"operation"` // create, modify, delete
-    LinesAdded  int    `json:"lines_added"`
-    LinesRemoved int   `json:"lines_removed"`
-}
-
-type CommitPayload struct {
-    SHA     string `json:"sha"`
-    Message string `json:"message"`
-    Files   []string `json:"files"`
-}
-
 type CompletePayload struct {
     Summary     string   `json:"summary"`
     ExitCode    int      `json:"exit_code"`
@@ -669,13 +285,15 @@ type CompletePayload struct {
 }
 ```
 
+This internal shape is useful because it isolates vendor output parsing from the rest of the adapter code, but it should remain an internal adapter concern until there is a demonstrated shared package need.
+
 ---
 
 ## 4. Harness-Specific Integration Plans
 
 ### 4.1 Claude Code Integration
 
-**Priority:** High (best non-interactive support)  
+**Priority:** Highest  
 **Maturity Target:** Stable → Preferred
 
 #### Implementation Approach
@@ -684,34 +302,31 @@ type CompletePayload struct {
 // internal/adapter/claudecode/adapter.go
 
 type ClaudeCodeAdapter struct {
-    cfg          ClaudeCodeConfig
-    cmdRunner    exec.CmdRunner
+    cfg       ClaudeCodeConfig
+    cmdRunner exec.CmdRunner
 }
 
 type ClaudeCodeConfig struct {
-    BinaryPath     string        `toml:"binary_path"`      // "claude" by default
-    Model          string        `toml:"model"`            // "sonnet", "opus", or full name
-    PermissionMode string        `toml:"permission_mode"`  // "plan", "accept", "auto"
-    FallbackModel  string        `toml:"fallback_model"`   // For rate limit fallback
-    MaxTurns       int           `toml:"max_turns"`        // Limit agentic turns
-    MaxBudgetUSD   float64       `toml:"max_budget_usd"`   // Cost limit
+    BinaryPath     string  `toml:"binary_path"`
+    Model          string  `toml:"model"`
+    PermissionMode string  `toml:"permission_mode"`
+    MaxTurns       int     `toml:"max_turns"`
+    MaxBudgetUSD   float64 `toml:"max_budget_usd"`
 }
 
 func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
     args := a.buildArgs(opts)
-    
     cmd := exec.CommandContext(ctx, a.cfg.BinaryPath, args...)
     cmd.Dir = opts.WorktreePath
-    
-    // Set up pipes
+
     stdin, _ := cmd.StdinPipe()
     stdout, _ := cmd.StdoutPipe()
     stderr, _ := cmd.StderrPipe()
-    
+
     if err := cmd.Start(); err != nil {
         return nil, fmt.Errorf("start claude code: %w", err)
     }
-    
+
     session := &claudeCodeSession{
         id:     opts.SessionID,
         cmd:    cmd,
@@ -720,79 +335,43 @@ func (a *ClaudeCodeAdapter) StartSession(ctx context.Context, opts SessionOpts) 
         stderr: stderr,
         events: make(chan SessionEvent, 256),
     }
-    
+
     go session.readEvents()
-    
-    // Send initial prompt if provided
+
     if opts.SubPlan.RawMarkdown != "" {
         session.sendPrompt(opts.SubPlan.RawMarkdown)
     }
-    
-    return session, nil
-}
 
-func (a *ClaudeCodeAdapter) buildArgs(opts SessionOpts) []string {
-    args := []string{
-        "-p",                           // Print mode (non-interactive)
-        "--output-format", "stream-json", // Structured output
-    }
-    
-    // Model selection
-    if a.cfg.Model != "" {
-        args = append(args, "--model", a.cfg.Model)
-    }
-    
-    // Tool restrictions
-    if len(opts.Tools) > 0 && a.Capabilities().CanRestrictTools {
-        args = append(args, "--tools", strings.Join(opts.Tools, ","))
-    }
-    
-    // Permission mode
-    if a.cfg.PermissionMode != "" {
-        args = append(args, "--permission-mode", a.cfg.PermissionMode)
-    }
-    
-    // System prompt
-    if opts.SystemPrompt != "" {
-        args = append(args, "--append-system-prompt", opts.SystemPrompt)
-    }
-    
-    // Cost/turn limits
-    if a.cfg.MaxTurns > 0 {
-        args = append(args, "--max-turns", fmt.Sprintf("%d", a.cfg.MaxTurns))
-    }
-    if a.cfg.MaxBudgetUSD > 0 {
-        args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", a.cfg.MaxBudgetUSD))
-    }
-    
-    // Mode-specific tool restrictions
-    switch opts.Mode {
-    case HarnessModeForeman, HarnessModeReview:
-        args = append(args, "--tools", "Read,Grep,Glob")
-    }
-    
-    return args
+    return session, nil
 }
 ```
 
+#### Review Notes on This Approach
+
+This is the strongest part of the original plan.
+- It matches the current adapter boundary in `04-adapters.md`.
+- It preserves subprocess isolation.
+- It gives Substrate a parser-friendly event stream.
+
+The only material caution is to avoid depending on rich event variants until parser tests pin the exact `stream-json` shapes Substrate expects.
+
 #### Event Translation
 
-Claude Code's `stream-json` output format needs translation:
+Claude Code should be the reference adapter for structured event translation:
 
 ```go
 func (s *claudeCodeSession) readEvents() {
     defer close(s.events)
-    
+
     scanner := bufio.NewScanner(s.stdout)
     for scanner.Scan() {
         line := scanner.Bytes()
-        
+
         var event map[string]any
         if err := json.Unmarshal(line, &event); err != nil {
             continue
         }
-        
-        // Translate Claude Code events to canonical form
+
         eventType, _ := event["type"].(string)
         switch eventType {
         case "assistant":
@@ -811,302 +390,93 @@ func (s *claudeCodeSession) readEvents() {
 #### Configuration
 
 ```toml
-[adapters.claudecode]
+[adapters.claude-code]
 enabled = true
 binary_path = "claude"
 model = "sonnet"
 permission_mode = "auto"
 max_turns = 50
 max_budget_usd = 10.00
-
-[adapters.claudecode.providers.anthropic]
-# Uses ANTHROPIC_API_KEY by default
-
-[adapters.claudecode.providers.bedrock]
-# AWS Bedrock configuration if needed
 ```
 
 ---
 
-### 4.2 Aider Integration
+### 4.2 Codex CLI Integration
 
-**Priority:** High (excellent scripting support)  
+**Priority:** High  
 **Maturity Target:** Stable
 
 #### Implementation Approach
 
 ```go
-// internal/adapter/aider/adapter.go
+// internal/adapter/codex/adapter.go
 
-type AiderAdapter struct {
-    cfg       AiderConfig
+type CodexAdapter struct {
+    cfg       CodexConfig
     cmdRunner exec.CmdRunner
 }
 
-type AiderConfig struct {
-    BinaryPath    string   `toml:"binary_path"`     // "aider" by default
-    Model         string   `toml:"model"`           // "claude-3-5-sonnet", etc.
-    EditFormat    string   `toml:"edit_format"`     // "diff-fenced", "diff", etc.
-    AutoCommits   bool     `toml:"auto_commits"`    // Auto-commit changes
-    Stream        bool     `toml:"stream"`          // Stream responses
-    ContextFile   string   `toml:"context_file"`    // Context from AGENTS.md
+type CodexConfig struct {
+    BinaryPath   string `toml:"binary_path"`
+    Model        string `toml:"model"`
+    ApprovalMode string `toml:"approval_mode"`
+    FullAuto     bool   `toml:"full_auto"`
+    Quiet        bool   `toml:"quiet"`
 }
 
-func (a *AiderAdapter) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
+func (a *CodexAdapter) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
     args := a.buildArgs(opts)
-    
-    // Aider takes files as positional arguments
-    files := opts.SubPlan.FileTargets
-    if len(files) == 0 {
-        // Default to common source patterns
-        files = []string{"."} // Current directory
-    }
-    
-    cmd := exec.CommandContext(ctx, a.cfg.BinaryPath, append(args, files...)...)
+    cmd := exec.CommandContext(ctx, a.cfg.BinaryPath, args...)
     cmd.Dir = opts.WorktreePath
-    
+
     stdin, _ := cmd.StdinPipe()
     stdout, _ := cmd.StdoutPipe()
-    
+    stderr, _ := cmd.StderrPipe()
+
     if err := cmd.Start(); err != nil {
-        return nil, fmt.Errorf("start aider: %w", err)
+        return nil, fmt.Errorf("start codex: %w", err)
     }
-    
-    session := &aiderSession{
+
+    session := &codexSession{
         id:     opts.SessionID,
         cmd:    cmd,
         stdin:  stdin,
         stdout: stdout,
+        stderr: stderr,
         events: make(chan SessionEvent, 256),
     }
-    
+
     go session.readEvents()
-    
-    // Send initial prompt
+
     if opts.SubPlan.RawMarkdown != "" {
         session.sendPrompt(opts.SubPlan.RawMarkdown)
     }
-    
+
     return session, nil
 }
-
-func (a *AiderAdapter) buildArgs(opts SessionOpts) []string {
-    args := []string{
-        "--yes",           // Auto-accept all
-        "--no-check-update",
-    }
-    
-    // Message mode (non-interactive)
-    if opts.SubPlan.RawMarkdown != "" {
-        args = append(args, "--message", opts.SubPlan.RawMarkdown)
-    }
-    
-    // Model selection
-    if a.cfg.Model != "" {
-        args = append(args, "--model", a.cfg.Model)
-    }
-    
-    // Edit format
-    if a.cfg.EditFormat != "" {
-        args = append(args, "--edit-format", a.cfg.EditFormat)
-    }
-    
-    // Auto-commits
-    if a.cfg.AutoCommits || opts.AutoCommit {
-        args = append(args, "--auto-commits")
-    } else {
-        args = append(args, "--no-auto-commits")
-    }
-    
-    // Stream mode
-    if a.cfg.Stream {
-        args = append(args, "--stream")
-    }
-    
-    return args
-}
 ```
 
-#### Aider Question Handling
+#### Design Guidance
 
-Aider doesn't have a native question escalation mechanism. We need to detect when it needs clarification:
+Codex should not be forced to match Claude Code's richness on day one. The safer rollout is:
+1. reliable process startup and completion handling,
+2. robust prompt injection,
+3. conservative progress extraction,
+4. richer event mapping only after fixture-based parser coverage exists.
 
-```go
-func (s *aiderSession) readEvents() {
-    defer close(s.events)
-    
-    scanner := bufio.NewScanner(s.stdout)
-    var outputBuffer strings.Builder
-    
-    for scanner.Scan() {
-        line := scanner.Text()
-        outputBuffer.WriteString(line + "\n")
-        
-        // Detect Aider's question patterns
-        if strings.Contains(line, "How would you like me to") ||
-           strings.Contains(line, "Do you want me to") ||
-           strings.HasSuffix(line, "?") {
-            // Escalate as question
-            s.events <- SessionEvent{
-                Type: EventQuestion,
-                Payload: QuestionPayload{
-                    ID:      ulid.Make().String(),
-                    Content: line,
-                },
-            }
-        }
-        
-        // Emit progress
-        s.events <- SessionEvent{
-            Type: EventProgress,
-            Payload: ProgressPayload{
-                Text: line,
-            },
-        }
-    }
-}
-```
+That keeps Codex support real without pretending its observable CLI contract is already as friendly as Claude Code's.
 
 #### Configuration
 
 ```toml
-[adapters.aider]
+[adapters.codex]
 enabled = true
-binary_path = "aider"
-model = "claude-3-5-sonnet-20241022"
-edit_format = "diff-fenced"
-auto_commits = true
-stream = true
-
-# API keys via environment: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
+binary_path = "codex"
+model = "o4"
+approval_mode = "full-auto"
+full_auto = false
+quiet = false
 ```
-
----
-
-### 4.3 Copilot CLI Integration
-
-**Priority:** Medium (experimental due to interactive-first design)  
-**Maturity Target:** Experimental
-
-#### Implementation Approach
-
-```go
-// internal/adapter/copilot/adapter.go
-
-type CopilotAdapter struct {
-    cfg CopilotConfig
-}
-
-type CopilotConfig struct {
-    BinaryPath string `toml:"binary_path"` // "copilot" by default
-    Agent      string `toml:"agent"`       // Default agent to use
-    AllowAll   bool   `toml:"allow_all"`   // --allow-all flag
-}
-
-func (a *CopilotAdapter) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
-    // WARNING: Copilot CLI is designed for interactive use
-    // This integration uses PTY automation which may be fragile
-    
-    args := []string{
-        "--agent", a.selectAgent(opts.Mode),
-    }
-    
-    if a.cfg.AllowAll {
-        args = append(args, "--allow-all")
-    }
-    
-    if opts.SubPlan.RawMarkdown != "" {
-        args = append(args, "--prompt", opts.SubPlan.RawMarkdown)
-    }
-    
-    // Use PTY for TUI automation
-    pty, err := pty.Start(exec.Command(a.cfg.BinaryPath, args...))
-    if err != nil {
-        return nil, fmt.Errorf("start copilot: %w", err)
-    }
-    
-    session := &copilotSession{
-        id:   opts.SessionID,
-        pty:  pty,
-        // ... PTY-based event reading
-    }
-    
-    return session, nil
-}
-
-func (a *CopilotAdapter) selectAgent(mode HarnessMode) string {
-    switch mode {
-    case HarnessModeReview:
-        return "code-review"
-    case HarnessModePlan:
-        return "explore"
-    default:
-        return a.cfg.Agent // "task" or user-configured
-    }
-}
-```
-
-**Note:** This integration is marked experimental. The PTY-based approach may break with Copilot CLI updates. Monitor for official non-interactive mode support.
-
----
-
-### 4.4 Goose Integration
-
-**Priority:** Medium  
-**Maturity Target:** Beta
-
-#### Implementation Approach
-
-```go
-// internal/adapter/goose/adapter.go
-
-type GooseAdapter struct {
-    cfg GooseConfig
-}
-
-type GooseConfig struct {
-    BinaryPath string `toml:"binary_path"` // "goose" by default
-    Provider   string `toml:"provider"`    // LLM provider
-    Model      string `toml:"model"`       // Model name
-    NoTUI      bool   `toml:"no_tui"`      // Disable TUI
-}
-
-func (g *GooseAdapter) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
-    args := []string{
-        "run",
-        "--no-tui",
-    }
-    
-    if g.cfg.Provider != "" {
-        args = append(args, "--provider", g.cfg.Provider)
-    }
-    
-    if g.cfg.Model != "" {
-        args = append(args, "--model", g.cfg.Model)
-    }
-    
-    // Goose takes the prompt as the last argument
-    prompt := opts.SubPlan.RawMarkdown
-    if opts.SystemPrompt != "" {
-        prompt = opts.SystemPrompt + "\n\n" + prompt
-    }
-    args = append(args, prompt)
-    
-    cmd := exec.CommandContext(ctx, g.cfg.BinaryPath, args...)
-    cmd.Dir = opts.WorktreePath
-    
-    // ... similar to other adapters
-}
-```
-
----
-
-### 4.5 Crush Integration
-
-**Priority:** Low (monitor development)  
-**Maturity Target:** Experimental
-
-**Status:** Waiting for Crush (Charmbracelet's fork of OpenCode) to stabilize. Go-based architecture makes it a natural fit, but non-interactive mode details are TBD.
 
 ---
 
@@ -1119,52 +489,36 @@ func (g *GooseAdapter) StartSession(ctx context.Context, opts SessionOpts) (Harn
 
 [harness]
 # Default harness for all sessions
-default = "claude-code"  # "oh-my-pi" | "claude-code" | "aider" | "copilot" | "goose"
+default = "ohmypi"  # "ohmypi" | "claude-code" | "codex"
 
-# Fallback harness if default fails
-fallback = "aider"
+# Fallback harnesses if default/phase target is unavailable
+fallback = ["claude-code", "codex"]
 
 # Per-phase harness overrides
-[harness.phases]
-planning = "claude-code"     # Use Claude Code for planning
-implementation = "aider"     # Use Aider for implementation
-review = "claude-code"       # Use Claude Code for review
-foreman = "claude-code"      # Use Claude Code for foreman
+[harness.phase]
+planning = "ohmypi"
+implementation = "ohmypi"
+review = "ohmypi"
+foreman = "ohmypi"
 
-# Harness-specific configurations
 [adapters.ohmypi]
-enabled = true
 bun_path = "bun"
-bridge_path = "scripts/omp-bridge.ts"
-thinking_level = "xhigh"
+bridge_path = "bridge/omp-bridge.ts"
+thinking_level = "high"
 
-[adapters.claude-code]
-enabled = true
+[adapters.claude_code]
 binary_path = "claude"
 model = "sonnet"
 permission_mode = "auto"
 max_turns = 50
 max_budget_usd = 10.00
 
-[adapters.aider]
-enabled = true
-binary_path = "aider"
-model = "claude-3-5-sonnet-20241022"
-edit_format = "diff-fenced"
-auto_commits = true
-stream = true
-
-[adapters.copilot]
-enabled = true
-binary_path = "copilot"
-agent = "task"
-allow_all = false  # Set true for autonomous mode
-
-[adapters.goose]
-enabled = false  # Experimental
-binary_path = "goose"
-provider = "anthropic"
-model = "claude-3-5-sonnet-latest"
+[adapters.codex]
+binary_path = "codex"
+model = "o4"
+approval_mode = "full-auto"
+full_auto = false
+quiet = false
 ```
 
 ### 5.2 Environment Variables
@@ -1172,19 +526,31 @@ model = "claude-3-5-sonnet-latest"
 Each harness respects its native environment variables:
 
 ```bash
+# oh-my-pi default path
+BUN_INSTALL=...
+
 # Claude Code
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Aider (supports multiple)
-ANTHROPIC_API_KEY=sk-ant-...
+# Codex CLI
 OPENAI_API_KEY=sk-...
-
-# Copilot CLI
-GITHUB_TOKEN=ghp_...
-
-# Goose
-ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+### 5.3 Selection Policy
+
+Current policy in the repository is:
+- **Default:** oh-my-pi
+- **Fallback order:** Claude Code, then Codex CLI
+- **Per-phase overrides:** supported via config
+- **Health checks:** binary existence is checked before harness selection succeeds
+
+### 5.4 Packaging Status
+
+Current packaging/install state:
+- Substrate's release workflow generates the Homebrew formula in `.github/workflows/release.yml`.
+- That formula now needs Bun as a dependency because oh-my-pi is the default harness path.
+- README install guidance should assume Bun is present when using the default harness.
+- Installing `substrate` alone is not sufficient for the default oh-my-pi path unless Bun is also provisioned.
 
 ---
 
@@ -1192,94 +558,59 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### Phase 1: Interface Refinement (Week 1)
 
-1. **Extend `HarnessCapabilities`** with new fields
-2. **Add `HarnessMode`** type for mode-specific behavior
-3. **Define canonical event types** in `internal/domain/harness/`
-4. **Update `SessionOpts`** with new configuration options
-5. **Write interface tests** using mock harnesses
+1. Keep the current `AgentHarness` and `HarnessSession` contracts as the implementation baseline.
+2. Identify the smallest contract additions actually required by Claude Code and Codex.
+3. Define internal adapter parsing types and fixtures.
+4. Write interface tests using mock harnesses.
+5. Document which proposed interface fields are deferred.
 
-**Gate:** All existing tests pass, new interface compiles cleanly
+**Gate:** Existing contracts still compile cleanly; adapter tests prove the current interface is sufficient or justify each extension.
 
-### Phase 2: Claude Code Integration (Week 2-3)
+### Phase 2: Harness Selection and Basic Adapters (Completed in Repo)
 
-1. **Create `internal/adapter/claudecode/` package**
-2. **Implement `ClaudeCodeAdapter`** with CLI invocation
-3. **Implement event stream parser** for `stream-json` format
-4. **Handle system prompt injection** via `--append-system-prompt`
-5. **Implement tool restriction** via `--tools` flag
-6. **Add configuration support** in TOML
-7. **Write integration tests** (requires ANTHROPIC_API_KEY)
-8. **Document setup and usage**
+1. Add config-driven harness selection.
+2. Add per-phase harness wiring.
+3. Add Claude Code adapter package.
+4. Add Codex adapter package.
+5. Add fallback selection when the preferred harness binary is unavailable.
+6. Update tests for config and harness construction.
 
-**Gate:** Full session lifecycle works (start, monitor, complete)
+**Status:** Completed in the repository.
 
-### Phase 3: Aider Integration (Week 3-4)
+### Phase 3: Claude Code Interactive Messaging (Blocked)
 
-1. **Create `internal/adapter/aider/` package**
-2. **Implement `AiderAdapter`** with CLI invocation
-3. **Implement stdout parsing** for progress and questions
-4. **Handle auto-commit integration** with Substrate's commit strategy
-5. **Add configuration support** in TOML
-6. **Write integration tests** (requires API key)
-7. **Document setup and usage**
+1. Verify the real `claude` CLI supports resumable or iterative follow-up messaging compatible with `SendMessage`.
+2. Pin the exact protocol for continuing an in-flight or resumable session.
+3. Implement adapter-side follow-up messaging.
+4. Add integration tests against the real binary.
 
-**Gate:** Full session lifecycle works with auto-commits
+**Status:** Blocked by missing `claude` binary in the current environment.
 
-### Phase 4: Harness Selection Logic (Week 4)
+### Phase 4: Codex Interactive Messaging (Blocked)
 
-1. **Create `internal/orchestrator/harness_selector.go`**
-2. **Implement phase-based harness selection**
-3. **Implement fallback logic** when primary harness fails
-4. **Add per-repo harness override** (via `[repos.<name>]` config)
-5. **Implement harness health checks** (binary exists, API key set)
-6. **Write unit tests** for selection logic
+1. Verify the real `codex` CLI supports resumable or iterative follow-up messaging compatible with `SendMessage`.
+2. Pin the exact protocol for follow-up messaging and completion semantics.
+3. Implement adapter-side follow-up messaging.
+4. Add integration tests against the real binary.
 
-**Gate:** Can configure different harnesses per phase, fallback works
+**Status:** Blocked by missing `codex` binary in the current environment.
 
-### Phase 5: Question Routing Abstraction (Week 5)
+### Phase 5: Question Routing and Foreman Parity (Blocked on 3 and 4)
 
-1. **Abstract question escalation** across harnesses
-2. **Implement `ask_foreman` equivalent** for each harness
-   - Claude Code: Custom MCP tool or prompt-based
-   - Aider: Detect question patterns, pause for answer
-   - Copilot: Leverage built-in question handling
-3. **Standardize question/answer protocol**
-4. **Update Foreman to route to active harness**
+1. Make `planning.go`, `review.go`, and `foreman.go` safe against harnesses without proven interactive messaging.
+2. Complete answer-event parity needed by Foreman flows.
+3. Add end-to-end validation with the real harness binaries.
 
-**Gate:** Questions from any harness route through Foreman → Human
+**Status:** Not complete. Depends on Phases 3 and 4.
 
-### Phase 6: Copilot CLI (Experimental) (Week 5-6)
+### Phase 6: Documentation and Packaging Follow-through (Partially Complete)
 
-1. **Create `internal/adapter/copilot/` package**
-2. **Implement PTY-based TUI automation**
-3. **Add configuration support** in TOML
-4. **Mark as experimental** in capabilities
-5. **Write basic integration tests**
-6. **Document limitations and risks**
+1. Record the current implementation status in this document.
+2. Keep oh-my-pi as the default documented path.
+3. Ensure Brew/tap output reflects Bun dependency for the default harness.
+4. Update installation and troubleshooting docs after interactive messaging lands for Claude/Codex.
 
-**Gate:** Basic session works, documented as experimental
-
-### Phase 7: Goose Integration (Week 6-7)
-
-1. **Create `internal/adapter/goose/` package**
-2. **Investigate headless CLI mode**
-3. **Implement adapter** based on findings
-4. **Add configuration support** in TOML
-5. **Write integration tests**
-6. **Document usage**
-
-**Gate:** Basic session works with Goose
-
-### Phase 8: Testing & Documentation (Week 7-8)
-
-1. **Comprehensive integration test suite**
-2. **Harness comparison documentation**
-3. **Migration guide** from oh-my-pi to other harnesses
-4. **Performance benchmarking** across harnesses
-5. **Cost comparison** documentation
-6. **Troubleshooting guide** per harness
-
-**Gate:** Full E2E test passes with each harness
+**Status:** Partially complete. Current-state documentation and Bun dependency updates are done; final docs depend on the blocked interactive work.
 
 ---
 
@@ -1287,11 +618,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### 7.1 Unit Tests
 
-Each adapter has unit tests for:
+Each adapter should have unit tests for:
 - Argument building
 - Event parsing
 - Error handling
 - Configuration validation
+- Fallback behavior when expected event shapes are absent
 
 ```go
 func TestClaudeCodeAdapter_BuildArgs(t *testing.T) {
@@ -1299,14 +631,13 @@ func TestClaudeCodeAdapter_BuildArgs(t *testing.T) {
         Model: "sonnet",
         PermissionMode: "auto",
     }}
-    
+
     opts := SessionOpts{
-        Mode: HarnessModeAgent,
         SubPlan: SubPlan{RawMarkdown: "test prompt"},
     }
-    
+
     args := adapter.buildArgs(opts)
-    
+
     assert.Contains(t, args, "-p")
     assert.Contains(t, args, "--output-format")
     assert.Contains(t, args, "stream-json")
@@ -1317,30 +648,25 @@ func TestClaudeCodeAdapter_BuildArgs(t *testing.T) {
 
 ### 7.2 Integration Tests
 
-Tagged tests that require real harness binaries:
+Tagged tests should cover real harness binaries:
 
 ```go
 //go:build integration
 
 func TestClaudeCodeSession_FullLifecycle(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test")
-    }
-    
     adapter := NewClaudeCodeAdapter(loadConfig(t))
-    
+
     opts := SessionOpts{
-        SessionID: ulid.Make().String(),
-        Mode:      HarnessModeAgent,
+        SessionID:   ulid.Make().String(),
         WorktreePath: t.TempDir(),
         SubPlan: SubPlan{
             RawMarkdown: "Create a file called hello.txt with content 'Hello, World!'",
         },
     }
-    
+
     session, err := adapter.StartSession(context.Background(), opts)
     require.NoError(t, err)
-    
+
     result, err := session.Wait(context.Background())
     require.NoError(t, err)
     assert.Equal(t, 0, result.ExitCode)
@@ -1350,18 +676,17 @@ func TestClaudeCodeSession_FullLifecycle(t *testing.T) {
 
 ### 7.3 E2E Tests
 
-Full Substrate workflow with each harness:
+Full Substrate workflow with each supported harness:
 
 ```go
 //go:build e2e
 
 func TestE2E_ClaudeCode_FullWorkflow(t *testing.T) {
-    // Test full workflow: ingest → plan → implement → review → complete
-    // Using Claude Code as the harness
+    // ingest → plan → implement → review → complete
 }
 
-func TestE2E_Aider_FullWorkflow(t *testing.T) {
-    // Same test with Aider
+func TestE2E_Codex_FullWorkflow(t *testing.T) {
+    // same workflow with Codex CLI
 }
 ```
 
@@ -1369,69 +694,70 @@ func TestE2E_Aider_FullWorkflow(t *testing.T) {
 
 ## 8. Harness Comparison Matrix
 
-| Feature | oh-my-pi | Claude Code | Codex CLI | Aider | Copilot CLI | Goose |
-|---------|----------|-------------|-----------|-------|-------------|-------|
-| **Non-interactive mode** | ✅ Native | ✅ `-p` flag | ✅ Full headless | ✅ `--message` | ⚠️ Limited | ✅ `--no-tui` |
-| **Streaming output** | ✅ JSON | ✅ `stream-json` | ⚠️ Text (TBD) | ⚠️ Text | ❌ TUI only | ✅ |
-| **Question escalation** | ✅ Custom tool | ⚠️ Via MCP | ❓ TBD | ⚠️ Pattern detect | ✅ Built-in | ❓ TBD |
-| **Tool restriction** | ✅ | ✅ `--tools` | ✅ Approval modes | ❌ | ⚠️ Agent-based | ❓ TBD |
-| **Session resume** | ✅ | ✅ `--resume` | ✅ | ✅ | ✅ `--resume` | ❓ TBD |
-| **Multi-provider** | ❌ Claude only | ❌ Claude only | ❌ OpenAI only | ✅ Many | ❌ GitHub only | ✅ Many |
-| **MCP support** | ❌ | ✅ Native | ❌ | ❌ | ✅ Native | ✅ Native |
-| **Open source** | ✅ | ❌ | ✅ Apache 2.0 | ✅ Apache 2.0 | ❌ | ✅ Apache 2.0 |
-| **Auto-commit** | ✅ Configurable | ✅ | ✅ | ✅ Native | ⚠️ Via git | ❓ TBD |
-| **Cost tracking** | ❌ | ✅ | ✅ | ⚠️ Via provider | ✅ Dashboard | ❓ TBD |
-| **Integration maturity** | Preferred | Target: Stable | Target: Stable | Target: Stable | Experimental | Target: Beta |
+| Feature | oh-my-pi | Claude Code | Codex CLI |
+|---------|----------|-------------|-----------|
+| **Default in repo today** | ✅ Yes | ❌ No | ❌ No |
+| **Non-interactive mode** | ✅ Via bridge | ✅ `-p` flag | ✅ Full headless |
+| **Streaming output** | ✅ Proven | ✅ Basic adapter support | ✅ Basic adapter support |
+| **Interactive `SendMessage` parity** | ✅ Implemented | ❌ Not yet verified | ❌ Not yet verified |
+| **Foreman/review correction compatibility** | ✅ Implemented | ⚠️ Incomplete | ⚠️ Incomplete |
+| **Tool restriction** | ✅ Bridge-controlled | ✅ CLI flag support | ⚠️ Approval/sandbox model only |
+| **Packaging readiness for default path** | ✅ With Bun installed | N/A | N/A |
+| **Current implementation state** | Production path | Adapter present, messaging blocked | Adapter present, messaging blocked |
+
+**Conclusion:** The repository is ready to continue from a solid OMP-default multi-harness base, but Claude Code and Codex should not be treated as fully equivalent harnesses until their interactive messaging behavior is implemented against the real binaries.
+
 ---
 
 ## 9. Risk Register
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| CLI output format changes | Medium | High | Pin versions, version detection, extensive parsing tests |
-| API rate limiting | High | Medium | Fallback harness, exponential backoff, budget limits |
-| Subscription requirements | High | Low | Clear documentation, open-source alternatives (Aider, Goose) |
-| Question detection unreliable | Medium | Medium | Multiple detection strategies, conservative escalation |
-| PTY automation fragile (Copilot) | High | Medium | Mark experimental, monitor for official API |
-| Harness binary not installed | Medium | Low | Pre-flight checks, helpful error messages |
-| Context overflow across harnesses | Medium | Medium | Standardize context format, compact on overflow |
-| Cost overrun with multiple harnesses | Medium | Medium | Per-harness budget limits, aggregate tracking |
-| Goose API instability | Medium | Medium | Mark as beta, monitor releases |
-| Crush direction unclear | Medium | Low | Monitor Charmbracelet announcements |
+| Claude/Codex interactive protocol differs from assumptions | High | High | Do not implement from guesswork; validate against installed binaries first |
+| Harness binary not installed | High | Medium | Keep oh-my-pi as default; fail early in harness construction; document prerequisites |
+| Bun missing on default install path | Medium | High | Make Homebrew formula depend on Bun; document Bun as required for default harness |
+| Review/planning correction loops assume `SendMessage` works | High | High | Keep OMP as default until Claude/Codex messaging parity is real and tested |
+| CLI output format changes | Medium | High | Pin versions, parser fixtures, compatibility tests |
+| Codex event fidelity weaker than Claude Code | Medium | Medium | Keep Codex adapter conservative until protocol is pinned |
 
 ---
 
 ## 10. Future Considerations
 
-### 10.1 MCP as Universal Tool Protocol
+### 10.1 MCP as a Harness Differentiator
 
-As MCP (Model Context Protocol) gains adoption, consider:
-- **MCP bridge:** Create a Substrate MCP server that exposes Substrate's capabilities
-- **Tool sharing:** Allow harnesses to use Substrate's tools via MCP
-- **Cross-harness tools:** Tools defined once, usable by any MCP-compliant harness
+Claude Code's MCP support makes it the better long-term target for shared tool integration. If Substrate later exposes capabilities via MCP, Claude Code can likely adopt them earlier and more naturally than Codex.
 
-### 10.2 Custom Tool Injection
+### 10.2 Shared Question/Answer Contract
 
-For harnesses without native custom tools:
-- **Prompt-based tools:** Define tool behavior in system prompt
-- **Output parsing:** Detect tool invocations in output, execute, return results
-- **File-based protocol:** Write tool requests to file, external executor handles
+If both adapters need explicit answer routing, promote that into the shared harness contract only after implementation proves the shape. Avoid baking oh-my-pi-specific assumptions into the new abstraction.
 
 ### 10.3 Harness Performance Metrics
 
 Track per-harness metrics:
-- **Success rate:** Percentage of sessions completing successfully
-- **Time to completion:** Average session duration
-- **Cost per task:** API costs for similar tasks
-- **Revision rate:** How often review finds issues
-- **Question rate:** How often human intervention needed
+- Success rate
+- Time to completion
+- Cost per task
+- Revision rate after review
+- Question rate
 
 ### 10.4 Automatic Harness Selection
 
-ML-based harness selection:
-- Track which harness performs best for which task types
-- Automatically select optimal harness based on task characteristics
-- A/B testing for harness comparison
+Do not implement this initially. Revisit only after collecting enough production data to justify task-based selection instead of explicit configuration.
+
+### 10.5 Resume Point for Future Work
+
+When this work resumes, start with these concrete tasks:
+1. Install and authenticate the real `claude` CLI in the development environment.
+2. Install and authenticate the real `codex` CLI in the development environment.
+3. Capture real transcript fixtures for:
+   - initial session start
+   - follow-up `SendMessage`/continuation
+   - completion after a follow-up message
+4. Update `internal/adapter/claudecode/` and `internal/adapter/codex/` to use those verified flows.
+5. Add integration tests that prove planning correction, review correction, and foreman interaction semantics.
+
+Until then, the correct operational position is: use oh-my-pi as the default harness.
 
 ---
 
@@ -1452,38 +778,31 @@ Claude Code JSON:
   name: "Edit"
   input: {...}
 Maps to:
-  SessionEvent.Type: EventToolUse
-  Payload: ToolUsePayload{Name: "Edit", Input: input}
+  SessionEvent.Type: EventProgress or adapter-private tool event
+  Payload: translated tool metadata
 
 Claude Code JSON:
   type: "result"
   content: "..."
-  cost_usd: 0.05
 Maps to:
   SessionEvent.Type: EventComplete
-  Payload: CompletePayload{Summary: content, CostUSD: 0.05}
+  Payload: CompletePayload{Summary: content}
 ```
 
-### 11.2 Aider Event Mapping
+### 11.2 Codex Event Mapping
 
 ```yaml
-Aider stdout:
-  "Added file.py with 50 lines"
+Codex CLI stdout:
+  "...progress line..."
 Maps to:
-  SessionEvent.Type: EventFileEdit
-  Payload: FileEditPayload{Path: "file.py", Operation: "create", LinesAdded: 50}
+  SessionEvent.Type: EventProgress
+  Payload: ProgressPayload{Text: line}
 
-Aider stdout:
-  "Commit abc123: Add feature"
+Codex CLI stdout/stderr or exit state:
+  completion summary + exit code
 Maps to:
-  SessionEvent.Type: EventCommit
-  Payload: CommitPayload{SHA: "abc123", Message: "Add feature"}
-
-Aider stdout:
-  "How would you like me to proceed?"
-Maps to:
-  SessionEvent.Type: EventQuestion
-  Payload: QuestionPayload{Content: "How would you like me to proceed?"}
+  SessionEvent.Type: EventComplete
+  Payload: CompletePayload{Summary: summary, ExitCode: code}
 ```
 
 ---
@@ -1492,10 +811,6 @@ Maps to:
 
 - **Claude Code CLI Reference:** https://code.claude.com/docs/en/cli-reference
 - **Claude Code MCP:** https://code.claude.com/docs/en/mcp
-- **Aider Documentation:** https://aider.chat/docs/
-- **Aider Scripting:** https://aider.chat/docs/scripting.html
-- **Copilot CLI:** https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli
-- **Goose:** https://github.com/block/goose
-- **OpenCode/Crush:** https://github.com/charmbracelet/crush
+- **Codex CLI:** https://github.com/openai/codex
 - **Substrate Adapters:** `04-adapters.md`
 - **Substrate Event System:** `03-event-system.md`

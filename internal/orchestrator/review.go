@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -491,47 +492,47 @@ func (p *ReviewPipeline) needsReimplementation(ctx context.Context, cycle domain
 // readSessionOutputFromLog reads the session output from the log file.
 // The log file is stored at ~/.substrate/sessions/<session-id>.log
 func (p *ReviewPipeline) readSessionOutputFromLog(ctx context.Context, sessionID string) (string, error) {
-	// Get global session directory
 	globalDir, err := config.GlobalDir()
 	if err != nil {
 		return "", fmt.Errorf("get global dir: %w", err)
 	}
 
 	logPath := filepath.Join(globalDir, "sessions", sessionID+".log")
-
-	// Check if file exists
 	if _, err := os.Stat(logPath); err != nil {
 		return "", fmt.Errorf("session log file not found: %w", err)
 	}
 
-	// Open and read the file
 	file, err := os.Open(logPath)
 	if err != nil {
 		return "", fmt.Errorf("open session log: %w", err)
 	}
 	defer file.Close()
 
-	// Read all content and extract text from progress events
 	var output strings.Builder
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
-		// Each line is: <timestamp> <json-event>
-		// We want to extract text from progress events
-		if strings.Contains(line, "\"type\":\"event\"") {
-			if strings.Contains(line, "\"type\":\"progress\"") {
-				// Extract text field from JSON
-				if idx := strings.Index(line, `"text":"`); idx != -1 {
-					start := idx + 8
-					end := strings.Index(line[start:], `"`)
-					if end != -1 {
-						text := line[start : start+end]
-						output.WriteString(text)
-						output.WriteString("\n")
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "{") {
+			var raw map[string]any
+			if err := json.Unmarshal([]byte(line), &raw); err == nil {
+				if eventType, _ := raw["type"].(string); eventType == "event" {
+					if event, ok := raw["event"].(map[string]any); ok {
+						if event["type"] == "progress" {
+							if text, ok := event["text"].(string); ok && text != "" {
+								output.WriteString(text)
+								output.WriteString("\n")
+							}
+						}
 					}
+					continue
 				}
 			}
 		}
+		output.WriteString(line)
+		output.WriteString("\n")
 	}
 
 	if err := scanner.Err(); err != nil {

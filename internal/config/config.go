@@ -45,6 +45,7 @@ type Config struct {
 	Commit   CommitConfig          `toml:"commit"`
 	Plan     PlanConfig            `toml:"plan"`
 	Review   ReviewConfig          `toml:"review"`
+	Harness  HarnessConfig         `toml:"harness"`
 	Adapters AdaptersConfig        `toml:"adapters"`
 	Foreman  ForemanConfig         `toml:"foreman"`
 	Repos    map[string]RepoConfig `toml:"repos"`
@@ -68,13 +69,36 @@ type ReviewConfig struct {
 	MaxCycles     *int          `toml:"max_cycles"`
 }
 
+type HarnessName string
+
+const (
+	HarnessOhMyPi     HarnessName = "ohmypi"
+	HarnessClaudeCode HarnessName = "claude-code"
+	HarnessCodex      HarnessName = "codex"
+)
+
+type HarnessConfig struct {
+	Default  HarnessName        `toml:"default"`
+	Phase    HarnessPhaseConfig `toml:"phase"`
+	Fallback []HarnessName      `toml:"fallback"`
+}
+
+type HarnessPhaseConfig struct {
+	Planning       HarnessName `toml:"planning"`
+	Implementation HarnessName `toml:"implementation"`
+	Review         HarnessName `toml:"review"`
+	Foreman        HarnessName `toml:"foreman"`
+}
+
 // AdaptersConfig contains per-adapter configuration.
 type AdaptersConfig struct {
-	OhMyPi OhMyPiConfig `toml:"ohmypi"`
-	Linear LinearConfig `toml:"linear"`
-	Glab   GlabConfig   `toml:"glab"`
-	GitLab GitlabConfig `toml:"gitlab"`
-	GitHub GithubConfig `toml:"github"`
+	OhMyPi     OhMyPiConfig     `toml:"ohmypi"`
+	ClaudeCode ClaudeCodeConfig `toml:"claude_code"`
+	Codex      CodexConfig      `toml:"codex"`
+	Linear     LinearConfig     `toml:"linear"`
+	Glab       GlabConfig       `toml:"glab"`
+	GitLab     GitlabConfig     `toml:"gitlab"`
+	GitHub     GithubConfig     `toml:"github"`
 }
 
 // LinearConfig configures the Linear GraphQL adapter.
@@ -122,6 +146,22 @@ type OhMyPiConfig struct {
 	BunPath       string `toml:"bun_path"`
 	BridgePath    string `toml:"bridge_path"`
 	ThinkingLevel string `toml:"thinking_level"`
+}
+
+type ClaudeCodeConfig struct {
+	BinaryPath     string  `toml:"binary_path"`
+	Model          string  `toml:"model"`
+	PermissionMode string  `toml:"permission_mode"`
+	MaxTurns       int     `toml:"max_turns"`
+	MaxBudgetUSD   float64 `toml:"max_budget_usd"`
+}
+
+type CodexConfig struct {
+	BinaryPath   string `toml:"binary_path"`
+	Model        string `toml:"model"`
+	ApprovalMode string `toml:"approval_mode"`
+	FullAuto     bool   `toml:"full_auto"`
+	Quiet        bool   `toml:"quiet"`
 }
 
 // ForemanConfig controls the foreman question-answering system.
@@ -235,11 +275,27 @@ func applyDefaults(cfg *Config) {
 	if cfg.Review.MaxCycles == nil {
 		cfg.Review.MaxCycles = ptr(3)
 	}
-	// Foreman defaults
+	if cfg.Harness.Default == "" {
+		cfg.Harness.Default = HarnessOhMyPi
+	}
+	if len(cfg.Harness.Fallback) == 0 {
+		cfg.Harness.Fallback = []HarnessName{HarnessClaudeCode, HarnessCodex}
+	}
+	if cfg.Harness.Phase.Planning == "" {
+		cfg.Harness.Phase.Planning = cfg.Harness.Default
+	}
+	if cfg.Harness.Phase.Implementation == "" {
+		cfg.Harness.Phase.Implementation = cfg.Harness.Default
+	}
+	if cfg.Harness.Phase.Review == "" {
+		cfg.Harness.Phase.Review = cfg.Harness.Default
+	}
+	if cfg.Harness.Phase.Foreman == "" {
+		cfg.Harness.Phase.Foreman = cfg.Harness.Default
+	}
 	if cfg.Foreman.QuestionTimeout == "" {
 		cfg.Foreman.QuestionTimeout = "0"
 	}
-	// Linear defaults
 	if cfg.Adapters.Linear.PollInterval == "" {
 		cfg.Adapters.Linear.PollInterval = "30s"
 	}
@@ -288,6 +344,30 @@ func validate(cfg *Config) error {
 	if cfg.Foreman.QuestionTimeout != "" {
 		if _, err := time.ParseDuration(cfg.Foreman.QuestionTimeout); err != nil {
 			return fmt.Errorf("invalid foreman.question_timeout: %w", err)
+		}
+	}
+
+	validHarnesses := map[HarnessName]bool{
+		HarnessOhMyPi:     true,
+		HarnessClaudeCode: true,
+		HarnessCodex:      true,
+	}
+	if !validHarnesses[cfg.Harness.Default] {
+		return fmt.Errorf("invalid harness.default: %q", cfg.Harness.Default)
+	}
+	for _, candidate := range append([]HarnessName{}, cfg.Harness.Fallback...) {
+		if !validHarnesses[candidate] {
+			return fmt.Errorf("invalid harness.fallback entry: %q", candidate)
+		}
+	}
+	for field, value := range map[string]HarnessName{
+		"planning":       cfg.Harness.Phase.Planning,
+		"implementation": cfg.Harness.Phase.Implementation,
+		"review":         cfg.Harness.Phase.Review,
+		"foreman":        cfg.Harness.Phase.Foreman,
+	} {
+		if !validHarnesses[value] {
+			return fmt.Errorf("invalid harness.phase.%s: %q", field, value)
 		}
 	}
 

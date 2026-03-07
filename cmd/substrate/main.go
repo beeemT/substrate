@@ -13,7 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/beeemT/substrate/internal/adapter"
-	omp "github.com/beeemT/substrate/internal/adapter/ohmypi"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -198,28 +197,31 @@ func run() error {
 	// Build orchestration services.
 	// planningSvc may be nil if template compilation fails (extremely unlikely).
 	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
-	harness := omp.NewHarness(cfg.Adapters.OhMyPi, workspaceDir)
+	harnesses, err := app.BuildAgentHarnesses(cfg, workspaceDir)
+	if err != nil {
+		return fmt.Errorf("building agent harnesses: %w", err)
+	}
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
 	planningSvc, err := orchestrator.NewPlanningService(
-		planningCfg, discoverer, gitClient, harness,
+		planningCfg, discoverer, gitClient, harnesses.Planning,
 		planSvc, workItemSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, cfg,
 	)
 	if err != nil {
 		slog.Warn("failed to build planning service; planning unavailable", "err", err)
 	}
 	implSvc := orchestrator.NewImplementationService(
-		cfg, harness, gitClient, bus,
+		cfg, harnesses.Implementation, gitClient, bus,
 		planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc,
 	)
 	reviewPipeline := orchestrator.NewReviewPipeline(
-		cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc,
+		cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
 		sessionRepo, planRepo, bus,
 	)
 	resumption := orchestrator.NewResumption(
-		harness, sessionSvc, planSvc, sessionRepo, bus,
+		harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus,
 	)
 	foreman := orchestrator.NewForeman(
-		cfg, harness, planSvc, questionSvc, sessionSvc, planRepo, bus,
+		cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, planRepo, bus,
 	)
 
 	svcs := views.Services{
@@ -252,47 +254,54 @@ func run() error {
 // initializeGlobalConfig creates the default config file.
 func initializeGlobalConfig(cfgPath string) error {
 	defaultConfig := `# Substrate Configuration
-# This file was auto-generated with default values.
-# All settings have sensible defaults - customize as needed.
+	# This file was auto-generated with default values.
+	# All settings have sensible defaults - customize as needed.
 
-# Commit behavior for agent sessions
-[commit]
-# strategy: granular (every change), semi-regular (logical chunks), single (one commit)
-# strategy = "semi-regular"
-
-# message_format: ai-generated, conventional, custom
-# message_format = "ai-generated"
-
-# message_template: required when message_format = "custom"
-# message_template = "feat({{.Scope}}): {{.Description}}"
-
-# Planning pipeline settings
-[plan]
-# max_parse_retries: number of correction attempts when plan parsing fails
-# max_parse_retries = 2
-
-# Review pipeline settings
-[review]
-# pass_threshold: nit_only, minor_ok, no_critiques
-# pass_threshold = "minor_ok"
-
-# max_cycles: maximum review->re-implement iterations before escalation
-# max_cycles = 3
-
-# Foreman (question-answering) settings
-[foreman]
-# enabled: whether to use foreman for agent questions
-# enabled = true
-
-# question_timeout: duration string (e.g., "5m") or "0" for unlimited
-# question_timeout = "0"
-
-# Oh-my-pi adapter settings
-[adapters.ohmypi]
-# bun_path: path to bun executable (defaults to "bun" in PATH)
-# bridge_path: path to omp-bridge.ts (defaults to bundled bridge)
-# thinking_level: thinking level for all sessions
-`
+	[commit]
+	# strategy = "semi-regular"
+	# message_format = "ai-generated"
+	# message_template = "feat({{.Scope}}): {{.Description}}"
+	
+	[plan]
+	# max_parse_retries = 2
+	
+	[review]
+	# pass_threshold = "minor_ok"
+	# max_cycles = 3
+	
+	[harness]
+	# default = "ohmypi"
+	# fallback = ["claude-code", "codex"]
+	
+	[harness.phase]
+	# planning = "ohmypi"
+	# implementation = "ohmypi"
+	# review = "ohmypi"
+	# foreman = "ohmypi"
+	
+	[foreman]
+	# enabled = true
+	# question_timeout = "0"
+	
+	[adapters.claude_code]
+	# binary_path = "claude"
+	# model = "sonnet"
+	# permission_mode = "auto"
+	# max_turns = 50
+	# max_budget_usd = 10.0
+	
+	[adapters.codex]
+	# binary_path = "codex"
+	# model = "o4"
+	# approval_mode = "full-auto"
+	# full_auto = false
+	# quiet = false
+	
+	[adapters.ohmypi]
+	# bun_path = "bun"
+	# bridge_path = "bridge/omp-bridge.ts"
+	# thinking_level = "high"
+	`
 
 	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o644); err != nil {
 		return fmt.Errorf("writing default config: %w", err)

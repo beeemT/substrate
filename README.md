@@ -68,7 +68,7 @@ Install from the beeemT tap:
 
 ```bash
 brew tap beeemT/tap
-brew install substrate
+brew install substrate bun
 ```
 
 To upgrade:
@@ -106,7 +106,7 @@ go build -o substrate ./cmd/substrate
 Runtime dependencies:
 
 - **git-work** — [Git worktree manager](https://github.com/beeemT/git-work)
-- **Bun** — For the agent harness bridge (oh-my-pi)
+- **Bun** — Required for the default oh-my-pi harness bridge; install it alongside Substrate if your tap formula has not already provisioned it
 - **glab** — GitLab CLI (optional, for MR creation)
 ---
 
