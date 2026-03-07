@@ -78,7 +78,7 @@ Fixed ~26 characters wide. Lists all work item sessions, grouped by status (acti
 **Keys:**
 - `↑`/`↓` or `j`/`k` — navigate sessions
 - `n` — open New Session overlay
-- `c` — open Configuration overlay
+- `c` — open Settings page
 - `q` — quit
 
 ```go
@@ -393,15 +393,19 @@ type NewSessionOverlay struct {
 
 **Keys (Manual)**: `Tab`/`S-Tab` cycle fields, `Enter` on last field starts, `Esc` cancel.
 
-### 4b. Configuration Overlay
+### 4b. Settings Page
 
-Accessed via `c` from anywhere. Renders as a modal over the current layout (or takes over the content panel on narrow terminals).
+Accessed via `c` from anywhere. Renders as a full-screen settings page rather than the legacy configuration modal.
 
-Settings editor for adapter configs, workspace root, and `substrate.toml` defaults.
+Settings are organized into sections for commit/planning/review/foreman behavior, harness routing, harness configuration, provider configuration, and repo overrides.
 
-**Model**: `[]ConfigSection` with `[]ConfigField` (key, value, kind: string/path/bool/enum). Supports inline editing for simple values. Complex TOML blocks launch `$EDITOR` via `tea.ExecProcess`.
+Provider secrets owned by Substrate are stored in the OS keychain. The config file stores stable secret references such as `api_key_ref` / `token_ref`, while runtime hydration loads the actual secret values before adapters are built. GitHub still supports `gh auth token` fallback when no keychain-backed token is configured.
 
-**Keys**: `j`/`k` navigate, `Enter` edit inline, `e` open in `$EDITOR`, `s` save, `Esc` close (prompt if dirty).
+Harness-owned credentials are handled by the relevant harness via structured harness actions rather than being persisted directly by the TUI.
+
+**Model**: typed settings sections/fields with secret-aware rendering, inline editing, provider status, save/apply actions, connection tests, and harness-driven login actions.
+
+**Keys**: `j`/`k` navigate fields, `h`/`l` switch sections, `Enter` edit, `Space` toggle booleans, `r` reveal/hide secrets, `s` save, `a` apply, `t` test provider connection, `g` run provider login through the relevant harness, `Esc` close.
 
 
 ### 4c. First-Start Initialization Modal
@@ -564,7 +568,7 @@ Vim-style primary, arrow keys as aliases.
 
 ### Global Keybinds (handled before delegation)
 
-`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` new session overlay, `c` configuration overlay, `Ctrl+c` force quit.
+`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` new session overlay, `c` settings page, `Ctrl+c` force quit.
 
 ### Input Modes
 

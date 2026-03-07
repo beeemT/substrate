@@ -23,7 +23,7 @@ type overlayKind int
 const (
 	overlayNone overlayKind = iota
 	overlayNewSession
-	overlayConfig
+	overlaySettings
 	overlayWorkspaceInit
 	overlayHelp
 )
@@ -41,7 +41,7 @@ type App struct {
 	// Overlays
 	activeOverlay  overlayKind
 	newSession     NewSessionOverlay
-	configOverlay  ConfigOverlay
+	settingsPage   SettingsPage
 	workspaceModal WorkspaceInitModal
 	helpOverlay    HelpOverlay
 	hasWorkspace   bool
@@ -98,7 +98,7 @@ func NewApp(svcs Services) App {
 		header:            NewHeaderModel(svcs.WorkspaceName, st),
 		statusBar:         NewStatusBarModel(st),
 		newSession:        NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
-		configOverlay:     NewConfigOverlay(svcs.Cfg, st),
+		settingsPage:      NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:       NewHelpOverlay(st),
 		subPlans:          make(map[string][]domain.SubPlan),
 		plans:             make(map[string]*domain.Plan),
@@ -162,7 +162,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.content.SetSize(contentWidth, bodyHeight)
 		a.workspaceModal.SetSize(msg.Width, msg.Height)
 		a.newSession.SetSize(msg.Width, msg.Height)
-		a.configOverlay.SetSize(msg.Width, msg.Height)
+		a.settingsPage.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
@@ -192,7 +192,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CloseOverlayMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
-		a.configOverlay.Close()
+		a.settingsPage.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -291,13 +291,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		return a, nil
 
-	case ConfirmCloseConfigMsg:
-		a.showConfirm("Discard Changes",
-			"You have unsaved configuration changes. Discard them?",
-			func() tea.Msg { return CloseOverlayMsg{} },
-		)
-		return a, nil
-
 	case StartPlanMsg:
 		if a.svcs.Planning != nil {
 			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItemID))
@@ -392,12 +385,37 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, createLinearSessionCmd(a.svcs, msg))
 		return a, tea.Batch(cmds...)
 
-	case ConfigSaveMsg:
-		if a.activeOverlay == overlayConfig {
-			a.configOverlay, cmd = a.configOverlay.Update(msg)
+	case SettingsSavedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.activeOverlay == overlaySettings {
+			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 			cmds = append(cmds, cmd)
 		}
-		a.toasts.AddToast("Configuration saved", components.ToastSuccess)
+		return a, tea.Batch(cmds...)
+	case SettingsAppliedMsg:
+		a.svcs = msg.Reload.Services
+		a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
+		a.settingsPage.SetSnapshot(msg.Reload.SettingsData)
+		a.sessionsDir = msg.Reload.SessionsDir
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.activeOverlay == overlaySettings {
+			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			cmds = append(cmds, cmd)
+		}
+		return a, tea.Batch(cmds...)
+	case SettingsProviderTestedMsg:
+		if a.activeOverlay == overlaySettings {
+			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			cmds = append(cmds, cmd)
+		}
+		a.toasts.AddToast(msg.Provider+" connection verified", components.ToastSuccess)
+		return a, tea.Batch(cmds...)
+	case SettingsSectionPatchedMsg:
+		if a.activeOverlay == overlaySettings {
+			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			cmds = append(cmds, cmd)
+		}
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, tea.Batch(cmds...)
 
 	case ForemanReplyMsg:
@@ -454,8 +472,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayNewSession {
 		a.newSession, cmd = a.newSession.Update(msg)
 		cmds = append(cmds, cmd)
-	} else if a.activeOverlay == overlayConfig {
-		a.configOverlay, cmd = a.configOverlay.Update(msg)
+	} else if a.activeOverlay == overlaySettings {
+		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 		cmds = append(cmds, cmd)
 	} else {
 		a.content, cmd = a.content.Update(msg)
@@ -501,8 +519,8 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.newSession, cmd = a.newSession.Update(msg)
 		return a, cmd
 	}
-	if a.activeOverlay == overlayConfig {
-		a.configOverlay, cmd = a.configOverlay.Update(msg)
+	if a.activeOverlay == overlaySettings {
+		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 		return a, cmd
 	}
 	// Help overlay: any key press dismisses it.
@@ -522,14 +540,14 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.newSession.Open()
 		return a, nil
 	case "c":
-		a.activeOverlay = overlayConfig
-		a.configOverlay.Open()
+		a.activeOverlay = overlaySettings
+		a.settingsPage.Open()
 		return a, nil
 	case "esc":
 		if a.activeOverlay != overlayNone {
 			a.activeOverlay = overlayNone
 			a.newSession.Close()
-			a.configOverlay.Close()
+			a.settingsPage.Close()
 			return a, nil
 		}
 	case "up", "k":
@@ -861,8 +879,8 @@ func (a App) View() string {
 	if a.activeOverlay == overlayNewSession {
 		return renderOverlay(a.newSession.View(), a.windowWidth, a.windowHeight)
 	}
-	if a.activeOverlay == overlayConfig {
-		return renderOverlay(a.configOverlay.View(), a.windowWidth, a.windowHeight)
+	if a.activeOverlay == overlaySettings {
+		return a.settingsPage.View()
 	}
 	if a.activeOverlay == overlayHelp {
 		return renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)

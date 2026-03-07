@@ -128,3 +128,21 @@ type HarnessCapabilities struct {
 	SupportsMessaging bool     // Supports SendMessage for iteration
 	SupportedTools    []string // List of supported tool names
 }
+
+// HarnessActionRequest describes a short-lived control-plane action executed by a harness.
+type HarnessActionRequest struct {
+	Action      string            // e.g. "login_provider", "check_auth"
+	Provider    string            // github, gitlab, linear, etc.
+	HarnessName string            // selected harness name
+	Inputs      map[string]string // optional scoped inputs / env-like values
+}
+
+// HarnessActionResult is the structured result of a harness-side action.
+type HarnessActionResult struct {
+	Success      bool
+	Message      string
+	Identity     string
+	Credentials  map[string]string // redacted only in UI; caller decides persistence
+	Metadata     map[string]string
+	NeedsConfirm bool
+}

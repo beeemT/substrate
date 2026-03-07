@@ -135,9 +135,6 @@ type NewSessionManualMsg struct {
 	Desc    string
 }
 
-// ConfigSaveMsg fires when user saves config changes.
-type ConfigSaveMsg struct{ NewContent string }
-
 // --- Error / status ---
 
 // ErrMsg wraps an error for display in the TUI.
@@ -151,8 +148,8 @@ type ActionDoneMsg struct{ Message string }
 // ShowNewSessionMsg opens the New Session overlay.
 type ShowNewSessionMsg struct{}
 
-// ShowConfigMsg opens the Configuration overlay.
-type ShowConfigMsg struct{}
+// ShowSettingsMsg opens the Settings page.
+type ShowSettingsMsg struct{}
 
 // CloseOverlayMsg closes the active overlay.
 type CloseOverlayMsg struct{}
@@ -189,9 +186,6 @@ type LiveInstancesLoadedMsg struct {
 	// AliveIDs is the set of instance IDs whose heartbeat is within the staleness threshold.
 	AliveIDs map[string]bool
 }
-
-// ConfirmCloseConfigMsg requests a confirmation dialog before discarding unsaved config changes.
-type ConfirmCloseConfigMsg struct{}
 
 // ImplementationCompleteMsg is sent when RunImplementationCmd finishes successfully.
 // SessionIDs holds the IDs of completed implementation sessions that need review.

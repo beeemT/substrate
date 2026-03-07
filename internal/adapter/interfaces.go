@@ -67,6 +67,11 @@ type AgentHarness interface {
 	StartSession(ctx context.Context, opts SessionOpts) (AgentSession, error)
 }
 
+// HarnessActionRunner executes structured harness control-plane actions such as login or auth checks.
+type HarnessActionRunner interface {
+	RunAction(ctx context.Context, req HarnessActionRequest) (HarnessActionResult, error)
+}
+
 // AgentSession represents a running agent interaction.
 type AgentSession interface {
 	// ID returns the unique identifier for this session.

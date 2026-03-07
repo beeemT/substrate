@@ -103,7 +103,8 @@ type AdaptersConfig struct {
 
 // LinearConfig configures the Linear GraphQL adapter.
 type LinearConfig struct {
-	APIKey         string            `toml:"api_key"`
+	APIKeyRef      string            `toml:"api_key_ref"`
+	APIKey         string            `toml:"-"`
 	TeamID         string            `toml:"team_id"`
 	AssigneeFilter string            `toml:"assignee_filter"` // "me" or explicit user ID
 	PollInterval   string            `toml:"poll_interval"`   // e.g. "30s"; default "30s"
@@ -111,7 +112,8 @@ type LinearConfig struct {
 }
 
 type GitlabConfig struct {
-	Token         string            `toml:"token"`         // required for GitLab REST API
+	TokenRef      string            `toml:"token_ref"` // keychain reference for GitLab REST API
+	Token         string            `toml:"-"`
 	BaseURL       string            `toml:"base_url"`      // default: https://gitlab.com
 	ProjectID     int64             `toml:"project_id"`    // numeric GitLab project ID
 	Assignee      string            `toml:"assignee"`      // username filter for Watch
@@ -121,7 +123,8 @@ type GitlabConfig struct {
 }
 
 type GithubConfig struct {
-	Token         string            `toml:"token"`         // optional; falls back to gh auth token
+	TokenRef      string            `toml:"token_ref"` // optional keychain reference; gh auth token remains fallback
+	Token         string            `toml:"-"`
 	Owner         string            `toml:"owner"`         // required
 	Repo          string            `toml:"repo"`          // required
 	Assignee      string            `toml:"assignee"`      // username filter for Watch; "me" resolves via /user

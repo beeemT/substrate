@@ -56,7 +56,7 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 func DefaultHints() []KeybindHint {
 	return []KeybindHint{
 		{Key: "n", Label: "New session"},
-		{Key: "c", Label: "Config"},
+		{Key: "c", Label: "Settings"},
 		{Key: "?", Label: "Help"},
 		{Key: "q", Label: "Quit"},
 	}

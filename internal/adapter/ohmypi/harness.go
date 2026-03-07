@@ -201,3 +201,32 @@ func escapeSandboxPath(path string) string {
 	path = strings.ReplaceAll(path, "\"", "\\\"")
 	return path
 }
+
+func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessActionRequest) (adapter.HarnessActionResult, error) {
+	switch req.Action {
+	case "check_auth":
+		bunPath := h.cfg.BunPath
+		if bunPath == "" {
+			bunPath = "bun"
+		}
+		if _, err := exec.LookPath(bunPath); err != nil {
+			return adapter.HarnessActionResult{}, err
+		}
+		return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bunPath}, nil
+	case "login_provider":
+		if req.Provider != "github" {
+			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)
+		}
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token").CombinedOutput()
+		if err != nil {
+			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		token := strings.TrimSpace(string(out))
+		if token == "" {
+			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+		}
+		return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
+	default:
+		return adapter.HarnessActionResult{}, fmt.Errorf("unsupported ohmypi action %q", req.Action)
+	}
+}

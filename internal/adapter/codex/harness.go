@@ -105,6 +105,35 @@ func (h *Harness) buildArgs(opts adapter.SessionOpts) []string {
 	return args
 }
 
+func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionRequest) (adapter.HarnessActionResult, error) {
+	switch req.Action {
+	case "check_auth":
+		binary := h.cfg.BinaryPath
+		if binary == "" {
+			binary = "codex"
+		}
+		if _, err := exec.LookPath(binary); err != nil {
+			return adapter.HarnessActionResult{}, err
+		}
+		return adapter.HarnessActionResult{Success: true, Message: "codex binary available", Identity: binary}, nil
+	case "login_provider":
+		if req.Provider != "github" {
+			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)
+		}
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token").CombinedOutput()
+		if err != nil {
+			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		token := strings.TrimSpace(string(out))
+		if token == "" {
+			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+		}
+		return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
+	default:
+		return adapter.HarnessActionResult{}, fmt.Errorf("unsupported codex action %q", req.Action)
+	}
+}
+
 type session struct {
 	id        string
 	cmd       *exec.Cmd

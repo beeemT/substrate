@@ -118,9 +118,12 @@ func run() error {
 	instanceSvc := service.NewInstanceService(instanceRepo)
 	reviewSvc := service.NewReviewService(reviews)
 
+	settingsSvc := views.NewSettingsService(
+		workItemRepo, planRepo, subPlanRepo, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, config.OSKeychainStore{},
+	)
+
 	// Build event bus.
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
-
 	// Detect workspace from cwd.
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -156,6 +159,10 @@ func run() error {
 		} else {
 			instanceID = inst.ID
 		}
+	}
+
+	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
+		return fmt.Errorf("load config secrets: %w", err)
 	}
 
 	// Build adapters.
@@ -223,6 +230,10 @@ func run() error {
 	foreman := orchestrator.NewForeman(
 		cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, planRepo, bus,
 	)
+	settingsData, err := settingsSvc.Snapshot(cfg)
+	if err != nil {
+		return fmt.Errorf("load settings snapshot: %w", err)
+	}
 
 	svcs := views.Services{
 		WorkItem:       workItemSvc,
@@ -235,6 +246,9 @@ func run() error {
 		Review:         reviewSvc,
 		Cfg:            cfg,
 		Adapters:       adapters,
+		Harnesses:      harnesses,
+		Settings:       settingsSvc,
+		SettingsData:   settingsData,
 		GitClient:      gitClient,
 		Bus:            bus,
 		InstanceID:     instanceID,

@@ -376,7 +376,7 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 | 12b | Content panel modes: Plan review (approve/request changes/edit in `$EDITOR`/reject) | Approve triggers `PlanApproved` event |
 | 12c | Implementing mode (repo status row, output stream per repo, Tab cycling), Question sub-mode (Foreman proposed answer, human iteration) | Events render real-time, question escalation works |
 | 12d | Reviewing mode (diff summaries, critiques with severity, per-repo tabs) + toast notifications | Critiques render, toast on escalation |
-| 12e | Configuration overlay (view/edit TOML, validate on save, `$EDITOR` for complex blocks) | Changes persist without restart |
+| 12e | Settings page (full-screen sectioned editor, keychain-backed app secrets, harness-driven provider login, save/apply/test flows) | Changes persist via keychain/config refs and apply without restart |
 | 12f | Workspace init modal (repo discovery, plain clone warnings, workspace registration) | Modal displays on fresh install in non-workspace directory, workspace registers in DB |
 
 **[NEW] Persistent two-pane layout:** Fixed-width (~26 char) session sidebar on left, dynamic content panel on right. No navigation stack — content panel re-renders in place based on selected session state.

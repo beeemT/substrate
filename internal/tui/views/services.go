@@ -2,6 +2,7 @@ package views
 
 import (
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
@@ -28,6 +29,9 @@ type Services struct {
 	Foreman        *orchestrator.Foreman
 	Cfg            *config.Config
 	Adapters       []adapter.WorkItemAdapter
+	Harnesses      app.AgentHarnesses
+	Settings       *SettingsService
+	SettingsData   SettingsSnapshot
 	GitClient      *gitwork.Client
 	Bus            *event.Bus
 	// Instance identity
@@ -35,4 +39,11 @@ type Services struct {
 	WorkspaceID   string
 	WorkspaceDir  string
 	WorkspaceName string
+}
+
+func (s Services) ForemanHarness() adapter.AgentHarness {
+	if s.Harnesses.Foreman != nil {
+		return s.Harnesses.Foreman
+	}
+	return nil
 }
