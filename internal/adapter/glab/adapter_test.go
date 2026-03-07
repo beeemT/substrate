@@ -134,6 +134,7 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 		Branch:        "sub-LIN-FOO-1-fix-bug",
 		WorktreePath:  "/tmp/wt",
 		WorkItemTitle: "Fix the bug",
+		SubPlan:       "Implement repo-specific steps",
 	})
 
 	err := a.OnEvent(context.Background(), domain.SystemEvent{
@@ -156,7 +157,7 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 	}
 	// Verify flags on mr create call
 	joined := strings.Join(call.args, " ")
-	for _, want := range []string{"mr create", "--draft", "--source-branch sub-LIN-FOO-1-fix-bug", "--title Fix the bug"} {
+	for _, want := range []string{"mr create", "--draft", "--source-branch sub-LIN-FOO-1-fix-bug", "--title Fix the bug", "--description Implement repo-specific steps"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}

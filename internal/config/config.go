@@ -73,6 +73,8 @@ type AdaptersConfig struct {
 	OhMyPi OhMyPiConfig `toml:"ohmypi"`
 	Linear LinearConfig `toml:"linear"`
 	Glab   GlabConfig   `toml:"glab"`
+	GitLab GitlabConfig `toml:"gitlab"`
+	GitHub GithubConfig `toml:"github"`
 }
 
 // LinearConfig configures the Linear GraphQL adapter.
@@ -82,6 +84,28 @@ type LinearConfig struct {
 	AssigneeFilter string            `toml:"assignee_filter"` // "me" or explicit user ID
 	PollInterval   string            `toml:"poll_interval"`   // e.g. "30s"; default "30s"
 	StateMappings  map[string]string `toml:"state_mappings"`  // TrackerState -> Linear workflow state UUID
+}
+
+type GitlabConfig struct {
+	Token         string            `toml:"token"`         // required for GitLab REST API
+	BaseURL       string            `toml:"base_url"`      // default: https://gitlab.com
+	ProjectID     int64             `toml:"project_id"`    // numeric GitLab project ID
+	Assignee      string            `toml:"assignee"`      // username filter for Watch
+	PollInterval  string            `toml:"poll_interval"` // default: 60s
+	StateMappings map[string]string `toml:"state_mappings"`
+	// No GroupID — discovered at startup via GET /projects/{id} → namespace.id
+}
+
+type GithubConfig struct {
+	Token         string            `toml:"token"`         // optional; falls back to gh auth token
+	Owner         string            `toml:"owner"`         // required
+	Repo          string            `toml:"repo"`          // required
+	Assignee      string            `toml:"assignee"`      // username filter for Watch; "me" resolves via /user
+	PollInterval  string            `toml:"poll_interval"` // default: 60s
+	Reviewers     []string          `toml:"reviewers"`
+	Labels        []string          `toml:"labels"`
+	StateMappings map[string]string `toml:"state_mappings"`
+	// No DefaultBranch — detected at startup via GET /repos/{owner}/{repo}
 }
 
 // GlabConfig configures the glab CLI adapter.
@@ -218,6 +242,15 @@ func applyDefaults(cfg *Config) {
 	// Linear defaults
 	if cfg.Adapters.Linear.PollInterval == "" {
 		cfg.Adapters.Linear.PollInterval = "30s"
+	}
+	if cfg.Adapters.GitLab.BaseURL == "" {
+		cfg.Adapters.GitLab.BaseURL = "https://gitlab.com"
+	}
+	if cfg.Adapters.GitLab.PollInterval == "" {
+		cfg.Adapters.GitLab.PollInterval = "60s"
+	}
+	if cfg.Adapters.GitHub.PollInterval == "" {
+		cfg.Adapters.GitHub.PollInterval = "60s"
 	}
 }
 

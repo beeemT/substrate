@@ -437,7 +437,7 @@ func (s *ImplementationService) executeSubPlan(
 func (s *ImplementationService) ensureWorktree(
 	ctx context.Context,
 	workspace *domain.Workspace,
-	repoName, repoPath, branch, workItemTitle string,
+	repoName, repoPath, branch, workItemTitle, subPlan string,
 ) (string, error) {
 	// Check if worktree already exists (idempotency guard)
 	worktrees, err := s.gitClient.List(ctx, repoPath)
@@ -461,6 +461,7 @@ func (s *ImplementationService) ensureWorktree(
 		Repository:    repoName,
 		Branch:        branch,
 		WorkItemTitle: workItemTitle,
+		SubPlan:       subPlan,
 	}
 	creatingEvent := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -486,6 +487,7 @@ func (s *ImplementationService) ensureWorktree(
 		Branch:        branch,
 		WorktreePath:  worktreePath,
 		WorkItemTitle: workItemTitle,
+		SubPlan:       subPlan,
 	}
 	createdEvent := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -524,7 +526,7 @@ func (s *ImplementationService) prepareWorktrees(
 		if !ok {
 			return nil, fmt.Errorf("repository %s not found in workspace", sp.RepositoryName)
 		}
-		wt, err := s.ensureWorktree(ctx, workspace, sp.RepositoryName, repoPath, branch, workItemTitle)
+		wt, err := s.ensureWorktree(ctx, workspace, sp.RepositoryName, repoPath, branch, workItemTitle, sp.Content)
 		if err != nil {
 			return nil, fmt.Errorf("prepare worktree for %s: %w", sp.RepositoryName, err)
 		}
@@ -671,6 +673,7 @@ type WorktreeCreatingPayload struct {
 	Repository    string `json:"repository"`
 	Branch        string `json:"branch"`
 	WorkItemTitle string `json:"work_item_title"`
+	SubPlan       string `json:"sub_plan"`
 }
 
 type WorktreeCreatedPayload struct {
@@ -679,6 +682,7 @@ type WorktreeCreatedPayload struct {
 	Branch        string `json:"branch"`
 	WorktreePath  string `json:"worktree_path"`
 	WorkItemTitle string `json:"work_item_title"`
+	SubPlan       string `json:"sub_plan"`
 }
 
 func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.WorkItem, workspaceID string) error {

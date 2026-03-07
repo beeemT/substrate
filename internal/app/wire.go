@@ -2,10 +2,16 @@
 package app
 
 import (
+	"context"
+	"log/slog"
+
 	"github.com/beeemT/substrate/internal/adapter"
+	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
+	gitlabadapter "github.com/beeemT/substrate/internal/adapter/gitlab"
 	gladapter "github.com/beeemT/substrate/internal/adapter/glab"
 	linearadapter "github.com/beeemT/substrate/internal/adapter/linear"
 	manualadapter "github.com/beeemT/substrate/internal/adapter/manual"
+	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/repository"
 )
@@ -30,14 +36,47 @@ func BuildWorkItemAdapters(
 	if cfg.Adapters.Linear.APIKey != "" {
 		adapters = append(adapters, linearadapter.New(cfg.Adapters.Linear))
 	}
+	if cfg.Adapters.GitLab.ProjectID != 0 && cfg.Adapters.GitLab.Token != "" {
+		gitlabAdapter, err := gitlabadapter.New(context.Background(), cfg.Adapters.GitLab)
+		if err != nil {
+			slog.Warn("skipping gitlab work item adapter", "err", err)
+		} else {
+			adapters = append(adapters, gitlabAdapter)
+		}
+	}
 
 	return adapters
 }
 
-// BuildRepoLifecycleAdapters constructs all RepoLifecycleAdapters.
-// The glab adapter is always included regardless of configuration.
-func BuildRepoLifecycleAdapters(cfg *config.Config) []adapter.RepoLifecycleAdapter {
-	return []adapter.RepoLifecycleAdapter{
-		gladapter.New(cfg.Adapters.Glab),
+// BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
+func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspaceDir string) []adapter.RepoLifecycleAdapter {
+	if workspaceDir == "" {
+		slog.Warn("skipping repo lifecycle adapters: workspace directory is empty")
+		return nil
+	}
+
+	platform, err := remotedetect.DetectPlatform(ctx, workspaceDir)
+	if err != nil {
+		slog.Warn("failed to detect remote platform; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
+		return nil
+	}
+
+	switch platform {
+	case remotedetect.PlatformGitLab:
+		return []adapter.RepoLifecycleAdapter{gladapter.New(cfg.Adapters.Glab)}
+	case remotedetect.PlatformGitHub:
+		if cfg.Adapters.GitHub.Owner == "" || cfg.Adapters.GitHub.Repo == "" {
+			slog.Warn("skipping github lifecycle adapter: owner/repo not configured")
+			return nil
+		}
+		githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
+		if err != nil {
+			slog.Warn("skipping github lifecycle adapter", "err", err)
+			return nil
+		}
+		return []adapter.RepoLifecycleAdapter{githubAdapter}
+	default:
+		slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
+		return nil
 	}
 }

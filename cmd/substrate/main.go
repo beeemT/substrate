@@ -164,6 +164,33 @@ func run() error {
 	if workspaceID != "" {
 		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemRepo)
 	}
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir)
+	for _, workItemAdapter := range adapters {
+		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+		if subErr != nil {
+			return fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
+		}
+		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
+			for evt := range events {
+				if err := a.OnEvent(context.Background(), evt); err != nil {
+					slog.Warn("work item adapter event handler failed", "adapter", a.Name(), "event", evt.EventType, "err", err)
+				}
+			}
+		}(workItemAdapter, sub.C)
+	}
+	for _, lifecycleAdapter := range repoLifecycleAdapters {
+		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorkItemCompleted))
+		if subErr != nil {
+			return fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
+		}
+		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
+			for evt := range events {
+				if err := a.OnEvent(context.Background(), evt); err != nil {
+					slog.Warn("repo lifecycle adapter event handler failed", "adapter", a.Name(), "event", evt.EventType, "err", err)
+				}
+			}
+		}(lifecycleAdapter, sub.C)
+	}
 
 	// Build gitwork client.
 	gitClient := gitwork.NewClient("")
@@ -198,6 +225,7 @@ func run() error {
 	svcs := views.Services{
 		WorkItem:       workItemSvc,
 		Plan:           planSvc,
+		SubPlan:        subPlanRepo,
 		Session:        sessionSvc,
 		Question:       questionSvc,
 		Instance:       instanceSvc,

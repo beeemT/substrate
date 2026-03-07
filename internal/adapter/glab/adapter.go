@@ -92,6 +92,7 @@ type worktreePayload struct {
 	Branch        string `json:"branch"`
 	WorktreePath  string `json:"worktree_path"`
 	WorkItemTitle string `json:"work_item_title"`
+	SubPlan       string `json:"sub_plan"`
 }
 
 // completedPayload is the expected shape of EventWorkItemCompleted.
@@ -112,9 +113,10 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	}
 
 	title := mrTitle(p.WorkItemTitle, p.Branch)
+	description := strings.TrimSpace(p.SubPlan)
 	if a.mrExists(ctx, p.WorktreePath, p.Branch) {
 		slog.Info("glab: MR already exists, skipping create", "branch", p.Branch)
-	} else if err := a.createMR(ctx, p.WorktreePath, p.Branch, title); err != nil {
+	} else if err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
 		// glab failure — warn but track anyway so un-draft can still be attempted later
 		slog.Warn("glab: mr create failed", "repo", p.Repository, "branch", p.Branch, "error", err)
 	}
@@ -153,14 +155,17 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	return nil
 }
 
-// createMR runs `glab mr create --draft --source-branch <branch> --title <title> [--reviewer ...] [--label ...] --yes`.
-func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title string) error {
+// createMR runs `glab mr create --draft --source-branch <branch> --title <title> [--description ...] [--reviewer ...] [--label ...] --yes`.
+func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, description string) error {
 	args := []string{
 		"mr", "create",
 		"--draft",
 		"--source-branch", branch,
 		"--title", title,
 		"--yes",
+	}
+	if strings.TrimSpace(description) != "" {
+		args = append(args, "--description", description)
 	}
 	for _, r := range a.cfg.Reviewers {
 		args = append(args, "--reviewer", r)

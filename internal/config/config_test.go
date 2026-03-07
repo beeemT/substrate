@@ -39,6 +39,18 @@ func TestLoadDefaults(t *testing.T) {
 	if *cfg.Review.MaxCycles != 3 {
 		t.Errorf("review.max_cycles = %d, want 3", *cfg.Review.MaxCycles)
 	}
+	if cfg.Adapters.Linear.PollInterval != "30s" {
+		t.Errorf("adapters.linear.poll_interval = %q, want %q", cfg.Adapters.Linear.PollInterval, "30s")
+	}
+	if cfg.Adapters.GitLab.BaseURL != "https://gitlab.com" {
+		t.Errorf("adapters.gitlab.base_url = %q, want %q", cfg.Adapters.GitLab.BaseURL, "https://gitlab.com")
+	}
+	if cfg.Adapters.GitLab.PollInterval != "60s" {
+		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "60s")
+	}
+	if cfg.Adapters.GitHub.PollInterval != "60s" {
+		t.Errorf("adapters.github.poll_interval = %q, want %q", cfg.Adapters.GitHub.PollInterval, "60s")
+	}
 }
 
 func TestLoadExplicitValues(t *testing.T) {

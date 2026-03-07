@@ -6,6 +6,7 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
+	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -13,6 +14,7 @@ import (
 type Services struct {
 	WorkItem  *service.WorkItemService
 	Plan      *service.PlanService
+	SubPlan   repository.SubPlanRepository
 	Session   *service.SessionService
 	Question  *service.QuestionService
 	Instance  *service.InstanceService

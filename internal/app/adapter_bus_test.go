@@ -1,0 +1,119 @@
+package app
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
+)
+
+type fakeWorkItemAdapter struct{ events chan domain.SystemEvent }
+
+func (f *fakeWorkItemAdapter) Name() string { return "fake-work" }
+func (f *fakeWorkItemAdapter) Capabilities() adapter.AdapterCapabilities {
+	return adapter.AdapterCapabilities{}
+}
+
+func (f *fakeWorkItemAdapter) ListSelectable(context.Context, adapter.ListOpts) (*adapter.ListResult, error) {
+	return nil, adapter.ErrBrowseNotSupported
+}
+
+func (f *fakeWorkItemAdapter) Resolve(context.Context, adapter.Selection) (domain.WorkItem, error) {
+	return domain.WorkItem{}, nil
+}
+
+func (f *fakeWorkItemAdapter) Watch(context.Context, adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
+	return nil, adapter.ErrWatchNotSupported
+}
+
+func (f *fakeWorkItemAdapter) Fetch(context.Context, string) (domain.WorkItem, error) {
+	return domain.WorkItem{}, nil
+}
+
+func (f *fakeWorkItemAdapter) UpdateState(context.Context, string, domain.TrackerState) error {
+	return nil
+}
+func (f *fakeWorkItemAdapter) AddComment(context.Context, string, string) error { return nil }
+func (f *fakeWorkItemAdapter) OnEvent(_ context.Context, evt domain.SystemEvent) error {
+	f.events <- evt
+	return nil
+}
+
+type fakeRepoLifecycleAdapter struct{ events chan domain.SystemEvent }
+
+func (f *fakeRepoLifecycleAdapter) Name() string { return "fake-lifecycle" }
+func (f *fakeRepoLifecycleAdapter) OnEvent(_ context.Context, evt domain.SystemEvent) error {
+	f.events <- evt
+	return nil
+}
+
+func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkItemAdapter, repoLifecycleAdapters []adapter.RepoLifecycleAdapter) error {
+	for _, workItemAdapter := range workItemAdapters {
+		sub, err := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+		if err != nil {
+			return err
+		}
+		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
+			for evt := range events {
+				_ = a.OnEvent(context.Background(), evt)
+			}
+		}(workItemAdapter, sub.C)
+	}
+	for _, lifecycleAdapter := range repoLifecycleAdapters {
+		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorkItemCompleted))
+		if err != nil {
+			return err
+		}
+		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
+			for evt := range events {
+				_ = a.OnEvent(context.Background(), evt)
+			}
+		}(lifecycleAdapter, sub.C)
+	}
+	return nil
+}
+
+func TestWireAdapterSubscriptions(t *testing.T) {
+	bus := event.NewBus(event.BusConfig{})
+	defer bus.Close()
+
+	work := &fakeWorkItemAdapter{events: make(chan domain.SystemEvent, 4)}
+	life := &fakeRepoLifecycleAdapter{events: make(chan domain.SystemEvent, 4)}
+	if err := wireAdapterSubscriptions(bus, []adapter.WorkItemAdapter{work}, []adapter.RepoLifecycleAdapter{life}); err != nil {
+		t.Fatalf("wireAdapterSubscriptions: %v", err)
+	}
+
+	planApproved := domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventPlanApproved), CreatedAt: time.Now()}
+	if err := bus.Publish(context.Background(), planApproved); err != nil {
+		t.Fatalf("publish plan approved: %v", err)
+	}
+	select {
+	case evt := <-work.events:
+		if evt.EventType != string(domain.EventPlanApproved) {
+			t.Fatalf("work adapter got %s", evt.EventType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for work item adapter event")
+	}
+	select {
+	case evt := <-life.events:
+		t.Fatalf("lifecycle adapter should not receive plan.approved, got %s", evt.EventType)
+	default:
+	}
+
+	worktreeCreated := domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventWorktreeCreated), CreatedAt: time.Now()}
+	if err := bus.Publish(context.Background(), worktreeCreated); err != nil {
+		t.Fatalf("publish worktree created: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-work.events:
+		case <-life.events:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for adapter event fanout")
+		}
+	}
+}

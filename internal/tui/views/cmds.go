@@ -107,7 +107,11 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 }
 
 // ApprovePlanCmd transitions work item to approved and emits plan approved.
-func ApprovePlanCmd(workItemSvc *service.WorkItemService, planSvc *service.PlanService, planID, workItemID string) tea.Cmd {
+func ApprovePlanCmd(
+	workItemSvc *service.WorkItemService,
+	planSvc *service.PlanService,
+	planID, workItemID string,
+) tea.Cmd {
 	return func() tea.Msg {
 		if err := planSvc.ApprovePlan(context.Background(), planID); err != nil {
 			return ErrMsg{Err: err}
