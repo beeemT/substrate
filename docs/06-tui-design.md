@@ -77,7 +77,7 @@ Fixed ~26 characters wide. Lists all work item sessions, grouped by status (acti
 
 **Keys:**
 - `↑`/`↓` or `j`/`k` — navigate sessions
-- `n` — open New Session overlay
+- `n` — open the Unified Work Browser
 - `c` — open Settings page
 - `q` — quit
 
@@ -193,7 +193,90 @@ Full plan markdown rendered in a scrollable viewport. All sub-plans shown in seq
 
 **Keys**: `↑`/`↓` scroll, `a` approve, `c` request changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject.
 
-### 3c. Implementing Mode
+### 3c. Unified Work Browser
+
+The legacy provider-specific new-session overlay is replaced by a unified work browser. This view is keyboard-first and capability-driven: the UI renders only sources, scopes, and filters that the active adapter selection can honor honestly.
+
+```
+│ New Session                                                                    │
+│───────────────────────────────────────────────────────────────────────────────│
+│ Source: [All ▼]   Scope: [Issues ▼]   View: [Assigned to me ▼]                │
+│ Search: [oauth token refresh_____________]                                    │
+│ Filters: state=open  labels=auth,backend  owner=myorg  repo=api              │
+│                                                                               │
+│ GitHub  GH-myorg-api-42   Fix OAuth refresh handling            open          │
+│ GitLab  GL-1234-77        Rotate token after callback            opened       │
+│ Linear  LIN-PLAT-91       Unify work browser filters              started      │
+│                                                                               │
+│ Preview                                                                         │
+│ <description, container metadata, labels, provider details, source link>       │
+│                                                                               │
+│ [Enter] Create session  [m] Manual work item  [Tab] Next control  [Esc] Close │
+```
+
+**Browser model**
+- **Source**: `All`, `Linear`, `GitHub`, `GitLab`
+- **Scope**: capability-driven; `All` mode is issues-first and must not imply false shared semantics for projects or initiatives
+- **Search**: server-side when the adapter declares search support
+- **Primary filters**: normalized issue views such as `assigned_to_me`, `created_by_me`, `mentioned`, `subscribed`, `all`
+- **Secondary filters**: state, labels, and container narrowing (`team`, `owner`, `repo`, `group`) when supported
+- **Pagination**: offset or cursor, depending on adapter capabilities
+- **Manual work item creation**: separate explicit action, not a fake provider tab
+
+**Provider and scope rules**
+- `All` mode is the honest default only for issue browsing.
+- Non-issue scopes remain provider-qualified unless the active selection has real shared semantics.
+- Multi-select is allowed only within one provider and one compatible scope.
+- The browser must not show a filter the active provider/scope cannot honor.
+- Empty, loading, and error states must be provider-aware and should explain capability constraints rather than silently hiding results.
+
+**Row and preview model**
+- rows show provider badge, stable identifier, title, parent container reference, state, labels, and updated time
+- preview shows description/body, parent/container metadata, provider-specific fields, and source URL when available
+
+**Keys (browser)**
+- `Tab` / `Shift-Tab` — move between source, scope, search, filter, list, and preview regions
+- `↑` / `↓` or `j` / `k` — navigate list rows
+- `Enter` — create a session from the current selection
+- `Space` — toggle item selection when same-provider multi-select is valid
+- `/` — focus search
+- `m` — switch to manual work item creation
+- `Esc` — close the browser
+
+**Keys (manual action)**
+- `Tab` / `Shift-Tab` — cycle form fields
+- `Enter` on the final field — create manual work item
+- `Esc` — return to the browser
+
+```go
+type UnifiedBrowserModel struct {
+    source         string
+    scope          domain.SelectionScope
+    search         textinput.Model
+    filters        BrowseUIState
+    items          list.Model
+    preview        viewport.Model
+    manualMode     bool
+    manualForm     ManualWorkItemForm
+    loading        bool
+    err            error
+}
+
+type BrowseUIState struct {
+    view       string
+    state      string
+    labels     []string
+    owner      string
+    repo       string
+    group      string
+    team       string
+    cursor     string
+    offset     int
+}
+```
+
+### 3d. Implementing Mode
+### 3d. Implementing Mode
 
 Two parts: a repo status row at the top, and the output stream for the currently selected repo below.
 
@@ -229,7 +312,7 @@ type ImplementingModel struct {
 
 **Keys**: `Tab` cycle repos, `↑`/`↓` scroll output, `p` pause/unpause live tailing.
 
-### 3d. Reviewing Mode
+### 3e. Reviewing Mode
 
 Diff summaries and review agent critiques post-implementation. Per-repo tabs at top.
 
@@ -250,7 +333,7 @@ type ReviewModel struct {
 
 **Keys**: `j`/`k` navigate critiques, `Enter` expand/collapse detail+diff, `Tab` switch repo tabs, `r` re-implement, `o` override accept (with confirm).
 
-### 3e. Completed Mode
+### 3f. Completed Mode
 
 Summary of what was done: repos changed, MR/PR links, any stale documentation warnings.
 
@@ -266,7 +349,7 @@ Summary of what was done: repos changed, MR/PR links, any stale documentation wa
 │ [↑↓] Scroll                                                                       │
 ```
 
-### 3f. Interrupted Mode
+### 3g. Interrupted Mode
 
 Shown when an agent session exited unexpectedly (substrate closed, process killed, crash). Partial worktree changes may exist.
 
@@ -288,7 +371,7 @@ Resuming starts a fresh agent session in the same worktree. The session context 
 
 **Keys**: `r` resume, `a` abandon (confirm dialog), `↑`/`↓` scroll.
 
-### 3g. Waiting for Human Question
+### 3h. Waiting for Human Question
 
 Surfaced when the Foreman agent escalates to the human (Tier 3). The human sees the sub-agent's question, the Foreman's proposed answer pre-filled (highlighted, read-only), and the Foreman's stated uncertainty. The human may:
 - Press `[A]` to approve the Foreman's answer directly — it is forwarded to the blocked sub-agent and appended to the FAQ.

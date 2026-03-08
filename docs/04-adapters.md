@@ -278,64 +278,164 @@ ExternalID format: `MAN-N` (incrementing sequence with no fixed width, e.g. `MAN
 
 ## 3. GitLab Adapter (WorkItemAdapter)
 
-> This section captures the tracker-focused GitLab adapter. The broader browsing redesign in `09-unified-work-item-browsing.md` remains authoritative for future global inbox behavior; this section documents the concrete adapter shape, lifecycle hooks, and config decisions for the initial implementation.
+### Unified Browsing Contract
 
-Package: `internal/adapter/gitlab`. This package is separate from `internal/adapter/glab`: `gitlab` owns work item browsing/watch/mutation, while `glab` owns GitLab merge request lifecycle.
+GitLab and GitHub browsing now participate in the same unified work browser as Linear. This section owns the concrete provider semantics and the shared browse-filter vocabulary that the UI consumes. `06-tui-design.md` owns presentation and interaction; `07-implementation-plan.md` owns rollout and test gates.
 
-### Configuration
+The current shared browse request surface is intentionally broader than the original `ListOpts` shape and is capability-driven rather than provider-name-driven.
 
-> `09-unified-work-item-browsing.md` supersedes project-scoped issue browsing as the long-term UX. The config below describes the initial adapter contract and the fields still required for tracker mutation and scoped browsing until that redesign lands.
+```go
+type ListOpts struct {
+    Provider  string
+    Scope     domain.SelectionScope
+    Search    string
+    Limit     int
+    Offset    int
+    View      string
+    State     string
+    Owner     string
+    Repo      string
+    Group     string
+    Labels    []string
+    Cursor    string
+    Sort      string
+    Direction string
+    Metadata  map[string]string
+}
+
+type BrowseFilterCapabilities struct {
+    Views          []string
+    States         []string
+    SupportsLabels bool
+    SupportsSearch bool
+    SupportsCursor bool
+    SupportsOffset bool
+    SupportsOwner  bool
+    SupportsRepo   bool
+    SupportsGroup  bool
+    SupportsTeam   bool
+}
+
+type AdapterCapabilities struct {
+    CanWatch      bool
+    CanBrowse     bool
+    CanMutate     bool
+    BrowseScopes  []domain.SelectionScope
+    BrowseFilters map[domain.SelectionScope]BrowseFilterCapabilities
+}
+```
+
+Shared semantic rules:
+- `ScopeIssues` is the normalization baseline across providers.
+- `Provider = All` is honest only where shared semantics exist; in the current implementation that means issues-first browsing.
+- Common controls should mean the same thing whenever they are shown.
+- Unsupported controls should be hidden or disabled from declared capabilities, not silently ignored.
+- Provider-specific escape hatches stay in `Metadata` until they earn a stable shared field.
+
+### Normalized Issue Filter Vocabulary
+
+The browser converges around a documented shared issue vocabulary rather than pretending every provider is identical.
+
+**View values**
+- `assigned_to_me`
+- `created_by_me`
+- `mentioned`
+- `subscribed`
+- `all`
+
+**Portable state values**
+- `open`
+- `closed`
+- `all`
+
+Adapters may also expose provider-native state values beyond the portable layer when they can back them honestly.
+
+### Filter Capability Model
+
+Filter semantics are intentionally split into three tiers:
+- **Tier A — broadly common:** `Search`, `View`, `State`, `Labels`, pagination
+- **Tier B — provider/scope-qualified:** `Team`, `Owner`, `Repo`, `Group`, sort/direction
+- **Tier C — provider-specific:** additional knobs under `Metadata` such as GitHub repo-inbox refinements, GitLab author/assignee fields, or Linear workflow-state names
+
+### GitLab Configuration
+
+> Global issue browsing no longer hard-requires `project_id`. `project_id` remains valuable for scoped fetch/mutate defaults and milestone/epic context, but it is not the conceptual prerequisite for issue browsing anymore.
 
 ```go
 type GitlabConfig struct {
     Token         string            `toml:"token"`
-    BaseURL       string            `toml:"base_url"`      // default: https://gitlab.com
-    ProjectID     int64             `toml:"project_id"`    // numeric; required for scoped mutation/fetch
-    Assignee      string            `toml:"assignee"`      // filter Watch to this username
-    PollInterval  string            `toml:"poll_interval"` // default: 60s, minimum 30s
+    BaseURL       string            `toml:"base_url"`
+    ProjectID     int64             `toml:"project_id"`
+    Assignee      string            `toml:"assignee"`
+    PollInterval  string            `toml:"poll_interval"`
     StateMappings map[string]string `toml:"state_mappings"`
-    // No GroupID: discover from GET /projects/{id} -> namespace.id when namespace.kind == "group".
 }
 ```
 
-`ProjectID` remains numeric in the adapter because the ExternalID format uses the stable numeric project identifier rather than namespace path. ExternalID format: `GL-{projectID}-{issueIID}` (example: `GL-1234-42`). Namespace paths are more readable but break silently on project rename or transfer.
+ExternalID format remains `GL-{projectID}-{issueIID}` for tracker mutation/fetch stability, even though issue browsing is now global-by-default.
 
-At startup, the adapter validates connectivity with `GET /projects/{id}` and caches `namespace.id` when `namespace.kind == "group"`. If the namespace is personal (`kind == "user"`), epics are unavailable and initiatives browsing degrades to `ErrBrowseNotSupported` with a logged explanation rather than a config requirement for `group_id`.
+At startup, the adapter validates connectivity and, when possible, discovers group context from `GET /projects/{id}` so epic-backed initiatives can be exposed honestly when that backing context exists.
 
-### Capabilities
+### GitLab Capabilities
 
+Current implementation declares:
 ```go
-func (a *GitlabAdapter) Capabilities() domain.AdapterCapabilities {
-    return domain.AdapterCapabilities{
-        CanWatch:     true,
-        CanBrowse:    true,
-        CanMutate:    true,
+func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
+    return adapter.AdapterCapabilities{
+        CanWatch:  true,
+        CanBrowse: true,
+        CanMutate: true,
         BrowseScopes: []domain.SelectionScope{
             domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
+        },
+        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+            domain.ScopeIssues: {
+                Views:          []string{"assigned_to_me", "created_by_me", "all"},
+                States:         []string{"open", "closed", "all"},
+                SupportsLabels: true,
+                SupportsSearch: true,
+                SupportsOffset: true,
+                SupportsRepo:   true,
+                SupportsGroup:  true,
+            },
+            domain.ScopeProjects: {
+                States:         []string{"active", "closed", "all"},
+                SupportsSearch: true,
+                SupportsOffset: true,
+                SupportsGroup:  true,
+                SupportsRepo:   true,
+            },
+            domain.ScopeInitiatives: {
+                States:         []string{"active", "closed", "all"},
+                SupportsSearch: true,
+                SupportsOffset: true,
+                SupportsGroup:  true,
+            },
         },
     }
 }
 ```
 
-### Browse, Watch, and Mutate
+### GitLab Browse, Watch, and Mutate
 
-> `09-unified-work-item-browsing.md` changes issue browsing to global-by-default. Until that redesign ships, the concrete scoped endpoints below define the adapter implementation.
+**Issues** are global-by-default through `/api/v4/issues`. The adapter maps the shared vocabulary into GitLab semantics:
+- `View=assigned_to_me` -> `scope=assigned_to_me`
+- `View=created_by_me` -> `scope=created_by_me`
+- `View=all` -> `scope=all`
+- `State=open` -> `state=opened`
+- `State=closed` -> `state=closed`
+- `State=all` -> `state=all`
+- `Group` and repo/project-path narrowing remain optional filters, not prerequisites for issue browsing
+- labels, search, and offset pagination are adapter-backed
+- unsupported views like `mentioned` / `subscribed` are omitted from capabilities rather than faked by the adapter
 
-- `ScopeIssues` -> `GET /projects/{id}/issues`
-- `ScopeProjects` -> `GET /projects/{id}/milestones`
-- `ScopeInitiatives` -> `GET /groups/{group_id}/epics`
-  - Requires GitLab Premium.
-  - If the API returns 403, return `ErrBrowseNotSupported` and log a warning rather than failing adapter construction.
+**Projects** remain milestone-backed and therefore container-qualified.
 
-Watch polls `/projects/{id}/issues?assignee_username={assignee}&state=opened` on `poll_interval`, using the same dedup pattern as Linear (`iid -> last state`). The minimum poll interval is 30s.
+**Initiatives** remain epic-backed and therefore group-qualified. The adapter should expose initiative browsing only when it has honest backing context; it must not infer a fake universal initiative inbox from a single project default.
 
-Mutations:
-- `UpdateState` -> `PUT /projects/{id}/issues/{iid}` with `state_event: "close" | "reopen"`, mapped from substrate tracker states via `state_mappings`.
-- `AddComment` -> `POST /projects/{id}/issues/{iid}/notes`.
+Watch and mutate behavior stay tracker-focused: poll issue state changes, map substrate tracker states through `state_mappings`, and post comments through GitLab notes APIs.
 
-### Event Handling
-
-> Work item event hooks depend on the Phase 12/13 payload shape carrying `external_id`, the same payload dependency called out for Linear.
+### GitLab Event Handling
 
 | Substrate Event | GitLab tracker action |
 |---|---|
@@ -343,79 +443,100 @@ Mutations:
 | `WorkItemCompleted` | `UpdateState("done")` |
 | `AgentSessionFailed` | Deferred comment hook until the failure payload carries the needed external tracker context |
 
-**Wire registration:** register the GitLab work item adapter only when tracker credentials are present. In the initial scoped form that means `GitlabConfig.ProjectID != 0 && GitlabConfig.Token != ""`; once the unified global browsing redesign from `09-unified-work-item-browsing.md` lands, `project_id` becomes an optional narrowing default rather than a hard browse prerequisite.
+**Wire registration:** register the GitLab work item adapter when credentials are present. Global issue browsing should not be documented as dependent on `project_id`, even if some scoped fetch/mutate paths still use it.
 
 ---
 
 ## 4. GitHub Adapter (WorkItemAdapter + RepoLifecycleAdapter)
 
-> `09-unified-work-item-browsing.md` is authoritative for the future global inbox UX. This section captures the concrete adapter decisions that replace the standalone GitHub/GitLab adapter plan.
+Package: `internal/adapter/github`. `GithubAdapter` remains the first dual-role adapter in the codebase: one struct implements both `WorkItemAdapter` and `RepoLifecycleAdapter` because both halves share the same config (`token`, `owner`, `repo`) and the same HTTP client.
 
-Package: `internal/adapter/github`. `GithubAdapter` is the first dual-role adapter in the codebase: one struct implements both `WorkItemAdapter` and `RepoLifecycleAdapter` because both halves share the same config (`token`, `owner`, `repo`) and the same HTTP client.
-
-### Configuration
+### GitHub Configuration
 
 ```go
 type GithubConfig struct {
-    Token         string            `toml:"token"`         // optional; falls back to gh auth token once at startup
-    Owner         string            `toml:"owner"`         // required for scoped repo behavior and PR lifecycle targeting
-    Repo          string            `toml:"repo"`          // required for scoped repo behavior and PR lifecycle targeting
-    Assignee      string            `toml:"assignee"`      // filter Watch; "me" resolves via /user
-    PollInterval  string            `toml:"poll_interval"` // default: 60s
+    Token         string            `toml:"token"`
+    Owner         string            `toml:"owner"`
+    Repo          string            `toml:"repo"`
+    Assignee      string            `toml:"assignee"`
+    PollInterval  string            `toml:"poll_interval"`
     Reviewers     []string          `toml:"reviewers"`
     Labels        []string          `toml:"labels"`
     StateMappings map[string]string `toml:"state_mappings"`
-    // No DefaultBranch field: discover via GET /repos/{owner}/{repo} at startup.
 }
 ```
 
-If `Token` is empty, adapter construction runs `gh auth token` exactly once at startup, caches the result, and uses that bearer token for all subsequent HTTP calls. If both config token and `gh auth token` are unavailable, construction fails and the adapter is not registered. The subprocess fallback exists only at initialization time; request handling stays REST-only.
+`Token` may still fall back to one-time `gh auth token` resolution at startup. `default_branch` is still discovered from `GET /repos/{owner}/{repo}` for PR lifecycle targeting. For browsing, `owner` and `repo` should be treated as optional narrowing filters rather than conceptual prerequisites for issue inbox access.
 
-At startup, the adapter calls `GET /repos/{owner}/{repo}` and caches `default_branch`. If that call fails, fall back to `main` and log a warning instead of adding a `default_branch` config field that could drift.
+ExternalID format remains `GH-{owner}-{repo}-{number}` for repo-scoped tracker mutation and lifecycle targeting.
 
-ExternalID format: `GH-{owner}-{repo}-{number}` (example: `GH-myorg-myrepo-42`).
+### GitHub Capabilities
 
-### Work Item Capabilities
-
+Current implementation declares:
 ```go
-func (a *GithubAdapter) Capabilities() domain.AdapterCapabilities {
-    return domain.AdapterCapabilities{
-        CanWatch:     true,
-        CanBrowse:    true,
-        CanMutate:    true,
+func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
+    return adapter.AdapterCapabilities{
+        CanWatch:  true,
+        CanBrowse: true,
+        CanMutate: true,
         BrowseScopes: []domain.SelectionScope{
             domain.ScopeIssues, domain.ScopeProjects,
+        },
+        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+            domain.ScopeIssues: {
+                Views:          []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", "all"},
+                States:         []string{"open", "closed", "all"},
+                SupportsLabels: true,
+                SupportsSearch: true,
+                SupportsOffset: true,
+                SupportsOwner:  true,
+                SupportsRepo:   true,
+            },
+            domain.ScopeProjects: {
+                States:         []string{"open", "closed", "all"},
+                SupportsSearch: true,
+                SupportsOffset: true,
+                SupportsOwner:  true,
+                SupportsRepo:   true,
+            },
         },
     }
 }
 ```
 
-`ScopeInitiatives` is intentionally unsupported in the first cut. Return `ErrBrowseNotSupported` and keep a TODO for a dedicated GitHub Projects v2 design rather than pretending milestones or PRs are a substitute.
+### GitHub Browse, Watch, and Mutate
 
-### Browse, Watch, and Mutate
+**Issues** are global-by-default through `GET /issues`. The adapter maps the shared issue vocabulary into GitHub inbox semantics:
+- `assigned_to_me` -> `filter=assigned`
+- `created_by_me` -> `filter=created`
+- `mentioned` -> `filter=mentioned`
+- `subscribed` -> `filter=subscribed`
+- `all` -> `filter=all`
+- `State` maps directly to `open`, `closed`, `all`
+- `Owner` / `Repo` are narrowing filters, not prerequisites for issue browsing
+- labels, search, and offset pagination are adapter-backed
 
-> The initial concrete adapter remains repo-scoped. `09-unified-work-item-browsing.md` broadens issue browsing to `GET /issues` in the later redesign.
+**Projects** remain milestone-backed and repo-scoped. In provider-specific mode they require repo context or explicit narrowing. In `All` mode the UI must not present GitHub milestones as if they were part of a truly global project inbox.
 
-- `ScopeIssues` -> `GET /repos/{owner}/{repo}/issues`
-- `ScopeProjects` -> `GET /repos/{owner}/{repo}/milestones`
-- `ScopeInitiatives` -> `ErrBrowseNotSupported`
-- Watch -> poll `/repos/{owner}/{repo}/issues?assignee={me}&state=open` with dedup map `number -> state`
-- `UpdateState` -> `PATCH /repos/{owner}/{repo}/issues/{number}` with `{ "state": "open" | "closed" }`, mapped via `state_mappings`
-- `AddComment` -> `POST /repos/{owner}/{repo}/issues/{number}/comments`
+`ScopeInitiatives` remains unsupported until a real GitHub Projects v2 model exists; the adapter must return `ErrBrowseNotSupported` honestly rather than inventing a substitute.
+
+Watch and mutate behavior remain repo-targeted for tracker updates and PR lifecycle.
 
 ### PR Lifecycle via REST
 
-> GitHub PR lifecycle deliberately does not shell out to `gh`. The adapter already owns an authenticated REST client, and keeping PR creation/readiness on that path removes subprocess coupling and keeps the lifecycle code unit-testable.
+GitHub PR lifecycle deliberately stays on direct REST rather than `gh`. The adapter already owns an authenticated REST client, and keeping PR creation/readiness on that path removes subprocess coupling and keeps the lifecycle code unit-testable.
 
 Repo lifecycle behavior:
-- `OnEvent(WorktreeCreated)` -> idempotency guard with `GET /repos/{owner}/{repo}/pulls?head={branch}&state=open`; if none exists, `POST /repos/{owner}/{repo}/pulls` with `{ draft: true, head: branch, base: default_branch, title: ... }`.
-- `OnEvent(WorkItemCompleted)` -> find the PR with `GET /repos/{owner}/{repo}/pulls?head={branch}`, then `PATCH /repos/{owner}/{repo}/pulls/{number}` with `{ draft: false }`.
-- Maintain the same warn-on-failure policy as `glab`: log at WARN, never block workflow completion.
-- Protect the in-memory `branch -> PR` tracking map with `sync.RWMutex`, matching the codebase rule for shared mutable state.
+- `OnEvent(WorktreeCreated)` -> idempotency guard with `GET /repos/{owner}/{repo}/pulls?head={branch}&state=open`; if none exists, `POST /repos/{owner}/{repo}/pulls` with `{ draft: true, head: branch, base: default_branch, title: ... }`
+- `OnEvent(WorkItemCompleted)` -> find the PR with `GET /repos/{owner}/{repo}/pulls?head={branch}` and `PATCH /repos/{owner}/{repo}/pulls/{number}` with `{ draft: false }`
+- warn on failure; never block workflow completion
+- guard branch-to-PR state with `sync.RWMutex`
 
-Lifecycle event coverage matches `glab`: respond to `WorktreeCreated` and `WorkItemCompleted`. Work item tracker events (`PlanApproved`, `WorkItemCompleted`) share the same payload dependency as the GitLab tracker adapter for external tracker mutation.
+Lifecycle event coverage matches `glab`: `WorktreeCreated` and `WorkItemCompleted`.
 
-**Wire registration:** register the GitHub adapter when lifecycle targeting is configured (`Owner` + `Repo`) and credentials are available either directly or through one-time `gh auth token` resolution. `09-unified-work-item-browsing.md` remains the source of truth for the later browse-config split that removes `owner`/`repo` as a hard requirement for issue browsing.
+**Wire registration:** register the GitHub adapter when credentials exist and repo-host lifecycle targeting can be configured. For issue browsing, do not document `owner` and `repo` as hard prerequisites when the provider can browse globally via the issue inbox.
+
+---
 
 ---
 

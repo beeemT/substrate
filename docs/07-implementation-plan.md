@@ -358,73 +358,61 @@ Old session stays in DB as `interrupted` (audit trail). New session links to sam
 
 **Gate:** Launch two Substrate instances against the same workspace. Instance A starts a session. Kill instance A (simulating crash). Instance B detects stale heartbeat within 20s, marks session interrupted, offers Resume. Resumed session continues in the same worktree. Clean shutdown: instance row deleted, no false interrupts.
 
-## Phase 10: Linear Adapter + Selection Model (Week 8)
+## Phase 10: Work Item Browsing and Selection (Week 8)
 
-GraphQL client (`net/http` + JSON). `Watch`: poll assigned issues, dedup, exponential backoff on 429. `Fetch`, `UpdateState` (maps `TrackerState` to Linear workflow state IDs from config), `AddComment`. Event hooks: `PlanApproved` → "In Progress", `WorkItemCompleted` → "Done".
+Deliver the unified work browser before release. This phase owns the contract, adapter, and TUI work needed to make Substrate the single place a user browses work across providers.
 
-**[NEW] ExternalID format:** `LIN-{teamKey}-{issueNumber}` (e.g., `LIN-FOO-123`). Team key from `issue.team.key`, issue number from identifier suffix.
+### 10a. Shared browse contract
 
-**[NEW] Selection model** — `ListSelectable` and `Resolve` for all three scopes:
+Expand the browse request and capability model so the UI can render only controls the active provider/scope can honor.
 
-- `ScopeIssues`: GraphQL query for team issues with filtering. Select 1+ issues. `Resolve`: if 1 issue, WorkItem mirrors it; if N issues, aggregate with joined title (+N-1 more), concatenated descriptions, merged labels.
-- `ScopeProjects`: GraphQL query for projects visible to team. Select 1+ projects. `Resolve` fetches all non-completed issues from each project, builds WorkItem with project context + full issue listing.
-- `ScopeInitiatives`: GraphQL query for initiatives. Select exactly 1. `Resolve` fetches all child projects + their issues, builds comprehensive WorkItem with initiative goals, project breakdown, grouped issue details.
+- `ListOpts` carries provider, scope, search, limit/offset, normalized `View`, normalized `State`, labels, owner/repo/group/team narrowing, cursor, sort/direction, and provider-specific `Metadata`.
+- `BrowseFilterCapabilities` advertises per-scope support for views, states, labels, search, cursor/offset pagination, and container narrowing.
+- `AdapterCapabilities` includes `BrowseScopes` plus `BrowseFilters` keyed by scope.
+- `ScopeIssues` is the normalization baseline. `All` mode must remain honest and issue-first until non-issue scope intersections are real.
 
-Each scope has its own GraphQL query and response parsing. `Capabilities()` returns `CanWatch: true, CanBrowse: true, CanMutate: true, BrowseScopes: [issues, projects, initiatives]`.
+### 10b. Linear selection model
 
-**Gate:** Correct GraphQL query construction for all three scopes. Parsed response -> valid `WorkItem`. Backoff: 429 -> delay >= 2x. Unit tests: `ListSelectable` returns correct items per scope, `Resolve` aggregates correctly for multi-issue selection, `Resolve` for project scope fetches all child issues. Integration (requires `SUBSTRATE_LINEAR_API_KEY`): browse real team issues, select, resolve into `WorkItem`, fetch + update round-trip. `go test ./internal/adapter/linear/...`
+Linear remains a first-class provider with the richest declared browse surface.
 
-## Phase 10b: Manual Adapter (Week 8)
+- Issues: support normalized views (`assigned_to_me`, `created_by_me`, `all`), normalized and native states, labels, search, team narrowing, and cursor pagination.
+- Projects: support state, search, team narrowing, and cursor pagination.
+- Initiatives: support state, search, and cursor pagination.
+- `Resolve` remains scope-aware: one issue maps directly; multi-issue/project/initiative resolution aggregates honestly.
 
-Implement `ManualAdapter` struct in `internal/adapter/manual/`. Lightweight adapter for ad-hoc work items not tracked in an external system.
+### 10c. Manual work item creation
 
-- `Name()` returns `"manual"`.
-- `Capabilities()` returns `CanWatch: false, CanBrowse: false, CanMutate: false, BrowseScopes: nil`.
-- `ListSelectable` returns `ErrNotSupported`.
-- `Resolve` takes `Selection` with `ManualInput` (title, description) and creates a `WorkItem` directly from user input.
-- `Watch` returns a closed channel immediately.
-- `Fetch`, `UpdateState`, `AddComment` are no-ops (return nil or zero values).
-- `OnEvent` is a no-op.
+Keep manual work item creation as a separate explicit action, not a fake provider tab.
 
-**[NEW]** ExternalID format: `MAN-N` (incrementing sequence: `MAN-1`, `MAN-42`, `MAN-1000`). Counter derived by counting existing manual work items in DB for current workspace — no separate counter column. `ManualAdapter.store` is a `WorkspaceStore` (wraps `*sqlx.Tx` from enclosing `Transact`), so COUNT and subsequent Create share same transaction.
+- `ManualAdapter` remains built-in and unconfigured.
+- The browser exposes manual creation through a dedicated action path.
+- No attempt is made to make manual creation look like a browsable provider.
 
-**[NEW]** No TOML configuration needed. Manual adapter is always available as built-in option, registered unconditionally at startup in `internal/app/wire.go`.
+### 10d. Gate
 
-This is a small phase, likely 1-2 days of effort.
+- Unit tests cover browse capability declarations and scope-aware selection resolution.
+- Adapter tests prove `ListSelectable` and `Resolve` behave correctly for supported scopes.
+- TUI/browser tests prove manual creation is reachable as a separate action path.
 
-**Gate:** Unit tests: `Resolve` produces valid `WorkItem` from `ManualWorkItemInput`, `Watch` returns closed channel, `UpdateState` and `AddComment` are no-ops. `go test ./internal/adapter/manual/...`
+## Phase 11: GitLab / GitHub Adapters and Unified Browse Semantics (Week 8-9)
 
-## Phase 11: GitLab / GitHub / glab Adapters (Week 8-9)
+Deliver the remaining provider adapters plus the normalized browse semantics needed for the unified work browser.
 
-Deliver the remaining provider adapters and lifecycle routing in one coherent phase: GitLab work item support, GitHub work item + PR lifecycle support, the existing `glab` lifecycle adapter, and startup remote detection that registers the right lifecycle adapter for the current workspace.
+### 11a. GitLab work item adapter (`internal/adapter/gitlab/`)
 
-### GitLab work item adapter (`internal/adapter/gitlab/`)
+- Global issue browsing via `/api/v4/issues` with normalized views (`assigned_to_me`, `created_by_me`, `all`), normalized states, labels, search, optional repo/group narrowing, and offset pagination.
+- Projects remain milestone-backed and therefore container-qualified.
+- Initiatives remain epic-backed and therefore group-qualified; expose them only when backing context is honest.
+- Watch/mutate/event-hook behavior remains tracker-focused.
 
-REST client with token auth, scoped issue/milestone/epic support, polling watch loop, and tracker mutation hooks.
+### 11b. GitHub dual adapter (`internal/adapter/github/`)
 
-- Config: `token`, `base_url` (default `https://gitlab.com`), `project_id`, `assignee`, `poll_interval`, `state_mappings`. No `group_id` field; discover `namespace.id` from `GET /projects/{id}` at startup.
-- ExternalID format: `GL-{projectID}-{issueIID}` using the stable numeric project ID.
-- Browse: `ScopeIssues -> /projects/{id}/issues`, `ScopeProjects -> /projects/{id}/milestones`, `ScopeInitiatives -> /groups/{group_id}/epics` with `ErrBrowseNotSupported` on 403/Premium absence.
-- Watch: poll opened assigned issues, dedup by `iid -> state`, minimum interval 30s.
-- Mutations: issue state update via `state_event`, comment creation via notes API.
-- Event hooks: `PlanApproved -> in_progress`, `WorkItemCompleted -> done`; failure comment remains deferred until payloads carry the needed tracker context.
+- Global issue browsing via `GET /issues` with normalized views (`assigned_to_me`, `created_by_me`, `mentioned`, `subscribed`, `all`), normalized states, labels, search, optional owner/repo narrowing, and offset pagination.
+- Projects remain milestone-backed and repo-qualified.
+- `ScopeInitiatives` remains unsupported until a real Projects v2 design exists.
+- PR lifecycle remains REST-based and non-blocking on failure.
 
-### GitHub dual adapter (`internal/adapter/github/`)
-
-Single struct implementing both `WorkItemAdapter` and `RepoLifecycleAdapter` because tracker and PR lifecycle share auth, owner/repo targeting, and one REST client.
-
-- Config: `token`, `owner`, `repo`, `assignee`, `poll_interval`, `reviewers`, `labels`, `state_mappings`. No `default_branch` field; discover from `GET /repos/{owner}/{repo}` and fall back to `main` with warning.
-- Token fallback: when `token` is empty, run `gh auth token` once at startup, cache the result, and never shell out again during request handling.
-- ExternalID format: `GH-{owner}-{repo}-{number}`.
-- Browse: `ScopeIssues -> /repos/{owner}/{repo}/issues`, `ScopeProjects -> /repos/{owner}/{repo}/milestones`, `ScopeInitiatives -> ErrBrowseNotSupported` with TODO for Projects v2.
-- Watch + mutate: poll repo issues, update issue state with REST `PATCH`, add comments with REST `POST`.
-- PR lifecycle: idempotent draft PR creation on `WorktreeCreated`, mark ready on `WorkItemCompleted`, both via REST; protect branch-to-PR cache with `sync.RWMutex`; never block the workflow on failure.
-
-### glab lifecycle adapter (`internal/adapter/glab/`)
-
-Keep GitLab MR lifecycle on `glab` rather than duplicating GitLab MR semantics in REST. `WorktreeCreated` creates a draft MR and `WorkItemCompleted` marks it ready. Prefer `WorkItemTitle` from event payload for MR title with branch-derived fallback. Errors stay WARN-only and non-blocking.
-
-### Remote detection for lifecycle registration (`internal/app/remotedetect/`)
+### 11c. Remote detection and lifecycle routing
 
 `BuildRepoLifecycleAdapters` receives `workspaceDir string` from startup and calls `DetectPlatform(ctx, workspaceDir)` before registering lifecycle adapters.
 
@@ -433,7 +421,10 @@ Keep GitLab MR lifecycle on `glab` rather than duplicating GitLab MR semantics i
 - Match `gitlab.com` or any host in `~/.config/glab-cli/config.yml` `hosts` -> `glab` lifecycle adapter.
 - Unknown host or missing workspace dir -> register no lifecycle adapter and log a warning.
 
-**Gate:** Unit tests cover GitLab ExternalID parsing, group discovery, GitHub token/default-branch fallback, REST PR idempotency, and remote host detection. Integration tests cover `./internal/adapter/gitlab/...`, `./internal/adapter/github/...`, `./internal/adapter/glab/...`, and `./internal/app/remotedetect/...` with provider credentials/CLIs available.
+### 11d. Gate
+
+- Unit tests cover GitLab ExternalID parsing, group discovery, GitHub token/default-branch fallback, REST PR idempotency, browse-filter semantics, and remote host detection.
+- Integration tests cover `./internal/adapter/gitlab/...`, `./internal/adapter/github/...`, `./internal/adapter/glab/...`, and `./internal/app/remotedetect/...` with provider credentials/CLIs available.
 
 ## Phase 12: TUI (Week 9-11)
 
@@ -457,9 +448,9 @@ Keep GitLab MR lifecycle on `glab` rather than duplicating GitLab MR semantics i
 
 **[NEW] Content panel modes:** Driven by `WorkItemState` plus `AgentSessionStatus` for sub-modes (question, interrupted). See `06-tui-design.md` §2c for mapping.
 
-**[NEW] New Session overlay:**
-- Unified provider browser per `09-unified-work-item-browsing.md`: All / Linear / GitHub / GitLab source modes, explicit scope selection, server-side search, provider-aware filters, and manual work item creation as a separate action path.
-- Initial provider implementations remain constrained by adapter capabilities: Linear supports issues/projects/initiatives; GitHub and GitLab begin with their concrete adapter scopes and later broaden to global issue inboxes as specified in `09-unified-work-item-browsing.md`.
+**[NEW] Unified Work Browser:**
+- Replace the legacy new-session overlay with a unified provider browser: All / Linear / GitHub / GitLab source modes, capability-driven scope selection, server-side search, normalized filters, provider-qualified container narrowing, and manual work item creation as a separate action path.
+- `All` mode is issue-first and must not imply false shared semantics for non-issue scopes. Controls shown in the UI come from adapter capabilities, not provider name checks.
 
 **[NEW] Multi-instance support:**
 - Instance registration in `substrate_instances` with heartbeat every 5s.
@@ -506,6 +497,8 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 |------|-----------|--------|------------|
 | oh-my-pi SDK / Bun bridge breaks | Medium | High | Pin bridge protocol, keep integration coverage on the default harness path, and keep Bun as an explicit packaging dependency |
 | Claude/Codex interactive messaging remains unverified | High | High | Keep oh-my-pi as default, block parity claims until real binary tests pin `SendMessage` continuation semantics |
+| Browse semantics drift across providers | Medium | High | Keep the UI capability-driven, normalize issue semantics first, and forbid controls the active provider/scope cannot honor |
+| Non-issue `All` mode implies false parity | Medium | High | Keep `All` mode issue-first until milestones/initiatives share honest semantics |
 | git-work output format changes | Low | Medium | Regex parsing (not positional), typed wrapper isolates blast radius |
 | Linear rate limiting | Medium | Low | Exponential backoff with jitter on 429, configurable interval (default 30s) |
 | Agent produces unparseable plan | High | Medium | Retry with format instructions, fallback to raw markdown + human decomposition, max 2 retries |

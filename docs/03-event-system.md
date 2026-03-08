@@ -336,7 +336,7 @@ The adapter methods serve distinct roles:
 - `Watch` is the reactive auto-assignment path, independent of interactive selection.
 - Adapters that lack browsing return `ErrNotSupported` from `ListSelectable`.
 - `OnEvent` dispatches via type switch. Each adapter maps substrate events into provider-native tracker mutations — for example Linear state transitions, scoped GitLab issue updates, or GitHub issue state/comment calls.
-- The same shared interface intentionally covers adapters with different browse semantics. `09-unified-work-item-browsing.md` defines the broader UX contract; concrete provider behavior lives in `04-adapters.md`.
+- The same shared interface intentionally covers adapters with different browse semantics. Concrete provider behavior and browse-filter semantics live in `04-adapters.md`.
 See `01-domain-model.md` for the full type definitions of `AdapterCapabilities`, `ListOpts`, `ListResult`, `Selection`, and `SelectableItem`.
 
 ```go
