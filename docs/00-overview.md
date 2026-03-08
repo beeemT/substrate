@@ -1,6 +1,5 @@
-# Substrate: Project Overview
+# 00 - Project Overview
 
-*the filling between all the gaps*
 
 ## Mission Statement
 
@@ -8,68 +7,76 @@ Substrate is an AI-powered work item orchestration tool built in Go. It automate
 
 ## Core Workflow
 
-1. **Ingest** — Pull a work item from a tracker (Linear or adapter) when assignment or status conditions are met, OR create one manually.
-2. **Discovery** — Operates within a pre-existing workspace folder where repos are already cloned via git-work. Scans workspace repos (`main/` worktrees), gathers documentation from architecture docs, API specs, and conventions.
-3. **Plan Generation** — Reads from `main/` worktrees across all repos. Produces a cross-repo orchestration plan and per-repo sub-plans.
-4. **Human Approval** — Presents the plan in the TUI. The human reviews, requests changes, or approves. Back-and-forth refinement until accepted.
-5. **Worktree Creation** — Runs `git-work checkout -b <branch>` in each repo that needs changes, creating isolated feature worktrees within the shared workspace.
-6. **Agent Execution** — Spawns one agent harness session per sub-plan/repo in its feature worktree. Agents implement changes, commit per the configured strategy, and push.
-7. **Foreman Monitoring** — A Foreman agent watches sub-agent sessions, answers questions from the cross-repo plan context, and escalates unanswerable questions to the human.
-8. **Review** — A review agent compares each feature worktree against `main/`, produces critique reports.
-9. **Re-implementation** — If critiques exist, the relevant agent session is respawned with critique context. Steps 6-8 repeat until review passes.
-10. **Completion** — Event hooks fire (e.g., create merge requests via `glab`, move ticket to "Done"). Workspace remains for reference.
+1. **Ingest** — Create or ingest a work item from a configured provider.
+2. **Plan** — Explore the workspace's `main/` worktrees, gather repo guidance, and generate a cross-repo plan plus per-repo sub-plans.
+3. **Review Plan** — Human reviews, revises, approves, or rejects the plan in the TUI.
+4. **Implement** — Create feature worktrees, run agent sessions per sub-plan, and execute waves in dependency order.
+5. **Oversee** — A Foreman session mediates unresolved questions and a review loop validates the changes.
+6. **Complete** — When all sub-plans pass review, event hooks update external trackers and repo hosts, then the workspace is retained for reference.
 
 ```mermaid
 flowchart TD
-    A[Work Item Ingested] --> B[Discovery: Scan Workspace Repos]
-    B --> C[Plan Generation + Doc Consultation]
-    C --> D{Human Approval}
-    D -- Refine --> C
-    D -- Approved --> E[Create Feature Worktrees]
-    E --> F[Spawn Agent Sessions]
-    F --> G[Foreman Monitors]
-    G --> H[Review Agent]
-    H -- Critiques --> F
-    H -- Pass --> I[Completion + Hooks]
+    A[Work Item Ingested] --> B[Plan Across Workspace]
+    B --> C{Human Approval}
+    C -- Refine --> B
+    C -- Approved --> D[Create Feature Worktrees]
+    D --> E[Run Agent Sessions]
+    E --> F[Foreman + Review Loop]
+    F -- Critiques --> E
+    F -- Pass --> G[Completion Hooks]
 ```
+
+## System Boundaries
+
+Substrate is organized around a few stable seams:
+
+- **Domain and persistence** — work items, plans, sessions, reviews, and workspace identity (`01-domain-model.md`, `02-layered-architecture.md`)
+- **Events and hooks** — workflow progression is published as system events; external effects subscribe to those events (`03-event-system.md`)
+- **Adapters and harnesses** — providers, repo hosts, and coding harnesses sit behind explicit interfaces (`04-adapters.md`)
+- **Runtime orchestration** — planning, execution waves, Foreman handling, review loops, and recovery are runtime workflows (`05-orchestration.md`)
+- **Operator interface** — the TUI exposes planning, implementation, settings, and recovery flows (`06-tui-design.md`)
+- **Delivery plan** — phased rollout, quality gates, validation strategy, and risk tracking live in one place (`07-implementation-plan.md`)
 
 ## Technology Decisions
 
 | Technology | Choice | Rationale |
 |---|---|---|
-| Language | Go | First-class concurrency (goroutines for parallel agent sessions), single-binary distribution, interfaces enable clean adapter pattern without generics overhead |
-| TUI | bubbletea + lipgloss + bubbles | Elm Architecture (model-update-view) gives predictable state management for a complex reactive UI; lipgloss for styling; bubbles for common widgets |
-| Database | SQLite via sqlx + go-atomic | Local-only persistence, no server dependency, single-file global DB at `~/.substrate/state.db`. `jmoiron/sqlx` for struct scanning with `db` tags; `modernc.org/sqlite` as pure-Go driver (no CGO). go-atomic provides Unit of Work pattern for transactional consistency. |
-| Git integration | git-work + git CLI (subprocess) | git-work manages worktree lifecycle with machine-readable stdout. Subprocess calls avoid fragile library bindings. |
-| Agent harness | Subprocess (Bun bridge script) | Fault isolation — agent crash cannot take down substrate. Language independence — harness interface is JSON-over-stdio. oh-my-pi SDK is TypeScript/Bun; bridge script is thin. |
-| Work item tracker | Linear GraphQL API | First adapter. Personal API key or OAuth. Adapter interface allows future backends. |
-| Repo lifecycle | glab CLI (subprocess) | Merge request creation, pipeline status. Subprocess keeps GitLab coupling at the boundary. |
-| Config | TOML (pelletier/go-toml) | Human-readable, well-suited for hierarchical config (`substrate.toml`), strong Go library support. |
-| DB concurrency | go-atomic (Unit of Work) | Transactional consistency across repos, automatic retry on SQLITE_BUSY, no manual locking |
-| Commit strategy | substrate.toml [commit] | Configurable: granular/semi-regular/single; AI-generated messages by default |
-## Key Design Principles
+| Language | Go | First-class concurrency for parallel sessions, single-binary distribution, and interface-oriented architecture |
+| TUI | bubbletea + lipgloss + bubbles | Predictable reactive UI model with strong terminal primitives |
+| Database | SQLite via sqlx + go-atomic | Local persistence, transactional consistency, and zero service dependency |
+| Git integration | git-work + git CLI | Worktree lifecycle stays explicit and machine-readable |
+| Agent harness | Multi-harness subprocess adapters | oh-my-pi via Bun bridge is the default verified interactive harness; Claude Code and Codex are selectable but not yet parity-proven for all interactive flows |
+| Work item trackers | Linear GraphQL + GitHub/GitLab REST adapters | Common work item contract with provider-specific capabilities behind the boundary |
+| Repo lifecycle | glab CLI + GitHub REST API | GitLab MR automation stays in `glab`; GitHub PR automation uses REST; startup remote detection selects the right lifecycle path |
+| Config | TOML | Human-editable structured configuration with stable defaults |
 
-**Adapter pattern everywhere.** Every external system — work item trackers, repository hosts, agent harnesses — sits behind a Go interface. Swapping Linear for Jira, GitLab for GitHub, or oh-my-pi for another agent means implementing one interface. No core logic changes. See `02-layered-architecture.md`.
+## Design Principles
 
-**Event-driven hooks.** System mutations (plan approved, worktree created, review passed) emit events. Adapters subscribe to act on them — move a ticket to "In Progress," create a merge request, notify a channel. Decouples workflow progression from side effects. See `03-event-system.md`.
+**Strong boundaries over clever abstractions.** Provider logic, repo host automation, harness integration, orchestration, and TUI concerns each have a primary home. Cross-file references should point to the owning document instead of duplicating detail.
 
-**Human-in-the-loop.** Plans require explicit approval. The Foreman escalates unanswerable questions. Humans can intervene at any point via the TUI. Automation handles volume; humans handle judgment. See `06-tui-design.md`.
+**Event-driven side effects.** Workflow state changes are internal; tracker updates, MR/PR creation, and other external actions hang off events rather than being embedded in core state transitions. See `03-event-system.md`.
 
-**Workspace as shared context.** A workspace is a pre-existing folder where repos are already cloned via git-work. Multiple work items coexist in one workspace — each gets its own branches and worktrees within the shared repos. Workspace identity is tracked via a `.substrate-workspace` file (contains a ULID), and all state lives in a global DB at `~/.substrate/state.db` scoped by workspace ID. Moving the folder doesn't break session access. See `01-domain-model.md`.
+**Human judgment at control points.** Plan approval, uncertain question handling, escalation, and interrupted-session recovery always have an operator path. See `05-orchestration.md` and `06-tui-design.md`.
 
-**Repository, Service, Business Logic layering.** Repository layer handles data access and converts domain models to storage format. Service layer owns domain models and encapsulates domain logic. Business Logic Services compose multiple services into workflows (e.g., "ingest work item, setup workspace, generate plan"). See `02-layered-architecture.md`.
+**Workspace-first execution.** Planning reads `main/` worktrees, implementation writes feature worktrees, and workspace identity survives path moves through `.substrate-workspace`. See `01-domain-model.md`.
 
-**Domain models owned by services.** Services define the canonical types. Repositories translate to/from SQLite rows. The TUI translates to/from view models. No layer leaks its representation into another.
+**One source of truth per topic.**
+- Domain/state/schema: `01` / `02`
+- Events/hook semantics: `03`
+- Provider, lifecycle, and harness contracts: `04`
+- Runtime control flow: `05`
+- TUI behavior: `06`
+- Phasing/tests/risks: `07`
 
 ## Document Map
 
-| Doc | Title | Description |
+| Doc | Owns | Does not own |
 |---|---|---|
-| `00-overview.md` | Project Overview | Mission, workflow, technology decisions, design principles |
-| `01-domain-model.md` | Domain Model | Core entities, enums, state machines, workspace layout |
-| `02-layered-architecture.md` | Layered Architecture | Repository / Service / Business Logic layers, SQLite schema |
-| `03-event-system.md` | Event System & Hooks | Event bus, adapter interfaces, hook dispatch |
-| `04-adapters.md` | Adapter Implementations | Linear, Manual, glab, agent harness |
-| `05-orchestration.md` | Orchestration | Planning pipeline, implementation, foreman, review cycle |
-| `06-tui-design.md` | TUI Design | bubbletea views, interaction model, async patterns |
-| `07-implementation-plan.md` | Implementation Plan | Phased build-out, quality gates, risk register |
+| `00-overview.md` | Product summary, boundaries, doc map | Detailed runtime logic, adapter specifics, schema |
+| `01-domain-model.md` | Entities, enums, state machines, workspace layout | Service wiring, adapter behavior |
+| `02-layered-architecture.md` | Layer boundaries, dependency injection, persistence/schema | Runtime workflow details |
+| `03-event-system.md` | Event catalog, bus behavior, hook semantics | Concrete provider behavior |
+| `04-adapters.md` | Work item adapters, repo lifecycle adapters, harnesses, remote detection | End-to-end workflow sequencing |
+| `05-orchestration.md` | Planning/execution/review/Foreman handling/recovery runtime flow | Provider internals, schema, full UI design |
+| `06-tui-design.md` | Views, overlays, settings UX, operator interactions | Adapter implementations, DB schema |
+| `07-implementation-plan.md` | Phases, quality gates, test strategy, risks | Canonical runtime behavior |

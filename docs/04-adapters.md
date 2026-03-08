@@ -318,9 +318,152 @@ ExternalID format: `MAN-N` (incrementing sequence with no fixed width, e.g. `MAN
 
 ---
 
-## 3. glab Adapter (RepoLifecycleAdapter)
+## 3. GitLab Adapter (WorkItemAdapter)
 
-Package: `internal/adapter/glab`. Requires `glab` CLI installed and authenticated. Validates at startup.
+> This section captures the tracker-focused GitLab adapter. The broader browsing redesign in `09-unified-work-item-browsing.md` remains authoritative for future global inbox behavior; this section documents the concrete adapter shape, lifecycle hooks, and config decisions for the initial implementation.
+
+Package: `internal/adapter/gitlab`. This package is separate from `internal/adapter/glab`: `gitlab` owns work item browsing/watch/mutation, while `glab` owns GitLab merge request lifecycle.
+
+### Configuration
+
+> `09-unified-work-item-browsing.md` supersedes project-scoped issue browsing as the long-term UX. The config below describes the initial adapter contract and the fields still required for tracker mutation and scoped browsing until that redesign lands.
+
+```go
+type GitlabConfig struct {
+    Token         string            `toml:"token"`
+    BaseURL       string            `toml:"base_url"`      // default: https://gitlab.com
+    ProjectID     int64             `toml:"project_id"`    // numeric; required for scoped mutation/fetch
+    Assignee      string            `toml:"assignee"`      // filter Watch to this username
+    PollInterval  string            `toml:"poll_interval"` // default: 60s, minimum 30s
+    StateMappings map[string]string `toml:"state_mappings"`
+    // No GroupID: discover from GET /projects/{id} -> namespace.id when namespace.kind == "group".
+}
+```
+
+`ProjectID` remains numeric in the adapter because the ExternalID format uses the stable numeric project identifier rather than namespace path. ExternalID format: `GL-{projectID}-{issueIID}` (example: `GL-1234-42`). Namespace paths are more readable but break silently on project rename or transfer.
+
+At startup, the adapter validates connectivity with `GET /projects/{id}` and caches `namespace.id` when `namespace.kind == "group"`. If the namespace is personal (`kind == "user"`), epics are unavailable and initiatives browsing degrades to `ErrBrowseNotSupported` with a logged explanation rather than a config requirement for `group_id`.
+
+### Capabilities
+
+```go
+func (a *GitlabAdapter) Capabilities() domain.AdapterCapabilities {
+    return domain.AdapterCapabilities{
+        CanWatch:     true,
+        CanBrowse:    true,
+        CanMutate:    true,
+        BrowseScopes: []domain.SelectionScope{
+            domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
+        },
+    }
+}
+```
+
+### Browse, Watch, and Mutate
+
+> `09-unified-work-item-browsing.md` changes issue browsing to global-by-default. Until that redesign ships, the concrete scoped endpoints below define the adapter implementation.
+
+- `ScopeIssues` -> `GET /projects/{id}/issues`
+- `ScopeProjects` -> `GET /projects/{id}/milestones`
+- `ScopeInitiatives` -> `GET /groups/{group_id}/epics`
+  - Requires GitLab Premium.
+  - If the API returns 403, return `ErrBrowseNotSupported` and log a warning rather than failing adapter construction.
+
+Watch polls `/projects/{id}/issues?assignee_username={assignee}&state=opened` on `poll_interval`, using the same dedup pattern as Linear (`iid -> last state`). The minimum poll interval is 30s.
+
+Mutations:
+- `UpdateState` -> `PUT /projects/{id}/issues/{iid}` with `state_event: "close" | "reopen"`, mapped from substrate tracker states via `state_mappings`.
+- `AddComment` -> `POST /projects/{id}/issues/{iid}/notes`.
+
+### Event Handling
+
+> Work item event hooks depend on the Phase 12/13 payload shape carrying `external_id`, the same payload dependency called out for Linear.
+
+| Substrate Event | GitLab tracker action |
+|---|---|
+| `PlanApproved` | `UpdateState("in_progress")` |
+| `WorkItemCompleted` | `UpdateState("done")` |
+| `AgentSessionFailed` | Deferred comment hook until the failure payload carries the needed external tracker context |
+
+**Wire registration:** register the GitLab work item adapter only when tracker credentials are present. In the initial scoped form that means `GitlabConfig.ProjectID != 0 && GitlabConfig.Token != ""`; once the unified global browsing redesign from `09-unified-work-item-browsing.md` lands, `project_id` becomes an optional narrowing default rather than a hard browse prerequisite.
+
+---
+
+## 4. GitHub Adapter (WorkItemAdapter + RepoLifecycleAdapter)
+
+> `09-unified-work-item-browsing.md` is authoritative for the future global inbox UX. This section captures the concrete adapter decisions that replace the standalone GitHub/GitLab adapter plan.
+
+Package: `internal/adapter/github`. `GithubAdapter` is the first dual-role adapter in the codebase: one struct implements both `WorkItemAdapter` and `RepoLifecycleAdapter` because both halves share the same config (`token`, `owner`, `repo`) and the same HTTP client.
+
+### Configuration
+
+```go
+type GithubConfig struct {
+    Token         string            `toml:"token"`         // optional; falls back to gh auth token once at startup
+    Owner         string            `toml:"owner"`         // required for scoped repo behavior and PR lifecycle targeting
+    Repo          string            `toml:"repo"`          // required for scoped repo behavior and PR lifecycle targeting
+    Assignee      string            `toml:"assignee"`      // filter Watch; "me" resolves via /user
+    PollInterval  string            `toml:"poll_interval"` // default: 60s
+    Reviewers     []string          `toml:"reviewers"`
+    Labels        []string          `toml:"labels"`
+    StateMappings map[string]string `toml:"state_mappings"`
+    // No DefaultBranch field: discover via GET /repos/{owner}/{repo} at startup.
+}
+```
+
+If `Token` is empty, adapter construction runs `gh auth token` exactly once at startup, caches the result, and uses that bearer token for all subsequent HTTP calls. If both config token and `gh auth token` are unavailable, construction fails and the adapter is not registered. The subprocess fallback exists only at initialization time; request handling stays REST-only.
+
+At startup, the adapter calls `GET /repos/{owner}/{repo}` and caches `default_branch`. If that call fails, fall back to `main` and log a warning instead of adding a `default_branch` config field that could drift.
+
+ExternalID format: `GH-{owner}-{repo}-{number}` (example: `GH-myorg-myrepo-42`).
+
+### Work Item Capabilities
+
+```go
+func (a *GithubAdapter) Capabilities() domain.AdapterCapabilities {
+    return domain.AdapterCapabilities{
+        CanWatch:     true,
+        CanBrowse:    true,
+        CanMutate:    true,
+        BrowseScopes: []domain.SelectionScope{
+            domain.ScopeIssues, domain.ScopeProjects,
+        },
+    }
+}
+```
+
+`ScopeInitiatives` is intentionally unsupported in the first cut. Return `ErrBrowseNotSupported` and keep a TODO for a dedicated GitHub Projects v2 design rather than pretending milestones or PRs are a substitute.
+
+### Browse, Watch, and Mutate
+
+> The initial concrete adapter remains repo-scoped. `09-unified-work-item-browsing.md` broadens issue browsing to `GET /issues` in the later redesign.
+
+- `ScopeIssues` -> `GET /repos/{owner}/{repo}/issues`
+- `ScopeProjects` -> `GET /repos/{owner}/{repo}/milestones`
+- `ScopeInitiatives` -> `ErrBrowseNotSupported`
+- Watch -> poll `/repos/{owner}/{repo}/issues?assignee={me}&state=open` with dedup map `number -> state`
+- `UpdateState` -> `PATCH /repos/{owner}/{repo}/issues/{number}` with `{ "state": "open" | "closed" }`, mapped via `state_mappings`
+- `AddComment` -> `POST /repos/{owner}/{repo}/issues/{number}/comments`
+
+### PR Lifecycle via REST
+
+> GitHub PR lifecycle deliberately does not shell out to `gh`. The adapter already owns an authenticated REST client, and keeping PR creation/readiness on that path removes subprocess coupling and keeps the lifecycle code unit-testable.
+
+Repo lifecycle behavior:
+- `OnEvent(WorktreeCreated)` -> idempotency guard with `GET /repos/{owner}/{repo}/pulls?head={branch}&state=open`; if none exists, `POST /repos/{owner}/{repo}/pulls` with `{ draft: true, head: branch, base: default_branch, title: ... }`.
+- `OnEvent(WorkItemCompleted)` -> find the PR with `GET /repos/{owner}/{repo}/pulls?head={branch}`, then `PATCH /repos/{owner}/{repo}/pulls/{number}` with `{ draft: false }`.
+- Maintain the same warn-on-failure policy as `glab`: log at WARN, never block workflow completion.
+- Protect the in-memory `branch -> PR` tracking map with `sync.RWMutex`, matching the codebase rule for shared mutable state.
+
+Lifecycle event coverage matches `glab`: respond to `WorktreeCreated` and `WorkItemCompleted`. Work item tracker events (`PlanApproved`, `WorkItemCompleted`) share the same payload dependency as the GitLab tracker adapter for external tracker mutation.
+
+**Wire registration:** register the GitHub adapter when lifecycle targeting is configured (`Owner` + `Repo`) and credentials are available either directly or through one-time `gh auth token` resolution. `09-unified-work-item-browsing.md` remains the source of truth for the later browse-config split that removes `owner`/`repo` as a hard requirement for issue browsing.
+
+---
+
+## 5. glab Adapter (RepoLifecycleAdapter)
+
+Package: `internal/adapter/glab`. Requires `glab` CLI installed and authenticated. Validates at startup. Unlike `internal/adapter/gitlab`, this package owns GitLab merge request lifecycle only; tracker issue data lives in the GitLab work item adapter.
 
 ```go
 type GlabAdapter struct {
@@ -385,9 +528,42 @@ auto_push         = true
 
 ---
 
-## 4. Agent Harness Interface
+## 6. Remote Detection for RepoLifecycleAdapter Registration
 
-Package: `internal/domain/harness`. The orchestrator is harness-agnostic.
+> Repo lifecycle adapters are not registered unconditionally. Startup inspects the workspace's git remotes and only enables the lifecycle adapter that matches the observed hosting platform.
+
+Package: `internal/app/remotedetect`. `BuildRepoLifecycleAdapters` receives `workspaceDir string` from startup rather than reading it from config. In `main.go`, `wsDir` is already resolved via `gitwork.FindWorkspace(cwd)`; the wire layer threads that runtime value into lifecycle registration.
+
+```go
+type Platform int
+
+const (
+    PlatformUnknown Platform = iota
+    PlatformGitHub
+    PlatformGitLab
+)
+
+func DetectPlatform(ctx context.Context, dir string) (Platform, error)
+```
+
+Detection rules:
+1. Run `git remote get-url origin` in the workspace directory.
+2. If `origin` is absent, fall back to the first remote alphabetically and log a warning naming the chosen remote.
+3. Match the remote host:
+   - `github.com` -> GitHub lifecycle adapter, if GitHub lifecycle config is present.
+   - `gitlab.com` -> `glab` lifecycle adapter.
+   - Any host listed in `~/.config/glab-cli/config.yml` under `hosts` -> `glab` lifecycle adapter.
+   - No match -> no lifecycle adapter; log a startup warning.
+
+If `workspaceDir == ""`, skip remote detection and register no lifecycle adapters, again with a warning. This keeps runtime-discovered environment state out of static config and prevents a GitLab repo from silently trying GitHub PR creation, or the inverse.
+
+`glab` still needs no `BaseURL` field for self-hosted GitLab lifecycle. The CLI infers the instance from the worktree remote; remote detection only answers whether the repository host is GitLab-like enough to route lifecycle hooks to `glab`.
+
+---
+
+## 7. Agent Harness Interface
+
+Package: `internal/domain/harness`. The orchestrator is harness-agnostic, but harness selection is now multi-provider: oh-my-pi remains the default documented execution path because it is the only harness with proven interactive correction and Foreman messaging support. Claude Code and Codex are wired behind the same contract for startup, progress, completion, and fallback selection, but they are not yet considered interaction-complete substitutes for oh-my-pi.
 
 ```go
 type AgentHarness interface {
@@ -438,6 +614,7 @@ type SessionResult struct {
 }
 
 type SessionEventType int
+
 const (
     SessionEventProgress        SessionEventType = iota
     SessionEventQuestion        // sub-agent called ask_foreman
@@ -453,207 +630,116 @@ type SessionEvent struct {
 }
 
 type HarnessCapabilities struct {
-    SupportsStreaming  bool
-    SupportsMessaging  bool
-    SupportedTools     []string
+    SupportsStreaming bool
+    SupportsMessaging bool
+    SupportedTools    []string
 }
 ```
 
-The orchestrator calls `StartSession`, reads `Events()` for TUI updates and question detection, and `Wait` for final result. Review critiques are sent via `SendMessage`.
+The current shared contract is intentionally small. Do not document richer shared modes or explicit answer-routing APIs as current state; those remain future candidates until the non-OMP harnesses prove they need them. Today, the key operational boundary is whether a harness has verified `SendMessage` parity for planning correction, review correction, and Foreman flows.
 
----
+### Harness Selection and Operational Policy
 
-## 5. oh-my-pi Harness Implementation
+Harness routing is config-driven. The repository supports a default harness, fallback order, and per-phase overrides (planning, implementation, review, foreman). The current operational policy is:
+- default to **oh-my-pi**
+- allow **Claude Code** then **Codex** as fallback/opt-in harnesses
+- fail early when the selected harness binary is unavailable
+- keep oh-my-pi as the documented safe path until Claude Code and Codex have real interactive messaging coverage
 
-Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge script.
+Representative config shape:
+```toml
+[harness]
+default = "ohmypi"
+fallback = ["claude-code", "codex"]
 
-### Protocol: JSON Lines over Stdio
+[harness.phase]
+planning = "ohmypi"
+implementation = "ohmypi"
+review = "ohmypi"
+foreman = "ohmypi"
+```
+
+### 7a. oh-my-pi Harness (default, fully interactive)
+
+Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge script. This remains the default harness in generated config and runtime selection because its bidirectional protocol is the only one currently verified for planning correction loops, review correction loops, and Foreman question/answer flows.
+
+**Transport and protocol:** JSON lines over stdio.
 
 **Go -> Bun (stdin):**
 ```json
 {"type":"prompt","text":"..."}
-{"type":"message","text":"..."}          
-{"type":"answer","text":"..."}           
+{"type":"message","text":"..."}
+{"type":"answer","text":"..."}
 {"type":"abort"}
 ```
 
 **Bun -> Go (stdout):**
 ```json
-{"type":"event","event":{"type":"progress","text":"Reading src/main.go..."}}          
-{"type":"event","event":{"type":"question","question":"...","context":"..."}}   
-    {"type":"event","event":{"type":"foreman_proposed","text":"...","uncertain":true}}
-{"type":"event","event":{"type":"complete","summary":"3 files, 2 commits"}}       
+{"type":"event","event":{"type":"progress","text":"Reading src/main.go..."}}
+{"type":"event","event":{"type":"question","question":"...","context":"..."}}
+{"type":"event","event":{"type":"foreman_proposed","text":"...","uncertain":true}}
+{"type":"event","event":{"type":"complete","summary":"3 files, 2 commits"}}
 ```
 
-The `answer` stdin message resolves a pending `ask_foreman` tool call in an agent session.
-The `foreman_proposed` event carries the Foreman LLM's proposed answer; the orchestrator renders it in the TUI and may loop with further `message` sends before approving.
-`uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain`. The bridge strips the confidence marker line from `text` before emitting.
+The `answer` stdin message resolves a pending `ask_foreman` tool call in an agent session. The `foreman_proposed` event carries the Foreman LLM's proposed answer; the orchestrator renders it in the TUI and may loop with further `message` sends before approving. `uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain`. The bridge strips the confidence marker line from `text` before emitting. `mapEvent` returns `null` for unhandled event types; the caller filters before emitting. Stderr is logged but not parsed as protocol.
 
-`mapEvent` returns `null` for unhandled event types; the caller filters before emitting (no null events reach Go).
+**Sandboxing and session modes:**
+- macOS uses `sandbox-exec` to restrict writes to the worktree and session temp directory.
+- Linux namespace-based isolation remains the intended equivalent.
+- Session modes remain `agent` and `foreman`; review reuses the read-only foreman-style tool restriction rather than introducing a separate shared mode in the current contract.
 
-Stderr is logged but not parsed as protocol.
+### 7b. Claude Code Harness (wired, messaging parity not yet verified)
 
-### Go Side (sketch)
+Package: `internal/adapter/claudecode`. This adapter exists behind the shared `AgentHarness` contract and is a viable non-interactive/streaming harness, but it is not yet a fully equivalent replacement for oh-my-pi because real interactive `SendMessage` continuation behavior has not been validated against an installed `claude` binary.
 
-```go
-func (h *OhMyPiHarness) StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error) {
-    if opts.Mode == "" { opts.Mode = SessionModeAgent }
-    workDir := opts.WorktreePath
-    if workDir == "" { workDir = h.workspaceRoot } // foreman uses workspace root
-    var cmd *exec.Cmd
-    if runtime.GOOS == "darwin" {
-        sessionTmpDir := fmt.Sprintf("/tmp/substrate-%s", opts.SessionID)
-        profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`, workDir, sessionTmpDir)
-        cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, h.bunPath, "run", h.bridgePath)
-    } else {
-        cmd = exec.CommandContext(ctx, h.bunPath, "run", h.bridgePath)
-    }
-    cmd.Dir = workDir
-    cmd.Env = append(os.Environ(),
-        "SUBSTRATE_BRIDGE_MODE="+string(opts.Mode),
-        "SUBSTRATE_THINKING_LEVEL="+h.cfg.ThinkingLevel,
-        "SUBSTRATE_ALLOW_PUSH="+strconv.FormatBool(opts.AllowPush),
-        "SUBSTRATE_SYSTEM_PROMPT="+base64.StdEncoding.EncodeToString([]byte(opts.SystemPrompt)))
-    stdin, _ := cmd.StdinPipe()
-    stdout, _ := cmd.StdoutPipe()
-    if err := cmd.Start(); err != nil { return nil, fmt.Errorf("start bridge: %w", err) }
-    s := &ohMyPiSession{id: opts.SessionID, cmd: cmd, stdin: stdin, events: make(chan SessionEvent, 64)}
-    go s.readEvents(stdout)
-    if opts.Mode == SessionModeAgent {
-        s.send(bridgeMsg{Type: "prompt", Text: opts.SubPlan.RawMarkdown})
-    }
-    // Foreman session receives its first question via SendMessage after startup.
-    return s, nil
-}
-```
+Current documented state:
+- supports startup, prompt injection, streaming/progress parsing, completion handling, and config-driven selection/fallback
+- should treat `stream-json` as the reference structured output mode
+- should restrict tools via Claude Code CLI flags when running read-only or limited modes
+- must not be considered production-equivalent for planning correction, review correction, or Foreman Q&A until real interactive session continuation is pinned and tested
 
-### Subprocess Sandboxing
-
-Agent subprocess file writes are restricted to the worktree directory at the OS level, preventing accidental or adversarial modification of `main/` worktrees or other workspace directories.
-
-**macOS (`sandbox-exec`):** The bridge subprocess is wrapped with `sandbox-exec` using a profile that allows reads everywhere but restricts `file-write*` to the session worktree path (shown in the `StartSession` sketch above).
-
-**Linux:** Mount namespaces (`unshare --mount`) with bind mounts achieve equivalent isolation. **Planning sessions** (no worktree) restrict writes to the `.substrate/sessions/<id>/` scratch directory only. **Review and foreman sessions** use `toolNames: ["read", "grep", "find"]` — no write tools are registered, making sandboxing redundant but retained for defence-in-depth.
-
-Network-level git remote policy (preventing `git push origin HEAD:main`) is enforced by remote branch protection rules, not by Substrate. Substrate sets the agent's working directory to the feature worktree; `git push` from that worktree pushes only the feature branch.
-
-```typescript
-import {
-    createAgentSession,
-    SessionManager,
-    Settings,
-    type AgentSessionEvent,
-    type CustomTool,
-} from "@oh-my-pi/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-import { createInterface } from "readline";
-
-const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";  // "agent" | "foreman"
-const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL ?? "xhigh";
-const systemPromptEnv = process.env.SUBSTRATE_SYSTEM_PROMPT ?? "";
-const systemPrompt = systemPromptEnv
-    ? Buffer.from(systemPromptEnv, "base64").toString("utf-8")
-    : undefined;
-
-const agentToolNames = mode === "agent"
-    ? ["read", "grep", "find", "edit", "write", "bash"]
-    : ["read", "grep", "find"]; // foreman and review: read-only, no write/bash
-
-// ask_foreman tool: only registered in agent mode.
-// Blocks until the orchestrator sends {type:"answer"} on stdin.
-let pendingAnswerResolve: ((text: string) => void) | null = null;
-
-const askForemanTool: CustomTool = {
-    name: "ask_foreman",
-    description: "Ask the foreman a question you cannot resolve from the plan or codebase.",
-    parameters: Type.Object({
-        question: Type.String({ description: "The question" }),
-        context:  Type.Optional(Type.String({ description: "Surrounding context from your work" })),
-    }),
-    execute: async (_toolCallId, args) => {
-        emit({ type: "question", question: args.question, context: args.context ?? "" });
-        const answer = await new Promise<string>(resolve => { pendingAnswerResolve = resolve; });
-        return answer;
-    },
-};
-
-const { session } = await createAgentSession({
-    cwd: process.cwd(),
-    sessionManager: mode === "foreman" ? SessionManager.inMemory() : SessionManager.create(process.cwd()),
-    thinkingLevel: thinkingLevel as any,
-    toolNames: agentToolNames,
-    spawns: "",         // prevent agent from spawning unmonitored sub-agents
-    enableMCP: false,
-    systemPrompt,
-    customTools: mode === "agent" ? [askForemanTool] : [],
-    ...(mode === "foreman" && {
-        settings: Settings.isolated({ "compaction.enabled": false }),
-    }),
-});
-
-let lastAssistantText = "";
-
-session.subscribe((event: AgentSessionEvent) => {
-    const mapped = mapEvent(event);
-    if (mapped !== null) {
-        emit(mapped);
-    }
-    // accumulate text for foreman_proposed / complete emission
-    if (event.type === "message_update" && (event as any).assistantMessageEvent?.type === "text_delta") {
-        lastAssistantText += (event as any).assistantMessageEvent.delta;
-    }
-});
-
-const rl = createInterface({ input: process.stdin });
-rl.on("line", async (line: string) => {
-    const msg = JSON.parse(line);
-    if (msg.type === "abort") { process.exit(0); }
-    if (msg.type === "answer") { pendingAnswerResolve?.(msg.text); pendingAnswerResolve = null; return; }
-    if (msg.type === "prompt" || msg.type === "message") {
-        await runPrompt(msg.text);
-    }
-});
-
-function extractConfidence(text: string): { text: string; uncertain: boolean } {
-    const lines = text.split("\n");
-    const last = lines[lines.length - 1].trim();
-    if (last === "CONFIDENCE: high") {
-        return { text: lines.slice(0, -1).join("\n").trimEnd(), uncertain: false };
-    }
-    if (last === "CONFIDENCE: uncertain") {
-        return { text: lines.slice(0, -1).join("\n").trimEnd(), uncertain: true };
-    }
-    return { text, uncertain: true }; // missing marker → conservative escalation
-}
-
-async function runPrompt(text: string): Promise<void> {
-    lastAssistantText = "";
-    await session.prompt(text, { expandPromptTemplates: false });
-    // session.prompt() resolves when the turn is complete
-    if (mode === "foreman") {
-        const { text: answer, uncertain } = extractConfidence(lastAssistantText);
-        emit({ type: "foreman_proposed", text: answer, uncertain });
-    } else {
-        emit({ type: "complete", summary: "Turn completed" });
-    }
-}
-
-function mapEvent(e: AgentSessionEvent): object | null {
-    if (e.type === "message_update" && (e as any).assistantMessageEvent?.type === "text_delta")
-        return { type: "progress", text: (e as any).assistantMessageEvent.delta };
-    if (e.type === "tool_execution_start")
-        return { type: "progress", text: `tool: ${(e as any).toolName}` };
-    return null; // filtered by caller before emitting
-}
-
-function emit(event: object) { process.stdout.write(JSON.stringify({ type: "event", event }) + "\n"); }
-```
-
+Representative config:
 ```toml
-[adapters.ohmypi]
-bun_path        = "bun"
-bridge_path     = "scripts/omp-bridge.ts"
-thinking_level = "xhigh"  # oh-my-pi thinkingLevel; applied to all sessions (sub-agents + foreman)
-                            # valid values are defined by oh-my-pi (e.g. xhigh, high, medium)
-                            # maps to model-specific settings (extended thinking budget, etc.)
+[adapters.claude_code]
+binary_path = "claude"
+model = "sonnet"
+permission_mode = "auto"
+max_turns = 50
+max_budget_usd = 10.00
 ```
+
+**Integration notes:**
+- strongest long-term candidate for rich non-OMP integration because it offers structured output, session persistence, and tool restriction flags
+- still blocked on verifying the live CLI continuation protocol needed for correctness-critical `SendMessage` flows
+- should remain behind explicit selection/fallback rather than replacing the oh-my-pi default until that verification exists
+
+### 7c. Codex Harness (wired, messaging parity not yet verified)
+
+Package: `internal/adapter/codex`. This adapter also exists behind the shared contract and is intended to provide reliable headless execution with conservative progress extraction first, richer event fidelity second.
+
+Current documented state:
+- supports startup, prompt injection, progress/completion parsing, and config-driven selection/fallback
+- should prefer conservative CLI integration rather than assuming feature parity with Claude Code or oh-my-pi
+- must not be considered production-equivalent for planning correction, review correction, or Foreman Q&A until real `SendMessage`-compatible behavior is validated against an installed `codex` binary
+
+Representative config:
+```toml
+[adapters.codex]
+binary_path = "codex"
+model = "o4"
+approval_mode = "full-auto"
+full_auto = false
+quiet = false
+```
+
+**Integration notes:**
+- built-in sandboxing and headless execution are useful, but the observable event contract is not yet pinned enough to document richer behavior as stable
+- should be rolled out conservatively: startup/completion first, richer event mapping only after fixture-backed parser coverage exists
+
+### Packaging, Testing, and Risk Notes
+
+- Bun is a runtime dependency for the default harness path and should remain documented in packaging/install flows.
+- `gh` and `glab` stay optional CLIs: missing `gh` disables GitHub token fallback/login flows; missing `glab` disables GitLab MR lifecycle automation.
+- The correctness-critical risk is unverified interactive messaging in Claude Code and Codex. Planning correction, review correction, and Foreman orchestration all rely on `SendMessage`; without real binary verification, documenting parity would be guesswork rather than an engineered contract.
+- Unit tests for non-OMP harnesses should cover argument building, event parsing, config validation, and fallback behavior when expected event shapes are absent.
+- Integration and end-to-end tests for Claude Code and Codex remain blocked until the real binaries are available to pin continuation/message semantics. Until then, the correct operational position is to use oh-my-pi as the default harness.

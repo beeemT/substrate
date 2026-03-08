@@ -1,7 +1,7 @@
 # 03 - Event System
 
-The event system is Substrate's integration backbone. Every meaningful state transition emits an event. Adapters subscribe to events to trigger side effects in external systems (Linear, GitLab). The bus is in-process, channel-based, and persisted to SQLite for audit and replay.
-See `02-layered-architecture.md` for where the event bus sits in the service layer. See `06-tui-design.md` for how the TUI subscribes to events for reactive updates.
+The event system is Substrate's integration backbone. Every meaningful state transition emits an event. Work item adapters subscribe to mutate external trackers (Linear, GitLab, GitHub), repo lifecycle adapters subscribe to create or advance GitLab merge requests and GitHub pull requests, and harness-driven orchestration publishes session/review/question events. The bus is in-process, channel-based, and persisted to SQLite for audit and replay.
+See `02-layered-architecture.md` for where the event bus sits in the service layer. See `04-adapters.md` for the adapter and harness implementations that consume these events, and `06-tui-design.md` for how the TUI subscribes to events for reactive updates.
 ---
 ## 1. System Events Catalog
 
@@ -272,18 +272,19 @@ CREATE INDEX idx_events_workspace ON system_events(workspace_id);
 ---
 ## 3. Hook Mechanism
 
-Adapters register event interest at startup via `EventBus.SubscribeType`. The orchestration layer publishes events; the bus routes them to registered handlers.
+Adapters register event interest at startup via `EventBus.SubscribeType`. The orchestration layer publishes events; the bus routes them to registered handlers. Work item adapters and repo lifecycle adapters are wired independently so tracker mutation and repository-host lifecycle automation can evolve without sharing a forced abstraction.
 
 **Pre-hooks** (e.g., `WorktreeCreating`): synchronous, block caller, error aborts operation, uses caller's context deadline. **Post-hooks** (all others): asynchronous, 30s timeout per handler, errors logged only. Panics recovered via `defer recover()`.
 
 ```go
-func (a *LinearAdapter) RegisterHooks(bus EventBus) {
-    bus.SubscribeType(EventPlanApproved, a.OnEvent)
-    bus.SubscribeType(EventWorkItemCompleted, a.OnEvent)
+for _, adapter := range workItemAdapters {
+    bus.SubscribeType(EventPlanApproved, adapter.OnEvent)
+    bus.SubscribeType(EventWorkItemCompleted, adapter.OnEvent)
 }
-func (a *GlabAdapter) RegisterHooks(bus EventBus) {
-    bus.SubscribeType(EventWorktreeCreated, a.OnEvent)
-    bus.SubscribeType(EventWorkItemCompleted, a.OnEvent)
+
+for _, adapter := range repoLifecycleAdapters {
+    bus.SubscribeType(EventWorktreeCreated, adapter.OnEvent)
+    bus.SubscribeType(EventWorkItemCompleted, adapter.OnEvent)
 }
 ```
 ---
@@ -334,8 +335,8 @@ The adapter methods serve distinct roles:
 - `ListSelectable` + `Resolve` is the interactive selection path: the TUI calls `ListSelectable` to populate a searchable list, then `Resolve` to aggregate selections into a `WorkItem`.
 - `Watch` is the reactive auto-assignment path, independent of interactive selection.
 - Adapters that lack browsing return `ErrNotSupported` from `ListSelectable`.
-- `OnEvent` dispatches via type switch. `UpdateState` maps `TrackerState` to Linear's state IDs (configured per-project in TOML). `AddComment` creates an `IssueComment` via GraphQL mutation.
-
+- `OnEvent` dispatches via type switch. Each adapter maps substrate events into provider-native tracker mutations — for example Linear state transitions, scoped GitLab issue updates, or GitHub issue state/comment calls.
+- The same shared interface intentionally covers adapters with different browse semantics. `09-unified-work-item-browsing.md` defines the broader UX contract; concrete provider behavior lives in `04-adapters.md`.
 See `01-domain-model.md` for the full type definitions of `AdapterCapabilities`, `ListOpts`, `ListResult`, `Selection`, and `SelectableItem`.
 
 ```go
@@ -377,21 +378,35 @@ type RepoLifecycleAdapter interface {
 
 Deliberately narrow. Repo lifecycle actions are event reactions, not imperative calls.
 
-### Glab Adapter Event Handling
+### Repo Lifecycle Adapter Event Handling
+
+`RepoLifecycleAdapter` remains deliberately narrow: repo-host automation is event-driven, not an imperative service API. Concrete implementations differ by platform and are selected at startup via remote detection.
 
 ```go
 func (a *GlabAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
     switch e := event.(type) {
     case WorktreeCreatedEvent:
-        return a.createDraftMR(ctx, e.RepositoryName, e.Branch)
+        return a.createDraftMR(ctx, e.RepositoryName, e.Branch, e.WorkItemTitle)
+    case WorkItemCompletedEvent:
+        return a.markAllReady(ctx, e.WorkItem.Repos)
+    default:
+        return nil
+    }
+}
+
+func (a *GithubAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
+    switch e := event.(type) {
+    case WorktreeCreatedEvent:
+        return a.ensureDraftPR(ctx, e.Branch, e.WorkItemTitle)
+    case WorkItemCompletedEvent:
+        return a.markReady(ctx, e.WorkItem.Repos)
     default:
         return nil
     }
 }
 ```
 
-`createDraftMR` shells out to `glab mr create --draft --source-branch <branch> --target-branch main`. Inherits the user's existing `glab` authentication.
-
+GitLab lifecycle remains delegated to `glab`, which infers the instance from the worktree remote. GitHub lifecycle uses direct REST calls rather than `gh`. `internal/app/remotedetect` decides which lifecycle adapter(s) to register by inspecting workspace git remotes at startup, preventing GitLab repos from accidentally attempting GitHub PR automation and vice versa.
 ---
 
 ## 6. Event Flow Diagrams
@@ -417,7 +432,7 @@ sequenceDiagram
     LinearAdapter->>LinearAPI: CreateComment("Plan approved...")
     Note over EventBus,LinearAdapter: Error in adapter logged,<br/>does not affect plan flow
 ```
-### 6b. Worktree Creation to Merge Request Creation
+### 6b. Worktree Creation to Repo Host Lifecycle Automation
 
 ```mermaid
 sequenceDiagram
@@ -426,8 +441,8 @@ sequenceDiagram
     participant SQLite
     participant PreHookHandlers
     participant GitWork
-    participant GlabAdapter
-    participant GitLab
+    participant LifecycleAdapter
+    participant RepoHost
     Orchestrator->>EventBus: Publish(WorktreeCreatingEvent)
     EventBus->>SQLite: Persist event
     EventBus->>PreHookHandlers: Run synchronously
@@ -437,8 +452,8 @@ sequenceDiagram
     GitWork-->>Orchestrator: worktree path
     Orchestrator->>EventBus: Publish(WorktreeCreatedEvent)
     EventBus->>SQLite: Persist event
-    EventBus-->>GlabAdapter: WorktreeCreatedEvent (async)
-    GlabAdapter->>GitLab: glab mr create --draft
+    EventBus-->>LifecycleAdapter: WorktreeCreatedEvent (async)
+    LifecycleAdapter->>RepoHost: create draft MR/PR
     Note over Orchestrator,GitWork: If pre-hook returns error,<br/>git-work checkout is skipped
 ```
 ## Design Decisions
@@ -449,4 +464,4 @@ sequenceDiagram
 
 **Single `OnEvent` dispatch.** Adapters register for specific types via `SubscribeType`. Adding event types never changes adapter interfaces.
 
-**Buffer size 256.** Conservative but generous. Dropped-event warnings (`slog.Warn`) signal pathologically slow handlers. When an `onDrop` handler is registered (the TUI does this), a warning toast is enqueued: e.g. `"Linear update skipped — event queue full"`. Preferable to unbounded memory growth.
+**Buffer size 256.** Conservative but generous. Dropped-event warnings (`slog.Warn`) signal pathologically slow handlers. When an `onDrop` handler is registered (the TUI does this), a warning toast is enqueued: e.g. `"GitHub PR update skipped — event queue full"` or `"Linear update skipped — event queue full"`. Preferable to unbounded memory growth.

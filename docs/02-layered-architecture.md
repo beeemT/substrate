@@ -275,7 +275,7 @@ State transitions are explicit and guarded. The service delegates persistence to
 
 ## 4. Business Logic Layer
 
-**Rules:** (1) Composes multiple services into workflows. (2) Orchestrates sequencing, error handling, rollback. (3) Emits system events via `EventService` (see `03-event-system.md`). (4) Invokes adapter hooks (Linear status, GitLab MR). (5) Owns cross-cutting concerns like "on plan approval → create worktrees → spawn agents."
+**Rules:** (1) Composes multiple services into workflows. (2) Orchestrates sequencing, error handling, rollback. (3) Emits system events via `EventService` (see `03-event-system.md`). (4) Invokes adapter hooks for external trackers and repository hosts — e.g. Linear/GitLab/GitHub tracker mutation plus GitLab MR or GitHub PR lifecycle. (5) Owns cross-cutting concerns like "on plan approval -> create worktrees -> spawn agents."
 
 The Orchestrator receives a `generic.Transacter` and uses `Transact` to wrap multi-repo mutations in a single atomic transaction. Inside each `Transact` closure, business logic calls **service methods** (available on `Resources`) whose repos are bound to the same transaction — so state-machine guards and persistence are always atomic. Events are emitted **after** the transaction commits.
 
@@ -285,8 +285,8 @@ package orchestrator
 type Orchestrator struct {
 	transacter generic.Transacter[generic.SQLXRemote, Resources]
 	eventBus   event.EventBus
-	harness    adapter.AgentHarness
-	// adapters...
+	harnesses  HarnessRouter
+	// work item adapters, repo lifecycle adapters, and other dependencies...
 }
 
 // OnPlanApproved delegates to PlanService.Approve inside a transaction so the
@@ -301,7 +301,8 @@ func (o *Orchestrator) OnPlanApproved(ctx context.Context, planID string) error 
 	}); err != nil {
 		return err
 	}
-	// Transaction committed. Safe to emit — adapter side effects (Linear, glab) run after this.
+	// Transaction committed. Safe to emit — adapter side effects (tracker mutations,
+	// repo lifecycle hooks, harness session startup) run after this point.
 	return o.eventBus.Publish(ctx, PlanApprovedEvent{
 		BaseEvent: newBaseEvent(EventPlanApproved),
 		Plan:      approvedPlan,
@@ -504,18 +505,24 @@ func main() {
 	// state-machine guards + persistence are always atomic. No separate service injection.
 
 	// Adapters
-	linearAdapter := linear.NewAdapter(cfg.Linear)
-	glabAdapter   := glab.NewAdapter(cfg.GitLab)
-	agentHarness  := ohmypi.NewBridge(cfg.Agent)
-
-	// Business logic
-	orch := orchestrator.New(transacter, linearAdapter, glabAdapter, agentHarness)
+	workItemAdapters := app.BuildWorkItemAdapters(cfg)
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, wsDir)
+	harnessRouter := app.BuildHarnessRouter(cfg)
 
 	// Event bus
 	eventRepo := sqlite.NewEventRepo(executor)
 	bus := event.NewEventBus(eventRepo)
-	linearAdapter.RegisterHooks(bus)
-	glabAdapter.RegisterHooks(bus)
+	for _, adapter := range workItemAdapters {
+		bus.SubscribeType(domain.EventPlanApproved, adapter.OnEvent)
+		bus.SubscribeType(domain.EventWorkItemCompleted, adapter.OnEvent)
+	}
+	for _, adapter := range repoLifecycleAdapters {
+		bus.SubscribeType(domain.EventWorktreeCreated, adapter.OnEvent)
+		bus.SubscribeType(domain.EventWorkItemCompleted, adapter.OnEvent)
+	}
+
+	// Business logic
+	orch := orchestrator.New(transacter, bus, harnessRouter, workItemAdapters, repoLifecycleAdapters)
 	bus.SubscribeType(domain.EventAgentSessionCompleted, orch.OnSessionCompleted)
 
 	// TUI
@@ -524,6 +531,6 @@ func main() {
 }
 ```
 
-**Wiring flow:** `sqlx.Open` → `sqlxexec.NewExecuter(db)` → `generic.NewTransacter(executor, ResourcesFactory)` → `adapter.New*(cfg)` → `orchestrator.New(transacter, adapters)` → `bus.SubscribeType(hooks)` → `tui.New(orch, bus).Run()`
+**Wiring flow:** `sqlx.Open` -> `sqlxexec.NewExecuter(db)` -> `generic.NewTransacter(executor, ResourcesFactory)` -> build work item adapters -> detect and build repo lifecycle adapters -> build harness router -> `orchestrator.New(...)` -> subscribe adapter hooks -> `tui.New(orch, bus).Run()`
 
-No global state. Every dependency is explicit in the constructor signature. Tests swap any layer by injecting a mock that satisfies the interface. See `04-adapters.md` for adapter contracts, `06-tui-design.md` for TUI consumption of the orchestrator.
+No global state. Every dependency is explicit in the constructor signature. Tests swap any layer by injecting a mock that satisfies the interface. See `04-adapters.md` for adapter contracts, remote detection, and harness implementations, `06-tui-design.md` for TUI consumption of the orchestrator.

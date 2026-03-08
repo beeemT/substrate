@@ -1,158 +1,65 @@
 # 05 - Orchestration
 
-Covers the full lifecycle: planning, approval, implementation, oversight, review, completion. For domain models see `01-domain-model.md`, events see `03-event-system.md`, workspace setup see `01-domain-model.md`.
+Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
+
+For domain/state definitions see `01-domain-model.md`. For event semantics see `03-event-system.md`. For provider, repo host, and harness behavior see `04-adapters.md`. For rollout status and test gates see `07-implementation-plan.md`.
 
 ---
 
 ## 1. Planning Pipeline
 
-Triggered when a work item enters the `Planning` state.
+Triggered when a work item enters the planning flow.
 
-**Flow:** `WorkItemReady → PullMainWorktrees → PreflightCheck → DiscoverRepos → BuildContext → RunPlanningAgent → ReadPlanDraft → ParseOutput → ValidateRepoNames → PersistDraft → PlanGenerated`
+**Runtime flow:**
 
-**0. Pull main worktrees.** Before discovery, run `git pull --ff-only` in the `main/` worktree of every git-work managed repo found in the workspace. This ensures planning operates on the current default branch state. If a pull fails (e.g. upstream conflict), surface as a workspace health warning requiring acknowledgement — do not fail hard. Continue with whatever state is present.
+`WorkItemReady -> PullMainWorktrees -> PreflightCheck -> DiscoverRepos -> BuildPlanningContext -> StartPlanningSession -> ParseDraft -> ValidatePlan -> PersistPlan -> PlanGenerated`
 
-**a. Pre-flight workspace check.** Scan all direct child directories of the workspace root. For each:
-- **git-work initialized** (`.bare/` present) → will be discovered in step b; no action
-- **plain git clone** (`.git/` present, no `.bare/`) → surface as a workspace health warning; requires explicit acknowledgement before it is dismissed
-- **other directories** → ignored
+### 1a. Refresh workspace inputs
 
-Uninitialized repos are not prevented from proceeding — the user may have intentionally unmanaged directories in the workspace. They will not appear in the planning agent's repo roster. If a repo that should be in scope is uninitialized, the resulting plan will be incomplete.
+Before planning:
+- pull `main/` worktrees with `git pull --ff-only`
+- re-scan the workspace for git-work repos
+- surface plain git clones as health warnings rather than silently treating them as managed repos
+- read workspace-level guidance (`AGENTS.md`) before the planning session starts
 
-**b. Discover repos.** Scan the workspace directory for git-work managed repos — any subdirectory containing a `.bare/` folder. For each discovered repo:
-- Record `Name` (directory name), `Path`, `MainDir` (absolute path to `main/` worktree)
-- Detect language and framework from manifest file existence (`go.mod` → Go, `package.json` → TypeScript/JS, `Cargo.toml` → Rust, `pyproject.toml`/`setup.py` → Python); detect framework from key dependencies in the manifest if useful
-- Check for `AGENTS.md` in `MainDir`; record its path if present
+Planning operates on `main/` worktrees only. Feature worktrees from other active items are excluded from planning context.
 
-Read the workspace-root `AGENTS.md` content (if present) as `WorkspaceAgentsMd`. This is the only file content read before the planning agent starts.
+### 1b. Build planning context
 
-```go
-type RepoPointer struct {
-    Name         string   // directory name
-    MainDir      string   // absolute path to main/ worktree
-    Language     string   // "go", "typescript", "rust", "python", "unknown"
-    Framework    string   // "gin", "next", "axum", etc.; empty if not detected
-    AgentsMdPath string   // absolute path to AGENTS.md if present; else empty
-}
-```
+The planning context contains:
+- work item snapshot
+- workspace guidance
+- discovered repo pointers
+- plan draft path for the planning session
 
-**c. Build context bundle.**
+The planning harness explores the workspace and writes its plan to the draft path. The draft file, not the final chat response, is the source of truth for plan parsing.
 
-```go
-type PlanningContext struct {
-    WorkItem          WorkItemSnapshot // title, description, labels, priority
-    WorkspaceAgentsMd string           // content of workspace-root AGENTS.md; empty if absent
-    Repos             []RepoPointer    // all discovered repos
-    SessionDraftPath  string           // absolute path to plan-draft.md for this session
-}
-```
+### 1c. Parse and validate the draft
 
-**d. Run planning agent.** Substrate generates a session ULID, creates `.substrate/sessions/<session-id>/` in the workspace root, and starts an agent harness session (see `04-adapters.md`) with cwd = workspace root and full filesystem access to all repos' `main/` worktrees. The session ID and draft path are recorded in `SessionOpts.SessionID` and `SessionOpts.DraftPath` respectively. The agent explores the workspace, determines which repos need changes, and writes its plan progressively to `SessionOpts.DraftPath`.
+The draft must begin with a fenced `substrate-plan` YAML block that defines `execution_groups`, followed by orchestration prose and one sub-plan section per declared repo.
 
-**Context stability rule**: The agent's filesystem access covers `main/` worktrees only. Feature worktrees from other active work items are not visible during planning.
+Validation rules:
+1. every repo in `execution_groups` must exist in the discovered workspace repo set
+2. every declared repo must have a matching sub-plan section
+3. no sub-plan may exist for a repo absent from `execution_groups`
 
-### Planning Prompt Template
+If validation fails or the draft is missing, Substrate sends a correction message to the same planning session and retries up to `plan.max_parse_retries`.
 
-Rendered via Go `text/template`:
+### 1d. Persist plan
 
-```
-{{if .WorkspaceAgentsMd}}
-## Workspace Guidance
-{{.WorkspaceAgentsMd}}
-{{end}}
-## Work Item
-Title: {{.WorkItem.Title}}
-ID: {{.WorkItem.ExternalID}}
-Description:
-{{.WorkItem.Description}}
+On success:
+- persist the orchestration plan and sub-plans atomically
+- assign execution order from the `execution_groups` index
+- emit `PlanGenerated`
+- retain the session draft directory as audit data
 
-## Repos
-{{range .Repos}}
-- {{.Name}} ({{.Language}}{{if .Framework}}/{{.Framework}}{{end}}) — {{.MainDir}}
-{{- if .AgentsMdPath}}  guidance: {{.AgentsMdPath}}{{end}}
-{{- if .DocPaths}}  docs: {{range .DocPaths}}{{.}} {{end}}{{end}}
-{{end}}
-
-## Instructions
-If `{{.SessionDraftPath}}` already exists, read it first to orient yourself before exploring.
-Explore the workspace before finalising your plan. After each significant decision or
-exploration finding, update `{{.SessionDraftPath}}`. Substrate reads this file as your
-plan output — your final message is not used. The last complete version in the file
-when the session ends is what gets executed.
-
-Begin the file with a fenced code block tagged `substrate-plan` containing YAML:
-
-```substrate-plan
-execution_groups:
-  - [<repo-name>, ...]   # group 1: no dependencies, run first (parallel within group)
-  - [<repo-name>, ...]   # group 2: run after group 1 completes (parallel within group)
-  # add further groups as needed; list only repos that require changes
-```
-
-Then write:
-
-## Orchestration
-<cross-repo coordination, shared contracts, data flow, rationale for execution order>
-
-## SubPlan: <repo-name>
-<files to change, approach, tests, edge cases>
-
-One `## SubPlan` section per repo listed in `execution_groups`. Omit repos requiring no changes.
-
-## Validation
-Before marking complete: run all relevant formatters, compilation checks, and unit tests.
-All must pass. Refer to AGENTS.md in this repo for tooling specifics.
-```
-
-**e. Read plan draft.** Read the file at `SessionOpts.DraftPath` (`.substrate/sessions/<session-id>/plan-draft.md` within the workspace root). If the file does not exist, enter the correction loop immediately (see step g) with message: *"Your plan was not written to {{.SessionDraftPath}}. Write your complete plan to this file now."* Find the fenced code block with info string `substrate-plan`. If absent → correction loop. Parse YAML. Extract `execution_groups: [][]string`. Flatten to `declared_repos []string` (ordered, deduped).
-
-**f. Validate.** Three rules, all must pass:
-1. Every name in `declared_repos` matches a `DiscoveredRepo.Name` (case-insensitive). Collect unknowns.
-2. For every name in `declared_repos`, find a SubPlan section: search for any markdown heading (any level) whose text contains that name (case-insensitive). Collect names with no matching section.
-3. Any heading whose text matches the pattern `SubPlan.*<name>` for a name NOT in `declared_repos` is an undeclared repo. Collect those too.
-
-```go
-type RawPlanOutput struct {
-    ExecutionGroups [][]string // from substrate-plan YAML; group index = exec_order
-    Orchestration   string     // Orchestration section prose
-    SubPlans        []RawSubPlan
-}
-
-type RawSubPlan struct {
-    RepoName string // name from execution_groups, matched to section heading
-    Body     string // full section content
-}
-
-type ParseErrors struct {
-    MissingBlock        bool
-    UnknownRepos        []string // in YAML but not in workspace
-    MissingSubPlans     []string // in YAML but no matching section found
-    UndeclaredSubPlans  []string // section found but not in YAML
-}
-
-func (e ParseErrors) HasErrors() bool
-```
-
-**g. Automatic correction loop.** On `ParseErrors.HasErrors()` or missing plan draft, send a correction message to the planning agent (same session — conversation continues, full history preserved):
-
-```
-Your plan had structural errors that prevent execution:
-{{.Errors}}
-
-Valid repos in this workspace: {{.DiscoveredRepos}}
-
-Re-read {{.SessionDraftPath}} to see your current plan, then address the errors above.
-Rewrite {{.SessionDraftPath}} with your complete revised plan. The substrate-plan YAML
-block must appear first, before any prose.
-```
-
-Retry up to `plan.max_parse_retries` (default `2`). On exhaustion: emit `PlanFailed { WorkItemID, Errors }`, surface to human with full error details, work item returns to `Ingested`.
-
-**h. Persist.** Build `Plan` + `SubPlan` domain objects. Assign `SubPlan.Order` from the group index (repos in `execution_groups[0]` → `Order=0`, `execution_groups[1]` → `Order=1`, etc.). Sub-plans in the same group share the same `Order` value and will run in parallel. Save via go-atomic transaction. Emit `PlanGenerated { PlanID, Version }`. The session directory `.substrate/sessions/<session-id>/` is retained as an audit trail.
+For draft format and implementation-phase validation gates, see `07-implementation-plan.md`.
 
 ---
 
 ## 2. Plan Review Loop
+
+The plan review loop is the human control point between planning and implementation.
 
 ```mermaid
 stateDiagram-v2
@@ -161,525 +68,225 @@ stateDiagram-v2
     InReview --> Approved: human approves
     InReview --> Revising: human requests changes
     InReview --> Rejected: human rejects
-    Revising --> InReview: agent revises
-    Rejected --> [*]: back to Ingested
+    Revising --> InReview: revised plan parsed and persisted
+    Rejected --> [*]: work item returns to ingested
     Approved --> [*]: PlanApproved
 ```
 
-**TUI presentation:** Scrollable markdown view with section navigation (Orchestration, each SubPlan). Action bar: `[a]pprove  [c]hange  [r]eject`.
+### Review actions
 
-**Approve:** Status → Approved. Emit `PlanApproved { PlanID, WorkItemID }`. Triggers implementation.
+- **Approve** — mark the plan approved and emit `PlanApproved`
+- **Request changes** — start a new planning session with the current plan plus human feedback; replace the existing plan contents in place and increment version on success
+- **Reject** — return the work item to the ingested state and retain the workspace/session audit trail
 
-**Request Changes:** Inline text input for feedback. The existing plan record is updated in place (content replaced, version incremented, status reset to `draft`). A new planning session is started — the original session is not resumed. The new session receives the current plan text (read from DB) and the human's feedback embedded in its prompt:
-```
-The human has requested changes to this plan:
-{{.Feedback}}
-
-The current plan is below. Apply the requested changes and write your revised plan to
-`{{.NewSessionDraftPath}}`. Use the same substrate-plan format.
-
---- CURRENT PLAN ---
-{{.CurrentPlan}}
----
-```
-Output parsed. The existing `Plan` record is updated in-place: `OrchestratorPlan` and `SubPlan` contents replaced, `Version` incremented, `UpdatedAt` refreshed. The previous session directory is retained on disk as an audit trail. Emit `PlanRevised`.
-
-**Reject:** Emit `PlanRejected { PlanID, Reason }`. Work item → `Ingested`. Workspace retained.
+The TUI interaction model for this loop belongs to `06-tui-design.md`; the runtime effect belongs here.
 
 ---
 
-## 3. Implementation Orchestrator
+## 3. Implementation Runtime
 
 Triggered by `PlanApproved`.
 
-### Execution Wave Scheduling
+### 3a. Build execution waves
 
-The orchestrator reads sub-plans ordered by `SubPlan.Order`. Sub-plans with equal `Order` form a wave and run in parallel. Waves execute sequentially — wave N+1 starts only after all sub-plans in wave N reach `completed` (or `failed`).
+Sub-plans are grouped by `SubPlan.Order`.
+- equal order => same wave => run in parallel
+- later order => later wave => start only after the previous wave reaches terminal status
 
-```go
-// BuildWaves groups sub-plans by Order into sequential execution waves.
-// Sub-plans within a wave run concurrently.
-func BuildWaves(subPlans []SubPlan) [][]SubPlan {
-    groups := map[int][]SubPlan{}
-    for _, sp := range subPlans {
-        groups[sp.Order] = append(groups[sp.Order], sp)
-    }
-    orders := sortedKeys(groups) // ascending
-    waves := make([][]SubPlan, len(orders))
-    for i, o := range orders {
-        waves[i] = groups[o]
-    }
-    return waves
-}
-```
+This lets the planner express explicit cross-repo dependency order while preserving safe parallelism.
 
-```
-execution_groups:          →  Wave 0: [backend-api, shared-lib]  parallel
-  - [backend-api, shared-lib]  Wave 1: [frontend-app]             after Wave 0
-  - [frontend-app]
-```
+### 3b. Per-sub-plan lifecycle
 
-### Per Sub-Plan Execution
+For each sub-plan in a ready wave:
+1. derive a shared branch name from the work item external ID and title slug
+2. create or reuse the feature worktree
+3. emit `WorktreeCreating` before checkout and `WorktreeCreated` after checkout
+4. start an implementation harness session in that worktree
+5. stream session events into orchestration state and the TUI
+6. on success, emit `AgentSessionCompleted`
+7. on failure, emit `AgentSessionFailed` and pause/escalate per orchestration policy
 
-**i. Create worktree.** Branch: `sub-<externalID>-<short-slug>` where `externalID` is `WorkItem.ExternalID` (e.g. `LIN-FOO-123` or `MAN-001`) and the slug is derived from the work item title (lowercased, spaces→dashes, stripped to `[a-z0-9-]`, consecutive dashes collapsed, leading/trailing dashes trimmed, max 30 chars). Example: `sub-LIN-FOO-123-fix-auth-flow`. All dashes, no slashes — avoids git ref namespace collisions. The same branch name is used in every repo touched by this work item. Before creating, check if worktree already exists via `git-work list` (idempotency guard — see section 7). Emit `WorktreeCreating` (pre-hook, can abort), then `WorktreeCreated` (post-hook, e.g. glab creates draft MR).
+### 3c. Idempotency expectations
 
-```go
-cmd := exec.CommandContext(ctx, "git-work", "checkout", "-b", branch)
-cmd.Dir = repoDir
-```
+Implementation must tolerate retries and resume:
+- worktree creation checks for an existing worktree first
+- repo-host lifecycle automation must detect and reuse existing MR/PR state
+- tracker updates should be safe when the target state already matches
+- plan revisions update the same plan record rather than creating divergent copies
 
-**ii. Start agent session.** Prompt = sub-plan + orchestration section. Session config:
+Concrete provider and repo-host guards live in `04-adapters.md`.
 
-```go
-type AgentSessionConfig struct {
-    WorkDir   string         // worktree path
-    Prompt    string         // assembled prompt
-		SubPlanID string
-    EventCh   chan AgentEvent // events → orchestrator
-    MessageCh chan string     // orchestrator → session
-}
-```
+### 3d. Harness routing at runtime
 
-Each session runs in its own goroutine. Events multiplexed to foreman + orchestrator.
+The orchestrator chooses a harness per phase through harness routing.
 
-**iii. Monitor.** The orchestrator loops: get ready nodes, launch them in parallel, `wg.Wait()`, check for failures. On failure: mark node + transitive dependents as blocked, pause pipeline, surface to human (options: retry, skip, abort).
+Current operational rule:
+- oh-my-pi is the default verified interactive harness
+- Claude Code and Codex may be selected or used as fallbacks
+- correction-loop and Foreman-sensitive phases must not assume non-OMP parity unless that parity has been proven
 
-**iv. On completion:** Emit `AgentSessionCompleted`, trigger review cycle (section 5).
-
-**v. Build and test validation.** Each repo's `AGENTS.md` is the canonical source for build and test validation instructions. The agent reads `AGENTS.md` at session start and runs whatever build, format, and test checks are specified there. No separate validation command is configured in `substrate.toml`.
-
-### Commit Strategy
-
-The agent session receives commit instructions as part of its system context, derived from the `[commit]` block in `substrate.toml`:
-
-```toml
-[commit]
-strategy = "semi-regular"       # "granular" | "semi-regular" | "single"
-message_format = "ai-generated" # "ai-generated" | "conventional" | "custom"
-message_template = ""           # used when message_format = "custom"
-```
-
-Strategy modes:
-
-- `granular`: commit after each logical change (function, file, config entry)
-- `semi-regular` (default): commit when a complete unit of work is done — e.g. after implementing a full feature component or adding all files for one sub-task; not after every file, not one big commit at the end
-- `single`: one commit at the end of the session
-
-Commit messages are AI-generated by default (the model picks a message from diff context). If `message_format = "conventional"`, the agent is instructed to follow Conventional Commits format. If `message_format = "custom"`, `message_template` is passed as the format string.
+Harness capabilities, maturity, and routing policy live in `04-adapters.md`; rollout status lives in `07-implementation-plan.md`.
 
 ---
 
-## 4. Foreman Agent
+## 4. Foreman Handling
 
-A persistent oh-my-pi harness session running for the duration of implementation. Started on `PlanApproved`, terminated when all sub-plans reach a terminal state. Reduces human interrupts by answering sub-agent questions from accumulated cross-repo context.
+The Foreman handles unresolved questions during implementation.
 
-```go
-type Foreman struct {
-    session    HarnessSession   // persistent oh-my-pi session (mode=foreman)
-    plan       *Plan
-    questionCh chan pendingQuestion
-    events     EventBus
-}
+### 4a. Model
 
-type pendingQuestion struct {
-    question AgentQuestion
-    answerCh chan<- string // write here to unblock the sub-agent's tool call
-}
+The Foreman is a persistent harness session that holds:
+- the approved plan
+- accumulated FAQ / answered questions
+- prior Foreman conversation context
 
-func (f *Foreman) Run(ctx context.Context) error // drains questionCh until ctx done
-func (f *Foreman) Ask(q AgentQuestion) <-chan string // enqueues; returns answer channel
-```
+Questions are serialized through that single session so later answers can rely on earlier resolved context.
 
-Questions are **serialized**: one at a time through the single persistent session. A sub-agent calling `ask_foreman` blocks on the tool call until the answer arrives on `answerCh`. The second question waits in `questionCh` — it is already blocked on a tool call, so extra wait is inconsequential. The persistent session accumulates full conversation history across all questions: later questions can be answered from earlier Q&A context without any external lookup.
-
-### Two-Tier Resolution
+### 4b. Two-tier resolution
 
 ```mermaid
 flowchart TD
-    Q[Question arrives] --> Foreman[Foreman LLM turn]
-    Foreman --> Conf{Confidence?}
-    Conf -->|high| Auto[Auto-answer, append to FAQ]
-    Conf -->|uncertain| Human[Surface to human]
-    Human --> Loop[Human ↔ Foreman back-and-forth]
-    Loop --> Approve[Human approves]
-    Approve --> Forward[Send answer to sub-agent, append to FAQ]
+    Q[Question arrives] --> F[Foreman turn]
+    F --> C{Confidence}
+    C -->|high| A[Auto-answer + append FAQ]
+    C -->|uncertain| H[Escalate to human]
+    H --> L[Human ↔ Foreman loop]
+    L --> P[Human approves answer]
+    P --> R[Reply to blocked agent + append FAQ]
 ```
 
-**Foreman — LLM answer (persistent session)**
+Runtime policy:
+- if the Foreman returns a high-confidence answer, Substrate auto-answers
+- if the Foreman is uncertain, the human reviews and may iterate with the Foreman before approving
+- every answered question is appended to the plan FAQ so later sessions and reviews inherit the clarified decision
 
-Send the question as a user message to the persistent Foreman session. The session holds full context: plan + docs + all prior Q&A in conversation history. The Foreman LLM emits a `foreman_proposed` event with its answer.
+### 4c. Recovery
 
-The Foreman system prompt instructs explicit confidence signalling:
-```
-If you can answer with high confidence from the plan and prior Q&A, answer directly.
-If uncertain, state what you do not know and propose your best answer with caveats.
-Do not fabricate facts about the codebase.
-End every response with exactly one line: `CONFIDENCE: high` or `CONFIDENCE: uncertain`.
-Choose `high` only if the answer is fully supported by the plan and prior Q&A.
-Choose `uncertain` if you are extrapolating, guessing, or lack information.
-```
+If the Foreman session dies while answering a question:
+- re-queue the in-flight question at the front of the queue
+- restart the Foreman with the current plan + FAQ as context
+- deliver the re-queued question first
+- escalate directly to the human if repeated immediate restarts imply the question no longer fits in the usable context window
 
-Response ends with `CONFIDENCE: high` → auto-answer, append to FAQ.
-Response ends with `CONFIDENCE: uncertain` → escalate to human.
+The question UI belongs to `06-tui-design.md`; the runtime restart behavior belongs here.
 
-**Human escalation**
-
-Surface to the TUI `waiting_question` panel. The human sees the question, the Foreman's proposed answer pre-filled, and the Foreman's stated uncertainty. The human may respond directly or iterate: each human message is forwarded to the Foreman session via `SendMessage()`, producing a refined `foreman_proposed`. This loop continues until the human presses `[A]pprove`. Only on approval is the answer written to `answerCh` and forwarded to the blocked sub-agent. Append to FAQ.
-
-### FAQ
-
-A `faq` section is appended to the live plan document (stored as a DB field, rendered in the TUI plan view, passed to review agents as context). Each entry represents a decision made during implementation that was not already in the plan.
-
-```go
-type FAQEntry struct {
-    ID             string    `json:"id"`
-    PlanID         string    `json:"plan_id"`
-    AgentSessionID string    `json:"session_id"`
-    RepoName       string    `json:"repo_name"`
-    Question       string    `json:"question"`
-    Answer         string    `json:"answer"`
-    AnsweredBy     string    `json:"answered_by"` // "foreman" | "human"
-    CreatedAt      time.Time `json:"created_at"`
-}
-```
-
-All answered questions produce FAQ entries.
-
-### Recovery
-
-**In-flight question on Foreman restart:** When the Foreman session terminates (context overflow or crash) while actively answering a question (the question was already dequeued from `questionCh`), the orchestrator detects the exit via `Wait()` and re-queues the in-flight question before restarting the Foreman:
-
-```go
-func (f *Foreman) Run(ctx context.Context) error {
-    for {
-        pq, ok := <-f.questionCh
-        if !ok { return nil }
-        err := f.answerOne(ctx, pq)
-        if err != nil {
-            // session died: re-queue the question and restart the session
-            f.requeueQuestion(ctx, pq)
-            if restartErr := f.restartSession(ctx); restartErr != nil {
-                return restartErr
-            }
-            continue
-        }
-    }
-}
-
-// requeueQuestion puts the in-flight question onto questionFront so the
-// restarted session answers it before any new question.
-// The goroutine respects ctx cancellation to avoid leaking on shutdown.
-func (f *Foreman) requeueQuestion(ctx context.Context, pq pendingQuestion) {
-    go func() {
-        select {
-        case f.questionFront <- pq:
-        case <-ctx.Done():
-        }
-    }()
-}
-```
-
-The `Foreman.Run` loop checks `questionFront` first with a non-blocking receive, then falls through to a blocking `select` on both channels. Go `select` has no channel priority, so an explicit non-blocking check is required:
-
-```go
-for {
-    // Drain priority re-queue first.
-    var pq pendingQuestion
-    var ok bool
-    select {
-    case pq, ok = <-f.questionFront:
-    default:
-        select {
-        case pq, ok = <-f.questionCh:
-        case pq, ok = <-f.questionFront:
-        }
-    }
-    if !ok { return nil }
-    // ... answer pq
-}
-```
-
-The sub-agent's `ask_foreman` tool call remains blocked on `answerCh` throughout the restart; it unblocks only when the restarted Foreman writes to `answerCh`.
-
-**Restart protocol (unchanged):**
-1. Detect termination via `Wait()` returning.
-2. Load the **current plan from DB** (includes all FAQ entries) — use as system prompt for the new session.
-3. Drain `questionFront` first, then `questionCh`, delivering the re-queued question as the first user message.
-4. No questions are lost.
-
-**Unrecoverable edge case:** A question whose combined context (plan + FAQ + question text) saturates the full context window produces 3+ immediate restarts without a `foreman_proposed` event. The orchestrator detects this pattern and escalates directly to the human, bypassing the Foreman entirely.
 ---
 
-## 5. Review Pipeline
+## 5. Review and Re-Implementation
 
-Triggered by `AgentSessionCompleted` for each sub-plan.
+Triggered by `AgentSessionCompleted` for a sub-plan.
 
-**a. Start review agent session.** Spawn a harness session in **foreman mode** (read-only tools: `read`, `grep`, `find`). The session's `cwd` is the repo's feature worktree. The system prompt instructs the agent to compare its worktree against `main`, evaluate against the sub-plan, and output structured critiques or `NO_CRITIQUES`.
+### 5a. Review session
 
-The review agent decides for itself what to read: it may run `git diff main`, read specific changed files, or run build/test commands via grep/find. The orchestrator does not dump a diff into the prompt — the agent explores the worktree and forms its own picture.
+Substrate starts a review harness session in the same repository worktree, with read-only review-oriented behavior. The review agent explores the worktree relative to `main`, evaluates the result against:
+- the repo sub-plan
+- cross-repo orchestration notes
+- accumulated FAQ decisions
 
-Prompt template:
-````
-## Task
-Review the changes in this repository against the plan. Compare the feature branch against `main`. Identify correctness, completeness, and quality issues.
+The orchestrator does not provide a precomputed diff as the canonical truth; the review session forms its own picture from the worktree.
 
-## Sub-Plan
-{{.SubPlan.Content}}
+### 5b. Structured output and correction loop
 
-## Cross-Repo Plan (Orchestration)
-{{.Plan.Orchestration}}
+Review output must be either:
+- exactly `NO_CRITIQUES`, or
+- one or more structured critique blocks
 
-## FAQ
-{{.Plan.FAQ}}
+If the output is unparseable, Substrate sends a correction message to the same review session and retries up to `plan.max_parse_retries`.
 
-## Output Format
-If no issues (or only nit-level issues that do not require fixing): output exactly `NO_CRITIQUES`.
-Otherwise, for each issue output:
+### 5c. Decision logic
 
-CRITIQUE
-File: <path or "general">
-Severity: critical | major | minor | nit
-Description: <what is wrong and what to do>
-END_CRITIQUE
-````
+- pass immediately if critiques are absent or below the configured failure threshold
+- start re-implementation if any critique meets or exceeds the configured blocking severity
+- escalate to human intervention when the review cycle count exceeds `review.max_cycles`
 
-**b. Parse critiques** via regex on `CRITIQUE`/`END_CRITIQUE` markers.
+### 5d. Re-implementation
 
-**c. Correction loop.** If the output neither contains `NO_CRITIQUES` nor any valid `CRITIQUE` blocks, send a correction message to the review session (same session — full history preserved):
-```
-Your output was not parseable. Output either:
-- Exactly "NO_CRITIQUES" if there are no issues requiring fixes, or
-- One or more CRITIQUE / END_CRITIQUE blocks (see format above).
-Do not include explanatory prose outside these markers.
-```
-Retry up to `plan.max_parse_retries` (default 2). On exhaustion: treat as zero critiques and log a warning.
+Re-implementation runs in the same worktree and receives:
+- the original sub-plan
+- the cross-repo orchestration context
+- the review critique set
 
-**d. Decision logic.**
+The runtime loop is:
 
-| Condition | Action |
-|---|---|
-| `NO_CRITIQUES` or only `minor`/`nit` | `ReviewCompleted` |
-| Any `major` or `critical` critique | `CritiquesFound` → re-implementation |
+`Implement -> Review -> (Pass | Re-implement | Escalate)`
 
-Configurable via `review.pass_threshold` in `substrate.toml`: `nit_only` \| `minor_ok` (default) \| `no_critiques`.
+Threshold values and rollout gates live in `07-implementation-plan.md`.
 
-### Re-Implementation Loop
-
-```mermaid
-flowchart TD
-    Review --> Parse[Parse critiques]
-    Parse --> Major{Major/Critical?}
-    Major -->|No| Pass[ReviewCompleted]
-    Major -->|Yes| Cycle{cycle < max?}
-    Cycle -->|Yes| Fix[New session: sub-plan + critiques]
-    Fix --> Review
-    Cycle -->|No| Escalate[Human intervention]
-```
-
-New session runs in **same worktree** (builds on previous commits). Prompt: original sub-plan + critique list. Max cycles configurable (default 3). Exceeded → pause, notify human with full critique history.
-
+---
 
 ## 6. Completion
 
-## 6. Completion
+Triggered when all sub-plans have passed review.
 
-Triggered when **all** sub-plans pass review.
+Completion runtime steps:
+1. verify every sub-plan is in a terminal successful state
+2. emit `WorkItemCompleted`
+3. allow subscribed adapters to perform tracker and repo-host side effects
+4. render the completion summary in the TUI
+5. retain the workspace and worktrees for reference until the operator prunes them
 
-**a.** Verify all sub-plans in `Completed` status (defensive check).
-
-**b.** Emit `WorkItemCompleted`:
-
-```go
-type WorkItemCompleted struct {
-		WorkItemID string
-		PlanID     string
-    Repos      []RepoResult
-    Duration   time.Duration
-}
-
-type RepoResult struct {
-    RepoName       string
-    Branch         string
-    ReviewCycles   int
-    CritiquesFixed int
-}
-```
-
-**c.** Adapter hooks fire (see `03-event-system.md`): Linear moves to Done, glab marks MRs ready.
-
-**d.** TUI completion summary: work item ID, per-repo stats (branch, review cycles, MR link), stale doc warnings, elapsed time.
-
-**e.** Workspace retained. Worktrees persist until `gw sync` is run to prune merged or no-longer-needed worktrees. DB record updated to `Completed`.
+This document owns the fact that completion emits the event and ends the runtime workflow. `03-event-system.md` owns event semantics. `04-adapters.md` owns what specific providers and repo hosts do in response.
 
 ---
 
-## 7. Resume & Recovery
+## 7. Resume and Recovery
 
-Substrate must handle crashes, user quits, and restarts gracefully. This section defines the reconciliation, resume, and shutdown protocols.
+Substrate must recover from crashes, process exits, and interrupted sessions without corrupting work.
 
-### Startup Reconciliation
+### 7a. Startup reconciliation
 
-On TUI launch or `substrate` CLI invocation:
+On startup:
+- resolve the current workspace from `.substrate-workspace`
+- reconcile moved workspace paths against persisted workspace identity
+- inspect instance heartbeats and session ownership
+- mark abandoned running sessions as `interrupted`
+- surface interrupted sessions to the TUI for operator action
 
-1. **Find workspace.** Walk from cwd upward looking for `.substrate-workspace` file. If not found, prompt user or error.
-2. **Load workspace.** Read workspace ID (ULID) from `.substrate-workspace`. Look up workspace in `~/.substrate/state.db` by ID.
-3. **Path reconciliation.** If the workspace path stored in DB differs from the current filesystem path (i.e. the user moved the folder), update the DB record. The workspace ID is the stable identity, not the path.
-4. **Check instance liveness via lock table.** Query `substrate_instances` for the current workspace:
-   - For each `agent_sessions` row with `status = 'running'`:
-     - If `owner_instance_id` is NULL or its row is missing from `substrate_instances`: transition to `interrupted`.
-     - If `owner_instance_id` row exists but `last_heartbeat` is older than 15 seconds: transition to `interrupted` and DELETE the stale instance row.
-     - If `last_heartbeat` is within 15 seconds: another live instance owns this session. This instance can observe via session log but cannot send inputs. Skip.
-5. **Surface state.** Dashboard shows all work items for this workspace. Interrupted sessions appear with `[R]esume` / `[A]bandon` actions.
+### 7b. Resume
 
-```go
-// On startup: register this instance in the lock table.
-func (s *OrchestrationService) RegisterInstance(ctx context.Context, wsID string) error {
-    instance := domain.SubstrateInstance{
-        ID:            ulid.Make().String(),
-        WorkspaceID:   wsID,
-        PID:           os.Getpid(),
-        Hostname:      hostname(),
-        LastHeartbeat: time.Now(),
-    }
-    if err := s.instances.Create(ctx, instance); err != nil {
-        return err
-    }
-    s.instanceID = instance.ID
-    go s.heartbeatLoop(ctx) // updates last_heartbeat every 5s
-    return nil
-}
+When resuming an interrupted session:
+- keep the old session as audit history
+- assign ownership to the current instance
+- start a new session in the same worktree
+- pass the original sub-plan plus recent session-log context
+- instruct the harness to inspect existing partial changes before continuing
+- emit `AgentSessionResumed`
 
-func (s *OrchestrationService) heartbeatLoop(ctx context.Context) {
-    ticker := time.NewTicker(5 * time.Second)
-    defer ticker.Stop()
-    for {
-        select {
-        case <-ctx.Done(): return
-        case <-ticker.C:
-            _ = s.instances.UpdateHeartbeat(ctx, s.instanceID, time.Now())
-        }
-    }
-}
-```
+### 7c. Abandon
 
-### Resume Protocol
+When abandoning an interrupted session:
+- mark the session failed
+- leave recovery choices to the operator (manual fix, reset, or worktree removal)
 
-When a human selects `[R]esume` on an interrupted session:
+### 7d. Graceful shutdown
 
-**Availability:** `[R]esume` is offered when the session's `owner_instance_id` is NULL, the owner instance row is missing from `substrate_instances`, its `last_heartbeat` is older than 15 seconds, or the current instance is the owner.
+On clean shutdown:
+- mark live sessions interrupted
+- record shutdown timestamps
+- terminate harness subprocesses with timeout + kill fallback
+- remove the current instance heartbeat row
 
-**On resume:** update `agent_sessions.owner_instance_id` to the current instance ID before spawning the new session.
-1. The old session stays in DB as `interrupted` (audit trail).
-2. Substrate starts a **new** agent harness session in the **same worktree** — the partial work is already on disk.
-3. The new session receives: original sub-plan + orchestration context + the last 50 lines from `~/.substrate/sessions/<interrupted-session-id>.log` (prior activity context) + resume preamble:
+### 7e. Session logs
 
-```
-You are continuing work on this sub-plan. The worktree may contain partial
-changes from a previous session that was interrupted. Before proceeding:
-1) Run `git status` and `git diff` to understand current state.
-2) Review any uncommitted changes.
-3) Continue implementing remaining items from the sub-plan.
-```
+Session logs are the durable output stream used for:
+- live observation across instances
+- resume context
+- audit history
+- rotated storage for long-running sessions
 
-4. The new session links to the same `SubPlan` (via `sub_plan_id` FK). The sub-plan now has two sessions: the interrupted one and the resumed one.
-5. Emit `AgentSessionResumed { OldSessionID, NewSessionID, SubPlanID }`.
-6. On completion, the normal review pipeline (section 5) applies.
+Schema, lock-table ownership, and session-log persistence details are specified in `02-layered-architecture.md` and `07-implementation-plan.md`.
 
-### Abandon Protocol
-
-When a human selects `[A]bandon` on an interrupted session:
-
-1. Session status → `failed`.
-2. Human can then:
-   - Reset worktree: `git checkout .` in the worktree directory
-   - Manually fix and commit the partial changes
-   - Remove the worktree entirely: `git-work remove <branch>`
-3. The sub-plan can be re-executed from scratch if the human chooses to retry from the TUI.
-
-### Idempotency Guards
-
-All side-effecting operations must be idempotent to support resume without corruption:
-
-| Operation | Guard |
-|---|---|
-| Worktree creation | Before `git-work checkout -b <branch>`, run `git-work list` and check if the worktree already exists. Skip creation if present. |
-| MR creation | glab adapter calls `glab mr list --source-branch <branch>` before creating. If MR exists, skip. |
-| Linear state updates | Setting the same status is inherently a no-op. |
-| Plan persistence | Update in place by plan ID. Version is incremented atomically on each revision. |
-
-### Graceful Shutdown
-
-On SIGINT, SIGTERM, or TUI quit:
-
-1. **Mark sessions.** All `running` sessions for the current workspace → `interrupted` in DB. Record `shutdown_at` timestamp.
-2. **Signal subprocesses.** Send SIGTERM to all tracked agent subprocess PIDs.
-3. **Wait.** Up to 10 seconds for subprocesses to exit.
-4. **Force kill.** Any surviving subprocesses receive SIGKILL.
-5. **Clean exit.**
-6. **Deregister instance.** DELETE the row from `substrate_instances` for the current instance.
-
-The `shutdown_at` timestamp distinguishes a clean shutdown (timestamp present) from a crash (no timestamp, detected on next startup by finding `running` sessions with dead PIDs).
-
-```go
-func (s *OrchestrationService) Shutdown(ctx context.Context) {
-    s.mu.Lock()
-    // Snapshot active sessions and mark them interrupted while holding the lock.
-    sessions := make([]*activeSession, 0, len(s.activeSessions))
-    for _, sess := range s.activeSessions {
-        sess.Status = StatusInterrupted
-        sess.ShutdownAt = ptr(time.Now())
-        s.agents.Update(ctx, sess)
-        syscall.Kill(sess.PID, syscall.SIGTERM)
-        sessions = append(sessions, sess)
-    }
-    s.mu.Unlock() // Release before blocking wait — prevents deadlock with heartbeat and event handlers.
-
-    deadline := time.After(10 * time.Second)
-    for _, sess := range sessions {
-        select {
-        case <-sess.Done:
-        case <-deadline:
-            syscall.Kill(sess.PID, syscall.SIGKILL)
-        }
-    }
-}
-```
-
-### PID Tracking
-
-The `agent_sessions` table includes a `pid INTEGER` column (nullable). Populated when the subprocess starts, cleared on clean completion. Used exclusively by the startup reconciliation protocol to detect crashed sessions.
-
-
-### Session Logging and Log Rotation
-
-Session log files are written to `~/.substrate/sessions/<session-id>.log`. Log segments are rotated **during** the session: when the current segment exceeds 10 MB, it is compressed and a new segment opened. A maximum of 5 compressed segments are retained per session. After session completion the final segment is compressed. This prevents disk exhaustion on multi-hour sessions.
-
-Plan draft files are written to `<workspace-root>/.substrate/sessions/<session-id>/plan-draft.md` and are not subject to rotation.
 ---
 
-## Orchestration Service Interface
+## Runtime Responsibility Summary
 
-Top-level service owning the full flow:
-
-```go
-type OrchestrationService struct {
-    workItems  WorkItemService
-    workspaces WorkspaceService
-    planning   PlanningService
-    agents     AgentHarnessService
-    reviews    ReviewService
-    foreman    *Foreman
-    events     EventBus
-    config     *OrchestratorConfig
-}
-
-func (s *OrchestrationService) Run(ctx context.Context, workItemID string) error
-func (s *OrchestrationService) Plan(ctx context.Context, workItemID string) (*Plan, error)
-func (s *OrchestrationService) ApprovePlan(ctx context.Context, planID string) error
-func (s *OrchestrationService) RejectPlan(ctx context.Context, planID string, reason string) error
-func (s *OrchestrationService) RequestPlanChanges(ctx context.Context, planID string, feedback string) (*Plan, error)
-func (s *OrchestrationService) Implement(ctx context.Context, planID string) error
-func (s *OrchestrationService) ReviewSubPlan(ctx context.Context, subPlanID string) (*ReviewResult, error)
-```
-
-`Run` composes phases with event-driven transitions. TUI calls individual methods (`ApprovePlan`, etc.) directly. `Run` is for non-interactive/test execution.
+| Topic | Owned here | Refer to |
+|---|---|---|
+| Planning flow | yes | `04-adapters.md`, `07-implementation-plan.md` |
+| Plan review runtime | yes | `06-tui-design.md` |
+| Execution waves and retries | yes | `04-adapters.md` |
+| Foreman handling | yes | `04-adapters.md`, `06-tui-design.md` |
+| Review/reimplementation loop | yes | `07-implementation-plan.md` |
+| Event catalog/handler semantics | no | `03-event-system.md` |
+| Provider/harness internals | no | `04-adapters.md` |
+| Schema/DI/persistence | no | `02-layered-architecture.md` |

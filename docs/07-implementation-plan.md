@@ -14,8 +14,12 @@ internal/
     adapter/
         linear/        # Linear GraphQL adapter (issues/projects/initiatives)
         manual/        # Manual work item input adapter
-        glab/          # glab CLI wrapper
+        gitlab/        # GitLab REST work item adapter
+        github/        # GitHub REST adapter (issues + PR lifecycle)
+        glab/          # GitLab MR lifecycle via glab CLI
         ohmypi/        # oh-my-pi agent harness (renamed from harness/omp)
+    app/
+        remotedetect/  # git remote host detection for lifecycle adapter registration
     event/             # pub/sub bus, hook dispatch
     gitwork/           # git-work CLI wrapper
     config/            # TOML config loading
@@ -37,6 +41,7 @@ Config loading validates:
 - `[plan]` block (`max_parse_retries` int, default 2).
 - `[review]` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3).
 - `[foreman]` block **[UPDATED - IMPLEMENTED]**: `enabled` bool (default true), `question_timeout` duration string (default "0" = wait indefinitely).
+- `[harness]` block **[UPDATED - IMPLEMENTED]**: default harness, fallback order, and per-phase overrides (`planning`, `implementation`, `review`, `foreman`). oh-my-pi remains the generated default because it is the only harness with verified interactive correction support.
 - `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bun_path`, `bridge_path`, `thinking_level` (maps to oh-my-pi thinkingLevel for all sessions).
 - Per-repo `[repos.<name>]` sections are optional.
 
@@ -205,46 +210,77 @@ func (c *Client) Remove(ctx context.Context, repoDir, branch string) error
 
 **Gate:** Unit: canned output parsed correctly. Integration: `substrate init` creates `.substrate-workspace` with valid ULID. Workspace scan discovers repos with `.bare/`. Checkout → `test-branch/` exists. Remove → gone. `go test ./internal/gitwork/...` and `go test -tags=integration ./internal/gitwork/...`
 
-## Phase 6: Agent Harness + oh-my-pi Bridge (Week 4-5)
+## Phase 6: Multi-Harness Agent Integration (Week 4-5)
+
+Substrate now supports multiple harness adapters behind the shared `AgentHarness` contract. The implementation standard is deliberately asymmetric: oh-my-pi is the default and only fully verified interactive harness; Claude Code and Codex are selectable and wired, but their live follow-up messaging semantics remain unverified until real binaries are available.
+
+### 6a. oh-my-pi bridge (default, production path)
 
 Bridge script (`bridge/omp-bridge.ts`): JSON-line protocol over stdio.
 
-**Go → Bun (stdin):**
+**Go -> Bun (stdin):**
 - `{"type":"prompt","text":"..."}` — initial prompt or continuation
-- `{"type":"message","text":"..."}` — follow-up message (human iteration)
+- `{"type":"message","text":"..."}` — follow-up message (human iteration / correction loop)
 - `{"type":"answer","text":"..."}` — resolve pending `ask_foreman` tool call
 - `{"type":"abort"}` — terminate session
 
-**Bun → Go (stdout):**
+**Bun -> Go (stdout):**
 - `{"type":"event","event":{"type":"progress","text":"..."}}` — text delta
 - `{"type":"event","event":{"type":"question","question":"...","context":"..."}}` — agent called `ask_foreman`
 - `{"type":"event","event":{"type":"foreman_proposed","text":"...","uncertain":true}}` — foreman session produced answer with confidence marker
 - `{"type":"event","event":{"type":"complete","summary":"..."}}` — turn completed
 
-**[NEW]** `foreman_proposed` event carries the Foreman LLM's proposed answer. `uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain` (last line of response). The bridge strips the confidence marker line from `text` before emitting. Missing confidence marker → conservative `uncertain: true`.
+**[NEW]** `foreman_proposed` carries the Foreman LLM's proposed answer. `uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain`; missing confidence marker also defaults to `uncertain: true`. `mapEvent` returns `null` for unhandled event types and the caller filters before emission.
 
-**[NEW]** `mapEvent` returns `null` for unhandled event types; the caller filters before emitting (no null events reach Go).
+**[NEW] Custom Tool — ask_foreman:** only registered in agent mode. Blocks until orchestrator sends `{type:"answer"}` on stdin.
 
-Go side (`internal/adapter/ohmypi/`): spawns `bun run bridge/omp-bridge.ts`, manages JSON-line I/O, maps to `domain.AgentEvent`, handles lifecycle.
+**[NEW] Subprocess sandboxing:**
+- **macOS:** wrap the bridge with `sandbox-exec`, allowing reads everywhere but restricting writes to the session worktree and session temp directory.
+- **Linux:** use mount namespaces / bind mounts for equivalent isolation.
+- **Planning sessions:** restrict writes to `.substrate/sessions/<id>/`.
+- **Review and foreman sessions:** register read-only tool sets; sandbox remains defence-in-depth.
 
-**[NEW] Subprocess Sandboxing:**
-- **macOS:** Bridge subprocess wrapped with `sandbox-exec` using a profile that allows reads everywhere but restricts `file-write*` to the session worktree path and a session-specific temp directory (`/tmp/substrate-<session-id>/`).
-- **Linux:** Mount namespaces (`unshare --mount`) with bind mounts achieve equivalent isolation.
-- **Planning sessions** (no worktree): restrict writes to `.substrate/sessions/<id>/` scratch directory only.
-- **Review and foreman sessions:** use read-only tool set (`read`, `grep`, `find`) — no write tools registered.
+### 6b. Claude Code adapter (implemented, interaction parity blocked)
 
-**[NEW] Custom Tool — ask_foreman:** Only registered in agent mode. Blocks until orchestrator sends `{type:"answer"}` on stdin. The tool's `execute` function emits a `question` event and awaits resolution via Promise.
+Package: `internal/adapter/claudecode/`. Implement against the current `AgentHarness` contract first: startup, prompt injection, streaming/progress translation, completion handling, config-driven selection, and fallback routing.
 
-**Gate:** Unit: JSON-line round-trip correct. Integration: session starts, trivial prompt produces `text_delta`, clean shutdown. `Abort()` terminates subprocess within 5s. `go test ./internal/adapter/ohmypi/...` and `go test -tags=integration ./internal/adapter/ohmypi/...`
+- Use `stream-json` as the preferred structured output mode.
+- Restrict tools through Claude Code CLI flags when running reduced-capability sessions.
+- Treat parser shape as version-pinned and fixture-tested before depending on richer event variants.
+- Do **not** claim planning/review correction or Foreman parity until real `claude` CLI continuation semantics are observed and tested.
 
-**Agent output log:** All JSON events emitted by the bridge stdout are tailed and written to `~/.substrate/sessions/<session-id>.log` in JSONL format with timestamps. This file is the source of truth for session output, enabling:
-- **Multi-instance:** any Substrate instance can tail the log to display live or historical output without holding the subprocess.
-- **Resume context:** interrupted sessions include last N lines of the log as context for the new session preamble.
-- **Audit:** full session history persisted independently of the DB.
+### 6c. Codex adapter (implemented, interaction parity blocked)
 
-The Go harness adapter opens the log file on session start (`O_CREATE|O_APPEND`), writes each received event, and closes it when the session exits or is aborted.
+Package: `internal/adapter/codex/`. Prioritise reliable startup, prompt injection, and conservative progress/completion parsing before richer event fidelity.
 
-**Log rotation** runs during session execution: rotate at 10 MB segments, compressing the previous segment. Keep maximum 5 compressed segments. After session completion, compress the final segment. TUI tailing handles rotation by detecting size regression or inode change and resetting offset to 0.
+- Keep the adapter behind explicit selection/fallback; do not over-promise feature parity with oh-my-pi.
+- Use fixture-backed parsing before documenting richer event contracts.
+- Do **not** claim planning/review correction or Foreman parity until real `codex` continuation semantics are observed and tested.
+
+### 6d. Harness routing, packaging, and validation
+
+Representative config shape:
+```toml
+[harness]
+default = "ohmypi"
+fallback = ["claude-code", "codex"]
+
+[harness.phase]
+planning = "ohmypi"
+implementation = "ohmypi"
+review = "ohmypi"
+foreman = "ohmypi"
+```
+
+- Build a central harness router/builder that resolves the preferred harness per phase, checks binary availability, and falls back deterministically.
+- Keep Bun as a packaging/runtime dependency for the default install path because oh-my-pi remains the default harness.
+- Treat Claude Code and Codex integration tests for interactive messaging as blocked work until the real binaries are installed and authenticated in the development environment.
+
+**Gate:**
+- `go test ./internal/adapter/ohmypi/...` plus integration tests for the Bun bridge
+- unit tests for `internal/adapter/claudecode/...` and `internal/adapter/codex/...` covering arg building, parser behavior, and fallback handling
+- harness routing tests proving default/fallback/per-phase selection
+- no documentation or runtime defaults may claim Claude Code or Codex are fully equivalent to oh-my-pi until interactive `SendMessage` parity is proven
 
 ## Phase 7: Planning Pipeline (Week 5-6)
 
@@ -284,7 +320,7 @@ Context assembly:
 
 ## Phase 9: Foreman + Review Pipeline (Week 7-8)
 
-**Foreman:** A persistent oh-my-pi harness session running for the duration of implementation. Started on `PlanApproved`, terminated when all sub-plans reach terminal state.
+**Foreman:** A persistent foreman-phase harness session running for the duration of implementation. In the current verified operational path this is oh-my-pi; other harnesses must not be treated as equivalent until interactive messaging parity is proven. Started on `PlanApproved`, terminated when all sub-plans reach terminal state.
 
 **[NEW] Two-tier resolution:**
 1. **Foreman LLM answer:** Send question to persistent Foreman session (holds full context: plan + docs + prior Q&A). Foreman emits `foreman_proposed` event with answer and confidence marker.
@@ -358,15 +394,46 @@ This is a small phase, likely 1-2 days of effort.
 
 **Gate:** Unit tests: `Resolve` produces valid `WorkItem` from `ManualWorkItemInput`, `Watch` returns closed channel, `UpdateState` and `AddComment` are no-ops. `go test ./internal/adapter/manual/...`
 
-## Phase 11: glab Adapter (Week 8-9)
+## Phase 11: GitLab / GitHub / glab Adapters (Week 8-9)
 
-Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create --draft --source-branch ... --reviewer ... --label ...`, parse MR URL. `OnEvent(WorkItemCompletedEvent)`: `glab mr update --source-branch <branch> --draft=false` for each repo.
+Deliver the remaining provider adapters and lifecycle routing in one coherent phase: GitLab work item support, GitHub work item + PR lifecycle support, the existing `glab` lifecycle adapter, and startup remote detection that registers the right lifecycle adapter for the current workspace.
 
-**[NEW] MR title:** Prefer `WorkItemTitle` from event payload. Fallback to title derived from branch slug (e.g., "sub-LIN-FOO-123-fix-auth-flow" → "Fix auth flow [LIN-FOO-123]").
+### GitLab work item adapter (`internal/adapter/gitlab/`)
 
-**[NEW] Error policy:** glab failures log at WARN and **never block** the workflow. Users can always manage MRs manually.
+REST client with token auth, scoped issue/milestone/epic support, polling watch loop, and tracker mutation hooks.
 
-**Gate:** WorktreeCreated event → OnEvent fires → MR created. JSON parsing from `mr view`. Integration (requires glab auth): event fires → MR created. `go test ./internal/adapter/glab/...`
+- Config: `token`, `base_url` (default `https://gitlab.com`), `project_id`, `assignee`, `poll_interval`, `state_mappings`. No `group_id` field; discover `namespace.id` from `GET /projects/{id}` at startup.
+- ExternalID format: `GL-{projectID}-{issueIID}` using the stable numeric project ID.
+- Browse: `ScopeIssues -> /projects/{id}/issues`, `ScopeProjects -> /projects/{id}/milestones`, `ScopeInitiatives -> /groups/{group_id}/epics` with `ErrBrowseNotSupported` on 403/Premium absence.
+- Watch: poll opened assigned issues, dedup by `iid -> state`, minimum interval 30s.
+- Mutations: issue state update via `state_event`, comment creation via notes API.
+- Event hooks: `PlanApproved -> in_progress`, `WorkItemCompleted -> done`; failure comment remains deferred until payloads carry the needed tracker context.
+
+### GitHub dual adapter (`internal/adapter/github/`)
+
+Single struct implementing both `WorkItemAdapter` and `RepoLifecycleAdapter` because tracker and PR lifecycle share auth, owner/repo targeting, and one REST client.
+
+- Config: `token`, `owner`, `repo`, `assignee`, `poll_interval`, `reviewers`, `labels`, `state_mappings`. No `default_branch` field; discover from `GET /repos/{owner}/{repo}` and fall back to `main` with warning.
+- Token fallback: when `token` is empty, run `gh auth token` once at startup, cache the result, and never shell out again during request handling.
+- ExternalID format: `GH-{owner}-{repo}-{number}`.
+- Browse: `ScopeIssues -> /repos/{owner}/{repo}/issues`, `ScopeProjects -> /repos/{owner}/{repo}/milestones`, `ScopeInitiatives -> ErrBrowseNotSupported` with TODO for Projects v2.
+- Watch + mutate: poll repo issues, update issue state with REST `PATCH`, add comments with REST `POST`.
+- PR lifecycle: idempotent draft PR creation on `WorktreeCreated`, mark ready on `WorkItemCompleted`, both via REST; protect branch-to-PR cache with `sync.RWMutex`; never block the workflow on failure.
+
+### glab lifecycle adapter (`internal/adapter/glab/`)
+
+Keep GitLab MR lifecycle on `glab` rather than duplicating GitLab MR semantics in REST. `WorktreeCreated` creates a draft MR and `WorkItemCompleted` marks it ready. Prefer `WorkItemTitle` from event payload for MR title with branch-derived fallback. Errors stay WARN-only and non-blocking.
+
+### Remote detection for lifecycle registration (`internal/app/remotedetect/`)
+
+`BuildRepoLifecycleAdapters` receives `workspaceDir string` from startup and calls `DetectPlatform(ctx, workspaceDir)` before registering lifecycle adapters.
+
+- Resolve `origin` remote URL, falling back to the first remote alphabetically with warning when `origin` is absent.
+- Match `github.com` -> GitHub lifecycle adapter when configured.
+- Match `gitlab.com` or any host in `~/.config/glab-cli/config.yml` `hosts` -> `glab` lifecycle adapter.
+- Unknown host or missing workspace dir -> register no lifecycle adapter and log a warning.
+
+**Gate:** Unit tests cover GitLab ExternalID parsing, group discovery, GitHub token/default-branch fallback, REST PR idempotency, and remote host detection. Integration tests cover `./internal/adapter/gitlab/...`, `./internal/adapter/github/...`, `./internal/adapter/glab/...`, and `./internal/app/remotedetect/...` with provider credentials/CLIs available.
 
 ## Phase 12: TUI (Week 9-11)
 
@@ -391,8 +458,8 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 **[NEW] Content panel modes:** Driven by `WorkItemState` plus `AgentSessionStatus` for sub-modes (question, interrupted). See `06-tui-design.md` §2c for mapping.
 
 **[NEW] New Session overlay:**
-- **Linear source:** Filterable issue list with multi-select (Space), scope dropdown (Issues/Projects/Initiatives).
-- **Manual source:** Title (textinput) + Description (textarea) form.
+- Unified provider browser per `09-unified-work-item-browsing.md`: All / Linear / GitHub / GitLab source modes, explicit scope selection, server-side search, provider-aware filters, and manual work item creation as a separate action path.
+- Initial provider implementations remain constrained by adapter capabilities: Linear supports issues/projects/initiatives; GitHub and GitLab begin with their concrete adapter scopes and later broaden to global issue inboxes as specified in `09-unified-work-item-browsing.md`.
 
 **[NEW] Multi-instance support:**
 - Instance registration in `substrate_instances` with heartbeat every 5s.
@@ -404,7 +471,7 @@ Wraps `glab` CLI. Event-driven: `OnEvent(WorktreeCreatedEvent)`: `glab mr create
 
 ## Phase 13: End-to-End Integration (Week 11-12)
 
-Full workflow: Linear issue → plan → approve → implement → review → done. Work item traverses all states. MRs created in GitLab. Error recovery: killed agent restartable, network failure recovers via backoff, corrupt plan surfaced to human, git-work failure shows remediation hint. Performance: 5-repo plan < 5 min, total workflow < 30 min.
+Full workflow: provider issue (Linear, GitLab, or GitHub) -> plan -> approve -> implement -> review -> done. Lifecycle automation follows the workspace remote: GitLab repos create MRs via `glab`, GitHub repos create PRs via REST. Error recovery: killed agent restartable, network failure recovers via backoff, corrupt plan surfaced to human, git-work failure shows remediation hint. Performance: 5-repo plan < 5 min, total workflow < 30 min.
 
 **Gate:** `go test -tags=integration,e2e -timeout=30m ./test/e2e/...`
 
@@ -417,10 +484,15 @@ go test -race ./...
 go vet ./...
 
 # Integration (tagged, nightly CI with secrets)
-go test -tags=integration ./internal/gitwork/...          # needs git-work + network
-go test -tags=integration ./internal/adapter/ohmypi/...   # needs bun + omp creds
-go test -tags=integration ./internal/adapter/linear/...   # needs SUBSTRATE_LINEAR_API_KEY
-go test -tags=integration ./internal/adapter/glab/...     # needs glab auth
+go test -tags=integration ./internal/gitwork/...               # needs git-work + network
+go test -tags=integration ./internal/adapter/ohmypi/...        # needs bun + omp creds
+go test -tags=integration ./internal/adapter/linear/...        # needs SUBSTRATE_LINEAR_API_KEY
+go test -tags=integration ./internal/adapter/gitlab/...        # needs GitLab token/project config
+go test -tags=integration ./internal/adapter/github/...        # needs GitHub token or gh auth
+go test -tags=integration ./internal/adapter/glab/...          # needs glab auth
+go test -tags=integration ./internal/adapter/claudecode/...    # needs claude CLI once available
+go test -tags=integration ./internal/adapter/codex/...         # needs codex CLI once available
+go test -tags=integration ./internal/app/remotedetect/...      # needs fixture/config coverage
 
 # End-to-end (manual trigger, all deps)
 go test -tags=integration,e2e -timeout=30m ./test/e2e/...
@@ -432,18 +504,16 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| oh-my-pi SDK breaks bridge | Medium | High | Pin version, version protocol (`"protocol":1` handshake), integration test catches |
+| oh-my-pi SDK / Bun bridge breaks | Medium | High | Pin bridge protocol, keep integration coverage on the default harness path, and keep Bun as an explicit packaging dependency |
+| Claude/Codex interactive messaging remains unverified | High | High | Keep oh-my-pi as default, block parity claims until real binary tests pin `SendMessage` continuation semantics |
 | git-work output format changes | Low | Medium | Regex parsing (not positional), typed wrapper isolates blast radius |
 | Linear rate limiting | Medium | Low | Exponential backoff with jitter on 429, configurable interval (default 30s) |
 | Agent produces unparseable plan | High | Medium | Retry with format instructions, fallback to raw markdown + human decomposition, max 2 retries |
 | Review loop doesn't converge | Medium | High | Hard cycle limit (default 3), escalate to human, preserve critique history |
 | Large repos slow planning | Medium | Medium | `.substrateignore` filtering, token budget with priority ordering, depth-2 summarization |
 | SQLite write contention | Low | Medium | Single writer goroutine + channel queue, WAL mode, separate read connections |
-| Bridge subprocess zombies | Medium | Medium | PID tracking, watchdog reaper, SIGTERM → 10s → SIGKILL |
 | git-work not installed | High | High | Startup PATH check, actionable error with install instructions, fail fast |
-| Linear API schema changes break project/initiative queries | Low | Medium | Typed response structs catch at compile time, integration tests catch at runtime, graceful degradation (fall back to issues-only scope) |
-| Agent output log growth (unbounded log files for long sessions) | Low | Low | Rolling log segments during session: rotate at 10 MB threshold, compress previous segment. TUI tailing follows newest segment by tracking inode/size. |
-| go-atomic SQLITE_BUSY retry not yet in isRetryable | Low | Low | **[RESOLVED - IMPLEMENTED]** go-atomic isRetryable extended in Phase 0 to include SQLITE_BUSY (5) and SQLITE_LOCKED (6). |
+| Provider or harness CLI output format changes | Medium | High | Pin versions, parser fixtures, compatibility tests |
 | Foreman context degrades gradually from Q&A history | Medium | Medium | Periodic compacted restart: after N questions (configurable, default 20), restart the Foreman session with a summarized FAQ as system prompt instead of full history. Note: compaction is disabled in the bridge (`compaction.enabled: false`), so Go-side restart with summary is the only mitigation. |
 
 ## Known Gaps

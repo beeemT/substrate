@@ -397,13 +397,13 @@ type NewSessionOverlay struct {
 
 Accessed via `c` from anywhere. Renders as a full-screen settings page rather than the legacy configuration modal.
 
-Settings are organized into sections for commit/planning/review/foreman behavior, harness routing, harness configuration, provider configuration, and repo overrides.
+Settings are organized into sections for commit/planning/review/Foreman behavior, harness routing, harness configuration, provider configuration, and repo overrides.
 
 Provider secrets owned by Substrate are stored in the OS keychain. The config file stores stable secret references such as `api_key_ref` / `token_ref`, while runtime hydration loads the actual secret values before adapters are built. GitHub still supports `gh auth token` fallback when no keychain-backed token is configured.
 
-Harness-owned credentials are handled by the relevant harness via structured harness actions rather than being persisted directly by the TUI.
+Harness-owned credentials are handled by the relevant harness via structured harness actions rather than being persisted directly by the TUI. The settings page must make the current maturity boundary clear: oh-my-pi is the default verified interactive harness, while Claude Code and Codex are selectable but may lack proven `SendMessage` parity for planning/review correction and Foreman handling.
 
-**Model**: typed settings sections/fields with secret-aware rendering, inline editing, provider status, save/apply actions, connection tests, and harness-driven login actions.
+**Model**: typed settings sections/fields with secret-aware rendering, inline editing, provider status, save/apply actions, connection tests, and harness-driven login actions. Harness routing fields include default harness, fallback order, and per-phase overrides.
 
 **Keys**: `j`/`k` navigate fields, `h`/`l` switch sections, `Enter` edit, `Space` toggle booleans, `r` reveal/hide secrets, `s` save, `a` apply, `t` test provider connection, `g` run provider login through the relevant harness, `Esc` close.
 

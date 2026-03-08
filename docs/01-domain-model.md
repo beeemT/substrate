@@ -1,6 +1,6 @@
-# Domain Model
+# 01 - Domain Model
 
-Core domain types, state machines, and workspace layout for Substrate — the filling between all the gaps.
+Core domain types, state machines, and workspace layout for Substrate.
 See `02-layered-architecture.md` for how these types flow through the system layers.
 
 ---
