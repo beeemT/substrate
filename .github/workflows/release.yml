@@ -95,7 +95,11 @@ jobs:
             license "MIT"
             version "${VERSION_NUM}"
 
-            depends_on "bun"
+            depends_on "beeemT/tap/git-work"
+            depends_on "oven-sh/bun/bun"
+            # Optional CLIs intentionally not hard dependencies:
+            # - gh: only needed for GitHub CLI token fallback and harness-driven GitHub login
+            # - glab: only needed for GitLab MR lifecycle automation
 
             on_macos do
               on_arm do

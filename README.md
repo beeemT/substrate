@@ -67,9 +67,12 @@ flowchart TD
 Install from the beeemT tap:
 
 ```bash
+brew tap oven-sh/bun
 brew tap beeemT/tap
-brew install substrate bun
+brew install substrate
 ```
+
+This install path pulls Bun from `oven-sh/bun` and `git-work` from `beeemT/tap`, matching the runtime requirements of the default oh-my-pi harness and Substrate's worktree management.
 
 To upgrade:
 
@@ -106,8 +109,9 @@ go build -o substrate ./cmd/substrate
 Runtime dependencies:
 
 - **git-work** — [Git worktree manager](https://github.com/beeemT/git-work)
-- **Bun** — Required for the default oh-my-pi harness bridge; install it alongside Substrate if your tap formula has not already provisioned it
-- **glab** — GitLab CLI (optional, for MR creation)
+- **Bun** — Required for the default oh-my-pi harness bridge; install via the `oven-sh/bun` Homebrew tap or another official Bun distribution
+- **gh** — Optional, used for GitHub CLI fallback auth and harness-driven GitHub login actions; when absent, GitHub CLI fallback/login features are disabled rather than crashing Substrate
+- **glab** — Optional, for GitLab MR creation; when absent, GitLab MR lifecycle automation is skipped rather than crashing Substrate
 ---
 
 ## Quick Start

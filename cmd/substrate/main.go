@@ -26,13 +26,36 @@ import (
 	"github.com/beeemT/substrate/migrations"
 )
 
+func printUsage() {
+	fmt.Println("substrate - AI-powered work item orchestration")
+	fmt.Println("")
+	fmt.Println("Usage:")
+	fmt.Println("  substrate           Start the TUI")
+	fmt.Println("  substrate --help    Show help")
+	fmt.Println("  substrate --version Show version")
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
+var Version = "dev"
+
 func run() error {
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "--help", "-h", "help":
+			printUsage()
+			return nil
+		case "--version", "-v", "version":
+			fmt.Println(Version)
+			return nil
+		}
+	}
+
 	// Get paths from config package (respects SUBSTRATE_HOME)
 	globalDir, err := config.GlobalDir()
 	if err != nil {

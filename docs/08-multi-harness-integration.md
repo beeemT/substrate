@@ -548,9 +548,9 @@ Current policy in the repository is:
 
 Current packaging/install state:
 - Substrate's release workflow generates the Homebrew formula in `.github/workflows/release.yml`.
-- That formula now needs Bun as a dependency because oh-my-pi is the default harness path.
-- README install guidance should assume Bun is present when using the default harness.
-- Installing `substrate` alone is not sufficient for the default oh-my-pi path unless Bun is also provisioned.
+- The formula depends on `beeemT/tap/git-work` and `oven-sh/bun/bun`, matching Substrate's required worktree-management and default harness runtime dependencies.
+- `gh` and `glab` are intentionally treated as optional CLIs rather than hard formula dependencies: missing `gh` disables GitHub CLI fallback/login flows, and missing `glab` disables GitLab MR lifecycle automation.
+- README install guidance taps the required Homebrew sources while documenting `gh`/`glab` as optional capabilities.
 
 ---
 
