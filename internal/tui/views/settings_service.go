@@ -493,7 +493,6 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "adapters.gitlab", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitLab.TokenRef, cfg.Adapters.GitLab.Token), Sensitive: true, Status: secretStatus(cfg.Adapters.GitLab.TokenRef, cfg.Adapters.GitLab.Token)},
 				{Section: "adapters.gitlab", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.BaseURL},
-				{Section: "adapters.gitlab", Key: "project_id", Label: "Project ID", Type: SettingsFieldString, Value: int64Str(cfg.Adapters.GitLab.ProjectID), Description: "Optional default narrowing for milestones and epics; no longer required for issue browsing"},
 				{Section: "adapters.gitlab", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.Assignee},
 				{Section: "adapters.gitlab", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.PollInterval},
 				{Section: "adapters.gitlab", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitLab.StateMappings)},
@@ -505,8 +504,6 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Description: "GitHub issues and PR integration",
 			Fields: []SettingsField{
 				{Section: "adapters.github", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitHub.TokenRef, cfg.Adapters.GitHub.Token), Sensitive: true, Status: githubAuthStatus(cfg)},
-				{Section: "adapters.github", Key: "owner", Label: "Owner", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Owner, Description: "Optional default narrowing for repo-scoped milestone browsing and PR lifecycle"},
-				{Section: "adapters.github", Key: "repo", Label: "Repo", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Repo, Description: "Optional default narrowing for repo-scoped milestone browsing and PR lifecycle"},
 				{Section: "adapters.github", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Assignee},
 				{Section: "adapters.github", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.PollInterval},
 				{Section: "adapters.github", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Reviewers, ",")},
@@ -646,8 +643,6 @@ func applyField(cfg *config.Config, field SettingsField) {
 		cfg.Adapters.GitLab.TokenRef = secretRef("gitlab.token")
 	case "adapters.gitlab.base_url":
 		cfg.Adapters.GitLab.BaseURL = value
-	case "adapters.gitlab.project_id":
-		cfg.Adapters.GitLab.ProjectID = parseInt64(value)
 	case "adapters.gitlab.assignee":
 		cfg.Adapters.GitLab.Assignee = value
 	case "adapters.gitlab.poll_interval":
@@ -657,10 +652,6 @@ func applyField(cfg *config.Config, field SettingsField) {
 	case "adapters.github.token_ref":
 		cfg.Adapters.GitHub.Token = value
 		cfg.Adapters.GitHub.TokenRef = secretRef("github.token")
-	case "adapters.github.owner":
-		cfg.Adapters.GitHub.Owner = value
-	case "adapters.github.repo":
-		cfg.Adapters.GitHub.Repo = value
 	case "adapters.github.assignee":
 		cfg.Adapters.GitHub.Assignee = value
 	case "adapters.github.poll_interval":

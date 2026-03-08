@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -455,6 +456,11 @@ func (s *ImplementationService) ensureWorktree(
 		}
 	}
 
+	reviewCtx, err := remotedetect.ResolveReviewContext(ctx, repoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve review context: %w", err)
+	}
+
 	// Emit WorktreeCreating pre-hook event
 	creatingPayload := WorktreeCreatingPayload{
 		WorkspaceID:   workspace.ID,
@@ -462,6 +468,7 @@ func (s *ImplementationService) ensureWorktree(
 		Branch:        branch,
 		WorkItemTitle: workItemTitle,
 		SubPlan:       subPlan,
+		Review:        reviewCtx.Review,
 	}
 	creatingEvent := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -489,6 +496,7 @@ func (s *ImplementationService) ensureWorktree(
 		WorkItemTitle: workItemTitle,
 		SubPlan:       subPlan,
 		TrackerRefs:   trackerRefs,
+		Review:        reviewCtx.Review,
 	}
 	createdEvent := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -671,11 +679,12 @@ func (s *ImplementationService) discoverRepoPaths(ctx context.Context, workspace
 // Event emission helpers
 
 type WorktreeCreatingPayload struct {
-	WorkspaceID   string `json:"workspace_id"`
-	Repository    string `json:"repository"`
-	Branch        string `json:"branch"`
-	WorkItemTitle string `json:"work_item_title"`
-	SubPlan       string `json:"sub_plan"`
+	WorkspaceID   string           `json:"workspace_id"`
+	Repository    string           `json:"repository"`
+	Branch        string           `json:"branch"`
+	WorkItemTitle string           `json:"work_item_title"`
+	SubPlan       string           `json:"sub_plan"`
+	Review        domain.ReviewRef `json:"review"`
 }
 
 type WorktreeCreatedPayload struct {
@@ -686,6 +695,7 @@ type WorktreeCreatedPayload struct {
 	WorkItemTitle string                    `json:"work_item_title"`
 	SubPlan       string                    `json:"sub_plan"`
 	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
+	Review        domain.ReviewRef          `json:"review"`
 }
 
 func trackerRefsFromMetadata(metadata map[string]any) []domain.TrackerReference {

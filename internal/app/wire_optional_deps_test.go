@@ -10,8 +10,6 @@ import (
 func TestBuildRepoLifecycleAdapters_SkipsGithubWhenTokenResolutionFails(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
-	cfg.Adapters.GitHub.Owner = "acme"
-	cfg.Adapters.GitHub.Repo = "rocket"
 
 	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "")
 	if adapters != nil {

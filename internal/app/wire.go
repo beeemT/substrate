@@ -63,20 +63,16 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 		return nil
 	}
 
-	platform, err := remotedetect.DetectPlatform(ctx, workspaceDir)
+	reviewCtx, err := remotedetect.ResolveReviewContext(ctx, workspaceDir)
 	if err != nil {
-		slog.Warn("failed to detect remote platform; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
+		slog.Warn("failed to resolve review context; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
 		return nil
 	}
 
-	switch platform {
+	switch reviewCtx.Platform {
 	case remotedetect.PlatformGitLab:
 		return []adapter.RepoLifecycleAdapter{gladapter.New(cfg.Adapters.Glab)}
 	case remotedetect.PlatformGitHub:
-		if cfg.Adapters.GitHub.Owner == "" || cfg.Adapters.GitHub.Repo == "" {
-			slog.Warn("skipping github lifecycle adapter: owner/repo not configured")
-			return nil
-		}
 		githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
 		if err != nil {
 			slog.Warn("skipping github lifecycle adapter", "err", err)

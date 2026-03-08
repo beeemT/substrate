@@ -37,8 +37,6 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 	repo := stubWorkItemRepo{}
 	cfg := &config.Config{}
 	cfg.Adapters.GitHub.Token = "token"
-	cfg.Adapters.GitHub.Owner = "acme"
-	cfg.Adapters.GitHub.Repo = "rocket"
 
 	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
 	if len(adapters) != 2 {

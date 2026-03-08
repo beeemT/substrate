@@ -115,24 +115,19 @@ type GitlabConfig struct {
 	TokenRef      string            `toml:"token_ref"` // keychain reference for GitLab REST API
 	Token         string            `toml:"-"`
 	BaseURL       string            `toml:"base_url"`      // default: https://gitlab.com
-	ProjectID     int64             `toml:"project_id"`    // numeric GitLab project ID
 	Assignee      string            `toml:"assignee"`      // username filter for Watch
 	PollInterval  string            `toml:"poll_interval"` // default: 60s
 	StateMappings map[string]string `toml:"state_mappings"`
-	// No GroupID — discovered at startup via GET /projects/{id} → namespace.id
 }
 
 type GithubConfig struct {
 	TokenRef      string            `toml:"token_ref"` // optional keychain reference; gh auth token remains fallback
 	Token         string            `toml:"-"`
-	Owner         string            `toml:"owner"`         // required
-	Repo          string            `toml:"repo"`          // required
 	Assignee      string            `toml:"assignee"`      // username filter for Watch; "me" resolves via /user
 	PollInterval  string            `toml:"poll_interval"` // default: 60s
 	Reviewers     []string          `toml:"reviewers"`
 	Labels        []string          `toml:"labels"`
 	StateMappings map[string]string `toml:"state_mappings"`
-	// No DefaultBranch — detected at startup via GET /repos/{owner}/{repo}
 }
 
 // GlabConfig configures the glab CLI adapter.

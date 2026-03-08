@@ -21,21 +21,18 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	cfg.Adapters.Linear.APIKey = "lin-secret"
 	cfg.Adapters.Linear.TeamID = "team-1"
 	cfg.Adapters.GitHub.Token = "gh-secret"
-	cfg.Adapters.GitHub.Owner = "acme"
-	cfg.Adapters.GitHub.Repo = "rocket"
 	cfg.Adapters.GitLab.Token = "gl-secret"
-	cfg.Adapters.GitLab.ProjectID = 42
 
 	raw, rebuilt, err := svc.Serialize(buildSettingsSections(cfg))
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
-	for _, want := range []string{"api_key_ref = 'keychain:linear.api_key'", "token_ref = 'keychain:github.token'", "repo = 'rocket'", "project_id = 42"} {
+	for _, want := range []string{"api_key_ref = 'keychain:linear.api_key'", "token_ref = 'keychain:github.token'"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("serialized config missing %q\n%s", want, raw)
 		}
 	}
-	if rebuilt.Adapters.Linear.APIKeyRef != "keychain:linear.api_key" || rebuilt.Adapters.GitHub.TokenRef != "keychain:github.token" || rebuilt.Adapters.GitLab.ProjectID != 42 {
+	if rebuilt.Adapters.Linear.APIKeyRef != "keychain:linear.api_key" || rebuilt.Adapters.GitHub.TokenRef != "keychain:github.token" {
 		t.Fatalf("rebuilt config mismatch: %+v", rebuilt.Adapters)
 	}
 }
