@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/config"
@@ -51,5 +53,60 @@ func TestBuildRepoLifecycleAdapters_EmptyWorkspace(t *testing.T) {
 	cfg := &config.Config{}
 	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, ""); len(adapters) != 0 {
 		t.Fatalf("adapters len = %d, want 0", len(adapters))
+	}
+}
+
+func TestBuildRepoLifecycleAdapters_UsesWorkspaceRepoPlatforms(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo-one")
+	createWorkspaceRepo(t, repoDir, "git@gitlab.com:group/repo.git")
+
+	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir)
+	if len(adapters) != 1 {
+		t.Fatalf("adapters len = %d, want 1", len(adapters))
+	}
+	if adapters[0].Name() != "glab" {
+		t.Fatalf("adapter name = %q, want glab", adapters[0].Name())
+	}
+}
+
+func TestBuildRepoLifecycleAdapters_SkipsMixedWorkspacePlatforms(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	createWorkspaceRepo(t, filepath.Join(workspaceDir, "gitlab-repo"), "git@gitlab.com:group/repo.git")
+	createWorkspaceRepo(t, filepath.Join(workspaceDir, "github-repo"), "git@github.com:org/repo.git")
+
+	if adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir); len(adapters) != 0 {
+		t.Fatalf("adapters len = %d, want 0", len(adapters))
+	}
+}
+
+func createWorkspaceRepo(t *testing.T, repoDir, remoteURL string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(repoDir, ".bare"), 0o755); err != nil {
+		t.Fatalf("create git-work marker: %v", err)
+	}
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	runGit(t, repoDir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "initial commit")
+	runGit(t, repoDir, "remote", "add", "origin", remoteURL)
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 }

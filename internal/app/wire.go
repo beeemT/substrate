@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -13,6 +14,7 @@ import (
 	manualadapter "github.com/beeemT/substrate/internal/adapter/manual"
 	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
@@ -63,13 +65,13 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 		return nil
 	}
 
-	reviewCtx, err := remotedetect.ResolveReviewContext(ctx, workspaceDir)
+	platform, err := detectWorkspaceLifecyclePlatform(ctx, workspaceDir)
 	if err != nil {
-		slog.Warn("failed to resolve review context; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
+		slog.Warn("failed to detect repo lifecycle platform; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
 		return nil
 	}
 
-	switch reviewCtx.Platform {
+	switch platform {
 	case remotedetect.PlatformGitLab:
 		return []adapter.RepoLifecycleAdapter{gladapter.New(cfg.Adapters.Glab)}
 	case remotedetect.PlatformGitHub:
@@ -83,4 +85,41 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 		slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
 		return nil
 	}
+}
+
+func detectWorkspaceLifecyclePlatform(ctx context.Context, workspaceDir string) (remotedetect.Platform, error) {
+	repoPaths, err := gitwork.DiscoverRepos(workspaceDir)
+	if err != nil {
+		return remotedetect.PlatformUnknown, fmt.Errorf("discover workspace repos: %w", err)
+	}
+	if len(repoPaths) == 0 {
+		return remotedetect.PlatformUnknown, fmt.Errorf("no git-work repos found in workspace %s", workspaceDir)
+	}
+
+	detected := remotedetect.PlatformUnknown
+	var firstErr error
+	for _, repoPath := range repoPaths {
+		platform, err := remotedetect.DetectPlatform(ctx, repoPath)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("detect platform for %s: %w", repoPath, err)
+			}
+			continue
+		}
+		if platform == remotedetect.PlatformUnknown {
+			continue
+		}
+		if detected != remotedetect.PlatformUnknown && detected != platform {
+			return remotedetect.PlatformUnknown, fmt.Errorf("workspace %s contains mixed repo lifecycle platforms", workspaceDir)
+		}
+		detected = platform
+	}
+
+	if detected != remotedetect.PlatformUnknown {
+		return detected, nil
+	}
+	if firstErr != nil {
+		return remotedetect.PlatformUnknown, firstErr
+	}
+	return remotedetect.PlatformUnknown, fmt.Errorf("no supported repo lifecycle platform detected in workspace %s", workspaceDir)
 }
