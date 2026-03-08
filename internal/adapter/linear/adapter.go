@@ -58,6 +58,27 @@ func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
 		CanBrowse:    true,
 		CanMutate:    true,
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives},
+		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "created_by_me", "all"},
+				States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
+				SupportsLabels: true,
+				SupportsSearch: true,
+				SupportsCursor: true,
+				SupportsTeam:   true,
+			},
+			domain.ScopeProjects: {
+				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+				SupportsSearch: true,
+				SupportsCursor: true,
+				SupportsTeam:   true,
+			},
+			domain.ScopeInitiatives: {
+				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+				SupportsSearch: true,
+				SupportsCursor: true,
+			},
+		},
 	}
 }
 
@@ -69,7 +90,7 @@ func (a *LinearAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 	case domain.ScopeProjects:
 		return a.listProjects(ctx, opts)
 	case domain.ScopeInitiatives:
-		return a.listInitiatives(ctx)
+		return a.listInitiatives(ctx, opts)
 	default:
 		return nil, adapter.ErrBrowseNotSupported
 	}
@@ -80,29 +101,61 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	if teamID == "" {
 		teamID = a.cfg.TeamID
 	}
-	vars := map[string]any{
-		"teamId": teamID,
-		"filter": nil,
+	first := opts.Limit
+	if first <= 0 {
+		first = 50
 	}
-	if opts.Search != "" {
-		vars["filter"] = opts.Search
+	if first > 250 {
+		first = 250
+	}
+	vars := map[string]any{
+		"teamId":     teamID,
+		"search":     optionalString(opts.Search),
+		"labelNames": optionalStrings(opts.Labels),
+		"stateTypes": optionalStrings(linearIssueStateTypes(opts.State)),
+		"stateNames": optionalStrings(linearIssueStateNames(opts.State)),
+		"first":      first,
+		"after":      optionalString(opts.Cursor),
+		"assigneeId": nil,
+		"creatorId":  nil,
+	}
+	query := queryTeamIssues
+	if opts.View == "assigned_to_me" {
+		assigneeID, err := a.assigneeIDForBrowse(ctx)
+		if err != nil {
+			return nil, err
+		}
+		vars["assigneeId"] = assigneeID
+		query = queryAssignedIssues
+	} else if opts.View == "created_by_me" {
+		creatorID, err := a.assigneeIDForBrowse(ctx)
+		if err != nil {
+			return nil, err
+		}
+		vars["creatorId"] = creatorID
+	} else if opts.View != "" && opts.View != "all" {
+		return nil, fmt.Errorf("linear issue view %q is not supported", opts.View)
 	}
 	var resp issuesResponse
-	if err := a.client.do(ctx, queryTeamIssues, vars, &resp); err != nil {
+	if err := a.client.do(ctx, query, vars, &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Issues.Nodes))
 	for i, issue := range resp.Issues.Nodes {
 		items[i] = adapter.ListItem{
-			ID:        issue.ID,
-			Title:     issue.Identifier + ": " + issue.Title,
-			State:     issue.State.Name,
-			Labels:    labelNames(issue.Labels),
-			CreatedAt: derefTime(issue.CreatedAt),
-			UpdatedAt: derefTime(issue.UpdatedAt),
+			ID:           issue.ID,
+			Title:        issue.Identifier + ": " + issue.Title,
+			Description:  issue.Description,
+			State:        issue.State.Name,
+			Labels:       labelNames(issue.Labels),
+			Identifier:   issue.Identifier,
+			ContainerRef: issue.Team.Key,
+			URL:          issue.URL,
+			CreatedAt:    derefTime(issue.CreatedAt),
+			UpdatedAt:    derefTime(issue.UpdatedAt),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Issues.PageInfo.HasNextPage, NextCursor: resp.Issues.PageInfo.EndCursor}, nil
 }
 
 func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -110,8 +163,21 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 	if teamID == "" {
 		teamID = a.cfg.TeamID
 	}
+	first := opts.Limit
+	if first <= 0 {
+		first = 50
+	}
+	if first > 250 {
+		first = 250
+	}
 	var resp projectsResponse
-	if err := a.client.do(ctx, queryProjects, map[string]any{"teamId": teamID}, &resp); err != nil {
+	if err := a.client.do(ctx, queryProjects, map[string]any{
+		"teamId": teamID,
+		"search": optionalString(opts.Search),
+		"states": optionalStrings(linearProjectStates(opts.State)),
+		"first":  first,
+		"after":  optionalString(opts.Cursor),
+	}, &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Projects.Nodes))
@@ -121,14 +187,29 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 			Title:       proj.Name,
 			Description: proj.Description,
 			State:       proj.State,
+			Labels:      projectIssueIdentifiers(proj),
+			CreatedAt:   projectCreatedAt(proj),
+			UpdatedAt:   projectUpdatedAt(proj),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Projects.PageInfo.HasNextPage, NextCursor: resp.Projects.PageInfo.EndCursor}, nil
 }
 
-func (a *LinearAdapter) listInitiatives(ctx context.Context) (*adapter.ListResult, error) {
+func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
+	first := opts.Limit
+	if first <= 0 {
+		first = 50
+	}
+	if first > 250 {
+		first = 250
+	}
 	var resp initiativesResponse
-	if err := a.client.do(ctx, queryInitiatives, nil, &resp); err != nil {
+	if err := a.client.do(ctx, queryInitiatives, map[string]any{
+		"search":   optionalString(opts.Search),
+		"statuses": optionalStrings(linearInitiativeStates(opts.State)),
+		"first":    first,
+		"after":    optionalString(opts.Cursor),
+	}, &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Initiatives.Nodes))
@@ -138,9 +219,12 @@ func (a *LinearAdapter) listInitiatives(ctx context.Context) (*adapter.ListResul
 			Title:       init.Name,
 			Description: init.Description,
 			State:       init.Status,
+			Labels:      initiativeProjectNames(init),
+			CreatedAt:   initiativeCreatedAt(init),
+			UpdatedAt:   initiativeUpdatedAt(init),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Initiatives.PageInfo.HasNextPage, NextCursor: resp.Initiatives.PageInfo.EndCursor}, nil
 }
 
 // Resolve converts a user selection into a WorkItem, aggregating multiple items when needed.
@@ -188,9 +272,13 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			Title:         strings.Join(names, ", "),
 			Description:   strings.Join(sections, "\n\n"),
 			State:         domain.WorkItemIngested,
-			Metadata:      map[string]any{"linear_project_ids": sel.ItemIDs},
-			CreatedAt:     domain.Now(),
-			UpdatedAt:     domain.Now(),
+			Metadata: linearProjectMetadata(projects, domain.TrackerReference{
+				Provider: "linear",
+				Kind:     "project",
+				ID:       projects[0].ID,
+			}),
+			CreatedAt: domain.Now(),
+			UpdatedAt: domain.Now(),
 		}, nil
 
 	case domain.ScopeInitiatives:
@@ -215,9 +303,13 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			Title:         init.Name,
 			Description:   formatInitiativeWorkItem(init),
 			State:         domain.WorkItemIngested,
-			Metadata:      map[string]any{"linear_initiative_id": id},
-			CreatedAt:     domain.Now(),
-			UpdatedAt:     domain.Now(),
+			Metadata: linearInitiativeMetadata(init, domain.TrackerReference{
+				Provider: "linear",
+				Kind:     "initiative",
+				ID:       init.ID,
+			}),
+			CreatedAt: domain.Now(),
+			UpdatedAt: domain.Now(),
 		}, nil
 
 	default:
@@ -400,6 +492,119 @@ func (a *LinearAdapter) fetchAssignedIssues(ctx context.Context) ([]linearIssue,
 	return resp.Issues.Nodes, nil
 }
 
+func (a *LinearAdapter) assigneeIDForBrowse(ctx context.Context) (string, error) {
+	if a.assigneeID != "" {
+		return a.assigneeID, nil
+	}
+	if err := a.resolveAssigneeID(ctx); err != nil {
+		return "", err
+	}
+	return a.assigneeID, nil
+}
+
+func linearIssueStateTypes(state string) []string {
+	switch state {
+	case "", "all":
+		return nil
+	case "open":
+		return []string{"triage", "backlog", "unstarted", "started"}
+	case "closed":
+		return []string{"completed", "cancelled"}
+	case "triage", "backlog", "unstarted", "started", "completed", "cancelled":
+		return []string{state}
+	default:
+		return nil
+	}
+}
+
+func linearIssueStateNames(state string) []string {
+	if state == "" || state == "all" || len(linearIssueStateTypes(state)) > 0 {
+		return nil
+	}
+	return []string{state}
+}
+
+func linearProjectStates(state string) []string {
+	switch state {
+	case "", "all":
+		return nil
+	case "closed":
+		return []string{"completed", "canceled"}
+	case "open":
+		return []string{"planned", "backlog", "started", "paused"}
+	default:
+		return []string{state}
+	}
+}
+
+func linearInitiativeStates(state string) []string {
+	return linearProjectStates(state)
+}
+
+func optionalString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func optionalStrings(values []string) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+func projectCreatedAt(proj linearProject) time.Time {
+	var created time.Time
+	for _, issue := range proj.Issues.Nodes {
+		candidate := derefTime(issue.CreatedAt)
+		if candidate.IsZero() {
+			continue
+		}
+		if created.IsZero() || candidate.Before(created) {
+			created = candidate
+		}
+	}
+	return created
+}
+
+func projectUpdatedAt(proj linearProject) time.Time {
+	var updated time.Time
+	for _, issue := range proj.Issues.Nodes {
+		candidate := derefTime(issue.UpdatedAt)
+		if candidate.After(updated) {
+			updated = candidate
+		}
+	}
+	return updated
+}
+
+func initiativeCreatedAt(init linearInitiative) time.Time {
+	var created time.Time
+	for _, proj := range init.Projects.Nodes {
+		candidate := projectCreatedAt(proj)
+		if candidate.IsZero() {
+			continue
+		}
+		if created.IsZero() || candidate.Before(created) {
+			created = candidate
+		}
+	}
+	return created
+}
+
+func initiativeUpdatedAt(init linearInitiative) time.Time {
+	var updated time.Time
+	for _, proj := range init.Projects.Nodes {
+		candidate := projectUpdatedAt(proj)
+		if candidate.After(updated) {
+			updated = candidate
+		}
+	}
+	return updated
+}
+
 func (a *LinearAdapter) fetchIssuesByIDs(ctx context.Context, ids []string) ([]linearIssue, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -480,17 +685,12 @@ func issueToWorkItem(issue linearIssue) domain.WorkItem {
 		Labels:        labelNames(issue.Labels),
 		State:         domain.WorkItemIngested,
 		AssigneeID:    assigneeID,
-		Metadata: map[string]any{
-			"linear_url":        issue.URL,
-			"linear_state_id":   issue.State.ID,
-			"linear_identifier": issue.Identifier,
-			"tracker_refs": []domain.TrackerReference{{
-				Provider: "linear",
-				Kind:     "issue",
-				ID:       issue.Identifier,
-				URL:      issue.URL,
-			}},
-		},
+		Metadata: linearIssueMetadata(issue, []domain.TrackerReference{{
+			Provider: "linear",
+			Kind:     "issue",
+			ID:       issue.Identifier,
+			URL:      issue.URL,
+		}}),
 		CreatedAt: derefTime(issue.CreatedAt),
 		UpdatedAt: derefTime(issue.UpdatedAt),
 	}
@@ -534,12 +734,9 @@ func aggregateIssues(issues []linearIssue) domain.WorkItem {
 		Description:   strings.Join(descs, "\n\n---\n\n"),
 		Labels:        labels,
 		State:         domain.WorkItemIngested,
-		Metadata: map[string]any{
-			"linear_identifier": issues[0].Identifier,
-			"tracker_refs":      linearTrackerRefs(issues),
-		},
-		CreatedAt: derefTime(issues[0].CreatedAt),
-		UpdatedAt: derefTime(issues[0].UpdatedAt),
+		Metadata:      linearIssueMetadata(issues[0], linearTrackerRefs(issues)),
+		CreatedAt:     derefTime(issues[0].CreatedAt),
+		UpdatedAt:     derefTime(issues[0].UpdatedAt),
 	}
 }
 
@@ -562,6 +759,90 @@ func linearTrackerRefs(issues []linearIssue) []domain.TrackerReference {
 		})
 	}
 	return refs
+}
+
+func linearIssueMetadata(issue linearIssue, trackerRefs []domain.TrackerReference) map[string]any {
+	metadata := map[string]any{
+		"linear_id":         issue.ID,
+		"linear_url":        issue.URL,
+		"linear_state_id":   issue.State.ID,
+		"linear_state_name": issue.State.Name,
+		"linear_state_type": issue.State.Type,
+		"linear_identifier": issue.Identifier,
+		"linear_team_id":    issue.Team.ID,
+		"linear_team_key":   issue.Team.Key,
+		"tracker_refs":      trackerRefs,
+	}
+	if issue.Assignee != nil {
+		metadata["linear_assignee_id"] = issue.Assignee.ID
+		metadata["linear_assignee_name"] = issue.Assignee.Name
+	}
+	return metadata
+}
+
+func linearProjectMetadata(projects []linearProject, trackerRefs ...domain.TrackerReference) map[string]any {
+	projectIDs := make([]string, 0, len(projects))
+	projectNames := make([]string, 0, len(projects))
+	for _, proj := range projects {
+		projectIDs = append(projectIDs, proj.ID)
+		projectNames = append(projectNames, proj.Name)
+	}
+	metadata := map[string]any{
+		"linear_project_ids":   projectIDs,
+		"linear_project_names": projectNames,
+		"tracker_refs":         trackerRefs,
+	}
+	if len(projects) > 0 {
+		metadata["linear_project_id"] = projects[0].ID
+		metadata["linear_project_name"] = projects[0].Name
+		metadata["linear_project_state"] = projects[0].State
+	}
+	return metadata
+}
+
+func linearInitiativeMetadata(init linearInitiative, trackerRefs ...domain.TrackerReference) map[string]any {
+	projectIDs := make([]string, 0, len(init.Projects.Nodes))
+	projectNames := make([]string, 0, len(init.Projects.Nodes))
+	for _, proj := range init.Projects.Nodes {
+		projectIDs = append(projectIDs, proj.ID)
+		projectNames = append(projectNames, proj.Name)
+	}
+	return map[string]any{
+		"linear_initiative_id":     init.ID,
+		"linear_initiative_name":   init.Name,
+		"linear_initiative_status": init.Status,
+		"linear_project_ids":       projectIDs,
+		"linear_project_names":     projectNames,
+		"tracker_refs":             trackerRefs,
+	}
+}
+
+func projectIssueIdentifiers(proj linearProject) []string {
+	ids := make([]string, 0, len(proj.Issues.Nodes))
+	for _, issue := range proj.Issues.Nodes {
+		if issue.Identifier == "" {
+			continue
+		}
+		ids = append(ids, issue.Identifier)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func initiativeProjectNames(init linearInitiative) []string {
+	names := make([]string, 0, len(init.Projects.Nodes))
+	for _, proj := range init.Projects.Nodes {
+		if proj.Name == "" {
+			continue
+		}
+		names = append(names, proj.Name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 // --- Formatters ---

@@ -36,12 +36,20 @@ func BuildWorkItemAdapters(
 	if cfg.Adapters.Linear.APIKey != "" {
 		adapters = append(adapters, linearadapter.New(cfg.Adapters.Linear))
 	}
-	if cfg.Adapters.GitLab.ProjectID != 0 && cfg.Adapters.GitLab.Token != "" {
+	if cfg.Adapters.GitLab.Token != "" {
 		gitlabAdapter, err := gitlabadapter.New(context.Background(), cfg.Adapters.GitLab)
 		if err != nil {
 			slog.Warn("skipping gitlab work item adapter", "err", err)
 		} else {
 			adapters = append(adapters, gitlabAdapter)
+		}
+	}
+	if cfg.Adapters.GitHub.Token != "" || cfg.Adapters.GitHub.TokenRef != "" {
+		githubAdapter, err := githubadapter.New(context.Background(), cfg.Adapters.GitHub)
+		if err != nil {
+			slog.Warn("skipping github work item adapter", "err", err)
+		} else {
+			adapters = append(adapters, githubAdapter)
 		}
 	}
 

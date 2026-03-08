@@ -10,24 +10,37 @@ Package: `internal/adapter/linear`. Authentication via personal API key in confi
 
 ### Capabilities
 
-```go
-type LinearAdapter struct {
-    client        *http.Client
-    apiKey        string
-    teamID        string
-    assignee      string
-    pollInterval  time.Duration
-    stateMappings map[domain.WorkItemState]string
-    gqlEndpoint   string
-}
+Current implementation in `internal/adapter/linear/adapter.go` declares:
 
-func (a *LinearAdapter) Capabilities() domain.AdapterCapabilities {
-    return domain.AdapterCapabilities{
-        CanWatch:     true,
-        CanBrowse:    true,
-        CanMutate:    true,
+```go
+func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
+    return adapter.AdapterCapabilities{
+        CanWatch:  true,
+        CanBrowse: true,
+        CanMutate: true,
         BrowseScopes: []domain.SelectionScope{
             domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
+        },
+        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+            domain.ScopeIssues: {
+                Views:          []string{"assigned_to_me", "created_by_me", "all"},
+                States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
+                SupportsLabels: true,
+                SupportsSearch: true,
+                SupportsCursor: true,
+                SupportsTeam:   true,
+            },
+            domain.ScopeProjects: {
+                States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+                SupportsSearch: true,
+                SupportsCursor: true,
+                SupportsTeam:   true,
+            },
+            domain.ScopeInitiatives: {
+                States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+                SupportsSearch: true,
+                SupportsCursor: true,
+            },
         },
     }
 }
@@ -37,12 +50,11 @@ func (a *LinearAdapter) Capabilities() domain.AdapterCapabilities {
 
 Three selection scopes for TUI session creation, each determining how work items are discovered and aggregated.
 
-**Issues** (`ScopeIssues`): Query issues from the configured team; user selects 1+. On `Resolve`: if 1 issue, WorkItem mirrors it directly. If N issues, title = first issue title + `(+N-1 more)`, description concatenates all with `---` separators, labels merged.
+**Issues** (`ScopeIssues`): Query issues from the configured team, optionally narrowed by assignee/creator view, normalized or provider-native state, labels, text search, and cursor pagination. On `Resolve`: if 1 issue, WorkItem mirrors it directly. If N issues, title = first issue title + `(+N-1 more)`, description concatenates all with `---` separators, labels merged.
 
-**Projects** (`ScopeProjects`): Query projects accessible to the team; user selects 1+. `Resolve` fetches all non-completed issues from selected projects, builds WorkItem with project context + all issue details in description.
+**Projects** (`ScopeProjects`): Query projects accessible to the team with search/state/cursor semantics. User selects 1+. `Resolve` fetches all relevant issues from selected projects, builds WorkItem with project context + all issue details in description.
 
-**Initiatives** (`ScopeInitiatives`): Query initiatives; user selects exactly 1. `Resolve` fetches all projects + their issues, builds comprehensive WorkItem with initiative goals, project breakdown, and grouped issue details.
-
+**Initiatives** (`ScopeInitiatives`): Query initiatives with search/state/cursor semantics; user selects exactly 1. `Resolve` fetches all projects + their issues, builds comprehensive WorkItem with initiative goals, project breakdown, and grouped issue details.
 ### ListSelectable and Resolve
 
 ```go
@@ -86,74 +98,20 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel domain.Selection) (doma
 
 ### GraphQL Queries
 
-Issue queries (existing -- used by Watch and issue-scope selection):
+The current adapter uses GraphQL queries for:
 
-```go
-const queryAssignedIssues = `
-query($assigneeId: String!, $teamId: String!) {
-  issues(filter: { assignee: { id: { eq: $assigneeId } }, team: { id: { eq: $teamId } },
-                    state: { type: { nin: ["canceled","completed"] } } }) {
-    nodes { id identifier title description priority state { id name type }
-            labels { nodes { name } } assignee { id name } team { key } url }
-  }
-}`
+- issue browsing with team, assignee/creator, label, state, search, and cursor filters
+- project browsing with team, state, search, and cursor filters
+- initiative browsing with state, search, and cursor filters
+- viewer lookup to resolve `assigned_to_me` / `created_by_me`
+- point fetches for issue/project/initiative resolution
+- state updates and comments
 
-const queryIssueByID = `
-query($id: String!) {
-  issue(id: $id) { id identifier title description priority state { id name type }
-    labels { nodes { name } } url
-    comments { nodes { body createdAt user { name } } }
-    relations { nodes { relatedIssue { id identifier title } type } } }
-}`
-```
+Notable implementation properties:
 
-New queries for project/initiative selection:
-
-```graphql
-# Projects accessible to team
-query($teamId: String!) {
-  projects(filter: { accessibleTeams: { id: { eq: $teamId } },
-                     state: { nin: ["completed","canceled"] } }) {
-    nodes { id name description state icon color
-            issues { nodes { id identifier title } } }
-  }
-}
-
-# Single project with non-completed issues (used by Resolve)
-query($projectId: String!) {
-  project(id: $projectId) {
-    id name description
-    issues(filter: { state: { type: { nin: ["completed","canceled"] } } }) {
-      nodes { id identifier title description state { id name }
-              labels { nodes { name } } }
-    }
-  }
-}
-
-# Initiatives with nested projects and issues
-query {
-  initiatives(filter: { status: { nin: ["completed","canceled"] } }) {
-    nodes { id name description status
-      projects { nodes { id name
-        issues { nodes { id identifier title } } } }
-    }
-  }
-}
-```
-
-Mutations:
-
-```go
-const mutationUpdateIssueState = `
-mutation($id: String!, $stateId: String!) {
-  issueUpdate(id: $id, input: { stateId: $stateId }) { success issue { id state { id name } } }
-}`
-
-const mutationAddComment = `
-mutation($issueId: String!, $body: String!) {
-  commentCreate(input: { issueId: $issueId, body: $body }) { success comment { id } }
-}`
-```
+- Issue browsing supports both normalized states (`open`, `closed`, `all`) and richer Linear-native workflow states.
+- Cursor pagination is adapter-backed and surfaced via `ListResult.HasMore` / `NextCursor`.
+- Team-aware browsing remains first-class, but the adapter no longer stops at a purely team-backlog model.
 
 ### ExternalID Construction
 

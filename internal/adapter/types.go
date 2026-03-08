@@ -6,22 +6,49 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// BrowseFilterCapabilities describes which shared browse filters a provider/scope can honor.
+type BrowseFilterCapabilities struct {
+	Views          []string
+	States         []string
+	SupportsLabels bool
+	SupportsSearch bool
+	SupportsCursor bool
+	SupportsOffset bool
+	SupportsOwner  bool
+	SupportsRepo   bool
+	SupportsGroup  bool
+	SupportsTeam   bool
+}
+
 // AdapterCapabilities describes what an adapter can do.
 type AdapterCapabilities struct {
-	CanWatch     bool                    // Supports Watch for reactive auto-assignment
-	CanBrowse    bool                    // Supports ListSelectable/Resolve for interactive selection
-	CanMutate    bool                    // Supports UpdateState/AddComment
-	BrowseScopes []domain.SelectionScope // Available scopes for browsing
+	CanWatch      bool                                               // Supports Watch for reactive auto-assignment
+	CanBrowse     bool                                               // Supports ListSelectable/Resolve for interactive selection
+	CanMutate     bool                                               // Supports UpdateState/AddComment
+	BrowseScopes  []domain.SelectionScope                            // Available scopes for browsing
+	BrowseFilters map[domain.SelectionScope]BrowseFilterCapabilities // Available filters by scope
 }
 
 // ListOpts controls ListSelectable behavior.
 type ListOpts struct {
 	WorkspaceID string
+	Provider    string
 	Scope       domain.SelectionScope
 	TeamID      string // Optional: filter by team (for Linear)
-	Search      string // Optional: fuzzy search query
+	Search      string // Optional: server-side search query
 	Limit       int    // Optional: max results (0 = default)
 	Offset      int    // Optional: pagination offset
+	View        string // Optional: assigned_to_me, created_by_me, mentioned, subscribed, all
+	State       string // Optional: provider-native state filter
+	Owner       string // Optional: GitHub owner filter
+	Repo        string // Optional: GitHub repo or GitLab project-path filter
+	Group       string // Optional: GitLab group filter
+	Labels      []string
+	Metadata    map[string]any
+	Cursor      string
+	HasMoreHint bool
+	Sort        string
+	Direction   string
 }
 
 // ListResult contains paginated results from ListSelectable.
@@ -29,18 +56,24 @@ type ListResult struct {
 	Items      []ListItem
 	TotalCount int
 	HasMore    bool
+	NextCursor string
 }
 
 // ListItem represents a single selectable item in browse results.
 type ListItem struct {
-	ID          string
-	Title       string
-	Description string
-	State       string
-	Labels      []string
-	ParentRef   *ParentRef // Optional: parent project/initiative reference
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           string
+	Title        string
+	Description  string
+	State        string
+	Labels       []string
+	Provider     string
+	Identifier   string
+	ContainerRef string
+	URL          string
+	Metadata     map[string]any
+	ParentRef    *ParentRef // Optional: parent project/initiative reference
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // ParentRef references a parent entity (project or initiative).

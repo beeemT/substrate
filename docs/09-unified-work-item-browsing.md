@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Intended to ship as one cohesive redesign before the first release.
+Implemented for the current pre-release unified browsing scope.
 
 ## Decision Summary
 
@@ -56,47 +56,44 @@ Current work item adapters are built in `internal/app/wire.go`.
 
 - Manual is always registered.
 - Linear is registered when configured.
-- GitLab is registered when `project_id` and token are configured.
-- GitHub is not registered as a work item adapter today.
+- GitLab is registered when configured; global issue browsing no longer hard-requires `project_id`.
+- GitHub is registered as a work item adapter when configured.
 
 ### TUI new-session behavior
 
 Current new-session overlay behavior in `internal/tui/views/overlay_new_session.go`:
 
-- The overlay chooses the first browse-capable adapter.
-- The browse mode is labeled "Linear" regardless of actual provider.
-- `currentScope` is initialized to `issues` and not exposed as a real selector.
-- The overlay fetches only `Limit: 50` items.
-- Search input is not passed to adapter `ListSelectable`; only local list filtering is used.
-- The user can multi-select items, but only from that single active adapter.
+- The overlay exposes explicit provider selection: All / Linear / GitHub / GitLab.
+- Scope selection is provider-aware, and `All` mode is honestly constrained to issues only.
+- Search input is passed through to adapter `ListSelectable` requests.
+- View, state, labels, owner/repo/group/team filters, and pagination hints are capability-driven rather than hardcoded by provider name.
+- The user can multi-select items only within the same provider.
+- Session creation dispatches to the selected provider adapter, not the first adapter matching a scope.
 
 ### GitHub current browsing model
 
-The existing GitHub adapter is repo-scoped by configuration:
+GitHub issue browsing is global-by-default via the authenticated-user issue inbox API.
 
-- `owner` and `repo` are required.
 - browse scopes are issues and projects.
-- listing uses `/repos/{owner}/{repo}/issues` and `/repos/{owner}/{repo}/milestones`.
-
-But GitHub also supports a user-accessible issue inbox API:
-
-- `GET /issues` lists issues assigned to or otherwise visible to the authenticated user across visible repositories.
+- issues support normalized views (`assigned_to_me`, `created_by_me`, `mentioned`, `subscribed`, `all`), normalized states, labels, search, owner/repo narrowing, and offset pagination.
+- projects remain milestone-backed and repo-scoped.
 
 ### GitLab current browsing model
 
-The existing GitLab adapter is project-scoped by configuration:
+GitLab issue browsing is global-by-default via `/api/v4/issues`.
 
-- `project_id` is required.
-- issue listing uses `/api/v4/projects/{projectID}/issues`.
-- milestone listing uses `/api/v4/projects/{projectID}/milestones`.
-- epic browsing depends on group discovery derived from that project.
+- browse scopes are issues, projects, and initiatives.
+- issues support normalized views (`assigned_to_me`, `created_by_me`, `all`), normalized states, labels, search, repo/group narrowing, and offset pagination.
+- projects remain milestone-backed and initiatives remain epic-backed, with capability exposure depending on available backing context.
 
-But GitLab also supports broader issue browsing:
+### Linear current browsing model
 
-- `GET /issues` lists issues the authenticated user has access to.
-- `scope=all` broadens beyond the default `created_by_me` behavior.
-- `GET /groups/:id/issues` supports group-scoped issue browsing.
+Linear is now a capability-rich first-class provider rather than a team-only special case.
 
+- browse scopes are issues, projects, and initiatives.
+- issues support normalized views (`assigned_to_me`, `created_by_me`, `all`), normalized and native Linear states, labels, search, team narrowing, and cursor pagination.
+- projects support state, search, team narrowing, and cursor pagination.
+- initiatives support state, search, and cursor pagination.
 ## Product Design
 
 ## Core UX Model
@@ -170,12 +167,12 @@ Selected item preview should include:
 
 ### Linear
 
-Linear remains a first-class provider.
+Linear remains a first-class provider and now carries the richest declared browse semantics in the system.
 
 - Issues, projects, and initiatives remain supported.
-- Team-aware browsing remains valid.
-- Search should be wired through the UI into adapter filtering.
-
+- Team-aware browsing remains valid, but issue browsing also supports normalized personal views where the adapter can back them honestly.
+- Search, state, labels, and pagination are adapter-backed rather than UI-only.
+- Provider-native Linear state richness is exposed through capabilities instead of being flattened away.
 ### GitHub
 
 GitHub issue browsing should become global-by-default.
@@ -515,8 +512,9 @@ Because no release has shipped yet, we should implement the full redesign in one
    - scoped milestones/epics second
 
 6. **Linear integration alignment**
-   - make sure search/team filters are actually wired into the new UI
-   - ensure result metadata is rendered consistently with GitHub/GitLab
+   - complete Linear issue parity on views/state/labels/pagination
+   - extend Linear project and initiative browsing with search/state/cursor semantics
+   - keep overlay semantics adapter-first so richer Linear capabilities are discovered from declarations, not provider name checks
 
 7. **Selection and resolution rules**
    - preserve same-provider multi-select for issue aggregation
@@ -554,8 +552,9 @@ At minimum, verify:
 3. **Linear**
    - browse issues/projects/initiatives
    - team filter works
-   - search works
-   - create session from selected item
+   - issue views work: assigned_to_me / created_by_me / all
+   - issue state, labels, search, and cursor pagination work
+   - project and initiative search/state/cursor flows work
 
 4. **Multi-provider UI**
    - source switch works
@@ -584,7 +583,7 @@ The first fully redesigned version should guarantee:
 - Pagination
 - GitHub global issue inbox
 - GitLab global issue inbox
-- Linear scoped browsing
+- Linear expanded browsing with issue/project/initiative search and state semantics
 - Manual creation as separate action
 - No misleading labels
 - No first-adapter-only behavior

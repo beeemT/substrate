@@ -122,8 +122,8 @@ type StartPlanMsg struct{ WorkItemID string }
 // OverrideAcceptMsg fires when user overrides and accepts critiques.
 type OverrideAcceptMsg struct{ WorkItemID string }
 
-// NewSessionLinearMsg fires when user selects items and starts a Linear session.
-type NewSessionLinearMsg struct {
+// NewSessionBrowseMsg fires when user selects browsed items and starts a session.
+type NewSessionBrowseMsg struct {
 	Adapter   adapter.WorkItemAdapter
 	Selection adapter.Selection
 }

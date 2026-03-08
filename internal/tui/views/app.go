@@ -379,10 +379,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, createManualSessionCmd(a.svcs, msg))
 		return a, tea.Batch(cmds...)
 
-	case NewSessionLinearMsg:
+	case NewSessionBrowseMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
-		cmds = append(cmds, createLinearSessionCmd(a.svcs, msg))
+		cmds = append(cmds, createBrowseSessionCmd(a.svcs, msg))
 		return a, tea.Batch(cmds...)
 
 	case SettingsSavedMsg:
@@ -941,7 +941,7 @@ func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 	}
 }
 
-func createLinearSessionCmd(svcs Services, msg NewSessionLinearMsg) tea.Cmd {
+func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 	return func() tea.Msg {
 		if msg.Adapter == nil {
 			return ErrMsg{Err: fmt.Errorf("no adapter available")}

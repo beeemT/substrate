@@ -4,20 +4,27 @@ package linear
 // Expanded inline in each query below for explicitness.
 
 const queryAssignedIssues = `
-query AssignedIssues($teamId: String!, $assigneeId: String!) {
-	issues(filter: {
+query AssignedIssues($teamId: String!, $assigneeId: String!, $first: Int, $after: String, $search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]) {
+	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
 		assignee: { id: { eq: $assigneeId } }
-		state: { type: { nin: ["completed", "cancelled"] } }
+		title: { containsIgnoreCase: $search }
+		labels: { name: { in: $labelNames } }
+		state: {
+			type: { in: $stateTypes }
+			name: { in: $stateNames }
+		}
 	}) {
 		nodes {
 			id identifier title description priority url
 			state { id name type }
 			labels { nodes { name } }
 			assignee { id name }
+			creator { id name }
 			team { id key }
 			createdAt updatedAt
 		}
+		pageInfo { hasNextPage endCursor }
 	}
 }`
 
@@ -48,41 +55,51 @@ query IssuesByIDs($ids: [String!]!) {
 }`
 
 const queryTeamIssues = `
-query TeamIssues($teamId: String!, $filter: String) {
-	issues(filter: {
+query TeamIssues($teamId: String!, $search: String, $assigneeId: String, $creatorId: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!], $first: Int, $after: String) {
+	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
-		title: { containsIgnoreCase: $filter }
-		state: { type: { nin: ["completed", "cancelled"] } }
+		title: { containsIgnoreCase: $search }
+		assignee: { id: { eq: $assigneeId } }
+		creator: { id: { eq: $creatorId } }
+		labels: { name: { in: $labelNames } }
+		state: {
+			type: { in: $stateTypes }
+			name: { in: $stateNames }
+		}
 	}) {
 		nodes {
 			id identifier title description priority url
 			state { id name type }
 			labels { nodes { name } }
 			assignee { id name }
+			creator { id name }
 			team { id key }
 			createdAt updatedAt
 		}
+		pageInfo { hasNextPage endCursor }
 	}
 }`
 
 const queryProjects = `
-query Projects($teamId: String!) {
-	projects(filter: {
+query Projects($teamId: String!, $search: String, $states: [String!], $first: Int, $after: String) {
+	projects(first: $first, after: $after, filter: {
 		accessibleTeams: { id: { eq: $teamId } }
-		state: { nin: ["completed", "cancelled"] }
+		name: { containsIgnoreCase: $search }
+		state: { in: $states }
 	}) {
 		nodes {
 			id name description state icon color
 			issues {
 				nodes {
 					id identifier title description
-					state { id name }
+					state { id name type }
 					labels { nodes { name } }
 					team { id key }
 					createdAt updatedAt
 				}
 			}
 		}
+		pageInfo { hasNextPage endCursor }
 	}
 }`
 
@@ -103,17 +120,20 @@ query ProjectWithIssues($id: String!) {
 }`
 
 const queryInitiatives = `
-query Initiatives {
-	initiatives(filter: { status: { nin: ["completed", "cancelled"] } }) {
+query Initiatives($search: String, $statuses: [String!], $first: Int, $after: String) {
+	initiatives(first: $first, after: $after, filter: {
+		name: { containsIgnoreCase: $search }
+		status: { in: $statuses }
+	}) {
 		nodes {
 			id name description status
 			projects {
 				nodes {
-					id name description
+					id name description state
 					issues {
 						nodes {
 							id identifier title description
-							state { id name }
+							state { id name type }
 							labels { nodes { name } }
 							team { id key }
 							createdAt updatedAt
@@ -122,6 +142,7 @@ query Initiatives {
 				}
 			}
 		}
+		pageInfo { hasNextPage endCursor }
 	}
 }`
 

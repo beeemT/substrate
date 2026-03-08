@@ -15,10 +15,14 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
-// testGQLBody is the shape of a GraphQL request body sent to the mock server.
 type testGQLBody struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables"`
+}
+
+type capturedRequest struct {
+	Query     string
+	Variables map[string]any
 }
 
 func respondJSON(w http.ResponseWriter, v any) {
@@ -98,6 +102,9 @@ func TestListSelectable(t *testing.T) {
 		if item.Title != "FOO-123: Fix bug" {
 			t.Errorf("Title: want %q, got %q", "FOO-123: Fix bug", item.Title)
 		}
+		if item.Description != "Details for Fix bug" {
+			t.Errorf("Description: want %q, got %q", "Details for Fix bug", item.Description)
+		}
 		if item.State != "In Progress" {
 			t.Errorf("State: want %q, got %q", "In Progress", item.State)
 		}
@@ -119,7 +126,7 @@ func TestListSelectable(t *testing.T) {
 								"state":       "in_progress",
 								"icon":        "",
 								"color":       "",
-								"issues":      map[string]any{"nodes": []any{}},
+								"issues":      map[string]any{"nodes": []any{testIssueNode("abc123", "FOO-123", "Fix bug", nil, "FOO")}},
 							},
 						},
 					},
@@ -146,6 +153,15 @@ func TestListSelectable(t *testing.T) {
 		if item.Title != "Project Alpha" {
 			t.Errorf("Title: want %q, got %q", "Project Alpha", item.Title)
 		}
+		if item.Description != "Desc" {
+			t.Errorf("Description: want %q, got %q", "Desc", item.Description)
+		}
+		if item.State != "in_progress" {
+			t.Errorf("State: want %q, got %q", "in_progress", item.State)
+		}
+		if len(item.Labels) != 1 || item.Labels[0] != "FOO-123" {
+			t.Errorf("Labels: want [FOO-123], got %v", item.Labels)
+		}
 	})
 
 	t.Run("initiatives", func(t *testing.T) {
@@ -159,7 +175,14 @@ func TestListSelectable(t *testing.T) {
 								"name":        "Initiative Beta",
 								"description": "Desc",
 								"status":      "planned",
-								"projects":    map[string]any{"nodes": []any{}},
+								"projects": map[string]any{"nodes": []any{
+									map[string]any{
+										"id":          "proj1",
+										"name":        "Project Alpha",
+										"description": "",
+										"issues":      map[string]any{"nodes": []any{}},
+									},
+								}},
 							},
 						},
 					},
@@ -185,7 +208,281 @@ func TestListSelectable(t *testing.T) {
 		if item.Title != "Initiative Beta" {
 			t.Errorf("Title: want %q, got %q", "Initiative Beta", item.Title)
 		}
+		if item.Description != "Desc" {
+			t.Errorf("Description: want %q, got %q", "Desc", item.Description)
+		}
+		if item.State != "planned" {
+			t.Errorf("State: want %q, got %q", "planned", item.State)
+		}
+		if len(item.Labels) != 1 || item.Labels[0] != "Project Alpha" {
+			t.Errorf("Labels: want [Project Alpha], got %v", item.Labels)
+		}
 	})
+}
+
+func TestLinearCapabilitiesExposeExpandedBrowseSupport(t *testing.T) {
+	t.Parallel()
+
+	a := &LinearAdapter{}
+	caps := a.Capabilities()
+	issues := caps.BrowseFilters[domain.ScopeIssues]
+	if !issues.SupportsLabels || !issues.SupportsSearch || !issues.SupportsCursor || !issues.SupportsTeam {
+		t.Fatalf("issue capabilities = %#v, want labels/search/cursor/team support", issues)
+	}
+	for _, want := range []string{"assigned_to_me", "created_by_me", "all"} {
+		if !containsString(issues.Views, want) {
+			t.Fatalf("issue views = %#v, want %q", issues.Views, want)
+		}
+	}
+	for _, want := range []string{"open", "closed", "triage", "started", "completed"} {
+		if !containsString(issues.States, want) {
+			t.Fatalf("issue states = %#v, want %q", issues.States, want)
+		}
+	}
+	projects := caps.BrowseFilters[domain.ScopeProjects]
+	if !projects.SupportsSearch || !projects.SupportsCursor || !projects.SupportsTeam {
+		t.Fatalf("project capabilities = %#v, want search/cursor/team support", projects)
+	}
+	initiatives := caps.BrowseFilters[domain.ScopeInitiatives]
+	if !initiatives.SupportsSearch || !initiatives.SupportsCursor {
+		t.Fatalf("initiative capabilities = %#v, want search/cursor support", initiatives)
+	}
+}
+
+func TestListSelectableIssuesSupportsViewStateLabelsAndCursor(t *testing.T) {
+	t.Parallel()
+
+	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend", "urgent"}, "FOO")
+	var requests []capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req testGQLBody
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		requests = append(requests, capturedRequest{Query: req.Query, Variables: req.Variables})
+		switch {
+		case strings.Contains(req.Query, "Viewer"):
+			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
+		default:
+			respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "cursor-2"}}}})
+		}
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{
+		Scope:  domain.ScopeIssues,
+		TeamID: "team1",
+		View:   "assigned_to_me",
+		State:  "open",
+		Labels: []string{"backend", "urgent"},
+		Search: "bug",
+		Limit:  25,
+		Cursor: "cursor-1",
+	})
+	if err != nil {
+		t.Fatalf("ListSelectable(ScopeIssues): %v", err)
+	}
+	if len(requests) < 2 {
+		t.Fatalf("requests = %d, want viewer + issues", len(requests))
+	}
+	issueReq := requests[len(requests)-1]
+	if !strings.Contains(issueReq.Query, "AssignedIssues") {
+		t.Fatalf("query = %q, want AssignedIssues", issueReq.Query)
+	}
+	if got := issueReq.Variables["teamId"]; got != "team1" {
+		t.Fatalf("teamId = %v, want team1", got)
+	}
+	if got := issueReq.Variables["assigneeId"]; got != "user1" {
+		t.Fatalf("assigneeId = %v, want user1", got)
+	}
+	if got := issueReq.Variables["search"]; got != "bug" {
+		t.Fatalf("search = %v, want bug", got)
+	}
+	if got := issueReq.Variables["after"]; got != "cursor-1" {
+		t.Fatalf("after = %v, want cursor-1", got)
+	}
+	if got := intFromAny(issueReq.Variables["first"]); got != 25 {
+		t.Fatalf("first = %v, want 25", issueReq.Variables["first"])
+	}
+	if got := stringSliceFromAny(issueReq.Variables["labelNames"]); !equalStrings(got, []string{"backend", "urgent"}) {
+		t.Fatalf("labelNames = %#v, want backend+urgent", got)
+	}
+	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"triage", "backlog", "unstarted", "started"}) {
+		t.Fatalf("stateTypes = %#v", got)
+	}
+	if result.NextCursor != "cursor-2" || !result.HasMore {
+		t.Fatalf("pagination = %#v, want hasMore cursor-2", result)
+	}
+	if len(result.Items) != 1 || result.Items[0].Identifier != "FOO-123" || result.Items[0].ContainerRef != "FOO" {
+		t.Fatalf("items = %#v, want identifier/container metadata", result.Items)
+	}
+}
+
+func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
+	t.Parallel()
+
+	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
+	var issueReq capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req testGQLBody
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Query, "Viewer") {
+			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
+			return
+		}
+		issueReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}}}})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "created_by_me", State: "closed"})
+	if err != nil {
+		t.Fatalf("ListSelectable(ScopeIssues): %v", err)
+	}
+	if got := issueReq.Variables["creatorId"]; got != "user1" {
+		t.Fatalf("creatorId = %v, want user1", got)
+	}
+	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"completed", "cancelled"}) {
+		t.Fatalf("stateTypes = %#v, want completed/cancelled", got)
+	}
+}
+
+func TestListSelectableProjectsSupportSearchStateAndCursor(t *testing.T) {
+	t.Parallel()
+
+	var projectReq capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req testGQLBody
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		projectReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		respondJSON(w, map[string]any{"data": map[string]any{"projects": map[string]any{"nodes": []any{map[string]any{"id": "proj1", "name": "Project Alpha", "description": "Desc", "state": "started", "icon": "", "color": "", "issues": map[string]any{"nodes": []any{testIssueNode("abc123", "FOO-123", "Fix bug", nil, "FOO")}}}}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "proj-cursor-2"}}}})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeProjects, TeamID: "team1", Search: "alpha", State: "open", Limit: 10, Cursor: "proj-cursor-1"})
+	if err != nil {
+		t.Fatalf("ListSelectable(ScopeProjects): %v", err)
+	}
+	if got := projectReq.Variables["search"]; got != "alpha" {
+		t.Fatalf("search = %v, want alpha", got)
+	}
+	if got := stringSliceFromAny(projectReq.Variables["states"]); !equalStrings(got, []string{"planned", "backlog", "started", "paused"}) {
+		t.Fatalf("states = %#v", got)
+	}
+	if got := projectReq.Variables["after"]; got != "proj-cursor-1" {
+		t.Fatalf("after = %v, want proj-cursor-1", got)
+	}
+	if !result.HasMore || result.NextCursor != "proj-cursor-2" {
+		t.Fatalf("pagination = %#v", result)
+	}
+}
+
+func TestListSelectableInitiativesSupportSearchStateAndCursor(t *testing.T) {
+	t.Parallel()
+
+	var initiativeReq capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req testGQLBody
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		initiativeReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		respondJSON(w, map[string]any{
+			"data": map[string]any{
+				"initiatives": map[string]any{
+					"nodes": []any{
+						map[string]any{
+							"id":          "init1",
+							"name":        "Initiative Beta",
+							"description": "Desc",
+							"status":      "started",
+							"projects": map[string]any{"nodes": []any{
+								map[string]any{
+									"id":          "proj1",
+									"name":        "Project Alpha",
+									"description": "",
+									"state":       "started",
+									"issues":      map[string]any{"nodes": []any{}},
+								},
+							}},
+						},
+					},
+					"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "init-cursor-2"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeInitiatives, Search: "beta", State: "started", Limit: 5, Cursor: "init-cursor-1"})
+	if err != nil {
+		t.Fatalf("ListSelectable(ScopeInitiatives): %v", err)
+	}
+	if got := initiativeReq.Variables["search"]; got != "beta" {
+		t.Fatalf("search = %v, want beta", got)
+	}
+	if got := stringSliceFromAny(initiativeReq.Variables["statuses"]); !equalStrings(got, []string{"started"}) {
+		t.Fatalf("statuses = %#v", got)
+	}
+	if got := initiativeReq.Variables["after"]; got != "init-cursor-1" {
+		t.Fatalf("after = %v, want init-cursor-1", got)
+	}
+	if !result.HasMore || result.NextCursor != "init-cursor-2" {
+		t.Fatalf("pagination = %#v", result)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSliceFromAny(value any) []string {
+	if value == nil {
+		return nil
+	}
+	raw, ok := value.([]any)
+	if ok {
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	stringsValue, ok := value.([]string)
+	if ok {
+		return stringsValue
+	}
+	return nil
+}
+
+func intFromAny(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
 }
 
 func TestResolve(t *testing.T) {
@@ -452,6 +749,113 @@ func TestLinearExternalID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveMetadataIncludesProviderAwareFields(t *testing.T) {
+	t.Run("issue", func(t *testing.T) {
+		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			respondJSON(w, map[string]any{
+				"data": map[string]any{
+					"issues": map[string]any{"nodes": []any{issue}},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		a := testLinearAdapter(t, srv.URL)
+		wi, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"abc123"}})
+		if err != nil {
+			t.Fatalf("Resolve single issue: %v", err)
+		}
+		if got := wi.Metadata["linear_team_key"]; got != "FOO" {
+			t.Fatalf("linear_team_key = %#v, want %q", got, "FOO")
+		}
+		if got := wi.Metadata["linear_state_name"]; got != "In Progress" {
+			t.Fatalf("linear_state_name = %#v, want %q", got, "In Progress")
+		}
+		if got := wi.Metadata["linear_assignee_name"]; got != "Alice" {
+			t.Fatalf("linear_assignee_name = %#v, want %q", got, "Alice")
+		}
+	})
+
+	t.Run("project", func(t *testing.T) {
+		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{}, "FOO")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			respondJSON(w, map[string]any{
+				"data": map[string]any{
+					"project": map[string]any{
+						"id":          "proj1",
+						"name":        "Project Alpha",
+						"description": "Desc",
+						"state":       "in_progress",
+						"icon":        "",
+						"color":       "",
+						"issues":      map[string]any{"nodes": []any{issue}},
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		a := testLinearAdapter(t, srv.URL)
+		wi, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeProjects, ItemIDs: []string{"proj1"}})
+		if err != nil {
+			t.Fatalf("Resolve project: %v", err)
+		}
+		refs, ok := wi.Metadata["tracker_refs"].([]domain.TrackerReference)
+		if !ok || len(refs) != 1 || refs[0].Kind != "project" || refs[0].ID != "proj1" {
+			t.Fatalf("tracker_refs = %#v, want single project ref", wi.Metadata["tracker_refs"])
+		}
+		if got := wi.Metadata["linear_project_name"]; got != "Project Alpha" {
+			t.Fatalf("linear_project_name = %#v, want %q", got, "Project Alpha")
+		}
+		ids, ok := wi.Metadata["linear_project_ids"].([]string)
+		if !ok || len(ids) != 1 || ids[0] != "proj1" {
+			t.Fatalf("linear_project_ids = %#v, want [proj1]", wi.Metadata["linear_project_ids"])
+		}
+	})
+
+	t.Run("initiative", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			respondJSON(w, map[string]any{
+				"data": map[string]any{
+					"initiative": map[string]any{
+						"id":          "init1",
+						"name":        "Initiative Beta",
+						"description": "Desc",
+						"status":      "planned",
+						"projects": map[string]any{"nodes": []any{
+							map[string]any{
+								"id":          "proj1",
+								"name":        "Project Alpha",
+								"description": "",
+								"issues":      map[string]any{"nodes": []any{}},
+							},
+						}},
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		a := testLinearAdapter(t, srv.URL)
+		wi, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeInitiatives, ItemIDs: []string{"init1"}})
+		if err != nil {
+			t.Fatalf("Resolve initiative: %v", err)
+		}
+		refs, ok := wi.Metadata["tracker_refs"].([]domain.TrackerReference)
+		if !ok || len(refs) != 1 || refs[0].Kind != "initiative" || refs[0].ID != "init1" {
+			t.Fatalf("tracker_refs = %#v, want single initiative ref", wi.Metadata["tracker_refs"])
+		}
+		if got := wi.Metadata["linear_initiative_status"]; got != "planned" {
+			t.Fatalf("linear_initiative_status = %#v, want %q", got, "planned")
+		}
+		names, ok := wi.Metadata["linear_project_names"].([]string)
+		if !ok || len(names) != 1 || names[0] != "Project Alpha" {
+			t.Fatalf("linear_project_names = %#v, want [Project Alpha]", wi.Metadata["linear_project_names"])
+		}
+	})
 }
 
 func TestResolveIssueTrackerRefs(t *testing.T) {

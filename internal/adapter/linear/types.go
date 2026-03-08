@@ -4,18 +4,19 @@ import "time"
 
 // linearIssue is the GraphQL response shape for a single issue.
 type linearIssue struct {
-	ID          string        `json:"id"`
-	Identifier  string        `json:"identifier"` // e.g. "FOO-123"
-	Title       string        `json:"title"`
-	Description string        `json:"description"`
-	Priority    int           `json:"priority"`
-	URL         string        `json:"url"`
-	State       linearState   `json:"state"`
-	Labels      linearLabels  `json:"labels"`
-	Assignee    *linearUser   `json:"assignee"`
-	Team        linearTeamRef `json:"team"`
-	CreatedAt   *time.Time    `json:"createdAt"`
-	UpdatedAt   *time.Time    `json:"updatedAt"`
+	ID          string         `json:"id"`
+	Identifier  string         `json:"identifier"` // e.g. "FOO-123"
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Priority    int            `json:"priority"`
+	URL         string         `json:"url"`
+	State       linearState    `json:"state"`
+	Labels      linearLabels   `json:"labels"`
+	Assignee    *linearUser    `json:"assignee"`
+	Creator     *linearCreator `json:"creator"`
+	Team        linearTeamRef  `json:"team"`
+	CreatedAt   *time.Time     `json:"createdAt"`
+	UpdatedAt   *time.Time     `json:"updatedAt"`
 }
 
 type linearState struct {
@@ -36,6 +37,8 @@ type linearUser struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+type linearCreator = linearUser
 
 type linearTeamRef struct {
 	ID  string `json:"id"`
@@ -84,17 +87,21 @@ type gqlError struct {
 }
 
 type issuesResponse struct {
-	Issues struct {
-		Nodes []linearIssue `json:"nodes"`
-	} `json:"issues"`
+	Issues linearIssueConnection `json:"issues"`
 }
 
-type issueResponse struct {
-	Issue *linearIssue `json:"issue"`
+type linearIssueConnection struct {
+	Nodes    []linearIssue  `json:"nodes"`
+	PageInfo linearPageInfo `json:"pageInfo"`
 }
 
 type projectsResponse struct {
-	Projects linearProjectConn `json:"projects"`
+	Projects linearProjectConnection `json:"projects"`
+}
+
+type linearProjectConnection struct {
+	Nodes    []linearProject `json:"nodes"`
+	PageInfo linearPageInfo  `json:"pageInfo"`
 }
 
 type projectResponse struct {
@@ -102,7 +109,17 @@ type projectResponse struct {
 }
 
 type initiativesResponse struct {
-	Initiatives linearInitiativeConn `json:"initiatives"`
+	Initiatives linearInitiativeConnection `json:"initiatives"`
+}
+
+type linearInitiativeConnection struct {
+	Nodes    []linearInitiative `json:"nodes"`
+	PageInfo linearPageInfo     `json:"pageInfo"`
+}
+
+type linearPageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
 }
 
 type updateIssueStateResponse struct {

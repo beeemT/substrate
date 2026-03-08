@@ -47,6 +47,7 @@ type projectMeta struct {
 type issue struct {
 	ID          int64    `json:"id"`
 	IID         int64    `json:"iid"`
+	ProjectID   int64    `json:"project_id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	State       string   `json:"state"`
@@ -84,9 +85,6 @@ func New(ctx context.Context, cfg config.GitlabConfig) (*GitlabAdapter, error) {
 }
 
 func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer) (*GitlabAdapter, error) {
-	if cfg.ProjectID == 0 {
-		return nil, fmt.Errorf("gitlab project_id is required")
-	}
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, fmt.Errorf("gitlab token is required")
 	}
@@ -97,6 +95,10 @@ func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	a := &GitlabAdapter{cfg: cfg, baseURL: baseURL, client: client}
+	if cfg.ProjectID == 0 {
+		return a, nil
+	}
+
 	meta, err := a.getProject(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load gitlab project metadata: %w", err)
@@ -113,7 +115,24 @@ func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer
 func (a *GitlabAdapter) Name() string { return "gitlab" }
 
 func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
-	return adapter.AdapterCapabilities{CanWatch: true, CanBrowse: true, CanMutate: true, BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives}}
+	filters := map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+		domain.ScopeIssues: {
+			Views:          []string{"assigned_to_me", "created_by_me", "all"},
+			States:         []string{"open", "closed", "all"},
+			SupportsLabels: true,
+			SupportsSearch: true,
+			SupportsOffset: true,
+			SupportsRepo:   true,
+			SupportsGroup:  true,
+		},
+	}
+	if a.cfg.ProjectID != 0 {
+		filters[domain.ScopeProjects] = adapter.BrowseFilterCapabilities{SupportsOffset: true, SupportsRepo: true}
+	}
+	if a.hasEpics {
+		filters[domain.ScopeInitiatives] = adapter.BrowseFilterCapabilities{SupportsOffset: true, SupportsGroup: true}
+	}
+	return adapter.AdapterCapabilities{CanWatch: true, CanBrowse: true, CanMutate: true, BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives}, BrowseFilters: filters}
 }
 
 func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -125,7 +144,8 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
-			items = append(items, adapter.ListItem{ID: strconv.FormatInt(iss.IID, 10), Title: fmt.Sprintf("#%d: %s", iss.IID, iss.Title), Description: iss.Description, State: iss.State, Labels: append([]string(nil), iss.Labels...), CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
+			itemID := gitlabIssueSelectionID(a.cfg.ProjectID, iss)
+			items = append(items, adapter.ListItem{ID: itemID, Identifier: fmt.Sprintf("#%d", iss.IID), Title: iss.Title, Description: iss.Description, State: iss.State, Labels: append([]string(nil), iss.Labels...), ContainerRef: gitlabProjectPath(iss), URL: iss.WebURL, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
 		}
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeProjects:
@@ -164,20 +184,20 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 	case domain.ScopeIssues:
 		issues := make([]issue, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
-			iid, err := strconv.ParseInt(itemID, 10, 64)
+			projectID, iid, err := parseIssueSelectionID(a.cfg.ProjectID, itemID)
 			if err != nil {
-				return domain.WorkItem{}, fmt.Errorf("parse issue iid %q: %w", itemID, err)
+				return domain.WorkItem{}, err
 			}
-			iss, err := a.fetchIssue(ctx, iid)
+			iss, err := a.fetchIssue(ctx, projectID, iid)
 			if err != nil {
 				return domain.WorkItem{}, err
 			}
 			issues = append(issues, iss)
 		}
 		if len(issues) == 1 {
-			return issueToWorkItem(a.cfg.ProjectID, issues[0]), nil
+			return issueToWorkItem(issues[0]), nil
 		}
-		return aggregateIssues(a.cfg.ProjectID, issues), nil
+		return aggregateIssues(issues), nil
 	case domain.ScopeProjects:
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
@@ -237,9 +257,9 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 					prev, ok := seen[iss.IID]
 					seen[iss.IID] = iss.State
 					if !ok {
-						ch <- adapter.WorkItemEvent{Type: "created", WorkItem: issueToWorkItem(a.cfg.ProjectID, iss), Timestamp: domain.Now()}
+						ch <- adapter.WorkItemEvent{Type: "created", WorkItem: issueToWorkItem(iss), Timestamp: domain.Now()}
 					} else if prev != iss.State {
-						ch <- adapter.WorkItemEvent{Type: "updated", WorkItem: issueToWorkItem(a.cfg.ProjectID, iss), Timestamp: domain.Now()}
+						ch <- adapter.WorkItemEvent{Type: "updated", WorkItem: issueToWorkItem(iss), Timestamp: domain.Now()}
 					}
 				}
 			}
@@ -253,11 +273,11 @@ func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Wo
 	if err != nil {
 		return domain.WorkItem{}, err
 	}
-	iss, err := a.fetchIssue(ctx, iid)
+	iss, err := a.fetchIssue(ctx, a.cfg.ProjectID, iid)
 	if err != nil {
 		return domain.WorkItem{}, err
 	}
-	return issueToWorkItem(a.cfg.ProjectID, iss), nil
+	return issueToWorkItem(iss), nil
 }
 
 func (a *GitlabAdapter) UpdateState(ctx context.Context, externalID string, state domain.TrackerState) error {
@@ -322,17 +342,21 @@ func (a *GitlabAdapter) getProject(ctx context.Context) (projectMeta, error) {
 }
 
 func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]issue, error) {
-	query := url.Values{}
-	query.Set("state", "opened")
-	applyListOpts(query, opts)
+	query, err := gitlabIssueListQuery(opts)
+	if err != nil {
+		return nil, err
+	}
 	var issues []issue
-	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues", a.cfg.ProjectID), query, &issues); err != nil {
+	if err := a.getJSON(ctx, "/api/v4/issues", query, &issues); err != nil {
 		return nil, err
 	}
 	return issues, nil
 }
 
 func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]milestone, error) {
+	if a.cfg.ProjectID == 0 {
+		return nil, fmt.Errorf("gitlab project_id is required for milestones browse")
+	}
 	query := url.Values{}
 	applyListOpts(query, opts)
 	var milestones []milestone
@@ -343,6 +367,9 @@ func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpt
 }
 
 func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([]epic, error) {
+	if a.cfg.ProjectID == 0 || a.groupID == 0 {
+		return nil, adapter.ErrBrowseNotSupported
+	}
 	query := url.Values{}
 	applyListOpts(query, opts)
 	var epics []epic
@@ -357,9 +384,9 @@ func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([
 	return epics, nil
 }
 
-func (a *GitlabAdapter) fetchIssue(ctx context.Context, iid int64) (issue, error) {
+func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (issue, error) {
 	var iss issue
-	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", a.cfg.ProjectID, iid), nil, &iss); err != nil {
+	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", projectID, iid), nil, &iss); err != nil {
 		return issue{}, err
 	}
 	return iss, nil
@@ -461,16 +488,18 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	return nil
 }
 
-func issueToWorkItem(projectID int64, iss issue) domain.WorkItem {
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{strconv.FormatInt(iss.IID, 10)}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+func issueToWorkItem(iss issue) domain.WorkItem {
+	projectID := gitlabIssueProjectID(iss)
+	selectionID := gitlabIssueSelectionID(projectID, iss)
+	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{selectionID}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
 }
 
-func aggregateIssues(projectID int64, issues []issue) domain.WorkItem {
+func aggregateIssues(issues []issue) domain.WorkItem {
 	labels := map[string]struct{}{}
 	parts := make([]string, 0, len(issues))
 	itemIDs := make([]string, 0, len(issues))
 	for _, iss := range issues {
-		itemIDs = append(itemIDs, strconv.FormatInt(iss.IID, 10))
+		itemIDs = append(itemIDs, gitlabIssueSelectionID(gitlabIssueProjectID(iss), iss))
 		parts = append(parts, fmt.Sprintf("#%d %s\n%s", iss.IID, iss.Title, strings.TrimSpace(iss.Description)))
 		for _, label := range iss.Labels {
 			labels[label] = struct{}{}
@@ -485,6 +514,7 @@ func aggregateIssues(projectID int64, issues []issue) domain.WorkItem {
 	if len(issues) > 1 {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
+	projectID := gitlabIssueProjectID(issues[0])
 	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
 }
 
@@ -526,6 +556,45 @@ func gitlabProjectPath(iss issue) string {
 		return ""
 	}
 	return strings.TrimPrefix(parsed.Path[:idx], "/")
+}
+
+func gitlabIssueSelectionID(defaultProjectID int64, iss issue) string {
+	projectID := gitlabIssueProjectID(iss)
+	if projectID == 0 {
+		projectID = defaultProjectID
+	}
+	if projectID > 0 {
+		return fmt.Sprintf("%d#%d", projectID, iss.IID)
+	}
+	return strconv.FormatInt(iss.IID, 10)
+}
+
+func parseIssueSelectionID(defaultProjectID int64, raw string) (projectID, iid int64, err error) {
+	trimmed := strings.TrimSpace(raw)
+	parts := strings.SplitN(trimmed, "#", 2)
+	if len(parts) == 1 {
+		iid, err = strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("parse issue iid %q: %w", raw, err)
+		}
+		if defaultProjectID == 0 {
+			return 0, 0, fmt.Errorf("gitlab issue selection %q missing project id", raw)
+		}
+		return defaultProjectID, iid, nil
+	}
+	projectID, err = strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse issue project id %q: %w", raw, err)
+	}
+	iid, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse issue iid %q: %w", raw, err)
+	}
+	return projectID, iid, nil
+}
+
+func gitlabIssueProjectID(iss issue) int64 {
+	return iss.ProjectID
 }
 
 func formatMilestone(ms milestone) string {
@@ -576,9 +645,62 @@ func extractPlanCommentPayload(payload string) (string, []string) {
 	return parsed.CommentBody, parsed.ExternalIDs
 }
 
+func gitlabIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
+	query := url.Values{}
+	scope, err := gitlabIssueScopeValue(opts.View)
+	if err != nil {
+		return nil, err
+	}
+	state, err := gitlabIssueStateValue(opts.State)
+	if err != nil {
+		return nil, err
+	}
+	query.Set("scope", scope)
+	query.Set("state", state)
+	applyListOpts(query, opts)
+	return query, nil
+}
+
+func gitlabIssueScopeValue(view string) (string, error) {
+	switch strings.TrimSpace(view) {
+	case "", "all":
+		return "all", nil
+	case "assigned_to_me":
+		return "assigned_to_me", nil
+	case "created_by_me":
+		return "created_by_me", nil
+	case "mentioned", "subscribed":
+		return "", fmt.Errorf("gitlab issue view %q not supported", view)
+	default:
+		return "", fmt.Errorf("gitlab issue view %q not supported", view)
+	}
+}
+
+func gitlabIssueStateValue(state string) (string, error) {
+	switch strings.TrimSpace(state) {
+	case "", "open":
+		return "opened", nil
+	case "closed":
+		return "closed", nil
+	case "all":
+		return "all", nil
+	default:
+		return "", fmt.Errorf("gitlab issue state %q not supported", state)
+	}
+}
+
 func applyListOpts(query url.Values, opts adapter.ListOpts) {
 	if opts.Search != "" {
 		query.Set("search", opts.Search)
+	}
+	if len(opts.Labels) > 0 {
+		query.Set("labels", strings.Join(opts.Labels, ","))
+	}
+	if strings.TrimSpace(opts.Repo) != "" {
+		query.Set("project_path", strings.TrimSpace(opts.Repo))
+	}
+	if strings.TrimSpace(opts.Group) != "" {
+		query.Set("group_id", strings.TrimSpace(opts.Group))
 	}
 	if opts.Limit > 0 {
 		query.Set("per_page", strconv.Itoa(opts.Limit))

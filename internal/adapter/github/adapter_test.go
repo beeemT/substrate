@@ -146,25 +146,104 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 	}
 }
 
-func TestListIssuesFiltersPullRequests(t *testing.T) {
+func TestListIssuesUsesGlobalInboxAndPreservesRepositoryMetadata(t *testing.T) {
+	var issueQuery string
+	var issuePath string
 	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/repos/acme/rocket":
 			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
 		case "/user":
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
-		case "/repos/acme/rocket/issues":
-			return jsonResp(t, http.StatusOK, []any{map[string]any{"number": 1, "title": "Issue", "state": "open", "labels": []any{}, "body": "body"}, map[string]any{"number": 2, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}}}), nil
+		case "/issues":
+			issuePath = req.URL.Path
+			issueQuery = req.URL.RawQuery
+			return jsonResp(t, http.StatusOK, []any{
+				map[string]any{"number": 7, "title": "Shared bug", "state": "open", "labels": []any{}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
+				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "repository": map[string]any{"full_name": "acme/rocket", "owner": map[string]any{"login": "acme"}, "name": "rocket"}},
+			}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
 		}
 	}))
-	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues})
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 25, View: "created_by_me", State: "closed", Owner: "other", Repo: "engine"})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
 	}
-	if len(res.Items) != 1 || res.Items[0].ID != "1" {
-		t.Fatalf("items = %+v, want only issue #1", res.Items)
+	if issuePath != "/issues" {
+		t.Fatalf("issue path = %q, want /issues", issuePath)
+	}
+	for _, want := range []string{"filter=created", "state=closed", "q=bug", "per_page=25"} {
+		if !strings.Contains(issueQuery, want) {
+			t.Fatalf("issue query = %q, want %q", issueQuery, want)
+		}
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("items = %+v, want 1 issue", res.Items)
+	}
+	item := res.Items[0]
+	if item.ID != "other/engine#7" {
+		t.Fatalf("item ID = %q, want other/engine#7", item.ID)
+	}
+	if item.Title != "[other/engine] #7: Shared bug" {
+		t.Fatalf("item title = %q", item.Title)
+	}
+	if item.ParentRef == nil || item.ParentRef.ID != "other/engine" || item.ParentRef.Type != "repository" {
+		t.Fatalf("parent ref = %+v, want repository other/engine", item.ParentRef)
+	}
+}
+
+func TestListMilestonesRemainRepoScoped(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/repos/acme/rocket":
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/repos/acme/rocket/milestones":
+			return jsonResp(t, http.StatusOK, []any{map[string]any{"number": 3, "title": "v1", "description": "repo milestone", "state": "open"}}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeProjects})
+	if err != nil {
+		t.Fatalf("ListSelectable milestones: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Title != "v1 (repo milestone)" {
+		t.Fatalf("milestone items = %+v, want explicit repo-scoped title", res.Items)
+	}
+}
+
+func TestResolveIssuePreservesRepositoryTrackerRefs(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/repos/acme/rocket":
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/repos/other/engine/issues/42":
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 42, "title": "Cross repo issue", "state": "open", "labels": []any{}, "body": "body", "html_url": "https://github.com/other/engine/issues/42", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"other/engine#42"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if item.ExternalID != "GH-other-engine-42" {
+		t.Fatalf("external ID = %q, want GH-other-engine-42", item.ExternalID)
+	}
+	if len(item.SourceItemIDs) != 1 || item.SourceItemIDs[0] != "other/engine#42" {
+		t.Fatalf("source item ids = %#v, want repo-qualified id", item.SourceItemIDs)
+	}
+	refs, ok := item.Metadata["tracker_refs"].([]domain.TrackerReference)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("tracker_refs = %#v, want 1 typed ref", item.Metadata["tracker_refs"])
+	}
+	if refs[0].Owner != "other" || refs[0].Repo != "engine" || refs[0].Number != 42 {
+		t.Fatalf("tracker ref = %+v, want other/engine#42", refs[0])
 	}
 }
 
@@ -244,5 +323,48 @@ func TestLifecycleCreateAddsLinearResolvesFooter(t *testing.T) {
 	}
 	if !strings.Contains(createBody, `Resolves [FOO-123](https://linear.app/acme/issue/FOO-123)`) {
 		t.Fatalf("create body = %s, want linear resolves footer", createBody)
+	}
+}
+
+func TestListIssuesRejectsUnsupportedNormalizedView(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/repos/acme/rocket":
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
+		}
+	}))
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "bogus"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("err = %v, want unsupported view error", err)
+	}
+}
+
+func TestListIssuesFiltersByLabels(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/repos/acme/rocket":
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/issues":
+			return jsonResp(t, http.StatusOK, []any{
+				map[string]any{"number": 7, "title": "Bug A", "state": "open", "labels": []any{map[string]any{"name": "bug"}, map[string]any{"name": "backend"}}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
+				map[string]any{"number": 8, "title": "Bug B", "state": "open", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
+			}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Labels: []string{"bug", "backend"}})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].ID != "other/engine#7" {
+		t.Fatalf("items = %+v, want only bug+backend issue", res.Items)
 	}
 }

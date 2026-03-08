@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed.
+Implemented for the current browse surface.
 
 ## Why this exists
 
-The unified work-item browser now exists, but its filter model is still only partially unified.
+The unified work-item browser now exists, and the current browse surface implements the first honest capability-driven filter model.
 
 The current `adapter.ListOpts` contract already exposes a broad shared surface in `internal/adapter/types.go`:
 
@@ -26,17 +26,14 @@ The current `adapter.ListOpts` contract already exposes a broad shared surface i
 - `Direction`
 - `Metadata`
 
-That is the right direction, but provider implementations still interpret only fragments of this shape:
+Provider implementations now consume meaningful subsets of that shape through declared capabilities instead of ad hoc UI assumptions:
 
-- GitHub issues currently hardcode `filter=assigned` and `state=open`, only wiring `Search` and `Limit`
-  - `internal/adapter/github/adapter.go:396-415`
-- GitLab issues currently hardcode `scope=all`, only wiring generic search/pagination through `applyListOpts`
-  - `internal/adapter/gitlab/adapter.go:327-335`
-  - `internal/adapter/gitlab/adapter.go:651-661`
-- Linear issues currently wire `TeamID` and `Search`, but not common concepts like view/state/labels/pagination
-  - `internal/adapter/linear/adapter.go:78-107`
+- GitHub issues support normalized views/states plus labels/search/owner/repo/offset
+- GitLab issues support normalized views/states plus labels/search/repo/group/offset
+- Linear issues support normalized views, normalized and native states, labels/search/team, and cursor pagination
+- Linear projects and initiatives now also expose search/state/cursor semantics
 
-The result is that the UI exposes common controls, but the user cannot rely on those controls meaning the same thing across providers.
+The remaining goal is to keep refining the UI and contract without losing honesty about provider differences.
 
 ## Goal
 
@@ -72,8 +69,7 @@ Current reality:
 
 - GitHub has a native `filter` query for issue inbox browsing with values like `assigned`, `created`, `mentioned`, `subscribed`, `repos`, `all`
 - GitLab has `scope` values such as `assigned_to_me`, `created_by_me`, `all`; mentioned/subscribed are not symmetrical
-- Linear does not expose the same personal inbox model in the current adapter; it is primarily team-scoped browsing
-
+- Linear now supports a narrower but real normalized view subset: `assigned_to_me`, `created_by_me`, `all`, while still remaining team-aware
 ### 2. State semantics differ
 
 Desired UI concept:
@@ -87,8 +83,7 @@ Current reality:
 
 - GitHub issues use `open`, `closed`, `all`
 - GitLab issues use `opened`, `closed`, `all`
-- Linear issue states are workspace-defined names, not portable open/closed enums
-
+- Linear now classifies workflow states into normalized `open`/`closed` buckets while also exposing richer provider-native state names
 ### 3. Container narrowing differs
 
 Desired UI concept:
@@ -98,9 +93,8 @@ Desired UI concept:
 Current reality:
 
 - GitHub uses `Owner` and `Repo`
-- GitLab conceptually needs `Group` and project path, but current adapter only partially models this
-- Linear uses `TeamID`
-
+- GitLab uses `Group` and project path
+- Linear uses `TeamID` as its primary narrowing container
 ### 4. Pagination is structurally common but not behaviorally common
 
 Desired UI concept:
@@ -109,10 +103,9 @@ Desired UI concept:
 
 Current reality:
 
-- GitHub and GitLab mostly use page/per-page today
-- `ListOpts` includes both `Offset` and `Cursor`, but providers do not expose a unified capability contract telling the UI which one is authoritative
-- Linear currently returns all fetched results without a normalized paging contract in the adapter layer
-
+- GitHub and GitLab use offset/page-style pagination
+- Linear now exposes cursor pagination through `HasMore` / `NextCursor`
+- `BrowseFilterCapabilities` tells the UI whether offset or cursor semantics are actually supported
 ### 5. Search semantics differ
 
 Desired UI concept:
@@ -121,10 +114,9 @@ Desired UI concept:
 
 Current reality:
 
-- GitHub currently pushes `Search` into `q` on `/issues`, which is not equivalent to the other providers
+- GitHub pushes `Search` into its issue query model
 - GitLab wires `search`
-- Linear wires a team issue filter string
-
+- Linear now wires search across issues, projects, and initiatives
 ## Proposed model
 
 ## 1. Split filters into three semantic tiers
@@ -208,12 +200,11 @@ For unsupported values, the adapter should return `adapter.ErrBrowseNotSupported
 
 ### Linear
 
-Linear should not fake this vocabulary. Instead:
+Linear should not fake GitHub/GitLab semantics, but it no longer needs to hide from the shared vocabulary entirely.
 
-- treat `assigned_to_me` as the only initially supported personal-inbox value if implemented
-- otherwise treat browse as team-scoped and have the UI either hide `View` for Linear issues or show a provider-specific label such as `Team backlog`
-
-This is the main place where honesty matters more than abstraction.
+- `assigned_to_me`, `created_by_me`, and `all` are now honest supported issue views
+- team/container-scoped semantics still matter and should be surfaced by capability-driven UI messaging when no richer inbox view exists
+- provider-native Linear state names remain valuable beyond the normalized layer
 
 ## 4. Define a normalized state vocabulary
 
@@ -231,16 +222,16 @@ Provider mapping:
 
 - GitHub: `open`, `closed`, `all`
 - GitLab: `open` -> `opened`, `closed` -> `closed`, `all` -> `all`
-- Linear: no direct mapping unless the adapter can classify workflow states into open/closed buckets
+- Linear: `open` -> active workflow state types, `closed` -> completed/cancelled, `all` -> no state restriction
 
 ### Layer 2: provider-native state
 
 If a provider has useful native states beyond the portable layer:
 
-- expose them as a provider-qualified secondary control or advanced filter
-- carry them in `ListOpts.Metadata` until the UI/adapter contract earns a dedicated field
+- expose them through the same capability-driven control when the adapter declares them honestly
+- keep the UI adapter-first: render what the current provider/scope declares instead of assuming GitHub/GitLab are the universal baseline
 
-This avoids lying about Linear’s workflow states while still giving GitHub/GitLab a common baseline.
+This lets Linear expose richer workflow states without lying about portability.
 
 ## 5. Add browse capabilities for filters
 
@@ -334,15 +325,16 @@ Update `listIssues` in `internal/adapter/gitlab/adapter.go` and `applyListOpts(.
 GitLab should be the second provider brought into line because its issue inbox is also naturally global.
 
 ### Linear
-n
-Do not force GitHub/GitLab semantics onto Linear.
+
+Do not force GitHub/GitLab semantics onto Linear, but do let Linear advertise the semantics it can now back honestly.
 
 Instead:
 
 - keep `Search`
 - keep `TeamID`
-- decide whether `View` is hidden for Linear or narrowed to a Linear-specific subset
-- consider a future `BrowseMode` value for team backlog vs assigned issues if Linear data can support it cleanly
+- support the implemented issue view subset (`assigned_to_me`, `created_by_me`, `all`)
+- expose normalized and provider-native state values through capabilities
+- keep room for future provider-native browse modes only if they are actually adapter-backed
 
 ## 8. Rollout sequence
 
@@ -350,10 +342,11 @@ Instead:
 2. Teach the UI to render controls from capabilities instead of hardcoded global options.
 3. Normalize GitHub issue view/state semantics.
 4. Normalize GitLab issue view/state semantics.
-5. Narrow or relabel Linear issue filtering honestly.
-6. Disable or clearly annotate `All` mode for non-issue scopes until scope intersections are real.
-7. Add adapter tests proving each provider honors the shared filters it claims to support.
-8. Add TUI tests proving controls shown in a given provider/scope pair match capabilities.
+5. Expand Linear issue semantics honestly.
+6. Expand Linear non-issue search/state/pagination semantics.
+7. Disable or clearly annotate `All` mode for non-issue scopes until scope intersections are real.
+8. Add adapter tests proving each provider honors the shared filters it claims to support.
+9. Add TUI tests proving controls shown in a given provider/scope pair match capabilities.
 
 ## Concrete acceptance criteria
 
@@ -362,7 +355,7 @@ This proposal should be considered implemented when:
 1. The UI does not show a filter that the active provider/scope cannot honor.
 2. `View=assigned_to_me` means the same thing for GitHub and GitLab issue browsing.
 3. `State=open|closed|all` means the same thing for GitHub and GitLab issue browsing.
-4. Linear issue browsing is explicitly labeled/scoped so users are not misled into assuming GitHub/GitLab-style personal inbox semantics.
+4. Linear issue browsing supports both normalized and provider-native state semantics without pretending they are identical to GitHub/GitLab.
 5. `All` mode only appears for scope/filter combinations with honest shared semantics.
 6. Each provider has tests covering the shared filter fields it claims to implement.
 
@@ -374,7 +367,7 @@ The pragmatic path is:
 
 - normalize issue browsing semantics first
 - make capabilities drive the UI
-- stay explicit that Linear is team-centric while GitHub/GitLab are inbox-centric
+- let adapters surface their strongest honest semantics instead of flattening everything to the weakest provider
 - keep milestones and initiatives provider-qualified until a true shared model exists
 
 That gets us semantic convergence without lying to the user or overfitting the abstraction.

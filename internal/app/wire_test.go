@@ -33,18 +33,19 @@ func writeExecutable(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-func TestBuildWorkItemAdapters_DoesNotRegisterGitHubAdapter(t *testing.T) {
+func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 	repo := stubWorkItemRepo{}
 	cfg := &config.Config{}
+	cfg.Adapters.GitHub.Token = "token"
 	cfg.Adapters.GitHub.Owner = "acme"
 	cfg.Adapters.GitHub.Repo = "rocket"
 
 	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
-	if len(adapters) != 1 {
-		t.Fatalf("adapters len = %d, want 1", len(adapters))
+	if len(adapters) != 2 {
+		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
-	if adapters[0].Name() != "manual" {
-		t.Fatalf("first adapter = %q, want manual only", adapters[0].Name())
+	if adapters[0].Name() != "manual" || adapters[1].Name() != "github" {
+		t.Fatalf("adapter order = [%q %q], want [manual github]", adapters[0].Name(), adapters[1].Name())
 	}
 }
 

@@ -37,6 +37,15 @@ func makeAdapter(t *testing.T, fn roundTripFunc) *GitlabAdapter {
 	return a
 }
 
+func makeAdapterWithConfig(t *testing.T, cfg config.GitlabConfig, fn roundTripFunc) *GitlabAdapter {
+	t.Helper()
+	a, err := newWithClient(context.Background(), cfg, fn)
+	if err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+	return a
+}
+
 func TestParseExternalID(t *testing.T) {
 	iid, err := parseExternalID(1234, "GL-1234-42")
 	if err != nil {
@@ -53,6 +62,104 @@ func TestParseExternalID(t *testing.T) {
 func TestParsePollIntervalFloor(t *testing.T) {
 	if got := parsePollInterval("5s"); got != 30*time.Second {
 		t.Fatalf("parsePollInterval floor = %v, want 30s", got)
+	}
+}
+
+func TestNewAllowsIssueBrowsingWithoutProjectID(t *testing.T) {
+	var calls []string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.Method+" "+req.URL.Path)
+		t.Fatalf("unexpected request during constructor: %s %s", req.Method, req.URL.String())
+		return nil, nil
+	}))
+	if a.cfg.ProjectID != 0 {
+		t.Fatalf("ProjectID = %d, want 0", a.cfg.ProjectID)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("calls = %v, want no metadata requests", calls)
+	}
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeProjects})
+	if err == nil {
+		t.Fatal("expected projects browse to require project context")
+	}
+	_, err = a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeInitiatives})
+	if !errors.Is(err, adapter.ErrBrowseNotSupported) {
+		t.Fatalf("initiatives err = %v, want ErrBrowseNotSupported", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("calls after scoped browse = %v, want no requests without project context", calls)
+	}
+}
+
+func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotPath = req.URL.Path
+		gotQuery = req.URL.RawQuery
+		if req.URL.Path != "/api/v4/issues" {
+			t.Fatalf("path = %s, want /api/v4/issues", req.URL.Path)
+		}
+		if req.URL.Query().Get("scope") != "created_by_me" {
+			t.Fatalf("scope = %q, want created_by_me", req.URL.Query().Get("scope"))
+		}
+		if req.URL.Query().Get("state") != "closed" {
+			t.Fatalf("state = %q, want closed", req.URL.Query().Get("state"))
+		}
+		if req.URL.Query().Get("search") != "bug" {
+			t.Fatalf("search = %q, want bug", req.URL.Query().Get("search"))
+		}
+		if req.URL.Query().Get("per_page") != "5" {
+			t.Fatalf("per_page = %q, want 5", req.URL.Query().Get("per_page"))
+		}
+		return jsonResponse(t, http.StatusOK, []map[string]any{{
+			"iid":         42,
+			"project_id":  5678,
+			"title":       "Cross-project issue",
+			"description": "body",
+			"state":       "opened",
+			"labels":      []string{"bug"},
+			"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
+			"references":  map[string]any{"full": "other-group/other-project#42"},
+		}}), nil
+	}))
+
+	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 5, View: "created_by_me", State: "closed", Labels: []string{"bug"}, Repo: "other-group/other-project", Group: "my-group"})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if gotPath != "/api/v4/issues" {
+		t.Fatalf("path = %s, want /api/v4/issues", gotPath)
+	}
+	for _, want := range []string{"scope=created_by_me", "state=closed", "search=bug", "per_page=5", "labels=bug", "project_path=other-group%2Fother-project", "group_id=my-group"} {
+		if !strings.Contains(gotQuery, want) {
+			t.Fatalf("query = %q, want %q", gotQuery, want)
+		}
+	}
+	if result.TotalCount != 1 || len(result.Items) != 1 {
+		t.Fatalf("result count = %d items=%d, want 1", result.TotalCount, len(result.Items))
+	}
+	item := result.Items[0]
+	if item.ID != "5678#42" {
+		t.Fatalf("ID = %q, want 5678#42", item.ID)
+	}
+	if item.Identifier != "#42" {
+		t.Fatalf("Identifier = %q, want #42", item.Identifier)
+	}
+	if item.Title != "Cross-project issue" {
+		t.Fatalf("Title = %q, want issue title", item.Title)
+	}
+	if item.ContainerRef != "other-group/other-project" {
+		t.Fatalf("ContainerRef = %q, want other-group/other-project", item.ContainerRef)
+	}
+	if item.URL != "https://gitlab.example.com/other-group/other-project/-/issues/42" {
+		t.Fatalf("URL = %q, want issue url", item.URL)
+	}
+	if item.Description != "body" {
+		t.Fatalf("Description = %q, want body", item.Description)
+	}
+	if len(item.Labels) != 1 || item.Labels[0] != "bug" {
+		t.Fatalf("Labels = %#v, want [bug]", item.Labels)
 	}
 }
 
@@ -253,5 +360,61 @@ func TestResolveIssueTrackerRefsUsesProjectPath(t *testing.T) {
 	}
 	if refs[0].Repo != "other-group/other-project" {
 		t.Fatalf("tracker ref repo = %q, want other-group/other-project", refs[0].Repo)
+	}
+}
+
+func TestResolveIssueUsesProjectQualifiedSelectionID(t *testing.T) {
+	var calls []string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.Method+" "+req.URL.Path)
+		switch req.URL.Path {
+		case "/api/v4/projects/5678/issues/42":
+			return jsonResponse(t, http.StatusOK, map[string]any{
+				"iid":         42,
+				"project_id":  5678,
+				"title":       "Cross-project issue",
+				"description": "body",
+				"labels":      []any{"bug"},
+				"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
+				"references":  map[string]any{"full": "other-group/other-project#42"},
+			}), nil
+		default:
+			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"5678#42"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if item.ExternalID != "GL-5678-42" {
+		t.Fatalf("ExternalID = %q, want GL-5678-42", item.ExternalID)
+	}
+	if len(item.SourceItemIDs) != 1 || item.SourceItemIDs[0] != "5678#42" {
+		t.Fatalf("SourceItemIDs = %#v, want [5678#42]", item.SourceItemIDs)
+	}
+	if len(calls) != 1 || calls[0] != "GET /api/v4/projects/5678/issues/42" {
+		t.Fatalf("calls = %v, want project-qualified fetch", calls)
+	}
+}
+
+func TestResolveIssueSelectionWithoutProjectIDFails(t *testing.T) {
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		return nil, nil
+	}))
+	_, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"42"}})
+	if err == nil || !strings.Contains(err.Error(), "missing project id") {
+		t.Fatalf("err = %v, want missing project id", err)
+	}
+}
+
+func TestListSelectableIssuesRejectsUnsupportedView(t *testing.T) {
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		return nil, nil
+	}))
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "mentioned"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("err = %v, want unsupported view error", err)
 	}
 }
