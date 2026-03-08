@@ -421,3 +421,42 @@ func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 		t.Errorf("expected 1 glab call (mr view only), got %d", callCount)
 	}
 }
+
+func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
+	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/4\n")}
+	a := newWithRunner(config.GlabConfig{}, stub.run)
+	payload := mustJSON(worktreePayload{Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Number: 40}}})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	joined := strings.Join(stub.calls[1].args, " ")
+	if !strings.Contains(joined, "--description Repo specific implementation plan\n\nResolves #40") {
+		t.Fatalf("args %q missing gitlab resolves footer", joined)
+	}
+}
+
+func TestOnEvent_WorktreeCreated_AddsLinearResolvesFooter(t *testing.T) {
+	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
+	a := newWithRunner(config.GlabConfig{}, stub.run)
+	payload := mustJSON(worktreePayload{Branch: "sub-LIN-FOO-123-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "linear", Kind: "issue", ID: "FOO-123", URL: "https://linear.app/acme/issue/FOO-123"}}})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	joined := strings.Join(stub.calls[1].args, " ")
+	if !strings.Contains(joined, "Resolves [FOO-123](https://linear.app/acme/issue/FOO-123)") {
+		t.Fatalf("args %q missing linear resolves footer", joined)
+	}
+}
+
+func TestOnEvent_WorktreeCreated_AddsCrossProjectGitLabResolvesFooter(t *testing.T) {
+	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/6\n")}
+	a := newWithRunner(config.GlabConfig{}, stub.run)
+	payload := mustJSON(worktreePayload{Branch: "sub-GL-9999-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Repo: "other-group/other-project", URL: "https://gitlab.example.com/other-group/other-project/-/issues/40", Number: 40}}})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	joined := strings.Join(stub.calls[1].args, " ")
+	if !strings.Contains(joined, "Resolves [other-group/other-project#40](https://gitlab.example.com/other-group/other-project/-/issues/40)") {
+		t.Fatalf("args %q missing cross-project gitlab resolves footer", joined)
+	}
+}

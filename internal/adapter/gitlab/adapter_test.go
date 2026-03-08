@@ -207,3 +207,51 @@ func TestResolveInitiativeEpicUsesDirectEndpoint(t *testing.T) {
 		t.Fatalf("calls = %v, want direct epic fetch", calls)
 	}
 }
+
+func TestResolveIssueTrackerRefs(t *testing.T) {
+	a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/v4/projects/1234":
+			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 55, "kind": "group"}}), nil
+		case "/api/v4/projects/1234/issues/42":
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42, "title": "Issue 42", "description": "body", "labels": []any{}, "web_url": "https://gitlab.example.com/acme/rocket/-/issues/42"}), nil
+		default:
+			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"42"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	refs, ok := item.Metadata["tracker_refs"].([]domain.TrackerReference)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("tracker_refs = %#v, want 1 typed ref", item.Metadata["tracker_refs"])
+	}
+	if refs[0].Provider != "gitlab" || refs[0].Number != 42 {
+		t.Fatalf("tracker ref = %+v, want gitlab issue 42", refs[0])
+	}
+}
+
+func TestResolveIssueTrackerRefsUsesProjectPath(t *testing.T) {
+	a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/v4/projects/1234":
+			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 55, "kind": "group"}}), nil
+		case "/api/v4/projects/1234/issues/42":
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42, "title": "Issue 42", "description": "body", "labels": []any{}, "web_url": "https://gitlab.example.com/other-group/other-project/-/issues/42", "references": map[string]any{"full": "other-group/other-project#42"}}), nil
+		default:
+			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"42"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	refs, ok := item.Metadata["tracker_refs"].([]domain.TrackerReference)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("tracker_refs = %#v, want 1 typed ref", item.Metadata["tracker_refs"])
+	}
+	if refs[0].Repo != "other-group/other-project" {
+		t.Fatalf("tracker ref repo = %q, want other-group/other-project", refs[0].Repo)
+	}
+}

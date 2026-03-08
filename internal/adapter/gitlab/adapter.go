@@ -45,15 +45,18 @@ type projectMeta struct {
 }
 
 type issue struct {
-	ID          int64      `json:"id"`
-	IID         int64      `json:"iid"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	State       string     `json:"state"`
-	Labels      []string   `json:"labels"`
-	WebURL      string     `json:"web_url"`
-	CreatedAt   *time.Time `json:"created_at"`
-	UpdatedAt   *time.Time `json:"updated_at"`
+	ID          int64    `json:"id"`
+	IID         int64    `json:"iid"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	State       string   `json:"state"`
+	Labels      []string `json:"labels"`
+	WebURL      string   `json:"web_url"`
+	References  struct {
+		Full string `json:"full"`
+	} `json:"references"`
+	CreatedAt *time.Time `json:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at"`
 }
 
 type milestone struct {
@@ -459,7 +462,7 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 }
 
 func issueToWorkItem(projectID int64, iss issue) domain.WorkItem {
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{strconv.FormatInt(iss.IID, 10)}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.WebURL}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{strconv.FormatInt(iss.IID, 10)}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
 }
 
 func aggregateIssues(projectID int64, issues []issue) domain.WorkItem {
@@ -482,7 +485,47 @@ func aggregateIssues(projectID int64, issues []issue) domain.WorkItem {
 	if len(issues) > 1 {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+}
+
+func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {
+	refs := make([]domain.TrackerReference, 0, len(issues))
+	seen := make(map[string]struct{}, len(issues))
+	for _, iss := range issues {
+		if iss.IID <= 0 {
+			continue
+		}
+		projectPath := gitlabProjectPath(iss)
+		key := fmt.Sprintf("%s#%d", projectPath, iss.IID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, domain.TrackerReference{Provider: "gitlab", Kind: "issue", ID: strconv.FormatInt(iss.IID, 10), URL: iss.WebURL, Repo: projectPath, Number: iss.IID})
+	}
+	return refs
+}
+
+func gitlabProjectPath(iss issue) string {
+	if strings.TrimSpace(iss.References.Full) != "" {
+		parts := strings.SplitN(strings.TrimSpace(iss.References.Full), "#", 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if strings.TrimSpace(iss.WebURL) == "" {
+		return ""
+	}
+	parsed, err := url.Parse(iss.WebURL)
+	if err != nil {
+		return ""
+	}
+	const marker = "/-/issues/"
+	idx := strings.Index(parsed.Path, marker)
+	if idx == -1 {
+		return ""
+	}
+	return strings.TrimPrefix(parsed.Path[:idx], "/")
 }
 
 func formatMilestone(ms milestone) string {

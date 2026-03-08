@@ -454,6 +454,57 @@ func TestLinearExternalID(t *testing.T) {
 	}
 }
 
+func TestResolveIssueTrackerRefs(t *testing.T) {
+	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{"nodes": []any{issue}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	wi, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"abc123"}})
+	if err != nil {
+		t.Fatalf("Resolve single issue: %v", err)
+	}
+	refs, ok := wi.Metadata["tracker_refs"].([]domain.TrackerReference)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("tracker_refs = %#v, want 1 typed ref", wi.Metadata["tracker_refs"])
+	}
+	if refs[0].Provider != "linear" || refs[0].ID != "FOO-123" || refs[0].URL == "" {
+		t.Fatalf("tracker ref = %+v, want linear FOO-123 with url", refs[0])
+	}
+}
+
+func TestResolveMultiIssueTrackerRefs(t *testing.T) {
+	issue1 := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
+	issue2 := testIssueNode("def456", "FOO-456", "Add feature", []string{"frontend"}, "FOO")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, map[string]any{
+			"data": map[string]any{
+				"issues": map[string]any{"nodes": []any{issue1, issue2}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	wi, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"abc123", "def456"}})
+	if err != nil {
+		t.Fatalf("Resolve multi issue: %v", err)
+	}
+	refs, ok := wi.Metadata["tracker_refs"].([]domain.TrackerReference)
+	if !ok || len(refs) != 2 {
+		t.Fatalf("tracker_refs = %#v, want 2 typed refs", wi.Metadata["tracker_refs"])
+	}
+	if refs[0].ID != "FOO-123" || refs[1].ID != "FOO-456" {
+		t.Fatalf("tracker refs = %+v, want ordered issue identifiers", refs)
+	}
+}
+
 func TestSubstrateToLinearIdentifier(t *testing.T) {
 	tests := []struct {
 		externalID string

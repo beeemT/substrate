@@ -73,12 +73,13 @@ type githubPull struct {
 }
 
 type worktreePayload struct {
-	WorkspaceID   string `json:"workspace_id"`
-	Repository    string `json:"repository"`
-	Branch        string `json:"branch"`
-	WorktreePath  string `json:"worktree_path"`
-	WorkItemTitle string `json:"work_item_title"`
-	SubPlan       string `json:"sub_plan"`
+	WorkspaceID   string                    `json:"workspace_id"`
+	Repository    string                    `json:"repository"`
+	Branch        string                    `json:"branch"`
+	WorktreePath  string                    `json:"worktree_path"`
+	WorkItemTitle string                    `json:"work_item_title"`
+	SubPlan       string                    `json:"sub_plan"`
+	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
 }
 type completedPayload struct {
 	Branch     string `json:"branch"`
@@ -335,7 +336,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	if title == "" {
 		title = p.Branch
 	}
-	body := strings.TrimSpace(p.SubPlan)
+	body := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, a.cfg.Owner, a.cfg.Repo))
 	var created githubPull
 	if err := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", a.cfg.Owner, a.cfg.Repo), map[string]any{"title": title, "head": p.Branch, "base": a.defaultBranch, "draft": true, "body": body}, &created); err != nil {
 		return err
@@ -531,7 +532,7 @@ func issueLabels(iss githubIssue) []string {
 }
 
 func issueToWorkItem(owner, repo string, iss githubIssue) domain.WorkItem {
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, iss.Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{strconv.FormatInt(iss.Number, 10)}, Title: iss.Title, Description: iss.Body, Labels: issueLabels(iss), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.HTMLURL}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, iss.Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{strconv.FormatInt(iss.Number, 10)}, Title: iss.Title, Description: iss.Body, Labels: issueLabels(iss), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.HTMLURL, "tracker_refs": githubTrackerRefs(owner, repo, []githubIssue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
 }
 
 func aggregateIssues(owner, repo string, issues []githubIssue) domain.WorkItem {
@@ -554,7 +555,23 @@ func aggregateIssues(owner, repo string, issues []githubIssue) domain.WorkItem {
 	if len(issues) > 1 {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(owner, repo, issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+}
+
+func githubTrackerRefs(owner, repo string, issues []githubIssue) []domain.TrackerReference {
+	refs := make([]domain.TrackerReference, 0, len(issues))
+	seen := make(map[int64]struct{}, len(issues))
+	for _, iss := range issues {
+		if iss.Number <= 0 {
+			continue
+		}
+		if _, ok := seen[iss.Number]; ok {
+			continue
+		}
+		seen[iss.Number] = struct{}{}
+		refs = append(refs, domain.TrackerReference{Provider: "github", Kind: "issue", ID: strconv.FormatInt(iss.Number, 10), URL: iss.HTMLURL, Owner: owner, Repo: repo, Number: iss.Number})
+	}
+	return refs
 }
 
 func formatExternalID(owner, repo string, number int64) string {
@@ -608,4 +625,63 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func appendTrackerFooter(body, footer string) string {
+	body = strings.TrimSpace(body)
+	footer = strings.TrimSpace(footer)
+	switch {
+	case body == "":
+		return footer
+	case footer == "":
+		return body
+	default:
+		return body + "\n\n" + footer
+	}
+}
+
+func renderGitHubTrackerRefs(refs []domain.TrackerReference, owner, repo string) string {
+	parts := make([]string, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		rendered := renderGitHubTrackerRef(ref, owner, repo)
+		if rendered == "" {
+			continue
+		}
+		if _, ok := seen[rendered]; ok {
+			continue
+		}
+		seen[rendered] = struct{}{}
+		parts = append(parts, rendered)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Resolves " + strings.Join(parts, ", ")
+}
+
+func renderGitHubTrackerRef(ref domain.TrackerReference, owner, repo string) string {
+	switch ref.Provider {
+	case "github":
+		if ref.Kind != "issue" || ref.Number <= 0 {
+			return ""
+		}
+		if ref.Owner == owner && ref.Repo == repo {
+			return fmt.Sprintf("#%d", ref.Number)
+		}
+		if ref.Owner != "" && ref.Repo != "" {
+			return fmt.Sprintf("%s/%s#%d", ref.Owner, ref.Repo, ref.Number)
+		}
+		return ""
+	case "linear":
+		if ref.ID == "" {
+			return ""
+		}
+		if ref.URL != "" {
+			return fmt.Sprintf("[%s](%s)", ref.ID, ref.URL)
+		}
+		return ref.ID
+	default:
+		return ""
+	}
 }

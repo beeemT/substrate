@@ -484,6 +484,12 @@ func issueToWorkItem(issue linearIssue) domain.WorkItem {
 			"linear_url":        issue.URL,
 			"linear_state_id":   issue.State.ID,
 			"linear_identifier": issue.Identifier,
+			"tracker_refs": []domain.TrackerReference{{
+				Provider: "linear",
+				Kind:     "issue",
+				ID:       issue.Identifier,
+				URL:      issue.URL,
+			}},
 		},
 		CreatedAt: derefTime(issue.CreatedAt),
 		UpdatedAt: derefTime(issue.UpdatedAt),
@@ -530,10 +536,32 @@ func aggregateIssues(issues []linearIssue) domain.WorkItem {
 		State:         domain.WorkItemIngested,
 		Metadata: map[string]any{
 			"linear_identifier": issues[0].Identifier,
+			"tracker_refs":      linearTrackerRefs(issues),
 		},
 		CreatedAt: derefTime(issues[0].CreatedAt),
 		UpdatedAt: derefTime(issues[0].UpdatedAt),
 	}
+}
+
+func linearTrackerRefs(issues []linearIssue) []domain.TrackerReference {
+	refs := make([]domain.TrackerReference, 0, len(issues))
+	seen := make(map[string]struct{}, len(issues))
+	for _, issue := range issues {
+		if issue.Identifier == "" {
+			continue
+		}
+		if _, ok := seen[issue.Identifier]; ok {
+			continue
+		}
+		seen[issue.Identifier] = struct{}{}
+		refs = append(refs, domain.TrackerReference{
+			Provider: "linear",
+			Kind:     "issue",
+			ID:       issue.Identifier,
+			URL:      issue.URL,
+		})
+	}
+	return refs
 }
 
 // --- Formatters ---

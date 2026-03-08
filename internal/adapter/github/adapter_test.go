@@ -192,3 +192,57 @@ func TestPlanApprovedAddsComments(t *testing.T) {
 		t.Fatalf("comment paths = %v, want 2 comments", commentPaths)
 	}
 }
+
+func TestLifecycleCreateAddsGitHubResolvesFooter(t *testing.T) {
+	var createBody string
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/repos/acme/rocket" && req.Method == http.MethodGet:
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet:
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
+			payload, _ := io.ReadAll(req.Body)
+			createBody = string(payload)
+			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	payload := `{"branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","tracker_refs":[{"provider":"github","kind":"issue","id":"40","owner":"acme","repo":"rocket","number":40}]}`
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("worktree created: %v", err)
+	}
+	if !strings.Contains(createBody, `"body":"Repo specific implementation plan\n\nResolves #40"`) {
+		t.Fatalf("create body = %s, want resolves footer", createBody)
+	}
+}
+
+func TestLifecycleCreateAddsLinearResolvesFooter(t *testing.T) {
+	var createBody string
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/repos/acme/rocket" && req.Method == http.MethodGet:
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet:
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
+			payload, _ := io.ReadAll(req.Body)
+			createBody = string(payload)
+			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	payload := `{"branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","tracker_refs":[{"provider":"linear","kind":"issue","id":"FOO-123","url":"https://linear.app/acme/issue/FOO-123"}]}`
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("worktree created: %v", err)
+	}
+	if !strings.Contains(createBody, `Resolves [FOO-123](https://linear.app/acme/issue/FOO-123)`) {
+		t.Fatalf("create body = %s, want linear resolves footer", createBody)
+	}
+}

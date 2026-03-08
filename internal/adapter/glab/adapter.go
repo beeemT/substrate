@@ -87,12 +87,13 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 // worktreePayload mirrors orchestrator.WorktreeCreatedPayload.
 // Defined locally to avoid cross-package dependency.
 type worktreePayload struct {
-	WorkspaceID   string `json:"workspace_id"`
-	Repository    string `json:"repository"`
-	Branch        string `json:"branch"`
-	WorktreePath  string `json:"worktree_path"`
-	WorkItemTitle string `json:"work_item_title"`
-	SubPlan       string `json:"sub_plan"`
+	WorkspaceID   string                    `json:"workspace_id"`
+	Repository    string                    `json:"repository"`
+	Branch        string                    `json:"branch"`
+	WorktreePath  string                    `json:"worktree_path"`
+	WorkItemTitle string                    `json:"work_item_title"`
+	SubPlan       string                    `json:"sub_plan"`
+	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
 }
 
 // completedPayload is the expected shape of EventWorkItemCompleted.
@@ -113,7 +114,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	}
 
 	title := mrTitle(p.WorkItemTitle, p.Branch)
-	description := strings.TrimSpace(p.SubPlan)
+	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
 	if a.mrExists(ctx, p.WorktreePath, p.Branch) {
 		slog.Info("glab: MR already exists, skipping create", "branch", p.Branch)
 	} else if err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
@@ -311,4 +312,63 @@ func capitalize(s string) string {
 		runes[0] -= 32
 	}
 	return string(runes)
+}
+
+func appendTrackerFooter(body, footer string) string {
+	body = strings.TrimSpace(body)
+	footer = strings.TrimSpace(footer)
+	switch {
+	case body == "":
+		return footer
+	case footer == "":
+		return body
+	default:
+		return body + "\n\n" + footer
+	}
+}
+
+func renderGitLabTrackerRefs(refs []domain.TrackerReference) string {
+	parts := make([]string, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		rendered := renderGitLabTrackerRef(ref)
+		if rendered == "" {
+			continue
+		}
+		if _, ok := seen[rendered]; ok {
+			continue
+		}
+		seen[rendered] = struct{}{}
+		parts = append(parts, rendered)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Resolves " + strings.Join(parts, ", ")
+}
+
+func renderGitLabTrackerRef(ref domain.TrackerReference) string {
+	switch ref.Provider {
+	case "gitlab":
+		if ref.Kind != "issue" || ref.Number <= 0 {
+			return ""
+		}
+		if ref.Repo == "" {
+			return fmt.Sprintf("#%d", ref.Number)
+		}
+		if ref.URL != "" {
+			return fmt.Sprintf("[%s#%d](%s)", ref.Repo, ref.Number, ref.URL)
+		}
+		return fmt.Sprintf("%s#%d", ref.Repo, ref.Number)
+	case "linear":
+		if ref.ID == "" {
+			return ""
+		}
+		if ref.URL != "" {
+			return fmt.Sprintf("[%s](%s)", ref.ID, ref.URL)
+		}
+		return ref.ID
+	default:
+		return ""
+	}
 }
