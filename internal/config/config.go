@@ -164,7 +164,6 @@ type CodexConfig struct {
 
 // ForemanConfig controls the foreman question-answering system.
 type ForemanConfig struct {
-	Enabled         bool   `toml:"enabled"`
 	QuestionTimeout string `toml:"question_timeout"`
 }
 

@@ -48,6 +48,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Harness.Phase.Planning != HarnessOhMyPi || cfg.Harness.Phase.Implementation != HarnessOhMyPi || cfg.Harness.Phase.Review != HarnessOhMyPi || cfg.Harness.Phase.Foreman != HarnessOhMyPi {
 		t.Errorf("harness phase defaults = %+v, want all ohmypi", cfg.Harness.Phase)
 	}
+	if cfg.Foreman.QuestionTimeout != "0" {
+		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "0")
+	}
 	if cfg.Adapters.Linear.PollInterval != "30s" {
 		t.Errorf("adapters.linear.poll_interval = %q, want %q", cfg.Adapters.Linear.PollInterval, "30s")
 	}
@@ -74,6 +77,9 @@ max_parse_retries = 5
 [review]
 pass_threshold = "no_critiques"
 max_cycles = 7
+
+[foreman]
+question_timeout = "45s"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -94,6 +100,9 @@ max_cycles = 7
 	}
 	if *cfg.Review.MaxCycles != 7 {
 		t.Errorf("review.max_cycles = %d, want 7", *cfg.Review.MaxCycles)
+	}
+	if cfg.Foreman.QuestionTimeout != "45s" {
+		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "45s")
 	}
 }
 

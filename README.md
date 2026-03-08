@@ -160,7 +160,6 @@ bridge_path    = "scripts/omp-bridge.ts"
 thinking_level = "xhigh"
 
 [foreman]
-enabled         = true
 question_timeout = "0"            # "0" = wait indefinitely
 ```
 ### 3. Run the TUI

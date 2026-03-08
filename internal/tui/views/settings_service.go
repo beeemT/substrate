@@ -422,10 +422,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			ID:          "foreman",
 			Title:       "Foreman",
 			Description: "Foreman session settings",
-			Fields: []SettingsField{
-				{Section: "foreman", Key: "enabled", Label: "Enabled", Type: SettingsFieldBool, Value: boolStr(cfg.Foreman.Enabled)},
-				{Section: "foreman", Key: "question_timeout", Label: "Question Timeout", Type: SettingsFieldString, Value: cfg.Foreman.QuestionTimeout},
-			},
+			Fields:      []SettingsField{{Section: "foreman", Key: "question_timeout", Label: "Question Timeout", Type: SettingsFieldString, Value: cfg.Foreman.QuestionTimeout}},
 		},
 		{
 			ID:          "harness",
@@ -585,8 +582,6 @@ func applyField(cfg *config.Config, field SettingsField) {
 		cfg.Review.PassThreshold = config.PassThreshold(value)
 	case "review.max_cycles":
 		cfg.Review.MaxCycles = parseOptionalInt(value)
-	case "foreman.enabled":
-		cfg.Foreman.Enabled = parseBool(value)
 	case "foreman.question_timeout":
 		cfg.Foreman.QuestionTimeout = value
 	case "harness.default":

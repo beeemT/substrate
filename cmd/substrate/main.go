@@ -317,7 +317,6 @@ func initializeGlobalConfig(cfgPath string) error {
 	# foreman = "ohmypi"
 	
 	[foreman]
-	# enabled = true
 	# question_timeout = "0"
 	
 	[adapters.claude_code]

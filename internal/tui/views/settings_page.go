@@ -20,6 +20,13 @@ const (
 	settingsActionLoginProvider
 )
 
+type settingsFocus int
+
+const (
+	settingsFocusSections settingsFocus = iota
+	settingsFocusFields
+)
+
 type SettingsSavedMsg struct {
 	Raw     string
 	Message string
@@ -51,6 +58,7 @@ type SettingsPage struct {
 	height         int
 	sectionCursor  int
 	fieldCursor    int
+	focus          settingsFocus
 	editing        bool
 	revealSecrets  bool
 	dirty          bool
@@ -68,18 +76,28 @@ func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.
 		sections:       snapshot.Sections,
 		providerStatus: snapshot.Providers,
 		rawContent:     snapshot.RawTOML,
+		focus:          settingsFocusSections,
 		editInput:      ti,
 		styles:         st,
 	}
 }
 
-func (m *SettingsPage) Open() { m.active = true }
+func (m *SettingsPage) Open() {
+	m.active = true
+	m.focusSections()
+	m.editing = false
+	m.editInput.Blur()
+	m.clampCursor()
+}
+
 func (m *SettingsPage) Close() {
 	m.active = false
+	m.focusSections()
 	m.editing = false
 	m.editInput.Blur()
 	m.errorText = ""
 }
+
 func (m SettingsPage) Active() bool      { return m.active }
 func (m *SettingsPage) SetSize(w, h int) { m.width = w; m.height = h }
 
@@ -124,6 +142,78 @@ func (m *SettingsPage) clampCursor() {
 	}
 }
 
+func (m SettingsPage) fieldsFocused() bool {
+	return m.focus == settingsFocusFields && m.currentField() != nil
+}
+
+func (m *SettingsPage) focusSections() {
+	m.focus = settingsFocusSections
+}
+
+func (m *SettingsPage) focusFields() {
+	m.clampCursor()
+	if m.currentField() == nil {
+		m.focus = settingsFocusSections
+		return
+	}
+	m.focus = settingsFocusFields
+}
+
+func (m *SettingsPage) moveSection(delta int) {
+	if len(m.sections) == 0 {
+		return
+	}
+	next := m.sectionCursor + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.sections) {
+		next = len(m.sections) - 1
+	}
+	if next != m.sectionCursor {
+		m.sectionCursor = next
+		m.fieldCursor = 0
+	}
+	m.clampCursor()
+}
+
+func (m *SettingsPage) moveField(delta int) {
+	sec := m.currentSection()
+	if sec == nil || len(sec.Fields) == 0 {
+		m.focusSections()
+		return
+	}
+	next := m.fieldCursor + delta
+	if next >= 0 && next < len(sec.Fields) {
+		m.fieldCursor = next
+		m.focus = settingsFocusFields
+		return
+	}
+
+	sectionIndex := m.sectionCursor + delta
+	for sectionIndex >= 0 && sectionIndex < len(m.sections) {
+		nextSection := m.sections[sectionIndex]
+		if len(nextSection.Fields) > 0 {
+			m.sectionCursor = sectionIndex
+			if delta > 0 {
+				m.fieldCursor = 0
+			} else {
+				m.fieldCursor = len(nextSection.Fields) - 1
+			}
+			m.focus = settingsFocusFields
+			return
+		}
+		sectionIndex += delta
+	}
+
+	if delta < 0 {
+		m.fieldCursor = 0
+	} else {
+		m.fieldCursor = len(sec.Fields) - 1
+	}
+	m.focus = settingsFocusFields
+}
+
 func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
@@ -151,41 +241,37 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		}
 		switch msg.String() {
 		case "up", "k":
-			if m.fieldCursor > 0 {
-				m.fieldCursor--
-			} else if m.sectionCursor > 0 {
-				m.sectionCursor--
-				sec := m.currentSection()
-				if sec != nil {
-					m.fieldCursor = max(0, len(sec.Fields)-1)
-				}
+			if m.fieldsFocused() {
+				m.moveField(-1)
+			} else {
+				m.moveSection(-1)
 			}
 		case "down", "j":
-			sec := m.currentSection()
-			if sec != nil && m.fieldCursor < len(sec.Fields)-1 {
-				m.fieldCursor++
-			} else if m.sectionCursor < len(m.sections)-1 {
-				m.sectionCursor++
-				m.fieldCursor = 0
+			if m.fieldsFocused() {
+				m.moveField(1)
+			} else {
+				m.moveSection(1)
 			}
 		case "left", "h":
-			if m.sectionCursor > 0 {
-				m.sectionCursor--
-				m.fieldCursor = 0
+			if m.fieldsFocused() {
+				m.focusSections()
 			}
 		case "right", "l":
-			if m.sectionCursor < len(m.sections)-1 {
-				m.sectionCursor++
-				m.fieldCursor = 0
+			if m.focus == settingsFocusSections {
+				m.focusFields()
 			}
 		case "enter":
+			if m.focus == settingsFocusSections {
+				m.focusFields()
+				return m, nil
+			}
 			if f := m.currentField(); f != nil {
 				m.editInput.SetValue(f.Value)
 				m.editInput.Focus()
 				m.editing = true
 			}
 		case " ":
-			if f := m.currentField(); f != nil && f.Type == SettingsFieldBool {
+			if f := m.currentField(); m.fieldsFocused() && f != nil && f.Type == SettingsFieldBool {
 				if parseBool(f.Value) {
 					f.Value = "false"
 				} else {
@@ -204,6 +290,12 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			return m, m.testProviderCmd()
 		case "g":
 			return m, m.loginProviderCmd(svcs)
+		case "esc":
+			if m.fieldsFocused() {
+				m.focusSections()
+				return m, nil
+			}
+			return m, func() tea.Msg { return CloseOverlayMsg{} }
 		}
 	case SettingsSavedMsg:
 		m.rawContent = msg.Raw
@@ -303,7 +395,11 @@ func (m SettingsPage) View() string {
 		}
 		style := lipgloss.NewStyle().Width(leftWidth - 2).PaddingLeft(1)
 		if i == m.sectionCursor {
-			style = style.Background(lipgloss.Color("#1e293b")).Foreground(lipgloss.Color("#f8fafc"))
+			if m.focus == settingsFocusSections && !m.editing {
+				style = style.Background(lipgloss.Color("#1e293b")).Foreground(lipgloss.Color("#f8fafc"))
+			} else {
+				style = style.Foreground(lipgloss.Color("#e2e8f0")).BorderLeft(true).BorderForeground(lipgloss.Color("#60a5fa"))
+			}
 		} else {
 			style = style.Foreground(lipgloss.Color("#94a3b8"))
 		}
@@ -325,6 +421,11 @@ func (m SettingsPage) renderMain(width int) string {
 	if sec.Description != "" {
 		lines = append(lines, m.styles.Subtitle.Render(sec.Description))
 	}
+	focusLabel := "Focus: groups"
+	if m.fieldsFocused() || m.editing {
+		focusLabel = "Focus: settings"
+	}
+	lines = append(lines, m.styles.Muted.Render(focusLabel))
 	provider := providerForSection(sec)
 	if provider != "" {
 		if st, ok := m.providerStatus[provider]; ok {
@@ -333,7 +434,7 @@ func (m SettingsPage) renderMain(width int) string {
 	}
 	lines = append(lines, "")
 	for i, field := range sec.Fields {
-		selected := i == m.fieldCursor
+		selected := m.fieldsFocused() && i == m.fieldCursor
 		value := field.Value
 		if field.Sensitive && !m.revealSecrets && value != "" {
 			value = strings.Repeat("•", min(8, len([]rune(value))))
@@ -373,9 +474,19 @@ func (m SettingsPage) renderMain(width int) string {
 	if m.statusText != "" {
 		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")).Render(m.statusText))
 	}
-	footer := m.styles.Muted.Render("[enter] edit  [space] toggle bool  [r] reveal  [s] save  [a] apply  [t] test  [g] login  [esc] close")
+	footer := m.styles.Muted.Render(m.footerText())
 	lines = append(lines, "", footer)
 	return lipgloss.NewStyle().Padding(1, 2).Width(width).Height(m.height).Render(strings.Join(lines, "\n"))
+}
+
+func (m SettingsPage) footerText() string {
+	if m.editing {
+		return "[enter] save edit  [esc] cancel edit"
+	}
+	if m.fieldsFocused() {
+		return "[↑↓] settings  [enter] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+	}
+	return "[↑↓] groups  [enter/right] settings  [s] save  [a] apply  [t] test  [g] login  [r] reveal  [esc] close"
 }
 
 func providerForSection(section *SettingsSection) string {

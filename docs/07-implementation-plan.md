@@ -40,7 +40,7 @@ Config loading validates:
 - `[commit]` block: `strategy` enum (`granular` | `semi-regular` | `single`, default `semi-regular`), `message_format` enum (`ai-generated` | `conventional` | `custom`, default `ai-generated`), optional `message_template` string (required when `message_format = "custom"`).
 - `[plan]` block (`max_parse_retries` int, default 2).
 - `[review]` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3).
-- `[foreman]` block **[UPDATED - IMPLEMENTED]**: `enabled` bool (default true), `question_timeout` duration string (default "0" = wait indefinitely).
+- `[foreman]` block **[UPDATED - IMPLEMENTED]**: `question_timeout` duration string (default "0" = wait indefinitely).
 - `[harness]` block **[UPDATED - IMPLEMENTED]**: default harness, fallback order, and per-phase overrides (`planning`, `implementation`, `review`, `foreman`). oh-my-pi remains the generated default because it is the only harness with verified interactive correction support.
 - `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bun_path`, `bridge_path`, `thinking_level` (maps to oh-my-pi thinkingLevel for all sessions).
 - Per-repo `[repos.<name>]` sections are optional.

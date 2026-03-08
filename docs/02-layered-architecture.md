@@ -485,7 +485,6 @@ bridge_path     = "scripts/omp-bridge.ts"
 thinking_level  = "xhigh"          # oh-my-pi thinkingLevel for all sessions
 
 [foreman]
-enabled          = true
 question_timeout = "0"             # duration string; "0" = wait indefinitely
 
 
