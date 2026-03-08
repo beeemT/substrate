@@ -475,6 +475,120 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionSearchHistory(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	workspaceRepo := reposqlite.NewWorkspaceRepo(tx)
+	workItemRepo := reposqlite.NewWorkItemRepo(tx)
+	sessionRepo := reposqlite.NewSessionRepo(tx)
+
+	localWS := makeWorkspace(t, tx)
+	localWS.Name = "local-workspace"
+	localWS.RootPath = "/tmp/local-workspace"
+	localWS.UpdatedAt = now()
+	if err := workspaceRepo.Update(ctx, localWS); err != nil {
+		t.Fatalf("update local workspace: %v", err)
+	}
+	remoteWS := domain.Workspace{
+		ID:        domain.NewID(),
+		Name:      "remote-workspace",
+		RootPath:  "/tmp/remote-workspace",
+		Status:    domain.WorkspaceReady,
+		CreatedAt: now(),
+		UpdatedAt: now(),
+	}
+	if err := workspaceRepo.Create(ctx, remoteWS); err != nil {
+		t.Fatalf("create remote workspace: %v", err)
+	}
+
+	localItem := makeWorkItem(t, tx, localWS.ID)
+	localItem.ExternalID = "LOC-1"
+	localItem.Title = "Local planner"
+	localItem.State = domain.WorkItemPlanning
+	localItem.UpdatedAt = now()
+	if err := workItemRepo.Update(ctx, localItem); err != nil {
+		t.Fatalf("update local work item: %v", err)
+	}
+	localPlan := makePlan(t, tx, localItem.ID)
+	localSubPlan := makeSubPlan(t, tx, localPlan.ID)
+	localSession := makeSession(t, tx, localSubPlan.ID, localWS.ID)
+	localSession.RepositoryName = "local-repo"
+	localSession.Status = domain.AgentSessionCompleted
+	completedAt := now()
+	localSession.CompletedAt = &completedAt
+	localSession.UpdatedAt = now()
+	if err := sessionRepo.Update(ctx, localSession); err != nil {
+		t.Fatalf("update local session: %v", err)
+	}
+
+	remoteItem := makeWorkItem(t, tx, remoteWS.ID)
+	remoteItem.ExternalID = "REM-1"
+	remoteItem.Title = "Remote search target"
+	remoteItem.State = domain.WorkItemReviewing
+	remoteItem.UpdatedAt = now()
+	if err := workItemRepo.Update(ctx, remoteItem); err != nil {
+		t.Fatalf("update remote work item: %v", err)
+	}
+	remotePlan := makePlan(t, tx, remoteItem.ID)
+	remoteSubPlan := makeSubPlan(t, tx, remotePlan.ID)
+	remoteSession := makeSession(t, tx, remoteSubPlan.ID, remoteWS.ID)
+	remoteSession.RepositoryName = "remote-repo"
+	remoteSession.Status = domain.AgentSessionRunning
+	remoteSession.UpdatedAt = now()
+	if err := sessionRepo.Update(ctx, remoteSession); err != nil {
+		t.Fatalf("update remote session: %v", err)
+	}
+
+	localEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{
+		WorkspaceID: &localWS.ID,
+		Search:      "local",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("search local history: %v", err)
+	}
+	if len(localEntries) != 1 {
+		t.Fatalf("local entries len = %d, want 1", len(localEntries))
+	}
+	if localEntries[0].SessionID != localSession.ID {
+		t.Fatalf("local session id = %q, want %q", localEntries[0].SessionID, localSession.ID)
+	}
+	if localEntries[0].WorkspaceName != localWS.Name {
+		t.Fatalf("local workspace name = %q, want %q", localEntries[0].WorkspaceName, localWS.Name)
+	}
+	if localEntries[0].WorkItemTitle != localItem.Title {
+		t.Fatalf("local work item title = %q, want %q", localEntries[0].WorkItemTitle, localItem.Title)
+	}
+	if localEntries[0].RepositoryName != localSession.RepositoryName {
+		t.Fatalf("local repository = %q, want %q", localEntries[0].RepositoryName, localSession.RepositoryName)
+	}
+	if localEntries[0].CompletedAt == nil {
+		t.Fatal("local completedAt = nil, want populated timestamp")
+	}
+
+	remoteEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{Search: "remote search", Limit: 10})
+	if err != nil {
+		t.Fatalf("search remote history: %v", err)
+	}
+	if len(remoteEntries) != 1 {
+		t.Fatalf("remote entries len = %d, want 1", len(remoteEntries))
+	}
+	if remoteEntries[0].SessionID != remoteSession.ID {
+		t.Fatalf("remote session id = %q, want %q", remoteEntries[0].SessionID, remoteSession.ID)
+	}
+	if remoteEntries[0].WorkspaceID != remoteWS.ID {
+		t.Fatalf("remote workspace id = %q, want %q", remoteEntries[0].WorkspaceID, remoteWS.ID)
+	}
+	if remoteEntries[0].WorkItemExternalID != remoteItem.ExternalID {
+		t.Fatalf("remote external id = %q, want %q", remoteEntries[0].WorkItemExternalID, remoteItem.ExternalID)
+	}
+	if remoteEntries[0].Status != remoteSession.Status {
+		t.Fatalf("remote status = %q, want %q", remoteEntries[0].Status, remoteSession.Status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ReviewCycle + Critique CRUD
 // ---------------------------------------------------------------------------

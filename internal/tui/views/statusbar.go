@@ -1,7 +1,6 @@
 package views
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,7 +8,10 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-// StatusBarModel renders the 1-line status bar at the bottom.
+// statusBarHeight is the single footer row at the bottom of the main page.
+const statusBarHeight = 1
+
+// StatusBarModel renders the footer content at the bottom.
 type StatusBarModel struct {
 	styles styles.Styles
 }
@@ -19,37 +21,77 @@ func NewStatusBarModel(st styles.Styles) StatusBarModel {
 	return StatusBarModel{styles: st}
 }
 
-// View renders the status bar with the given keybind hints, right-aligned text, and total width.
+// View renders the keybind hints and right-aligned metadata within one footer row.
 func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) string {
-	var parts []string
+	if width <= 0 {
+		return ""
+	}
+
+	horizontalPadding := 0
+	innerWidth := width
+	if width >= 2 {
+		horizontalPadding = 1
+		innerWidth = width - 2
+	}
+
+	type hintPart struct {
+		raw      string
+		rendered string
+	}
+
+	parts := make([]hintPart, 0, len(hints))
 	for _, h := range hints {
+		keyRaw := "[" + h.Key + "]"
+		labelRaw := " " + h.Label
 		key := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#5b8def")).
 			Bold(true).
-			Render("[" + h.Key + "]")
+			Render(keyRaw)
 		label := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#a0a0a0")).
-			Render(" " + h.Label)
-		parts = append(parts, key+label)
+			Render(labelRaw)
+		parts = append(parts, hintPart{
+			raw:      keyRaw + labelRaw,
+			rendered: key + label,
+		})
 	}
-	left := strings.Join(parts, "  ")
+
+	rightText = truncate(rightText, innerWidth)
 	right := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(rightText)
+	rightLen := lipgloss.Width(rightText)
 
-	leftLen := lipgloss.Width(left)
-	rightLen := lipgloss.Width(right)
-	padLen := width - leftLen - rightLen - 2
-	if padLen < 0 {
-		padLen = 0
+	requiredGap := 0
+	if rightLen > 0 {
+		requiredGap = 1
 	}
-	pad := strings.Repeat(" ", padLen)
 
-	line := fmt.Sprintf(" %s%s%s", left, pad, right)
-	barStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#16213e")).
+	leftRawParts := make([]string, 0, len(parts))
+	leftRenderedParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		leftRawParts = append(leftRawParts, part.raw)
+		leftRenderedParts = append(leftRenderedParts, part.rendered)
+	}
+
+	leftRaw := strings.Join(leftRawParts, "  ")
+	for len(leftRawParts) > 0 && lipgloss.Width(leftRaw)+rightLen+requiredGap > innerWidth {
+		leftRawParts = leftRawParts[:len(leftRawParts)-1]
+		leftRenderedParts = leftRenderedParts[:len(leftRenderedParts)-1]
+		leftRaw = strings.Join(leftRawParts, "  ")
+	}
+
+	left := strings.Join(leftRenderedParts, "  ")
+	leftLen := lipgloss.Width(leftRaw)
+	gapLen := innerWidth - leftLen - rightLen
+	if gapLen < 0 {
+		gapLen = 0
+	}
+
+	line := left + strings.Repeat(" ", gapLen) + right
+	lineStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#a0a0a0")).
-		Width(width).
-		Padding(0, 1)
-	return barStyle.Render(line)
+		Padding(0, horizontalPadding)
+
+	return lineStyle.Render(line)
 }
 
 // DefaultHints returns the global keybind hints always shown in the status bar.

@@ -35,7 +35,7 @@ func NewQuestionModel(st styles.Styles) QuestionModel {
 // SetSize updates the layout dimensions.
 func (m *QuestionModel) SetSize(w, h int) { m.width = w; m.height = h }
 
-// SetTitle sets the work-item title shown in the header.
+// SetTitle sets the work-item title shown in the question view.
 func (m *QuestionModel) SetTitle(t string) { m.title = t }
 
 // SetQuestion loads a question into the model and activates the input.

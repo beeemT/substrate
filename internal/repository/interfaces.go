@@ -64,6 +64,7 @@ type SessionRepository interface {
 	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error)
 	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error)
+	SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error)
 	Create(ctx context.Context, s domain.AgentSession) error
 	Update(ctx context.Context, s domain.AgentSession) error
 	Delete(ctx context.Context, id string) error

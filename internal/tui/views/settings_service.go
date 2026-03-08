@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,18 +38,19 @@ const (
 )
 
 type SettingsField struct {
-	Section     string
-	Key         string
-	Label       string
-	Description string
-	Type        SettingsFieldType
-	Value       string
-	Options     []string
-	Sensitive   bool
-	Required    bool
-	Dirty       bool
-	Error       string
-	Status      string
+	Section      string
+	Key          string
+	Label        string
+	Description  string
+	DefaultValue string
+	Type         SettingsFieldType
+	Value        string
+	Options      []string
+	Sensitive    bool
+	Required     bool
+	Dirty        bool
+	Error        string
+	Status       string
 }
 
 type SettingsSection struct {
@@ -500,7 +500,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Provider · GitHub",
 			Description: "GitHub issues and PR integration",
 			Fields: []SettingsField{
-				{Section: "adapters.github", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitHub.TokenRef, cfg.Adapters.GitHub.Token), Sensitive: true, Status: githubAuthStatus(cfg)},
+				{Section: "adapters.github", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitHub.TokenRef, cfg.Adapters.GitHub.Token), Sensitive: true, Status: config.GitHubAuthSource(cfg.Adapters.GitHub)},
 				{Section: "adapters.github", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Assignee},
 				{Section: "adapters.github", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.PollInterval},
 				{Section: "adapters.github", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Reviewers, ",")},
@@ -525,6 +525,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		},
 	}
 	for i := range sections {
+		annotateFieldPresentation(&sections[i])
 		sections[i].Status = sectionStatus(sections[i])
 	}
 	return sections
@@ -548,9 +549,9 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 		},
 		"github": {
 			Title:       "GitHub",
-			Configured:  cfg.Adapters.GitHub.TokenRef != "" || strings.TrimSpace(cfg.Adapters.GitHub.Token) != "" || hasGhCLI(),
+			Configured:  config.GitHubAuthConfigured(cfg.Adapters.GitHub),
 			Connected:   false,
-			AuthSource:  githubAuthStatus(cfg),
+			AuthSource:  config.GitHubAuthSource(cfg.Adapters.GitHub),
 			Description: "Uses OS keychain-backed token or gh CLI fallback",
 		},
 	}
@@ -717,29 +718,109 @@ func sectionStatus(section SettingsSection) string {
 	return "configured"
 }
 
-func authSource(configured bool, fallback bool, configuredLabel, fallbackLabel string) string {
-	if configured {
-		return configuredLabel
+func annotateFieldPresentation(section *SettingsSection) {
+	for i := range section.Fields {
+		description, defaultValue := fieldPresentation(section.Fields[i].Section, section.Fields[i].Key)
+		section.Fields[i].Description = description
+		section.Fields[i].DefaultValue = defaultValue
 	}
-	if fallback {
-		return fallbackLabel
-	}
-	return "unset"
 }
 
-func githubAuthStatus(cfg *config.Config) string {
-	if strings.TrimSpace(cfg.Adapters.GitHub.Token) != "" {
-		return "config token"
+func fieldPresentation(section, key string) (description string, defaultValue string) {
+	switch section + "." + key {
+	case "commit.strategy":
+		return "Controls how often implementation work is committed while an agent is running.", "semi-regular"
+	case "commit.message_format":
+		return "Chooses how commit messages are generated for agent-authored commits.", "ai-generated"
+	case "commit.message_template":
+		return "Custom commit message template used only when the message format is set to custom.", "empty"
+	case "plan.max_parse_retries":
+		return "Maximum retries for repairing malformed plan output before planning fails.", "2"
+	case "review.pass_threshold":
+		return "Sets how strict the review pipeline is before a change is accepted.", "minor_ok"
+	case "review.max_cycles":
+		return "Maximum review and re-implementation cycles before escalation to a human.", "3"
+	case "foreman.question_timeout":
+		return "How long Foreman waits before timing out a question; 0 disables the timeout.", "0"
+	case "harness.default":
+		return "Primary harness used whenever a phase-specific override is not set.", "ohmypi"
+	case "harness.fallback":
+		return "Ordered fallback harnesses used when the preferred harness is unavailable.", "claude-code, codex"
+	case "harness.phase.planning":
+		return "Overrides the harness used for the planning phase.", "inherits harness.default"
+	case "harness.phase.implementation":
+		return "Overrides the harness used for the implementation phase.", "inherits harness.default"
+	case "harness.phase.review":
+		return "Overrides the harness used for the review phase.", "inherits harness.default"
+	case "harness.phase.foreman":
+		return "Overrides the harness used for the Foreman coordination phase.", "inherits harness.default"
+	case "adapters.ohmypi.bun_path":
+		return "Path to the Bun executable used to launch the oh-my-pi bridge harness.", "empty"
+	case "adapters.ohmypi.bridge_path":
+		return "Path to the oh-my-pi bridge entrypoint or script.", "empty"
+	case "adapters.ohmypi.thinking_level":
+		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", "empty"
+	case "adapters.claude_code.binary_path":
+		return "Path to the Claude Code CLI binary.", "empty"
+	case "adapters.claude_code.model":
+		return "Claude model name passed to the CLI for new sessions.", "empty"
+	case "adapters.claude_code.permission_mode":
+		return "Permission or sandbox mode requested from Claude Code.", "empty"
+	case "adapters.claude_code.max_turns":
+		return "Upper bound on Claude Code turns for a single session.", "0"
+	case "adapters.claude_code.max_budget_usd":
+		return "Optional USD budget ceiling passed to Claude Code sessions.", "0"
+	case "adapters.codex.binary_path":
+		return "Path to the Codex CLI binary.", "empty"
+	case "adapters.codex.model":
+		return "Codex model name used for new sessions.", "empty"
+	case "adapters.codex.approval_mode":
+		return "Approval mode passed to Codex for command execution.", "empty"
+	case "adapters.codex.full_auto":
+		return "Allows Codex to run in full-auto mode when the CLI supports it.", "false"
+	case "adapters.codex.quiet":
+		return "Reduces Codex CLI verbosity in session output.", "false"
+	case "adapters.linear.api_key_ref":
+		return "Linear API credential stored in config or the OS keychain.", "empty"
+	case "adapters.linear.team_id":
+		return "Default Linear team used for scoped browsing and identifier resolution.", "empty"
+	case "adapters.linear.assignee_filter":
+		return "Watcher assignee filter; use 'me' or a specific Linear user identifier.", "empty"
+	case "adapters.linear.poll_interval":
+		return "Polling interval for Linear watch updates.", "30s"
+	case "adapters.linear.state_mappings":
+		return "Maps Substrate tracker states to Linear workflow states.", "empty"
+	case "adapters.gitlab.token_ref":
+		return "GitLab token stored in config or the OS keychain for issue and MR APIs.", "empty"
+	case "adapters.gitlab.base_url":
+		return "Base URL for the GitLab instance used by the adapter.", "https://gitlab.com"
+	case "adapters.gitlab.assignee":
+		return "GitLab assignee username filter used by watch polling.", "empty"
+	case "adapters.gitlab.poll_interval":
+		return "Polling interval for GitLab watch updates.", "60s"
+	case "adapters.gitlab.state_mappings":
+		return "Maps Substrate tracker states to GitLab issue states.", "empty"
+	case "adapters.github.token_ref":
+		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", "empty"
+	case "adapters.github.assignee":
+		return "GitHub assignee filter used by watch polling.", "empty"
+	case "adapters.github.poll_interval":
+		return "Polling interval for GitHub watch updates.", "60s"
+	case "adapters.github.reviewers":
+		return "Default reviewers requested when Substrate opens GitHub pull requests.", "empty"
+	case "adapters.github.labels":
+		return "Default labels applied to GitHub pull requests created by Substrate.", "empty"
+	case "adapters.github.state_mappings":
+		return "Maps Substrate tracker states to GitHub issue states.", "empty"
+	case "adapters.glab.reviewers":
+		return "Default GitLab merge request reviewers added by the glab lifecycle adapter.", "empty"
+	case "adapters.glab.labels":
+		return "Default GitLab merge request labels added by the glab lifecycle adapter.", "empty"
+	case "repos.doc_paths":
+		return "Per-repository documentation paths injected into planning context.", "empty"
+	default:
+		return "", ""
 	}
-	if hasGhCLI() {
-		return "gh cli"
-	}
-	return "unset"
-}
-
-func hasGhCLI() bool {
-	_, err := exec.LookPath("gh")
-	return err == nil
 }
 
 func intPtrStr(p *int) string {

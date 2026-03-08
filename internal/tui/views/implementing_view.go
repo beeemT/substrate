@@ -74,7 +74,7 @@ func (m *ImplementingModel) SetSize(width, height int) {
 	}
 }
 
-// SetTitle sets the work-item title shown in the header.
+// SetTitle sets the work-item title shown in the implementing view.
 func (m *ImplementingModel) SetTitle(t string) { m.title = t }
 
 // SetRepos updates the repo list, initialising viewports for any new repos.

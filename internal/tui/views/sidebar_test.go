@@ -1,21 +1,43 @@
 package views_test
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
 	"github.com/beeemT/substrate/internal/tui/views"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func makeSidebarStyles() styles.Styles {
 	return styles.NewStyles(styles.DefaultTheme)
 }
 
-func makeSessions(n int) []views.SessionSummary {
-	sessions := make([]views.SessionSummary, n)
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiEscapePattern.ReplaceAllString(s, "")
+}
+
+func trimSidebarBorder(line string) string {
+	if strings.HasSuffix(line, "│") {
+		return strings.TrimSuffix(line, "│")
+	}
+
+	return line
+}
+
+func headerStart(line, text string) int {
+	return lipgloss.Width(strings.Split(line, text)[0])
+}
+
+func makeSessions(n int) []views.SidebarEntry {
+	sessions := make([]views.SidebarEntry, n)
 	for i := range sessions {
-		sessions[i] = views.SessionSummary{
+		sessions[i] = views.SidebarEntry{
+			Kind:       views.SidebarEntryWorkItem,
 			WorkItemID: string(rune('A' + i)),
 			ExternalID: string(rune('A' + i)),
 			Title:      "Session " + string(rune('A'+i)),
@@ -35,11 +57,49 @@ func TestSidebarEmpty(t *testing.T) {
 	}
 }
 
+func TestSidebarFillsRequestedHeight(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+
+	lines := strings.Split(stripANSI(m.View()), "\n")
+	if got := len(lines); got != 20 {
+		t.Fatalf("sidebar line count = %d, want 20", got)
+	}
+}
+
+func TestSidebarDoesNotRenderGlobalFooterHints(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries(makeSessions(1))
+
+	out := stripANSI(m.View())
+	if strings.Contains(out, "[n] New") || strings.Contains(out, "[q] Quit") {
+		t.Fatalf("sidebar should not duplicate global footer hints: %q", out)
+	}
+}
+
+func TestSidebarHeaderCentersSessionsTitle(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+
+	lines := strings.Split(stripANSI(m.View()), "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected sidebar view to include a header line")
+	}
+
+	header := trimSidebarBorder(lines[0])
+	const title = "Sessions"
+	wantStart := (views.SidebarWidth - lipgloss.Width(title)) / 2
+	if got := headerStart(header, title); got != wantStart {
+		t.Fatalf("expected %q header to start at column %d, got %d in %q", title, wantStart, got, header)
+	}
+}
+
 func TestSidebarNavigation(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
 	m.SetHeight(40)
 	sessions := makeSessions(3)
-	m.SetSessions(sessions)
+	m.SetEntries(sessions)
 
 	// Default: first item selected
 	sel := m.Selected()
@@ -83,7 +143,7 @@ func TestSidebarMoveUpAtTop(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
 	m.SetHeight(20)
 	sessions := makeSessions(2)
-	m.SetSessions(sessions)
+	m.SetEntries(sessions)
 
 	// Already at index 0; MoveUp should stay at 0
 	m.MoveUp()
@@ -100,7 +160,7 @@ func TestSidebarSingleSession(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
 	m.SetHeight(20)
 	sessions := makeSessions(1)
-	m.SetSessions(sessions)
+	m.SetEntries(sessions)
 
 	m.MoveDown()
 	sel := m.Selected()

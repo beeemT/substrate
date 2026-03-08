@@ -18,7 +18,7 @@ func TestBuildRepoLifecycleAdapters_SkipsGithubWhenTokenResolutionFails(t *testi
 }
 
 func TestBuildWorkItemAdapters_ManualOnlyWithoutOptionalProviders(t *testing.T) {
-	t.Parallel()
+	t.Setenv("PATH", t.TempDir())
 	cfg := &config.Config{}
 	adapters := BuildWorkItemAdapters(cfg, "workspace-1", nil)
 	if len(adapters) != 1 {

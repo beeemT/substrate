@@ -46,7 +46,7 @@ func BuildWorkItemAdapters(
 			adapters = append(adapters, gitlabAdapter)
 		}
 	}
-	if cfg.Adapters.GitHub.Token != "" || cfg.Adapters.GitHub.TokenRef != "" {
+	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 		githubAdapter, err := githubadapter.New(context.Background(), cfg.Adapters.GitHub)
 		if err != nil {
 			slog.Warn("skipping github work item adapter", "err", err)
@@ -61,7 +61,6 @@ func BuildWorkItemAdapters(
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
 func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspaceDir string) []adapter.RepoLifecycleAdapter {
 	if workspaceDir == "" {
-		slog.Warn("skipping repo lifecycle adapters: workspace directory is empty")
 		return nil
 	}
 
@@ -75,6 +74,10 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 	case remotedetect.PlatformGitLab:
 		return []adapter.RepoLifecycleAdapter{gladapter.New(cfg.Adapters.Glab)}
 	case remotedetect.PlatformGitHub:
+		if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
+			slog.Warn("skipping github lifecycle adapter: no github auth configured")
+			return nil
+		}
 		githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
 		if err != nil {
 			slog.Warn("skipping github lifecycle adapter", "err", err)

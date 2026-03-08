@@ -31,6 +31,19 @@ func (c *Client) bin() string {
 	return "git-work"
 }
 
+// Init converts a plain git repository into the git-work layout.
+func (c *Client) Init(ctx context.Context, repoDir string) error {
+	cmd := exec.CommandContext(ctx, c.bin(), "init")
+	cmd.Dir = repoDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git-work init in %s: %w (output: %s)", repoDir, err, strings.TrimSpace(string(output)))
+	}
+
+	return nil
+}
+
 // Checkout creates a new worktree for the given branch and returns its path.
 // The branch is created from the current HEAD if it doesn't exist.
 // The worktree is created in a subdirectory named after the branch.

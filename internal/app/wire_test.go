@@ -110,3 +110,21 @@ func runGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 }
+
+func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
+	repo := stubWorkItemRepo{}
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.Assignee = "someone"
+
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "gh", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'gh-cli-token\\n'\n  exit 0\nfi\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	if len(adapters) != 2 {
+		t.Fatalf("adapters len = %d, want 2", len(adapters))
+	}
+	if adapters[0].Name() != "manual" || adapters[1].Name() != "github" {
+		t.Fatalf("adapter order = [%q %q], want [manual github]", adapters[0].Name(), adapters[1].Name())
+	}
+}

@@ -1,10 +1,22 @@
 package gitwork
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type stubRepoInitializer struct {
+	calls []string
+	err   error
+}
+
+func (s *stubRepoInitializer) Init(_ context.Context, repoDir string) error {
+	s.calls = append(s.calls, repoDir)
+	return s.err
+}
 
 func TestInitWorkspace(t *testing.T) {
 	// Create temp dir
@@ -38,6 +50,65 @@ func TestInitWorkspace(t *testing.T) {
 	// Verify timestamp is recent
 	if ws.CreatedAt.IsZero() {
 		t.Error("CreatedAt is zero")
+	}
+}
+
+func TestInitWorkspace_InitializesPlainGitRepos(t *testing.T) {
+	dir := t.TempDir()
+
+	plainRepo := filepath.Join(dir, "plain-repo")
+	if err := os.MkdirAll(filepath.Join(plainRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create plain repo: %v", err)
+	}
+
+	gitWorkRepo := filepath.Join(dir, "gitwork-repo")
+	if err := os.MkdirAll(filepath.Join(gitWorkRepo, ".bare"), 0o755); err != nil {
+		t.Fatalf("create git-work repo: %v", err)
+	}
+
+	regularDir := filepath.Join(dir, "notes")
+	if err := os.MkdirAll(regularDir, 0o755); err != nil {
+		t.Fatalf("create regular dir: %v", err)
+	}
+
+	initializer := &stubRepoInitializer{}
+	ws, err := initWorkspace(context.Background(), initializer, dir, "test-workspace")
+	if err != nil {
+		t.Fatalf("initWorkspace() error = %v", err)
+	}
+
+	if len(initializer.calls) != 1 {
+		t.Fatalf("initializer called %d times, want 1", len(initializer.calls))
+	}
+	if initializer.calls[0] != plainRepo {
+		t.Fatalf("initializer called for %q, want %q", initializer.calls[0], plainRepo)
+	}
+	if _, err := os.Stat(filepath.Join(dir, WorkspaceFileName)); err != nil {
+		t.Fatalf("workspace file missing: %v", err)
+	}
+	if err := ValidateWorkspaceID(ws.ID); err != nil {
+		t.Fatalf("workspace ID invalid: %v", err)
+	}
+}
+
+func TestInitWorkspace_InitializerFailureDoesNotWriteWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+
+	plainRepo := filepath.Join(dir, "plain-repo")
+	if err := os.MkdirAll(filepath.Join(plainRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create plain repo: %v", err)
+	}
+
+	initializer := &stubRepoInitializer{err: errors.New("boom")}
+	_, err := initWorkspace(context.Background(), initializer, dir, "test-workspace")
+	if err == nil {
+		t.Fatal("expected initWorkspace() error")
+	}
+	if len(initializer.calls) != 1 || initializer.calls[0] != plainRepo {
+		t.Fatalf("initializer calls = %v, want [%q]", initializer.calls, plainRepo)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, WorkspaceFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("workspace file should not exist, stat err = %v", statErr)
 	}
 }
 
@@ -221,6 +292,41 @@ func TestDiscoverRepos_EmptyDir(t *testing.T) {
 
 	if len(repos) != 0 {
 		t.Errorf("DiscoverRepos() found %d repos in empty dir, want 0", len(repos))
+	}
+}
+
+func TestScanWorkspace(t *testing.T) {
+	workspaceDir := t.TempDir()
+
+	gitWorkRepo := filepath.Join(workspaceDir, "gitwork-repo")
+	if err := os.MkdirAll(filepath.Join(gitWorkRepo, ".bare"), 0o755); err != nil {
+		t.Fatalf("create git-work repo: %v", err)
+	}
+
+	plainRepo := filepath.Join(workspaceDir, "plain-repo")
+	if err := os.MkdirAll(filepath.Join(plainRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create plain repo: %v", err)
+	}
+
+	regularDir := filepath.Join(workspaceDir, "regular-dir")
+	if err := os.MkdirAll(regularDir, 0o755); err != nil {
+		t.Fatalf("create regular dir: %v", err)
+	}
+
+	regularFile := filepath.Join(workspaceDir, "some-file.txt")
+	if err := os.WriteFile(regularFile, []byte("test"), 0o644); err != nil {
+		t.Fatalf("create regular file: %v", err)
+	}
+
+	scan, err := ScanWorkspace(workspaceDir)
+	if err != nil {
+		t.Fatalf("ScanWorkspace() error = %v", err)
+	}
+	if len(scan.GitWorkRepos) != 1 || scan.GitWorkRepos[0] != gitWorkRepo {
+		t.Fatalf("GitWorkRepos = %v, want [%q]", scan.GitWorkRepos, gitWorkRepo)
+	}
+	if len(scan.PlainGitRepos) != 1 || scan.PlainGitRepos[0] != plainRepo {
+		t.Fatalf("PlainGitRepos = %v, want [%q]", scan.PlainGitRepos, plainRepo)
 	}
 }
 

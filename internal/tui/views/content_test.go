@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -23,6 +24,7 @@ func TestContentSetMode(t *testing.T) {
 		views.ContentModeEmpty,
 		views.ContentModeReadyToPlan,
 		views.ContentModePlanning,
+		views.ContentModeSessionInteraction,
 		views.ContentModePlanReview,
 		views.ContentModeImplementing,
 		views.ContentModeCompleted,
@@ -44,6 +46,22 @@ func TestContentSetSize(t *testing.T) {
 	m.SetSize(80, 24)
 	// View must return a string (not crash)
 	_ = m.View()
+}
+
+func TestContentEmptyViewShowsHelperText(t *testing.T) {
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 24)
+
+	view := m.View()
+	if !strings.Contains(view, "No sessions yet") {
+		t.Fatalf("view is missing empty-state title: %q", view)
+	}
+	if !strings.Contains(view, "[n]") || !strings.Contains(view, "create your first session") {
+		t.Fatalf("view is missing next-step guidance: %q", view)
+	}
+	if !strings.Contains(view, "Once a session is running") || !strings.Contains(view, "review output") {
+		t.Fatalf("view is missing post-session description: %q", view)
+	}
 }
 
 func TestContentKeybindHints_Empty(t *testing.T) {

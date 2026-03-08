@@ -21,6 +21,31 @@ type AgentSession struct {
 	UpdatedAt       time.Time
 }
 
+// SessionHistoryEntry is one searchable session-history result enriched with workspace and work-item metadata.
+type SessionHistoryEntry struct {
+	SessionID          string
+	WorkspaceID        string
+	WorkspaceName      string
+	WorkItemID         string
+	WorkItemExternalID string
+	WorkItemTitle      string
+	WorkItemState      WorkItemState
+	RepositoryName     string
+	HarnessName        string
+	Status             AgentSessionStatus
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	CompletedAt        *time.Time
+}
+
+// SessionHistoryFilter constrains session-history search results.
+type SessionHistoryFilter struct {
+	WorkspaceID *string
+	Search      string
+	Limit       int
+	Offset      int
+}
+
 // AgentSessionStatus represents the lifecycle state of an agent session.
 type AgentSessionStatus string
 

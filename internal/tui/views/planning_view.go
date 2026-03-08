@@ -10,54 +10,79 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-// PlanningViewModel renders live planning agent output (log tail).
-type PlanningViewModel struct {
+// SessionLogModel renders either a live-tailing session log or a static interaction transcript.
+type SessionLogModel struct {
 	viewport  viewport.Model
 	lines     []string
 	paused    bool
 	title     string
+	modeLabel string
+	meta      string
 	logPath   string
 	sessionID string
 	offset    int64
+	live      bool
 	styles    styles.Styles
 	width     int
 	height    int
 }
 
-func NewPlanningViewModel(st styles.Styles) PlanningViewModel {
+func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	vp := viewport.New(0, 0)
-	return PlanningViewModel{viewport: vp, styles: st}
+	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction"}
 }
 
-func (m *PlanningViewModel) SetSize(width, height int) {
+func (m *SessionLogModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.viewport.Width = width
-	m.viewport.Height = height - 3 // reserve header + divider + hints
+	m.viewport.Height = max(1, height-4) // reserve header + divider + optional meta + hints
 }
 
-func (m *PlanningViewModel) SetTitle(title string) { m.title = title }
+func (m *SessionLogModel) SetTitle(title string) { m.title = title }
 
-func (m *PlanningViewModel) SetLogPath(sessionID, logPath string) {
+func (m *SessionLogModel) SetModeLabel(label string) { m.modeLabel = label }
+
+func (m *SessionLogModel) SetMeta(meta string) { m.meta = meta }
+
+func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.sessionID = sessionID
 	m.logPath = logPath
+	m.live = true
 	m.offset = 0
 	m.lines = nil
 	m.viewport.SetContent("")
 }
 
-func (m *PlanningViewModel) TailCmd() tea.Cmd {
-	if m.logPath == "" {
+func (m *SessionLogModel) SetStaticContent(lines []string) {
+	m.live = false
+	m.logPath = ""
+	m.sessionID = ""
+	m.offset = 0
+	m.lines = append([]string(nil), lines...)
+	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.viewport.GotoTop()
+}
+
+func (m *SessionLogModel) TailCmd() tea.Cmd {
+	if !m.live || m.logPath == "" {
 		return nil
 	}
 	return TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 }
 
-func (m PlanningViewModel) Update(msg tea.Msg) (PlanningViewModel, tea.Cmd) {
+func (m SessionLogModel) KeybindHints() []KeybindHint {
+	return []KeybindHint{
+		{Key: "↑↓", Label: "Scroll"},
+		{Key: "p", Label: "Pause/unpause"},
+	}
+}
+
+func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case SessionLogLinesMsg:
-		if msg.SessionID != m.sessionID {
+		if !m.live || msg.SessionID != m.sessionID {
 			return m, nil
 		}
 		m.offset = msg.NextOffset
@@ -82,14 +107,31 @@ func (m PlanningViewModel) Update(msg tea.Msg) (PlanningViewModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m PlanningViewModel) View() string {
+func (m SessionLogModel) View() string {
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
 	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
-	header := titleStyle.Render(m.title + " · Planning")
+	headerText := m.title
+	if m.modeLabel != "" {
+		headerText += " · " + m.modeLabel
+	}
+	header := titleStyle.Render(headerText)
 	pauseHint := ""
 	if m.paused {
 		pauseHint = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Render(" [PAUSED]")
 	}
+	meta := ""
+	if strings.TrimSpace(m.meta) != "" {
+		meta = lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")).Render(m.meta)
+	}
+	body := m.viewport.View()
+	if strings.TrimSpace(body) == "" {
+		body = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("No session output captured.")
+	}
 	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("[↑↓] Scroll  [p] Pause/unpause")
-	return strings.Join([]string{header + pauseHint, divider, m.viewport.View(), hints}, "\n")
+	parts := []string{header + pauseHint, divider}
+	if meta != "" {
+		parts = append(parts, meta)
+	}
+	parts = append(parts, body, hints)
+	return strings.Join(parts, "\n")
 }

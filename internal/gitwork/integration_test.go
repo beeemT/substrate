@@ -175,6 +175,64 @@ func TestIntegration_WorkspaceInit(t *testing.T) {
 	}
 }
 
+func TestIntegration_WorkspaceInit_ConvertsPlainGitRepos(t *testing.T) {
+	if err := NewClient("").CheckInstalled(); err != nil {
+		t.Skipf("git-work not installed: %v", err)
+	}
+
+	workspaceDir := t.TempDir()
+	plainRepo, err := createPlainGitRepo(t, workspaceDir, "plain-repo")
+	if err != nil {
+		t.Fatalf("create plain repo: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(plainRepo, ".bare")); !os.IsNotExist(err) {
+		t.Fatalf("plain repo unexpectedly initialized before workspace init: %v", err)
+	}
+
+	ws, err := InitWorkspace(workspaceDir, "test-workspace")
+	if err != nil {
+		t.Fatalf("InitWorkspace() error = %v", err)
+	}
+	if err := ValidateWorkspaceID(ws.ID); err != nil {
+		t.Fatalf("workspace ID is not valid ULID: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(plainRepo, ".bare")); err != nil {
+		t.Fatalf("plain repo was not converted to git-work: %v", err)
+	}
+
+	plainRepos, err := DiscoverPlainRepos(workspaceDir)
+	if err != nil {
+		t.Fatalf("DiscoverPlainRepos() error = %v", err)
+	}
+	if len(plainRepos) != 0 {
+		t.Fatalf("DiscoverPlainRepos() = %v, want none after init", plainRepos)
+	}
+
+	repos, err := DiscoverRepos(workspaceDir)
+	if err != nil {
+		t.Fatalf("DiscoverRepos() error = %v", err)
+	}
+	if len(repos) != 1 || repos[0] != plainRepo {
+		t.Fatalf("DiscoverRepos() = %v, want [%q]", repos, plainRepo)
+	}
+}
+
+func createPlainGitRepo(t *testing.T, parentDir, name string) (string, error) {
+	t.Helper()
+
+	repoDir := filepath.Join(parentDir, name)
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		return "", err
+	}
+	if err := seedTestGitRepo(repoDir); err != nil {
+		os.RemoveAll(repoDir)
+		return "", err
+	}
+	return repoDir, nil
+}
+
 // createTestGitWorkRepo creates a temporary git-work repository for testing.
 func createTestGitWorkRepo(t *testing.T) (string, error) {
 	t.Helper()
@@ -185,59 +243,67 @@ func createTestGitWorkRepo(t *testing.T) (string, error) {
 		return "", err
 	}
 
-	// Initialize a regular git repo
-	cmd := exec.Command("git", "init")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := seedTestGitRepo(repoDir); err != nil {
 		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git init: %w (output: %s)", err, string(output))
+		return "", err
 	}
-
-	// Configure git user
-	cmd = exec.Command("git", "config", "user.email", "test@test.com")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := runGitWorkInit(repoDir); err != nil {
 		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git config email: %w (output: %s)", err, string(output))
-	}
-
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git config name: %w (output: %s)", err, string(output))
-	}
-
-	// Create an initial commit (required for git-work init)
-	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
-		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("create README: %w", err)
-	}
-
-	cmd = exec.Command("git", "add", "README.md")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git add: %w (output: %s)", err, string(output))
-	}
-
-	cmd = exec.Command("git", "commit", "-m", "Initial commit")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git commit: %w (output: %s)", err, string(output))
-	}
-
-	// Convert to git-work layout
-	cmd = exec.Command("git-work", "init")
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(repoDir)
-		return "", fmt.Errorf("git-work init: %w (output: %s)", err, string(output))
+		return "", err
 	}
 
 	// Register cleanup
 	t.Cleanup(func() { os.RemoveAll(repoDir) })
 
 	return repoDir, nil
+}
+
+func seedTestGitRepo(repoDir string) error {
+	// Initialize a regular git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git init: %w (output: %s)", err, string(output))
+	}
+
+	// Configure git user
+	cmd = exec.Command("git", "config", "user.email", "test@test.com")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config email: %w (output: %s)", err, string(output))
+	}
+
+	cmd = exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config name: %w (output: %s)", err, string(output))
+	}
+
+	// Create an initial commit (required for git-work init)
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
+		return fmt.Errorf("create README: %w", err)
+	}
+
+	cmd = exec.Command("git", "add", "README.md")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %w (output: %s)", err, string(output))
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Initial commit")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
+func runGitWorkInit(repoDir string) error {
+	cmd := exec.Command("git-work", "init")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git-work init: %w (output: %s)", err, string(output))
+	}
+	return nil
 }

@@ -1,9 +1,10 @@
 package views
 
 import (
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -11,17 +12,18 @@ import (
 type ContentMode int
 
 const (
-	ContentModeEmpty        ContentMode = iota // no session selected
-	ContentModeReadyToPlan                     // ingested: work item ready for planning
-	ContentModePlanning                        // planning: agent running, log tailing
-	ContentModePlanReview                      // plan_review: awaiting human review
-	ContentModeAwaitingImpl                    // approved: plan approved, awaiting impl start
-	ContentModeImplementing                    // implementing: agents running
-	ContentModeReviewing                       // reviewing: review agent running
-	ContentModeCompleted                       // completed: all repos passed review
-	ContentModeFailed                          // failed: unrecoverable error
-	ContentModeInterrupted                     // sub-mode: session interrupted
-	ContentModeQuestion                        // sub-mode: waiting for human answer
+	ContentModeEmpty              ContentMode = iota // no session selected
+	ContentModeReadyToPlan                           // ingested: work item ready for planning
+	ContentModePlanning                              // planning: agent running, log tailing
+	ContentModeSessionInteraction                    // historical session interaction view
+	ContentModePlanReview                            // plan_review: awaiting human review
+	ContentModeAwaitingImpl                          // approved: plan approved, awaiting impl start
+	ContentModeImplementing                          // implementing: agents running
+	ContentModeReviewing                             // reviewing: review agent running
+	ContentModeCompleted                             // completed: all repos passed review
+	ContentModeFailed                                // failed: unrecoverable error
+	ContentModeInterrupted                           // sub-mode: session interrupted
+	ContentModeQuestion                              // sub-mode: waiting for human answer
 )
 
 // KeybindHint is a label/key pair rendered by the status bar.
@@ -38,9 +40,8 @@ type ContentModel struct {
 	height int
 
 	// Per-mode sub-models
-	emptyView    viewport.Model
 	readyToPlan  ReadyToPlanModel
-	planOutput   PlanningViewModel
+	sessionLog   SessionLogModel
 	planReview   PlanReviewModel
 	awaitingImpl AwaitingImplModel
 	implementing ImplementingModel
@@ -58,9 +59,8 @@ func NewContentModel(st styles.Styles) ContentModel {
 	return ContentModel{
 		mode:         ContentModeEmpty,
 		styles:       st,
-		emptyView:    viewport.New(0, 0),
 		readyToPlan:  NewReadyToPlanModel(st),
-		planOutput:   NewPlanningViewModel(st),
+		sessionLog:   NewSessionLogModel(st),
 		planReview:   NewPlanReviewModel(st),
 		awaitingImpl: NewAwaitingImplModel(st),
 		implementing: NewImplementingModel(st),
@@ -76,7 +76,7 @@ func (m *ContentModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.readyToPlan.SetSize(width, height)
-	m.planOutput.SetSize(width, height)
+	m.sessionLog.SetSize(width, height)
 	m.planReview.SetSize(width, height)
 	m.awaitingImpl.SetSize(width, height)
 	m.implementing.SetSize(width, height)
@@ -101,10 +101,19 @@ func (m *ContentModel) SetWorkItem(wi *domain.WorkItem) {
 		m.failed.SetTitle(title)
 		m.interrupted.SetTitle(title)
 		m.question.SetTitle(title)
-		m.planOutput.SetTitle(title)
+		m.sessionLog.SetTitle(title)
 		m.readyToPlan.SetWorkItem(wi)
 		m.awaitingImpl.SetWorkItem(wi)
 	}
+}
+
+func (m *ContentModel) SetSessionInteraction(title, meta string, lines []string) {
+	m.currentWorkItem = nil
+	m.sessionLog.SetTitle(title)
+	m.sessionLog.SetModeLabel("Session interaction")
+	m.sessionLog.SetMeta(meta)
+	m.sessionLog.SetStaticContent(lines)
+	m.mode = ContentModeSessionInteraction
 }
 
 func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
@@ -115,8 +124,8 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	case ContentModeReadyToPlan:
 		m.readyToPlan, cmd = m.readyToPlan.Update(msg)
 		cmds = append(cmds, cmd)
-	case ContentModePlanning:
-		m.planOutput, cmd = m.planOutput.Update(msg)
+	case ContentModePlanning, ContentModeSessionInteraction:
+		m.sessionLog, cmd = m.sessionLog.Update(msg)
 		cmds = append(cmds, cmd)
 	case ContentModePlanReview:
 		m.planReview, cmd = m.planReview.Update(msg)
@@ -147,11 +156,11 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 func (m ContentModel) View() string {
 	switch m.mode {
 	case ContentModeEmpty:
-		return m.emptyView.View()
+		return m.emptyStateView()
 	case ContentModeReadyToPlan:
 		return m.readyToPlan.View()
-	case ContentModePlanning:
-		return m.planOutput.View()
+	case ContentModePlanning, ContentModeSessionInteraction:
+		return m.sessionLog.View()
 	case ContentModePlanReview:
 		return m.planReview.View()
 	case ContentModeAwaitingImpl:
@@ -173,9 +182,39 @@ func (m ContentModel) View() string {
 	}
 }
 
-// KeybindHints returns keybind hints for the active mode (passed to status bar).
+func (m ContentModel) emptyStateView() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
+	panelWidth := min(max(1, m.width-4), 80)
+	detailWidth := max(1, panelWidth-4)
+
+	title := m.styles.Title.Render("No sessions yet")
+	prompt := m.styles.Subtitle.Render("Press ") +
+		m.styles.KeybindAccent.Render("[n]") +
+		m.styles.Subtitle.Render(" to create your first session, or pick one from the sidebar.")
+	detail := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Muted)).
+		Width(detailWidth).
+		Align(lipgloss.Left).
+		Render("Once a session is running, this panel shows plans, agent progress, logs, review output, and searchable history.")
+
+	message := lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", detail)
+
+	container := m.styles.Border.Copy().
+		Padding(1, 2).
+		Width(panelWidth).
+		Render(message)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
+}
+
+// KeybindHints returns keybind hints for the active mode (passed to the status bar).
 func (m ContentModel) KeybindHints() []KeybindHint {
 	switch m.mode {
+	case ContentModePlanning, ContentModeSessionInteraction:
+		return m.sessionLog.KeybindHints()
 	case ContentModePlanReview:
 		return m.planReview.KeybindHints()
 	case ContentModeImplementing:

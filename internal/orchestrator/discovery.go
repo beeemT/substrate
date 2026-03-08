@@ -27,36 +27,17 @@ func NewDiscoverer(gitClient *gitwork.Client, cfg *config.Config) *Discoverer {
 // PreflightCheck scans the workspace for health issues.
 // It identifies git-work repos, plain git clones, and other directories.
 func (d *Discoverer) PreflightCheck(ctx context.Context, workspaceDir string) (domain.WorkspaceHealthCheck, error) {
-	entries, err := os.ReadDir(workspaceDir)
+	_ = ctx
+
+	scan, err := gitwork.ScanWorkspace(workspaceDir)
 	if err != nil {
-		return domain.WorkspaceHealthCheck{}, fmt.Errorf("read workspace directory: %w", err)
+		return domain.WorkspaceHealthCheck{}, err
 	}
 
-	var check domain.WorkspaceHealthCheck
-
-	for _, entry := range entries {
-		// Use os.Stat to follow symlinks
-		info, err := os.Stat(filepath.Join(workspaceDir, entry.Name()))
-		if err != nil {
-			slog.Warn("failed to stat entry, skipping", "path", entry.Name(), "err", err)
-			continue
-		}
-		if !info.IsDir() {
-			continue
-		}
-
-		repoPath := filepath.Join(workspaceDir, entry.Name())
-
-		// Check if it's a git-work repo
-		if gitwork.IsGitWorkRepo(repoPath) {
-			check.GitWorkRepos = append(check.GitWorkRepos, repoPath)
-		} else if d.isPlainGitClone(repoPath) {
-			check.PlainGitClones = append(check.PlainGitClones, repoPath)
-		}
-		// Other directories are ignored
-	}
-
-	return check, nil
+	return domain.WorkspaceHealthCheck{
+		GitWorkRepos:   scan.GitWorkRepos,
+		PlainGitClones: scan.PlainGitRepos,
+	}, nil
 }
 
 // PullMainWorktrees pulls the main worktree in each git-work repo.
@@ -333,21 +314,6 @@ func (d *Discoverer) detectPythonFramework(mainDir string, pointer *domain.RepoP
 			}
 		}
 	}
-}
-
-// isPlainGitClone checks if a directory is a plain git clone (has .git, no .bare).
-func (d *Discoverer) isPlainGitClone(dir string) bool {
-	gitPath := filepath.Join(dir, ".git")
-	barePath := filepath.Join(dir, ".bare")
-
-	_, gitErr := os.Stat(gitPath)
-	bareInfo, bareErr := os.Stat(barePath)
-
-	// Has .git (file or dir) and no .bare dir
-	hasGit := gitErr == nil // .git can be a file (worktree) or dir
-	hasBare := bareErr == nil && bareInfo.IsDir()
-
-	return hasGit && !hasBare
 }
 
 // ReadWorkspaceAgentsMd reads the workspace-root AGENTS.md file if it exists.

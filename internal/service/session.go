@@ -60,6 +60,11 @@ func (s *SessionService) ListByWorkspaceID(ctx context.Context, workspaceID stri
 	return s.repo.ListByWorkspaceID(ctx, workspaceID)
 }
 
+// SearchHistory retrieves searchable session-history entries for the requested scope.
+func (s *SessionService) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+	return s.repo.SearchHistory(ctx, filter)
+}
+
 // Create creates a new session in pending status.
 func (s *SessionService) Create(ctx context.Context, session domain.AgentSession) error {
 	// Set initial status if not set

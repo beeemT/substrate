@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
@@ -28,6 +31,20 @@ const (
 	overlayHelp
 )
 
+type sessionHistoryScope int
+
+const (
+	sessionHistoryScopeWorkspace sessionHistoryScope = iota
+	sessionHistoryScopeGlobal
+)
+
+func (s sessionHistoryScope) Label() string {
+	if s == sessionHistoryScopeGlobal {
+		return "global"
+	}
+	return "workspace"
+}
+
 // App is the top-level bubbletea model.
 type App struct {
 	svcs Services
@@ -35,7 +52,6 @@ type App struct {
 	// Layout sub-models
 	sidebar   SidebarModel
 	content   ContentModel
-	header    HeaderModel
 	statusBar StatusBarModel
 
 	// Overlays
@@ -72,7 +88,14 @@ type App struct {
 	confirmActive bool
 
 	// Current selection
-	currentWorkItemID string
+	currentWorkItemID       string
+	currentHistorySessionID string
+
+	// Session history search
+	historySearchInput   textinput.Model
+	historySearchScope   sessionHistoryScope
+	historyResults       []domain.SessionHistoryEntry
+	historySearchLoading bool
 
 	// Session log tailing
 	sessionsDir string
@@ -90,32 +113,39 @@ func NewApp(svcs Services) App {
 	st := styles.NewStyles(styles.DefaultTheme)
 	sessionsDir, _ := config.SessionsDir()
 	cwd, _ := os.Getwd()
+	historySearch := textinput.New()
+	historySearch.Placeholder = "Search session history…"
+	historySearch.CharLimit = 200
+	historySearch.Blur()
 
 	app := App{
-		svcs:              svcs,
-		sidebar:           NewSidebarModel(st),
-		content:           NewContentModel(st),
-		header:            NewHeaderModel(svcs.WorkspaceName, st),
-		statusBar:         NewStatusBarModel(st),
-		newSession:        NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
-		settingsPage:      NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
-		helpOverlay:       NewHelpOverlay(st),
-		subPlans:          make(map[string][]domain.SubPlan),
-		plans:             make(map[string]*domain.Plan),
-		questions:         make(map[string][]domain.Question),
-		reviews:           make(map[string]ReviewsLoadedMsg),
-		tailingSessionIDs: make(map[string]bool),
-		liveInstanceIDs:   make(map[string]bool),
-		reviewSessionLogs: make(map[string]string),
-		sessionsDir:       sessionsDir,
-		hasWorkspace:      svcs.WorkspaceID != "",
+		svcs:               svcs,
+		sidebar:            NewSidebarModel(st),
+		content:            NewContentModel(st),
+		statusBar:          NewStatusBarModel(st),
+		newSession:         NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
+		settingsPage:       NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
+		helpOverlay:        NewHelpOverlay(st),
+		subPlans:           make(map[string][]domain.SubPlan),
+		plans:              make(map[string]*domain.Plan),
+		questions:          make(map[string][]domain.Question),
+		reviews:            make(map[string]ReviewsLoadedMsg),
+		tailingSessionIDs:  make(map[string]bool),
+		liveInstanceIDs:    make(map[string]bool),
+		reviewSessionLogs:  make(map[string]string),
+		sessionsDir:        sessionsDir,
+		hasWorkspace:       svcs.WorkspaceID != "",
+		historySearchInput: historySearch,
 	}
 
-	if !app.hasWorkspace {
+	if app.hasWorkspace {
+		app.historySearchScope = sessionHistoryScopeWorkspace
+	} else {
+		app.historySearchScope = sessionHistoryScopeGlobal
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, svcs.Workspace)
 		app.activeOverlay = overlayWorkspaceInit
 	}
-
+	app.syncSidebarSearchPresentation()
 	return app
 }
 
@@ -138,6 +168,9 @@ func (a App) Init() tea.Cmd {
 			LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
 			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 		)
+		if a.historySearchActive() {
+			cmds = append(cmds, SearchSessionHistoryCmd(a.svcs.Session, a.historySearchFilter()))
+		}
 	}
 
 	if a.activeOverlay == overlayWorkspaceInit {
@@ -145,6 +178,188 @@ func (a App) Init() tea.Cmd {
 	}
 
 	return tea.Batch(cmds...)
+}
+
+func (a *App) applyServicesReload(reload viewsServicesReload) {
+	a.svcs = reload.Services
+	a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
+	a.settingsPage.SetSnapshot(reload.SettingsData)
+	a.sessionsDir = reload.SessionsDir
+	a.hasWorkspace = a.svcs.WorkspaceID != ""
+	switch {
+	case !a.hasWorkspace:
+		a.historySearchScope = sessionHistoryScopeGlobal
+	case a.historySearchScope == sessionHistoryScopeGlobal && !a.historySearchActive():
+		a.historySearchScope = sessionHistoryScopeWorkspace
+	}
+	a.syncSidebarSearchPresentation()
+}
+
+func (a *App) syncSidebarSearchPresentation() {
+	a.sidebar.SetSearchPresentation(SidebarSearchPresentation{
+		QueryView:  a.historySearchInput.View(),
+		ScopeLabel: a.historySearchScope.Label(),
+		Focused:    a.historySearchInput.Focused(),
+		Loading:    a.historySearchLoading,
+	})
+}
+
+func (a App) historySearchActive() bool {
+	return strings.TrimSpace(a.historySearchInput.Value()) != ""
+}
+
+func (a App) historySearchFilter() domain.SessionHistoryFilter {
+	filter := domain.SessionHistoryFilter{
+		Search: strings.TrimSpace(a.historySearchInput.Value()),
+		Limit:  100,
+	}
+	if a.historySearchScope == sessionHistoryScopeWorkspace && a.svcs.WorkspaceID != "" {
+		workspaceID := a.svcs.WorkspaceID
+		filter.WorkspaceID = &workspaceID
+	}
+	return filter
+}
+
+func sameSessionHistoryFilter(current, incoming domain.SessionHistoryFilter) bool {
+	if strings.TrimSpace(current.Search) != strings.TrimSpace(incoming.Search) {
+		return false
+	}
+	switch {
+	case current.WorkspaceID == nil && incoming.WorkspaceID == nil:
+		return true
+	case current.WorkspaceID != nil && incoming.WorkspaceID != nil:
+		return *current.WorkspaceID == *incoming.WorkspaceID
+	default:
+		return false
+	}
+}
+
+func (a *App) runHistorySearch() tea.Cmd {
+	if !a.historySearchActive() {
+		a.historyResults = nil
+		a.historySearchLoading = false
+		a.syncSidebarSearchPresentation()
+		a.rebuildSidebar()
+		return a.onSidebarMove()
+	}
+	a.historySearchLoading = true
+	a.syncSidebarSearchPresentation()
+	return SearchSessionHistoryCmd(a.svcs.Session, a.historySearchFilter())
+}
+
+func (a *App) clearHistorySearch() tea.Cmd {
+	a.historySearchInput.SetValue("")
+	a.historySearchInput.Blur()
+	a.currentHistorySessionID = ""
+	return a.runHistorySearch()
+}
+
+func (a *App) toggleHistorySearchScope() tea.Cmd {
+	if a.historySearchScope == sessionHistoryScopeWorkspace {
+		a.historySearchScope = sessionHistoryScopeGlobal
+	} else {
+		a.historySearchScope = sessionHistoryScopeWorkspace
+		if a.svcs.WorkspaceID == "" {
+			a.historySearchScope = sessionHistoryScopeGlobal
+		}
+	}
+	a.syncSidebarSearchPresentation()
+	return a.runHistorySearch()
+}
+
+func (a App) currentHints() []KeybindHint {
+	if a.historySearchInput.Focused() {
+		return []KeybindHint{
+			{Key: "Enter", Label: "Search results"},
+			{Key: "Tab", Label: "Toggle scope"},
+			{Key: "Esc", Label: "Clear search"},
+		}
+	}
+	if a.historySearchActive() {
+		return []KeybindHint{
+			{Key: "/", Label: "Edit search"},
+			{Key: "j/k", Label: "Navigate results"},
+			{Key: "Esc", Label: "Clear search"},
+		}
+	}
+	hints := a.content.KeybindHints()
+	if len(hints) == 0 {
+		return DefaultHints()
+	}
+	return hints
+}
+
+func (a App) historyEntryTitle(entry SidebarEntry) string {
+	if entry.ExternalID != "" && entry.Title != "" {
+		return entry.ExternalID + " · " + entry.Title
+	}
+	if entry.Title != "" {
+		return entry.Title
+	}
+	if entry.ExternalID != "" {
+		return entry.ExternalID
+	}
+	return entry.SessionID
+}
+
+func (a App) historyEntryMeta(entry SidebarEntry) string {
+	parts := []string{"Session " + entry.SessionID}
+	if entry.WorkspaceName != "" {
+		parts = append(parts, entry.WorkspaceName)
+	}
+	if entry.RepositoryName != "" {
+		parts = append(parts, entry.RepositoryName)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (a App) sidebarEntryFromHistory(entry domain.SessionHistoryEntry) SidebarEntry {
+	return SidebarEntry{
+		Kind:           SidebarEntrySessionHistory,
+		WorkItemID:     entry.WorkItemID,
+		SessionID:      entry.SessionID,
+		WorkspaceID:    entry.WorkspaceID,
+		WorkspaceName:  entry.WorkspaceName,
+		ExternalID:     entry.WorkItemExternalID,
+		Title:          entry.WorkItemTitle,
+		State:          entry.WorkItemState,
+		SessionStatus:  entry.Status,
+		RepositoryName: entry.RepositoryName,
+	}
+}
+
+func (a App) historyEntryBySessionID(sessionID string) (SidebarEntry, bool) {
+	for _, entry := range a.historyResults {
+		if entry.SessionID == sessionID {
+			return a.sidebarEntryFromHistory(entry), true
+		}
+	}
+	return SidebarEntry{}, false
+}
+
+func (a App) historyEntryIsLocal(entry SidebarEntry) bool {
+	if entry.WorkspaceID == "" || entry.WorkspaceID != a.svcs.WorkspaceID || entry.WorkItemID == "" {
+		return false
+	}
+	for _, workItem := range a.workItems {
+		if workItem.ID == entry.WorkItemID {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
+	a.tailingSessionIDs = make(map[string]bool)
+	if a.historyEntryIsLocal(entry) {
+		a.currentHistorySessionID = ""
+		a.currentWorkItemID = entry.WorkItemID
+		return a.updateContentFromState()
+	}
+	a.currentWorkItemID = ""
+	a.currentHistorySessionID = entry.SessionID
+	a.content.SetSessionInteraction(a.historyEntryTitle(entry), a.historyEntryMeta(entry), nil)
+	return LoadSessionInteractionCmd(a.sessionsDir, entry.SessionID)
 }
 
 // Update is the bubbletea message handler.
@@ -156,10 +371,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.windowWidth = msg.Width
 		a.windowHeight = msg.Height
-		bodyHeight := msg.Height - 2
-		contentWidth := msg.Width - SidebarWidth - 1
-		a.sidebar.SetHeight(bodyHeight)
-		a.content.SetSize(contentWidth, bodyHeight)
+		sidebarPaneWidth, contentPaneWidth, _, paneInnerHeight := mainPageLayoutMetrics(msg.Width, msg.Height)
+		a.sidebar.SetWidth(max(0, sidebarPaneWidth-2))
+		a.sidebar.SetHeight(paneInnerHeight)
+		a.historySearchInput.Width = max(1, sidebarPaneWidth-12)
+		a.syncSidebarSearchPresentation()
+		a.content.SetSize(max(0, contentPaneWidth-2), paneInnerHeight)
 		a.workspaceModal.SetSize(msg.Width, msg.Height)
 		a.newSession.SetSize(msg.Width, msg.Height)
 		a.settingsPage.SetSize(msg.Width, msg.Height)
@@ -173,17 +390,29 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceInitDoneMsg:
-		a.svcs.WorkspaceID = msg.WorkspaceID
-		a.svcs.WorkspaceName = msg.WorkspaceName
-		a.svcs.WorkspaceDir = msg.WorkspaceDir
-		a.header.WorkspaceName = msg.WorkspaceName
-		a.hasWorkspace = true
+		cmds = append(cmds, initializeWorkspaceServicesCmd(
+			a.svcs.Settings,
+			a.svcs,
+			msg.WorkspaceID,
+			msg.WorkspaceName,
+			msg.WorkspaceDir,
+		))
+		return a, tea.Batch(cmds...)
+
+	case WorkspaceServicesReloadedMsg:
+		a.applyServicesReload(msg.Reload)
 		a.activeOverlay = overlayNone
-		a.toasts.AddToast("Workspace initialized", components.ToastSuccess)
-		cmds = append(cmds,
-			LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
-			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-		)
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds,
+				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
+				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+			)
+			if a.historySearchActive() {
+				cmds = append(cmds, SearchSessionHistoryCmd(a.svcs.Session, a.historySearchFilter()))
+			}
+		}
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceCancelMsg:
@@ -203,6 +432,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
 			)
+			if a.historySearchActive() {
+				cmds = append(cmds, SearchSessionHistoryCmd(a.svcs.Session, a.historySearchFilter()))
+			}
 		}
 		cmds = append(cmds, PollTickCmd())
 		return a, tea.Batch(cmds...)
@@ -238,8 +470,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, LoadReviewsCmd(a.svcs.Review, s.ID))
 			}
 		}
-		cmds = append(cmds, a.updateContentFromState())
+		if !a.historySearchActive() {
+			cmds = append(cmds, a.updateContentFromState())
+		}
 		return a, tea.Batch(cmds...)
+
+	case SessionHistoryLoadedMsg:
+		if !sameSessionHistoryFilter(a.historySearchFilter(), msg.Filter) {
+			return a, nil
+		}
+		a.historySearchLoading = false
+		a.historyResults = msg.Entries
+		a.syncSidebarSearchPresentation()
+		a.rebuildSidebar()
+		cmds = append(cmds, a.onSidebarMove())
+		return a, tea.Batch(cmds...)
+
+	case SessionInteractionLoadedMsg:
+		if msg.SessionID != a.currentHistorySessionID {
+			return a, nil
+		}
+		if entry, ok := a.historyEntryBySessionID(msg.SessionID); ok {
+			a.content.SetSessionInteraction(a.historyEntryTitle(entry), a.historyEntryMeta(entry), msg.Lines)
+		}
+		return a, nil
 
 	case PlanLoadedMsg:
 		a.plans[msg.WorkItemID] = msg.Plan
@@ -247,7 +501,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.subPlans[msg.Plan.ID] = msg.SubPlans
 		}
 		a.rebuildSidebar()
-		if a.currentWorkItemID == msg.WorkItemID {
+		if a.currentWorkItemID == msg.WorkItemID && !a.historySearchActive() {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
@@ -255,14 +509,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case QuestionsLoadedMsg:
 		a.questions[msg.SessionID] = msg.Questions
 		a.rebuildSidebar()
-		if a.currentWorkItemID != "" {
+		if a.currentWorkItemID != "" && !a.historySearchActive() {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
 
 	case ReviewsLoadedMsg:
 		a.reviews[msg.SessionID] = msg
-		if a.currentWorkItemID != "" {
+		if a.currentWorkItemID != "" && !a.historySearchActive() {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
@@ -393,10 +647,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 	case SettingsAppliedMsg:
-		a.svcs = msg.Reload.Services
-		a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
-		a.settingsPage.SetSnapshot(msg.Reload.SettingsData)
-		a.sessionsDir = msg.Reload.SessionsDir
+		a.applyServicesReload(msg.Reload)
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		if a.activeOverlay == overlaySettings {
 			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
@@ -495,7 +746,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.confirm = components.ConfirmDialog{}
 			a.confirmActive = false
 			return a, onYes
-		default: // n, esc, any other key cancels
+		default:
 			a.confirm = components.ConfirmDialog{}
 			a.confirmActive = false
 			return a, nil
@@ -509,12 +760,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 	}
 
-	// Workspace init modal captures all input.
 	if a.activeOverlay == overlayWorkspaceInit {
 		a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 		return a, cmd
 	}
-
 	if a.activeOverlay == overlayNewSession {
 		a.newSession, cmd = a.newSession.Update(msg)
 		return a, cmd
@@ -523,10 +772,33 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 		return a, cmd
 	}
-	// Help overlay: any key press dismisses it.
 	if a.activeOverlay == overlayHelp {
 		a.activeOverlay = overlayNone
 		return a, nil
+	}
+
+	if a.historySearchInput.Focused() {
+		switch msg.String() {
+		case "esc":
+			return a, a.clearHistorySearch()
+		case "enter":
+			a.historySearchInput.Blur()
+			a.syncSidebarSearchPresentation()
+			return a, nil
+		case "tab", "shift+tab":
+			return a, a.toggleHistorySearchScope()
+		}
+		before := a.historySearchInput.Value()
+		a.historySearchInput, cmd = a.historySearchInput.Update(msg)
+		a.syncSidebarSearchPresentation()
+		if strings.TrimSpace(before) != strings.TrimSpace(a.historySearchInput.Value()) {
+			return a, tea.Batch(cmd, a.runHistorySearch())
+		}
+		return a, cmd
+	}
+
+	if a.historySearchActive() && msg.String() == "esc" {
+		return a, a.clearHistorySearch()
 	}
 
 	switch msg.String() {
@@ -542,6 +814,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
+		return a, nil
+	case "/":
+		a.historySearchInput.Focus()
+		a.syncSidebarSearchPresentation()
 		return a, nil
 	case "esc":
 		if a.activeOverlay != overlayNone {
@@ -581,12 +857,20 @@ func (a *App) onSidebarMove() tea.Cmd {
 	if sel == nil {
 		a.content.SetMode(ContentModeEmpty)
 		a.currentWorkItemID = ""
+		a.currentHistorySessionID = ""
 		return nil
 	}
-	if sel.WorkItemID == a.currentWorkItemID {
+	if sel.Kind == SidebarEntrySessionHistory {
+		if sel.SessionID == a.currentHistorySessionID {
+			return nil
+		}
+		return a.loadHistoryEntry(*sel)
+	}
+	if sel.WorkItemID == a.currentWorkItemID && a.currentHistorySessionID == "" {
 		return nil
 	}
 	a.tailingSessionIDs = make(map[string]bool)
+	a.currentHistorySessionID = ""
 	a.currentWorkItemID = sel.WorkItemID
 	return a.updateContentFromState()
 }
@@ -618,10 +902,12 @@ func (a *App) updateContentFromState() tea.Cmd {
 
 	case domain.WorkItemPlanning:
 		a.content.SetMode(ContentModePlanning)
+		a.content.sessionLog.SetModeLabel("Planning")
+		a.content.sessionLog.SetMeta("")
 		for _, s := range a.sessions {
 			if s.Status == domain.AgentSessionRunning {
 				logPath := filepath.Join(a.sessionsDir, s.ID+".log")
-				a.content.planOutput.SetLogPath(s.ID, logPath)
+				a.content.sessionLog.SetLogPath(s.ID, logPath)
 				if !a.tailingSessionIDs[s.ID] {
 					a.tailingSessionIDs[s.ID] = true
 					return TailSessionLogCmd(logPath, s.ID, 0)
@@ -629,7 +915,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 				break
 			}
 		}
-
 	case domain.WorkItemPlanReview:
 		a.content.SetMode(ContentModePlanReview)
 		if plan := a.plans[wi.ID]; plan != nil {
@@ -798,41 +1083,56 @@ func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 	a.confirmActive = true
 }
 
-func (a *App) rebuildSidebar() {
-	var summaries []SessionSummary
-	for _, wi := range a.workItems {
-		ss := SessionSummary{
-			WorkItemID: wi.ID,
-			ExternalID: wi.ExternalID,
-			Title:      wi.Title,
-			State:      wi.State,
-		}
-		if plan := a.plans[wi.ID]; plan != nil {
-			sps := a.subPlans[plan.ID]
-			ss.TotalSubPlans = len(sps)
-			for _, sp := range sps {
-				if sp.Status == domain.SubPlanCompleted {
-					ss.DoneSubPlans++
-				}
-				for _, s := range a.sessions {
-					if s.SubPlanID == sp.ID {
-						if s.Status == domain.AgentSessionWaitingForAnswer {
-							for _, q := range a.questions[s.ID] {
-								if q.Status == domain.QuestionEscalated {
-									ss.HasOpenQuestion = true
-								}
+func (a App) sidebarEntryFromWorkItem(wi domain.WorkItem) SidebarEntry {
+	entry := SidebarEntry{
+		Kind:       SidebarEntryWorkItem,
+		WorkItemID: wi.ID,
+		ExternalID: wi.ExternalID,
+		Title:      wi.Title,
+		State:      wi.State,
+	}
+	if plan := a.plans[wi.ID]; plan != nil {
+		sps := a.subPlans[plan.ID]
+		entry.TotalSubPlans = len(sps)
+		for _, sp := range sps {
+			if sp.Status == domain.SubPlanCompleted {
+				entry.DoneSubPlans++
+			}
+			for _, s := range a.sessions {
+				if s.SubPlanID == sp.ID {
+					if s.Status == domain.AgentSessionWaitingForAnswer {
+						for _, q := range a.questions[s.ID] {
+							if q.Status == domain.QuestionEscalated {
+								entry.HasOpenQuestion = true
 							}
 						}
-						if s.Status == domain.AgentSessionInterrupted {
-							ss.HasInterrupted = true
-						}
+					}
+					if s.Status == domain.AgentSessionInterrupted {
+						entry.HasInterrupted = true
 					}
 				}
 			}
 		}
-		summaries = append(summaries, ss)
 	}
-	a.sidebar.SetSessions(summaries)
+	return entry
+}
+
+func (a *App) rebuildSidebar() {
+	if a.historySearchActive() {
+		entries := make([]SidebarEntry, 0, len(a.historyResults))
+		for _, result := range a.historyResults {
+			entries = append(entries, a.sidebarEntryFromHistory(result))
+		}
+		a.sidebar.SetEntries(entries)
+		a.syncSidebarSearchPresentation()
+		return
+	}
+	entries := make([]SidebarEntry, 0, len(a.workItems))
+	for _, wi := range a.workItems {
+		entries = append(entries, a.sidebarEntryFromWorkItem(wi))
+	}
+	a.sidebar.SetEntries(entries)
+	a.syncSidebarSearchPresentation()
 }
 
 // View renders the full terminal UI.
@@ -849,31 +1149,44 @@ func (a App) View() string {
 		return renderOverlay(a.confirm.View(), a.windowWidth, a.windowHeight)
 	}
 
-	header := a.header.View(a.windowWidth)
+	sidebarPaneWidth, contentPaneWidth, _, paneInnerHeight := mainPageLayoutMetrics(a.windowWidth, a.windowHeight)
+	borderColor := lipgloss.Color("#334155")
 
-	bodyHeight := a.windowHeight - 2
-	sidebarView := a.sidebar.View()
-	divider := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#2d2d44")).
-		Render("|")
-	contentView := lipgloss.NewStyle().
-		Width(a.windowWidth - SidebarWidth - 1).
-		Height(bodyHeight).
+	sidebarContent := lipgloss.NewStyle().
+		Width(max(0, sidebarPaneWidth-2)).
+		Height(paneInnerHeight).
+		Render(a.sidebar.View())
+	sidebarPane := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Render(sidebarContent)
+
+	contentContent := lipgloss.NewStyle().
+		Width(max(0, contentPaneWidth-2)).
+		Height(paneInnerHeight).
 		Render(a.content.View())
+	contentPane := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Render(contentContent)
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, divider, contentView)
-
-	hints := a.content.KeybindHints()
-	if len(hints) == 0 {
-		hints = DefaultHints()
+	bodyParts := make([]string, 0, 2)
+	if sidebarPaneWidth > 0 {
+		bodyParts = append(bodyParts, sidebarPane)
 	}
-	statusBar := a.statusBar.View(hints, fmt.Sprintf("%d sessions", len(a.workItems)), a.windowWidth)
+	if contentPaneWidth > 0 {
+		bodyParts = append(bodyParts, contentPane)
+	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, bodyParts...)
 
-	base := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar)
+	hints := a.currentHints()
+	statusBar := a.statusBar.View(hints, a.statusBarText(), a.windowWidth)
+
+	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 
 	if a.toasts.HasToasts() {
 		toastView := a.toasts.View("", "")
-		base = renderBottomRight(base, toastView, a.windowWidth)
+		base = renderTopRightOverlay(base, toastView, a.windowWidth, 1, lipgloss.Height(statusBar))
 	}
 
 	if a.activeOverlay == overlayNewSession {
@@ -887,6 +1200,41 @@ func (a App) View() string {
 	}
 
 	return base
+}
+
+func mainPageLayoutMetrics(totalWidth, totalHeight int) (sidebarPaneWidth, contentPaneWidth, bodyHeight, paneInnerHeight int) {
+	bodyHeight = max(0, totalHeight-statusBarHeight)
+	paneInnerHeight = max(0, bodyHeight-2)
+
+	sidebarPaneWidth = min(SidebarWidth+2, max(0, totalWidth))
+	contentPaneWidth = max(0, totalWidth-sidebarPaneWidth)
+	if contentPaneWidth > 0 && contentPaneWidth < 2 {
+		shift := 2 - contentPaneWidth
+		sidebarPaneWidth = max(0, sidebarPaneWidth-shift)
+		contentPaneWidth = totalWidth - sidebarPaneWidth
+	}
+
+	return sidebarPaneWidth, contentPaneWidth, bodyHeight, paneInnerHeight
+}
+
+func (a App) statusBarText() string {
+	parts := make([]string, 0, 2)
+	if a.svcs.WorkspaceName != "" {
+		parts = append(parts, a.svcs.WorkspaceName)
+	}
+	parts = append(parts, fmt.Sprintf("%d active sessions", a.activeSessionCount()))
+	return strings.Join(parts, " · ")
+}
+
+func (a App) activeSessionCount() int {
+	count := 0
+	for _, session := range a.sessions {
+		switch session.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			count++
+		}
+	}
+	return count
 }
 
 // renderOverlay centers an overlay in the terminal window.
@@ -906,9 +1254,57 @@ func renderCentered(content string, w, h int) string {
 	)
 }
 
-// renderBottomRight appends a toast widget right-aligned at the bottom.
-func renderBottomRight(base, toast string, w int) string {
-	return base + "\n" + lipgloss.NewStyle().Width(w).AlignHorizontal(lipgloss.Right).Render(toast)
+// renderTopRightOverlay overlays a widget into the upper-right of the base view without changing its height.
+func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset int) string {
+	if base == "" || overlay == "" || width <= 0 {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+	maxOverlayBottom := len(baseLines) - bottomInset
+	if maxOverlayBottom <= 0 {
+		return base
+	}
+	if len(overlayLines) > maxOverlayBottom {
+		overlayLines = overlayLines[:maxOverlayBottom]
+	}
+
+	start := topInset
+	maxStart := maxOverlayBottom - len(overlayLines)
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	if start > maxStart {
+		start = maxStart
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	for i, overlayLine := range overlayLines {
+		target := start + i
+		if target < 0 || target >= maxOverlayBottom {
+			break
+		}
+		overlayWidth := ansi.StringWidth(overlayLine)
+		if overlayWidth <= 0 {
+			continue
+		}
+		if overlayWidth >= width {
+			baseLines[target] = ansi.Truncate(overlayLine, width, "")
+			continue
+		}
+
+		prefixWidth := width - overlayWidth
+		prefix := ansi.Cut(baseLines[target], 0, prefixWidth)
+		if got := ansi.StringWidth(prefix); got < prefixWidth {
+			prefix += strings.Repeat(" ", prefixWidth-got)
+		}
+		baseLines[target] = prefix + overlayLine
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 // --- Command helpers ---

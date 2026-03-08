@@ -15,6 +15,12 @@ type WorkItemsLoadedMsg struct{ Items []domain.WorkItem }
 // SessionsLoadedMsg is sent when sessions for a workspace are refreshed.
 type SessionsLoadedMsg struct{ Sessions []domain.AgentSession }
 
+// SessionHistoryLoadedMsg is sent when a session-history search completes.
+type SessionHistoryLoadedMsg struct {
+	Filter  domain.SessionHistoryFilter
+	Entries []domain.SessionHistoryEntry
+}
+
 // PlanLoadedMsg is sent when a plan is loaded.
 type PlanLoadedMsg struct {
 	WorkItemID string
@@ -48,6 +54,12 @@ type SessionLogLinesMsg struct {
 	SessionID  string
 	Lines      []string
 	NextOffset int64
+}
+
+// SessionInteractionLoadedMsg delivers the parsed interaction log for one session.
+type SessionInteractionLoadedMsg struct {
+	SessionID string
+	Lines     []string
 }
 
 // --- User actions ---
@@ -162,11 +174,17 @@ type WorkspaceHealthCheckMsg struct {
 	Error error
 }
 
-// WorkspaceInitDoneMsg is sent after workspace is successfully initialized.
+// WorkspaceInitDoneMsg is sent after workspace metadata is persisted.
 type WorkspaceInitDoneMsg struct {
 	WorkspaceID   string
 	WorkspaceName string
 	WorkspaceDir  string
+}
+
+// WorkspaceServicesReloadedMsg is sent after the app rebuilds services for a newly initialized workspace.
+type WorkspaceServicesReloadedMsg struct {
+	Reload  viewsServicesReload
+	Message string
 }
 
 // PlanEditedMsg is sent when the user edits a plan in $EDITOR and saves.

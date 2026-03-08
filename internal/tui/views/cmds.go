@@ -2,12 +2,17 @@ package views
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -58,6 +63,17 @@ func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 			return ErrMsg{Err: err}
 		}
 		return SessionsLoadedMsg{Sessions: sessions}
+	}
+}
+
+// SearchSessionHistoryCmd searches session history within the requested scope.
+func SearchSessionHistoryCmd(svc *service.SessionService, filter domain.SessionHistoryFilter) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := svc.SearchHistory(context.Background(), filter)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionHistoryLoadedMsg{Filter: filter, Entries: entries}
 	}
 }
 
@@ -163,37 +179,194 @@ func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd 
 	}
 }
 
-// WorkspaceHealthCheckCmd scans the current directory for repos.
-func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
+// initializeWorkspaceServicesCmd rebuilds services after workspace initialization
+// so adapters, harnesses, and instance registration use the new workspace root.
+func initializeWorkspaceServicesCmd(settings *SettingsService, current Services, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := os.ReadDir(dir)
+		if settings == nil {
+			return ErrMsg{Err: fmt.Errorf("settings service is unavailable")}
+		}
+		if current.Cfg == nil {
+			return ErrMsg{Err: fmt.Errorf("config is unavailable")}
+		}
+		current.WorkspaceID = workspaceID
+		current.WorkspaceName = workspaceName
+		current.WorkspaceDir = workspaceDir
+
+		reloaded, err := settings.rebuildServices(context.Background(), current.Cfg, current)
 		if err != nil {
-			return WorkspaceHealthCheckMsg{Error: err}
+			return ErrMsg{Err: err}
 		}
-		check := domain.WorkspaceHealthCheck{}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			if gitwork.IsGitWorkRepo(path) {
-				check.GitWorkRepos = append(check.GitWorkRepos, path)
-			} else if isPlainGitClone(path) {
-				check.PlainGitClones = append(check.PlainGitClones, path)
-			}
+
+		host, _ := os.Hostname()
+		inst := domain.SubstrateInstance{
+			ID:          domain.NewID(),
+			WorkspaceID: workspaceID,
+			PID:         os.Getpid(),
+			Hostname:    host,
 		}
-		return WorkspaceHealthCheckMsg{Check: check}
+		if err := reloaded.Services.Instance.Create(context.Background(), inst); err != nil {
+			slog.Warn("failed to register instance after workspace initialization", "workspace_id", workspaceID, "err", err)
+		} else {
+			reloaded.Services.InstanceID = inst.ID
+		}
+
+		return WorkspaceServicesReloadedMsg{Reload: reloaded, Message: "Workspace initialized"}
 	}
 }
 
-// isPlainGitClone reports whether dir is a regular git clone (has .git but not .bare).
-func isPlainGitClone(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	if err != nil {
-		return false
+// WorkspaceHealthCheckCmd scans the current directory for repos.
+func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
+	return func() tea.Msg {
+		scan, err := gitwork.ScanWorkspace(dir)
+		if err != nil {
+			return WorkspaceHealthCheckMsg{Error: err}
+		}
+		return WorkspaceHealthCheckMsg{Check: domain.WorkspaceHealthCheck{
+			GitWorkRepos:   scan.GitWorkRepos,
+			PlainGitClones: scan.PlainGitRepos,
+		}}
 	}
-	_, bareErr := os.Stat(filepath.Join(dir, ".bare"))
-	return os.IsNotExist(bareErr)
+}
+
+// normalizeSessionLogLine converts a raw session log line into display text.
+func normalizeSessionLogLine(line string) (string, bool) {
+	raw := strings.TrimSpace(line)
+	if raw == "" {
+		return "", false
+	}
+	payload := raw
+	if idx := strings.IndexByte(raw, ' '); idx >= 0 && idx+1 < len(raw) && raw[idx+1] == '{' {
+		payload = raw[idx+1:]
+	}
+	if !strings.HasPrefix(payload, "{") {
+		return raw, true
+	}
+	var record struct {
+		Type  string `json:"type"`
+		Event struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Question string `json:"question"`
+			Message  string `json:"message"`
+			Summary  string `json:"summary"`
+			Context  string `json:"context"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		return raw, true
+	}
+	if record.Type != "event" {
+		return raw, true
+	}
+	switch record.Event.Type {
+	case "progress":
+		text := strings.TrimSpace(record.Event.Text)
+		return text, text != ""
+	case "question":
+		question := strings.TrimSpace(record.Event.Question)
+		contextText := strings.TrimSpace(record.Event.Context)
+		if question == "" {
+			return "", false
+		}
+		if contextText != "" {
+			question += " — " + contextText
+		}
+		return "Question: " + question, true
+	case "foreman_proposed":
+		text := strings.TrimSpace(record.Event.Text)
+		if text == "" {
+			return "", false
+		}
+		return "Foreman: " + text, true
+	case "error":
+		text := strings.TrimSpace(record.Event.Message)
+		if text == "" {
+			return "", false
+		}
+		return "Error: " + text, true
+	case "complete":
+		text := strings.TrimSpace(record.Event.Summary)
+		if text == "" {
+			text = "Session complete"
+		}
+		return text, true
+	default:
+		return "", false
+	}
+}
+
+func scanSessionInteraction(r io.Reader) ([]string, error) {
+	var lines []string
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for scanner.Scan() {
+		if line, ok := normalizeSessionLogLine(scanner.Text()); ok {
+			lines = append(lines, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
+	pattern := filepath.Join(sessionsDir, sessionID+".log.*.gz")
+	compressed, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("glob session logs: %w", err)
+	}
+	sort.Strings(compressed)
+	paths := append([]string(nil), compressed...)
+	active := filepath.Join(sessionsDir, sessionID+".log")
+	if _, err := os.Stat(active); err == nil {
+		paths = append(paths, active)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat session log: %w", err)
+	}
+	return paths, nil
+}
+
+func readSessionInteractionFile(path string) ([]string, error) {
+	if strings.HasSuffix(path, ".gz") {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open session log %s: %w", path, err)
+		}
+		defer file.Close()
+		gz, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, fmt.Errorf("open compressed session log %s: %w", path, err)
+		}
+		defer gz.Close()
+		return scanSessionInteraction(gz)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open session log %s: %w", path, err)
+	}
+	defer file.Close()
+	return scanSessionInteraction(file)
+}
+
+// LoadSessionInteractionCmd reads the parsed interaction history for a session, including compressed segments.
+func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		paths, err := sessionInteractionPaths(sessionsDir, sessionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		var lines []string
+		for _, path := range paths {
+			chunk, err := readSessionInteractionFile(path)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			lines = append(lines, chunk...)
+		}
+		return SessionInteractionLoadedMsg{SessionID: sessionID, Lines: lines}
+	}
 }
 
 // TailSessionLogCmd reads new lines from a session log file since the given byte offset.
@@ -221,19 +394,17 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		}
 		var lines []string
 		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
+			if line, ok := normalizeSessionLogLine(scanner.Text()); ok {
+				lines = append(lines, line)
+			}
 		}
-		// Use actual FD position, not stat size, to avoid skipping bytes
-		// written between EOF detection and the stat call.
 		pos, seekErr := f.Seek(0, io.SeekCurrent)
 		newOffset := offset
 		if seekErr == nil {
 			newOffset = pos
 		}
-		// scanner.Err() is non-nil on I/O error or line > 1 MiB.
-		// Return whatever lines were collected; next call resumes from pos.
 		_ = scanner.Err()
 		return SessionLogLinesMsg{SessionID: sessionID, Lines: lines, NextOffset: newOffset}
 	}

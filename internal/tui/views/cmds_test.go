@@ -1,7 +1,9 @@
 package views_test
 
 import (
+	"compress/gzip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -152,5 +154,88 @@ func TestTailSessionLogCmd_MissingFile(t *testing.T) {
 	}
 	if len(got.Lines) != 0 {
 		t.Errorf("Lines: want empty slice, got %v", got.Lines)
+	}
+}
+
+func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		`{"type":"event","event":{"type":"progress","text":"planning step"}}`,
+		`{"type":"event","event":{"type":"question","question":"Need input","context":"missing token"}}`,
+		"plain fallback line",
+		"",
+	}, "\n")
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(f.Name(), "json", 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	want := []string{"planning step", "Question: Need input — missing token", "plain fallback line"}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	}
+	for i, line := range want {
+		if got.Lines[i] != line {
+			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
+		}
+	}
+}
+
+func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sessionID := "sess-history"
+	compressedPath := filepath.Join(dir, sessionID+".log.20260308.gz")
+	compressedFile, err := os.Create(compressedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(compressedFile)
+	compressedContent := strings.Join([]string{
+		`{"type":"event","event":{"type":"progress","text":"first chunk"}}`,
+		`{"type":"event","event":{"type":"complete","summary":"done"}}`,
+	}, "\n") + "\n"
+	if _, err := gz.Write([]byte(compressedContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressedFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	activePath := filepath.Join(dir, sessionID+".log")
+	if err := os.WriteFile(activePath, []byte("live tail line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.LoadSessionInteractionCmd(dir, sessionID)()
+	got, ok := msg.(views.SessionInteractionLoadedMsg)
+	if !ok {
+		t.Fatalf("expected SessionInteractionLoadedMsg, got %T", msg)
+	}
+	want := []string{"first chunk", "done", "live tail line"}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	}
+	for i, line := range want {
+		if got.Lines[i] != line {
+			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
+		}
+	}
+	if got.SessionID != sessionID {
+		t.Fatalf("SessionID: want %q, got %q", sessionID, got.SessionID)
 	}
 }

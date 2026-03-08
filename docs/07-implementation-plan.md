@@ -204,11 +204,11 @@ func (c *Client) Remove(ctx context.Context, repoDir, branch string) error
 
 **[UPDATED - IMPLEMENTED]** Workspace discovery: `substrate init` creates a `.substrate-workspace` file (YAML with ULID, name, timestamp) in the current directory. On startup, Substrate walks from cwd upward looking for `.substrate-workspace`. If DB-stored path differs from current filesystem path (user moved folder), DB is updated — workspace ID is stable identity, not path.
 
-**[UPDATED - IMPLEMENTED]** Repo discovery scans workspace folder for git-work repos (directories containing a `.bare/` subdirectory). Plain git clones (`.git/` present, no `.bare/`) are surfaced as workspace health warnings requiring acknowledgement. Other directories are ignored.
+**[UPDATED - IMPLEMENTED]** Repo discovery scans the workspace folder for git-work repos (directories containing a `.bare/` subdirectory). During `substrate init`, direct child plain git clones (`.git/` present, no `.bare/`) are converted with `git-work init`; non-repo directories are ignored. Plain git clones discovered later are surfaced as workspace health warnings until converted.
 
 **[UPDATED - IMPLEMENTED]** Pre-flight check (before each plan): re-verify git-work repos, surface any new plain clones as warnings.
 
-**Gate:** Unit: canned output parsed correctly. Integration: `substrate init` creates `.substrate-workspace` with valid ULID. Workspace scan discovers repos with `.bare/`. Checkout → `test-branch/` exists. Remove → gone. `go test ./internal/gitwork/...` and `go test -tags=integration ./internal/gitwork/...`
+**Gate:** Unit: canned output parsed correctly. Integration: `substrate init` creates `.substrate-workspace` with valid ULID, converts direct child plain git repos into git-work layouts, and leaves non-repo directories alone. Workspace scan discovers repos with `.bare/`. Checkout → `test-branch/` exists. Remove → gone. `go test ./internal/gitwork/...` and `go test -tags=integration ./internal/gitwork/...`
 
 ## Phase 6: Multi-Harness Agent Integration (Week 4-5)
 

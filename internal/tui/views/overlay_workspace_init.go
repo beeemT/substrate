@@ -77,7 +77,7 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 	return m, nil
 }
 
-// initWorkspaceCmd creates the .substrate-workspace file and registers in DB.
+// initWorkspaceCmd initializes plain git repos, creates the .substrate-workspace file, and registers in DB.
 func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cmd {
 	return func() tea.Msg {
 		name := filepath.Base(cwd)
@@ -135,8 +135,8 @@ func (m WorkspaceInitModal) View() string {
 			"",
 			m.styles.Subtitle.Render("This will:"),
 			m.styles.Muted.Render("  • Create .substrate-workspace  (workspace identity file)"),
-			m.styles.Muted.Render("  • Scan for git-work repos      (directories with .bare/)"),
-			m.styles.Muted.Render("  • Warn about plain git clones  (require gw init conversion)"),
+			m.styles.Muted.Render("  • Detect git-work repos        (directories with .bare/)"),
+			m.styles.Muted.Render("  • Convert plain git repos      (child dirs with .git/)"),
 			m.styles.Muted.Render("  • Register workspace in        ~/.substrate/state.db"),
 			"",
 		)
@@ -160,7 +160,7 @@ func (m WorkspaceInitModal) View() string {
 				cloneNames[i] = filepath.Base(c) + "/"
 			}
 			lines = append(lines,
-				m.styles.Warning.Render("⚠ Plain git clones (need conversion): ")+
+				m.styles.Warning.Render("⚠ Plain git repos to initialize: ")+
 					m.styles.Subtitle.Render(strings.Join(cloneNames, ", ")),
 			)
 		}

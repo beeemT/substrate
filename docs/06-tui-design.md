@@ -507,12 +507,12 @@ When Substrate launches and the current directory is not a registered workspace,
 │                                                                             │
 │  This will:                                                                 │
 │    • Create .substrate-workspace  (workspace identity file)                 │
-│    • Scan for git-work repos      (directories with .bare/)                 │
-│    • Warn about plain git clones  (require gw init conversion)              │
+│    • Detect git-work repos        (directories with .bare/)                 │
+│    • Convert plain git repos      (child dirs with .git/)                   │
 │    • Register workspace in        ~/.substrate/state.db                     │
 │                                                                             │
-│  git-work repos detected: backend-api/, frontend-app/                      │
-│  Plain git clones (need conversion): legacy-service/                       │
+│  git-work repos detected: backend-api/, frontend-app/                       │
+│  Plain git repos to initialize: legacy-service/                             │
 │                                                                             │
 │  [y] Initialize  [n] Cancel                                                 │
 │                                                                             │

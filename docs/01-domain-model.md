@@ -428,8 +428,8 @@ created_at: "2024-..."
 
 **Key invariants:**
 - The workspace folder and its repos are pre-existing — the user clones repos with `gw clone` and runs `substrate init` to register the workspace.
-- **All repos in the workspace must be git-work initialized** (`.bare/` present). `substrate init` verifies this at setup time. The pre-flight check (planning pipeline step a) re-verifies before each plan and surfaces any plain git clones as workspace health warnings.
-- Substrate scans for git-work repos (directories with a `.bare/` subdirectory) on startup. Plain git clones are visible as warnings but excluded from planning.
+- **All repos in the workspace must be git-work initialized** (`.bare/` present). `substrate init` converts direct child plain git repositories (`.git/` present, no `.bare/`) during setup and ignores non-repo directories. The pre-flight check (planning pipeline step a) re-verifies before each plan and surfaces any plain git clones added later as workspace health warnings.
+- Substrate scans for git-work repos (directories with a `.bare/` subdirectory) on startup. Plain git clones are excluded from planning until they are converted.
 - The `main/` worktree is never modified by agents. It serves as the read-only reference for planning and diffing.
 - Feature worktrees are created via `git-work checkout -b <branch>` only after plan approval.
 - Multiple work items coexist in the same workspace, each with its own branch/worktree per repo.

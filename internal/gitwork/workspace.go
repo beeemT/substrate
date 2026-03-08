@@ -1,6 +1,7 @@
 package gitwork
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,12 @@ var (
 	ErrWorkspaceExists = errors.New("workspace already exists")
 )
 
+// WorkspaceScan classifies direct child directories in a workspace.
+type WorkspaceScan struct {
+	GitWorkRepos  []string
+	PlainGitRepos []string
+}
+
 // IsNotInWorkspace returns true if err is ErrNotInWorkspace.
 func IsNotInWorkspace(err error) bool {
 	return errors.Is(err, ErrNotInWorkspace)
@@ -34,37 +41,83 @@ func IsWorkspaceExists(err error) bool {
 	return errors.Is(err, ErrWorkspaceExists)
 }
 
+// ScanWorkspace scans the workspace directory for managed and plain git repositories.
+func ScanWorkspace(workspaceDir string) (WorkspaceScan, error) {
+	dirs, err := workspaceChildDirs(workspaceDir)
+	if err != nil {
+		return WorkspaceScan{}, err
+	}
+
+	scan := WorkspaceScan{}
+	for _, dir := range dirs {
+		switch {
+		case IsGitWorkRepo(dir):
+			scan.GitWorkRepos = append(scan.GitWorkRepos, dir)
+		case IsPlainGitRepo(dir):
+			scan.PlainGitRepos = append(scan.PlainGitRepos, dir)
+		}
+	}
+
+	return scan, nil
+}
+
 // DiscoverRepos scans the workspace directory for git-work repositories.
 // A git-work repository is identified by the presence of a .bare/ subdirectory.
 func DiscoverRepos(workspaceDir string) ([]string, error) {
-	entries, err := os.ReadDir(workspaceDir)
+	scan, err := ScanWorkspace(workspaceDir)
 	if err != nil {
-		return nil, fmt.Errorf("read workspace directory: %w", err)
+		return nil, err
 	}
+	return scan.GitWorkRepos, nil
+}
 
-	var repos []string
-	for _, entry := range entries {
-		// Use os.Stat to follow symlinks when checking if entry is a directory
-		info, err := os.Stat(filepath.Join(workspaceDir, entry.Name()))
-		if err != nil {
-			slog.Warn("failed to stat entry, skipping", "path", entry.Name(), "err", err)
-			continue
-		}
-		if !info.IsDir() {
-			continue
-		}
-
-		repoPath := filepath.Join(workspaceDir, entry.Name())
-		if IsGitWorkRepo(repoPath) {
-			repos = append(repos, repoPath)
-		}
+// DiscoverPlainRepos scans the workspace directory for plain git repositories.
+// A plain git repository has a .git entry but no .bare/ subdirectory.
+func DiscoverPlainRepos(workspaceDir string) ([]string, error) {
+	scan, err := ScanWorkspace(workspaceDir)
+	if err != nil {
+		return nil, err
 	}
+	return scan.PlainGitRepos, nil
+}
 
-	return repos, nil
+// IsPlainGitRepo checks if the given directory is a plain git repository.
+// Plain git repositories have a .git entry and do not yet use the git-work .bare layout.
+func IsPlainGitRepo(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false
+	}
+	return !IsGitWorkRepo(dir)
+}
+
+type repoInitializer interface {
+	Init(ctx context.Context, repoDir string) error
 }
 
 func InitWorkspace(dir, name string) (*WorkspaceFile, error) {
+	return initWorkspace(context.Background(), NewClient(""), dir, name)
+}
+
+func initWorkspace(ctx context.Context, initializer repoInitializer, dir, name string) (*WorkspaceFile, error) {
 	workspacePath := filepath.Join(dir, WorkspaceFileName)
+	if _, err := os.Stat(workspacePath); err == nil {
+		return nil, ErrWorkspaceExists
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat workspace file: %w", err)
+	}
+
+	scan, err := ScanWorkspace(dir)
+	if err != nil {
+		return nil, fmt.Errorf("scan workspace: %w", err)
+	}
+	for _, repoPath := range scan.PlainGitRepos {
+		if initializer == nil {
+			return nil, fmt.Errorf("repo initializer is nil")
+		}
+		if err := initializer.Init(ctx, repoPath); err != nil {
+			return nil, fmt.Errorf("initialize git-work repo %s: %w", filepath.Base(repoPath), err)
+		}
+	}
 
 	ws := &WorkspaceFile{
 		ID:        ulid.Make().String(),
@@ -77,7 +130,7 @@ func InitWorkspace(dir, name string) (*WorkspaceFile, error) {
 		return nil, fmt.Errorf("marshal workspace file: %w", err)
 	}
 
-	// Use O_EXCL for atomic creation - fails if file already exists
+	// Use O_EXCL for atomic creation - fails if file already exists.
 	f, err := os.OpenFile(workspacePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
@@ -88,12 +141,35 @@ func InitWorkspace(dir, name string) (*WorkspaceFile, error) {
 	defer f.Close()
 
 	if _, err := f.Write(data); err != nil {
-		f.Close() // Close before remove
+		f.Close() // Close before remove.
 		os.Remove(workspacePath)
 		return nil, fmt.Errorf("write workspace file: %w", err)
 	}
 
 	return ws, nil
+}
+
+func workspaceChildDirs(workspaceDir string) ([]string, error) {
+	entries, err := os.ReadDir(workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("read workspace directory: %w", err)
+	}
+
+	dirs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		path := filepath.Join(workspaceDir, entry.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			slog.Warn("failed to stat entry, skipping", "path", entry.Name(), "err", err)
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, path)
+	}
+
+	return dirs, nil
 }
 
 // WriteWorkspaceFile writes the workspace file to the given directory.
