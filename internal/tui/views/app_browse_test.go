@@ -196,6 +196,84 @@ func TestNewSessionOverlayBrowseSelectionPersistsInRenderedList(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayCloseClearsSelectedBrowseState(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "✓ First") {
+		t.Fatalf("view = %q, want selected marker before close", view)
+	}
+
+	overlay.Close()
+	overlay.Open()
+
+	view = stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if strings.Contains(view, "✓ First") {
+		t.Fatalf("view = %q, want previous selection marker cleared after reopen", view)
+	}
+	if strings.Contains(view, "First") || strings.Contains(view, "Second") {
+		t.Fatalf("view = %q, want stale browse items cleared after reopen", view)
+	}
+}
+
+func TestNewSessionOverlayOpenResyncsBrowseListAfterStaleReopen(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	overlay.active = false
+	overlay.issueList.ResetSelected()
+	overlay.issueList.SetItems(nil)
+	overlay.setBrowseDetailsFocus()
+
+	overlay.Open()
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "First") || !strings.Contains(view, "Second") {
+		t.Fatalf("view = %q, want canonical browse items rendered after reopen", view)
+	}
+	if overlay.browseFocus != browseFocusControls || overlay.browseControl != browseControlSearch {
+		t.Fatalf("focus = (%v, %v), want search control after reopen", overlay.browseFocus, overlay.browseControl)
+	}
+	if overlay.issueList.Index() != 0 {
+		t.Fatalf("list index = %d, want reset to first item after reopen", overlay.issueList.Index())
+	}
+
+	focused, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if focused.browseFocus != browseFocusList {
+		t.Fatalf("browseFocus = %v, want browseFocusList after reopening", focused.browseFocus)
+	}
+	if focused.issueList.Index() != 0 {
+		t.Fatalf("list index = %d, want first item on entry after reopen", focused.issueList.Index())
+	}
+	moved, _ := focused.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if moved.issueList.Index() != 1 {
+		t.Fatalf("list index = %d, want immediate navigation after reopen", moved.issueList.Index())
+	}
+}
+
 func TestNewSessionOverlayDispatchesSelectedProvider(t *testing.T) {
 	t.Parallel()
 
@@ -458,6 +536,7 @@ func TestNewSessionOverlayRightArrowMovesBetweenListAndDetails(t *testing.T) {
 func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 	t.Parallel()
 
+	const exampleURL = "https://example.com/issue/42"
 	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	overlay.Open()
@@ -470,15 +549,42 @@ func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 		State:        "open",
 		ContainerRef: "acme/rocket",
 		Labels:       []string{"bug", "backend"},
+		URL:          exampleURL,
 		Description:  "## Summary\n\nThis is **important**.\n\n```mermaid\ngraph LR\nA-->B\n```",
 	}))
 
 	view := stripBrowseANSI(overlay.View())
-	for _, want := range []string{"Issue title", "Provider:", "Container:", "Mermaid diagram", "A", "B"} {
+
+	for _, want := range []string{"Issue title", "Provider:", "Mermaid diagram", "A", "B", "Description", "Metadata", exampleURL} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q in rendered details", view, want)
 		}
 	}
+
+	if strings.Contains(view, "Open in browser") {
+		t.Fatalf("view = %q, must not render legacy link text", view)
+	}
+
+	t.Run("EmptyDescriptionShowsPlaceholder", func(t *testing.T) {
+		overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{
+			ID:           "gh-2",
+			Provider:     "github",
+			Identifier:   "#43",
+			Title:        "Issue without description",
+			State:        "open",
+			ContainerRef: "acme/rocket",
+			Labels:       []string{"bug"},
+			URL:          exampleURL,
+			Description:  "",
+		}))
+		view := stripBrowseANSI(overlay.View())
+		if !strings.Contains(view, "Description") {
+			t.Fatalf("view = %q, want description section", view)
+		}
+		if !strings.Contains(view, "No description provided.") {
+			t.Fatalf("view = %q, want empty description placeholder", view)
+		}
+	})
 }
 
 func TestNewSessionOverlayNoItemsBackgroundMatchesOverlay(t *testing.T) {
@@ -605,6 +711,80 @@ func TestNewSessionOverlayAllModeRestrictsToIssues(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayShowsOnlyConfiguredProviderSources(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	view := stripBrowseANSI(overlay.View())
+	if !strings.Contains(view, "GitHub") {
+		t.Fatalf("view = %q, want configured GitHub source", view)
+	}
+	for _, avoid := range []string{"Linear", "GitLab"} {
+		if strings.Contains(view, avoid) {
+			t.Fatalf("view = %q, must not advertise unavailable %s source", view, avoid)
+		}
+	}
+}
+
+func TestNewSessionOverlaySelectingLinearSourceExposesSupportedScopesAndFilters(t *testing.T) {
+	t.Parallel()
+
+	linearAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "created_by_me", "subscribed", "all"},
+				States:         []string{"open", "closed", "all"},
+				SupportsLabels: true,
+				SupportsSearch: true,
+				SupportsTeam:   true,
+			},
+			domain.ScopeProjects: {
+				States:         []string{"planned", "all"},
+				SupportsSearch: true,
+				SupportsTeam:   true,
+			},
+			domain.ScopeInitiatives: {
+				States:         []string{"planned", "all"},
+				SupportsSearch: true,
+			},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{linearAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 30)
+	overlay.setBrowseControlFocus(browseControlSource)
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if updated.currentProvider() != "linear" {
+		t.Fatalf("provider = %q, want linear after source change", updated.currentProvider())
+	}
+	updated = applyOverlayCmds(t, updated, cmd)
+
+	view := stripBrowseANSI(updated.View())
+	for _, want := range []string{"Projects", "Initiatives", "View:", "State:", "Labels:", "Team:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want %q after selecting Linear source", view, want)
+		}
+	}
+	for _, avoid := range []string{"GitHub", "GitLab"} {
+		if strings.Contains(view, avoid) {
+			t.Fatalf("view = %q, must not show unsupported %s source", view, avoid)
+		}
+	}
+}
+
 func TestNewSessionOverlayShowsAdvancedFilterRowsByCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -685,6 +865,121 @@ func TestNewSessionOverlayShowsLinearSubscribedViewWhenSupported(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayCtrlRClearsBrowseStateAndReloadsDefaults(t *testing.T) {
+	t.Parallel()
+
+	linearAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "created_by_me", "all"},
+				States:         []string{"open", "closed", "all"},
+				SupportsLabels: true,
+				SupportsOwner:  true,
+				SupportsRepo:   true,
+				SupportsGroup:  true,
+				SupportsTeam:   true,
+			},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{linearAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 30)
+	overlay.providerIndex = providerOptionIndex("linear")
+	overlay.viewIndex = 1
+	overlay.stateIndex = 1
+	overlay.filterInput.SetValue("bug")
+	overlay.labelsInput.SetValue("bug,backend")
+	overlay.ownerInput.SetValue("alice")
+	overlay.repoInput.SetValue("acme/rocket")
+	overlay.groupInput.SetValue("platform")
+	overlay.teamInput.SetValue("rocket")
+	overlay.normalizeSelectionOptions()
+
+	if overlay.currentProvider() != "linear" {
+		t.Fatalf("provider = %q, want linear before clear", overlay.currentProvider())
+	}
+	if overlay.currentView() != "created_by_me" {
+		t.Fatalf("view = %q, want created_by_me before clear", overlay.currentView())
+	}
+	if overlay.currentState() != "closed" {
+		t.Fatalf("state = %q, want closed before clear", overlay.currentState())
+	}
+
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "lin-1", Provider: "linear", Title: "First"},
+		adapter.ListItem{ID: "lin-2", Provider: "linear", Title: "Second"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay.setBrowseListFocus()
+	overlay.issueList.Select(1)
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 120, 30)
+	if !strings.Contains(view, "✓ First") {
+		t.Fatalf("view = %q, want selected marker before clear", view)
+	}
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if !updated.loading {
+		t.Fatal("expected loading after clear")
+	}
+	if cmd == nil {
+		t.Fatal("expected reload command after clear")
+	}
+	if updated.currentProvider() != "all" {
+		t.Fatalf("provider = %q, want all after clear", updated.currentProvider())
+	}
+	if updated.currentScope() != domain.ScopeIssues {
+		t.Fatalf("scope = %q, want issues after clear", updated.currentScope())
+	}
+	if updated.currentView() != "assigned_to_me" {
+		t.Fatalf("view = %q, want assigned_to_me after clear", updated.currentView())
+	}
+	if updated.currentState() != "open" {
+		t.Fatalf("state = %q, want open after clear", updated.currentState())
+	}
+	if updated.filterInput.Value() != "" || updated.labelsInput.Value() != "" || updated.ownerInput.Value() != "" || updated.repoInput.Value() != "" || updated.groupInput.Value() != "" || updated.teamInput.Value() != "" {
+		t.Fatalf("filters were not fully cleared")
+	}
+	if len(updated.selectedIDs) != 0 {
+		t.Fatalf("selectedIDs len = %d, want 0 after clear", len(updated.selectedIDs))
+	}
+	if len(updated.allItems) != 0 {
+		t.Fatalf("allItems len = %d, want 0 after clear", len(updated.allItems))
+	}
+	if updated.browseFocus != browseFocusControls || updated.browseControl != browseControlSearch {
+		t.Fatalf("focus = (%v, %v), want search control after clear", updated.browseFocus, updated.browseControl)
+	}
+
+	view = stripBrowseANSI(updated.View())
+	assertOverlayFits(t, view, 120, 30)
+	if strings.Contains(view, "✓ First") || strings.Contains(view, "First") || strings.Contains(view, "Second") {
+		t.Fatalf("view = %q, want stale browse items and markers cleared before reload completes", view)
+	}
+
+	updated = applyOverlayCmds(t, updated, cmd)
+	if linearAdapter.lastListOpts.Provider != "all" {
+		t.Fatalf("provider = %q, want all on reload", linearAdapter.lastListOpts.Provider)
+	}
+	if linearAdapter.lastListOpts.Scope != domain.ScopeIssues {
+		t.Fatalf("scope = %q, want issues on reload", linearAdapter.lastListOpts.Scope)
+	}
+	if linearAdapter.lastListOpts.View != "assigned_to_me" {
+		t.Fatalf("view = %q, want assigned_to_me on reload", linearAdapter.lastListOpts.View)
+	}
+	if linearAdapter.lastListOpts.State != "open" {
+		t.Fatalf("state = %q, want open on reload", linearAdapter.lastListOpts.State)
+	}
+	if linearAdapter.lastListOpts.Search != "" || linearAdapter.lastListOpts.Owner != "" || linearAdapter.lastListOpts.Repo != "" || linearAdapter.lastListOpts.Group != "" || linearAdapter.lastListOpts.TeamID != "" {
+		t.Fatalf("reload opts = %#v, want cleared scalar filters", linearAdapter.lastListOpts)
+	}
+	if len(linearAdapter.lastListOpts.Labels) != 0 {
+		t.Fatalf("labels = %#v, want none on reload", linearAdapter.lastListOpts.Labels)
+	}
+}
+
 func TestNewSessionOverlayShowsStateControlsByCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -713,6 +1008,46 @@ func TestNewSessionOverlayShowsStateControlsByCapabilities(t *testing.T) {
 	}
 	if !strings.Contains(hint, "Ctrl+O") {
 		t.Fatalf("hint = %q, want browser-open hint", hint)
+	}
+	if !strings.Contains(hint, "Ctrl+R") {
+		t.Fatalf("hint = %q, want clear hint", hint)
+	}
+	if !strings.Contains(hint, "Ctrl+S") {
+		t.Fatalf("hint = %q, want scope hint", hint)
+	}
+	for _, avoid := range []string{"↑/↓", "←/→"} {
+		if strings.Contains(hint, avoid) {
+			t.Fatalf("hint = %q, must not include %q", hint, avoid)
+		}
+	}
+}
+
+func TestNewSessionOverlayBrowserHintsWrapWithoutTruncation(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, States: []string{"open", "closed", "all"}},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.providerIndex = 2
+	overlay.Open()
+	overlay.SetSize(80, 20)
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 80, 20)
+	for _, want := range []string{"Ctrl+N", "Ctrl+R", "Ctrl+S", "Multi-select: one provider"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want wrapped hint content %q", view, want)
+		}
+	}
+	for _, avoid := range []string{"↑/↓", "←/→"} {
+		if strings.Contains(view, avoid) {
+			t.Fatalf("view = %q, must not include %q", view, avoid)
+		}
 	}
 }
 

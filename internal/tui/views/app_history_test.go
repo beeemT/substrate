@@ -1,11 +1,58 @@
 package views
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/orchestrator"
 )
+
+func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
+	now := time.Now()
+	app := NewApp(Services{Settings: &SettingsService{}})
+	app.activeOverlay = overlaySessionSearch
+	app.sessionSearch.Open(sessionHistoryScopeGlobal, false)
+	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{{
+		SessionID:          "sess-1",
+		WorkspaceID:        "ws-1",
+		WorkspaceName:      "workspace",
+		WorkItemID:         "wi-1",
+		WorkItemExternalID: "SUB-1",
+		WorkItemTitle:      "Work item",
+		UpdatedAt:          now,
+		CreatedAt:          now,
+	}})
+	app.sessionSearch.SetLoading(false)
+
+	model, cmd := app.Update(PollTickMsg{})
+	if cmd == nil {
+		t.Fatal("expected poll tick command batch")
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.sessionSearch.loading {
+		t.Fatal("expected background poll refresh to keep loading indicator hidden")
+	}
+	if view := updated.sessionSearch.View(); strings.Contains(view, "Searching…") {
+		t.Fatalf("view = %q, want no searching indicator during background refresh", view)
+	}
+
+	model, cmd = updated.Update(SessionHistorySearchRequestedMsg{})
+	if cmd == nil {
+		t.Fatal("expected interactive search command")
+	}
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if !updated.sessionSearch.loading {
+		t.Fatal("expected interactive search request to show loading indicator")
+	}
+}
 
 func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 	app := NewApp(Services{
@@ -81,6 +128,37 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 	}
 }
 
+func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *testing.T) {
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	app.content.SetSize(80, 20)
+
+	cmd := app.loadHistoryEntry(SidebarEntry{
+		Kind:          SidebarEntrySessionHistory,
+		WorkspaceID:   "ws-remote",
+		WorkspaceName: "remote",
+		WorkItemID:    "wi-remote",
+		ExternalID:    "SUB-3",
+		Title:         "Remote planning item",
+		State:         domain.WorkItemPlanning,
+	})
+	if cmd != nil {
+		t.Fatalf("loadHistoryEntry() cmd = %v, want nil when no agent session exists", cmd)
+	}
+	if app.currentHistorySessionID != "" {
+		t.Fatalf("currentHistorySessionID = %q, want empty", app.currentHistorySessionID)
+	}
+	if app.content.Mode() != ContentModeSessionInteraction {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeSessionInteraction)
+	}
+	if view := app.content.View(); !strings.Contains(view, "No agent-session log is available") {
+		t.Fatalf("content view = %q, want summary fallback", view)
+	}
+}
+
 func TestRebuildSidebarSortsByLastActivity(t *testing.T) {
 	now := time.Now()
 	older := now.Add(-2 * time.Hour)
@@ -109,5 +187,91 @@ func TestRebuildSidebarSortsByLastActivity(t *testing.T) {
 	sel = app.sidebar.Selected()
 	if sel == nil || sel.WorkItemID != "wi-old" {
 		t.Fatalf("second work item = %v, want wi-old", sel)
+	}
+}
+
+func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
+	now := time.Now()
+	older := now.Add(-time.Hour)
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	app.workItems = []domain.WorkItem{{
+		ID:          "wi-old",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-1",
+		Title:       "Old item",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   older,
+		UpdatedAt:   older,
+	}}
+	app.rebuildSidebar()
+
+	model, _ := app.Update(WorkItemCreatedMsg{
+		WorkItem: domain.WorkItem{
+			ID:          "wi-new",
+			WorkspaceID: "ws-local",
+			ExternalID:  "SUB-2",
+			Title:       "New item",
+			State:       domain.WorkItemIngested,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		Message: "Work item created: SUB-2",
+	})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.currentWorkItemID != "wi-new" {
+		t.Fatalf("currentWorkItemID = %q, want wi-new", updated.currentWorkItemID)
+	}
+	if updated.content.Mode() != ContentModeReadyToPlan {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.WorkItemID != "wi-new" {
+		t.Fatalf("selected sidebar entry = %v, want wi-new", sel)
+	}
+	if len(updated.workItems) != 2 {
+		t.Fatalf("work item count = %d, want 2", len(updated.workItems))
+	}
+}
+
+func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
+	now := time.Now()
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		Planning:      &orchestrator.PlanningService{},
+	})
+
+	model, cmd := app.Update(WorkItemCreatedMsg{
+		WorkItem: domain.WorkItem{
+			ID:          "wi-new",
+			WorkspaceID: "ws-local",
+			ExternalID:  "SUB-2",
+			Title:       "New item",
+			State:       domain.WorkItemIngested,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		Message: "Session created: SUB-2",
+	})
+	if cmd == nil {
+		t.Fatal("expected planning command after work item creation")
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.content.Mode() != ContentModePlanning {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	}
+	if len(updated.workItems) != 1 || updated.workItems[0].State != domain.WorkItemPlanning {
+		t.Fatalf("work items = %#v, want one planning work item", updated.workItems)
 	}
 }

@@ -33,6 +33,22 @@ func TestWorkItemService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects missing workspace id", func(t *testing.T) {
+		item := domain.WorkItem{
+			ID:     "wi-missing-workspace",
+			Title:  "Test Item",
+			Source: "manual",
+		}
+		err := svc.Create(ctx, item)
+		if err == nil {
+			t.Fatal("expected error for missing workspace id")
+		}
+		_, ok := err.(ErrInvalidInput)
+		if !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
 	t.Run("rejects non-ingested initial state", func(t *testing.T) {
 		item := domain.WorkItem{
 			ID:          "wi-2",

@@ -35,15 +35,26 @@ func NewSessionLogModel(st styles.Styles) SessionLogModel {
 func (m *SessionLogModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.viewport.Width = width
-	m.viewport.Height = max(1, height-4) // reserve header + divider + optional meta + hints
+	m.syncViewportSize()
+}
+
+func (m *SessionLogModel) syncViewportSize() {
+	m.viewport.Width = m.width
+	reservedRows := 3 // header + divider + hints
+	if strings.TrimSpace(m.meta) != "" {
+		reservedRows++
+	}
+	m.viewport.Height = max(1, m.height-reservedRows)
 }
 
 func (m *SessionLogModel) SetTitle(title string) { m.title = title }
 
 func (m *SessionLogModel) SetModeLabel(label string) { m.modeLabel = label }
 
-func (m *SessionLogModel) SetMeta(meta string) { m.meta = meta }
+func (m *SessionLogModel) SetMeta(meta string) {
+	m.meta = meta
+	m.syncViewportSize()
+}
 
 func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.sessionID = sessionID
@@ -108,6 +119,10 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 }
 
 func (m SessionLogModel) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
 	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
 	headerText := m.title
@@ -133,5 +148,5 @@ func (m SessionLogModel) View() string {
 		parts = append(parts, meta)
 	}
 	parts = append(parts, body, hints)
-	return strings.Join(parts, "\n")
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

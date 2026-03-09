@@ -21,7 +21,11 @@ type AgentSession struct {
 	UpdatedAt       time.Time
 }
 
-// SessionHistoryEntry is one searchable session-history result enriched with workspace and work-item metadata.
+// SessionHistoryEntry is one searchable work-item session result.
+//
+// The work item is the primary session identity shown in session history. When the
+// work item has child agent sessions, SessionID/RepositoryName/HarnessName/Status
+// describe the latest contributing agent session for preview purposes.
 type SessionHistoryEntry struct {
 	SessionID          string
 	WorkspaceID        string
@@ -33,6 +37,9 @@ type SessionHistoryEntry struct {
 	RepositoryName     string
 	HarnessName        string
 	Status             AgentSessionStatus
+	AgentSessionCount  int
+	HasOpenQuestion    bool
+	HasInterrupted     bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	CompletedAt        *time.Time

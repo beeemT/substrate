@@ -163,6 +163,12 @@ type ErrMsg struct{ Err error }
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 
+// WorkItemCreatedMsg is sent after the new-session flow persists a work item.
+type WorkItemCreatedMsg struct {
+	WorkItem domain.WorkItem
+	Message  string
+}
+
 // --- Overlay control ---
 
 // ShowNewSessionMsg opens the New Session overlay.

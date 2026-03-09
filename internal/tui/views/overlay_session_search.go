@@ -14,20 +14,34 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 const (
-	sessionSearchWindowWidth     = 180
-	sessionSearchPaneMinWidth    = 40
-	sessionSearchDetailMinWidth  = 52
-	sessionSearchVerticalPadding = 7
+	sessionSearchWindowWidth    = 180
+	sessionSearchPaneMinWidth   = 40
+	sessionSearchDetailMinWidth = 52
 )
+
+var sessionSearchSizingSpec = components.SplitOverlaySizingSpec{
+	MaxOverlayWidth:   sessionSearchWindowWidth,
+	LeftMinWidth:      sessionSearchPaneMinWidth,
+	RightMinWidth:     sessionSearchDetailMinWidth,
+	LeftWeight:        2,
+	RightWeight:       3,
+	MinBodyHeight:     8,
+	DefaultBodyHeight: 18,
+	HeightRatioNum:    3,
+	HeightRatioDen:    5,
+	InputWidthOffset:  20,
+}
 
 type sessionSearchFocus int
 
 const (
 	sessionSearchFocusInput sessionSearchFocus = iota
+	sessionSearchFocusScope
 	sessionSearchFocusResults
 	sessionSearchFocusPreview
 )
@@ -37,10 +51,7 @@ type sessionSearchListItem struct {
 }
 
 func (i sessionSearchListItem) Title() string {
-	prefix := i.entry.WorkItemExternalID
-	if prefix == "" {
-		prefix = i.entry.SessionID
-	}
+	prefix := firstNonEmpty(i.entry.WorkItemExternalID, i.entry.WorkItemID, i.entry.SessionID)
 	if i.entry.WorkItemTitle == "" {
 		return prefix
 	}
@@ -48,7 +59,7 @@ func (i sessionSearchListItem) Title() string {
 }
 
 func (i sessionSearchListItem) Description() string {
-	parts := []string{humanSessionStatus(i.entry.Status)}
+	parts := []string{humanHistoryStatus(i.entry)}
 	if i.entry.WorkspaceName != "" {
 		parts = append(parts, i.entry.WorkspaceName)
 	}
@@ -60,11 +71,13 @@ func (i sessionSearchListItem) Description() string {
 
 func (i sessionSearchListItem) FilterValue() string {
 	return strings.Join([]string{
+		i.entry.WorkItemID,
 		i.entry.SessionID,
 		i.entry.WorkspaceName,
 		i.entry.WorkItemExternalID,
 		i.entry.WorkItemTitle,
 		i.entry.RepositoryName,
+		string(i.entry.WorkItemState),
 		string(i.entry.Status),
 	}, " ")
 }
@@ -86,7 +99,7 @@ type SessionSearchOverlay struct {
 
 func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
 	input := textinput.New()
-	input.Placeholder = "Search session history…"
+	input.Placeholder = "Search work item sessions…"
 	input.CharLimit = 200
 
 	delegate := list.NewDefaultDelegate()
@@ -96,8 +109,7 @@ func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
 	resultList.SetShowStatusBar(false)
 	resultList.SetFilteringEnabled(false)
 	resultList.SetShowHelp(false)
-	resultList.Styles.NoItems = resultList.Styles.NoItems.Background(lipgloss.Color(overlayBackgroundColor))
-	resultList.Styles.StatusEmpty = resultList.Styles.StatusEmpty.Background(lipgloss.Color(overlayBackgroundColor))
+	resultList = components.ApplyOverlayListStyles(resultList)
 
 	return SessionSearchOverlay{
 		input:  input,
@@ -156,9 +168,9 @@ func (m *SessionSearchOverlay) SetLoading(loading bool) {
 }
 
 func (m *SessionSearchOverlay) SetEntries(entries []domain.SessionHistoryEntry) {
-	selectedSessionID := ""
+	selectedWorkItemID := ""
 	if entry := m.Selected(); entry != nil {
-		selectedSessionID = entry.SessionID
+		selectedWorkItemID = entry.WorkItemID
 	}
 
 	m.entries = append([]domain.SessionHistoryEntry(nil), entries...)
@@ -169,20 +181,22 @@ func (m *SessionSearchOverlay) SetEntries(entries []domain.SessionHistoryEntry) 
 		if !m.entries[i].CreatedAt.Equal(m.entries[j].CreatedAt) {
 			return m.entries[i].CreatedAt.After(m.entries[j].CreatedAt)
 		}
-		return m.entries[i].SessionID < m.entries[j].SessionID
+		return m.entries[i].WorkItemID < m.entries[j].WorkItemID
 	})
 
 	items := make([]list.Item, 0, len(m.entries))
 	selectedIndex := 0
 	for i, entry := range m.entries {
 		items = append(items, sessionSearchListItem{entry: entry})
-		if entry.SessionID == selectedSessionID {
+		if entry.WorkItemID == selectedWorkItemID {
 			selectedIndex = i
 		}
 	}
 	m.list.SetItems(items)
 	if len(items) > 0 {
 		m.list.Select(selectedIndex)
+	} else if m.focus == sessionSearchFocusResults || m.focus == sessionSearchFocusPreview {
+		m.focusInput()
 	}
 	m.syncDetailViewport(true)
 }
@@ -206,20 +220,82 @@ func (m *SessionSearchOverlay) requestSearchCmd() tea.Cmd {
 	return func() tea.Msg { return SessionHistorySearchRequestedMsg{} }
 }
 
+func (m *SessionSearchOverlay) focusInput() {
+	m.focus = sessionSearchFocusInput
+	m.input.Focus()
+}
+
+func (m *SessionSearchOverlay) focusScope() bool {
+	if !m.workspaceAvailable {
+		return false
+	}
+	m.focus = sessionSearchFocusScope
+	m.input.Blur()
+	return true
+}
+
+func (m *SessionSearchOverlay) focusResults() bool {
+	if len(m.entries) == 0 {
+		return false
+	}
+	m.focus = sessionSearchFocusResults
+	m.input.Blur()
+	return true
+}
+
+func (m *SessionSearchOverlay) focusPreview() bool {
+	if len(m.entries) == 0 {
+		return false
+	}
+	m.focus = sessionSearchFocusPreview
+	m.input.Blur()
+	return true
+}
+
 func (m *SessionSearchOverlay) cycleFocus() {
 	switch m.focus {
+	case sessionSearchFocusScope:
+		m.focusInput()
 	case sessionSearchFocusInput:
-		if len(m.entries) > 0 {
-			m.focus = sessionSearchFocusResults
-			m.input.Blur()
-		}
+		m.focusResults()
 	case sessionSearchFocusResults:
-		m.focus = sessionSearchFocusPreview
-		m.input.Blur()
+		if !m.focusPreview() {
+			m.focusInput()
+		}
 	default:
-		m.focus = sessionSearchFocusInput
-		m.input.Focus()
+		if !m.focusScope() {
+			m.focusInput()
+		}
 	}
+}
+
+func (m *SessionSearchOverlay) moveFocusLeft() bool {
+	switch m.focus {
+	case sessionSearchFocusPreview:
+		return m.focusResults()
+	case sessionSearchFocusResults:
+		m.focusInput()
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *SessionSearchOverlay) moveFocusRight() bool {
+	switch m.focus {
+	case sessionSearchFocusResults:
+		return m.focusPreview()
+	default:
+		return false
+	}
+}
+
+func (m *SessionSearchOverlay) setScope(scope sessionHistoryScope) tea.Cmd {
+	if !m.workspaceAvailable || m.scope == scope {
+		return nil
+	}
+	m.scope = scope
+	return m.requestSearchCmd()
 }
 
 func (m *SessionSearchOverlay) toggleScope() tea.Cmd {
@@ -227,14 +303,12 @@ func (m *SessionSearchOverlay) toggleScope() tea.Cmd {
 		return nil
 	}
 	if m.scope == sessionHistoryScopeWorkspace {
-		m.scope = sessionHistoryScopeGlobal
-	} else {
-		m.scope = sessionHistoryScopeWorkspace
+		return m.setScope(sessionHistoryScopeGlobal)
 	}
-	return m.requestSearchCmd()
+	return m.setScope(sessionHistoryScopeWorkspace)
 }
 
-func humanSessionStatus(status domain.AgentSessionStatus) string {
+func humanAgentSessionStatus(status domain.AgentSessionStatus) string {
 	switch status {
 	case domain.AgentSessionPending:
 		return "Pending"
@@ -249,7 +323,36 @@ func humanSessionStatus(status domain.AgentSessionStatus) string {
 	case domain.AgentSessionFailed:
 		return "Failed"
 	default:
-		return string(status)
+		return ""
+	}
+}
+
+func humanHistoryStatus(entry domain.SessionHistoryEntry) string {
+	switch entry.WorkItemState {
+	case domain.WorkItemIngested:
+		return "Ready to plan"
+	case domain.WorkItemPlanning:
+		return "Planning"
+	case domain.WorkItemPlanReview:
+		return "Plan review needed"
+	case domain.WorkItemApproved:
+		return "Awaiting implementation"
+	case domain.WorkItemImplementing:
+		if entry.HasOpenQuestion {
+			return "Waiting for answer"
+		}
+		if entry.HasInterrupted {
+			return "Interrupted"
+		}
+		return "Implementing"
+	case domain.WorkItemReviewing:
+		return "Under review"
+	case domain.WorkItemCompleted:
+		return "Completed"
+	case domain.WorkItemFailed:
+		return "Failed"
+	default:
+		return firstNonEmpty(string(entry.WorkItemState), humanAgentSessionStatus(entry.Status), "Unknown")
 	}
 }
 
@@ -266,7 +369,7 @@ func (m SessionSearchOverlay) detailContent() string {
 		if m.loading {
 			return "Loading sessions…"
 		}
-		return "No sessions found for the current scope and query."
+		return "No work item sessions found for the current scope and query."
 	}
 
 	workspace := entry.WorkspaceName
@@ -276,18 +379,19 @@ func (m SessionSearchOverlay) detailContent() string {
 	lines := []string{
 		entry.WorkItemTitle,
 		"",
-		fmt.Sprintf("Work item: %s", firstNonEmpty(entry.WorkItemExternalID, entry.WorkItemID)),
-		fmt.Sprintf("Session:   %s", entry.SessionID),
-		fmt.Sprintf("Workspace: %s", firstNonEmpty(workspace, "—")),
-		fmt.Sprintf("Repo:      %s", firstNonEmpty(entry.RepositoryName, "—")),
-		fmt.Sprintf("Harness:   %s", firstNonEmpty(entry.HarnessName, "—")),
-		fmt.Sprintf("Status:    %s", humanSessionStatus(entry.Status)),
-		fmt.Sprintf("State:     %s", firstNonEmpty(string(entry.WorkItemState), "—")),
-		fmt.Sprintf("Created:   %s", entry.CreatedAt.Local().Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("Updated:   %s", entry.UpdatedAt.Local().Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("Finished:  %s", formatSessionTime(entry.CompletedAt)),
+		fmt.Sprintf("Work item:            %s", firstNonEmpty(entry.WorkItemExternalID, entry.WorkItemID)),
+		fmt.Sprintf("State:                %s", humanHistoryStatus(*entry)),
+		fmt.Sprintf("Workspace:            %s", firstNonEmpty(workspace, "—")),
+		fmt.Sprintf("Agent sessions:       %d", entry.AgentSessionCount),
+		fmt.Sprintf("Latest agent session: %s", firstNonEmpty(entry.SessionID, "—")),
+		fmt.Sprintf("Latest repo:          %s", firstNonEmpty(entry.RepositoryName, "—")),
+		fmt.Sprintf("Latest harness:       %s", firstNonEmpty(entry.HarnessName, "—")),
+		fmt.Sprintf("Latest agent status:  %s", firstNonEmpty(humanAgentSessionStatus(entry.Status), "—")),
+		fmt.Sprintf("Created:              %s", entry.CreatedAt.Local().Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Updated:              %s", entry.UpdatedAt.Local().Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Finished:             %s", formatSessionTime(entry.CompletedAt)),
 		"",
-		"Press Enter to open the selected session.",
+		"Press Enter to open the selected work item session.",
 	}
 	return strings.Join(lines, "\n")
 }
@@ -301,36 +405,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (m SessionSearchOverlay) renderWidth() int {
-	if m.width <= 0 {
-		return maxInt(1, sessionSearchWindowWidth-overlayHorizontalFrame)
-	}
-	return maxInt(1, minInt(sessionSearchWindowWidth-overlayHorizontalFrame, m.width-overlayHorizontalFrame))
-}
-
-func (m SessionSearchOverlay) renderContentWidth() int {
-	return maxInt(1, m.renderWidth()-overlayHorizontalPad)
-}
-
-func (m SessionSearchOverlay) paneWidths(renderWidth int) (int, int) {
-	available := maxInt(1, renderWidth-1)
-	if renderWidth <= sessionSearchPaneMinWidth+sessionSearchDetailMinWidth+1 {
-		leftWidth := maxInt(1, available/2)
-		rightWidth := maxInt(1, available-leftWidth)
-		return leftWidth, rightWidth
-	}
-	leftWidth := maxInt(sessionSearchPaneMinWidth, renderWidth*2/5)
-	rightWidth := maxInt(sessionSearchDetailMinWidth, available-leftWidth)
-	if leftWidth+rightWidth > available {
-		rightWidth = maxInt(1, available-leftWidth)
-	}
-	if rightWidth < sessionSearchDetailMinWidth {
-		rightWidth = sessionSearchDetailMinWidth
-		leftWidth = maxInt(1, available-rightWidth)
-	}
-	return leftWidth, rightWidth
-}
-
 func (m SessionSearchOverlay) chromeLines() int {
 	lines := 10 // outer border plus non-body chrome lines
 	if m.loading {
@@ -339,30 +413,18 @@ func (m SessionSearchOverlay) chromeLines() int {
 	return lines
 }
 
-func (m SessionSearchOverlay) paneHeight() int {
-	target := 18
-	if m.height > 0 {
-		target = maxInt(8, (m.height*browseHeightNumerator+browseHeightDenom-1)/browseHeightDenom)
-	}
-	if m.height <= 0 {
-		return target
-	}
-	maxHeight := m.height - m.chromeLines()
-	if maxHeight < 1 {
-		return 1
-	}
-	return maxInt(1, minInt(target, maxHeight))
+func (m SessionSearchOverlay) layout() components.SplitOverlayLayout {
+	return components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), sessionSearchSizingSpec)
 }
 
 func (m *SessionSearchOverlay) syncDetailViewport(forceTop bool) {
-	contentWidth := m.renderContentWidth()
-	_, rightWidth := m.paneWidths(contentWidth)
-	paneHeight := m.paneHeight()
-	viewportWidth := maxInt(1, rightWidth-paneHorizontalFrame-2)
-	viewportHeight := maxInt(1, paneHeight-paneVerticalFrame-2)
-	m.detail.Width = viewportWidth
-	m.detail.Height = viewportHeight
-	content := ansi.Hardwrap(m.detailContent(), viewportWidth, true)
+	m.syncDetailViewportWithLayout(m.layout(), forceTop)
+}
+
+func (m *SessionSearchOverlay) syncDetailViewportWithLayout(layout components.SplitOverlayLayout, forceTop bool) {
+	m.detail.Width = layout.ViewportWidth
+	m.detail.Height = layout.ViewportHeight
+	content := ansi.Hardwrap(m.detailContent(), layout.ViewportWidth, true)
 	m.detail.SetContent(content)
 	if forceTop {
 		m.detail.GotoTop()
@@ -370,7 +432,7 @@ func (m *SessionSearchOverlay) syncDetailViewport(forceTop bool) {
 }
 
 func (m SessionSearchOverlay) hintText() string {
-	return "[Tab] Focus  [Ctrl+S] Toggle scope  [Enter] Open  [Esc] Close"
+	return "[↑] Scope  [↓] Results  [←/→] Focus or toggle  [Ctrl+S] Toggle scope  [Enter] Open"
 }
 
 func (m SessionSearchOverlay) View() string {
@@ -378,78 +440,61 @@ func (m SessionSearchOverlay) View() string {
 		return ""
 	}
 
-	boxWidth := m.renderWidth()
-	contentWidth := m.renderContentWidth()
-	m.input.Width = maxInt(1, contentWidth-20)
-	m.syncDetailViewport(false)
+	layout := m.layout()
+	m.input.Width = layout.InputWidth
+	m.list.SetWidth(layout.LeftInnerWidth)
+	m.list.SetHeight(layout.ListHeight)
+	m.syncDetailViewportWithLayout(layout, false)
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Search Sessions")
+	scopePrefix := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Scope:")
+	activeScopeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true)
+	if m.focus == sessionSearchFocusScope {
+		scopePrefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#60a5fa")).Bold(true).Render("Scope:")
+		activeScopeStyle = activeScopeStyle.Underline(true)
+	}
 	scopeWorkspace := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("workspace")
 	if m.workspaceAvailable && m.scope == sessionHistoryScopeWorkspace {
-		scopeWorkspace = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true).Render("[workspace]")
+		scopeWorkspace = activeScopeStyle.Render("[workspace]")
 	}
 	scopeGlobal := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("global")
 	if m.scope == sessionHistoryScopeGlobal || !m.workspaceAvailable {
-		scopeGlobal = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true).Render("[global]")
+		scopeGlobal = activeScopeStyle.Render("[global]")
 	}
 	header := []string{
 		title,
-		truncate("Scope: "+scopeWorkspace+"  "+scopeGlobal, maxInt(1, contentWidth)),
+		truncate(scopePrefix+" "+scopeWorkspace+"  "+scopeGlobal, layout.ContentWidth),
 		"Search: " + m.input.View(),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(contentWidth).Render(strings.Repeat("─", maxInt(1, contentWidth))),
+		components.RenderOverlayDivider(layout.ContentWidth),
 	}
 	if m.loading {
 		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Searching…"))
 	}
 
-	leftBorder := lipgloss.Color("#2d2d44")
-	rightBorder := lipgloss.Color("#2d2d44")
-	if m.focus == sessionSearchFocusResults {
-		leftBorder = lipgloss.Color("#60a5fa")
-	}
-	if m.focus == sessionSearchFocusPreview {
-		rightBorder = lipgloss.Color("#60a5fa")
-	}
-
-	paneHeight := m.paneHeight()
-	leftWidth, rightWidth := m.paneWidths(contentWidth)
-	leftInnerWidth := maxInt(1, leftWidth-paneHorizontalFrame)
-	rightInnerWidth := maxInt(1, rightWidth-paneHorizontalFrame)
-	listHeight := maxInt(1, paneHeight-paneVerticalFrame)
-	m.list.SetWidth(leftInnerWidth)
-	m.list.SetHeight(listHeight)
-	m.syncDetailViewport(false)
-
 	leftContent := m.list.View()
 	if m.loading && len(m.entries) == 0 {
 		leftContent = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading…")
 	}
-	leftPane := lipgloss.NewStyle().
-		Width(leftInnerWidth).
-		Height(listHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(leftBorder).
-		Padding(0, 1).
-		Render(leftContent)
-	detailHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Preview")
-	detailDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(m.detail.Width).Render(strings.Repeat("─", maxInt(1, m.detail.Width)))
-	rightPane := lipgloss.NewStyle().
-		Width(rightInnerWidth).
-		Height(listHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(rightBorder).
-		Padding(0, 1).
-		Render(strings.Join([]string{detailHeader, detailDivider, m.detail.View()}, "\n"))
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(truncate(m.hintText(), maxInt(1, contentWidth)))
-	content := strings.Join(append(header, "", body, hints), "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#2d2d44")).
-		Background(lipgloss.Color(overlayBackgroundColor)).
-		Padding(0, 2).
-		Width(boxWidth).
-		Render(content)
+
+	body := components.RenderSplitOverlayBody(layout, components.SplitOverlaySpec{
+		LeftPane: components.OverlayPaneSpec{
+			Body:    leftContent,
+			Focused: m.focus == sessionSearchFocusResults,
+		},
+		RightPane: components.OverlayPaneSpec{
+			Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Preview"),
+			DividerWidth: layout.ViewportWidth,
+			Body:         m.detail.View(),
+			Focused:      m.focus == sessionSearchFocusPreview,
+		},
+	})
+
+	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(truncate(m.hintText(), layout.ContentWidth))
+	return components.RenderOverlayFrame(layout.FrameWidth, components.OverlayFrameSpec{
+		HeaderLines: header,
+		Body:        body,
+		Footer:      hints,
+	})
 }
 
 func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd) {
@@ -465,18 +510,52 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			return m, func() tea.Msg { return CloseOverlayMsg{} }
 		case "ctrl+s":
 			return m, m.toggleScope()
-		case "tab", "shift+tab":
+		case "tab":
 			m.cycleFocus()
 			return m, nil
+		case "shift+tab":
+			if m.focus == sessionSearchFocusInput && m.focusScope() {
+				return m, nil
+			}
+			if m.moveFocusLeft() {
+				return m, nil
+			}
+		case "left", "right":
+			if m.focus == sessionSearchFocusScope {
+				if msg.String() == "left" {
+					return m, m.setScope(sessionHistoryScopeWorkspace)
+				}
+				return m, m.setScope(sessionHistoryScopeGlobal)
+			}
+			if msg.String() == "left" && m.moveFocusLeft() {
+				return m, nil
+			}
+			if msg.String() == "right" && m.moveFocusRight() {
+				return m, nil
+			}
+		case "up":
+			if m.focus == sessionSearchFocusInput && m.focusScope() {
+				return m, nil
+			}
+		case "down":
+			if m.focus == sessionSearchFocusScope {
+				m.focusInput()
+				return m, nil
+			}
+			if m.focus == sessionSearchFocusInput && m.focusResults() {
+				return m, nil
+			}
 		}
 
 		switch m.focus {
+		case sessionSearchFocusScope:
+			if msg.String() == "enter" {
+				return m, m.toggleScope()
+			}
+			return m, nil
 		case sessionSearchFocusInput:
 			if msg.String() == "enter" {
-				if len(m.entries) > 0 {
-					m.focus = sessionSearchFocusResults
-					m.input.Blur()
-				}
+				m.focusResults()
 				return m, nil
 			}
 			before := m.input.Value()
@@ -497,12 +576,12 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			}
 			before := ""
 			if entry := m.Selected(); entry != nil {
-				before = entry.SessionID
+				before = entry.WorkItemID
 			}
 			m.list, cmd = m.list.Update(msg)
 			after := ""
 			if entry := m.Selected(); entry != nil {
-				after = entry.SessionID
+				after = entry.WorkItemID
 			}
 			if before != after {
 				m.syncDetailViewport(true)

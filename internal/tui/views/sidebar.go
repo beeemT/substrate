@@ -41,38 +41,17 @@ type SidebarEntry struct {
 }
 
 func (e SidebarEntry) titlePrefix() string {
-	switch e.Kind {
-	case SidebarEntrySessionHistory:
-		if e.ExternalID != "" {
-			return e.ExternalID
-		}
-		return e.SessionID
-	default:
-		if e.ExternalID != "" {
-			return e.ExternalID
-		}
+	if e.ExternalID != "" {
+		return e.ExternalID
+	}
+	if e.WorkItemID != "" {
 		return e.WorkItemID
 	}
+	return e.SessionID
 }
 
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
-	if e.Kind == SidebarEntrySessionHistory {
-		switch e.SessionStatus {
-		case domain.AgentSessionCompleted:
-			return st.Success.Render("✓")
-		case domain.AgentSessionFailed:
-			return st.Error.Render("✗")
-		case domain.AgentSessionInterrupted:
-			return st.Interrupted.Render("⊘")
-		case domain.AgentSessionWaitingForAnswer:
-			return st.Warning.Render("◐")
-		case domain.AgentSessionRunning:
-			return st.Active.Render("●")
-		default:
-			return st.Muted.Render("◌")
-		}
-	}
 	switch {
 	case e.State == domain.WorkItemCompleted:
 		return st.Success.Render("✓")
@@ -93,57 +72,42 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 
 // Subtitle returns the human-readable status line for this sidebar entry.
 func (e SidebarEntry) Subtitle() string {
-	if e.Kind == SidebarEntrySessionHistory {
-		status := string(e.SessionStatus)
-		switch e.SessionStatus {
-		case domain.AgentSessionPending:
-			status = "Pending"
-		case domain.AgentSessionRunning:
-			status = "Running"
-		case domain.AgentSessionWaitingForAnswer:
-			status = "Waiting for answer"
-		case domain.AgentSessionCompleted:
-			status = "Completed"
-		case domain.AgentSessionInterrupted:
-			status = "Interrupted"
-		case domain.AgentSessionFailed:
-			status = "Failed"
-		}
-		parts := []string{status}
-		if e.WorkspaceName != "" {
-			parts = append(parts, e.WorkspaceName)
-		}
-		if e.RepositoryName != "" {
-			parts = append(parts, e.RepositoryName)
-		}
-		return strings.Join(parts, " · ")
-	}
+	status := ""
 	switch e.State {
 	case domain.WorkItemIngested:
-		return "Ready to plan"
+		status = "Ready to plan"
 	case domain.WorkItemPlanning:
-		return "Planning..."
+		status = "Planning..."
 	case domain.WorkItemPlanReview:
-		return "Plan review needed"
+		status = "Plan review needed"
 	case domain.WorkItemApproved:
-		return "Awaiting implementation"
+		status = "Awaiting implementation"
 	case domain.WorkItemImplementing:
 		if e.HasOpenQuestion {
-			return "Waiting for answer"
+			status = "Waiting for answer"
+		} else if e.HasInterrupted {
+			status = "Interrupted"
+		} else {
+			status = "Implementing"
 		}
-		if e.HasInterrupted {
-			return "Interrupted"
-		}
-		return "Implementing"
 	case domain.WorkItemReviewing:
-		return "Under review"
+		status = "Under review"
 	case domain.WorkItemCompleted:
-		return "Completed"
+		status = "Completed"
 	case domain.WorkItemFailed:
-		return "Failed"
-	default:
-		return ""
+		status = "Failed"
 	}
+	if e.Kind != SidebarEntrySessionHistory {
+		return status
+	}
+	parts := []string{status}
+	if e.WorkspaceName != "" {
+		parts = append(parts, e.WorkspaceName)
+	}
+	if e.RepositoryName != "" {
+		parts = append(parts, e.RepositoryName)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // SidebarModel manages the session list sidebar.
@@ -276,7 +240,7 @@ func (m SidebarModel) View() string {
 	for len(lines) < m.height {
 		lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
 	}
-	return strings.Join(lines, "\n")
+	return fitViewBox(strings.Join(lines, "\n"), width, m.height)
 }
 
 // truncate trims s to maxLen runes, appending "…" if truncated.

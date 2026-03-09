@@ -199,18 +199,20 @@ func (a App) sessionSearchFilter() domain.SessionHistoryFilter {
 	return a.sessionSearch.Filter(a.svcs.WorkspaceID)
 }
 
-func (a *App) runSessionSearch() tea.Cmd {
+func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 	if !a.sessionSearch.Active() {
 		return nil
 	}
-	a.sessionSearch.SetLoading(true)
+	if showLoading {
+		a.sessionSearch.SetLoading(true)
+	}
 	return SearchSessionHistoryCmd(a.svcs.Session, a.sessionSearchFilter())
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
 	a.activeOverlay = overlaySessionSearch
 	a.sessionSearch.Open(a.sessionSearchScope(), a.hasWorkspace)
-	return a.runSessionSearch()
+	return a.runSessionSearch(true)
 }
 
 func (a App) currentHints() []KeybindHint {
@@ -231,32 +233,65 @@ func (a App) historyEntryTitle(entry SidebarEntry) string {
 	if entry.ExternalID != "" {
 		return entry.ExternalID
 	}
+	if entry.WorkItemID != "" {
+		return entry.WorkItemID
+	}
 	return entry.SessionID
 }
 
 func (a App) historyEntryMeta(entry SidebarEntry) string {
-	parts := []string{"Session " + entry.SessionID}
+	parts := []string{"Work item " + firstNonEmptyString(entry.ExternalID, entry.WorkItemID)}
 	if entry.WorkspaceName != "" {
 		parts = append(parts, entry.WorkspaceName)
 	}
 	if entry.RepositoryName != "" {
 		parts = append(parts, entry.RepositoryName)
 	}
+	if entry.SessionID != "" {
+		parts = append(parts, "latest agent session "+entry.SessionID)
+	}
 	return strings.Join(parts, " · ")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (a App) historyEntrySummaryLines(entry SidebarEntry) []string {
+	lines := []string{
+		"No agent-session log is available for this work item yet.",
+		"",
+		"State: " + entry.Subtitle(),
+	}
+	if entry.WorkspaceName != "" {
+		lines = append(lines, "Workspace: "+entry.WorkspaceName)
+	}
+	if entry.RepositoryName != "" {
+		lines = append(lines, "Latest repo: "+entry.RepositoryName)
+	}
+	return lines
 }
 
 func (a App) sidebarEntryFromHistory(entry domain.SessionHistoryEntry) SidebarEntry {
 	return SidebarEntry{
-		Kind:           SidebarEntrySessionHistory,
-		WorkItemID:     entry.WorkItemID,
-		SessionID:      entry.SessionID,
-		WorkspaceID:    entry.WorkspaceID,
-		WorkspaceName:  entry.WorkspaceName,
-		ExternalID:     entry.WorkItemExternalID,
-		Title:          entry.WorkItemTitle,
-		State:          entry.WorkItemState,
-		SessionStatus:  entry.Status,
-		RepositoryName: entry.RepositoryName,
+		Kind:            SidebarEntrySessionHistory,
+		WorkItemID:      entry.WorkItemID,
+		SessionID:       entry.SessionID,
+		WorkspaceID:     entry.WorkspaceID,
+		WorkspaceName:   entry.WorkspaceName,
+		ExternalID:      entry.WorkItemExternalID,
+		Title:           entry.WorkItemTitle,
+		State:           entry.WorkItemState,
+		SessionStatus:   entry.Status,
+		RepositoryName:  entry.RepositoryName,
+		LastActivity:    entry.UpdatedAt,
+		HasOpenQuestion: entry.HasOpenQuestion,
+		HasInterrupted:  entry.HasInterrupted,
 	}
 }
 
@@ -282,8 +317,13 @@ func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 		return a.updateContentFromState()
 	}
 	a.currentWorkItemID = ""
-	a.currentHistorySessionID = entry.SessionID
 	a.currentHistoryEntry = entry
+	if entry.SessionID == "" {
+		a.currentHistorySessionID = ""
+		a.content.SetSessionInteraction(a.historyEntryTitle(entry), a.historyEntryMeta(entry), a.historyEntrySummaryLines(entry))
+		return nil
+	}
+	a.currentHistorySessionID = entry.SessionID
 	a.content.SetSessionInteraction(a.historyEntryTitle(entry), a.historyEntryMeta(entry), nil)
 	return LoadSessionInteractionCmd(a.sessionsDir, entry.SessionID)
 }
@@ -357,7 +397,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		if a.activeOverlay == overlaySessionSearch {
-			cmds = append(cmds, a.runSessionSearch())
+			cmds = append(cmds, a.runSessionSearch(false))
 		}
 		cmds = append(cmds, PollTickCmd())
 		return a, tea.Batch(cmds...)
@@ -397,7 +437,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionHistorySearchRequestedMsg:
-		cmds = append(cmds, a.runSessionSearch())
+		cmds = append(cmds, a.runSessionSearch(true))
 		return a, tea.Batch(cmds...)
 
 	case SessionHistoryLoadedMsg:
@@ -608,6 +648,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case WorkItemCreatedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.svcs.Planning != nil {
+			msg.WorkItem.State = domain.WorkItemPlanning
+		}
+		replaced := false
+		for i := range a.workItems {
+			if a.workItems[i].ID == msg.WorkItem.ID {
+				a.workItems[i] = msg.WorkItem
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			a.workItems = append(a.workItems, msg.WorkItem)
+		}
+		a.rebuildSidebar()
+		a.sidebar.SelectWorkItem(msg.WorkItem.ID)
+		a.currentHistorySessionID = ""
+		a.currentHistoryEntry = SidebarEntry{}
+		a.currentWorkItemID = msg.WorkItem.ID
+		cmds = append(cmds, a.updateContentFromState())
+		if a.svcs.Planning != nil {
+			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItem.ID))
+		} else {
+			a.toasts.AddToast("Planning service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
+
 	case ActionDoneMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, nil
@@ -808,17 +877,11 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.SetMode(ContentModePlanning)
 		a.content.sessionLog.SetModeLabel("Planning")
 		a.content.sessionLog.SetMeta("")
-		for _, s := range a.sessions {
-			if s.Status == domain.AgentSessionRunning {
-				logPath := filepath.Join(a.sessionsDir, s.ID+".log")
-				a.content.sessionLog.SetLogPath(s.ID, logPath)
-				if !a.tailingSessionIDs[s.ID] {
-					a.tailingSessionIDs[s.ID] = true
-					return TailSessionLogCmd(logPath, s.ID, 0)
-				}
-				break
-			}
-		}
+		a.content.sessionLog.SetStaticContent([]string{
+			"Planning has started for this work item.",
+			"",
+			"Repository agent sessions appear after the plan is approved.",
+		})
 	case domain.WorkItemPlanReview:
 		a.content.SetMode(ContentModePlanReview)
 		if plan := a.plans[wi.ID]; plan != nil {
@@ -1059,19 +1122,21 @@ func (a App) View() string {
 	sidebarPaneWidth, contentPaneWidth, _, paneInnerHeight := mainPageLayoutMetrics(a.windowWidth, a.windowHeight)
 	borderColor := lipgloss.Color("#334155")
 
+	sidebarInnerWidth := max(0, sidebarPaneWidth-2)
 	sidebarContent := lipgloss.NewStyle().
-		Width(max(0, sidebarPaneWidth-2)).
+		Width(sidebarInnerWidth).
 		Height(paneInnerHeight).
-		Render(a.sidebar.View())
+		Render(fitViewBox(a.sidebar.View(), sidebarInnerWidth, paneInnerHeight))
 	sidebarPane := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Render(sidebarContent)
 
+	contentInnerWidth := max(0, contentPaneWidth-2)
 	contentContent := lipgloss.NewStyle().
-		Width(max(0, contentPaneWidth-2)).
+		Width(contentInnerWidth).
 		Height(paneInnerHeight).
-		Render(a.content.View())
+		Render(fitViewBox(a.content.View(), contentInnerWidth, paneInnerHeight))
 	contentPane := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
@@ -1228,6 +1293,27 @@ func abandonSessionCmd(svc *service.SessionService, sessionID string) tea.Cmd {
 	}
 }
 
+func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
+	if svcs.WorkItem == nil {
+		return ErrMsg{Err: fmt.Errorf("work item service not configured")}
+	}
+	if strings.TrimSpace(svcs.WorkspaceID) == "" {
+		return ErrMsg{Err: fmt.Errorf("workspace not configured")}
+	}
+	wi.WorkspaceID = svcs.WorkspaceID
+	if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
+		return ErrMsg{Err: err}
+	}
+	label := strings.TrimSpace(wi.ExternalID)
+	if label == "" {
+		label = strings.TrimSpace(wi.Title)
+	}
+	if label == "" {
+		label = wi.ID
+	}
+	return WorkItemCreatedMsg{WorkItem: wi, Message: "Session created: " + label}
+}
+
 func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 	return func() tea.Msg {
 		if msg.Adapter == nil {
@@ -1240,10 +1326,7 @@ func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
-			return ErrMsg{Err: err}
-		}
-		return ActionDoneMsg{Message: "Session created: " + wi.ExternalID}
+		return persistCreatedWorkItemMsg(svcs, wi)
 	}
 }
 
@@ -1256,9 +1339,6 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
-			return ErrMsg{Err: err}
-		}
-		return ActionDoneMsg{Message: "Session created: " + wi.ExternalID}
+		return persistCreatedWorkItemMsg(svcs, wi)
 	}
 }

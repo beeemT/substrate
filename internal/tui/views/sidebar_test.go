@@ -184,3 +184,16 @@ func TestSidebarSelected_Empty(t *testing.T) {
 		t.Fatalf("expected nil Selected() with no sessions, got %+v", sel)
 	}
 }
+
+func TestSidebarClipsOverflowingEntriesToRequestedHeight(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(8)
+	m.SetEntries(makeSessions(5))
+
+	lines := strings.Split(stripANSI(m.View()), "\n")
+	if got := len(lines); got != 8 {
+		t.Fatalf("sidebar line count = %d, want 8", got)
+	}
+}

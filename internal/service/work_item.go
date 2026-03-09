@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -60,6 +61,9 @@ func (s *WorkItemService) List(ctx context.Context, filter repository.WorkItemFi
 
 // Create creates a new work item in the ingested state.
 func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) error {
+	if strings.TrimSpace(item.WorkspaceID) == "" {
+		return newInvalidInputError("workspace_id is required", "workspace_id")
+	}
 	// Set initial state if not set
 	if item.State == "" {
 		item.State = domain.WorkItemIngested

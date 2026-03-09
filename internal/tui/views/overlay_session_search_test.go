@@ -17,16 +17,16 @@ func TestSessionSearchOverlaySortsByUpdatedAt(t *testing.T) {
 	older := time.Now().Add(-time.Hour)
 	newer := time.Now()
 	overlay.SetEntries([]domain.SessionHistoryEntry{
-		{SessionID: "old", WorkItemTitle: "Old", UpdatedAt: older, CreatedAt: older},
-		{SessionID: "new", WorkItemTitle: "New", UpdatedAt: newer, CreatedAt: older},
+		{WorkItemID: "wi-old", WorkItemTitle: "Old", UpdatedAt: older, CreatedAt: older},
+		{WorkItemID: "wi-new", WorkItemTitle: "New", UpdatedAt: newer, CreatedAt: older},
 	})
 
 	sel := overlay.Selected()
 	if sel == nil {
 		t.Fatal("selected entry = nil")
 	}
-	if sel.SessionID != "new" {
-		t.Fatalf("selected session = %q, want new", sel.SessionID)
+	if sel.WorkItemID != "wi-new" {
+		t.Fatalf("selected work item = %q, want wi-new", sel.WorkItemID)
 	}
 }
 
@@ -87,9 +87,133 @@ func TestSessionSearchOverlayEnterOpensSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd() message = %T, want OpenSessionHistoryMsg", msg)
 	}
-	if openMsg.Entry.SessionID != "sess-1" {
-		t.Fatalf("opened session = %q, want sess-1", openMsg.Entry.SessionID)
+	if openMsg.Entry.WorkItemID != "wi-1" {
+		t.Fatalf("opened work item = %q, want wi-1", openMsg.Entry.WorkItemID)
 	}
+}
+
+func TestSessionSearchOverlayArrowKeysMoveFocus(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+	overlay.SetEntries([]domain.SessionHistoryEntry{{
+		SessionID:          "sess-1",
+		WorkspaceID:        "ws-1",
+		WorkspaceName:      "workspace",
+		WorkItemID:         "wi-1",
+		WorkItemExternalID: "SUB-1",
+		WorkItemTitle:      "Work item",
+		UpdatedAt:          time.Now(),
+		CreatedAt:          time.Now(),
+	}})
+
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated.focus != sessionSearchFocusResults {
+		t.Fatalf("focus after down = %v, want results", updated.focus)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if updated.focus != sessionSearchFocusPreview {
+		t.Fatalf("focus after right = %v, want preview", updated.focus)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if updated.focus != sessionSearchFocusResults {
+		t.Fatalf("focus after left = %v, want results", updated.focus)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if updated.focus != sessionSearchFocusInput {
+		t.Fatalf("focus after second left = %v, want input", updated.focus)
+	}
+}
+
+func TestSessionSearchOverlayArrowKeysToggleScope(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if updated.focus != sessionSearchFocusScope {
+		t.Fatalf("focus after up = %v, want scope", updated.focus)
+	}
+	if cmd != nil {
+		t.Fatalf("cmd after up = %v, want nil", cmd)
+	}
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if updated.Scope() != sessionHistoryScopeWorkspace {
+		t.Fatalf("scope after left = %v, want workspace", updated.Scope())
+	}
+	assertSessionSearchRequestCmd(t, cmd)
+
+	updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if updated.Scope() != sessionHistoryScopeGlobal {
+		t.Fatalf("scope after right = %v, want global", updated.Scope())
+	}
+	assertSessionSearchRequestCmd(t, cmd)
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated.focus != sessionSearchFocusInput {
+		t.Fatalf("focus after down = %v, want input", updated.focus)
+	}
+}
+
+func TestSessionSearchOverlayKeepsScopeFocusWhenToggleReturnsNoResults(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if updated.focus != sessionSearchFocusScope {
+		t.Fatalf("focus after up = %v, want scope", updated.focus)
+	}
+
+	updated.SetEntries(nil)
+	if updated.focus != sessionSearchFocusScope {
+		t.Fatalf("focus after empty results = %v, want scope", updated.focus)
+	}
+}
+
+func TestSessionSearchOverlayClearsPreviewFocusWhenResultsDisappear(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+	overlay.SetEntries([]domain.SessionHistoryEntry{{
+		SessionID:          "sess-1",
+		WorkspaceID:        "ws-1",
+		WorkspaceName:      "workspace",
+		WorkItemID:         "wi-1",
+		WorkItemExternalID: "SUB-1",
+		WorkItemTitle:      "Work item",
+		UpdatedAt:          time.Now(),
+		CreatedAt:          time.Now(),
+	}})
+
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if updated.focus != sessionSearchFocusPreview {
+		t.Fatalf("focus before clear = %v, want preview", updated.focus)
+	}
+
+	updated.SetEntries(nil)
+	if updated.focus != sessionSearchFocusInput {
+		t.Fatalf("focus after clear = %v, want input", updated.focus)
+	}
+}
+
+func assertSessionSearchRequestCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected search request command")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, batchCmd := range batch {
+			if batchCmd == nil {
+				continue
+			}
+			if _, ok := batchCmd().(SessionHistorySearchRequestedMsg); ok {
+				return
+			}
+		}
+	} else if _, ok := msg.(SessionHistorySearchRequestedMsg); ok {
+		return
+	}
+	t.Fatalf("cmd() message = %T, want SessionHistorySearchRequestedMsg in response", msg)
 }
 
 func TestSessionSearchOverlayViewFitsSmallWindow(t *testing.T) {
@@ -103,9 +227,12 @@ func TestSessionSearchOverlayViewFitsSmallWindow(t *testing.T) {
 		WorkItemID:         "wi-1",
 		WorkItemExternalID: "SUBSTRATE-12345",
 		WorkItemTitle:      "A very long work item title that should wrap inside the preview pane instead of overflowing the terminal width",
+		WorkItemState:      domain.WorkItemImplementing,
 		RepositoryName:     "repository-name-that-is-deliberately-long",
 		HarnessName:        "claude-sonnet-4",
 		Status:             domain.AgentSessionWaitingForAnswer,
+		AgentSessionCount:  3,
+		HasOpenQuestion:    true,
 		UpdatedAt:          time.Now(),
 		CreatedAt:          time.Now(),
 	}})

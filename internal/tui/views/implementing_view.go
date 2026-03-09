@@ -63,15 +63,16 @@ func NewImplementingModel(st styles.Styles) ImplementingModel {
 func (m *ImplementingModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	vpH := height - 6
-	if vpH < 1 {
-		vpH = 1
-	}
+	vpH := m.viewportHeight()
 	for k, vp := range m.viewports {
 		vp.Width = width
 		vp.Height = vpH
 		m.viewports[k] = vp
 	}
+}
+
+func (m ImplementingModel) viewportHeight() int {
+	return max(1, m.height-5) // header + divider + repo row + repo header + hints
 }
 
 // SetTitle sets the work-item title shown in the implementing view.
@@ -80,10 +81,7 @@ func (m *ImplementingModel) SetTitle(t string) { m.title = t }
 // SetRepos updates the repo list, initialising viewports for any new repos.
 func (m *ImplementingModel) SetRepos(repos []RepoProgress) {
 	m.repos = repos
-	vpH := m.height - 6
-	if vpH < 1 {
-		vpH = 1
-	}
+	vpH := m.viewportHeight()
 	for _, r := range repos {
 		if _, ok := m.viewports[r.Name]; !ok {
 			m.viewports[r.Name] = viewport.New(m.width, vpH)
@@ -161,6 +159,10 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 
 // View renders the implementing view.
 func (m ImplementingModel) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
 	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
 	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44"))
 	dimLine := dividerStyle.Render(strings.Repeat("─", m.width))
@@ -182,7 +184,7 @@ func (m ImplementingModel) View() string {
 
 	// Output block for the selected repo.
 	selectedName := m.selectedRepoName()
-	var outputBlock string
+	outputBlock := lipgloss.NewStyle().Height(m.viewportHeight()).Render("")
 	if selectedName != "" {
 		// Guard against negative repeat count from very narrow terminals.
 		dashCount := m.width - len(selectedName) - 5
@@ -203,5 +205,5 @@ func (m ImplementingModel) View() string {
 	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
 		"[Tab] Cycle repos  [↑↓] Scroll  [p] Pause") + pauseLabel
 
-	return strings.Join([]string{header, dimLine, repoRow, outputBlock, hints}, "\n")
+	return fitViewBox(strings.Join([]string{header, dimLine, repoRow, outputBlock, hints}, "\n"), m.width, m.height)
 }

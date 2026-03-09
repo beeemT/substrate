@@ -542,6 +542,15 @@ func TestSessionSearchHistory(t *testing.T) {
 		t.Fatalf("update remote session: %v", err)
 	}
 
+	planningOnlyItem := makeWorkItem(t, tx, remoteWS.ID)
+	planningOnlyItem.ExternalID = "REM-2"
+	planningOnlyItem.Title = "Planning only"
+	planningOnlyItem.State = domain.WorkItemPlanning
+	planningOnlyItem.UpdatedAt = now().Add(1 * time.Minute)
+	if err := workItemRepo.Update(ctx, planningOnlyItem); err != nil {
+		t.Fatalf("update planning-only work item: %v", err)
+	}
+
 	localEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{
 		WorkspaceID: &localWS.ID,
 		Search:      "local",
@@ -593,11 +602,20 @@ func TestSessionSearchHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search recent history: %v", err)
 	}
-	if len(recentEntries) != 2 {
-		t.Fatalf("recent entries len = %d, want 2", len(recentEntries))
+	if len(recentEntries) != 3 {
+		t.Fatalf("recent entries len = %d, want 3", len(recentEntries))
 	}
-	if recentEntries[0].SessionID != remoteSession.ID || recentEntries[1].SessionID != localSession.ID {
-		t.Fatalf("recent order = [%q %q], want [%q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, remoteSession.ID, localSession.ID)
+	if recentEntries[0].WorkItemID != planningOnlyItem.ID {
+		t.Fatalf("recent first work item = %q, want %q", recentEntries[0].WorkItemID, planningOnlyItem.ID)
+	}
+	if recentEntries[0].SessionID != "" {
+		t.Fatalf("planning-only session id = %q, want empty", recentEntries[0].SessionID)
+	}
+	if recentEntries[0].AgentSessionCount != 0 {
+		t.Fatalf("planning-only agent session count = %d, want 0", recentEntries[0].AgentSessionCount)
+	}
+	if recentEntries[1].SessionID != remoteSession.ID || recentEntries[2].SessionID != localSession.ID {
+		t.Fatalf("recent order = [%q %q %q], want [%q %q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, recentEntries[2].SessionID, "", remoteSession.ID, localSession.ID)
 	}
 }
 

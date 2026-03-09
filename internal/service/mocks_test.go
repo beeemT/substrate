@@ -347,6 +347,13 @@ func (m *MockSessionRepository) ListByOwnerInstanceID(ctx context.Context, insta
 	return result, nil
 }
 
+func (m *MockSessionRepository) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return nil, nil
+}
+
 func (m *MockSessionRepository) Create(ctx context.Context, s domain.AgentSession) error {
 	if m.err != nil {
 		return m.err

@@ -39,6 +39,9 @@ type sessionHistoryRow struct {
 	RepositoryName     string  `db:"repository_name"`
 	HarnessName        string  `db:"harness_name"`
 	Status             string  `db:"status"`
+	AgentSessionCount  int     `db:"agent_session_count"`
+	HasOpenQuestion    int     `db:"has_open_question"`
+	HasInterrupted     int     `db:"has_interrupted"`
 	CreatedAt          string  `db:"created_at"`
 	UpdatedAt          string  `db:"updated_at"`
 	CompletedAt        *string `db:"completed_at"`
@@ -68,6 +71,9 @@ func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
 		RepositoryName:     r.RepositoryName,
 		HarnessName:        r.HarnessName,
 		Status:             domain.AgentSessionStatus(r.Status),
+		AgentSessionCount:  r.AgentSessionCount,
+		HasOpenQuestion:    r.HasOpenQuestion != 0,
+		HasInterrupted:     r.HasInterrupted != 0,
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
 		CompletedAt:        completedAt,
@@ -198,46 +204,80 @@ func (r SessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID strin
 }
 
 func (r SessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
-	query := `SELECT
-		s.id AS session_id,
-		s.workspace_id AS workspace_id,
+	query := `WITH latest_session AS (
+		SELECT
+			p.work_item_id AS work_item_id,
+			s.id AS session_id,
+			s.repository_name AS repository_name,
+			s.harness_name AS harness_name,
+			s.status AS status,
+			s.completed_at AS completed_at,
+			ROW_NUMBER() OVER (
+				PARTITION BY p.work_item_id
+				ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
+			) AS rn
+		FROM agent_sessions s
+		JOIN sub_plans sp ON sp.id = s.sub_plan_id
+		JOIN plans p ON p.id = sp.plan_id
+	), session_stats AS (
+		SELECT
+			p.work_item_id AS work_item_id,
+			COUNT(*) AS agent_session_count,
+			MAX(s.updated_at) AS latest_session_updated_at,
+			MAX(CASE WHEN s.status = 'waiting_for_answer' THEN 1 ELSE 0 END) AS has_open_question,
+			MAX(CASE WHEN s.status = 'interrupted' THEN 1 ELSE 0 END) AS has_interrupted
+		FROM agent_sessions s
+		JOIN sub_plans sp ON sp.id = s.sub_plan_id
+		JOIN plans p ON p.id = sp.plan_id
+		GROUP BY p.work_item_id
+	)
+	SELECT
+		COALESCE(ls.session_id, '') AS session_id,
+		wi.workspace_id AS workspace_id,
 		w.name AS workspace_name,
 		wi.id AS work_item_id,
 		wi.external_id AS work_item_external_id,
 		wi.title AS work_item_title,
 		wi.state AS work_item_state,
-		s.repository_name AS repository_name,
-		s.harness_name AS harness_name,
-		s.status AS status,
-		s.created_at AS created_at,
-		s.updated_at AS updated_at,
-		s.completed_at AS completed_at
-	FROM agent_sessions s
-	JOIN sub_plans sp ON sp.id = s.sub_plan_id
-	JOIN plans p ON p.id = sp.plan_id
-	JOIN work_items wi ON wi.id = p.work_item_id
-	JOIN workspaces w ON w.id = s.workspace_id
+		COALESCE(ls.repository_name, '') AS repository_name,
+		COALESCE(ls.harness_name, '') AS harness_name,
+		COALESCE(ls.status, '') AS status,
+		COALESCE(ss.agent_session_count, 0) AS agent_session_count,
+		COALESCE(ss.has_open_question, 0) AS has_open_question,
+		COALESCE(ss.has_interrupted, 0) AS has_interrupted,
+		wi.created_at AS created_at,
+		CASE
+			WHEN ss.latest_session_updated_at IS NOT NULL AND ss.latest_session_updated_at > wi.updated_at THEN ss.latest_session_updated_at
+			ELSE wi.updated_at
+		END AS updated_at,
+		ls.completed_at AS completed_at
+	FROM work_items wi
+	JOIN workspaces w ON w.id = wi.workspace_id
+	LEFT JOIN latest_session ls ON ls.work_item_id = wi.id AND ls.rn = 1
+	LEFT JOIN session_stats ss ON ss.work_item_id = wi.id
 	WHERE 1=1`
 	var args []any
 	if filter.WorkspaceID != nil {
-		query += ` AND s.workspace_id = ?`
+		query += ` AND wi.workspace_id = ?`
 		args = append(args, *filter.WorkspaceID)
 	}
 	search := strings.ToLower(strings.TrimSpace(filter.Search))
 	if search != "" {
 		like := "%" + search + "%"
 		query += ` AND (
-			lower(s.id) LIKE ? OR
-			lower(s.status) LIKE ? OR
-			lower(s.repository_name) LIKE ? OR
-			lower(s.harness_name) LIKE ? OR
-			lower(w.name) LIKE ? OR
+			lower(wi.id) LIKE ? OR
+			lower(COALESCE(wi.external_id, '')) LIKE ? OR
 			lower(wi.title) LIKE ? OR
-			lower(COALESCE(wi.external_id, '')) LIKE ?
+			lower(wi.state) LIKE ? OR
+			lower(w.name) LIKE ? OR
+			lower(COALESCE(ls.session_id, '')) LIKE ? OR
+			lower(COALESCE(ls.repository_name, '')) LIKE ? OR
+			lower(COALESCE(ls.harness_name, '')) LIKE ? OR
+			lower(COALESCE(ls.status, '')) LIKE ?
 		)`
-		args = append(args, like, like, like, like, like, like, like)
+		args = append(args, like, like, like, like, like, like, like, like, like)
 	}
-	query += ` ORDER BY s.updated_at DESC, s.created_at DESC`
+	query += ` ORDER BY updated_at DESC, wi.created_at DESC, wi.id`
 	limit := filter.Limit
 	if limit == 0 {
 		limit = 100
