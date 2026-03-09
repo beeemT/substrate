@@ -251,15 +251,42 @@ func (m ReadyToPlanModel) View() string {
 
 	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
 	nextStepContent := ansi.Hardwrap(nextStep, nextStepInnerWidth, true)
-	rendered := strings.Join([]string{
+
+	topBlocks := []string{
 		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
 		sectionLabelStyle.Render("Description"),
 		descriptionBoxStyle.Render(descriptionContent),
-		sectionLabelStyle.Render("Next step"),
-		nextStepBoxStyle.Render(nextStepContent),
-	}, "\n")
+	}
+	bottomBlocks := []string{
+		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, sectionLabelStyle.Render("Next step")),
+		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, nextStepBoxStyle.Render(nextStepContent)),
+	}
 
-	return fitViewBox(rendered, m.width, m.height)
+	topLineCount := 0
+	for _, block := range topBlocks {
+		topLineCount += len(strings.Split(block, "\n"))
+	}
+	bottomLineCount := 0
+	for _, block := range bottomBlocks {
+		bottomLineCount += len(strings.Split(block, "\n"))
+	}
+	gapLines := m.height - topLineCount - bottomLineCount
+	if gapLines < 0 {
+		gapLines = 0
+	}
+
+	renderedLines := make([]string, 0, topLineCount+gapLines+bottomLineCount)
+	for _, block := range topBlocks {
+		renderedLines = append(renderedLines, strings.Split(block, "\n")...)
+	}
+	for i := 0; i < gapLines; i++ {
+		renderedLines = append(renderedLines, "")
+	}
+	for _, block := range bottomBlocks {
+		renderedLines = append(renderedLines, strings.Split(block, "\n")...)
+	}
+
+	return fitViewBox(strings.Join(renderedLines, "\n"), m.width, m.height)
 }
 
 // AwaitingImplModel shows plan summary when state is "approved".

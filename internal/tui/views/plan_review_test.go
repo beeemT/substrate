@@ -95,4 +95,8 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 			t.Fatalf("line %d width = %d, want <= 48\nline: %q", i+1, got, line)
 		}
 	}
+	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-4):], "\n"))
+	if !strings.Contains(footerRegion, "Press [Enter]") {
+		t.Fatalf("footer region = %q, want next-step CTA near the bottom", footerRegion)
+	}
 }
