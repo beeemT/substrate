@@ -60,7 +60,7 @@ func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives},
 		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
-				Views:          []string{"assigned_to_me", "created_by_me", "all"},
+				Views:          []string{"assigned_to_me", "created_by_me", "subscribed", "all"},
 				States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
 				SupportsLabels: true,
 				SupportsSearch: true,
@@ -109,31 +109,40 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		first = 250
 	}
 	vars := map[string]any{
-		"teamId":     teamID,
-		"search":     optionalString(opts.Search),
-		"labelNames": optionalStrings(opts.Labels),
-		"stateTypes": optionalStrings(linearIssueStateTypes(opts.State)),
-		"stateNames": optionalStrings(linearIssueStateNames(opts.State)),
-		"first":      first,
-		"after":      optionalString(opts.Cursor),
-		"assigneeId": nil,
-		"creatorId":  nil,
+		"teamId":       teamID,
+		"search":       optionalString(opts.Search),
+		"labelNames":   optionalStrings(opts.Labels),
+		"stateTypes":   optionalStrings(linearIssueStateTypes(opts.State)),
+		"stateNames":   optionalStrings(linearIssueStateNames(opts.State)),
+		"first":        first,
+		"after":        optionalString(opts.Cursor),
+		"assigneeId":   nil,
+		"creatorId":    nil,
+		"subscriberId": nil,
 	}
 	query := queryTeamIssues
-	if opts.View == "assigned_to_me" {
+	switch opts.View {
+	case "assigned_to_me":
 		assigneeID, err := a.assigneeIDForBrowse(ctx)
 		if err != nil {
 			return nil, err
 		}
 		vars["assigneeId"] = assigneeID
 		query = queryAssignedIssues
-	} else if opts.View == "created_by_me" {
+	case "created_by_me":
 		creatorID, err := a.assigneeIDForBrowse(ctx)
 		if err != nil {
 			return nil, err
 		}
 		vars["creatorId"] = creatorID
-	} else if opts.View != "" && opts.View != "all" {
+	case "subscribed":
+		subscriberID, err := a.assigneeIDForBrowse(ctx)
+		if err != nil {
+			return nil, err
+		}
+		vars["subscriberId"] = subscriberID
+	case "", "all":
+	default:
 		return nil, fmt.Errorf("linear issue view %q is not supported", opts.View)
 	}
 	var resp issuesResponse

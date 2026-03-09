@@ -755,9 +755,9 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "harness.phase.foreman":
 		return "Overrides the harness used for the Foreman coordination phase.", "inherits harness.default"
 	case "adapters.ohmypi.bun_path":
-		return "Path to the Bun executable used to launch the oh-my-pi bridge harness.", "empty"
+		return "Optional override for the Bun executable used only when Substrate launches a source bridge script instead of the packaged compiled bridge.", "auto-detect on PATH when needed"
 	case "adapters.ohmypi.bridge_path":
-		return "Path to the oh-my-pi bridge entrypoint or script.", "empty"
+		return "Optional override for the oh-my-pi bridge binary or script; leave empty to use the packaged compiled bridge.", "packaged compiled bridge"
 	case "adapters.ohmypi.thinking_level":
 		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", "empty"
 	case "adapters.claude_code.binary_path":

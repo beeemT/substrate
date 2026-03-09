@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -58,6 +59,48 @@ func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 	}
 	if a.defaultBranch != "main" {
 		t.Fatalf("defaultBranch = %q, want main", a.defaultBranch)
+	}
+}
+
+func TestCreatedByMeUsesViewerLoginWhenAssigneeConfigured(t *testing.T) {
+	userCalls := 0
+	var issueQuery string
+	a, err := newWithDeps(context.Background(), config.GithubConfig{Assignee: "bob"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			userCalls++
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/search/issues":
+			issueQuery = req.URL.RawQuery
+			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{}}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
+		}
+	}), func(context.Context) (string, error) { return "token-from-gh", nil })
+	if err != nil {
+		t.Fatalf("newWithDeps: %v", err)
+	}
+	if a.assignee != "bob" {
+		t.Fatalf("assignee = %q, want bob", a.assignee)
+	}
+	if a.viewer != "alice" {
+		t.Fatalf("viewer = %q, want alice", a.viewer)
+	}
+	_, err = a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "created_by_me"})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if userCalls != 1 {
+		t.Fatalf("/user calls = %d, want 1 cached lookup", userCalls)
+	}
+	values, err := url.ParseQuery(issueQuery)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	q := values.Get("q")
+	if !strings.Contains(q, "author:alice") || strings.Contains(q, "author:bob") {
+		t.Fatalf("search query = %q, want viewer author only", q)
 	}
 }
 
@@ -148,37 +191,44 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 	}
 }
 
-func TestListIssuesUsesGlobalInboxAndPreservesRepositoryMetadata(t *testing.T) {
+func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t *testing.T) {
 	var issueQuery string
 	var issuePath string
 	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
-		case "/repos/acme/rocket":
-			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
 		case "/user":
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
-		case "/issues":
+		case "/search/issues":
 			issuePath = req.URL.Path
 			issueQuery = req.URL.RawQuery
-			return jsonResp(t, http.StatusOK, []any{
-				map[string]any{"number": 7, "title": "Shared bug", "state": "open", "labels": []any{}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
-				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "repository": map[string]any{"full_name": "acme/rocket", "owner": map[string]any{"login": "acme"}, "name": "rocket"}},
-			}), nil
+			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
+				map[string]any{"number": 7, "title": "Shared bug", "state": "closed", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "html_url": "https://github.com/other/engine/issues/7", "repository_url": "https://api.github.com/repos/other/engine"},
+				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "html_url": "https://github.com/acme/rocket/pull/8", "repository_url": "https://api.github.com/repos/acme/rocket"},
+			}}), nil
 		default:
-			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
 		}
 	}))
-	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 25, View: "created_by_me", State: "closed", Owner: "other", Repo: "engine"})
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "memory leak", Labels: []string{"bug"}, Limit: 25, View: "created_by_me", State: "closed", Owner: "other", Repo: "engine"})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
 	}
-	if issuePath != "/issues" {
-		t.Fatalf("issue path = %q, want /issues", issuePath)
+	if issuePath != "/search/issues" {
+		t.Fatalf("issue path = %q, want /search/issues", issuePath)
 	}
-	for _, want := range []string{"filter=created", "state=closed", "q=bug", "per_page=25"} {
-		if !strings.Contains(issueQuery, want) {
-			t.Fatalf("issue query = %q, want %q", issueQuery, want)
+	values, err := url.ParseQuery(issueQuery)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	q := values.Get("q")
+	for _, want := range []string{"is:issue", "author:alice", "state:closed", "repo:other/engine", `label:"bug"`, "memory leak"} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("search query = %q, want %q", q, want)
 		}
+	}
+	if values.Get("per_page") != "25" {
+		t.Fatalf("per_page = %q, want 25", values.Get("per_page"))
 	}
 	if len(res.Items) != 1 {
 		t.Fatalf("items = %+v, want 1 issue", res.Items)
@@ -189,6 +239,9 @@ func TestListIssuesUsesGlobalInboxAndPreservesRepositoryMetadata(t *testing.T) {
 	}
 	if item.Title != "[other/engine] #7: Shared bug" {
 		t.Fatalf("item title = %q", item.Title)
+	}
+	if item.URL != "https://github.com/other/engine/issues/7" {
+		t.Fatalf("item URL = %q, want issue HTML URL", item.URL)
 	}
 	if item.ParentRef == nil || item.ParentRef.ID != "other/engine" || item.ParentRef.Type != "repository" {
 		t.Fatalf("parent ref = %+v, want repository other/engine", item.ParentRef)

@@ -1086,7 +1086,7 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 		appendRendered(metaStyle.Render(truncate(metaPrefix+"Section status: "+sec.Status, width)))
 		if provider := providerForSection(&sec); provider != "" {
 			if st, ok := m.providerStatus[provider]; ok {
-				appendRendered(metaStyle.Render(truncate(metaPrefix+"Provider auth: "+providerStatusLine(st), width)))
+				appendRendered(m.renderProviderStatusLine(metaPrefix, st, width))
 				if st.Description != "" {
 					appendRendered(metaStyle.Render(truncate(metaPrefix+st.Description, width)))
 				}
@@ -1216,20 +1216,23 @@ func harnessForProvider(provider string) string {
 	}
 }
 
-func providerStatusLine(status ProviderStatus) string {
-	parts := []string{status.AuthSource}
+func (m SettingsPage) renderProviderStatusLine(prefix string, status ProviderStatus, width int) string {
+	parts := []string{
+		m.styles.Muted.Render(prefix + "Provider auth: " + status.AuthSource),
+		m.styles.Muted.Render(" · "),
+	}
 	if status.Configured {
-		parts = append(parts, "configured")
+		parts = append(parts, m.styles.Muted.Render("configured"))
 	} else {
-		parts = append(parts, "unconfigured")
+		parts = append(parts, m.styles.Muted.Render("unconfigured"))
 	}
 	if status.Connected {
-		parts = append(parts, "connected")
+		parts = append(parts, m.styles.Muted.Render(" · "), m.styles.Success.Render("connected"))
 	}
 	if status.LastError != "" {
-		parts = append(parts, "error: "+status.LastError)
+		parts = append(parts, m.styles.Muted.Render(" · error: "+status.LastError))
 	}
-	return strings.Join(parts, " · ")
+	return ansi.Truncate(strings.Join(parts, ""), width, "…")
 }
 
 func min(a, b int) int {

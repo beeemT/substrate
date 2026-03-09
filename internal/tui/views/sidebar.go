@@ -2,6 +2,7 @@ package views
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -32,6 +33,7 @@ type SidebarEntry struct {
 	State           domain.WorkItemState
 	SessionStatus   domain.AgentSessionStatus
 	RepositoryName  string
+	LastActivity    time.Time
 	TotalSubPlans   int
 	DoneSubPlans    int
 	HasOpenQuestion bool
@@ -144,13 +146,6 @@ func (e SidebarEntry) Subtitle() string {
 	}
 }
 
-type SidebarSearchPresentation struct {
-	QueryView  string
-	ScopeLabel string
-	Focused    bool
-	Loading    bool
-}
-
 // SidebarModel manages the session list sidebar.
 type SidebarModel struct {
 	entries []SidebarEntry
@@ -158,7 +153,6 @@ type SidebarModel struct {
 	styles  styles.Styles
 	width   int
 	height  int
-	search  SidebarSearchPresentation
 }
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
@@ -166,20 +160,27 @@ func NewSidebarModel(st styles.Styles) SidebarModel {
 	return SidebarModel{styles: st, width: SidebarWidth}
 }
 
-// SetEntries replaces the sidebar entries and clamps the cursor.
+// SetEntries replaces the sidebar entries and preserves selection when possible.
 func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
+	selectedWorkItemID := ""
+	selectedSessionID := ""
+	if current := m.Selected(); current != nil {
+		selectedWorkItemID = current.WorkItemID
+		selectedSessionID = current.SessionID
+	}
 	m.entries = entries
+	for i, entry := range m.entries {
+		if entry.WorkItemID == selectedWorkItemID && entry.SessionID == selectedSessionID {
+			m.cursor = i
+			return
+		}
+	}
 	if m.cursor >= len(m.entries) && len(m.entries) > 0 {
 		m.cursor = len(m.entries) - 1
 	}
 	if len(m.entries) == 0 {
 		m.cursor = 0
 	}
-}
-
-// SetSearchPresentation updates the search UI rendered above the entries.
-func (m *SidebarModel) SetSearchPresentation(search SidebarSearchPresentation) {
-	m.search = search
 }
 
 // SetWidth sets the available render width.
@@ -216,6 +217,17 @@ func (m *SidebarModel) GotoBottom() {
 	}
 }
 
+// SelectWorkItem moves the cursor to the matching work item entry when present.
+func (m *SidebarModel) SelectWorkItem(workItemID string) bool {
+	for i, entry := range m.entries {
+		if entry.Kind == SidebarEntryWorkItem && entry.WorkItemID == workItemID {
+			m.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
 // Selected returns a copy of the currently selected entry, or nil if none.
 func (m *SidebarModel) Selected() *SidebarEntry {
 	if len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
@@ -239,19 +251,6 @@ func (m SidebarModel) View() string {
 	title := m.styles.Muted.Render("Sessions")
 	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
-	lines = append(lines, m.styles.Muted.Render(strings.Repeat("─", width)))
-
-	searchPrefix := "Search: "
-	if m.search.Focused {
-		searchPrefix = m.styles.KeybindAccent.Render("Search: ")
-	}
-	searchRow := lipgloss.NewStyle().Width(width).Render(searchPrefix + m.search.QueryView)
-	lines = append(lines, searchRow)
-	scope := "Scope: " + m.search.ScopeLabel
-	if m.search.Loading {
-		scope += " · searching…"
-	}
-	lines = append(lines, m.styles.Subtitle.Render(truncate(scope, width)))
 	lines = append(lines, m.styles.Muted.Render(strings.Repeat("─", width)))
 
 	for i, entry := range m.entries {

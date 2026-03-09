@@ -155,7 +155,45 @@ func TestNewSessionOverlayRejectsMixedProviderSelection(t *testing.T) {
 	if view := updated.View(); !strings.Contains(view, "GitLab issue") {
 		t.Fatalf("view = %q, want selected second item visible after failed mixed-provider selection", view)
 	}
+}
 
+func TestNewSessionOverlayBrowseSelectionPersistsInRenderedList(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "✓ First") {
+		t.Fatalf("view = %q, want selected marker for first item after moving cursor away", view)
+	}
+	if strings.Contains(view, "✓ Second") {
+		t.Fatalf("view = %q, want no selected marker for unselected second item", view)
+	}
+
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First reloaded"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second reloaded"},
+	))
+
+	view = stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "✓ First reloaded") {
+		t.Fatalf("view = %q, want selected marker to stay in sync after reload", view)
+	}
+	if strings.Contains(view, "✓ Second reloaded") {
+		t.Fatalf("view = %q, want no selected marker for unselected second item after reload", view)
+	}
 }
 
 func TestNewSessionOverlayDispatchesSelectedProvider(t *testing.T) {
@@ -479,6 +517,40 @@ func TestNewSessionOverlayViewFitsRequestedSize(t *testing.T) {
 	assertOverlayFits(t, manual.View(), 80, 20)
 }
 
+func TestNewSessionOverlayBrowsePanesShareBottomBorderRow(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-1", Provider: "github", Title: "Issue title", Description: strings.Repeat("Detail line\n", 8)}))
+
+	for _, tc := range []struct {
+		width  int
+		height int
+	}{
+		{width: 80, height: 20},
+		{width: 120, height: 24},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", tc.width, tc.height), func(t *testing.T) {
+			overlay.SetSize(tc.width, tc.height)
+			view := stripBrowseANSI(overlay.View())
+			assertOverlayFits(t, view, tc.width, tc.height)
+
+			aligned := false
+			for _, line := range strings.Split(view, "\n") {
+				if strings.Count(line, "╰") == 2 && strings.Count(line, "╯") == 2 {
+					aligned = true
+					break
+				}
+			}
+			if !aligned {
+				t.Fatalf("view = %q, want browse pane bottoms on the same row", view)
+			}
+		})
+	}
+}
+
 func TestNewSessionOverlayShowsContainerScopedMessageWhenViewsUnsupported(t *testing.T) {
 	t.Parallel()
 
@@ -589,6 +661,30 @@ func TestNewSessionOverlayAdvancedFilterChangeTriggersReload(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayShowsLinearSubscribedViewWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	linearAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "created_by_me", "subscribed", "all"}},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{linearAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.providerIndex = 1
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	view := strings.ToLower(stripBrowseANSI(overlay.View()))
+	if !strings.Contains(view, "subscribed") {
+		t.Fatalf("view = %q, want subscribed Linear view option", view)
+	}
+	if strings.Contains(view, "mentioned") {
+		t.Fatalf("view = %q, must not show unsupported mentioned Linear view option", view)
+	}
+}
+
 func TestNewSessionOverlayShowsStateControlsByCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -611,10 +707,13 @@ func TestNewSessionOverlayShowsStateControlsByCapabilities(t *testing.T) {
 	if !strings.Contains(view, "[open]") {
 		t.Fatalf("view = %q, want default open state selected", view)
 	}
-	if !strings.Contains(overlay.browserHintText(), "Ctrl+T") {
-		t.Fatalf("hint = %q, want state hint", overlay.browserHintText())
+	hint := overlay.browserHintText()
+	if !strings.Contains(hint, "Ctrl+T") {
+		t.Fatalf("hint = %q, want state hint", hint)
 	}
-
+	if !strings.Contains(hint, "Ctrl+O") {
+		t.Fatalf("hint = %q, want browser-open hint", hint)
+	}
 }
 
 func TestNewSessionOverlayStateCycleTriggersReloadAndPassesState(t *testing.T) {
@@ -651,6 +750,81 @@ func TestNewSessionOverlayStateCycleTriggersReloadAndPassesState(t *testing.T) {
 	}
 	if githubAdapter.lastListOpts.Scope != domain.ScopeIssues {
 		t.Fatalf("scope = %q, want issues", githubAdapter.lastListOpts.Scope)
+	}
+}
+
+func TestNewSessionOverlayCtrlOOpensFocusedItemURL(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.providerIndex = 2
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	var openedURL string
+	overlay.openBrowserCmd = func(url string) tea.Cmd {
+		return func() tea.Msg {
+			openedURL = url
+			return nil
+		}
+	}
+
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First", URL: "https://github.com/acme/rocket/issues/1"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second", URL: "https://github.com/acme/rocket/issues/2"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRight})
+
+	_, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if cmd == nil {
+		t.Fatal("expected browser-open command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("msg = %T, want nil", msg)
+	}
+	if openedURL != "https://github.com/acme/rocket/issues/2" {
+		t.Fatalf("openedURL = %q, want focused item URL", openedURL)
+	}
+}
+
+func TestNewSessionOverlayCtrlOReturnsErrorWithoutURL(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.providerIndex = 2
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
+	))
+
+	_, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if cmd == nil {
+		t.Fatal("expected error command when URL is missing")
+	}
+	msg := cmd()
+	errMsg, ok := msg.(ErrMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want ErrMsg", msg)
+	}
+	if errMsg.Err == nil || errMsg.Err.Error() != "selected work item has no URL" {
+		t.Fatalf("err = %v, want missing URL error", errMsg.Err)
 	}
 }
 

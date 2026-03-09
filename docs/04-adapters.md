@@ -23,7 +23,7 @@ func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
         },
         BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
             domain.ScopeIssues: {
-                Views:          []string{"assigned_to_me", "created_by_me", "all"},
+                Views:          []string{"assigned_to_me", "created_by_me", "subscribed", "all"},
                 States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
                 SupportsLabels: true,
                 SupportsSearch: true,

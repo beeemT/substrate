@@ -147,6 +147,14 @@ type NewSessionManualMsg struct {
 	Desc    string
 }
 
+// SessionHistorySearchRequestedMsg requests a session-history refresh for the active overlay filter.
+type SessionHistorySearchRequestedMsg struct{}
+
+// OpenSessionHistoryMsg requests opening the selected session-history entry in the main content area.
+type OpenSessionHistoryMsg struct {
+	Entry domain.SessionHistoryEntry
+}
+
 // --- Error / status ---
 
 // ErrMsg wraps an error for display in the TUI.

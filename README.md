@@ -67,12 +67,11 @@ flowchart TD
 Install from the beeemT tap:
 
 ```bash
-brew tap oven-sh/bun
 brew tap beeemT/tap
 brew install substrate
 ```
 
-This install path pulls Bun from `oven-sh/bun` and `git-work` from `beeemT/tap`, matching the runtime requirements of the default oh-my-pi harness and Substrate's worktree management.
+This install path ships the compiled oh-my-pi bridge executable and native addon with Substrate, so the default harness works out of the box without `bun_path` or `bridge_path` configuration.
 
 To upgrade:
 
@@ -94,11 +93,14 @@ Install a specific version:
 go install github.com/beeemT/substrate/cmd/substrate@v1.0.0
 ```
 
+Note: `go install` only installs the Go binary. If you want the default oh-my-pi harness to work out of the box, prefer the Homebrew package or build from a source checkout that includes the `bridge/` assets.
+
 ### Build from Source
 
 ```bash
 git clone https://github.com/beeemT/substrate.git
 cd substrate
+bun install --cwd bridge
 go build -o substrate ./cmd/substrate
 ```
 
@@ -109,7 +111,7 @@ go build -o substrate ./cmd/substrate
 Runtime dependencies:
 
 - **git-work** — [Git worktree manager](https://github.com/beeemT/git-work)
-- **Bun** — Required for the default oh-my-pi harness bridge; install via the `oven-sh/bun` Homebrew tap or another official Bun distribution
+- **Bun** — Only required for source-checkout builds that run the TypeScript oh-my-pi bridge directly; the Homebrew package ships a compiled bridge executable instead
 - **gh** — Optional, used for GitHub CLI fallback auth and harness-driven GitHub login actions; when absent, GitHub CLI fallback/login features are disabled rather than crashing Substrate
 - **glab** — Optional, for GitLab MR creation; when absent, GitLab MR lifecycle automation is skipped rather than crashing Substrate
 ---
@@ -155,9 +157,10 @@ pass_threshold = "minor_ok"       # nit_only | minor_ok | no_critiques
 max_cycles     = 3
 
 [adapters.ohmypi]
-bun_path       = "bun"
-bridge_path    = "scripts/omp-bridge.ts"
 thinking_level = "xhigh"
+
+# `bun_path` and `bridge_path` are optional advanced overrides for source-checkout bridge development.
+# Brew installs use the packaged compiled bridge automatically.
 
 [foreman]
 question_timeout = "0"            # "0" = wait indefinitely

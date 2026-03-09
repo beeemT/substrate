@@ -34,6 +34,7 @@ type GithubAdapter struct {
 	token         string
 	defaultBranch string
 	assignee      string
+	viewer        string
 
 	mu      sync.RWMutex
 	tracked map[string]int
@@ -42,25 +43,35 @@ type GithubAdapter struct {
 type repoInfo struct {
 	DefaultBranch string `json:"default_branch"`
 }
+
+type githubOwner struct {
+	Login string `json:"login"`
+}
+
+type githubRepository struct {
+	FullName string       `json:"full_name"`
+	Owner    *githubOwner `json:"owner"`
+	Name     string       `json:"name"`
+}
+
 type githubIssue struct {
-	Number     int64      `json:"number"`
-	Title      string     `json:"title"`
-	Body       string     `json:"body"`
-	State      string     `json:"state"`
-	HTMLURL    string     `json:"html_url"`
-	CreatedAt  *time.Time `json:"created_at"`
-	UpdatedAt  *time.Time `json:"updated_at"`
-	Repository *struct {
-		FullName string `json:"full_name"`
-		Owner    *struct {
-			Login string `json:"login"`
-		} `json:"owner"`
-		Name string `json:"name"`
-	} `json:"repository,omitempty"`
-	Labels []struct {
+	Number        int64             `json:"number"`
+	Title         string            `json:"title"`
+	Body          string            `json:"body"`
+	State         string            `json:"state"`
+	HTMLURL       string            `json:"html_url"`
+	Repository    *githubRepository `json:"repository,omitempty"`
+	RepositoryURL string            `json:"repository_url,omitempty"`
+	CreatedAt     *time.Time        `json:"created_at"`
+	UpdatedAt     *time.Time        `json:"updated_at"`
+	Labels        []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	PullReq *struct{} `json:"pull_request,omitempty"`
+}
+
+type githubIssueSearchResult struct {
+	Items []githubIssue `json:"items"`
 }
 type githubMilestone struct {
 	Number      int64      `json:"number"`
@@ -108,10 +119,10 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, client httpClient
 		}
 	}
 	a := &GithubAdapter{cfg: cfg, client: client, baseURL: "https://api.github.com", token: token, tracked: make(map[string]int), defaultBranch: "main"}
+	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
-		var user githubUser
-		if err := a.getJSON(ctx, "/user", nil, &user); err == nil && user.Login != "" {
-			a.assignee = user.Login
+		if viewer != "" {
+			a.assignee = viewer
 		} else {
 			a.assignee = "me"
 		}
@@ -119,6 +130,25 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, client httpClient
 		a.assignee = cfg.Assignee
 	}
 	return a, nil
+}
+
+func (a *GithubAdapter) viewerLogin(ctx context.Context) (string, error) {
+	if strings.TrimSpace(a.viewer) != "" {
+		return a.viewer, nil
+	}
+	var user githubUser
+	if err := a.getJSON(ctx, "/user", nil, &user); err != nil {
+		return "", fmt.Errorf("resolve github viewer: %w", err)
+	}
+	login := strings.TrimSpace(user.Login)
+	if login == "" {
+		return "", fmt.Errorf("resolve github viewer: empty login")
+	}
+	a.viewer = login
+	if a.assignee == "" || a.assignee == "me" {
+		a.assignee = login
+	}
+	return login, nil
 }
 
 func execTokenResolver(ctx context.Context) (string, error) {
@@ -167,7 +197,7 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
-			items = append(items, adapter.ListItem{ID: issueSelectionID(iss), Title: issueListTitle(iss), Description: iss.Body, State: iss.State, Labels: issueLabels(iss), ParentRef: issueParentRef(iss), CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
+			items = append(items, adapter.ListItem{ID: issueSelectionID(iss), Title: issueListTitle(iss), Description: iss.Body, State: iss.State, Labels: issueLabels(iss), URL: iss.HTMLURL, ParentRef: issueParentRef(iss), CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
 		}
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeProjects:
@@ -427,6 +457,13 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 }
 
 func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
+	if strings.TrimSpace(opts.View) == "created_by_me" {
+		return a.listCreatedIssues(ctx, opts)
+	}
+	return a.listInboxIssues(ctx, opts)
+}
+
+func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
 	query, err := githubIssueListQuery(opts)
 	if err != nil {
 		return nil, err
@@ -435,6 +472,7 @@ func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	if err := a.getJSON(ctx, "/issues", query, &issues); err != nil {
 		return nil, err
 	}
+	normalizeGitHubIssueRepositories(issues)
 	filtered := filterIssues(issues)
 	if owner := strings.TrimSpace(opts.Owner); owner != "" {
 		repo := strings.TrimSpace(opts.Repo)
@@ -457,6 +495,37 @@ func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		return filtered[i].Number < filtered[j].Number
 	})
 	return filtered, nil
+}
+
+func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
+	viewer, err := a.viewerLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query, err := githubCreatedIssueSearchQuery(viewer, opts)
+	if err != nil {
+		return nil, err
+	}
+	var result githubIssueSearchResult
+	if err := a.getJSON(ctx, "/search/issues", query, &result); err != nil {
+		return nil, err
+	}
+	issues := filterIssues(result.Items)
+	normalizeGitHubIssueRepositories(issues)
+	if owner := strings.TrimSpace(opts.Owner); owner != "" {
+		repo := strings.TrimSpace(opts.Repo)
+		issues = filterGitHubIssuesByContainer(issues, owner, repo)
+	}
+	if len(opts.Labels) > 0 {
+		issues = filterGitHubIssuesByLabels(issues, opts.Labels)
+	}
+	sort.Slice(issues, func(i, j int) bool {
+		if left, right := issueRepoFullName(issues[i]), issueRepoFullName(issues[j]); left != right {
+			return left < right
+		}
+		return issues[i].Number < issues[j].Number
+	})
+	return issues, nil
 }
 
 func githubIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
@@ -483,12 +552,45 @@ func githubIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
 	return query, nil
 }
 
+func githubCreatedIssueSearchQuery(viewer string, opts adapter.ListOpts) (url.Values, error) {
+	state, err := githubIssueStateValue(opts.State)
+	if err != nil {
+		return nil, err
+	}
+	terms := []string{"is:issue", "author:" + strings.TrimSpace(viewer)}
+	if state != "all" {
+		terms = append(terms, "state:"+state)
+	}
+	if owner := strings.TrimSpace(opts.Owner); owner != "" {
+		if repo := strings.TrimSpace(opts.Repo); repo != "" {
+			terms = append(terms, fmt.Sprintf("repo:%s/%s", owner, repo))
+		}
+	}
+	for _, label := range opts.Labels {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" {
+			continue
+		}
+		terms = append(terms, fmt.Sprintf("label:%q", trimmed))
+	}
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		terms = append(terms, search)
+	}
+	query := url.Values{}
+	query.Set("q", strings.Join(terms, " "))
+	if opts.Limit > 0 {
+		query.Set("per_page", strconv.Itoa(opts.Limit))
+	}
+	if opts.Limit > 0 && opts.Offset > 0 {
+		query.Set("page", strconv.Itoa((opts.Offset/opts.Limit)+1))
+	}
+	return query, nil
+}
+
 func githubIssueFilterValue(view string) (string, error) {
 	switch strings.TrimSpace(view) {
 	case "", "assigned_to_me":
 		return "assigned", nil
-	case "created_by_me":
-		return "created", nil
 	case "mentioned":
 		return "mentioned", nil
 	case "subscribed":
@@ -585,17 +687,7 @@ func (a *GithubAdapter) fetchIssue(ctx context.Context, owner, repo string, numb
 	if iss.PullReq != nil {
 		return githubIssue{}, fmt.Errorf("github issue %s/%s#%d is a pull request", owner, repo, number)
 	}
-	if iss.Repository == nil {
-		iss.Repository = &struct {
-			FullName string `json:"full_name"`
-			Owner    *struct {
-				Login string `json:"login"`
-			} `json:"owner"`
-			Name string `json:"name"`
-		}{FullName: owner + "/" + repo, Owner: &struct {
-			Login string `json:"login"`
-		}{Login: owner}, Name: repo}
-	}
+	normalizeGitHubIssueRepository(&iss, owner, repo)
 	return iss, nil
 }
 
@@ -757,6 +849,49 @@ func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {
 		refs = append(refs, domain.TrackerReference{Provider: "github", Kind: "issue", ID: strconv.FormatInt(iss.Number, 10), URL: iss.HTMLURL, Owner: owner, Repo: repo, Number: iss.Number})
 	}
 	return refs
+}
+
+func normalizeGitHubIssueRepositories(issues []githubIssue) {
+	for i := range issues {
+		normalizeGitHubIssueRepository(&issues[i], "", "")
+	}
+}
+
+func normalizeGitHubIssueRepository(iss *githubIssue, fallbackOwner, fallbackRepo string) {
+	if iss == nil || iss.Repository != nil {
+		return
+	}
+	owner, repo := githubIssueRepositoryIdentity(*iss)
+	if owner == "" || repo == "" {
+		owner, repo = fallbackOwner, fallbackRepo
+	}
+	if owner == "" || repo == "" {
+		return
+	}
+	iss.Repository = &githubRepository{FullName: owner + "/" + repo, Owner: &githubOwner{Login: owner}, Name: repo}
+}
+
+func githubIssueRepositoryIdentity(iss githubIssue) (string, string) {
+	if owner, repo := parseGitHubRepositoryURL(iss.RepositoryURL); owner != "" && repo != "" {
+		return owner, repo
+	}
+	return parseGitHubRepositoryURL(iss.HTMLURL)
+}
+
+func parseGitHubRepositoryURL(rawURL string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	switch {
+	case len(parts) >= 3 && parts[0] == "repos":
+		return parts[1], parts[2]
+	case len(parts) >= 2:
+		return parts[0], parts[1]
+	default:
+		return "", ""
+	}
 }
 
 func issueSelectionID(iss githubIssue) string {

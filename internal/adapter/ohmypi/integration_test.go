@@ -17,6 +17,42 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+func requireTestBun(t *testing.T) string {
+	t.Helper()
+
+	bunPath, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun not found in PATH, skipping integration test")
+	}
+
+	return bunPath
+}
+
+func repoBridgePath(t *testing.T) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
+
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(cwd))))
+	bridgePath := filepath.Join(repoRoot, "bridge", "omp-bridge.ts")
+	if _, err := os.Stat(bridgePath); os.IsNotExist(err) {
+		t.Skipf("bridge script not found at %s, skipping integration test", bridgePath)
+	}
+
+	dependencyPath := filepath.Join(filepath.Dir(bridgePath), "node_modules", "@oh-my-pi", "pi-coding-agent")
+	if _, err := os.Stat(dependencyPath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("bridge dependencies not installed under %s; run `bun install --cwd %s`", filepath.Dir(bridgePath), filepath.Dir(bridgePath))
+		}
+		t.Fatalf("failed to stat bridge dependency path %s: %v", dependencyPath, err)
+	}
+
+	return bridgePath
+}
+
 // TestIntegration_SessionLifecycle tests that a session starts,
 // produces events, and shuts down cleanly.
 func TestIntegration_SessionLifecycle(t *testing.T) {
@@ -24,11 +60,7 @@ func TestIntegration_SessionLifecycle(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Check if bun is available
-	bunPath, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("bun not found in PATH, skipping integration test")
-	}
+	bunPath := requireTestBun(t)
 
 	// Create a temp directory for the session
 	tmpDir := t.TempDir()
@@ -37,19 +69,7 @@ func TestIntegration_SessionLifecycle(t *testing.T) {
 		t.Fatalf("failed to create session log dir: %v", err)
 	}
 
-	// Get bridge path relative to repo root
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	// Navigate from internal/adapter/ohmypi to repo root
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(cwd))))
-	bridgePath := filepath.Join(repoRoot, "bridge", "omp-bridge.ts")
-
-	// Check if bridge exists
-	if _, err := os.Stat(bridgePath); os.IsNotExist(err) {
-		t.Skipf("bridge script not found at %s, skipping integration test", bridgePath)
-	}
+	bridgePath := repoBridgePath(t)
 
 	cfg := config.OhMyPiConfig{
 		BunPath:       bunPath,
@@ -129,11 +149,7 @@ func TestIntegration_AbortTerminatesSubprocess(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Check if bun is available
-	bunPath, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("bun not found in PATH, skipping integration test")
-	}
+	bunPath := requireTestBun(t)
 
 	// Create a temp directory for the session
 	tmpDir := t.TempDir()
@@ -142,17 +158,7 @@ func TestIntegration_AbortTerminatesSubprocess(t *testing.T) {
 		t.Fatalf("failed to create session log dir: %v", err)
 	}
 
-	// Get bridge path relative to repo root
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(cwd))))
-	bridgePath := filepath.Join(repoRoot, "bridge", "omp-bridge.ts")
-
-	if _, err := os.Stat(bridgePath); os.IsNotExist(err) {
-		t.Skipf("bridge script not found at %s, skipping integration test", bridgePath)
-	}
+	bridgePath := repoBridgePath(t)
 
 	cfg := config.OhMyPiConfig{
 		BunPath:       bunPath,
@@ -300,11 +306,7 @@ func TestIntegration_ForemanMode(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Check if bun is available
-	bunPath, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("bun not found in PATH, skipping integration test")
-	}
+	bunPath := requireTestBun(t)
 
 	// Create a temp directory for the session
 	tmpDir := t.TempDir()
@@ -313,17 +315,7 @@ func TestIntegration_ForemanMode(t *testing.T) {
 		t.Fatalf("failed to create session log dir: %v", err)
 	}
 
-	// Get bridge path relative to repo root
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(cwd))))
-	bridgePath := filepath.Join(repoRoot, "bridge", "omp-bridge.ts")
-
-	if _, err := os.Stat(bridgePath); os.IsNotExist(err) {
-		t.Skipf("bridge script not found at %s, skipping integration test", bridgePath)
-	}
+	bridgePath := repoBridgePath(t)
 
 	cfg := config.OhMyPiConfig{
 		BunPath:       bunPath,

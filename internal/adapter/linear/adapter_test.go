@@ -229,7 +229,7 @@ func TestLinearCapabilitiesExposeExpandedBrowseSupport(t *testing.T) {
 	if !issues.SupportsLabels || !issues.SupportsSearch || !issues.SupportsCursor || !issues.SupportsTeam {
 		t.Fatalf("issue capabilities = %#v, want labels/search/cursor/team support", issues)
 	}
-	for _, want := range []string{"assigned_to_me", "created_by_me", "all"} {
+	for _, want := range []string{"assigned_to_me", "created_by_me", "subscribed", "all"} {
 		if !containsString(issues.Views, want) {
 			t.Fatalf("issue views = %#v, want %q", issues.Views, want)
 		}
@@ -344,6 +344,36 @@ func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
 	}
 	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"completed", "cancelled"}) {
 		t.Fatalf("stateTypes = %#v, want completed/cancelled", got)
+	}
+}
+
+func TestListSelectableIssuesSupportsSubscribed(t *testing.T) {
+	t.Parallel()
+
+	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
+	var issueReq capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req testGQLBody
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Query, "Viewer") {
+			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
+			return
+		}
+		issueReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}}}})
+	}))
+	defer srv.Close()
+
+	a := testLinearAdapter(t, srv.URL)
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "subscribed", State: "open"})
+	if err != nil {
+		t.Fatalf("ListSelectable(ScopeIssues): %v", err)
+	}
+	if got := issueReq.Variables["subscriberId"]; got != "user1" {
+		t.Fatalf("subscriberId = %v, want user1", got)
+	}
+	if !strings.Contains(issueReq.Query, "subscribers") {
+		t.Fatalf("query = %q, want subscribers filter", issueReq.Query)
 	}
 }
 

@@ -42,7 +42,7 @@ Config loading validates:
 - `[review]` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3).
 - `[foreman]` block **[UPDATED - IMPLEMENTED]**: `question_timeout` duration string (default "0" = wait indefinitely).
 - `[harness]` block **[UPDATED - IMPLEMENTED]**: default harness, fallback order, and per-phase overrides (`planning`, `implementation`, `review`, `foreman`). oh-my-pi remains the generated default because it is the only harness with verified interactive correction support.
-- `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bun_path`, `bridge_path`, `thinking_level` (maps to oh-my-pi thinkingLevel for all sessions).
+- `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bridge_path` and `thinking_level`, plus `bun_path` as a source-bridge-only override. Brew installs use the packaged compiled bridge by default.
 - Per-repo `[repos.<name>]` sections are optional.
 
 **[UPDATED - IMPLEMENTED] Global Self-Initialization:** On first start, the CLI auto-initializes global resources without user interaction:
@@ -273,7 +273,7 @@ foreman = "ohmypi"
 ```
 
 - Build a central harness router/builder that resolves the preferred harness per phase, checks binary availability, and falls back deterministically.
-- Keep Bun as a packaging/runtime dependency for the default install path because oh-my-pi remains the default harness.
+- Ship a compiled oh-my-pi bridge executable plus the required native addon in the default install path so brew users do not need Bun for the default harness.
 - Treat Claude Code and Codex integration tests for interactive messaging as blocked work until the real binaries are installed and authenticated in the development environment.
 
 **Gate:**
@@ -375,7 +375,7 @@ Expand the browse request and capability model so the UI can render only control
 
 Linear remains a first-class provider with the richest declared browse surface.
 
-- Issues: support normalized views (`assigned_to_me`, `created_by_me`, `all`), normalized and native states, labels, search, team narrowing, and cursor pagination.
+- Issues: support normalized views (`assigned_to_me`, `created_by_me`, `subscribed`, `all`), normalized and native states, labels, search, team narrowing, and cursor pagination.
 - Projects: support state, search, team narrowing, and cursor pagination.
 - Initiatives: support state, search, and cursor pagination.
 - `Resolve` remains scope-aware: one issue maps directly; multi-issue/project/initiative resolution aggregates honestly.
@@ -495,7 +495,7 @@ CI: every push runs `go build/vet/test` + `-race`. Nightly runs integration. Man
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| oh-my-pi SDK / Bun bridge breaks | Medium | High | Pin bridge protocol, keep integration coverage on the default harness path, and keep Bun as an explicit packaging dependency |
+| oh-my-pi bridge packaging breaks | Medium | High | Keep release coverage on the packaged compiled bridge path, including the platform-native addon shipped beside the bridge executable |
 | Claude/Codex interactive messaging remains unverified | High | High | Keep oh-my-pi as default, block parity claims until real binary tests pin `SendMessage` continuation semantics |
 | Browse semantics drift across providers | Medium | High | Keep the UI capability-driven, normalize issue semantics first, and forbid controls the active provider/scope cannot honor |
 | Non-issue `All` mode implies false parity | Medium | High | Keep `All` mode issue-first until milestones/initiatives share honest semantics |

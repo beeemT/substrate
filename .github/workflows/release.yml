@@ -20,6 +20,11 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.9"
+
       - name: Download dependencies
         run: go mod download
 
@@ -35,6 +40,8 @@ jobs:
           VERSION_NUM="${VERSION#v}"
           mkdir -p dist
           
+          bun install --cwd bridge --frozen-lockfile
+          
           # Build for multiple platforms
           platforms=(
             "darwin/amd64"
@@ -47,14 +54,46 @@ jobs:
             GOOS="${platform%%/*}"
             GOARCH="${platform##*/}"
             output="dist/substrate_${VERSION_NUM}_${GOOS}_${GOARCH}"
+            package_dir="dist/package_${VERSION_NUM}_${GOOS}_${GOARCH}"
+            
+            case "$platform" in
+              "darwin/amd64")
+                bridge_target="bun-darwin-x64-baseline"
+                native_addon="pi_natives.darwin-x64-baseline.node"
+                ;;
+              "darwin/arm64")
+                bridge_target="bun-darwin-arm64"
+                native_addon="pi_natives.darwin-arm64.node"
+                ;;
+              "linux/amd64")
+                bridge_target="bun-linux-x64-baseline"
+                native_addon="pi_natives.linux-x64-baseline.node"
+                ;;
+              "linux/arm64")
+                bridge_target="bun-linux-arm64"
+                native_addon="pi_natives.linux-arm64.node"
+                ;;
+              *)
+                echo "unsupported platform: $platform"
+                exit 1
+                ;;
+            esac
             
             CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
               -ldflags="-s -w -X main.Version=${VERSION_NUM}" \
               -o "$output" \
               ./cmd/substrate
             
-            tar -C dist -czf "${output}.tar.gz" "$(basename "$output")"
-            rm "$output"
+            rm -rf "$package_dir"
+            mkdir -p "$package_dir/bridge"
+            mv "$output" "$package_dir/substrate"
+            bun build bridge/omp-bridge.ts \
+              --compile \
+              --target "$bridge_target" \
+              --outfile "$package_dir/bridge/omp-bridge"
+            cp "bridge/node_modules/@oh-my-pi/pi-natives/native/$native_addon" "$package_dir/bridge/$native_addon"
+            tar -C "$package_dir" -czf "dist/substrate_${VERSION_NUM}_${GOOS}_${GOARCH}.tar.gz" .
+            rm -rf "$package_dir"
           done
           
           # Generate checksums
@@ -96,7 +135,6 @@ jobs:
             version "${VERSION_NUM}"
 
             depends_on "beeemT/tap/git-work"
-            depends_on "oven-sh/bun/bun"
             # Optional CLIs intentionally not hard dependencies:
             # - gh: only needed for GitHub CLI token fallback and harness-driven GitHub login
             # - glab: only needed for GitLab MR lifecycle automation
@@ -124,13 +162,14 @@ jobs:
 
             def install
               bin.install "substrate"
+              pkgshare.install "bridge"
             end
 
             test do
               assert_match "substrate", shell_output("#{bin}/substrate --help 2>&1", 0).downcase
+              assert_path_exists pkgshare/"bridge/omp-bridge"
+              assert_match "session_ready", pipe_output("#{pkgshare}/bridge/omp-bridge", '{"type":"abort"}\n', 0)
             end
-          end
-          FORMULA
           end
           FORMULA
           

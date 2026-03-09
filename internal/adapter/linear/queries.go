@@ -55,12 +55,13 @@ query IssuesByIDs($ids: [String!]!) {
 }`
 
 const queryTeamIssues = `
-query TeamIssues($teamId: String!, $search: String, $assigneeId: String, $creatorId: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!], $first: Int, $after: String) {
+query TeamIssues($teamId: String!, $search: String, $assigneeId: String, $creatorId: String, $subscriberId: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!], $first: Int, $after: String) {
 	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
 		title: { containsIgnoreCase: $search }
 		assignee: { id: { eq: $assigneeId } }
 		creator: { id: { eq: $creatorId } }
+		subscribers: { id: { eq: $subscriberId } }
 		labels: { name: { in: $labelNames } }
 		state: {
 			type: { in: $stateTypes }

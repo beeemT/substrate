@@ -516,9 +516,10 @@ func TestSessionSearchHistory(t *testing.T) {
 	localSession := makeSession(t, tx, localSubPlan.ID, localWS.ID)
 	localSession.RepositoryName = "local-repo"
 	localSession.Status = domain.AgentSessionCompleted
-	completedAt := now()
+	localUpdatedAt := now().Add(-2 * time.Minute)
+	completedAt := localUpdatedAt
 	localSession.CompletedAt = &completedAt
-	localSession.UpdatedAt = now()
+	localSession.UpdatedAt = localUpdatedAt
 	if err := sessionRepo.Update(ctx, localSession); err != nil {
 		t.Fatalf("update local session: %v", err)
 	}
@@ -536,7 +537,7 @@ func TestSessionSearchHistory(t *testing.T) {
 	remoteSession := makeSession(t, tx, remoteSubPlan.ID, remoteWS.ID)
 	remoteSession.RepositoryName = "remote-repo"
 	remoteSession.Status = domain.AgentSessionRunning
-	remoteSession.UpdatedAt = now()
+	remoteSession.UpdatedAt = now().Add(-1 * time.Minute)
 	if err := sessionRepo.Update(ctx, remoteSession); err != nil {
 		t.Fatalf("update remote session: %v", err)
 	}
@@ -586,6 +587,17 @@ func TestSessionSearchHistory(t *testing.T) {
 	}
 	if remoteEntries[0].Status != remoteSession.Status {
 		t.Fatalf("remote status = %q, want %q", remoteEntries[0].Status, remoteSession.Status)
+	}
+
+	recentEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("search recent history: %v", err)
+	}
+	if len(recentEntries) != 2 {
+		t.Fatalf("recent entries len = %d, want 2", len(recentEntries))
+	}
+	if recentEntries[0].SessionID != remoteSession.ID || recentEntries[1].SessionID != localSession.ID {
+		t.Fatalf("recent order = [%q %q], want [%q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, remoteSession.ID, localSession.ID)
 	}
 }
 

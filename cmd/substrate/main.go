@@ -334,9 +334,9 @@ func initializeGlobalConfig(cfgPath string) error {
 	# quiet = false
 	
 	[adapters.ohmypi]
-	# bun_path = "bun"
-	# bridge_path = "bridge/omp-bridge.ts"
 	# thinking_level = "high"
+	# bun_path = "/opt/homebrew/bin/bun"       # optional override when using a source bridge script
+	# bridge_path = "/custom/path/to/omp-bridge" # optional override; default uses packaged compiled bridge
 	`
 
 	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o644); err != nil {

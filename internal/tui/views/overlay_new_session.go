@@ -117,6 +117,9 @@ func (i selectableItem) Title() string {
 	if i.item.Identifier != "" {
 		prefix = i.item.Identifier + "  " + i.item.Title
 	}
+	if i.selected {
+		prefix = "✓ " + prefix
+	}
 	return strings.TrimSpace(prefix)
 }
 
@@ -173,6 +176,7 @@ type NewSessionOverlay struct {
 	width          int
 	height         int
 	active         bool
+	openBrowserCmd func(string) tea.Cmd
 	statusMessage  string
 }
 
@@ -252,6 +256,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		browseControl:  browseControlSearch,
 		detailViewport: viewport.New(0, 0),
 		styles:         st,
+		openBrowserCmd: OpenBrowserCmd,
 	}
 }
 
@@ -326,12 +331,14 @@ func (m *NewSessionOverlay) toggleSelection(item adapter.ListItem) error {
 	provider := m.selectedProvider()
 	if m.selectedIDs[item.ID] {
 		delete(m.selectedIDs, item.ID)
+		m.refreshBrowseListItems()
 		return nil
 	}
 	if provider != "" && provider != item.Provider {
 		return fmt.Errorf("multi-select must stay within one provider")
 	}
 	m.selectedIDs[item.ID] = true
+	m.refreshBrowseListItems()
 	return nil
 }
 
@@ -1025,7 +1032,7 @@ func (m *NewSessionOverlay) syncDetailViewport(forceTop bool) {
 	advancedRows := len(m.advancedFilterRows())
 	paneHeight := m.browserPaneHeight(advancedRows)
 	_, rightWidth := m.browserPaneWidths(contentWidth)
-	viewportWidth := maxInt(1, rightWidth-paneHorizontalFrame)
+	viewportWidth := maxInt(1, rightWidth-paneHorizontalFrame-2)
 	viewportHeight := maxInt(1, paneHeight-paneVerticalFrame-2)
 	m.detailViewport.Width = viewportWidth
 	m.detailViewport.Height = viewportHeight
@@ -1078,7 +1085,6 @@ func detailMarkdown(item adapter.ListItem) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("# ")
 	b.WriteString(title)
 	b.WriteString("\n\n")
 	if len(meta) > 0 {
@@ -1174,6 +1180,14 @@ func (m *NewSessionOverlay) pruneSelectedIDs() {
 	}
 }
 
+func (m *NewSessionOverlay) refreshBrowseListItems() {
+	items := make([]list.Item, len(m.allItems))
+	for i, it := range m.allItems {
+		items[i] = selectableItem{item: it, selected: m.selectedIDs[it.ID]}
+	}
+	m.issueList.SetItems(items)
+}
+
 func (m NewSessionOverlay) currentListItem() (adapter.ListItem, bool) {
 	if len(m.allItems) == 0 {
 		return adapter.ListItem{}, false
@@ -1186,6 +1200,21 @@ func (m NewSessionOverlay) currentListItem() (adapter.ListItem, bool) {
 		return m.allItems[index], true
 	}
 	return m.allItems[0], true
+}
+
+func (m NewSessionOverlay) openCurrentItemInBrowserCmd() tea.Cmd {
+	item, ok := m.currentListItem()
+	if !ok {
+		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("no work item selected")} }
+	}
+	if strings.TrimSpace(item.URL) == "" {
+		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("selected work item has no URL")} }
+	}
+	openBrowserCmd := m.openBrowserCmd
+	if openBrowserCmd == nil {
+		openBrowserCmd = OpenBrowserCmd
+	}
+	return openBrowserCmd(item.URL)
 }
 
 func (m *NewSessionOverlay) maybeLoadMore() tea.Cmd {
@@ -1324,11 +1353,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		m.allItems = flattenBrowsePages(m.browsePages)
 		m.hasMore = anyPageHasMore(m.browsePages)
 		m.pruneSelectedIDs()
-		items := make([]list.Item, len(m.allItems))
-		for i, it := range m.allItems {
-			items[i] = selectableItem{item: it}
-		}
-		m.issueList.SetItems(items)
+		m.refreshBrowseListItems()
 		m.normalizeBrowseFocus()
 		m.syncDetailViewport(true)
 
@@ -1508,6 +1533,8 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					cmds = append(cmds, m.updateFocusedBrowseInput(msg)...)
 				}
 			}
+		case "ctrl+o":
+			return m, m.openCurrentItemInBrowserCmd()
 		case "enter":
 			if len(m.selectedIDs) == 0 {
 				if item, ok := m.currentListItem(); ok {
@@ -1692,7 +1719,7 @@ func (m *NewSessionOverlay) browserView(w int) string {
 		rightBorder = lipgloss.Color("#60a5fa")
 	}
 	detailHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Details")
-	detailDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(rightInnerWidth).Render(strings.Repeat("─", maxInt(1, rightInnerWidth)))
+	detailDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(m.detailViewport.Width).Render(strings.Repeat("─", maxInt(1, m.detailViewport.Width)))
 	rightContent := strings.Join([]string{detailHeader, detailDivider, m.detailViewport.View()}, "\n")
 	rightPane := lipgloss.NewStyle().
 		Width(rightInnerWidth).
@@ -1709,7 +1736,7 @@ func (m *NewSessionOverlay) browserView(w int) string {
 }
 
 func (m NewSessionOverlay) browserHintText() string {
-	parts := []string{"[↑/↓] Focus/List/Scroll", "[←/→] List⇄Details", "[PgUp/PgDn] Scroll", "[Ctrl+N] Manual"}
+	parts := []string{"[↑/↓] Focus/List/Scroll", "[←/→] List⇄Details", "[PgUp/PgDn] Scroll", "[Ctrl+O] Open", "[Ctrl+N] Manual"}
 	if len(m.availableStateOptions()) > 0 {
 		parts = append(parts, "[Ctrl+T] State")
 	}

@@ -480,9 +480,9 @@ pass_threshold = "minor_ok"        # "nit_only" | "minor_ok" | "no_critiques"
 max_cycles     = 3                 # max re-implementation cycles before human escalation
 
 [adapters.ohmypi]
-bun_path        = "bun"
-bridge_path     = "scripts/omp-bridge.ts"
 thinking_level  = "xhigh"          # oh-my-pi thinkingLevel for all sessions
+# bun_path      = "/opt/homebrew/bin/bun"         # optional override when using a source bridge script
+# bridge_path   = "/custom/path/to/omp-bridge"   # optional override; default uses packaged compiled bridge
 
 [foreman]
 question_timeout = "0"             # duration string; "0" = wait indefinitely

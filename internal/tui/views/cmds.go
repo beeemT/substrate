@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -577,6 +579,32 @@ func StartForemanCmd(foreman *orchestrator.Foreman, planID string) tea.Cmd {
 			return ErrMsg{Err: err}
 		}
 		return ActionDoneMsg{Message: "Foreman started"}
+	}
+}
+
+// OpenBrowserCmd opens the provided URL in the system browser.
+func OpenBrowserCmd(rawURL string) tea.Cmd {
+	url := strings.TrimSpace(rawURL)
+	if url == "" {
+		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("browser URL is required")} }
+	}
+
+	return tea.ExecProcess(browserOpenExecCmd(url), func(err error) tea.Msg {
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("open browser for %q: %w", url, err)}
+		}
+		return nil
+	})
+}
+
+func browserOpenExecCmd(url string) *exec.Cmd {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url)
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return exec.Command("xdg-open", url)
 	}
 }
 

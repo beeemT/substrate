@@ -2,6 +2,7 @@ package views
 
 import (
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
 )
@@ -77,5 +78,36 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 	}
 	if loaded.SessionID != "sess-remote" {
 		t.Fatalf("loaded session id = %q, want sess-remote", loaded.SessionID)
+	}
+}
+
+func TestRebuildSidebarSortsByLastActivity(t *testing.T) {
+	now := time.Now()
+	older := now.Add(-2 * time.Hour)
+	newer := now.Add(-15 * time.Minute)
+
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	app.workItems = []domain.WorkItem{
+		{ID: "wi-old", ExternalID: "SUB-1", Title: "Old", State: domain.WorkItemIngested, CreatedAt: older, UpdatedAt: older},
+		{ID: "wi-new", ExternalID: "SUB-2", Title: "New", State: domain.WorkItemIngested, CreatedAt: older, UpdatedAt: newer},
+	}
+
+	app.rebuildSidebar()
+
+	sel := app.sidebar.Selected()
+	if sel == nil {
+		t.Fatal("selected sidebar entry = nil")
+	}
+	if sel.WorkItemID != "wi-new" {
+		t.Fatalf("selected work item = %q, want wi-new", sel.WorkItemID)
+	}
+	app.sidebar.MoveDown()
+	sel = app.sidebar.Selected()
+	if sel == nil || sel.WorkItemID != "wi-old" {
+		t.Fatalf("second work item = %v, want wi-old", sel)
 	}
 }

@@ -302,6 +302,24 @@ func TestSettingsPage_ViewShowsTreeAndFieldHelp(t *testing.T) {
 	}
 }
 
+func TestSettingsPage_RenderProviderStatusLineColorsConnectedGreen(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	status := page.providerStatus["github"]
+	status.AuthSource = "gh"
+	status.Configured = true
+	status.Connected = true
+
+	rendered := page.renderProviderStatusLine("  ", status, 80)
+	if !strings.Contains(rendered, "Provider auth: gh") {
+		t.Fatalf("expected provider auth label in rendered status line, got %q", rendered)
+	}
+	if !strings.Contains(rendered, page.styles.Success.Render("connected")) {
+		t.Fatalf("expected connected provider status to be rendered in green, got %q", rendered)
+	}
+}
+
 func TestSettingsPage_SyntheticProvidersGroupCollapsesAndExpands(t *testing.T) {
 	t.Parallel()
 	page := newTestSettingsPage(&config.Config{})
