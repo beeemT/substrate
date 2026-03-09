@@ -16,6 +16,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -48,12 +49,20 @@ const (
 	detailMinPaneWidth      = 44
 	browsePageSize          = 50
 	infiniteScrollThreshold = 5
-	overlayHorizontalFrame  = 2
-	overlayHorizontalPad    = 4
-	paneHorizontalFrame     = 4
-	paneVerticalFrame       = 2
-	overlayBackgroundColor  = "#1a1a2e"
 )
+
+var browseSizingSpec = components.SplitOverlaySizingSpec{
+	MaxOverlayWidth:   browseWindowWidth,
+	LeftMinWidth:      browseMinPaneWidth,
+	RightMinWidth:     detailMinPaneWidth,
+	LeftWeight:        2,
+	RightWeight:       3,
+	MinBodyHeight:     browseMinListHeight,
+	DefaultBodyHeight: browseMinListHeight * 3,
+	HeightRatioNum:    browseHeightNumerator,
+	HeightRatioDen:    browseHeightDenom,
+	InputWidthOffset:  20,
+}
 
 type browseFocusArea int
 
@@ -223,8 +232,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	il.SetShowStatusBar(false)
 	il.SetFilteringEnabled(true)
 	il.SetShowHelp(false)
-	il.Styles.NoItems = il.Styles.NoItems.Background(lipgloss.Color(overlayBackgroundColor))
-	il.Styles.StatusEmpty = il.Styles.StatusEmpty.Background(lipgloss.Color(overlayBackgroundColor))
+	il = components.ApplyOverlayListStyles(il)
 
 	browseAdapters := make([]adapter.WorkItemAdapter, 0, len(adapters))
 	for _, a := range adapters {
@@ -1008,23 +1016,8 @@ func fitOverlayLine(line string, width int) string {
 	return lipgloss.NewStyle().Width(width).Render(ansi.Truncate(line, width, ""))
 }
 
-func (m NewSessionOverlay) renderWidth() int {
-	if m.width <= 0 {
-		return maxInt(1, browseWindowWidth-overlayHorizontalFrame)
-	}
-	return maxInt(1, minInt(browseWindowWidth-overlayHorizontalFrame, m.width-overlayHorizontalFrame))
-}
-
-func (m NewSessionOverlay) renderContentWidth() int {
-	return maxInt(1, m.renderWidth()-overlayHorizontalPad)
-}
-
-func (m NewSessionOverlay) browserInputWidth(renderWidth int) int {
-	return maxInt(1, renderWidth-20)
-}
-
-func (m *NewSessionOverlay) resizeInputs(renderWidth int) {
-	inputWidth := m.browserInputWidth(renderWidth)
+func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
+	inputWidth = maxInt(1, inputWidth)
 	m.filterInput.Width = inputWidth
 	m.labelsInput.Width = inputWidth
 	m.ownerInput.Width = inputWidth
@@ -1049,52 +1042,26 @@ func (m NewSessionOverlay) browserChromeLines(advancedRows int, renderWidth int)
 	return headerLines + advancedRows + 5 + m.browserHintLineCount(renderWidth)
 }
 
-func (m NewSessionOverlay) browserPaneHeight(advancedRows int, renderWidth int) int {
-	target := browseMinListHeight * 3
-	if m.height > 0 {
-		target = maxInt(browseMinListHeight, (m.height*browseHeightNumerator+browseHeightDenom-1)/browseHeightDenom)
-	}
-	if m.height <= 0 {
-		return target
-	}
-	maxHeight := m.height - m.browserChromeLines(advancedRows, renderWidth)
-	if maxHeight < 1 {
-		return 1
-	}
-	return maxInt(1, minInt(target, maxHeight))
-}
-
-func (m NewSessionOverlay) browserPaneWidths(renderWidth int) (int, int) {
-	available := maxInt(1, renderWidth-1)
-	if renderWidth <= browseMinPaneWidth+detailMinPaneWidth+1 {
-		leftWidth := maxInt(1, available/2)
-		rightWidth := maxInt(1, available-leftWidth)
-		return leftWidth, rightWidth
-	}
-
-	leftWidth := maxInt(browseMinPaneWidth, renderWidth*2/5)
-	rightWidth := maxInt(detailMinPaneWidth, available-leftWidth)
-	if leftWidth+rightWidth > available {
-		rightWidth = maxInt(1, available-leftWidth)
-	}
-	if rightWidth < detailMinPaneWidth {
-		rightWidth = detailMinPaneWidth
-		leftWidth = maxInt(1, available-rightWidth)
-	}
-	return leftWidth, rightWidth
+func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
+	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
+	chromeLines := m.browserChromeLines(len(m.advancedFilterRows()), baseLayout.ContentWidth)
+	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, browseSizingSpec)
 }
 
 func (m *NewSessionOverlay) syncDetailViewport(forceTop bool) {
 	if m.showManual {
 		return
 	}
-	contentWidth := m.renderContentWidth()
-	m.resizeInputs(contentWidth)
-	advancedRows := len(m.advancedFilterRows())
-	paneHeight := m.browserPaneHeight(advancedRows, contentWidth)
-	_, rightWidth := m.browserPaneWidths(contentWidth)
-	viewportWidth := maxInt(1, rightWidth-paneHorizontalFrame-2)
-	viewportHeight := maxInt(1, paneHeight-paneVerticalFrame-2)
+	m.syncDetailViewportWithLayout(m.browserLayout(), forceTop)
+}
+
+func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.SplitOverlayLayout, forceTop bool) {
+	if m.showManual {
+		return
+	}
+	m.resizeInputs(layout.InputWidth)
+	viewportWidth := layout.ViewportWidth
+	viewportHeight := layout.ViewportHeight
 	m.detailViewport.Width = viewportWidth
 	m.detailViewport.Height = viewportHeight
 
@@ -1677,10 +1644,9 @@ func (m *NewSessionOverlay) View() string {
 		return ""
 	}
 
-	boxWidth := m.renderWidth()
-	contentWidth := m.renderContentWidth()
-	m.resizeInputs(contentWidth)
-	m.syncDetailViewport(false)
+	layout := m.browserLayout()
+	m.resizeInputs(layout.InputWidth)
+	m.syncDetailViewportWithLayout(layout, false)
 
 	providerLabels := make([]string, 0, len(m.activeProviderOptions()))
 	for _, option := range m.activeProviderOptions() {
@@ -1734,45 +1700,35 @@ func (m *NewSessionOverlay) View() string {
 	}
 
 	var body string
+	footer := ""
 	if m.showManual {
-		body = m.manualView(contentWidth)
+		body = m.manualView(layout.ContentWidth)
 	} else {
-		body = m.browserView(contentWidth)
+		body = m.browserView(layout)
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(m.wrappedBrowserHintText(layout.ContentWidth))
 	}
 
-	content := strings.Join(header, "\n") + "\n\n" + body
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#2d2d44")).
-		Background(lipgloss.Color(overlayBackgroundColor)).
-		Padding(0, 2).
-		Width(boxWidth)
-	return boxStyle.Render(content)
+	return components.RenderOverlayFrame(layout.FrameWidth, components.OverlayFrameSpec{
+		HeaderLines: header,
+		Body:        body,
+		Footer:      footer,
+	})
 }
 
-func (m *NewSessionOverlay) browserView(w int) string {
-	lines := make([]string, 0, 6)
+func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) string {
+	lines := make([]string, 0, 5)
 	advancedRows := m.advancedFilterRows()
 	filterRow := m.controlLabel("Search: ", browseControlSearch) + m.filterInput.View()
 	lines = append(lines, filterRow)
 	if len(advancedRows) > 0 {
 		lines = append(lines, advancedRows...)
 	}
-	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(w).Render(strings.Repeat("─", maxInt(1, w))))
+	lines = append(lines, components.RenderOverlayDivider(layout.ContentWidth))
 
-	paneHeight := m.browserPaneHeight(len(advancedRows), w)
-	leftWidth, rightWidth := m.browserPaneWidths(w)
-	leftInnerWidth := maxInt(1, leftWidth-paneHorizontalFrame)
-	rightInnerWidth := maxInt(1, rightWidth-paneHorizontalFrame)
-	listHeight := maxInt(1, paneHeight-paneVerticalFrame)
-	m.issueList.SetWidth(leftInnerWidth)
-	m.issueList.SetHeight(listHeight)
-	m.syncDetailViewport(false)
+	m.issueList.SetWidth(layout.LeftInnerWidth)
+	m.issueList.SetHeight(layout.ListHeight)
+	m.syncDetailViewportWithLayout(layout, false)
 
-	leftBorder := lipgloss.Color("#2d2d44")
-	if m.browseFocus != browseFocusDetails {
-		leftBorder = lipgloss.Color("#60a5fa")
-	}
 	leftContent := m.issueList.View()
 	if m.loading && len(m.allItems) == 0 {
 		leftContent = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading…")
@@ -1780,33 +1736,20 @@ func (m *NewSessionOverlay) browserView(w int) string {
 	if m.loading && len(m.allItems) > 0 {
 		leftContent += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading more…")
 	}
-	leftPane := lipgloss.NewStyle().
-		Width(leftInnerWidth).
-		Height(listHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(leftBorder).
-		Padding(0, 1).
-		Render(leftContent)
 
-	rightBorder := lipgloss.Color("#2d2d44")
-	if m.browseFocus == browseFocusDetails {
-		rightBorder = lipgloss.Color("#60a5fa")
-	}
-	detailHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Details")
-	detailDivider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Width(m.detailViewport.Width).Render(strings.Repeat("─", maxInt(1, m.detailViewport.Width)))
-	rightContent := strings.Join([]string{detailHeader, detailDivider, m.detailViewport.View()}, "\n")
-	rightPane := lipgloss.NewStyle().
-		Width(rightInnerWidth).
-		Height(listHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(rightBorder).
-		Padding(0, 1).
-		Render(rightContent)
-
-	panes := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
-	hintText := m.wrappedBrowserHintText(w)
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(hintText)
-	lines = append(lines, panes, hints)
+	panes := components.RenderSplitOverlayBody(layout, components.SplitOverlaySpec{
+		LeftPane: components.OverlayPaneSpec{
+			Body:    leftContent,
+			Focused: m.browseFocus != browseFocusDetails,
+		},
+		RightPane: components.OverlayPaneSpec{
+			Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Details"),
+			DividerWidth: layout.ViewportWidth,
+			Body:         m.detailViewport.View(),
+			Focused:      m.browseFocus == browseFocusDetails,
+		},
+	})
+	lines = append(lines, panes)
 	return strings.Join(lines, "\n")
 }
 

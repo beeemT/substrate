@@ -13,6 +13,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -591,8 +592,8 @@ func TestNewSessionOverlayNoItemsBackgroundMatchesOverlay(t *testing.T) {
 	t.Parallel()
 
 	overlay := NewNewSessionOverlay(nil, "ws-1", styles.NewStyles(styles.DefaultTheme))
-	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(overlayBackgroundColor) {
-		t.Fatalf("no-items background = %v, want %q", got, overlayBackgroundColor)
+	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(components.OverlayBackgroundColor) {
+		t.Fatalf("no-items background = %v, want %q", got, components.OverlayBackgroundColor)
 	}
 }
 
