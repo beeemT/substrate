@@ -316,7 +316,6 @@ func (m *NewSessionOverlay) Close() {
 	m.detailViewport.YOffset = 0
 	m.detailItemID = ""
 	m.detailWidth = 0
-	m.requestSeq = 0
 	m.statusMessage = ""
 	m.browseFocus = browseFocusControls
 	m.browseControl = browseControlSearch
@@ -551,13 +550,15 @@ func (m *NewSessionOverlay) normalizeProviderSelection() {
 }
 
 func (m *NewSessionOverlay) normalizeSelectionOptions() {
+	currentScope := m.currentScope()
+	currentView := m.currentView()
+	currentState := m.currentState()
 	m.normalizeProviderSelection()
 	availableScopes := m.availableScopes()
 	if len(availableScopes) > 0 {
-		current := m.currentScope()
 		m.scopeIndex = scopeOptionIndex(availableScopes[0])
 		for _, scope := range availableScopes {
-			if scope == current {
+			if scope == currentScope {
 				m.scopeIndex = scopeOptionIndex(scope)
 				break
 			}
@@ -567,13 +568,9 @@ func (m *NewSessionOverlay) normalizeSelectionOptions() {
 	if len(availableViews) == 0 {
 		m.viewIndex = 0
 	} else {
-		current := ""
-		if m.viewIndex >= 0 && m.viewIndex < len(defaultViewOptions) {
-			current = defaultViewOptions[m.viewIndex]
-		}
 		m.viewIndex = 0
 		for i, view := range availableViews {
-			if view == current {
+			if view == currentView {
 				m.viewIndex = i
 				break
 			}
@@ -583,13 +580,9 @@ func (m *NewSessionOverlay) normalizeSelectionOptions() {
 	if len(availableStates) == 0 {
 		m.stateIndex = 0
 	} else {
-		current := ""
-		if m.stateIndex >= 0 && m.stateIndex < len(availableStates) {
-			current = availableStates[m.stateIndex]
-		}
 		m.stateIndex = 0
 		for i, state := range availableStates {
-			if state == current {
+			if state == currentState {
 				m.stateIndex = i
 				break
 			}
@@ -1078,7 +1071,7 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 	if !forceTop && item.ID == m.detailItemID && viewportWidth == m.detailWidth {
 		return
 	}
-	content := ansi.Hardwrap(renderMarkdownDocument(detailMarkdown(item), viewportWidth), viewportWidth, true)
+	content := renderDetailContent(item, viewportWidth)
 	m.detailViewport.SetContent(content)
 	if forceTop || item.ID != m.detailItemID || viewportWidth != m.detailWidth {
 		m.detailViewport.GotoTop()
@@ -1087,52 +1080,93 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 	m.detailWidth = viewportWidth
 }
 
-func detailMarkdown(item adapter.ListItem) string {
-	title := item.Title
-	if item.Identifier != "" {
-		title = item.Identifier + " · " + item.Title
+func renderDetailContent(item adapter.ListItem, width int) string {
+	if width < 20 {
+		width = 20
 	}
 
-	meta := make([]string, 0, 6)
-	if item.Provider != "" {
-		meta = append(meta, "- **Provider:** "+strings.Title(item.Provider))
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0"))
+	sectionLabelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
+	metaBoxStyle := lipgloss.NewStyle().
+		Width(width).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#334155")).
+		Padding(0, 1)
+
+	metaInnerWidth := maxInt(1, width-metaBoxStyle.GetHorizontalFrameSize())
+	sections := []string{
+		titleStyle.Render(ansi.Hardwrap(detailTitle(item), width, true)),
+		sectionLabelStyle.Render("Metadata"),
+		metaBoxStyle.Render(renderDetailMetadata(item, metaInnerWidth)),
+		sectionLabelStyle.Render("Description"),
+		renderMarkdownDocument(detailMarkdown(item), width),
 	}
-	if item.State != "" {
-		meta = append(meta, "- **State:** "+item.State)
+
+	return strings.Join(sections, "\n\n")
+}
+
+func renderDetailMetadata(item adapter.ListItem, width int) string {
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e5e7eb"))
+	linkStyle := valueStyle.Copy().Foreground(lipgloss.Color("#7dd3fc")).Underline(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+
+	rows := make([]string, 0, 6)
+	add := func(label, value string, style lipgloss.Style) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		line := labelStyle.Render(label+": ") + style.Render(value)
+		rows = append(rows, ansi.Hardwrap(line, width, true))
 	}
-	if item.ContainerRef != "" {
-		meta = append(meta, "- **Container:** "+item.ContainerRef)
-	}
+
+	add("Provider", detailProviderLabel(item.Provider), valueStyle)
+	add("State", item.State, valueStyle)
+	add("Container", item.ContainerRef, valueStyle)
 	if len(item.Labels) > 0 {
-		meta = append(meta, "- **Labels:** "+strings.Join(item.Labels, ", "))
+		add("Labels", strings.Join(item.Labels, ", "), valueStyle)
 	}
 	if !item.UpdatedAt.IsZero() {
-		meta = append(meta, "- **Updated:** "+item.UpdatedAt.Local().Format("2006-01-02 15:04"))
+		add("Updated", item.UpdatedAt.Local().Format("2006-01-02 15:04"), valueStyle)
 	}
-	if item.URL != "" {
-		meta = append(meta, "- **Link:** ["+item.URL+"]("+item.URL+")")
+	add("URL", item.URL, linkStyle)
+
+	if len(rows) == 0 {
+		return mutedStyle.Render("No metadata available.")
 	}
 
+	return strings.Join(rows, "\n")
+}
+
+func detailProviderLabel(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	for _, option := range providerOptions {
+		if option.Key == provider {
+			return option.Label
+		}
+	}
+	return strings.Title(provider)
+}
+
+func detailTitle(item adapter.ListItem) string {
+	title := strings.TrimSpace(item.Title)
+	if item.Identifier != "" && title != "" {
+		return item.Identifier + " · " + title
+	}
+	if item.Identifier != "" {
+		return item.Identifier
+	}
+	return title
+}
+
+func detailMarkdown(item adapter.ListItem) string {
 	trimmed := strings.TrimSpace(item.Description)
-	body := item.Description
 	if trimmed == "" {
-		body = "_No description provided._"
+		return "_No description provided._"
 	}
-
-	var b strings.Builder
-	b.WriteString("## " + title)
-	b.WriteString("\n\n")
-	b.WriteString("### Metadata\n\n")
-	if len(meta) > 0 {
-		b.WriteString(strings.Join(meta, "\n"))
-	} else {
-		b.WriteString("_No metadata available._")
-	}
-	b.WriteString("\n\n")
-	b.WriteString("### Description\n\n")
-	b.WriteString(body)
-
-	return b.String()
+	return trimmed
 }
 
 func cloneBrowsePages(src map[string]browsePageState) map[string]browsePageState {

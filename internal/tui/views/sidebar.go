@@ -19,6 +19,8 @@ type SidebarEntryKind int
 const (
 	SidebarEntryWorkItem SidebarEntryKind = iota
 	SidebarEntrySessionHistory
+	SidebarEntrySessionOverview
+	SidebarEntrySessionRun
 )
 
 // SidebarEntry is one selectable row in the sidebar.
@@ -41,17 +43,46 @@ type SidebarEntry struct {
 }
 
 func (e SidebarEntry) titlePrefix() string {
-	if e.ExternalID != "" {
-		return e.ExternalID
+	switch e.Kind {
+	case SidebarEntrySessionOverview:
+		return "Overview"
+	case SidebarEntrySessionRun:
+		if e.RepositoryName != "" {
+			return e.RepositoryName
+		}
+		if e.SessionID != "" {
+			return "Run " + shortSessionID(e.SessionID)
+		}
+		return "Run"
+	default:
+		if e.ExternalID != "" {
+			return e.ExternalID
+		}
+		if e.WorkItemID != "" {
+			return e.WorkItemID
+		}
+		return e.SessionID
 	}
-	if e.WorkItemID != "" {
-		return e.WorkItemID
-	}
-	return e.SessionID
 }
 
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
+	if e.Kind == SidebarEntrySessionRun {
+		switch e.SessionStatus {
+		case domain.AgentSessionCompleted:
+			return st.Success.Render("✓")
+		case domain.AgentSessionFailed:
+			return st.Error.Render("✗")
+		case domain.AgentSessionInterrupted:
+			return st.Interrupted.Render("⊘")
+		case domain.AgentSessionWaitingForAnswer:
+			return st.Warning.Render("◐")
+		case domain.AgentSessionRunning:
+			return st.Active.Render("●")
+		default:
+			return st.Muted.Render("◌")
+		}
+	}
 	switch {
 	case e.State == domain.WorkItemCompleted:
 		return st.Success.Render("✓")
@@ -72,6 +103,9 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 
 // Subtitle returns the human-readable status line for this sidebar entry.
 func (e SidebarEntry) Subtitle() string {
+	if e.Kind == SidebarEntrySessionRun {
+		return sessionStatusLabel(e.SessionStatus)
+	}
 	status := ""
 	switch e.State {
 	case domain.WorkItemIngested:
@@ -114,6 +148,7 @@ func (e SidebarEntry) Subtitle() string {
 type SidebarModel struct {
 	entries []SidebarEntry
 	cursor  int
+	title   string
 	styles  styles.Styles
 	width   int
 	height  int
@@ -121,7 +156,7 @@ type SidebarModel struct {
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
 func NewSidebarModel(st styles.Styles) SidebarModel {
-	return SidebarModel{styles: st, width: SidebarWidth}
+	return SidebarModel{styles: st, width: SidebarWidth, title: "Sessions"}
 }
 
 // SetEntries replaces the sidebar entries and preserves selection when possible.
@@ -155,6 +190,11 @@ func (m *SidebarModel) SetWidth(w int) {
 // SetHeight sets the available render height.
 func (m *SidebarModel) SetHeight(h int) { m.height = h }
 
+// SetTitle sets the sidebar header title.
+func (m *SidebarModel) SetTitle(title string) {
+	m.title = title
+}
+
 // MoveUp moves the cursor up by one entry.
 func (m *SidebarModel) MoveUp() {
 	if m.cursor > 0 {
@@ -181,15 +221,20 @@ func (m *SidebarModel) GotoBottom() {
 	}
 }
 
-// SelectWorkItem moves the cursor to the matching work item entry when present.
-func (m *SidebarModel) SelectWorkItem(workItemID string) bool {
+// SelectEntry moves the cursor to the matching work-item/session pair when present.
+func (m *SidebarModel) SelectEntry(workItemID, sessionID string) bool {
 	for i, entry := range m.entries {
-		if entry.Kind == SidebarEntryWorkItem && entry.WorkItemID == workItemID {
+		if entry.WorkItemID == workItemID && entry.SessionID == sessionID {
 			m.cursor = i
 			return true
 		}
 	}
 	return false
+}
+
+// SelectWorkItem moves the cursor to the matching overview/work-item entry when present.
+func (m *SidebarModel) SelectWorkItem(workItemID string) bool {
+	return m.SelectEntry(workItemID, "")
 }
 
 // Selected returns a copy of the currently selected entry, or nil if none.
@@ -212,18 +257,34 @@ func (m SidebarModel) View() string {
 	}
 	var lines []string
 
-	title := m.styles.Muted.Render("Sessions")
+	titleText := m.title
+	if strings.TrimSpace(titleText) == "" {
+		titleText = "Sessions"
+	}
+	title := m.styles.Muted.Render(titleText)
 	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
 	lines = append(lines, m.styles.Muted.Render(strings.Repeat("─", width)))
 
-	for i, entry := range m.entries {
+	visibleEntryCount := 0
+	if availableRows := m.height - len(lines); availableRows > 0 {
+		visibleEntryCount = availableRows / 4
+	}
+	start, end := 0, len(m.entries)
+	if visibleEntryCount <= 0 {
+		start, end = 0, 0
+	} else if len(m.entries) > visibleEntryCount {
+		start = min(max(0, m.cursor-visibleEntryCount+1), len(m.entries)-visibleEntryCount)
+		end = start + visibleEntryCount
+	}
+	for i := start; i < end; i++ {
+		entry := m.entries[i]
 		selected := i == m.cursor
 		icon := entry.StatusIcon(m.styles)
 		line1 := truncate(icon+" "+entry.titlePrefix(), width)
 		titleLine := truncate("  "+entry.Title, width)
 		var line3 string
-		if entry.Kind == SidebarEntryWorkItem && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
+		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntrySessionOverview) && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
 			bar := components.RenderProgressBar(entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4), "#5b8def", "#34d399", "#2d2d44")
 			line3 = "  " + truncate(bar, max(1, width-2))
 		} else {
@@ -241,6 +302,32 @@ func (m SidebarModel) View() string {
 		lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
 	}
 	return fitViewBox(strings.Join(lines, "\n"), width, m.height)
+}
+
+func sessionStatusLabel(status domain.AgentSessionStatus) string {
+	switch status {
+	case domain.AgentSessionPending:
+		return "Pending"
+	case domain.AgentSessionRunning:
+		return "Running"
+	case domain.AgentSessionWaitingForAnswer:
+		return "Waiting for answer"
+	case domain.AgentSessionCompleted:
+		return "Completed"
+	case domain.AgentSessionInterrupted:
+		return "Interrupted"
+	case domain.AgentSessionFailed:
+		return "Failed"
+	default:
+		return string(status)
+	}
+}
+
+func shortSessionID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // truncate trims s to maxLen runes, appending "…" if truncated.

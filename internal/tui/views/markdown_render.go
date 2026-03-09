@@ -7,10 +7,25 @@ import (
 	mermaidcmd "github.com/AlexanderGrooff/mermaid-ascii/cmd"
 	mermaiddiagram "github.com/AlexanderGrooff/mermaid-ascii/pkg/diagram"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/x/ansi"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 )
 
 var mermaidFencePattern = regexp.MustCompile("(?s)```mermaid\\s*\\r?\\n(.*?)\\r?\\n```")
+
+var detailMarkdownStyleConfig = newDetailMarkdownStyleConfig()
+
+func newDetailMarkdownStyleConfig() glamouransi.StyleConfig {
+	cfg := glamourstyles.DarkStyleConfig
+	cfg.H1.Prefix = ""
+	cfg.H1.Suffix = ""
+	cfg.H2.Prefix = ""
+	cfg.H3.Prefix = ""
+	cfg.H4.Prefix = ""
+	cfg.H5.Prefix = ""
+	cfg.H6.Prefix = ""
+	return cfg
+}
 
 func renderMarkdownDocument(content string, width int) string {
 	trimmed := strings.TrimSpace(content)
@@ -52,7 +67,7 @@ func renderMarkdownDocument(content string, width int) string {
 
 func renderMarkdownSegment(content string, width int) string {
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithStyles(detailMarkdownStyleConfig),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -62,7 +77,7 @@ func renderMarkdownSegment(content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimRight(ansi.Strip(out), "\n")
+	return strings.TrimRight(out, "\n")
 }
 
 func renderMermaidBlock(source string) string {

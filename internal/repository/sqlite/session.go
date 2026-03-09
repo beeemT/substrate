@@ -261,6 +261,7 @@ func (r SessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHis
 		query += ` AND wi.workspace_id = ?`
 		args = append(args, *filter.WorkspaceID)
 	}
+	query += ` AND (wi.state <> 'ingested' OR COALESCE(ss.agent_session_count, 0) > 0)`
 	search := strings.ToLower(strings.TrimSpace(filter.Search))
 	if search != "" {
 		like := "%" + search + "%"
@@ -273,9 +274,21 @@ func (r SessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHis
 			lower(COALESCE(ls.session_id, '')) LIKE ? OR
 			lower(COALESCE(ls.repository_name, '')) LIKE ? OR
 			lower(COALESCE(ls.harness_name, '')) LIKE ? OR
-			lower(COALESCE(ls.status, '')) LIKE ?
+			lower(COALESCE(ls.status, '')) LIKE ? OR
+			EXISTS (
+				SELECT 1
+				FROM agent_sessions s2
+				JOIN sub_plans sp2 ON sp2.id = s2.sub_plan_id
+				JOIN plans p2 ON p2.id = sp2.plan_id
+				WHERE p2.work_item_id = wi.id AND (
+					lower(s2.id) LIKE ? OR
+					lower(COALESCE(s2.repository_name, '')) LIKE ? OR
+					lower(COALESCE(s2.harness_name, '')) LIKE ? OR
+					lower(s2.status) LIKE ?
+				)
+			)
 		)`
-		args = append(args, like, like, like, like, like, like, like, like, like)
+		args = append(args, like, like, like, like, like, like, like, like, like, like, like, like, like)
 	}
 	query += ` ORDER BY updated_at DESC, wi.created_at DESC, wi.id`
 	limit := filter.Limit

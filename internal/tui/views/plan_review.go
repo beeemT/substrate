@@ -216,20 +216,46 @@ func (m ReadyToPlanModel) Update(msg tea.Msg) (ReadyToPlanModel, tea.Cmd) {
 }
 
 func (m ReadyToPlanModel) View() string {
-	if m.workItem == nil {
+	if m.workItem == nil || m.width <= 0 || m.height <= 0 {
 		return ""
 	}
-	lines := []string{
-		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
-		m.styles.Muted.Render(strings.Repeat("─", m.width)),
-		"",
-		m.styles.Subtitle.Render(m.workItem.Description),
-		"",
-		m.styles.Muted.Render("Ready to plan. Press ") +
-			m.styles.KeybindAccent.Render("[Enter]") +
-			m.styles.Muted.Render(" to start planning."),
+
+	description := strings.TrimSpace(m.workItem.Description)
+	if description == "" {
+		description = "_No description provided._"
 	}
-	return strings.Join(lines, "\n")
+
+	sectionLabelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
+	descriptionBoxStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#334155")).
+		Padding(0, 1)
+	descriptionInnerWidth := m.width - descriptionBoxStyle.GetHorizontalFrameSize()
+	if descriptionInnerWidth < 1 {
+		descriptionInnerWidth = 1
+	}
+
+	nextStepBoxStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("#2d2d44")).
+		Padding(0, 1)
+
+	nextStep := m.styles.Muted.Render("Press ") +
+		m.styles.KeybindAccent.Render("[Enter]") +
+		m.styles.Muted.Render(" to start planning.")
+
+	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
+	rendered := strings.Join([]string{
+		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
+		sectionLabelStyle.Render("Description"),
+		descriptionBoxStyle.Render(descriptionContent),
+		sectionLabelStyle.Render("Next step"),
+		nextStepBoxStyle.Render(nextStep),
+	}, "\n")
+
+	return fitViewBox(rendered, m.width, m.height)
 }
 
 // AwaitingImplModel shows plan summary when state is "approved".

@@ -125,6 +125,22 @@ func applyOverlayCmds(t *testing.T, overlay NewSessionOverlay, cmd tea.Cmd) NewS
 	return overlay
 }
 
+func applyAppCmds(t *testing.T, app App, cmd tea.Cmd) App {
+	t.Helper()
+	for _, msg := range runOverlayCmd(t, cmd) {
+		model, follow := app.Update(msg)
+		updated, ok := model.(App)
+		if !ok {
+			t.Fatalf("model = %T, want App", model)
+		}
+		app = updated
+		if follow != nil {
+			app = applyAppCmds(t, app, follow)
+		}
+	}
+	return app
+}
+
 func TestNewSessionOverlayRejectsMixedProviderSelection(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +242,161 @@ func TestNewSessionOverlayCloseClearsSelectedBrowseState(t *testing.T) {
 	}
 	if strings.Contains(view, "First") || strings.Contains(view, "Second") {
 		t.Fatalf("view = %q, want stale browse items cleared after reopen", view)
+	}
+}
+
+func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
+		},
+	}
+	githubAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+		title := "Assigned issues"
+		if opts.View == "all" {
+			title = "All issues"
+		}
+		return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-" + opts.View, Provider: "github", Title: title}}}, nil
+	}
+
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
+		Settings:      &SettingsService{},
+	})
+	app.newSession.SetSize(100, 30)
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd == nil {
+		t.Fatal("expected opening new session to trigger a browse reload")
+	}
+	app = applyAppCmds(t, updated, cmd)
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd == nil {
+		t.Fatal("expected view cycling to trigger a browse reload")
+	}
+	app = applyAppCmds(t, updated, cmd)
+
+	if got := app.newSession.currentView(); got != "all" {
+		t.Fatalf("view = %q, want all before close", got)
+	}
+	if got := githubAdapter.lastListOpts.View; got != "all" {
+		t.Fatalf("last list view = %q, want all before close", got)
+	}
+	view := stripBrowseANSI(app.newSession.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "All issues") {
+		t.Fatalf("view = %q, want all-view browse results before close", view)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd == nil {
+		t.Fatal("expected Esc to emit a close-overlay command")
+	}
+	app = applyAppCmds(t, updated, cmd)
+	if app.activeOverlay != overlayNone {
+		t.Fatalf("activeOverlay = %v, want %v after close", app.activeOverlay, overlayNone)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd == nil {
+		t.Fatal("expected reopening new session to trigger a browse reload")
+	}
+	if !updated.newSession.loading {
+		t.Fatal("expected new session overlay to enter loading state on reopen")
+	}
+	if got := updated.newSession.currentView(); got != "all" {
+		t.Fatalf("view = %q, want all preserved on reopen", got)
+	}
+	app = applyAppCmds(t, updated, cmd)
+
+	if len(githubAdapter.listCalls) != 3 {
+		t.Fatalf("list calls = %d, want 3 (open, change view, reopen)", len(githubAdapter.listCalls))
+	}
+	if got := githubAdapter.listCalls[2].View; got != "all" {
+		t.Fatalf("reopen list view = %q, want all", got)
+	}
+	view = stripBrowseANSI(app.newSession.View())
+	assertOverlayFits(t, view, 100, 30)
+	if !strings.Contains(view, "All issues") {
+		t.Fatalf("view = %q, want reopened overlay to render refreshed all-view results", view)
+	}
+}
+
+func TestNewSessionOverlayReopenIgnoresStaleLoadFromPriorSession(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
+		},
+	}
+	githubAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+		title := "Fresh"
+		if len(githubAdapter.listCalls) == 1 {
+			title = "Stale"
+		}
+		return &adapter.ListResult{Items: []adapter.ListItem{{ID: fmt.Sprintf("gh-%d", len(githubAdapter.listCalls)), Provider: "github", Title: title}}}, nil
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	staleCmd := overlay.reloadItems()
+	if overlay.requestSeq != 1 {
+		t.Fatalf("requestSeq = %d, want 1 after initial reload", overlay.requestSeq)
+	}
+
+	overlay.Close()
+	if overlay.requestSeq != 1 {
+		t.Fatalf("requestSeq = %d, want close to preserve request sequence", overlay.requestSeq)
+	}
+
+	overlay.Open()
+	freshCmd := overlay.reloadItems()
+	if overlay.requestSeq != 2 {
+		t.Fatalf("requestSeq = %d, want 2 after reopen reload", overlay.requestSeq)
+	}
+
+	overlay = applyOverlayCmds(t, overlay, staleCmd)
+	if !overlay.loading {
+		t.Fatal("expected stale response to be ignored while the reopen load is still pending")
+	}
+	if len(overlay.allItems) != 0 {
+		t.Fatalf("items = %#v, want stale reopen items ignored", overlay.allItems)
+	}
+
+	overlay = applyOverlayCmds(t, overlay, freshCmd)
+	if overlay.loading {
+		t.Fatal("expected reopen load to finish after fresh response")
+	}
+	if len(overlay.allItems) != 1 || overlay.allItems[0].Title != "Fresh" {
+		t.Fatalf("items = %#v, want only fresh reopen item", overlay.allItems)
 	}
 }
 
@@ -534,6 +705,55 @@ func TestNewSessionOverlayRightArrowMovesBetweenListAndDetails(t *testing.T) {
 	}
 }
 
+func TestRenderDetailContentVisuallySeparatesMetadata(t *testing.T) {
+	t.Parallel()
+
+	const exampleURL = "https://example.com/issue/42"
+	rendered := stripBrowseANSI(renderDetailContent(adapter.ListItem{
+		Provider:    "github",
+		Identifier:  "#42",
+		Title:       "Issue title",
+		State:       "open",
+		Description: "## Summary\n\nThis is **important**.",
+		URL:         exampleURL,
+	}, 80))
+
+	for _, want := range []string{"#42 · Issue title", "Metadata", "Description", "Summary", "This is important.", "Provider: GitHub", "URL: " + exampleURL} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want %q in detail content", rendered, want)
+		}
+	}
+
+	if !strings.Contains(rendered, "╭") || !strings.Contains(rendered, "╰") {
+		t.Fatalf("rendered = %q, want a bordered metadata card", rendered)
+	}
+
+	for _, raw := range []string{"## #42 · Issue title", "## Summary", "### Metadata", "### Description", "**important**", "Open in browser"} {
+		if strings.Contains(rendered, raw) {
+			t.Fatalf("rendered = %q, must not contain raw markdown token %q", rendered, raw)
+		}
+	}
+}
+
+func TestRenderDetailContentRendersMarkdownLinksWithHrefText(t *testing.T) {
+	t.Parallel()
+
+	rendered := stripBrowseANSI(renderDetailContent(adapter.ListItem{
+		Title:       "Issue title",
+		Description: "Read [the guide](https://example.com/guide) for details.",
+	}, 80))
+
+	for _, want := range []string{"Issue title", "Description", "the guide", "https://example.com/guide", "for details."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want %q in detail content", rendered, want)
+		}
+	}
+
+	if strings.Contains(rendered, "[the guide](https://example.com/guide)") {
+		t.Fatalf("rendered = %q, must not contain raw markdown link syntax", rendered)
+	}
+}
+
 func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 	t.Parallel()
 
@@ -556,14 +776,16 @@ func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 
 	view := stripBrowseANSI(overlay.View())
 
-	for _, want := range []string{"Issue title", "Provider:", "Mermaid diagram", "A", "B", "Description", "Metadata", exampleURL} {
+	for _, want := range []string{"Issue title", "Provider:", "Mermaid diagram", "A", "B", "Description", "Metadata", "URL:", exampleURL} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view = %q, want %q in rendered details", view, want)
 		}
 	}
 
-	if strings.Contains(view, "Open in browser") {
-		t.Fatalf("view = %q, must not render legacy link text", view)
+	for _, raw := range []string{"Open in browser", "## #42 · Issue title", "## Summary", "### Description", "### Metadata", "**important**"} {
+		if strings.Contains(view, raw) {
+			t.Fatalf("view = %q, must not contain raw markdown token %q", view, raw)
+		}
 	}
 
 	t.Run("EmptyDescriptionShowsPlaceholder", func(t *testing.T) {

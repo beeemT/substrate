@@ -189,11 +189,19 @@ func TestSidebarClipsOverflowingEntriesToRequestedHeight(t *testing.T) {
 	t.Parallel()
 
 	m := views.NewSidebarModel(makeSidebarStyles())
-	m.SetHeight(8)
+	m.SetHeight(10)
 	m.SetEntries(makeSessions(5))
+	m.GotoBottom()
 
-	lines := strings.Split(stripANSI(m.View()), "\n")
-	if got := len(lines); got != 8 {
-		t.Fatalf("sidebar line count = %d, want 8", got)
+	view := stripANSI(m.View())
+	lines := strings.Split(view, "\n")
+	if got := len(lines); got != 10 {
+		t.Fatalf("sidebar line count = %d, want 10", got)
+	}
+	if !strings.Contains(view, "Session E") {
+		t.Fatalf("view = %q, want bottom-most selected entry visible", view)
+	}
+	if strings.Contains(view, "Session C") {
+		t.Fatalf("view = %q, want clipped middle entries removed at full-entry boundaries", view)
 	}
 }

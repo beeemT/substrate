@@ -46,6 +46,20 @@ func (s sessionHistoryScope) Label() string {
 	return "workspace"
 }
 
+type sidebarPaneMode int
+
+const (
+	sidebarPaneSessions sidebarPaneMode = iota
+	sidebarPaneRuns
+)
+
+type mainFocusArea int
+
+const (
+	mainFocusSidebar mainFocusArea = iota
+	mainFocusContent
+)
+
 // App is the top-level bubbletea model.
 type App struct {
 	svcs Services
@@ -93,6 +107,9 @@ type App struct {
 	currentWorkItemID       string
 	currentHistorySessionID string
 	currentHistoryEntry     SidebarEntry
+	sidebarMode             sidebarPaneMode
+	mainFocus               mainFocusArea
+	runSelectionByWorkItem  map[string]string
 
 	// Session log tailing
 	sessionsDir string
@@ -112,23 +129,24 @@ func NewApp(svcs Services) App {
 	cwd, _ := os.Getwd()
 
 	app := App{
-		svcs:              svcs,
-		sidebar:           NewSidebarModel(st),
-		content:           NewContentModel(st),
-		statusBar:         NewStatusBarModel(st),
-		newSession:        NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
-		sessionSearch:     NewSessionSearchOverlay(st),
-		settingsPage:      NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
-		helpOverlay:       NewHelpOverlay(st),
-		subPlans:          make(map[string][]domain.SubPlan),
-		plans:             make(map[string]*domain.Plan),
-		questions:         make(map[string][]domain.Question),
-		reviews:           make(map[string]ReviewsLoadedMsg),
-		tailingSessionIDs: make(map[string]bool),
-		liveInstanceIDs:   make(map[string]bool),
-		reviewSessionLogs: make(map[string]string),
-		sessionsDir:       sessionsDir,
-		hasWorkspace:      svcs.WorkspaceID != "",
+		svcs:                   svcs,
+		sidebar:                NewSidebarModel(st),
+		content:                NewContentModel(st),
+		statusBar:              NewStatusBarModel(st),
+		newSession:             NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
+		sessionSearch:          NewSessionSearchOverlay(st),
+		settingsPage:           NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
+		helpOverlay:            NewHelpOverlay(st),
+		subPlans:               make(map[string][]domain.SubPlan),
+		plans:                  make(map[string]*domain.Plan),
+		questions:              make(map[string][]domain.Question),
+		reviews:                make(map[string]ReviewsLoadedMsg),
+		tailingSessionIDs:      make(map[string]bool),
+		liveInstanceIDs:        make(map[string]bool),
+		reviewSessionLogs:      make(map[string]string),
+		runSelectionByWorkItem: make(map[string]string),
+		sessionsDir:            sessionsDir,
+		hasWorkspace:           svcs.WorkspaceID != "",
 	}
 
 	if !app.hasWorkspace {
@@ -215,12 +233,22 @@ func (a *App) openSessionSearch() tea.Cmd {
 	return a.runSessionSearch(true)
 }
 
+func (a *App) openNewSession() tea.Cmd {
+	a.activeOverlay = overlayNewSession
+	a.newSession.Open()
+	return a.newSession.reloadItems()
+}
+
 func (a App) currentHints() []KeybindHint {
-	hints := a.content.KeybindHints()
-	if len(hints) == 0 {
-		return DefaultHints()
+	global := DefaultHints()
+	if a.mainFocus == mainFocusContent {
+		hints := append([]KeybindHint{{Key: "←", Label: "Back"}}, a.content.KeybindHints()...)
+		return append(hints, global...)
 	}
-	return hints
+	if a.sidebarMode == sidebarPaneRuns {
+		return append([]KeybindHint{{Key: "↑/↓", Label: "Runs"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}, global...)
+	}
+	return append([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Runs"}}, global...)
 }
 
 func (a App) historyEntryTitle(entry SidebarEntry) string {
@@ -260,6 +288,79 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (a App) workItemByID(workItemID string) *domain.WorkItem {
+	for i := range a.workItems {
+		if a.workItems[i].ID == workItemID {
+			return &a.workItems[i]
+		}
+	}
+	return nil
+}
+
+func (a App) sessionByID(sessionID string) *domain.AgentSession {
+	for i := range a.sessions {
+		if a.sessions[i].ID == sessionID {
+			return &a.sessions[i]
+		}
+	}
+	return nil
+}
+
+func (a App) selectedRunSessionID() string {
+	if a.currentWorkItemID == "" {
+		return ""
+	}
+	return a.runSelectionByWorkItem[a.currentWorkItemID]
+}
+
+func (a *App) setSelectedRunSessionID(sessionID string) {
+	if a.currentWorkItemID == "" {
+		return
+	}
+	a.runSelectionByWorkItem[a.currentWorkItemID] = sessionID
+}
+
+func (a *App) enterRunSidebar() tea.Cmd {
+	if a.currentWorkItemID == "" {
+		return nil
+	}
+	a.sidebarMode = sidebarPaneRuns
+	a.mainFocus = mainFocusSidebar
+	a.rebuildSidebar()
+	if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedRunSessionID()) {
+		a.sidebar.SelectEntry(a.currentWorkItemID, "")
+	}
+	a.tailingSessionIDs = make(map[string]bool)
+	a.currentHistorySessionID = ""
+	a.currentHistoryEntry = SidebarEntry{}
+	if sel := a.sidebar.Selected(); sel != nil {
+		a.currentWorkItemID = sel.WorkItemID
+		a.setSelectedRunSessionID(sel.SessionID)
+	}
+	return a.updateContentFromState()
+}
+
+func (a *App) exitRunSidebar() tea.Cmd {
+	a.sidebarMode = sidebarPaneSessions
+	a.mainFocus = mainFocusSidebar
+	a.rebuildSidebar()
+	a.sidebar.SelectWorkItem(a.currentWorkItemID)
+	a.tailingSessionIDs = make(map[string]bool)
+	a.currentHistorySessionID = ""
+	a.currentHistoryEntry = SidebarEntry{}
+	return a.updateContentFromState()
+}
+
+func (a App) workItemRunSession(workItemID, sessionID string) *domain.AgentSession {
+	for _, session := range a.sessionsForWorkItem(workItemID) {
+		if session.ID == sessionID {
+			s := session
+			return &s
+		}
+	}
+	return nil
 }
 
 func (a App) historyEntrySummaryLines(entry SidebarEntry) []string {
@@ -310,6 +411,9 @@ func (a App) historyEntryIsLocal(entry SidebarEntry) bool {
 func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 	a.tailingSessionIDs = make(map[string]bool)
 	a.currentHistoryEntry = SidebarEntry{}
+	a.sidebarMode = sidebarPaneSessions
+	a.mainFocus = mainFocusSidebar
+	a.rebuildSidebar()
 	if a.historyEntryIsLocal(entry) {
 		a.currentHistorySessionID = ""
 		a.currentWorkItemID = entry.WorkItemID
@@ -664,6 +768,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !replaced {
 			a.workItems = append(a.workItems, msg.WorkItem)
 		}
+		a.sidebarMode = sidebarPaneSessions
+		a.mainFocus = mainFocusSidebar
+		a.runSelectionByWorkItem[msg.WorkItem.ID] = ""
 		a.rebuildSidebar()
 		a.sidebar.SelectWorkItem(msg.WorkItem.ID)
 		a.currentHistorySessionID = ""
@@ -786,9 +893,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Quit
 	case "n":
-		a.activeOverlay = overlayNewSession
-		a.newSession.Open()
-		return a, nil
+		return a, a.openNewSession()
 	case "c":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
@@ -803,19 +908,52 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.settingsPage.Close()
 			return a, nil
 		}
+	case "right":
+		if a.mainFocus == mainFocusContent {
+			break
+		}
+		if a.sidebarMode == sidebarPaneSessions {
+			return a, a.enterRunSidebar()
+		}
+		a.mainFocus = mainFocusContent
+		return a, nil
+	case "left":
+		if a.mainFocus == mainFocusContent {
+			a.mainFocus = mainFocusSidebar
+			return a, nil
+		}
+		if a.sidebarMode == sidebarPaneRuns {
+			return a, a.exitRunSidebar()
+		}
 	case "up", "k":
+		if a.mainFocus == mainFocusContent {
+			a.content, cmd = a.content.Update(msg)
+			return a, cmd
+		}
 		a.sidebar.MoveUp()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "down", "j":
+		if a.mainFocus == mainFocusContent {
+			a.content, cmd = a.content.Update(msg)
+			return a, cmd
+		}
 		a.sidebar.MoveDown()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "g":
+		if a.mainFocus == mainFocusContent {
+			a.content, cmd = a.content.Update(msg)
+			return a, cmd
+		}
 		a.sidebar.GotoTop()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "G":
+		if a.mainFocus == mainFocusContent {
+			a.content, cmd = a.content.Update(msg)
+			return a, cmd
+		}
 		a.sidebar.GotoBottom()
 		cmd = a.onSidebarMove()
 		return a, cmd
@@ -838,6 +976,17 @@ func (a *App) onSidebarMove() tea.Cmd {
 		a.currentHistoryEntry = SidebarEntry{}
 		return nil
 	}
+	if a.sidebarMode == sidebarPaneRuns {
+		if sel.WorkItemID == a.currentWorkItemID && sel.SessionID == a.selectedRunSessionID() && a.currentHistorySessionID == "" {
+			return nil
+		}
+		a.tailingSessionIDs = make(map[string]bool)
+		a.currentHistorySessionID = ""
+		a.currentHistoryEntry = SidebarEntry{}
+		a.currentWorkItemID = sel.WorkItemID
+		a.setSelectedRunSessionID(sel.SessionID)
+		return a.updateContentFromState()
+	}
 	if sel.WorkItemID == a.currentWorkItemID && a.currentHistorySessionID == "" {
 		return nil
 	}
@@ -855,19 +1004,21 @@ func (a *App) updateContentFromState() tea.Cmd {
 		return nil
 	}
 
-	var wi *domain.WorkItem
-	for i := range a.workItems {
-		if a.workItems[i].ID == a.currentWorkItemID {
-			wi = &a.workItems[i]
-			break
-		}
-	}
+	wi := a.workItemByID(a.currentWorkItemID)
 	if wi == nil {
 		a.content.SetMode(ContentModeEmpty)
 		return nil
 	}
 
 	a.content.SetWorkItem(wi)
+	if a.sidebarMode == sidebarPaneRuns {
+		if runSessionID := a.selectedRunSessionID(); runSessionID != "" {
+			if session := a.workItemRunSession(a.currentWorkItemID, runSessionID); session != nil {
+				return a.showRunContent(wi, session)
+			}
+			a.setSelectedRunSessionID("")
+		}
+	}
 
 	switch wi.State {
 	case domain.WorkItemIngested:
@@ -904,7 +1055,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 				}
 			}
 		}
-		// Check for escalated question.
 		for _, s := range activeSessions {
 			if s.Status == domain.AgentSessionWaitingForAnswer {
 				for _, q := range a.questions[s.ID] {
@@ -916,7 +1066,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 				}
 			}
 		}
-		// Check for interrupted session.
 		for _, s := range activeSessions {
 			if s.Status == domain.AgentSessionInterrupted {
 				a.content.SetMode(ContentModeInterrupted)
@@ -968,7 +1117,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 		}
 		a.content.reviewing.SetRepos(repoResults)
 		a.content.reviewing.SetWorkItemID(wi.ID)
-		// Tail the review agent log for each implementation session if available.
 		var tailCmds []tea.Cmd
 		if plan := a.plans[wi.ID]; plan != nil {
 			for _, sp := range a.subPlans[plan.ID] {
@@ -999,11 +1147,30 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.failed.SetFailure("Work item failed", "")
 	}
 
-	// Reset tailing state when mode changes away from live-tailing modes.
 	if prevMode != a.content.mode {
-		if prevMode == ContentModePlanning || prevMode == ContentModeImplementing {
+		if prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction {
 			a.tailingSessionIDs = make(map[string]bool)
 		}
+	}
+	return nil
+}
+
+func (a *App) showRunContent(wi *domain.WorkItem, session *domain.AgentSession) tea.Cmd {
+	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + firstNonEmptyString(session.RepositoryName, "Run")
+	metaParts := []string{sessionStatusLabel(session.Status)}
+	if session.HarnessName != "" {
+		metaParts = append(metaParts, session.HarnessName)
+	}
+	metaParts = append(metaParts, session.ID)
+	a.content.SetMode(ContentModeSessionInteraction)
+	a.content.sessionLog.SetTitle(title)
+	a.content.sessionLog.SetModeLabel("Run")
+	a.content.sessionLog.SetMeta(strings.Join(metaParts, " · "))
+	logPath := filepath.Join(a.sessionsDir, session.ID+".log")
+	a.content.sessionLog.SetLogPath(session.ID, logPath)
+	if !a.tailingSessionIDs[session.ID] {
+		a.tailingSessionIDs[session.ID] = true
+		return TailSessionLogCmd(logPath, session.ID, 0)
 	}
 	return nil
 }
@@ -1037,8 +1204,6 @@ func (a *App) canActOnSession(s domain.AgentSession) bool {
 	if *s.OwnerInstanceID == a.svcs.InstanceID {
 		return true
 	}
-	// Owner is a different instance — take over only if it's dead (stale heartbeat >15s).
-	// If we have no live instance data yet, be conservative and disallow.
 	if len(a.liveInstanceIDs) == 0 {
 		return false
 	}
@@ -1091,7 +1256,7 @@ func (a App) sidebarEntryFromWorkItem(wi domain.WorkItem) SidebarEntry {
 	return entry
 }
 
-func (a *App) rebuildSidebar() {
+func (a App) sessionSidebarEntries() []SidebarEntry {
 	entries := make([]SidebarEntry, 0, len(a.workItems))
 	for _, wi := range a.workItems {
 		entries = append(entries, a.sidebarEntryFromWorkItem(wi))
@@ -1102,7 +1267,81 @@ func (a *App) rebuildSidebar() {
 		}
 		return entries[i].WorkItemID < entries[j].WorkItemID
 	})
-	a.sidebar.SetEntries(entries)
+	return entries
+}
+
+func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
+	plan := a.plans[workItemID]
+	if plan == nil {
+		return nil
+	}
+	subPlanOrder := make(map[string]int, len(a.subPlans[plan.ID]))
+	for i, sp := range a.subPlans[plan.ID] {
+		subPlanOrder[sp.ID] = i
+	}
+	sessions := make([]domain.AgentSession, 0)
+	for _, s := range a.sessions {
+		if _, ok := subPlanOrder[s.SubPlanID]; ok {
+			sessions = append(sessions, s)
+		}
+	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		orderI, okI := subPlanOrder[sessions[i].SubPlanID]
+		orderJ, okJ := subPlanOrder[sessions[j].SubPlanID]
+		if okI && okJ && orderI != orderJ {
+			return orderI < orderJ
+		}
+		if okI != okJ {
+			return okI
+		}
+		if !sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
+			return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+		}
+		return sessions[i].ID < sessions[j].ID
+	})
+	return sessions
+}
+
+func (a App) runSidebarEntries(workItemID string) []SidebarEntry {
+	wi := a.workItemByID(workItemID)
+	if wi == nil {
+		return nil
+	}
+	overview := a.sidebarEntryFromWorkItem(*wi)
+	overview.Kind = SidebarEntrySessionOverview
+	entries := []SidebarEntry{overview}
+	for _, session := range a.sessionsForWorkItem(workItemID) {
+		entries = append(entries, SidebarEntry{
+			Kind:           SidebarEntrySessionRun,
+			WorkItemID:     workItemID,
+			SessionID:      session.ID,
+			Title:          "Session " + shortSessionID(session.ID),
+			State:          wi.State,
+			SessionStatus:  session.Status,
+			RepositoryName: session.RepositoryName,
+			LastActivity:   session.UpdatedAt,
+		})
+	}
+	return entries
+}
+
+func (a *App) rebuildSidebar() {
+	if a.sidebarMode == sidebarPaneRuns && a.currentWorkItemID != "" && a.workItemByID(a.currentWorkItemID) != nil {
+		wi := a.workItemByID(a.currentWorkItemID)
+		a.sidebar.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Tasks")
+		a.sidebar.SetEntries(a.runSidebarEntries(a.currentWorkItemID))
+		if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedRunSessionID()) {
+			a.setSelectedRunSessionID("")
+			a.sidebar.SelectEntry(a.currentWorkItemID, "")
+		}
+		return
+	}
+	a.sidebarMode = sidebarPaneSessions
+	a.sidebar.SetTitle("Sessions")
+	a.sidebar.SetEntries(a.sessionSidebarEntries())
+	if a.currentWorkItemID != "" {
+		a.sidebar.SelectWorkItem(a.currentWorkItemID)
+	}
 }
 
 // View renders the full terminal UI.

@@ -541,6 +541,28 @@ func TestSessionSearchHistory(t *testing.T) {
 	if err := sessionRepo.Update(ctx, remoteSession); err != nil {
 		t.Fatalf("update remote session: %v", err)
 	}
+	remoteLatestSubPlan := domain.SubPlan{
+		ID:             domain.NewID(),
+		PlanID:         remotePlan.ID,
+		RepositoryName: "latest-repo",
+		Content:        "latest remote sub-plan",
+		Order:          2,
+		Status:         domain.SubPlanPending,
+		CreatedAt:      now(),
+		UpdatedAt:      now(),
+	}
+	if err := reposqlite.NewSubPlanRepo(tx).Create(ctx, remoteLatestSubPlan); err != nil {
+		t.Fatalf("create latest remote sub-plan: %v", err)
+	}
+	remoteLatestSession := makeSession(t, tx, remoteLatestSubPlan.ID, remoteWS.ID)
+	remoteLatestSession.RepositoryName = remoteLatestSubPlan.RepositoryName
+	remoteLatestSession.Status = domain.AgentSessionCompleted
+	latestCompletedAt := now().Add(-30 * time.Second)
+	remoteLatestSession.CompletedAt = &latestCompletedAt
+	remoteLatestSession.UpdatedAt = latestCompletedAt
+	if err := sessionRepo.Update(ctx, remoteLatestSession); err != nil {
+		t.Fatalf("update latest remote session: %v", err)
+	}
 
 	planningOnlyItem := makeWorkItem(t, tx, remoteWS.ID)
 	planningOnlyItem.ExternalID = "REM-2"
@@ -549,6 +571,12 @@ func TestSessionSearchHistory(t *testing.T) {
 	planningOnlyItem.UpdatedAt = now().Add(1 * time.Minute)
 	if err := workItemRepo.Update(ctx, planningOnlyItem); err != nil {
 		t.Fatalf("update planning-only work item: %v", err)
+	}
+	ingestedItem := makeWorkItem(t, tx, remoteWS.ID)
+	ingestedItem.ExternalID = "REM-3"
+	ingestedItem.Title = "Untouched backlog item"
+	if err := workItemRepo.Update(ctx, ingestedItem); err != nil {
+		t.Fatalf("update ingested work item: %v", err)
 	}
 
 	localEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{
@@ -585,8 +613,8 @@ func TestSessionSearchHistory(t *testing.T) {
 	if len(remoteEntries) != 1 {
 		t.Fatalf("remote entries len = %d, want 1", len(remoteEntries))
 	}
-	if remoteEntries[0].SessionID != remoteSession.ID {
-		t.Fatalf("remote session id = %q, want %q", remoteEntries[0].SessionID, remoteSession.ID)
+	if remoteEntries[0].SessionID != remoteLatestSession.ID {
+		t.Fatalf("remote session id = %q, want %q", remoteEntries[0].SessionID, remoteLatestSession.ID)
 	}
 	if remoteEntries[0].WorkspaceID != remoteWS.ID {
 		t.Fatalf("remote workspace id = %q, want %q", remoteEntries[0].WorkspaceID, remoteWS.ID)
@@ -594,8 +622,16 @@ func TestSessionSearchHistory(t *testing.T) {
 	if remoteEntries[0].WorkItemExternalID != remoteItem.ExternalID {
 		t.Fatalf("remote external id = %q, want %q", remoteEntries[0].WorkItemExternalID, remoteItem.ExternalID)
 	}
-	if remoteEntries[0].Status != remoteSession.Status {
-		t.Fatalf("remote status = %q, want %q", remoteEntries[0].Status, remoteSession.Status)
+	if remoteEntries[0].Status != remoteLatestSession.Status {
+		t.Fatalf("remote status = %q, want %q", remoteEntries[0].Status, remoteLatestSession.Status)
+	}
+
+	olderSessionEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{Search: "remote-repo", Limit: 10})
+	if err != nil {
+		t.Fatalf("search older child session metadata: %v", err)
+	}
+	if len(olderSessionEntries) != 1 || olderSessionEntries[0].WorkItemID != remoteItem.ID {
+		t.Fatalf("older session search = %#v, want one entry for remote item", olderSessionEntries)
 	}
 
 	recentEntries, err := sessionRepo.SearchHistory(ctx, domain.SessionHistoryFilter{Limit: 10})
@@ -614,8 +650,8 @@ func TestSessionSearchHistory(t *testing.T) {
 	if recentEntries[0].AgentSessionCount != 0 {
 		t.Fatalf("planning-only agent session count = %d, want 0", recentEntries[0].AgentSessionCount)
 	}
-	if recentEntries[1].SessionID != remoteSession.ID || recentEntries[2].SessionID != localSession.ID {
-		t.Fatalf("recent order = [%q %q %q], want [%q %q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, recentEntries[2].SessionID, "", remoteSession.ID, localSession.ID)
+	if recentEntries[1].SessionID != remoteLatestSession.ID || recentEntries[2].SessionID != localSession.ID {
+		t.Fatalf("recent order = [%q %q %q], want [%q %q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, recentEntries[2].SessionID, "", remoteLatestSession.ID, localSession.ID)
 	}
 }
 
