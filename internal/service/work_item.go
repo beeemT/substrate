@@ -72,6 +72,21 @@ func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) erro
 	if item.State != domain.WorkItemIngested {
 		return newInvalidInputError("initial state must be ingested", "state")
 	}
+	if strings.TrimSpace(item.ExternalID) != "" {
+		workspaceID := item.WorkspaceID
+		externalID := item.ExternalID
+		existing, err := s.repo.List(ctx, repository.WorkItemFilter{
+			WorkspaceID: &workspaceID,
+			ExternalID:  &externalID,
+			Limit:       1,
+		})
+		if err != nil {
+			return err
+		}
+		if len(existing) > 0 {
+			return newAlreadyExistsError("work item", item.ExternalID)
+		}
+	}
 	// Set timestamps
 	now := time.Now()
 	item.CreatedAt = now

@@ -39,6 +39,9 @@ func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.Wor
 		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
 			continue
 		}
+		if filter.ExternalID != nil && item.ExternalID != *filter.ExternalID {
+			continue
+		}
 		if filter.State != nil && item.State != *filter.State {
 			continue
 		}

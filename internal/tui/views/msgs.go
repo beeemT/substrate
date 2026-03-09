@@ -169,6 +169,12 @@ type WorkItemCreatedMsg struct {
 	Message  string
 }
 
+// WorkItemDuplicateOpenedMsg is sent when session creation resolves to an existing work item.
+type WorkItemDuplicateOpenedMsg struct {
+	WorkItem domain.WorkItem
+	Message  string
+}
+
 // --- Overlay control ---
 
 // ShowNewSessionMsg opens the New Session overlay.

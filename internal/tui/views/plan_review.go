@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -227,7 +228,6 @@ func (m ReadyToPlanModel) View() string {
 
 	sectionLabelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
 	descriptionBoxStyle := lipgloss.NewStyle().
-		Width(m.width).
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#334155")).
 		Padding(0, 1)
@@ -237,22 +237,26 @@ func (m ReadyToPlanModel) View() string {
 	}
 
 	nextStepBoxStyle := lipgloss.NewStyle().
-		Width(m.width).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("#2d2d44")).
 		Padding(0, 1)
+	nextStepInnerWidth := m.width - nextStepBoxStyle.GetHorizontalFrameSize()
+	if nextStepInnerWidth < 1 {
+		nextStepInnerWidth = 1
+	}
 
 	nextStep := m.styles.Muted.Render("Press ") +
 		m.styles.KeybindAccent.Render("[Enter]") +
 		m.styles.Muted.Render(" to start planning.")
 
 	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
+	nextStepContent := ansi.Hardwrap(nextStep, nextStepInnerWidth, true)
 	rendered := strings.Join([]string{
 		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
 		sectionLabelStyle.Render("Description"),
 		descriptionBoxStyle.Render(descriptionContent),
 		sectionLabelStyle.Render("Next step"),
-		nextStepBoxStyle.Render(nextStep),
+		nextStepBoxStyle.Render(nextStepContent),
 	}, "\n")
 
 	return fitViewBox(rendered, m.width, m.height)

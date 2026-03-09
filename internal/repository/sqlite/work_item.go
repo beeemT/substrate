@@ -120,6 +120,10 @@ func (r WorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter
 		query += ` AND workspace_id = ?`
 		args = append(args, *filter.WorkspaceID)
 	}
+	if filter.ExternalID != nil {
+		query += ` AND external_id = ?`
+		args = append(args, *filter.ExternalID)
+	}
 	if filter.State != nil {
 		query += ` AND state = ?`
 		args = append(args, string(*filter.State))

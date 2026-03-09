@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,48 @@ import (
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/orchestrator"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
+
+type duplicateCreateWorkItemRepo struct {
+	items     []domain.WorkItem
+	createErr error
+	listErr   error
+}
+
+func (r duplicateCreateWorkItemRepo) Get(context.Context, string) (domain.WorkItem, error) {
+	return domain.WorkItem{}, repository.ErrNotFound
+}
+
+func (r duplicateCreateWorkItemRepo) List(_ context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	items := make([]domain.WorkItem, 0, len(r.items))
+	for _, item := range r.items {
+		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
+			continue
+		}
+		if filter.ExternalID != nil && item.ExternalID != *filter.ExternalID {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (r duplicateCreateWorkItemRepo) Create(context.Context, domain.WorkItem) error {
+	return r.createErr
+}
+
+func (r duplicateCreateWorkItemRepo) Update(context.Context, domain.WorkItem) error {
+	return nil
+}
+
+func (r duplicateCreateWorkItemRepo) Delete(context.Context, string) error {
+	return nil
+}
 
 func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	now := time.Now()
@@ -134,6 +176,15 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeSessionInteraction)
 	}
 
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if view := stripToastANSI(updated.View()); !strings.Contains(view, "Read only") {
+		t.Fatalf("view = %q, want persistent read only toast", view)
+	}
+
 	msg := cmd()
 	loaded, ok := msg.(SessionInteractionLoadedMsg)
 	if !ok {
@@ -253,6 +304,120 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 	}
 	if len(updated.workItems) != 2 {
 		t.Fatalf("work item count = %d, want 2", len(updated.workItems))
+	}
+}
+
+func TestPersistCreatedWorkItemMsgDuplicateReturnsExistingWorkItem(t *testing.T) {
+	existing := domain.WorkItem{
+		ID:          "wi-existing",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-1",
+		Title:       "Existing item",
+		State:       domain.WorkItemIngested,
+	}
+	repo := duplicateCreateWorkItemRepo{
+		items:     []domain.WorkItem{existing},
+		createErr: service.ErrAlreadyExists{Entity: "work item", ID: existing.ExternalID},
+	}
+
+	msg := persistCreatedWorkItemMsg(Services{
+		WorkspaceID: "ws-local",
+		WorkItem:    service.NewWorkItemService(repo),
+	}, domain.WorkItem{
+		ID:         "wi-new",
+		ExternalID: existing.ExternalID,
+		Title:      "Duplicate item",
+	})
+
+	dup, ok := msg.(WorkItemDuplicateOpenedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want WorkItemDuplicateOpenedMsg", msg)
+	}
+	if dup.WorkItem.ID != existing.ID {
+		t.Fatalf("work item id = %q, want %q", dup.WorkItem.ID, existing.ID)
+	}
+	if dup.Message != "Work item already exists: opened existing item SUB-1" {
+		t.Fatalf("message = %q", dup.Message)
+	}
+}
+
+func TestWorkItemDuplicateOpenedMsgFocusesExistingWorkItemOverview(t *testing.T) {
+	now := time.Now()
+	older := now.Add(-time.Hour)
+	existing := domain.WorkItem{
+		ID:          "wi-existing",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-1",
+		Title:       "Existing item",
+		Description: "## Summary\n\nThis is **important**.",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   older,
+		UpdatedAt:   older,
+	}
+	other := domain.WorkItem{
+		ID:          "wi-other",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-2",
+		Title:       "Other item",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		Planning:      &orchestrator.PlanningService{},
+	})
+	app.content.SetSize(80, 20)
+	app.workItems = []domain.WorkItem{existing, other}
+	app.currentWorkItemID = other.ID
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem(other.ID)
+	_ = app.updateContentFromState()
+
+	model, cmd := app.Update(WorkItemDuplicateOpenedMsg{
+		WorkItem: existing,
+		Message:  "Work item already exists: opened existing item SUB-1",
+	})
+	if cmd != nil {
+		t.Fatal("expected duplicate open to avoid auto-starting planning")
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.currentWorkItemID != existing.ID {
+		t.Fatalf("currentWorkItemID = %q, want %q", updated.currentWorkItemID, existing.ID)
+	}
+	if updated.content.Mode() != ContentModeReadyToPlan {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.WorkItemID != existing.ID {
+		t.Fatalf("selected sidebar entry = %v, want %q", sel, existing.ID)
+	}
+	toastView := stripBrowseANSI(updated.toasts.View("", ""))
+	if !strings.Contains(toastView, "ℹ Work item already exists: opened existing item SUB-1") {
+		t.Fatalf("toast view = %q", toastView)
+	}
+	if strings.Contains(toastView, "✗") {
+		t.Fatalf("toast view = %q, want non-error duplicate toast", toastView)
+	}
+	if strings.Contains(strings.ToLower(toastView), "sqlite") || strings.Contains(strings.ToLower(toastView), "unique") {
+		t.Fatalf("toast view = %q, want friendly duplicate text", toastView)
+	}
+
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"SUB-1 · Existing item", "Description", "Next step", "Summary", "This is important.", "Press [Enter]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	for _, raw := range []string{"## Summary", "**important**"} {
+		if strings.Contains(view, raw) {
+			t.Fatalf("content view = %q, must not contain raw markdown token %q", view, raw)
+		}
 	}
 }
 

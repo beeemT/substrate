@@ -16,6 +16,7 @@ func (notFound) Error() string { return "not found" }
 // WorkItemFilter constrains WorkItemRepository.List results.
 type WorkItemFilter struct {
 	WorkspaceID   *string
+	ExternalID    *string
 	State         *domain.WorkItemState
 	Source        *string
 	Limit, Offset int

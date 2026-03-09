@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -299,6 +301,28 @@ func (a App) workItemByID(workItemID string) *domain.WorkItem {
 	return nil
 }
 
+func (a *App) upsertWorkItem(workItem domain.WorkItem) {
+	for i := range a.workItems {
+		if a.workItems[i].ID == workItem.ID {
+			a.workItems[i] = workItem
+			return
+		}
+	}
+	a.workItems = append(a.workItems, workItem)
+}
+
+func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
+	a.sidebarMode = sidebarPaneSessions
+	a.mainFocus = mainFocusSidebar
+	a.runSelectionByWorkItem[workItemID] = ""
+	a.rebuildSidebar()
+	a.sidebar.SelectWorkItem(workItemID)
+	a.currentHistorySessionID = ""
+	a.currentHistoryEntry = SidebarEntry{}
+	a.currentWorkItemID = workItemID
+	return a.updateContentFromState()
+}
+
 func (a App) sessionByID(sessionID string) *domain.AgentSession {
 	for i := range a.sessions {
 		if a.sessions[i].ID == sessionID {
@@ -406,6 +430,17 @@ func (a App) historyEntryIsLocal(entry SidebarEntry) bool {
 		}
 	}
 	return false
+}
+
+func (a App) historyEntryIsReadOnly(entry SidebarEntry) bool {
+	return entry.WorkspaceID != "" && entry.WorkspaceID != a.svcs.WorkspaceID
+}
+
+func (a App) readOnlyToast() (components.Toast, bool) {
+	if !a.historyEntryIsReadOnly(a.currentHistoryEntry) {
+		return components.Toast{}, false
+	}
+	return components.Toast{Message: "Read only", Level: components.ToastWarning}, true
 }
 
 func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
@@ -757,32 +792,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Planning != nil {
 			msg.WorkItem.State = domain.WorkItemPlanning
 		}
-		replaced := false
-		for i := range a.workItems {
-			if a.workItems[i].ID == msg.WorkItem.ID {
-				a.workItems[i] = msg.WorkItem
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			a.workItems = append(a.workItems, msg.WorkItem)
-		}
-		a.sidebarMode = sidebarPaneSessions
-		a.mainFocus = mainFocusSidebar
-		a.runSelectionByWorkItem[msg.WorkItem.ID] = ""
-		a.rebuildSidebar()
-		a.sidebar.SelectWorkItem(msg.WorkItem.ID)
-		a.currentHistorySessionID = ""
-		a.currentHistoryEntry = SidebarEntry{}
-		a.currentWorkItemID = msg.WorkItem.ID
-		cmds = append(cmds, a.updateContentFromState())
+		a.upsertWorkItem(msg.WorkItem)
+		cmds = append(cmds, a.focusWorkItemOverview(msg.WorkItem.ID))
 		if a.svcs.Planning != nil {
 			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItem.ID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
+
+	case WorkItemDuplicateOpenedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastInfo)
+		a.upsertWorkItem(msg.WorkItem)
+		return a, a.focusWorkItemOverview(msg.WorkItem.ID)
 
 	case ActionDoneMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -1395,8 +1417,13 @@ func (a App) View() string {
 
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 
-	if a.toasts.HasToasts() {
-		toastView := a.toasts.View("", "")
+	toastView := ""
+	if readOnlyToast, ok := a.readOnlyToast(); ok {
+		toastView = a.toasts.StackView(readOnlyToast)
+	} else {
+		toastView = a.toasts.View("", "")
+	}
+	if toastView != "" {
 		base = renderTopRightOverlay(base, toastView, a.windowWidth, 1, lipgloss.Height(statusBar))
 	}
 
@@ -1532,6 +1559,40 @@ func abandonSessionCmd(svc *service.SessionService, sessionID string) tea.Cmd {
 	}
 }
 
+func workItemDisplayLabel(wi domain.WorkItem) string {
+	label := strings.TrimSpace(wi.ExternalID)
+	if label == "" {
+		label = strings.TrimSpace(wi.Title)
+	}
+	if label == "" {
+		label = wi.ID
+	}
+	return label
+}
+
+func existingWorkItemByExternalID(svc *service.WorkItemService, workspaceID, externalID string) (domain.WorkItem, error) {
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return domain.WorkItem{}, fmt.Errorf("workspace not configured")
+	}
+	trimmedExternalID := strings.TrimSpace(externalID)
+	if trimmedExternalID == "" {
+		return domain.WorkItem{}, fmt.Errorf("work item external_id is required")
+	}
+	items, err := svc.List(context.Background(), repository.WorkItemFilter{
+		WorkspaceID: &trimmedWorkspaceID,
+		ExternalID:  &trimmedExternalID,
+		Limit:       1,
+	})
+	if err != nil {
+		return domain.WorkItem{}, err
+	}
+	if len(items) > 0 {
+		return items[0], nil
+	}
+	return domain.WorkItem{}, service.ErrNotFound{Entity: "work item", ID: trimmedExternalID}
+}
+
 func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
 	if svcs.WorkItem == nil {
 		return ErrMsg{Err: fmt.Errorf("work item service not configured")}
@@ -1540,15 +1601,20 @@ func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
 		return ErrMsg{Err: fmt.Errorf("workspace not configured")}
 	}
 	wi.WorkspaceID = svcs.WorkspaceID
+	label := workItemDisplayLabel(wi)
 	if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
+		var alreadyExists service.ErrAlreadyExists
+		if errors.As(err, &alreadyExists) {
+			existing, lookupErr := existingWorkItemByExternalID(svcs.WorkItem, svcs.WorkspaceID, wi.ExternalID)
+			if lookupErr == nil {
+				return WorkItemDuplicateOpenedMsg{
+					WorkItem: existing,
+					Message:  "Work item already exists: opened existing item " + workItemDisplayLabel(existing),
+				}
+			}
+			return ErrMsg{Err: fmt.Errorf("work item already exists in this workspace: %s", label)}
+		}
 		return ErrMsg{Err: err}
-	}
-	label := strings.TrimSpace(wi.ExternalID)
-	if label == "" {
-		label = strings.TrimSpace(wi.Title)
-	}
-	if label == "" {
-		label = wi.ID
 	}
 	return WorkItemCreatedMsg{WorkItem: wi, Message: "Session created: " + label}
 }

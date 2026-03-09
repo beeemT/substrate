@@ -17,6 +17,15 @@ func stripToastANSI(s string) string {
 	return toastANSIPattern.ReplaceAllString(s, "")
 }
 
+func findLineContaining(lines []string, needle string) int {
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
 func newToastTestApp(t *testing.T) App {
 	t.Helper()
 
@@ -77,6 +86,65 @@ func TestAppView_RendersToastInUpperRightWithoutGrowingLayout(t *testing.T) {
 	for i := len(withToast) - statusBarHeight; i < len(withToast); i++ {
 		if i >= 0 && strings.Contains(withToast[i], "Workspace initialized") {
 			t.Fatalf("toast rendered in status bar line %d: %q", i, withToast[i])
+		}
+	}
+}
+
+func TestAppView_ReadOnlyToastStacksTransientToastsBelow(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	_ = app.loadHistoryEntry(SidebarEntry{
+		Kind:          SidebarEntrySessionHistory,
+		SessionID:     "sess-remote",
+		WorkspaceID:   "ws-remote",
+		WorkspaceName: "remote",
+		ExternalID:    "SUB-2",
+		Title:         "Remote item",
+	})
+	app.toasts.AddToast("First toast", components.ToastInfo)
+	app.toasts.AddToast("Second toast", components.ToastSuccess)
+
+	rendered := app.View()
+	assertAppViewFitsWindow(t, rendered, 80, 16)
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+
+	readOnlyLine := findLineContaining(lines, "Read only")
+	secondLine := findLineContaining(lines, "Second toast")
+	firstLine := findLineContaining(lines, "First toast")
+	if readOnlyLine == -1 || secondLine == -1 || firstLine == -1 {
+		t.Fatalf("view missing stacked toasts: %q", strings.Join(lines, "\n"))
+	}
+	if !(readOnlyLine < secondLine && secondLine < firstLine) {
+		t.Fatalf("toast order = read-only:%d second:%d first:%d, want read only above transient stack", readOnlyLine, secondLine, firstLine)
+	}
+}
+
+func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	updated.loadHistoryEntry(SidebarEntry{
+		Kind:          SidebarEntrySessionHistory,
+		SessionID:     "sess-remote",
+		WorkspaceID:   "ws-remote",
+		WorkspaceName: "remote",
+		ExternalID:    "SUB-2",
+		Title:         "Remote item",
+	})
+	updated.toasts.AddToast("Sync complete", components.ToastSuccess)
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 36, 12)
+	assertBodyEndsAboveFooter(t, lines)
+	plain := stripToastANSI(strings.Join(lines, "\n"))
+	for _, want := range []string{"Read only", "Sync complete"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q in narrow toast stack", plain, want)
 		}
 	}
 }

@@ -10,7 +10,7 @@ import (
 type ToastLevel int
 
 const (
-	ToastInfo    ToastLevel = iota
+	ToastInfo ToastLevel = iota
 	ToastSuccess
 	ToastWarning
 	ToastError
@@ -51,7 +51,24 @@ func (m *ToastModel) View(fg, bg string) string {
 	if len(m.toasts) == 0 {
 		return ""
 	}
-	t := m.toasts[len(m.toasts)-1]
+	return renderToast(m.toasts[len(m.toasts)-1])
+}
+
+func (m *ToastModel) StackView(pinned ...Toast) string {
+	if len(pinned) == 0 {
+		return m.View("", "")
+	}
+	views := make([]string, 0, len(pinned)+len(m.toasts))
+	for _, toast := range pinned {
+		views = append(views, renderToast(toast))
+	}
+	for i := len(m.toasts) - 1; i >= 0; i-- {
+		views = append(views, renderToast(m.toasts[i]))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, views...)
+}
+
+func renderToast(t Toast) string {
 	color := colorForLevel(t.Level)
 	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#f0f0f0")).

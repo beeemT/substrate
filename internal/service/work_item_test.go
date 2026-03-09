@@ -10,10 +10,11 @@ import (
 
 func TestWorkItemService_Create(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMockWorkItemRepository()
-	svc := NewWorkItemService(repo)
 
 	t.Run("creates item with ingested state", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
 		item := domain.WorkItem{
 			ID:          "wi-1",
 			WorkspaceID: "ws-1",
@@ -33,7 +34,59 @@ func TestWorkItemService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("allows items without external id", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		first := domain.WorkItem{ID: "wi-no-ext-1", WorkspaceID: "ws-1", Title: "First", Source: "manual"}
+		second := domain.WorkItem{ID: "wi-no-ext-2", WorkspaceID: "ws-1", Title: "Second", Source: "manual"}
+
+		if err := svc.Create(ctx, first); err != nil {
+			t.Fatalf("Create first without external id: %v", err)
+		}
+		if err := svc.Create(ctx, second); err != nil {
+			t.Fatalf("Create second without external id: %v", err)
+		}
+	})
+
+	t.Run("rejects duplicate external id in same workspace", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		first := domain.WorkItem{ID: "wi-dup-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
+		second := domain.WorkItem{ID: "wi-dup-2", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
+
+		if err := svc.Create(ctx, first); err != nil {
+			t.Fatalf("Create first duplicate candidate: %v", err)
+		}
+		err := svc.Create(ctx, second)
+		if err == nil {
+			t.Fatal("expected duplicate create error")
+		}
+		if _, ok := err.(ErrAlreadyExists); !ok {
+			t.Errorf("error type = %T, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("allows same external id in different workspaces", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		first := domain.WorkItem{ID: "wi-cross-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
+		second := domain.WorkItem{ID: "wi-cross-2", WorkspaceID: "ws-2", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
+
+		if err := svc.Create(ctx, first); err != nil {
+			t.Fatalf("Create first workspace item: %v", err)
+		}
+		if err := svc.Create(ctx, second); err != nil {
+			t.Fatalf("Create second workspace item: %v", err)
+		}
+	})
+
 	t.Run("rejects missing workspace id", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
 		item := domain.WorkItem{
 			ID:     "wi-missing-workspace",
 			Title:  "Test Item",
@@ -50,6 +103,9 @@ func TestWorkItemService_Create(t *testing.T) {
 	})
 
 	t.Run("rejects non-ingested initial state", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
 		item := domain.WorkItem{
 			ID:          "wi-2",
 			WorkspaceID: "ws-1",

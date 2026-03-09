@@ -75,7 +75,7 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 
 	rendered := m.View()
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"SUB-1 · Investigate overflow", "Description", "Next step", "Summary", "This is important.", "Press [Enter]"} {
+	for _, want := range []string{"SUB-1 · Investigate overflow", "Description", "Next step", "Summary", "This is important.", "Press [Enter]", "╭", "╮", "┌", "┐"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
 		}

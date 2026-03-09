@@ -147,6 +147,36 @@ func TestAppViewWithSessionInteractionFitsWindow(t *testing.T) {
 	assertBodyEndsAboveFooter(t, lines)
 }
 
+func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 72, 16)
+	app.sidebar.SetEntries([]SidebarEntry{{
+		Kind:       SidebarEntryWorkItem,
+		WorkItemID: "wi-1",
+		ExternalID: "SUB-1",
+		Title:      "Investigate overflow",
+		State:      domain.WorkItemIngested,
+	}})
+	app.content.SetWorkItem(&domain.WorkItem{
+		ID:          "wi-1",
+		ExternalID:  "SUB-1",
+		Title:       "Investigate overflow",
+		Description: "## Summary\n\nThis is **important**.",
+		State:       domain.WorkItemIngested,
+	})
+	app.content.SetMode(ContentModeReadyToPlan)
+
+	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
+	assertBodyEndsAboveFooter(t, lines)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	for _, want := range []string{"Description", "Next step", "╭", "╮", "┌", "┐"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q in ready overview layout", plain, want)
+		}
+	}
+}
+
 func TestAppViewWithImplementingSessionFitsWindow(t *testing.T) {
 	t.Parallel()
 
