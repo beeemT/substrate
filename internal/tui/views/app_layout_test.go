@@ -44,6 +44,50 @@ func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 	}
 }
 
+func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	app.sidebarMode = sidebarPaneTasks
+	app.currentWorkItemID = "wi-1"
+	app.taskSessionSelectionByWorkItem["wi-1"] = "sess-1"
+	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	app.subPlans["plan-1"] = []domain.SubPlan{{ID: "sp-1", PlanID: "plan-1"}}
+	app.sessions = []domain.AgentSession{{ID: "sess-1", SubPlanID: "sp-1", Status: domain.AgentSessionCompleted}}
+
+	if got := app.deletableSessionID(); got != "sess-1" {
+		t.Fatalf("deletable session id = %q, want sess-1", got)
+	}
+
+	hints := app.currentHints()
+	found := false
+	for _, hint := range hints {
+		if hint.Key == "d" && hint.Label == "Delete session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("current hints = %#v, want delete session hint", hints)
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil while showing confirm dialog", cmd)
+	}
+	if !updated.confirmActive {
+		t.Fatal("expected delete shortcut to open confirm dialog")
+	}
+	confirmView := stripBrowseANSI(updated.confirm.View())
+	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "review data") {
+		t.Fatalf("confirm view = %q, want delete session confirmation copy", confirmView)
+	}
+}
+
 func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	app := NewApp(Services{
 		WorkspaceID:   "ws-1",
@@ -161,23 +205,33 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 	app.content.SetWorkItem(&domain.WorkItem{
 		ID:          "wi-1",
 		ExternalID:  "SUB-1",
+		Source:      "github",
 		Title:       "Investigate overflow",
 		Description: "## Summary\n\nThis is **important**.",
-		State:       domain.WorkItemIngested,
+		Labels:      []string{"bug", "backend"},
+		Metadata: map[string]any{
+			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
+		},
+		State: domain.WorkItemIngested,
 	})
 	app.content.SetMode(ContentModeReadyToPlan)
 
 	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
 	assertBodyEndsAboveFooter(t, lines)
 	plain := ansi.Strip(strings.Join(lines, "\n"))
-	for _, want := range []string{"Details", "Next step", "╭", "╮", "┌", "┐"} {
+	for _, want := range []string{"Details", "╭", "╮", "┌", "┐"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q in ready overview layout", plain, want)
 		}
 	}
-	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-7):], "\n"))
-	if !strings.Contains(footerRegion, "Next step") || !strings.Contains(footerRegion, "Press [Enter]") {
-		t.Fatalf("footer region = %q, want the next-step label and CTA near the bottom of the content pane", footerRegion)
+	for _, hidden := range []string{"GitHub", "acme/rocket", "Labels: bug, backend"} {
+		if strings.Contains(plain, hidden) {
+			t.Fatalf("view = %q, want ready overview to omit source detail %q", plain, hidden)
+		}
+	}
+	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-6):], "\n"))
+	if !strings.Contains(footerRegion, "Press [Enter]") {
+		t.Fatalf("footer region = %q, want the CTA near the bottom of the content pane", footerRegion)
 	}
 }
 
@@ -209,4 +263,22 @@ func TestAppViewWithImplementingSessionFitsWindow(t *testing.T) {
 
 	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
 	assertBodyEndsAboveFooter(t, lines)
+}
+
+func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 48, 14)
+	app.showDuplicateSessionDialog(
+		domain.WorkItem{ID: "wi-requested", ExternalID: "SUB-99", Title: "Requested item"},
+		domain.WorkItem{ID: "wi-existing", ExternalID: "SUB-1", Title: "Existing item", State: domain.WorkItemIngested},
+	)
+
+	lines := assertAppViewFitsWindow(t, app.View(), 48, 14)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	for _, want := range []string{"Work item already exists", "Existing work item:", "Open existing", "Start planning"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q in duplicate-session dialog", plain, want)
+		}
+	}
 }

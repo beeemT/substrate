@@ -102,6 +102,8 @@ type captureHarness struct {
 	mu          sync.Mutex
 	captured    []adapter.SessionOpts
 	returnErr   error
+	abortErr    error
+	lastSession *mockAgentSession
 }
 
 func (h *captureHarness) Name() string { return "capture" }
@@ -118,7 +120,10 @@ func (h *captureHarness) StartSession(ctx context.Context, opts adapter.SessionO
 		logPath := filepath.Join(h.sessionsDir, opts.SessionID+".log")
 		_ = os.WriteFile(logPath, []byte(`{"type":"event","event":{"type":"progress","text":"ok"}}`+"\n"), 0o644)
 	}
-	return newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"}), nil
+	session := newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"})
+	session.abortErr = h.abortErr
+	h.lastSession = session
+	return session, nil
 }
 
 // lastOpts returns the SessionOpts from the most recent StartSession call.
@@ -516,6 +521,56 @@ func TestResumeSession_OldSessionRemainInterrupted(t *testing.T) {
 	}
 
 	if got := fix.getSessionStatus("sess-int2"); got != domain.AgentSessionInterrupted {
+		t.Errorf("old session must remain interrupted; got %q", got)
+	}
+}
+
+func TestResumeSession_StartFailureAbortsHarnessAndDeletesSession(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	origHome := os.Getenv("SUBSTRATE_HOME")
+	os.Setenv("SUBSTRATE_HOME", tmpDir)
+	defer func() {
+		if origHome == "" {
+			os.Unsetenv("SUBSTRATE_HOME")
+		} else {
+			os.Setenv("SUBSTRATE_HOME", origHome)
+		}
+	}()
+
+	fix.seedInterruptedSession("sess-int3")
+	fix.sessionRepo.updateErr = repository.ErrNotFound
+	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
+
+	harness := &captureHarness{sessionsDir: sessionsDir, abortErr: repository.ErrNotFound}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus)
+
+	interrupted := fix.sessionRepo.sessions["sess-int3"]
+	_, err := r.ResumeSession(ctx, interrupted, "inst-new3")
+	if err == nil {
+		t.Fatal("expected ResumeSession to fail when transition to running fails")
+	}
+	if !strings.Contains(err.Error(), "transition resumed session to running") {
+		t.Fatalf("expected original start-transition error, got %v", err)
+	}
+
+	if len(harness.captured) != 1 {
+		t.Fatalf("expected one harness start, got %d", len(harness.captured))
+	}
+	newSessionID := harness.captured[0].SessionID
+	if _, getErr := fix.sessionRepo.Get(ctx, newSessionID); getErr != repository.ErrNotFound {
+		t.Fatalf("expected resumed session %q to be deleted, got %v", newSessionID, getErr)
+	}
+	if harness.lastSession == nil || !harness.lastSession.aborted {
+		t.Fatal("expected resumed harness session to be aborted")
+	}
+	if got := fix.getSessionStatus("sess-int3"); got != domain.AgentSessionInterrupted {
 		t.Errorf("old session must remain interrupted; got %q", got)
 	}
 }

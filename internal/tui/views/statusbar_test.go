@@ -1,12 +1,15 @@
 package views_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/tui/styles"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
+
+var statusBarBackgroundPattern = regexp.MustCompile(`\x1b\[[0-9;]*48;`)
 
 func makeStatusBarStyles() styles.Styles {
 	return styles.NewStyles(styles.DefaultTheme)
@@ -31,6 +34,16 @@ func TestStatusBarHasNoBorderOrSeparator(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "0 sessions") {
 		t.Fatalf("content = %q, want right-aligned session count", lines[0])
+	}
+}
+
+func TestStatusBarHasNoBackgroundColor(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewStatusBarModel(makeStatusBarStyles())
+	rendered := m.View(views.DefaultHints(), "0 sessions", 40)
+	if statusBarBackgroundPattern.MatchString(rendered) {
+		t.Fatalf("rendered = %q, want no background color escape sequences", rendered)
 	}
 }
 

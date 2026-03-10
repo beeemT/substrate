@@ -155,13 +155,14 @@ func run() error {
 	var workspaceID, workspaceName, workspaceDir string
 	wsDir, wsFile, wsErr := gitwork.FindWorkspace(cwd)
 	if wsErr == nil {
+		workspaceDir = wsDir
+		workspaceName = wsFile.Name
 		ws, getErr := workspaceSvc.Get(context.Background(), wsFile.ID)
 		if getErr != nil {
 			slog.Warn("workspace file found but not in DB; will prompt init", "id", wsFile.ID, "err", getErr)
 		} else {
 			workspaceID = ws.ID
 			workspaceName = ws.Name
-			workspaceDir = wsDir
 		}
 	} else if !gitwork.IsNotInWorkspace(wsErr) {
 		return fmt.Errorf("detecting workspace: %w", wsErr)

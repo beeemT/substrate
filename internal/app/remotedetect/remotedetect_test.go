@@ -3,8 +3,12 @@ package remotedetect
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/beeemT/substrate/internal/config"
 )
 
 func TestRemoteHost(t *testing.T) {
@@ -51,11 +55,49 @@ func TestLoadGlabKnownHosts(t *testing.T) {
 }
 
 func TestDetectPlatform_EmptyDir(t *testing.T) {
-	platform, err := DetectPlatform(context.Background(), "")
+	platform, err := DetectPlatform(context.Background(), "", nil)
 	if err == nil {
 		t.Fatal("DetectPlatform() error = nil, want error")
 	}
 	if platform != PlatformUnknown {
 		t.Fatalf("DetectPlatform() platform = %v, want unknown", platform)
+	}
+}
+
+func TestDetectPlatform_ConfiguredGitHubEnterpriseHost(t *testing.T) {
+	repoDir := createRepoWithRemote(t, "git@github.internal:org/repo.git")
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.BaseURL = "https://github.internal/api/v3"
+
+	platform, err := DetectPlatform(context.Background(), repoDir, cfg)
+	if err != nil {
+		t.Fatalf("DetectPlatform() error = %v", err)
+	}
+	if platform != PlatformGitHub {
+		t.Fatalf("DetectPlatform() platform = %v, want github", platform)
+	}
+}
+
+func createRepoWithRemote(t *testing.T, remoteURL string) string {
+	t.Helper()
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	runGit(t, repoDir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "initial commit")
+	runGit(t, repoDir, "remote", "add", "origin", remoteURL)
+	return repoDir
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 }

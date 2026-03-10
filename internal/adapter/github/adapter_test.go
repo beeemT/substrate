@@ -36,6 +36,24 @@ func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	return a
 }
 
+func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
+	var seenHost, seenPath string
+	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		seenHost = req.URL.Host
+		seenPath = req.URL.Path
+		return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+	}), func(context.Context) (string, error) { return "token-from-gh", nil })
+	if err != nil {
+		t.Fatalf("newWithDeps: %v", err)
+	}
+	if a.baseURL != "https://github.internal/api/v3" {
+		t.Fatalf("baseURL = %q, want configured enterprise URL", a.baseURL)
+	}
+	if seenHost != "github.internal" || seenPath != "/api/v3/user" {
+		t.Fatalf("viewer request = %s%s, want https://github.internal/api/v3/user", seenHost, seenPath)
+	}
+}
+
 func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 	resolved := false
 	a, err := newWithDeps(context.Background(), config.GithubConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +119,16 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 
 	// Transition new session to running.
 	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
+		if abortErr := harnessSession.Abort(ctx); abortErr != nil {
+			slog.Warn("failed to abort resumed harness session after start transition error",
+				"error", abortErr,
+				"session_id", newSession.ID)
+		}
+		if deleteErr := r.sessionSvc.Delete(ctx, newSession.ID); deleteErr != nil {
+			slog.Warn("failed to delete resumed session after start transition error",
+				"error", deleteErr,
+				"session_id", newSession.ID)
+		}
 		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
 	}
 

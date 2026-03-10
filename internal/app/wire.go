@@ -64,45 +64,49 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 		return nil
 	}
 
-	platform, err := detectWorkspaceLifecyclePlatform(ctx, workspaceDir)
+	platforms, err := detectWorkspaceLifecyclePlatforms(ctx, cfg, workspaceDir)
 	if err != nil {
-		slog.Warn("failed to detect repo lifecycle platform; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
+		slog.Warn("failed to detect repo lifecycle platforms; no repo lifecycle adapters registered", "workspace_dir", workspaceDir, "err", err)
 		return nil
 	}
 
-	switch platform {
-	case remotedetect.PlatformGitLab:
-		return []adapter.RepoLifecycleAdapter{gladapter.New(cfg.Adapters.Glab)}
-	case remotedetect.PlatformGitHub:
-		if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
-			slog.Warn("skipping github lifecycle adapter: no github auth configured")
-			return nil
+	adapters := make([]adapter.RepoLifecycleAdapter, 0, len(platforms))
+	for _, platform := range platforms {
+		switch platform {
+		case remotedetect.PlatformGitLab:
+			adapters = append(adapters, gladapter.New(cfg.Adapters.Glab))
+		case remotedetect.PlatformGitHub:
+			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
+				slog.Warn("skipping github lifecycle adapter: no github auth configured")
+				continue
+			}
+			githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
+			if err != nil {
+				slog.Warn("skipping github lifecycle adapter", "err", err)
+				continue
+			}
+			adapters = append(adapters, githubAdapter)
+		default:
+			slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
 		}
-		githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
-		if err != nil {
-			slog.Warn("skipping github lifecycle adapter", "err", err)
-			return nil
-		}
-		return []adapter.RepoLifecycleAdapter{githubAdapter}
-	default:
-		slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
-		return nil
 	}
+	return adapters
 }
 
-func detectWorkspaceLifecyclePlatform(ctx context.Context, workspaceDir string) (remotedetect.Platform, error) {
+func detectWorkspaceLifecyclePlatforms(ctx context.Context, cfg *config.Config, workspaceDir string) ([]remotedetect.Platform, error) {
 	repoPaths, err := gitwork.DiscoverRepos(workspaceDir)
 	if err != nil {
-		return remotedetect.PlatformUnknown, fmt.Errorf("discover workspace repos: %w", err)
+		return nil, fmt.Errorf("discover workspace repos: %w", err)
 	}
 	if len(repoPaths) == 0 {
-		return remotedetect.PlatformUnknown, fmt.Errorf("no git-work repos found in workspace %s", workspaceDir)
+		return nil, fmt.Errorf("no git-work repos found in workspace %s", workspaceDir)
 	}
 
-	detected := remotedetect.PlatformUnknown
+	platforms := make([]remotedetect.Platform, 0, 2)
+	seen := make(map[remotedetect.Platform]struct{}, 2)
 	var firstErr error
 	for _, repoPath := range repoPaths {
-		platform, err := remotedetect.DetectPlatform(ctx, repoPath)
+		platform, err := remotedetect.DetectPlatform(ctx, repoPath, cfg)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("detect platform for %s: %w", repoPath, err)
@@ -112,17 +116,18 @@ func detectWorkspaceLifecyclePlatform(ctx context.Context, workspaceDir string) 
 		if platform == remotedetect.PlatformUnknown {
 			continue
 		}
-		if detected != remotedetect.PlatformUnknown && detected != platform {
-			return remotedetect.PlatformUnknown, fmt.Errorf("workspace %s contains mixed repo lifecycle platforms", workspaceDir)
+		if _, ok := seen[platform]; ok {
+			continue
 		}
-		detected = platform
+		seen[platform] = struct{}{}
+		platforms = append(platforms, platform)
 	}
 
-	if detected != remotedetect.PlatformUnknown {
-		return detected, nil
+	if len(platforms) > 0 {
+		return platforms, nil
 	}
 	if firstErr != nil {
-		return remotedetect.PlatformUnknown, firstErr
+		return nil, firstErr
 	}
-	return remotedetect.PlatformUnknown, fmt.Errorf("no supported repo lifecycle platform detected in workspace %s", workspaceDir)
+	return nil, fmt.Errorf("no supported repo lifecycle platform detected in workspace %s", workspaceDir)
 }

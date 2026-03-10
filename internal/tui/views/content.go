@@ -14,6 +14,7 @@ type ContentMode int
 const (
 	ContentModeEmpty              ContentMode = iota // no session selected
 	ContentModeReadyToPlan                           // ingested: work item ready for planning
+	ContentModeSourceDetails                         // task-pane source metadata for the selected work item
 	ContentModePlanning                              // planning: agent running, log tailing
 	ContentModeSessionInteraction                    // historical session interaction view
 	ContentModePlanReview                            // plan_review: awaiting human review
@@ -40,16 +41,17 @@ type ContentModel struct {
 	height int
 
 	// Per-mode sub-models
-	readyToPlan  ReadyToPlanModel
-	sessionLog   SessionLogModel
-	planReview   PlanReviewModel
-	awaitingImpl AwaitingImplModel
-	implementing ImplementingModel
-	reviewing    ReviewModel
-	completed    CompletedModel
-	failed       FailedModel
-	interrupted  InterruptedModel
-	question     QuestionModel
+	readyToPlan   ReadyToPlanModel
+	sourceDetails SourceDetailsModel
+	sessionLog    SessionLogModel
+	planReview    PlanReviewModel
+	awaitingImpl  AwaitingImplModel
+	implementing  ImplementingModel
+	reviewing     ReviewModel
+	completed     CompletedModel
+	failed        FailedModel
+	interrupted   InterruptedModel
+	question      QuestionModel
 
 	// Current work item being displayed
 	currentWorkItem *domain.WorkItem
@@ -57,18 +59,19 @@ type ContentModel struct {
 
 func NewContentModel(st styles.Styles) ContentModel {
 	return ContentModel{
-		mode:         ContentModeEmpty,
-		styles:       st,
-		readyToPlan:  NewReadyToPlanModel(st),
-		sessionLog:   NewSessionLogModel(st),
-		planReview:   NewPlanReviewModel(st),
-		awaitingImpl: NewAwaitingImplModel(st),
-		implementing: NewImplementingModel(st),
-		reviewing:    NewReviewModel(st),
-		completed:    NewCompletedModel(st),
-		failed:       NewFailedModel(st),
-		interrupted:  NewInterruptedModel(st),
-		question:     NewQuestionModel(st),
+		mode:          ContentModeEmpty,
+		styles:        st,
+		readyToPlan:   NewReadyToPlanModel(st),
+		sourceDetails: NewSourceDetailsModel(st),
+		sessionLog:    NewSessionLogModel(st),
+		planReview:    NewPlanReviewModel(st),
+		awaitingImpl:  NewAwaitingImplModel(st),
+		implementing:  NewImplementingModel(st),
+		reviewing:     NewReviewModel(st),
+		completed:     NewCompletedModel(st),
+		failed:        NewFailedModel(st),
+		interrupted:   NewInterruptedModel(st),
+		question:      NewQuestionModel(st),
 	}
 }
 
@@ -76,6 +79,7 @@ func (m *ContentModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.readyToPlan.SetSize(width, height)
+	m.sourceDetails.SetSize(width, height)
 	m.sessionLog.SetSize(width, height)
 	m.planReview.SetSize(width, height)
 	m.awaitingImpl.SetSize(width, height)
@@ -103,6 +107,7 @@ func (m *ContentModel) SetWorkItem(wi *domain.WorkItem) {
 		m.question.SetTitle(title)
 		m.sessionLog.SetTitle(title)
 		m.readyToPlan.SetWorkItem(wi)
+		m.sourceDetails.SetWorkItem(wi)
 		m.awaitingImpl.SetWorkItem(wi)
 	}
 }
@@ -123,6 +128,9 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	switch m.mode {
 	case ContentModeReadyToPlan:
 		m.readyToPlan, cmd = m.readyToPlan.Update(msg)
+		cmds = append(cmds, cmd)
+	case ContentModeSourceDetails:
+		m.sourceDetails, cmd = m.sourceDetails.Update(msg)
 		cmds = append(cmds, cmd)
 	case ContentModePlanning, ContentModeSessionInteraction:
 		m.sessionLog, cmd = m.sessionLog.Update(msg)
@@ -159,6 +167,8 @@ func (m ContentModel) View() string {
 		return m.emptyStateView()
 	case ContentModeReadyToPlan:
 		return m.readyToPlan.View()
+	case ContentModeSourceDetails:
+		return m.sourceDetails.View()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.View()
 	case ContentModePlanReview:
@@ -213,6 +223,8 @@ func (m ContentModel) emptyStateView() string {
 // KeybindHints returns keybind hints for the active mode (passed to the status bar).
 func (m ContentModel) KeybindHints() []KeybindHint {
 	switch m.mode {
+	case ContentModeSourceDetails:
+		return m.sourceDetails.KeybindHints()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.KeybindHints()
 	case ContentModePlanReview:

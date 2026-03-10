@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +124,7 @@ type GitlabConfig struct {
 type GithubConfig struct {
 	TokenRef      string            `toml:"token_ref"` // optional keychain reference; gh auth token remains fallback
 	Token         string            `toml:"-"`
+	BaseURL       string            `toml:"base_url"`      // default: https://api.github.com
 	Assignee      string            `toml:"assignee"`      // username filter for Watch; "me" resolves via /user
 	PollInterval  string            `toml:"poll_interval"` // default: 60s
 	Reviewers     []string          `toml:"reviewers"`
@@ -302,6 +304,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.GitLab.PollInterval == "" {
 		cfg.Adapters.GitLab.PollInterval = "60s"
 	}
+	if cfg.Adapters.GitHub.BaseURL == "" {
+		cfg.Adapters.GitHub.BaseURL = "https://api.github.com"
+	}
 	if cfg.Adapters.GitHub.PollInterval == "" {
 		cfg.Adapters.GitHub.PollInterval = "60s"
 	}
@@ -341,6 +346,12 @@ func validate(cfg *Config) error {
 	if cfg.Foreman.QuestionTimeout != "" {
 		if _, err := time.ParseDuration(cfg.Foreman.QuestionTimeout); err != nil {
 			return fmt.Errorf("invalid foreman.question_timeout: %w", err)
+		}
+	}
+
+	if cfg.Adapters.GitHub.BaseURL != "" {
+		if _, err := url.ParseRequestURI(cfg.Adapters.GitHub.BaseURL); err != nil {
+			return fmt.Errorf("invalid github base_url: %w", err)
 		}
 	}
 

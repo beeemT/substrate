@@ -81,8 +81,22 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 	return func() tea.Msg {
 		name := filepath.Base(cwd)
 		wsFile, err := gitwork.InitWorkspace(cwd, name)
+		createdWorkspaceFile := err == nil
 		if err != nil {
-			return ErrMsg{Err: err}
+			if !gitwork.IsWorkspaceExists(err) {
+				return ErrMsg{Err: err}
+			}
+			wsFile, err = gitwork.ReadWorkspaceFile(cwd)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			if _, getErr := workspaceSvc.Get(context.Background(), wsFile.ID); getErr == nil {
+				return WorkspaceInitDoneMsg{
+					WorkspaceID:   wsFile.ID,
+					WorkspaceName: wsFile.Name,
+					WorkspaceDir:  cwd,
+				}
+			}
 		}
 		ws := domain.Workspace{
 			ID:       wsFile.ID,
@@ -90,7 +104,9 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 			RootPath: cwd,
 		}
 		if err := workspaceSvc.Create(context.Background(), ws); err != nil {
-			_ = os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName))
+			if createdWorkspaceFile {
+				_ = os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName))
+			}
 			return ErrMsg{Err: err}
 		}
 		return WorkspaceInitDoneMsg{

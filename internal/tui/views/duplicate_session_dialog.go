@@ -99,27 +99,34 @@ func (a App) duplicateSessionDialogView() string {
 	if a.windowWidth > 0 {
 		finalWidth = min(finalWidth, a.windowWidth)
 	}
-	frame := styles.OverlayFrame.Copy().Width(finalWidth)
+	overlayBG := lipgloss.Color(styles.Theme.OverlayBg)
+	frame := styles.OverlayFrame.Copy().Width(finalWidth).Background(overlayBG)
 	innerWidth := finalWidth - frame.GetHorizontalFrameSize()
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
-	content := lipgloss.NewStyle().Width(innerWidth)
+	content := lipgloss.NewStyle().Width(innerWidth).Background(overlayBG)
+	titleStyle := styles.Title.Copy().Background(overlayBG)
+	subtitleStyle := styles.Subtitle.Copy().Background(overlayBG)
+	labelStyle := styles.Label.Copy().Background(overlayBG)
+	accentStyle := styles.Accent.Copy().Background(overlayBG)
+	hintStyle := styles.Hint.Copy().Background(overlayBG)
+	keybindStyle := styles.KeybindAccent.Copy().Background(overlayBG)
 	compact := innerWidth < 40 || (a.windowHeight > 0 && a.windowHeight <= 14)
 
 	requested := workItemSummaryLabel(a.duplicateSession.RequestedWorkItem)
 	existing := workItemSummaryLabel(a.duplicateSession.ExistingWorkItem)
 	rows := []string{
-		styles.Title.Render("Work item already exists"),
+		titleStyle.Render("Work item already exists"),
 		"",
-		content.Render(styles.Label.Render("Existing work item: ") + styles.Accent.Render(existing)),
+		content.Render(labelStyle.Render("Existing work item: ") + accentStyle.Render(existing)),
 	}
 	if !compact {
 		rows = append(rows,
-			content.Render(styles.Subtitle.Render("This selection already exists in this workspace.")),
+			content.Render(subtitleStyle.Render("This selection already exists in this workspace.")),
 		)
 		if requested != "" && requested != existing {
-			rows = append(rows, content.Render(styles.Label.Render("Requested selection: ")+styles.Subtitle.Render(requested)))
+			rows = append(rows, content.Render(labelStyle.Render("Requested selection: ")+subtitleStyle.Render(requested)))
 		}
 	}
 	rows = append(rows, "")
@@ -129,18 +136,18 @@ func (a App) duplicateSessionDialogView() string {
 			title = option.CompactTitle
 		}
 		prefix := "  "
-		line := styles.Subtitle.Render(title)
+		line := subtitleStyle.Render(title)
 		if i == a.duplicateSession.Selected {
-			prefix = styles.KeybindAccent.Render("› ")
-			line = styles.Accent.Render(title)
+			prefix = keybindStyle.Render("› ")
+			line = accentStyle.Render(title)
 		}
 		rows = append(rows, content.Render(prefix+line))
 	}
 	rows = append(rows, "")
 	if compact {
-		rows = append(rows, content.Render(styles.Hint.Render("Enter confirm • Esc cancel")))
+		rows = append(rows, content.Render(hintStyle.Render("Enter confirm • Esc cancel")))
 	} else {
-		rows = append(rows, content.Render(styles.Hint.Render("↑/↓ choose • Enter confirm • Esc cancel")))
+		rows = append(rows, content.Render(hintStyle.Render("↑/↓ choose • Enter confirm • Esc cancel")))
 	}
 	return frame.Render(strings.Join(rows, "\n"))
 }

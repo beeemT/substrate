@@ -92,6 +92,38 @@ func TestSessionSearchOverlayEnterOpensSelection(t *testing.T) {
 	}
 }
 
+func TestSessionSearchOverlayDeleteRequestsConfirmation(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+	overlay.SetEntries([]domain.SessionHistoryEntry{{
+		SessionID:          "sess-1",
+		WorkspaceID:        "ws-1",
+		WorkspaceName:      "workspace",
+		WorkItemID:         "wi-1",
+		WorkItemExternalID: "SUB-1",
+		WorkItemTitle:      "Work item",
+		UpdatedAt:          time.Now(),
+		CreatedAt:          time.Now(),
+	}})
+
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if updated.focus != sessionSearchFocusResults {
+		t.Fatalf("focus = %v, want results", updated.focus)
+	}
+	if cmd == nil {
+		t.Fatal("expected delete confirmation command")
+	}
+	msg := cmd()
+	confirmMsg, ok := msg.(ConfirmDeleteSessionMsg)
+	if !ok {
+		t.Fatalf("cmd() message = %T, want ConfirmDeleteSessionMsg", msg)
+	}
+	if confirmMsg.SessionID != "sess-1" {
+		t.Fatalf("session id = %q, want sess-1", confirmMsg.SessionID)
+	}
+}
+
 func TestSessionSearchOverlayArrowKeysMoveFocus(t *testing.T) {
 	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
 	overlay.Open(sessionHistoryScopeGlobal, true)

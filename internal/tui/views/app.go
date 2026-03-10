@@ -55,6 +55,8 @@ const (
 	sidebarPaneTasks
 )
 
+const taskSidebarSourceDetailsID = "__source_details__"
+
 type mainFocusArea int
 
 const (
@@ -104,6 +106,10 @@ type App struct {
 	// Confirm dialog
 	confirm       components.ConfirmDialog
 	confirmActive bool
+
+	// Duplicate-session dialog
+	duplicateSession       duplicateSessionDialogState
+	duplicateSessionActive bool
 
 	// Current selection
 	currentWorkItemID              string
@@ -244,14 +250,20 @@ func (a *App) openNewSession() tea.Cmd {
 
 func (a App) currentHints() []KeybindHint {
 	global := DefaultHints()
+	prependDelete := func(hints []KeybindHint) []KeybindHint {
+		if a.deletableSessionID() == "" {
+			return hints
+		}
+		return append([]KeybindHint{{Key: "d", Label: "Delete session"}}, hints...)
+	}
 	if a.mainFocus == mainFocusContent {
 		hints := append([]KeybindHint{{Key: "←", Label: "Back"}}, a.content.KeybindHints()...)
-		return append(hints, global...)
+		return append(prependDelete(hints), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
-		return append([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}, global...)
+		return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}), global...)
 	}
-	return append([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}, global...)
+	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}), global...)
 }
 
 func (a App) historyEntryTitle(entry SidebarEntry) string {
@@ -345,6 +357,23 @@ func (a *App) setSelectedTaskSessionID(sessionID string) {
 		return
 	}
 	a.taskSessionSelectionByWorkItem[a.currentWorkItemID] = sessionID
+}
+
+func (a App) deletableSessionID() string {
+	if a.currentHistorySessionID != "" {
+		return a.currentHistorySessionID
+	}
+	if a.sidebarMode != sidebarPaneTasks {
+		return ""
+	}
+	sessionID := a.selectedTaskSessionID()
+	if sessionID == "" || sessionID == taskSidebarSourceDetailsID {
+		return ""
+	}
+	if a.workItemTaskSession(a.currentWorkItemID, sessionID) == nil {
+		return ""
+	}
+	return sessionID
 }
 
 func (a *App) enterTaskSidebar() tea.Cmd {
@@ -574,11 +603,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkItemsLoadedMsg:
+		if msg.WorkspaceID != a.svcs.WorkspaceID {
+			return a, nil
+		}
 		a.workItems = msg.Items
 		a.rebuildSidebar()
 		return a, nil
 
 	case SessionsLoadedMsg:
+		if msg.WorkspaceID != a.svcs.WorkspaceID {
+			return a, nil
+		}
 		a.sessions = msg.Sessions
 		a.rebuildSidebar()
 		for _, wi := range a.workItems {
@@ -663,6 +698,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		return a, nil
 
+	case ConfirmDeleteSessionMsg:
+		a.showDeleteSessionConfirm(msg.SessionID)
+		return a, nil
+
 	case ConfirmOverrideAcceptMsg:
 		a.showConfirm("Override Accept",
 			"Accept this work item despite outstanding critiques? This cannot be undone.",
@@ -679,7 +718,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.WorkItem, a.svcs.Plan, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.svcs.WorkItem, a.svcs.Plan, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:
@@ -732,6 +771,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, abandonSessionCmd(a.svcs.Session, msg.SessionID))
 		return a, tea.Batch(cmds...)
 
+	case DeleteSessionMsg:
+		cmds = append(cmds, deleteSessionCmd(a.svcs.Session, a.sessionsDir, msg.SessionID, a.reviewSessionLogs[msg.SessionID]))
+		return a, tea.Batch(cmds...)
+
 	case ReimplementMsg:
 		if a.svcs.Implementation != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
@@ -749,7 +792,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case OverrideAcceptMsg:
-		cmds = append(cmds, OverrideAcceptCmd(a.svcs.WorkItem, msg.WorkItemID))
+		cmds = append(cmds, OverrideAcceptCmd(a.svcs.WorkItem, a.svcs.Plan, a.svcs.Session, a.svcs.Bus, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case NewSessionManualMsg:
@@ -821,10 +864,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
-	case WorkItemDuplicateOpenedMsg:
-		a.toasts.AddToast(msg.Message, components.ToastInfo)
-		a.upsertWorkItem(msg.WorkItem)
-		return a, a.focusWorkItemOverview(msg.WorkItem.ID)
+	case WorkItemDuplicatePromptMsg:
+		a.showDuplicateSessionDialog(msg.RequestedWorkItem, msg.ExistingWorkItem)
+		return a, nil
+	case WorkItemDuplicateActionMsg:
+		if !a.duplicateSessionActive {
+			return a, nil
+		}
+		existing := a.duplicateSession.ExistingWorkItem
+		label := workItemDisplayLabel(existing)
+		a.closeDuplicateSessionDialog()
+		switch msg.Action {
+		case WorkItemDuplicateCancel:
+			return a, nil
+		case WorkItemDuplicateOpenExisting:
+			a.toasts.AddToast("Opened existing item "+label, components.ToastInfo)
+			a.upsertWorkItem(existing)
+			return a, a.focusWorkItemOverview(existing.ID)
+		case WorkItemDuplicateCreateSession:
+			a.toasts.AddToast("Starting planning with existing item "+label, components.ToastInfo)
+			if a.svcs.Planning != nil && existing.State == domain.WorkItemIngested {
+				existing.State = domain.WorkItemPlanning
+			}
+			a.upsertWorkItem(existing)
+			cmds = append(cmds, a.focusWorkItemOverview(existing.ID))
+			if a.svcs.Planning != nil {
+				cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, existing.ID))
+			} else {
+				a.toasts.AddToast("Planning service not configured", components.ToastError)
+			}
+			return a, tea.Batch(cmds...)
+		default:
+			return a, nil
+		}
 
 	case ActionDoneMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -852,6 +924,43 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
+
+	case SessionDeletedMsg:
+		delete(a.questions, msg.SessionID)
+		delete(a.reviews, msg.SessionID)
+		delete(a.reviewSessionLogs, msg.SessionID)
+		delete(a.tailingSessionIDs, msg.SessionID)
+		delete(a.tailingSessionIDs, "review-"+msg.SessionID)
+		filtered := a.sessions[:0]
+		for _, session := range a.sessions {
+			if session.ID != msg.SessionID {
+				filtered = append(filtered, session)
+			}
+		}
+		a.sessions = filtered
+		if a.selectedTaskSessionID() == msg.SessionID {
+			a.setSelectedTaskSessionID("")
+		}
+		if a.currentHistorySessionID == msg.SessionID {
+			a.currentHistorySessionID = ""
+			a.currentHistoryEntry.SessionID = ""
+			a.content.SetSessionInteraction(a.historyEntryTitle(a.currentHistoryEntry), a.historyEntryMeta(a.currentHistoryEntry), a.historyEntrySummaryLines(a.currentHistoryEntry))
+		}
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds,
+				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
+				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+			)
+		}
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		if a.activeOverlay == overlaySessionSearch {
+			cmds = append(cmds, a.runSessionSearch(false))
+		}
+		return a, tea.Batch(cmds...)
+
 	case ErrMsg:
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
@@ -900,6 +1009,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if a.duplicateSessionActive {
+		return a.handleDuplicateSessionKey(msg)
+	}
+
 	if msg.String() == "ctrl+c" {
 		if a.svcs.InstanceID != "" {
 			return a, tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
@@ -942,6 +1055,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "/":
 		return a, a.openSessionSearch()
+	case "d":
+		if sessionID := a.deletableSessionID(); sessionID != "" {
+			a.showDeleteSessionConfirm(sessionID)
+			return a, nil
+		}
 	case "esc":
 		if a.activeOverlay != overlayNone {
 			a.activeOverlay = overlayNone
@@ -1055,6 +1173,10 @@ func (a *App) updateContentFromState() tea.Cmd {
 	a.content.SetWorkItem(wi)
 	if a.sidebarMode == sidebarPaneTasks {
 		if taskSessionID := a.selectedTaskSessionID(); taskSessionID != "" {
+			if taskSessionID == taskSidebarSourceDetailsID {
+				a.content.SetMode(ContentModeSourceDetails)
+				return nil
+			}
 			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
 				return a.showTaskContent(wi, session)
 			}
@@ -1257,6 +1379,14 @@ func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 	a.confirmActive = true
 }
 
+func (a *App) showDeleteSessionConfirm(sessionID string) {
+	sID := sessionID
+	a.showConfirm("Delete Session",
+		"Delete this agent session, its review data, questions, and logs?",
+		func() tea.Msg { return DeleteSessionMsg{SessionID: sID} },
+	)
+}
+
 func (a App) sidebarEntryFromWorkItem(wi domain.WorkItem) SidebarEntry {
 	entry := SidebarEntry{
 		Kind:         SidebarEntryWorkItem,
@@ -1352,6 +1482,17 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	overview := a.sidebarEntryFromWorkItem(*wi)
 	overview.Kind = SidebarEntryTaskOverview
 	entries := []SidebarEntry{overview}
+	if workItemHasSourceDetails(wi) {
+		entries = append(entries, SidebarEntry{
+			Kind:         SidebarEntryTaskSourceDetails,
+			WorkItemID:   workItemID,
+			SessionID:    taskSidebarSourceDetailsID,
+			ExternalID:   wi.ExternalID,
+			Title:        "Source details",
+			SubtitleText: workItemSourceSidebarSubtitle(wi),
+			LastActivity: wi.UpdatedAt,
+		})
+	}
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		entries = append(entries, SidebarEntry{
 			Kind:           SidebarEntryTaskSession,
@@ -1404,6 +1545,10 @@ func (a App) View() string {
 
 	if a.confirmActive {
 		return renderOverlay(a.confirm.View(), a.windowWidth, a.windowHeight)
+	}
+
+	if a.duplicateSessionActive {
+		return renderOverlay(a.duplicateSessionDialogView(), a.windowWidth, a.windowHeight)
 	}
 
 	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
@@ -1540,6 +1685,16 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 	}
 
 	const overlayRightInset = 2
+	blockWidth := 0
+	for _, overlayLine := range overlayLines {
+		blockWidth = max(blockWidth, ansi.StringWidth(overlayLine))
+	}
+	if blockWidth <= 0 {
+		return base
+	}
+	if blockWidth > width {
+		blockWidth = width
+	}
 	for i, overlayLine := range overlayLines {
 		target := start + i
 		if target < 0 || target >= maxOverlayBottom {
@@ -1549,25 +1704,32 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 		if overlayWidth <= 0 {
 			continue
 		}
-		if overlayWidth >= width {
-			baseLines[target] = ansi.Truncate(overlayLine, width, "")
-			continue
+		if overlayWidth > blockWidth {
+			overlayLine = ansi.Truncate(overlayLine, blockWidth, "")
+			overlayWidth = ansi.StringWidth(overlayLine)
 		}
-
-		rightInset := min(overlayRightInset, max(0, width-overlayWidth))
-		if overlayWidth+rightInset >= width {
+		rightInset := min(overlayRightInset, max(0, width-blockWidth))
+		if blockWidth+rightInset >= width {
 			rightInset = 0
 		}
-		prefixWidth := width - overlayWidth - rightInset
+		prefixWidth := width - blockWidth - rightInset
 		prefix := ansi.Cut(baseLines[target], 0, prefixWidth)
 		if got := ansi.StringWidth(prefix); got < prefixWidth {
 			prefix += strings.Repeat(" ", prefixWidth-got)
 		}
-		suffix := ansi.Cut(baseLines[target], prefixWidth+overlayWidth, width)
+		leftPad := max(0, blockWidth-overlayWidth)
+		if blockWidth == width {
+			leftPad = min(leftPad, max(0, width-rightInset-overlayWidth))
+		}
+		overlaySegment := strings.Repeat(" ", leftPad) + overlayLine
+		if segmentWidth := ansi.StringWidth(overlaySegment); segmentWidth < blockWidth {
+			overlaySegment += strings.Repeat(" ", blockWidth-segmentWidth)
+		}
+		suffix := ansi.Cut(baseLines[target], prefixWidth+blockWidth, width)
 		if got := ansi.StringWidth(suffix); got < rightInset {
 			suffix += strings.Repeat(" ", rightInset-got)
 		}
-		baseLines[target] = prefix + overlayLine + suffix
+		baseLines[target] = prefix + overlaySegment + suffix
 	}
 
 	return strings.Join(baseLines, "\n")
@@ -1582,6 +1744,58 @@ func abandonSessionCmd(svc *service.SessionService, sessionID string) tea.Cmd {
 		}
 		return ActionDoneMsg{Message: "Session abandoned"}
 	}
+}
+
+func deleteSessionCmd(svc *service.SessionService, sessionsDir, sessionID, reviewLogPath string) tea.Cmd {
+	return func() tea.Msg {
+		if err := svc.Delete(context.Background(), sessionID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		message := "Session deleted"
+		if err := deleteSessionArtifacts(sessionsDir, sessionID, reviewLogPath); err != nil {
+			message = "Session deleted; some logs could not be removed"
+		}
+		return SessionDeletedMsg{SessionID: sessionID, Message: message}
+	}
+}
+
+func deleteSessionArtifacts(sessionsDir, sessionID, reviewLogPath string) error {
+	var errs []error
+	for _, deleteID := range deleteSessionArtifactIDs(sessionsDir, sessionID, reviewLogPath) {
+		paths, err := sessionInteractionPaths(sessionsDir, deleteID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, path := range paths {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("remove session log %s: %w", path, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func deleteSessionArtifactIDs(sessionsDir, sessionID, reviewLogPath string) []string {
+	if strings.TrimSpace(sessionsDir) == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	ids := []string{sessionID}
+	if strings.TrimSpace(reviewLogPath) == "" {
+		return ids
+	}
+	reviewLogPath = filepath.Clean(reviewLogPath)
+	if filepath.Dir(reviewLogPath) != filepath.Clean(sessionsDir) {
+		return ids
+	}
+	base := filepath.Base(reviewLogPath)
+	if strings.HasSuffix(base, ".log") {
+		reviewID := strings.TrimSuffix(base, ".log")
+		if reviewID != "" && reviewID != sessionID {
+			ids = append(ids, reviewID)
+		}
+	}
+	return ids
 }
 
 func workItemDisplayLabel(wi domain.WorkItem) string {
@@ -1630,11 +1844,15 @@ func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
 	if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
 		var alreadyExists service.ErrAlreadyExists
 		if errors.As(err, &alreadyExists) {
-			existing, lookupErr := existingWorkItemByExternalID(svcs.WorkItem, svcs.WorkspaceID, wi.ExternalID)
+			duplicateID := strings.TrimSpace(alreadyExists.ID)
+			if duplicateID == "" {
+				duplicateID = wi.ExternalID
+			}
+			existing, lookupErr := existingWorkItemByExternalID(svcs.WorkItem, svcs.WorkspaceID, duplicateID)
 			if lookupErr == nil {
-				return WorkItemDuplicateOpenedMsg{
-					WorkItem: existing,
-					Message:  "Work item already exists: opened existing item " + workItemDisplayLabel(existing),
+				return WorkItemDuplicatePromptMsg{
+					RequestedWorkItem: wi,
+					ExistingWorkItem:  existing,
 				}
 			}
 			return ErrMsg{Err: fmt.Errorf("work item already exists in this workspace: %s", label)}

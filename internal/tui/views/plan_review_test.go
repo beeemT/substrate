@@ -69,8 +69,13 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 	m.SetWorkItem(&domain.WorkItem{
 		ID:          "wi-1",
 		ExternalID:  "SUB-1",
+		Source:      "github",
 		Title:       "Investigate overflow",
 		Description: "## Summary\n\nThis is **important**.",
+		Labels:      []string{"bug", "backend"},
+		Metadata: map[string]any{
+			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
+		},
 	})
 
 	rendered := m.View()
@@ -79,9 +84,14 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 	if len(plainLines) == 0 || !strings.HasPrefix(plainLines[0], "  SUB-1 · Investigate overflow") {
 		t.Fatalf("first line = %q, want title inset from the pane edge", plainLines[0])
 	}
-	for _, want := range []string{"SUB-1 · Investigate overflow", "Details", "Next step", "Summary", "This is important.", "Press [Enter]", "╭", "╮", "┌", "┐"} {
+	for _, want := range []string{"SUB-1 · Investigate overflow", "Details", "Summary", "This is important.", "Press [Enter]", "╭", "╮", "┌", "┐"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
+		}
+	}
+	for _, hidden := range []string{"GitHub", "acme/rocket", "Labels: bug, backend"} {
+		if strings.Contains(plain, hidden) {
+			t.Fatalf("view = %q, want ready overview to omit source detail %q", plain, hidden)
 		}
 	}
 	for _, raw := range []string{"## Summary", "**important**"} {
@@ -100,32 +110,27 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 		}
 	}
 
-	labelIndex := -1
 	cardIndex := -1
 	for i, line := range plainLines {
-		if labelIndex == -1 && strings.Contains(line, "Next step") {
-			labelIndex = i
-		}
-		if cardIndex == -1 && strings.Contains(line, "┌") {
+		if strings.Contains(line, "┌") {
 			cardIndex = i
+			break
 		}
 	}
-	if labelIndex == -1 || cardIndex != labelIndex+1 {
-		t.Fatalf("label index = %d card index = %d, want card immediately below the label", labelIndex, cardIndex)
+	if cardIndex == -1 {
+		t.Fatalf("view = %q, want next-step card near the bottom", plain)
 	}
-	labelLine := plainLines[labelIndex]
 	cardLine := plainLines[cardIndex]
-	if got := len(labelLine) - len(strings.TrimLeft(labelLine, " ")); got < 2 {
-		t.Fatalf("label line = %q, want at least 2 spaces of left inset", labelLine)
-	}
-	if got := len(labelLine) - len(strings.TrimRight(labelLine, " ")); got < 2 {
-		t.Fatalf("label line = %q, want at least 2 spaces of right inset", labelLine)
-	}
-	if got := len(cardLine) - len(strings.TrimLeft(cardLine, " ")); got < 2 {
+	leftInset := len(cardLine) - len(strings.TrimLeft(cardLine, " "))
+	rightInset := len(cardLine) - len(strings.TrimRight(cardLine, " "))
+	if leftInset < 2 {
 		t.Fatalf("card line = %q, want at least 2 spaces of left inset", cardLine)
 	}
-	if got := len(cardLine) - len(strings.TrimRight(cardLine, " ")); got < 2 {
+	if rightInset < 2 {
 		t.Fatalf("card line = %q, want at least 2 spaces of right inset", cardLine)
+	}
+	if leftInset != rightInset {
+		t.Fatalf("card line = %q, want symmetric left/right inset, got left=%d right=%d", cardLine, leftInset, rightInset)
 	}
 	if strings.TrimSpace(plainLines[len(plainLines)-1]) != "" {
 		t.Fatalf("last line = %q, want bottom padding below the next-step card", plainLines[len(plainLines)-1])

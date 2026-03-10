@@ -117,7 +117,7 @@ type ImplementationWarning struct {
 
 // Implement starts the implementation phase for an approved plan.
 // It executes sub-plans in waves, creating worktrees and spawning agent sessions.
-func (s *ImplementationService) Implement(ctx context.Context, planID string) (*ImplementResult, error) {
+func (s *ImplementationService) Implement(ctx context.Context, planID string) (result *ImplementResult, err error) {
 	// 1. Get the plan
 	plan, err := s.planSvc.GetPlan(ctx, planID)
 	if err != nil {
@@ -147,35 +147,49 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (*
 		return nil, fmt.Errorf("get sub-plans: %w", err)
 	}
 
-	// 6. Transition work item to implementing
-	if err := s.workItemSvc.Transition(ctx, workItem.ID, domain.WorkItemImplementing); err != nil {
-		return nil, fmt.Errorf("transition work item to implementing: %w", err)
+	implementingStarted := false
+	defer func() {
+		if err == nil || !implementingStarted {
+			return
+		}
+		if failErr := s.workItemSvc.FailWorkItem(ctx, workItem.ID); failErr != nil {
+			slog.Warn("failed to transition work item to failed after implementation error",
+				"error", failErr,
+				"plan_id", planID,
+				"work_item_id", workItem.ID)
+		}
+	}()
+
+	// 6. Discover repos before mutating work-item state.
+	repoPaths, err := s.discoverRepoPaths(ctx, workspace.RootPath)
+	if err != nil {
+		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
-	// 7. Emit ImplementationStarted event
+	// 7. Transition work item to implementing once non-mutating preflight succeeds.
+	if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
+		return nil, fmt.Errorf("transition work item to implementing: %w", err)
+	}
+	implementingStarted = true
+
+	// 8. Emit ImplementationStarted event
 	if err := s.emitImplementationStarted(ctx, &plan, &workItem, workspace.ID); err != nil {
 		slog.Warn("failed to emit implementation started event", "error", err)
 	}
 
-	// 8. Generate branch name
+	// 9. Generate branch name
 	branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
 
-	// 9. Initialize execution state
+	// 10. Initialize execution state
 	state := NewExecutionState(planID, subPlans)
 
-	// 10. Execute waves
-	result := &ImplementResult{
+	// 11. Execute waves
+	result = &ImplementResult{
 		PlanID:     planID,
 		WorkItemID: workItem.ID,
 		State:      state,
 		Sessions:   make([]SessionResult, 0),
 		Warnings:   make([]ImplementationWarning, 0),
-	}
-
-	// Discover repos to get paths
-	repoPaths, err := s.discoverRepoPaths(ctx, workspace.RootPath)
-	if err != nil {
-		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
 	// Pre-create all worktrees sequentially before fan-out to eliminate the
@@ -230,12 +244,12 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (*
 
 	// Update work item state based on overall result
 	if state.AllWavesCompleted() {
-		if err := s.workItemSvc.Transition(ctx, workItem.ID, domain.WorkItemReviewing); err != nil {
-			slog.Warn("failed to transition work item to reviewing", "error", err)
+		if reviewErr := s.workItemSvc.SubmitForReview(ctx, workItem.ID); reviewErr != nil {
+			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
 		}
 	} else {
-		if err := s.workItemSvc.Transition(ctx, workItem.ID, domain.WorkItemFailed); err != nil {
-			slog.Warn("failed to transition work item to failed", "error", err)
+		if failErr := s.workItemSvc.FailWorkItem(ctx, workItem.ID); failErr != nil {
+			slog.Warn("failed to transition work item to failed", "error", failErr)
 		}
 	}
 

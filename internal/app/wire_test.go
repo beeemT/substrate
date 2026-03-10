@@ -72,15 +72,27 @@ func TestBuildRepoLifecycleAdapters_UsesWorkspaceRepoPlatforms(t *testing.T) {
 	}
 }
 
-func TestBuildRepoLifecycleAdapters_SkipsMixedWorkspacePlatforms(t *testing.T) {
-	t.Parallel()
+func TestBuildRepoLifecycleAdapters_PreservesSupportedPlatformsInMixedWorkspace(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("LookPath(git): %v", err)
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(binDir, "git")); err != nil {
+		t.Fatalf("Symlink(git): %v", err)
+	}
+	t.Setenv("PATH", binDir)
 
 	workspaceDir := t.TempDir()
 	createWorkspaceRepo(t, filepath.Join(workspaceDir, "gitlab-repo"), "git@gitlab.com:group/repo.git")
 	createWorkspaceRepo(t, filepath.Join(workspaceDir, "github-repo"), "git@github.com:org/repo.git")
 
-	if adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir); len(adapters) != 0 {
-		t.Fatalf("adapters len = %d, want 0", len(adapters))
+	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir)
+	if len(adapters) != 1 {
+		t.Fatalf("adapters len = %d, want 1", len(adapters))
+	}
+	if adapters[0].Name() != "glab" {
+		t.Fatalf("adapter name = %q, want glab", adapters[0].Name())
 	}
 }
 

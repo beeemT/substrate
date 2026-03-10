@@ -392,6 +392,9 @@ func (m SessionSearchOverlay) detailContent() string {
 		"",
 		"Press Enter to open the selected work item session.",
 	}
+	if strings.TrimSpace(entry.SessionID) != "" {
+		lines = append(lines, "Press d to delete the latest agent session and related records.")
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -431,7 +434,7 @@ func (m *SessionSearchOverlay) syncDetailViewportWithLayout(layout components.Sp
 }
 
 func (m SessionSearchOverlay) hintText() string {
-	return "[↑] Scope  [↓] Results  [←/→] Focus or toggle  [Ctrl+S] Toggle scope  [Enter] Open"
+	return "[↑] Scope  [↓] Results  [←/→] Focus or toggle  [Ctrl+S] Toggle scope  [Enter] Open  [d] Delete session"
 }
 
 func (m SessionSearchOverlay) View() string {
@@ -571,6 +574,12 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			if msg.String() == "enter" {
 				if entry := m.Selected(); entry != nil {
 					return m, func() tea.Msg { return OpenSessionHistoryMsg{Entry: *entry} }
+				}
+				return m, nil
+			}
+			if msg.String() == "d" {
+				if entry := m.Selected(); entry != nil && strings.TrimSpace(entry.SessionID) != "" {
+					return m, func() tea.Msg { return ConfirmDeleteSessionMsg{SessionID: entry.SessionID} }
 				}
 				return m, nil
 			}

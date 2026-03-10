@@ -46,6 +46,32 @@ func (h *OhMyPiHarness) Capabilities() adapter.HarnessCapabilities {
 	}
 }
 
+// ValidateReadiness verifies that the oh-my-pi bridge can run with the configured runtime prerequisites.
+func ValidateReadiness(cfg config.OhMyPiConfig) error {
+	_, _, err := resolveReadyBridgeRuntime(cfg)
+	return err
+}
+
+func resolveReadyBridgeRuntime(cfg config.OhMyPiConfig) (bridgeRuntime, string, error) {
+	runtime, err := resolveBridgeRuntime(cfg.BridgePath)
+	if err != nil {
+		return bridgeRuntime{}, "", err
+	}
+	if !runtime.NeedsBun {
+		return runtime, "", nil
+	}
+
+	bunPath, err := resolveBunExecutable(cfg.BunPath)
+	if err != nil {
+		return bridgeRuntime{}, "", err
+	}
+	if err := ensureBridgeDependencies(runtime); err != nil {
+		return bridgeRuntime{}, "", err
+	}
+
+	return runtime, bunPath, nil
+}
+
 // StartSession spawns a new agent session with the given options.
 func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	if opts.Mode == "" {
@@ -69,22 +95,11 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 		sessionLogDir = filepath.Join(globalDir, "sessions")
 	}
 
-	bridgeRuntime, err := resolveBridgeRuntime(h.cfg.BridgePath)
+	bridgeRuntime, bunPath, err := resolveReadyBridgeRuntime(h.cfg)
 	if err != nil {
 		return nil, err
 	}
 	bunCacheDir := filepath.Join(globalDir, "bun-cache")
-
-	var bunPath string
-	if bridgeRuntime.NeedsBun {
-		bunPath, err = resolveBunExecutable(h.cfg.BunPath)
-		if err != nil {
-			return nil, err
-		}
-		if err := ensureBridgeDependencies(bridgeRuntime); err != nil {
-			return nil, err
-		}
-	}
 
 	// Build the command
 	var cmd *exec.Cmd
@@ -382,18 +397,11 @@ func escapeSandboxPath(path string) string {
 func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessActionRequest) (adapter.HarnessActionResult, error) {
 	switch req.Action {
 	case "check_auth":
-		bridgeRuntime, err := resolveBridgeRuntime(h.cfg.BridgePath)
+		bridgeRuntime, bunPath, err := resolveReadyBridgeRuntime(h.cfg)
 		if err != nil {
 			return adapter.HarnessActionResult{}, err
 		}
-		if bridgeRuntime.NeedsBun {
-			bunPath, err := resolveBunExecutable(h.cfg.BunPath)
-			if err != nil {
-				return adapter.HarnessActionResult{}, err
-			}
-			if err := ensureBridgeDependencies(bridgeRuntime); err != nil {
-				return adapter.HarnessActionResult{}, err
-			}
+		if bunPath != "" {
 			return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bridgeRuntime.Path + " via " + bunPath}, nil
 		}
 		return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bridgeRuntime.Path}, nil

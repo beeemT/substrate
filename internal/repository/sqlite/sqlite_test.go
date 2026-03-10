@@ -475,6 +475,99 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionDeleteCascadesDependents(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	sess := makeSession(t, tx, sp.ID, ws.ID)
+
+	sessionRepo := reposqlite.NewSessionRepo(tx)
+	reviewRepo := reposqlite.NewReviewRepo(tx)
+	questionRepo := reposqlite.NewQuestionRepo(tx)
+
+	reviewCycle := domain.ReviewCycle{
+		ID:              domain.NewID(),
+		AgentSessionID:  sess.ID,
+		CycleNumber:     1,
+		ReviewerHarness: "claude-reviewer",
+		Status:          domain.ReviewCycleReviewing,
+		CreatedAt:       now(),
+		UpdatedAt:       now(),
+	}
+	if err := reviewRepo.CreateCycle(ctx, reviewCycle); err != nil {
+		t.Fatalf("create review cycle: %v", err)
+	}
+
+	critique := domain.Critique{
+		ID:            domain.NewID(),
+		ReviewCycleID: reviewCycle.ID,
+		Severity:      domain.CritiqueMajor,
+		Description:   "needs fix",
+		Status:        domain.CritiqueOpen,
+		CreatedAt:     now(),
+	}
+	if err := reviewRepo.CreateCritique(ctx, critique); err != nil {
+		t.Fatalf("create critique: %v", err)
+	}
+
+	question := domain.Question{
+		ID:             domain.NewID(),
+		AgentSessionID: sess.ID,
+		Content:        "what next?",
+		Status:         domain.QuestionPending,
+		CreatedAt:      now(),
+	}
+	if err := questionRepo.Create(ctx, question); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+
+	if err := sessionRepo.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	if _, err := sessionRepo.Get(ctx, sess.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("session get error = %v, want %v", err, sql.ErrNoRows)
+	}
+	if _, err := reviewRepo.GetCycle(ctx, reviewCycle.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("review cycle get error = %v, want %v", err, sql.ErrNoRows)
+	}
+	if _, err := reviewRepo.GetCritique(ctx, critique.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("critique get error = %v, want %v", err, sql.ErrNoRows)
+	}
+	if _, err := questionRepo.Get(ctx, question.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("question get error = %v, want %v", err, sql.ErrNoRows)
+	}
+
+	cycles, err := reviewRepo.ListCyclesBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list review cycles: %v", err)
+	}
+	if len(cycles) != 0 {
+		t.Fatalf("review cycles len = %d, want 0", len(cycles))
+	}
+
+	critiques, err := reviewRepo.ListCritiquesByReviewCycleID(ctx, reviewCycle.ID)
+	if err != nil {
+		t.Fatalf("list critiques: %v", err)
+	}
+	if len(critiques) != 0 {
+		t.Fatalf("critiques len = %d, want 0", len(critiques))
+	}
+
+	questions, err := questionRepo.ListBySessionID(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list questions: %v", err)
+	}
+	if len(questions) != 0 {
+		t.Fatalf("questions len = %d, want 0", len(questions))
+	}
+}
+
 func TestSessionSearchHistory(t *testing.T) {
 	db := setupDB(t)
 	tx := beginTx(t, db)

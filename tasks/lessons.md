@@ -1,5 +1,35 @@
 # Lessons Learned
 
+## 2026-03-10 - Duplicate-Flow UX Corrections
+
+**Mistake**: I implemented duplicate work-item handling as a hard redirect to the existing item after fixing the dedup bug, even though the user actually wanted a choice between canceling, opening the duplicate, or proceeding with the duplicate work item.
+**Pattern**: I stopped at the first correct backend guard instead of re-checking whether the surrounding interaction still matched the user’s intended workflow.
+**Rule**: When a user corrects a workflow from automatic behavior to user choice, replace the hard-coded branch with an explicit decision surface and test each available action instead of preserving the old one-path UX.
+**Applied**: Duplicate detection prompts, conflict-resolution dialogs, overwrite flows, and any TUI action that can validly continue in more than one user-directed way.
+
+
+## 2026-03-10 - Overlay Visual Consistency
+
+**Mistake**: I added a new upper-right toast/modal flow without checking whether the toast stack was actually right-bound or whether the modal content rows inherited the same background as the overlay frame.
+**Pattern**: I verified the interaction behavior but stopped short of validating the visual contract of adjacent overlay elements.
+**Rule**: When adding or moving overlays, verify alignment and background ownership explicitly in the rendered view and add layout tests for the final placement rather than assuming container styling propagates correctly.
+**Applied**: Toast stacks, modal dialogs, callouts, and any TUI overlay composed from nested lipgloss blocks.
+
+
+## 2026-03-10 - Overview Granularity vs Source Detail
+
+**Mistake**: I reacted to missing ticket context by pasting source metadata into the overview itself, even though multi-ticket work items make labels and other source facts ambiguous at the overview level.
+**Pattern**: I fixed an information gap without first separating which facts belong to the whole work item versus which facts belong to individual source tickets.
+**Rule**: When a work item aggregates multiple source objects, keep the overview limited to whole-item context and move ticket-level metadata into a dedicated detail surface instead of flattening it into an inline summary.
+**Applied**: Work-item overviews, task-pane synthetic rows, browse-to-task handoffs, and any UI that summarizes many source records into one operating unit.
+
+## 2026-03-10 - Overview vs Selection Parity
+
+**Mistake**: I treated the session overview tweak as isolated copy/spacing work and missed that the new-session selection screen was already showing ticket context the overview still dropped.
+**Pattern**: I changed one UI surface without comparing the information contract of the adjacent surface that hands off into it.
+**Rule**: When a ticket or work item appears in both selection/details and overview screens, compare the metadata shown on both surfaces and carry forward the context users need after the handoff instead of stopping at the first requested visual tweak.
+**Applied**: TUI handoff views, browse-to-overview transitions, summary/detail panes, and any workflow where one screen previews richer metadata than the next screen retains.
+
 ## 2026-03-08 - Communication
 
 **Mistake**: I left workspace initialization as a scan-and-warn flow for plain git clones even though the expected behavior was to git-work initialize repos inside a new workspace.
@@ -28,3 +58,17 @@
 **Pattern**: I treated a terminology change as a one-string tweak instead of a full cutover through the owning subsystem.
 **Rule**: When product terminology changes, search the entire subsystem for user-facing labels, internal symbol names, test names, and helper APIs using the old term, then cut them over together before considering the work complete.
 **Applied**: UI terminology updates, navigation labels, symbol renames, and any refactor where product language becomes part of the code structure.
+
+## 2026-03-10 - Footer CTA Minimalism
+
+**Mistake**: After fixing the detached footer card, I kept a `Next step` heading even though the cleaner design was the card alone.
+**Pattern**: I preserved explanatory UI chrome after the user clarified that the affordance itself was already self-explanatory.
+**Rule**: When a user prefers the simpler presentation, remove non-essential labels instead of defending the extra structure; then update tests to assert the obsolete label stays gone.
+**Applied**: Footer CTAs, callout headings, helper captions, and any UI element where the action card already conveys the needed meaning.
+
+## 2026-03-10 - Remove Obsolete Tests With Removed UI
+
+**Mistake**: After removing the `Next step` label, I kept negative assertions that only checked the deleted label stayed gone.
+**Pattern**: I treated tests added during a short-lived UI change as harmless residue instead of pruning them once the feature itself disappeared.
+**Rule**: When a UI element or behavior is removed, delete tests that exist only to defend that removed detail; keep only coverage for the surviving behavior.
+**Applied**: TUI labels, helper captions, short-lived UX experiments, and any feature rollback or simplification where the old behavior no longer exists.

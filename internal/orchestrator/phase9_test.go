@@ -27,6 +27,7 @@ type mockAgentSession struct {
 	mu       sync.Mutex
 	messages []string
 	aborted  bool
+	abortErr error
 }
 
 func newMockSession(id string, events ...adapter.AgentEvent) *mockAgentSession {
@@ -51,7 +52,7 @@ func (s *mockAgentSession) Abort(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aborted = true
-	return nil
+	return s.abortErr
 }
 
 // ============================================================
@@ -208,8 +209,12 @@ func (r *mockSubPlanRepo) Delete(ctx context.Context, id string) error {
 }
 
 type mockSessionRepo struct {
-	mu       sync.Mutex
-	sessions map[string]domain.AgentSession
+	mu              sync.Mutex
+	sessions        map[string]domain.AgentSession
+	searchHistory   []domain.SessionHistoryEntry
+	updateErr       error
+	updateErrStatus domain.AgentSessionStatus
+	deleteErr       error
 }
 
 func newMockSessionRepo() *mockSessionRepo {
@@ -261,6 +266,14 @@ func (r *mockSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID 
 	return result, nil
 }
 
+func (r *mockSessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entries := make([]domain.SessionHistoryEntry, len(r.searchHistory))
+	copy(entries, r.searchHistory)
+	return entries, nil
+}
+
 func (r *mockSessionRepo) Create(ctx context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -271,6 +284,9 @@ func (r *mockSessionRepo) Create(ctx context.Context, s domain.AgentSession) err
 func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateErr != nil && (r.updateErrStatus == "" || s.Status == r.updateErrStatus) {
+		return r.updateErr
+	}
 	r.sessions[s.ID] = s
 	return nil
 }
@@ -278,6 +294,9 @@ func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) err
 func (r *mockSessionRepo) Delete(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
 	delete(r.sessions, id)
 	return nil
 }

@@ -312,12 +312,12 @@ func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
 	snapshot := SettingsSnapshot{
 		Sections:       buildSettingsSections(&config.Config{}),
 		Providers:      buildProviderStatuses(&config.Config{}),
-		HarnessWarning: "Planning unavailable — open Settings → Harness Routing",
+		HarnessWarning: "Planning unavailable. Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.",
 	}
 	for i := range snapshot.Sections {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
-			snapshot.Sections[i].Error = `Planning unavailable: codex binary "codex" not found`
+			snapshot.Sections[i].Error = `Planning: Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.`
 			break
 		}
 	}
@@ -327,11 +327,11 @@ func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
 	page.navCursor = page.sections[page.sectionCursor].ID
 	page.syncMainViewport()
 	rendered := ansi.Strip(page.View())
-	if !strings.Contains(rendered, "warning: Planning unavailable — open Settings → Harness Routing") {
+	if !strings.Contains(rendered, "warning: Planning unavailable. Codex CLI not found in PATH.") {
 		t.Fatalf("view = %q, want footer warning", rendered)
 	}
 	doc, _, _ := page.buildMainDocument(80)
-	if !strings.Contains(ansi.Strip(doc), `Planning unavailable: codex binary "codex" not found`) {
+	if !strings.Contains(ansi.Strip(doc), `Planning: Codex CLI not found in PATH.`) {
 		t.Fatalf("document = %q, want section error detail", ansi.Strip(doc))
 	}
 }
@@ -342,12 +342,12 @@ func TestSettingsPage_ViewWithHarnessWarningFitsNarrowWidth(t *testing.T) {
 	snapshot := SettingsSnapshot{
 		Sections:       buildSettingsSections(&config.Config{}),
 		Providers:      buildProviderStatuses(&config.Config{}),
-		HarnessWarning: "Harness configuration warnings — open Settings → Harness Routing",
+		HarnessWarning: "Some harnesses are unavailable. Open Settings → Harness Routing.",
 	}
 	for i := range snapshot.Sections {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
-			snapshot.Sections[i].Error = `Planning unavailable: codex binary "codex" not found`
+			snapshot.Sections[i].Error = `Planning: Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.`
 			break
 		}
 	}

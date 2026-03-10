@@ -65,14 +65,21 @@ func (m *ToastModel) StackView(pinned ...Toast) string {
 	if len(pinned) == 0 {
 		return m.View()
 	}
-	views := make([]string, 0, len(pinned)+len(m.toasts))
+	pinnedViews := make([]string, 0, len(pinned))
 	for _, toast := range pinned {
-		views = append(views, renderToast(m.styles, toast))
+		pinnedViews = append(pinnedViews, renderToast(m.styles, toast))
 	}
+	if len(m.toasts) == 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, pinnedViews...)
+	}
+	transientViews := make([]string, 0, len(m.toasts))
 	for i := len(m.toasts) - 1; i >= 0; i-- {
-		views = append(views, renderToast(m.styles, m.toasts[i]))
+		transientViews = append(transientViews, renderToast(m.styles, m.toasts[i]))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, views...)
+	stack := make([]string, 0, len(pinnedViews)+1)
+	stack = append(stack, pinnedViews...)
+	stack = append(stack, lipgloss.JoinVertical(lipgloss.Right, transientViews...))
+	return lipgloss.JoinVertical(lipgloss.Left, stack...)
 }
 
 func renderToast(st styles.Styles, t Toast) string {

@@ -2,12 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 // TestBuildWaves tests the BuildWaves function with various input scenarios.
@@ -419,5 +423,222 @@ func TestAllWavesCompletedEmptyPlan(t *testing.T) {
 	state := NewExecutionState("plan-empty", []domain.SubPlan{})
 	if state.AllWavesCompleted() {
 		t.Error("AllWavesCompleted() = true for empty plan, want false")
+	}
+}
+
+type implementationWorkItemRepo struct {
+	mu    sync.Mutex
+	items map[string]domain.WorkItem
+}
+
+func (r *implementationWorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[id]
+	if !ok {
+		return domain.WorkItem{}, repository.ErrNotFound
+	}
+	return item, nil
+}
+
+func (r *implementationWorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]domain.WorkItem, 0, len(r.items))
+	for _, item := range r.items {
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (r *implementationWorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.items[item.ID] = item
+	return nil
+}
+
+func (r *implementationWorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.items[item.ID] = item
+	return nil
+}
+
+func (r *implementationWorkItemRepo) Delete(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.items, id)
+	return nil
+}
+
+type implementationWorkspaceRepo struct {
+	workspaces map[string]domain.Workspace
+}
+
+func (r *implementationWorkspaceRepo) Get(ctx context.Context, id string) (domain.Workspace, error) {
+	ws, ok := r.workspaces[id]
+	if !ok {
+		return domain.Workspace{}, repository.ErrNotFound
+	}
+	return ws, nil
+}
+
+func (r *implementationWorkspaceRepo) Create(ctx context.Context, ws domain.Workspace) error {
+	r.workspaces[ws.ID] = ws
+	return nil
+}
+
+func (r *implementationWorkspaceRepo) Update(ctx context.Context, ws domain.Workspace) error {
+	r.workspaces[ws.ID] = ws
+	return nil
+}
+
+func (r *implementationWorkspaceRepo) Delete(ctx context.Context, id string) error {
+	delete(r.workspaces, id)
+	return nil
+}
+
+type implementationEventRepo struct {
+	events []domain.SystemEvent
+}
+
+func (r *implementationEventRepo) Create(ctx context.Context, evt domain.SystemEvent) error {
+	r.events = append(r.events, evt)
+	return nil
+}
+
+func (r *implementationEventRepo) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
+	var events []domain.SystemEvent
+	for _, evt := range r.events {
+		if evt.EventType == eventType {
+			events = append(events, evt)
+		}
+	}
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
+}
+
+func (r *implementationEventRepo) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
+	var events []domain.SystemEvent
+	for _, evt := range r.events {
+		if evt.WorkspaceID == workspaceID {
+			events = append(events, evt)
+		}
+	}
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
+}
+
+func newImplementationServiceForTest(workspaceRoot, repoName string) (*ImplementationService, *implementationWorkItemRepo, *implementationEventRepo) {
+	planRepo := newMockPlanRepo()
+	planRepo.plans["plan-1"] = domain.Plan{
+		ID:         "plan-1",
+		WorkItemID: "wi-1",
+		Status:     domain.PlanApproved,
+	}
+
+	subPlanRepo := newMockSubPlanRepo()
+	subPlanRepo.subPlans["sp-1"] = domain.SubPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: repoName,
+		Content:        "Implement the change",
+		Order:          0,
+		Status:         domain.SubPlanPending,
+	}
+
+	workItemRepo := &implementationWorkItemRepo{
+		items: map[string]domain.WorkItem{
+			"wi-1": {
+				ID:          "wi-1",
+				WorkspaceID: "ws-1",
+				ExternalID:  "MAN-1",
+				Source:      "manual",
+				Title:       "Implement the change",
+				State:       domain.WorkItemApproved,
+			},
+		},
+	}
+	workspaceRepo := &implementationWorkspaceRepo{
+		workspaces: map[string]domain.Workspace{
+			"ws-1": {
+				ID:       "ws-1",
+				RootPath: workspaceRoot,
+				Status:   domain.WorkspaceReady,
+			},
+		},
+	}
+	sessionRepo := newMockSessionRepo()
+	eventRepo := &implementationEventRepo{}
+
+	svc := NewImplementationService(
+		&config.Config{},
+		&mockAgentHarness{},
+		nil,
+		nil,
+		service.NewPlanService(planRepo, subPlanRepo),
+		service.NewWorkItemService(workItemRepo),
+		service.NewSessionService(sessionRepo),
+		subPlanRepo,
+		sessionRepo,
+		eventRepo,
+		service.NewWorkspaceService(workspaceRepo),
+	)
+
+	return svc, workItemRepo, eventRepo
+}
+
+func TestImplement_DiscoverRepoFailureKeepsWorkItemApproved(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "missing")
+	svc, workItemRepo, eventRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+
+	_, err := svc.Implement(context.Background(), "plan-1")
+	if err == nil {
+		t.Fatal("expected implementation to fail when workspace repo discovery fails")
+	}
+	if !strings.Contains(err.Error(), "discover repo paths") {
+		t.Fatalf("expected discover repo paths error, got %v", err)
+	}
+
+	workItem, getErr := workItemRepo.Get(context.Background(), "wi-1")
+	if getErr != nil {
+		t.Fatalf("get work item: %v", getErr)
+	}
+	if workItem.State != domain.WorkItemApproved {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemApproved)
+	}
+	if len(eventRepo.events) != 0 {
+		t.Fatalf("expected no implementation-started events, got %d", len(eventRepo.events))
+	}
+}
+
+func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
+	svc, workItemRepo, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+
+	_, err := svc.Implement(context.Background(), "plan-1")
+	if err == nil {
+		t.Fatal("expected implementation to fail when worktree preparation fails")
+	}
+	if !strings.Contains(err.Error(), "prepare worktrees") {
+		t.Fatalf("expected prepare worktrees error, got %v", err)
+	}
+
+	workItem, getErr := workItemRepo.Get(context.Background(), "wi-1")
+	if getErr != nil {
+		t.Fatalf("get work item: %v", getErr)
+	}
+	if workItem.State != domain.WorkItemFailed {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemFailed)
+	}
+	if len(eventRepo.events) != 1 {
+		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
+	}
+	if got := eventRepo.events[0].EventType; got != string(domain.EventImplementationStarted) {
+		t.Fatalf("event type = %q, want %q", got, domain.EventImplementationStarted)
 	}
 }

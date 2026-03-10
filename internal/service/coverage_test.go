@@ -299,6 +299,9 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 		if err := svc.Delete(ctx, "s-del"); err != nil {
 			t.Fatalf("Delete failed: %v", err)
 		}
+		if _, err := svc.Get(ctx, "s-del"); err == nil {
+			t.Fatal("expected deleted session lookup to fail")
+		}
 	})
 }
 

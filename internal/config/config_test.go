@@ -57,6 +57,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Adapters.GitLab.BaseURL != "https://gitlab.com" {
 		t.Errorf("adapters.gitlab.base_url = %q, want %q", cfg.Adapters.GitLab.BaseURL, "https://gitlab.com")
 	}
+	if cfg.Adapters.GitHub.BaseURL != "https://api.github.com" {
+		t.Errorf("adapters.github.base_url = %q, want %q", cfg.Adapters.GitHub.BaseURL, "https://api.github.com")
+	}
 	if cfg.Adapters.GitLab.PollInterval != "60s" {
 		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "60s")
 	}

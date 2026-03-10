@@ -23,6 +23,7 @@ func TestContentSetMode(t *testing.T) {
 	modes := []views.ContentMode{
 		views.ContentModeEmpty,
 		views.ContentModeReadyToPlan,
+		views.ContentModeSourceDetails,
 		views.ContentModePlanning,
 		views.ContentModeSessionInteraction,
 		views.ContentModePlanReview,

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/beeemT/substrate/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,7 +33,7 @@ func (p Platform) String() string {
 	}
 }
 
-func DetectPlatform(ctx context.Context, dir string) (Platform, error) {
+func DetectPlatform(ctx context.Context, dir string, cfg *config.Config) (Platform, error) {
 	if strings.TrimSpace(dir) == "" {
 		return PlatformUnknown, fmt.Errorf("workspace directory is empty")
 	}
@@ -47,21 +48,15 @@ func DetectPlatform(ctx context.Context, dir string) (Platform, error) {
 		return PlatformUnknown, fmt.Errorf("parse remote %q (%s): unsupported url", remoteName, remoteURL)
 	}
 
-	switch host {
-	case "github.com":
+	if isKnownGitHubHost(host, cfg) {
 		return PlatformGitHub, nil
-	case "gitlab.com":
-		return PlatformGitLab, nil
 	}
-
-	knownHosts, err := loadGlabKnownHosts()
+	isGitLab, err := isKnownGitLabHost(host, cfg)
 	if err != nil {
 		return PlatformUnknown, err
 	}
-	for _, knownHost := range knownHosts {
-		if strings.EqualFold(host, knownHost) {
-			return PlatformGitLab, nil
-		}
+	if isGitLab {
+		return PlatformGitLab, nil
 	}
 
 	return PlatformUnknown, nil
@@ -131,6 +126,71 @@ func normalizeHost(host string) string {
 	host = strings.TrimSpace(strings.ToLower(host))
 	host = strings.TrimSuffix(host, ".")
 	return host
+}
+
+func isKnownGitHubHost(host string, cfg *config.Config) bool {
+	normalized := normalizeHost(host)
+	if normalized == "github.com" {
+		return true
+	}
+	for _, knownHost := range configuredGitHubHosts(cfg) {
+		if strings.EqualFold(normalized, knownHost) {
+			return true
+		}
+	}
+	return false
+}
+
+func configuredGitHubHosts(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	host := hostFromBaseURL(cfg.Adapters.GitHub.BaseURL)
+	if host == "" {
+		return nil
+	}
+	hosts := []string{host}
+	if host == "api.github.com" {
+		hosts = append(hosts, "github.com")
+	}
+	if strings.HasPrefix(host, "api.") {
+		hosts = append(hosts, strings.TrimPrefix(host, "api."))
+	}
+	return hosts
+}
+
+func isKnownGitLabHost(host string, cfg *config.Config) (bool, error) {
+	normalized := normalizeHost(host)
+	if normalized == "gitlab.com" {
+		return true, nil
+	}
+	knownHosts, err := loadGlabKnownHosts()
+	if err != nil {
+		return false, err
+	}
+	if cfg != nil {
+		if configuredHost := hostFromBaseURL(cfg.Adapters.GitLab.BaseURL); configuredHost != "" {
+			knownHosts = append(knownHosts, configuredHost)
+		}
+	}
+	for _, knownHost := range knownHosts {
+		if strings.EqualFold(normalized, knownHost) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hostFromBaseURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	return normalizeHost(parsed.Hostname())
 }
 
 type glabConfig struct {

@@ -37,7 +37,8 @@ func RenderCallout(st styles.Styles, spec CalloutSpec) string {
 		calloutStyle = st.CalloutWarning
 	}
 	if spec.Width > 0 {
-		calloutStyle = calloutStyle.Copy().Width(st.Chrome.Callout.InnerWidth(spec.Width))
+		horizontalBorder := st.Chrome.Callout.BorderLeft + st.Chrome.Callout.BorderRight
+		calloutStyle = calloutStyle.Copy().Width(max(1, spec.Width-horizontalBorder))
 	}
 	return calloutStyle.Render(spec.Body)
 }

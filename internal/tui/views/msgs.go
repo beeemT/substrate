@@ -10,10 +10,16 @@ import (
 // --- DB polling / data loading ---
 
 // WorkItemsLoadedMsg is sent when the work item list is refreshed.
-type WorkItemsLoadedMsg struct{ Items []domain.WorkItem }
+type WorkItemsLoadedMsg struct {
+	WorkspaceID string
+	Items       []domain.WorkItem
+}
 
 // SessionsLoadedMsg is sent when sessions for a workspace are refreshed.
-type SessionsLoadedMsg struct{ Sessions []domain.AgentSession }
+type SessionsLoadedMsg struct {
+	WorkspaceID string
+	Sessions    []domain.AgentSession
+}
 
 // SessionHistoryLoadedMsg is sent when a session-history search completes.
 type SessionHistoryLoadedMsg struct {
@@ -163,17 +169,38 @@ type ErrMsg struct{ Err error }
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 
+// DeleteSessionMsg fires when the user confirms session deletion.
+type DeleteSessionMsg struct{ SessionID string }
+
+// SessionDeletedMsg is sent after a session and its related records are removed.
+type SessionDeletedMsg struct {
+	SessionID string
+	Message   string
+}
+
 // WorkItemCreatedMsg is sent after the new-session flow persists a work item.
 type WorkItemCreatedMsg struct {
 	WorkItem domain.WorkItem
 	Message  string
 }
 
-// WorkItemDuplicateOpenedMsg is sent when session creation resolves to an existing work item.
-type WorkItemDuplicateOpenedMsg struct {
-	WorkItem domain.WorkItem
-	Message  string
+// WorkItemDuplicatePromptMsg is sent when new-session creation resolves to an existing work item.
+type WorkItemDuplicatePromptMsg struct {
+	RequestedWorkItem domain.WorkItem
+	ExistingWorkItem  domain.WorkItem
 }
+
+// WorkItemDuplicateAction identifies how the user resolved a duplicate work-item prompt.
+type WorkItemDuplicateAction string
+
+const (
+	WorkItemDuplicateCancel        WorkItemDuplicateAction = "cancel"
+	WorkItemDuplicateOpenExisting  WorkItemDuplicateAction = "open_existing"
+	WorkItemDuplicateCreateSession WorkItemDuplicateAction = "create_session"
+)
+
+// WorkItemDuplicateActionMsg resolves the duplicate-session prompt.
+type WorkItemDuplicateActionMsg struct{ Action WorkItemDuplicateAction }
 
 // --- Overlay control ---
 
@@ -215,6 +242,9 @@ type PlanEditedMsg struct {
 
 // ConfirmAbandonMsg requests a confirmation dialog before abandoning a session.
 type ConfirmAbandonMsg struct{ SessionID string }
+
+// ConfirmDeleteSessionMsg requests a confirmation dialog before deleting a session.
+type ConfirmDeleteSessionMsg struct{ SessionID string }
 
 // ConfirmOverrideAcceptMsg requests a confirmation dialog before overriding review acceptance.
 type ConfirmOverrideAcceptMsg struct{ WorkItemID string }

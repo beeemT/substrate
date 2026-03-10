@@ -72,9 +72,10 @@ type ProviderStatus struct {
 }
 
 type SettingsSnapshot struct {
-	Sections  []SettingsSection
-	Providers map[string]ProviderStatus
-	RawTOML   string
+	Sections       []SettingsSection
+	Providers      map[string]ProviderStatus
+	RawTOML        string
+	HarnessWarning string
 }
 
 type SettingsApplyResult struct {
@@ -140,10 +141,12 @@ func (s *SettingsService) Snapshot(cfg *config.Config) (SettingsSnapshot, error)
 	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
 		return SettingsSnapshot{}, err
 	}
+	diagnostics := app.DiagnoseHarnesses(cfg, "")
 	return SettingsSnapshot{
-		Sections:  buildSettingsSections(cfg),
-		Providers: buildProviderStatuses(cfg),
-		RawTOML:   string(raw),
+		Sections:       buildSettingsSections(cfg),
+		Providers:      buildProviderStatuses(cfg),
+		RawTOML:        string(raw),
+		HarnessWarning: diagnostics.WarningSummary(),
 	}, nil
 }
 
@@ -155,8 +158,35 @@ func (s *SettingsService) SaveRaw(raw string) error {
 	return os.WriteFile(cfgPath, []byte(raw), 0o644)
 }
 
+func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) {
+	tmp, err := os.CreateTemp("", "substrate-settings-*.toml")
+	if err != nil {
+		return nil, fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(raw); err != nil {
+		_ = tmp.Close()
+		return nil, fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("close temp config: %w", err)
+	}
+	cfg, err := config.Load(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config.Config, error) {
-	cfg := configFromSections(sections)
+	cfg, err := configFromSections(sections)
+	if err != nil {
+		return "", nil, err
+	}
 	if err := validateSettingsConfig(cfg); err != nil {
 		return "", nil, err
 	}
@@ -171,32 +201,29 @@ func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config
 }
 
 func (s *SettingsService) Apply(ctx context.Context, raw string, current Services) (SettingsApplyResult, error) {
-	if err := s.SaveRaw(raw); err != nil {
-		return SettingsApplyResult{}, err
-	}
-	cfgPath, err := config.ConfigPath()
+	cfg, err := s.loadConfigFromRaw(raw)
 	if err != nil {
 		return SettingsApplyResult{}, err
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return SettingsApplyResult{}, err
-	}
-	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
-		return SettingsApplyResult{}, err
-	}
-	if current.Foreman != nil {
-		_ = current.Foreman.Stop(ctx)
 	}
 	reloaded, err := s.rebuildServices(ctx, cfg, current)
 	if err != nil {
 		return SettingsApplyResult{}, err
 	}
+	if err := s.SaveRaw(raw); err != nil {
+		return SettingsApplyResult{}, err
+	}
+	if current.Foreman != nil {
+		_ = current.Foreman.Stop(ctx)
+	}
+	reloaded.SettingsData.RawTOML = raw
 	return SettingsApplyResult{Services: reloaded, Message: "Settings applied"}, nil
 }
 
 func (s *SettingsService) TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error) {
-	cfg := configFromSections(sections)
+	cfg, err := configFromSections(sections)
+	if err != nil {
+		return ProviderStatus{}, err
+	}
 	if err := validateSettingsConfig(cfg); err != nil {
 		return ProviderStatus{}, err
 	}
@@ -268,7 +295,10 @@ func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness s
 	if !result.Success {
 		return SettingsSection{}, fmt.Errorf("%s", result.Message)
 	}
-	cfg := configFromSections(sections)
+	cfg, err := configFromSections(sections)
+	if err != nil {
+		return SettingsSection{}, err
+	}
 	switch provider {
 	case "github":
 		cfg.Adapters.GitHub.Token = result.Credentials["token"]
@@ -325,14 +355,29 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		return viewsServicesReload{}, fmt.Errorf("building agent harnesses: %w", err)
 	}
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
-	planningSvc, err := orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, cfg)
-	if err != nil {
-		return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
+	var planningSvc *orchestrator.PlanningService
+	if harnesses.Planning != nil {
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, cfg)
+		if err != nil {
+			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
+		}
 	}
-	implSvc := orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc)
-	reviewPipeline := orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus)
-	resumption := orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, s.sessionRepo, bus)
-	foreman := orchestrator.NewForeman(cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, s.planRepo, bus)
+	var implSvc *orchestrator.ImplementationService
+	if harnesses.Implementation != nil {
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc)
+	}
+	var reviewPipeline *orchestrator.ReviewPipeline
+	if harnesses.Review != nil {
+		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus)
+	}
+	var resumption *orchestrator.Resumption
+	if harnesses.Resume != nil {
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, s.sessionRepo, bus)
+	}
+	var foreman *orchestrator.Foreman
+	if harnesses.Foreman != nil {
+		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, s.planRepo, bus)
+	}
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
 		return viewsServicesReload{}, err
@@ -528,7 +573,35 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		annotateFieldPresentation(&sections[i])
 		sections[i].Status = sectionStatus(sections[i])
 	}
+	annotateHarnessWarnings(sections, app.DiagnoseHarnesses(cfg, ""))
 	return sections
+}
+
+func annotateHarnessWarnings(sections []SettingsSection, diagnostics app.HarnessDiagnostics) {
+	if !diagnostics.HasWarnings() {
+		return
+	}
+	harnessWarnings := diagnostics.HarnessWarnings()
+	for i := range sections {
+		switch sections[i].ID {
+		case "harness":
+			setSectionWarning(&sections[i], diagnostics.PhaseWarnings())
+		case "harness.ohmypi":
+			setSectionWarning(&sections[i], harnessWarnings[config.HarnessOhMyPi])
+		case "harness.claude":
+			setSectionWarning(&sections[i], harnessWarnings[config.HarnessClaudeCode])
+		case "harness.codex":
+			setSectionWarning(&sections[i], harnessWarnings[config.HarnessCodex])
+		}
+	}
+}
+
+func setSectionWarning(section *SettingsSection, warnings []string) {
+	if section == nil || len(warnings) == 0 {
+		return
+	}
+	section.Status = "warning"
+	section.Error = strings.Join(warnings, "\n")
 }
 
 func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
@@ -558,19 +631,22 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 	return statuses
 }
 
-func configFromSections(sections []SettingsSection) *config.Config {
+func configFromSections(sections []SettingsSection) (*config.Config, error) {
 	cfg := &config.Config{}
 	for _, sec := range sections {
 		for _, field := range sec.Fields {
-			applyField(cfg, field)
+			if err := applyField(cfg, field); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return cfg
+	return cfg, nil
 }
 
-func applyField(cfg *config.Config, field SettingsField) {
+func applyField(cfg *config.Config, field SettingsField) error {
 	value := strings.TrimSpace(field.Value)
-	switch field.Section + "." + field.Key {
+	fieldPath := field.Section + "." + field.Key
+	switch fieldPath {
 	case "commit.strategy":
 		cfg.Commit.Strategy = config.CommitStrategy(value)
 	case "commit.message_format":
@@ -578,11 +654,19 @@ func applyField(cfg *config.Config, field SettingsField) {
 	case "commit.message_template":
 		cfg.Commit.MessageTemplate = value
 	case "plan.max_parse_retries":
-		cfg.Plan.MaxParseRetries = parseOptionalInt(value)
+		parsed, err := parseOptionalInt(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Plan.MaxParseRetries = parsed
 	case "review.pass_threshold":
 		cfg.Review.PassThreshold = config.PassThreshold(value)
 	case "review.max_cycles":
-		cfg.Review.MaxCycles = parseOptionalInt(value)
+		parsed, err := parseOptionalInt(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Review.MaxCycles = parsed
 	case "foreman.question_timeout":
 		cfg.Foreman.QuestionTimeout = value
 	case "harness.default":
@@ -610,9 +694,17 @@ func applyField(cfg *config.Config, field SettingsField) {
 	case "adapters.claude_code.permission_mode":
 		cfg.Adapters.ClaudeCode.PermissionMode = value
 	case "adapters.claude_code.max_turns":
-		cfg.Adapters.ClaudeCode.MaxTurns = parseInt(value)
+		parsed, err := parseInt(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Adapters.ClaudeCode.MaxTurns = parsed
 	case "adapters.claude_code.max_budget_usd":
-		cfg.Adapters.ClaudeCode.MaxBudgetUSD = parseFloat(value)
+		parsed, err := parseFloat(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Adapters.ClaudeCode.MaxBudgetUSD = parsed
 	case "adapters.codex.binary_path":
 		cfg.Adapters.Codex.BinaryPath = value
 	case "adapters.codex.model":
@@ -620,9 +712,17 @@ func applyField(cfg *config.Config, field SettingsField) {
 	case "adapters.codex.approval_mode":
 		cfg.Adapters.Codex.ApprovalMode = value
 	case "adapters.codex.full_auto":
-		cfg.Adapters.Codex.FullAuto = parseBool(value)
+		parsed, err := parseFieldBool(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Adapters.Codex.FullAuto = parsed
 	case "adapters.codex.quiet":
-		cfg.Adapters.Codex.Quiet = parseBool(value)
+		parsed, err := parseFieldBool(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Adapters.Codex.Quiet = parsed
 	case "adapters.linear.api_key_ref":
 		cfg.Adapters.Linear.APIKey = value
 		cfg.Adapters.Linear.APIKeyRef = secretRef("linear.api_key")
@@ -665,6 +765,7 @@ func applyField(cfg *config.Config, field SettingsField) {
 	case "repos.doc_paths":
 		cfg.Repos = parseRepos(value)
 	}
+	return nil
 }
 
 func validateSettingsConfig(cfg *config.Config) error {
@@ -859,17 +960,27 @@ func formatFloat(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
-func parseOptionalInt(v string) *int {
+func parseOptionalInt(fieldPath, v string) (*int, error) {
 	if strings.TrimSpace(v) == "" {
-		return nil
+		return nil, nil
 	}
-	parsed := parseInt(v)
-	return &parsed
+	parsed, err := parseInt(fieldPath, v)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
-func parseInt(v string) int {
-	n, _ := strconv.Atoi(strings.TrimSpace(v))
-	return n
+func parseInt(fieldPath, v string) (int, error) {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid integer %q: %w", fieldPath, trimmed, err)
+	}
+	return n, nil
 }
 
 func parseInt64(v string) int64 {
@@ -877,14 +988,33 @@ func parseInt64(v string) int64 {
 	return n
 }
 
-func parseFloat(v string) float64 {
-	f, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
-	return f
+func parseFloat(fieldPath, v string) (float64, error) {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" {
+		return 0, nil
+	}
+	f, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid number %q: %w", fieldPath, trimmed, err)
+	}
+	return f, nil
 }
 
 func parseBool(v string) bool {
 	b, _ := strconv.ParseBool(strings.TrimSpace(v))
 	return b
+}
+
+func parseFieldBool(fieldPath, v string) (bool, error) {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(trimmed)
+	if err != nil {
+		return false, fmt.Errorf("%s: invalid boolean %q: %w", fieldPath, trimmed, err)
+	}
+	return b, nil
 }
 
 func parseList(v string) []string {

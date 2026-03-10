@@ -252,49 +252,26 @@ func (m ReadyToPlanModel) View() string {
 		m.styles.Muted.Render(" to start planning.")
 
 	headingInset := lipgloss.NewStyle().PaddingLeft(2)
-	nextStepInsetStyle := lipgloss.NewStyle().Width(m.width).Padding(0, nextStepInset, 1, nextStepInset)
+	nextStepInsetStyle := lipgloss.NewStyle().Padding(0, nextStepInset, 1, nextStepInset)
 	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
 	nextStepContent := ansi.Hardwrap(nextStep, nextStepInnerWidth, true)
-	nextStepBlock := nextStepInsetStyle.Render(lipgloss.JoinVertical(
-		lipgloss.Right,
-		m.styles.SectionLabel.Render("Next step"),
-		components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: nextStepWidth, Variant: components.CalloutCard}),
-	))
+	nextStepCard := components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: nextStepWidth, Variant: components.CalloutCard})
+	nextStepBlock := nextStepInsetStyle.Render(nextStepCard)
 
 	topBlocks := []string{
 		headingInset.Render(m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title)),
 		headingInset.Render(m.styles.SectionLabel.Render("Details")),
 		components.RenderCallout(m.styles, components.CalloutSpec{Body: descriptionContent, Width: m.width}),
 	}
-	bottomBlocks := []string{
-		nextStepBlock,
+
+	footerLineCount := len(strings.Split(nextStepBlock, "\n"))
+	bodyHeight := max(0, m.height-footerLineCount)
+	body := fitViewHeight(strings.Join(topBlocks, "\n"), bodyHeight)
+	if body == "" {
+		return fitViewBox(nextStepBlock, m.width, m.height)
 	}
 
-	topLineCount := 0
-	for _, block := range topBlocks {
-		topLineCount += len(strings.Split(block, "\n"))
-	}
-	bottomLineCount := 0
-	for _, block := range bottomBlocks {
-		bottomLineCount += len(strings.Split(block, "\n"))
-	}
-	gapLines := m.height - topLineCount - bottomLineCount
-	if gapLines < 0 {
-		gapLines = 0
-	}
-
-	renderedLines := make([]string, 0, topLineCount+gapLines+bottomLineCount)
-	for _, block := range topBlocks {
-		renderedLines = append(renderedLines, strings.Split(block, "\n")...)
-	}
-	for i := 0; i < gapLines; i++ {
-		renderedLines = append(renderedLines, "")
-	}
-	for _, block := range bottomBlocks {
-		renderedLines = append(renderedLines, strings.Split(block, "\n")...)
-	}
-
-	return fitViewBox(strings.Join(renderedLines, "\n"), m.width, m.height)
+	return fitViewBox(body+"\n"+nextStepBlock, m.width, m.height)
 }
 
 // AwaitingImplModel shows plan summary when state is "approved".

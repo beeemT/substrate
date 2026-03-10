@@ -223,3 +223,48 @@ func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 		t.Fatalf("sessions dir = %q, want /tmp/sessions", updated.sessionsDir)
 	}
 }
+
+func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-new",
+		WorkspaceName: "workspace",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+	app.workItems = []domain.WorkItem{{ID: "wi-current", WorkspaceID: "ws-new", Title: "current"}}
+	app.sessions = []domain.AgentSession{{ID: "sess-current", WorkspaceID: "ws-new"}}
+
+	model, cmd := app.Update(WorkItemsLoadedMsg{
+		WorkspaceID: "ws-old",
+		Items:       []domain.WorkItem{{ID: "wi-stale", WorkspaceID: "ws-old", Title: "stale"}},
+	})
+	if cmd != nil {
+		t.Fatalf("expected no command for stale work item load, got %v", cmd)
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if len(updated.workItems) != 1 || updated.workItems[0].ID != "wi-current" {
+		t.Fatalf("work items = %#v, want current workspace data preserved", updated.workItems)
+	}
+
+	model, cmd = updated.Update(SessionsLoadedMsg{
+		WorkspaceID: "ws-old",
+		Sessions:    []domain.AgentSession{{ID: "sess-stale", WorkspaceID: "ws-old"}},
+	})
+	if cmd != nil {
+		t.Fatalf("expected no command for stale session load, got %v", cmd)
+	}
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if len(updated.sessions) != 1 || updated.sessions[0].ID != "sess-current" {
+		t.Fatalf("sessions = %#v, want current workspace data preserved", updated.sessions)
+	}
+}

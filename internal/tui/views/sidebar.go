@@ -12,7 +12,7 @@ import (
 )
 
 // SidebarWidth is the fixed character width of the sidebar panel.
-const SidebarWidth = 26
+const SidebarWidth = 34
 
 type SidebarEntryKind int
 
@@ -20,6 +20,7 @@ const (
 	SidebarEntryWorkItem SidebarEntryKind = iota
 	SidebarEntrySessionHistory
 	SidebarEntryTaskOverview
+	SidebarEntryTaskSourceDetails
 	SidebarEntryTaskSession
 )
 
@@ -32,6 +33,7 @@ type SidebarEntry struct {
 	WorkspaceName   string
 	ExternalID      string
 	Title           string
+	SubtitleText    string
 	State           domain.WorkItemState
 	SessionStatus   domain.AgentSessionStatus
 	RepositoryName  string
@@ -46,6 +48,8 @@ func (e SidebarEntry) titlePrefix() string {
 	switch e.Kind {
 	case SidebarEntryTaskOverview:
 		return "Overview"
+	case SidebarEntryTaskSourceDetails:
+		return "Source"
 	case SidebarEntryTaskSession:
 		if e.RepositoryName != "" {
 			return e.RepositoryName
@@ -67,6 +71,9 @@ func (e SidebarEntry) titlePrefix() string {
 
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
+	if e.Kind == SidebarEntryTaskSourceDetails {
+		return st.Muted.Render("◌")
+	}
 	if e.Kind == SidebarEntryTaskSession {
 		switch e.SessionStatus {
 		case domain.AgentSessionCompleted:
@@ -105,6 +112,9 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 func (e SidebarEntry) Subtitle() string {
 	if e.Kind == SidebarEntryTaskSession {
 		return sessionStatusLabel(e.SessionStatus)
+	}
+	if e.SubtitleText != "" {
+		return e.SubtitleText
 	}
 	status := ""
 	switch e.State {

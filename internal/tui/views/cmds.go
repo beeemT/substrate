@@ -19,7 +19,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
@@ -53,7 +55,7 @@ func LoadWorkItemsCmd(svc *service.WorkItemService, workspaceID string) tea.Cmd 
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return WorkItemsLoadedMsg{Items: items}
+		return WorkItemsLoadedMsg{WorkspaceID: workspaceID, Items: items}
 	}
 }
 
@@ -64,7 +66,7 @@ func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return SessionsLoadedMsg{Sessions: sessions}
+		return SessionsLoadedMsg{WorkspaceID: workspaceID, Sessions: sessions}
 	}
 }
 
@@ -128,14 +130,19 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 func ApprovePlanCmd(
 	workItemSvc *service.WorkItemService,
 	planSvc *service.PlanService,
+	bus *event.Bus,
 	planID, workItemID string,
 ) tea.Cmd {
 	return func() tea.Msg {
-		if err := planSvc.ApprovePlan(context.Background(), planID); err != nil {
+		ctx := context.Background()
+		if err := planSvc.ApprovePlan(ctx, planID); err != nil {
 			return ErrMsg{Err: err}
 		}
-		if err := workItemSvc.ApprovePlan(context.Background(), workItemID); err != nil {
+		if err := workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
+		}
+		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, planID, workItemID); err != nil {
+			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
 		}
 		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
 	}
@@ -529,13 +536,154 @@ func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.S
 }
 
 // OverrideAcceptCmd marks a work item completed despite outstanding critiques.
-func OverrideAcceptCmd(workItemSvc *service.WorkItemService, workItemID string) tea.Cmd {
+func OverrideAcceptCmd(
+	workItemSvc *service.WorkItemService,
+	planSvc *service.PlanService,
+	sessionSvc *service.SessionService,
+	bus *event.Bus,
+	workItemID string,
+) tea.Cmd {
 	return func() tea.Msg {
-		if err := workItemSvc.CompleteWorkItem(context.Background(), workItemID); err != nil {
+		ctx := context.Background()
+		if err := workItemSvc.CompleteWorkItem(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
+		}
+		if err := emitWorkItemCompleted(ctx, bus, planSvc, sessionSvc, workItemSvc, workItemID); err != nil {
+			slog.Warn("failed to emit work item completed event", "work_item_id", workItemID, "err", err)
 		}
 		return ActionDoneMsg{Message: "Work item accepted"}
 	}
+}
+
+func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.WorkItemService, planID, workItemID string) error {
+	if bus == nil {
+		return nil
+	}
+	plan, err := planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		return err
+	}
+	workItem, err := workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"plan_id":      planID,
+		"work_item_id": workItemID,
+		"external_id":  workItem.ExternalID,
+	}
+	if commentBody := strings.TrimSpace(plan.OrchestratorPlan); commentBody != "" {
+		payload["comment_body"] = commentBody
+	}
+	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
+		payload["external_ids"] = externalIDs
+	}
+	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
+}
+
+func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.SessionService, workItemSvc *service.WorkItemService, workItemID string) error {
+	if bus == nil {
+		return nil
+	}
+	workItem, err := workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"work_item_id": workItemID,
+		"external_id":  workItem.ExternalID,
+	}
+	if review, branch, err := completionReviewContext(ctx, planSvc, sessionSvc, workItemID); err == nil {
+		if branch != "" {
+			payload["branch"] = branch
+		}
+		if review.BaseRepo.Owner != "" || review.BaseRepo.Repo != "" || review.HeadRepo.Owner != "" || review.HeadRepo.Repo != "" {
+			payload["review"] = review
+		}
+	} else {
+		slog.Warn("failed to derive work item completion context", "work_item_id", workItemID, "err", err)
+	}
+	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
+		payload["external_ids"] = externalIDs
+	}
+	return publishSystemEvent(ctx, bus, domain.EventWorkItemCompleted, workItem.WorkspaceID, payload)
+}
+
+func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.EventType, workspaceID string, payload map[string]any) error {
+	serialized, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal %s payload: %w", eventType, err)
+	}
+	return bus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(eventType),
+		WorkspaceID: workspaceID,
+		Payload:     string(serialized),
+		CreatedAt:   time.Now(),
+	})
+}
+
+func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.SessionService, workItemID string) (domain.ReviewRef, string, error) {
+	plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return domain.ReviewRef{}, "", err
+	}
+	subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+	if err != nil {
+		return domain.ReviewRef{}, "", err
+	}
+	for _, subPlan := range subPlans {
+		sessions, err := sessionSvc.ListBySubPlanID(ctx, subPlan.ID)
+		if err != nil {
+			return domain.ReviewRef{}, "", err
+		}
+		for _, session := range sessions {
+			if strings.TrimSpace(session.WorktreePath) == "" {
+				continue
+			}
+			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, session.WorktreePath)
+			if err != nil {
+				continue
+			}
+			branch := strings.TrimSpace(reviewCtx.Review.HeadBranch)
+			if branch == "" {
+				branch = strings.TrimSpace(reviewCtx.Review.BaseBranch)
+			}
+			if branch == "" {
+				continue
+			}
+			return reviewCtx.Review, branch, nil
+		}
+	}
+	return domain.ReviewRef{}, "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
+}
+
+func workItemEventExternalIDs(workItem domain.WorkItem) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(workItem.SourceItemIDs)+1)
+	appendID := func(id string) {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			return
+		}
+		seen[trimmed] = struct{}{}
+		ids = append(ids, trimmed)
+	}
+	switch {
+	case workItem.Source == "github" && workItem.SourceScope == domain.ScopeIssues:
+		for _, id := range workItem.SourceItemIDs {
+			appendID("gh:issue:" + id)
+		}
+	case workItem.Source == "gitlab" && workItem.SourceScope == domain.ScopeIssues:
+		for _, id := range workItem.SourceItemIDs {
+			appendID("gl:issue:" + id)
+		}
+	}
+	appendID(workItem.ExternalID)
+	return ids
 }
 
 // SkipQuestionCmd marks a question as skipped — the sub-agent continues without an answer.

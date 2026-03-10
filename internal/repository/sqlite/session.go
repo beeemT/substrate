@@ -352,8 +352,15 @@ func (r SessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
 }
 
 func (r SessionRepo) Delete(ctx context.Context, id string) error {
-	_, err := r.remote.NamedExecContext(ctx, `DELETE FROM agent_sessions WHERE id = :id`, map[string]any{"id": id})
-	if err != nil {
+	params := map[string]any{"id": id}
+
+	if _, err := r.remote.NamedExecContext(ctx, `DELETE FROM questions WHERE agent_session_id = :id`, params); err != nil {
+		return fmt.Errorf("delete session %s questions: %w", id, err)
+	}
+	if _, err := r.remote.NamedExecContext(ctx, `DELETE FROM review_cycles WHERE agent_session_id = :id`, params); err != nil {
+		return fmt.Errorf("delete session %s review cycles: %w", id, err)
+	}
+	if _, err := r.remote.NamedExecContext(ctx, `DELETE FROM agent_sessions WHERE id = :id`, params); err != nil {
 		return fmt.Errorf("delete session %s: %w", id, err)
 	}
 	return nil

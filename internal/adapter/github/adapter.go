@@ -118,7 +118,11 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, client httpClient
 			return nil, fmt.Errorf("resolve github token: %w", err)
 		}
 	}
-	a := &GithubAdapter{cfg: cfg, client: client, baseURL: "https://api.github.com", token: token, tracked: make(map[string]int), defaultBranch: "main"}
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+	}
+	a := &GithubAdapter{cfg: cfg, client: client, baseURL: baseURL, token: token, tracked: make(map[string]int), defaultBranch: "main"}
 	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
 		if viewer != "" {

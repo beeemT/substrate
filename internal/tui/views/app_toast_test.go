@@ -120,6 +120,40 @@ func TestAppView_ReadOnlyToastStacksTransientToastsBelow(t *testing.T) {
 	}
 }
 
+func TestAppView_ReadOnlyToastStackRightAlignsNarrowerToasts(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	_ = app.loadHistoryEntry(SidebarEntry{
+		Kind:          SidebarEntrySessionHistory,
+		SessionID:     "sess-remote",
+		WorkspaceID:   "ws-remote",
+		WorkspaceName: "remote",
+		ExternalID:    "SUB-2",
+		Title:         "Remote item",
+	})
+	app.toasts.AddToast("tiny", components.ToastInfo)
+	app.toasts.AddToast("This transient toast is intentionally much longer", components.ToastSuccess)
+
+	rendered := app.View()
+	assertAppViewFitsWindow(t, rendered, 80, 16)
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+
+	tinyLine := findLineContaining(lines, "tiny")
+	longLine := findLineContaining(lines, "This transient toast is intentionally much longer")
+	if tinyLine == -1 || longLine == -1 {
+		t.Fatalf("view missing stacked toasts: %q", strings.Join(lines, "\n"))
+	}
+	tinyCol := strings.Index(lines[tinyLine], "tiny")
+	longCol := strings.Index(lines[longLine], "This transient toast is intentionally much longer")
+	if tinyCol == -1 || longCol == -1 {
+		t.Fatalf("toast columns not found in lines: tiny=%q long=%q", lines[tinyLine], lines[longLine])
+	}
+	if tinyCol <= longCol {
+		t.Fatalf("toast columns = tiny:%d long:%d, want narrower toast shifted right", tinyCol, longCol)
+	}
+}
+
 func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
 	t.Parallel()
 
@@ -160,7 +194,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 		SettingsData: SettingsSnapshot{
 			Sections:       buildSettingsSections(cfg),
 			Providers:      buildProviderStatuses(cfg),
-			HarnessWarning: "Planning unavailable — open Settings → Harness Routing",
+			HarnessWarning: "Planning unavailable. Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.",
 		},
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
@@ -173,7 +207,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	rendered := updated.View()
 	assertAppViewFitsWindow(t, rendered, 80, 16)
 	lines := strings.Split(stripToastANSI(rendered), "\n")
-	warningLine := findLineContaining(lines, "Planning unavailable")
+	warningLine := findLineContaining(lines, "Codex CLI not found in PATH")
 	syncLine := findLineContaining(lines, "Sync complete")
 	if warningLine == -1 || syncLine == -1 {
 		t.Fatalf("view missing warning stack: %q", strings.Join(lines, "\n"))
