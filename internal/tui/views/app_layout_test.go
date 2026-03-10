@@ -170,14 +170,14 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
 	assertBodyEndsAboveFooter(t, lines)
 	plain := ansi.Strip(strings.Join(lines, "\n"))
-	for _, want := range []string{"Description", "Next step", "╭", "╮", "┌", "┐"} {
+	for _, want := range []string{"Details", "Next step", "╭", "╮", "┌", "┐"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q in ready overview layout", plain, want)
 		}
 	}
-	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-4):], "\n"))
-	if !strings.Contains(footerRegion, "Press [Enter]") {
-		t.Fatalf("footer region = %q, want next-step CTA near the bottom of the content pane", footerRegion)
+	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-7):], "\n"))
+	if !strings.Contains(footerRegion, "Next step") || !strings.Contains(footerRegion, "Press [Enter]") {
+		t.Fatalf("footer region = %q, want the next-step label and CTA near the bottom of the content pane", footerRegion)
 	}
 }
 

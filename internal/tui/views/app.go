@@ -52,7 +52,7 @@ type sidebarPaneMode int
 
 const (
 	sidebarPaneSessions sidebarPaneMode = iota
-	sidebarPaneRuns
+	sidebarPaneTasks
 )
 
 type mainFocusArea int
@@ -106,12 +106,12 @@ type App struct {
 	confirmActive bool
 
 	// Current selection
-	currentWorkItemID       string
-	currentHistorySessionID string
-	currentHistoryEntry     SidebarEntry
-	sidebarMode             sidebarPaneMode
-	mainFocus               mainFocusArea
-	runSelectionByWorkItem  map[string]string
+	currentWorkItemID              string
+	currentHistorySessionID        string
+	currentHistoryEntry            SidebarEntry
+	sidebarMode                    sidebarPaneMode
+	mainFocus                      mainFocusArea
+	taskSessionSelectionByWorkItem map[string]string
 
 	// Session log tailing
 	sessionsDir string
@@ -131,25 +131,25 @@ func NewApp(svcs Services) App {
 	cwd, _ := os.Getwd()
 
 	app := App{
-		svcs:                   svcs,
-		sidebar:                NewSidebarModel(st),
-		content:                NewContentModel(st),
-		statusBar:              NewStatusBarModel(st),
-		newSession:             NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
-		sessionSearch:          NewSessionSearchOverlay(st),
-		settingsPage:           NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
-		helpOverlay:            NewHelpOverlay(st),
-		toasts:                 components.NewToastModel(st),
-		subPlans:               make(map[string][]domain.SubPlan),
-		plans:                  make(map[string]*domain.Plan),
-		questions:              make(map[string][]domain.Question),
-		reviews:                make(map[string]ReviewsLoadedMsg),
-		tailingSessionIDs:      make(map[string]bool),
-		liveInstanceIDs:        make(map[string]bool),
-		reviewSessionLogs:      make(map[string]string),
-		runSelectionByWorkItem: make(map[string]string),
-		sessionsDir:            sessionsDir,
-		hasWorkspace:           svcs.WorkspaceID != "",
+		svcs:                           svcs,
+		sidebar:                        NewSidebarModel(st),
+		content:                        NewContentModel(st),
+		statusBar:                      NewStatusBarModel(st),
+		newSession:                     NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
+		sessionSearch:                  NewSessionSearchOverlay(st),
+		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
+		helpOverlay:                    NewHelpOverlay(st),
+		toasts:                         components.NewToastModel(st),
+		subPlans:                       make(map[string][]domain.SubPlan),
+		plans:                          make(map[string]*domain.Plan),
+		questions:                      make(map[string][]domain.Question),
+		reviews:                        make(map[string]ReviewsLoadedMsg),
+		tailingSessionIDs:              make(map[string]bool),
+		liveInstanceIDs:                make(map[string]bool),
+		reviewSessionLogs:              make(map[string]string),
+		taskSessionSelectionByWorkItem: make(map[string]string),
+		sessionsDir:                    sessionsDir,
+		hasWorkspace:                   svcs.WorkspaceID != "",
 	}
 
 	if !app.hasWorkspace {
@@ -248,10 +248,10 @@ func (a App) currentHints() []KeybindHint {
 		hints := append([]KeybindHint{{Key: "←", Label: "Back"}}, a.content.KeybindHints()...)
 		return append(hints, global...)
 	}
-	if a.sidebarMode == sidebarPaneRuns {
-		return append([]KeybindHint{{Key: "↑/↓", Label: "Runs"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}, global...)
+	if a.sidebarMode == sidebarPaneTasks {
+		return append([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}, global...)
 	}
-	return append([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Runs"}}, global...)
+	return append([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}, global...)
 }
 
 func (a App) historyEntryTitle(entry SidebarEntry) string {
@@ -315,7 +315,7 @@ func (a *App) upsertWorkItem(workItem domain.WorkItem) {
 func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
 	a.sidebarMode = sidebarPaneSessions
 	a.mainFocus = mainFocusSidebar
-	a.runSelectionByWorkItem[workItemID] = ""
+	a.taskSessionSelectionByWorkItem[workItemID] = ""
 	a.rebuildSidebar()
 	a.sidebar.SelectWorkItem(workItemID)
 	a.currentHistorySessionID = ""
@@ -333,28 +333,28 @@ func (a App) sessionByID(sessionID string) *domain.AgentSession {
 	return nil
 }
 
-func (a App) selectedRunSessionID() string {
+func (a App) selectedTaskSessionID() string {
 	if a.currentWorkItemID == "" {
 		return ""
 	}
-	return a.runSelectionByWorkItem[a.currentWorkItemID]
+	return a.taskSessionSelectionByWorkItem[a.currentWorkItemID]
 }
 
-func (a *App) setSelectedRunSessionID(sessionID string) {
+func (a *App) setSelectedTaskSessionID(sessionID string) {
 	if a.currentWorkItemID == "" {
 		return
 	}
-	a.runSelectionByWorkItem[a.currentWorkItemID] = sessionID
+	a.taskSessionSelectionByWorkItem[a.currentWorkItemID] = sessionID
 }
 
-func (a *App) enterRunSidebar() tea.Cmd {
+func (a *App) enterTaskSidebar() tea.Cmd {
 	if a.currentWorkItemID == "" {
 		return nil
 	}
-	a.sidebarMode = sidebarPaneRuns
+	a.sidebarMode = sidebarPaneTasks
 	a.mainFocus = mainFocusSidebar
 	a.rebuildSidebar()
-	if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedRunSessionID()) {
+	if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedTaskSessionID()) {
 		a.sidebar.SelectEntry(a.currentWorkItemID, "")
 	}
 	a.tailingSessionIDs = make(map[string]bool)
@@ -362,12 +362,12 @@ func (a *App) enterRunSidebar() tea.Cmd {
 	a.currentHistoryEntry = SidebarEntry{}
 	if sel := a.sidebar.Selected(); sel != nil {
 		a.currentWorkItemID = sel.WorkItemID
-		a.setSelectedRunSessionID(sel.SessionID)
+		a.setSelectedTaskSessionID(sel.SessionID)
 	}
 	return a.updateContentFromState()
 }
 
-func (a *App) exitRunSidebar() tea.Cmd {
+func (a *App) exitTaskSidebar() tea.Cmd {
 	a.sidebarMode = sidebarPaneSessions
 	a.mainFocus = mainFocusSidebar
 	a.rebuildSidebar()
@@ -378,7 +378,7 @@ func (a *App) exitRunSidebar() tea.Cmd {
 	return a.updateContentFromState()
 }
 
-func (a App) workItemRunSession(workItemID, sessionID string) *domain.AgentSession {
+func (a App) workItemTaskSession(workItemID, sessionID string) *domain.AgentSession {
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		if session.ID == sessionID {
 			s := session
@@ -936,7 +936,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if a.sidebarMode == sidebarPaneSessions {
-			return a, a.enterRunSidebar()
+			return a, a.enterTaskSidebar()
 		}
 		a.mainFocus = mainFocusContent
 		return a, nil
@@ -945,8 +945,8 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.mainFocus = mainFocusSidebar
 			return a, nil
 		}
-		if a.sidebarMode == sidebarPaneRuns {
-			return a, a.exitRunSidebar()
+		if a.sidebarMode == sidebarPaneTasks {
+			return a, a.exitTaskSidebar()
 		}
 	case "up", "k":
 		if a.mainFocus == mainFocusContent {
@@ -999,15 +999,15 @@ func (a *App) onSidebarMove() tea.Cmd {
 		a.currentHistoryEntry = SidebarEntry{}
 		return nil
 	}
-	if a.sidebarMode == sidebarPaneRuns {
-		if sel.WorkItemID == a.currentWorkItemID && sel.SessionID == a.selectedRunSessionID() && a.currentHistorySessionID == "" {
+	if a.sidebarMode == sidebarPaneTasks {
+		if sel.WorkItemID == a.currentWorkItemID && sel.SessionID == a.selectedTaskSessionID() && a.currentHistorySessionID == "" {
 			return nil
 		}
 		a.tailingSessionIDs = make(map[string]bool)
 		a.currentHistorySessionID = ""
 		a.currentHistoryEntry = SidebarEntry{}
 		a.currentWorkItemID = sel.WorkItemID
-		a.setSelectedRunSessionID(sel.SessionID)
+		a.setSelectedTaskSessionID(sel.SessionID)
 		return a.updateContentFromState()
 	}
 	if sel.WorkItemID == a.currentWorkItemID && a.currentHistorySessionID == "" {
@@ -1034,12 +1034,12 @@ func (a *App) updateContentFromState() tea.Cmd {
 	}
 
 	a.content.SetWorkItem(wi)
-	if a.sidebarMode == sidebarPaneRuns {
-		if runSessionID := a.selectedRunSessionID(); runSessionID != "" {
-			if session := a.workItemRunSession(a.currentWorkItemID, runSessionID); session != nil {
-				return a.showRunContent(wi, session)
+	if a.sidebarMode == sidebarPaneTasks {
+		if taskSessionID := a.selectedTaskSessionID(); taskSessionID != "" {
+			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
+				return a.showTaskContent(wi, session)
 			}
-			a.setSelectedRunSessionID("")
+			a.setSelectedTaskSessionID("")
 		}
 	}
 
@@ -1178,8 +1178,8 @@ func (a *App) updateContentFromState() tea.Cmd {
 	return nil
 }
 
-func (a *App) showRunContent(wi *domain.WorkItem, session *domain.AgentSession) tea.Cmd {
-	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + firstNonEmptyString(session.RepositoryName, "Run")
+func (a *App) showTaskContent(wi *domain.WorkItem, session *domain.AgentSession) tea.Cmd {
+	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + firstNonEmptyString(session.RepositoryName, "Task")
 	metaParts := []string{sessionStatusLabel(session.Status)}
 	if session.HarnessName != "" {
 		metaParts = append(metaParts, session.HarnessName)
@@ -1187,7 +1187,7 @@ func (a *App) showRunContent(wi *domain.WorkItem, session *domain.AgentSession) 
 	metaParts = append(metaParts, session.ID)
 	a.content.SetMode(ContentModeSessionInteraction)
 	a.content.sessionLog.SetTitle(title)
-	a.content.sessionLog.SetModeLabel("Run")
+	a.content.sessionLog.SetModeLabel("Task")
 	a.content.sessionLog.SetMeta(strings.Join(metaParts, " · "))
 	logPath := filepath.Join(a.sessionsDir, session.ID+".log")
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
@@ -1325,17 +1325,17 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
 	return sessions
 }
 
-func (a App) runSidebarEntries(workItemID string) []SidebarEntry {
+func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	wi := a.workItemByID(workItemID)
 	if wi == nil {
 		return nil
 	}
 	overview := a.sidebarEntryFromWorkItem(*wi)
-	overview.Kind = SidebarEntrySessionOverview
+	overview.Kind = SidebarEntryTaskOverview
 	entries := []SidebarEntry{overview}
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		entries = append(entries, SidebarEntry{
-			Kind:           SidebarEntrySessionRun,
+			Kind:           SidebarEntryTaskSession,
 			WorkItemID:     workItemID,
 			SessionID:      session.ID,
 			Title:          "Session " + shortSessionID(session.ID),
@@ -1349,21 +1349,27 @@ func (a App) runSidebarEntries(workItemID string) []SidebarEntry {
 }
 
 func (a *App) rebuildSidebar() {
-	if a.sidebarMode == sidebarPaneRuns && a.currentWorkItemID != "" && a.workItemByID(a.currentWorkItemID) != nil {
+	if a.sidebarMode == sidebarPaneTasks && a.currentWorkItemID != "" && a.workItemByID(a.currentWorkItemID) != nil {
 		wi := a.workItemByID(a.currentWorkItemID)
 		a.sidebar.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Tasks")
-		a.sidebar.SetEntries(a.runSidebarEntries(a.currentWorkItemID))
-		if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedRunSessionID()) {
-			a.setSelectedRunSessionID("")
-			a.sidebar.SelectEntry(a.currentWorkItemID, "")
+		a.sidebar.SetEntries(a.taskSidebarEntries(a.currentWorkItemID))
+		if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedTaskSessionID()) {
+			a.setSelectedTaskSessionID("")
+			if !a.sidebar.SelectEntry(a.currentWorkItemID, "") {
+				a.sidebar.ClearSelection()
+			}
 		}
 		return
 	}
 	a.sidebarMode = sidebarPaneSessions
 	a.sidebar.SetTitle("Sessions")
 	a.sidebar.SetEntries(a.sessionSidebarEntries())
-	if a.currentWorkItemID != "" {
-		a.sidebar.SelectWorkItem(a.currentWorkItemID)
+	if a.currentWorkItemID == "" {
+		a.sidebar.ClearSelection()
+		return
+	}
+	if !a.sidebar.SelectWorkItem(a.currentWorkItemID) {
+		a.sidebar.ClearSelection()
 	}
 }
 
@@ -1514,6 +1520,7 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 		start = 0
 	}
 
+	const overlayRightInset = 2
 	for i, overlayLine := range overlayLines {
 		target := start + i
 		if target < 0 || target >= maxOverlayBottom {
@@ -1528,12 +1535,20 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 			continue
 		}
 
-		prefixWidth := width - overlayWidth
+		rightInset := min(overlayRightInset, max(0, width-overlayWidth))
+		if overlayWidth+rightInset >= width {
+			rightInset = 0
+		}
+		prefixWidth := width - overlayWidth - rightInset
 		prefix := ansi.Cut(baseLines[target], 0, prefixWidth)
 		if got := ansi.StringWidth(prefix); got < prefixWidth {
 			prefix += strings.Repeat(" ", prefixWidth-got)
 		}
-		baseLines[target] = prefix + overlayLine
+		suffix := ansi.Cut(baseLines[target], prefixWidth+overlayWidth, width)
+		if got := ansi.StringWidth(suffix); got < rightInset {
+			suffix += strings.Repeat(" ", rightInset-got)
+		}
+		baseLines[target] = prefix + overlayLine + suffix
 	}
 
 	return strings.Join(baseLines, "\n")

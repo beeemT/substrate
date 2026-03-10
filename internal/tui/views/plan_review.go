@@ -244,22 +244,30 @@ func (m ReadyToPlanModel) View() string {
 	}
 
 	descriptionInnerWidth := components.CalloutInnerWidth(m.styles, m.width)
-	nextStepInnerWidth := components.CalloutInnerWidth(m.styles, m.width)
+	nextStepInset := 2
+	nextStepWidth := max(1, m.width-(nextStepInset*2))
+	nextStepInnerWidth := components.CalloutInnerWidth(m.styles, nextStepWidth)
 	nextStep := m.styles.Muted.Render("Press ") +
 		m.styles.KeybindAccent.Render("[Enter]") +
 		m.styles.Muted.Render(" to start planning.")
 
+	headingInset := lipgloss.NewStyle().PaddingLeft(2)
+	nextStepInsetStyle := lipgloss.NewStyle().Width(m.width).Padding(0, nextStepInset, 1, nextStepInset)
 	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
 	nextStepContent := ansi.Hardwrap(nextStep, nextStepInnerWidth, true)
+	nextStepBlock := nextStepInsetStyle.Render(lipgloss.JoinVertical(
+		lipgloss.Right,
+		m.styles.SectionLabel.Render("Next step"),
+		components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: nextStepWidth, Variant: components.CalloutCard}),
+	))
 
 	topBlocks := []string{
-		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
-		m.styles.SectionLabel.Render("Description"),
+		headingInset.Render(m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title)),
+		headingInset.Render(m.styles.SectionLabel.Render("Details")),
 		components.RenderCallout(m.styles, components.CalloutSpec{Body: descriptionContent, Width: m.width}),
 	}
 	bottomBlocks := []string{
-		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, m.styles.SectionLabel.Render("Next step")),
-		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: m.width, Variant: components.CalloutCard})),
+		nextStepBlock,
 	}
 
 	topLineCount := 0

@@ -75,7 +75,11 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 
 	rendered := m.View()
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"SUB-1 · Investigate overflow", "Description", "Next step", "Summary", "This is important.", "Press [Enter]", "╭", "╮", "┌", "┐"} {
+	plainLines := strings.Split(plain, "\n")
+	if len(plainLines) == 0 || !strings.HasPrefix(plainLines[0], "  SUB-1 · Investigate overflow") {
+		t.Fatalf("first line = %q, want title inset from the pane edge", plainLines[0])
+	}
+	for _, want := range []string{"SUB-1 · Investigate overflow", "Details", "Next step", "Summary", "This is important.", "Press [Enter]", "╭", "╮", "┌", "┐"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
 		}
@@ -95,7 +99,39 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 			t.Fatalf("line %d width = %d, want <= 48\nline: %q", i+1, got, line)
 		}
 	}
-	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-4):], "\n"))
+
+	labelIndex := -1
+	cardIndex := -1
+	for i, line := range plainLines {
+		if labelIndex == -1 && strings.Contains(line, "Next step") {
+			labelIndex = i
+		}
+		if cardIndex == -1 && strings.Contains(line, "┌") {
+			cardIndex = i
+		}
+	}
+	if labelIndex == -1 || cardIndex != labelIndex+1 {
+		t.Fatalf("label index = %d card index = %d, want card immediately below the label", labelIndex, cardIndex)
+	}
+	labelLine := plainLines[labelIndex]
+	cardLine := plainLines[cardIndex]
+	if got := len(labelLine) - len(strings.TrimLeft(labelLine, " ")); got < 2 {
+		t.Fatalf("label line = %q, want at least 2 spaces of left inset", labelLine)
+	}
+	if got := len(labelLine) - len(strings.TrimRight(labelLine, " ")); got < 2 {
+		t.Fatalf("label line = %q, want at least 2 spaces of right inset", labelLine)
+	}
+	if got := len(cardLine) - len(strings.TrimLeft(cardLine, " ")); got < 2 {
+		t.Fatalf("card line = %q, want at least 2 spaces of left inset", cardLine)
+	}
+	if got := len(cardLine) - len(strings.TrimRight(cardLine, " ")); got < 2 {
+		t.Fatalf("card line = %q, want at least 2 spaces of right inset", cardLine)
+	}
+	if strings.TrimSpace(plainLines[len(plainLines)-1]) != "" {
+		t.Fatalf("last line = %q, want bottom padding below the next-step card", plainLines[len(plainLines)-1])
+	}
+
+	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-5):], "\n"))
 	if !strings.Contains(footerRegion, "Press [Enter]") {
 		t.Fatalf("footer region = %q, want next-step CTA near the bottom", footerRegion)
 	}

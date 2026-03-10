@@ -101,37 +101,39 @@ func TestSidebarNavigation(t *testing.T) {
 	sessions := makeSessions(3)
 	m.SetEntries(sessions)
 
-	// Default: first item selected
-	sel := m.Selected()
-	if sel == nil {
-		t.Fatal("expected selected item, got nil")
-	}
-	if sel.WorkItemID != sessions[0].WorkItemID {
-		t.Fatalf("expected first session, got %q", sel.WorkItemID)
+	if sel := m.Selected(); sel != nil {
+		t.Fatalf("expected no selected item before navigation, got %v", sel)
 	}
 
-	// MoveDown -> second
+	// MoveDown from no selection -> first.
+	m.MoveDown()
+	sel := m.Selected()
+	if sel == nil || sel.WorkItemID != sessions[0].WorkItemID {
+		t.Fatalf("after MoveDown from empty selection expected first session, got %v", sel)
+	}
+
+	// MoveDown -> second.
 	m.MoveDown()
 	sel = m.Selected()
 	if sel == nil || sel.WorkItemID != sessions[1].WorkItemID {
-		t.Fatalf("after MoveDown expected second session, got %v", sel)
+		t.Fatalf("after second MoveDown expected second session, got %v", sel)
 	}
 
-	// MoveDown -> third
+	// MoveDown -> third.
 	m.MoveDown()
 	sel = m.Selected()
 	if sel == nil || sel.WorkItemID != sessions[2].WorkItemID {
-		t.Fatalf("after second MoveDown expected third session, got %v", sel)
+		t.Fatalf("after third MoveDown expected third session, got %v", sel)
 	}
 
-	// MoveDown at end -> still third (no wrap)
+	// MoveDown at end -> still third (no wrap).
 	m.MoveDown()
 	sel = m.Selected()
 	if sel == nil || sel.WorkItemID != sessions[2].WorkItemID {
 		t.Fatalf("MoveDown past end should stay at last, got %v", sel)
 	}
 
-	// MoveUp -> second
+	// MoveUp -> second.
 	m.MoveUp()
 	sel = m.Selected()
 	if sel == nil || sel.WorkItemID != sessions[1].WorkItemID {
@@ -139,20 +141,19 @@ func TestSidebarNavigation(t *testing.T) {
 	}
 }
 
-func TestSidebarMoveUpAtTop(t *testing.T) {
+func TestSidebarMoveUpFromUnselectedJumpsToBottom(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
 	m.SetHeight(20)
 	sessions := makeSessions(2)
 	m.SetEntries(sessions)
 
-	// Already at index 0; MoveUp should stay at 0
 	m.MoveUp()
 	sel := m.Selected()
 	if sel == nil {
-		t.Fatal("expected selected item, got nil")
+		t.Fatal("expected selected item after MoveUp from empty selection")
 	}
-	if sel.WorkItemID != sessions[0].WorkItemID {
-		t.Fatalf("MoveUp at top should keep first item selected, got %q", sel.WorkItemID)
+	if sel.WorkItemID != sessions[len(sessions)-1].WorkItemID {
+		t.Fatalf("MoveUp from empty selection should choose last item, got %q", sel.WorkItemID)
 	}
 }
 

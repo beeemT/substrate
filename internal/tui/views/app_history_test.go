@@ -136,7 +136,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 	}
 
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"SUB-1 · Local item", "Description", "Next step", "Summary", "This is important.", "Press [Enter]"} {
+	for _, want := range []string{"SUB-1 · Local item", "Details", "Next step", "Summary", "This is important.", "Press [Enter]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -226,7 +226,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 	}
 }
 
-func TestRebuildSidebarSortsByLastActivity(t *testing.T) {
+func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	now := time.Now()
 	older := now.Add(-2 * time.Hour)
 	newer := now.Add(-15 * time.Minute)
@@ -243,17 +243,37 @@ func TestRebuildSidebarSortsByLastActivity(t *testing.T) {
 
 	app.rebuildSidebar()
 
-	sel := app.sidebar.Selected()
-	if sel == nil {
-		t.Fatal("selected sidebar entry = nil")
+	if sel := app.sidebar.Selected(); sel != nil {
+		t.Fatalf("selected sidebar entry = %v, want nil before navigation", sel)
 	}
-	if sel.WorkItemID != "wi-new" {
-		t.Fatalf("selected work item = %q, want wi-new", sel.WorkItemID)
+	if app.currentWorkItemID != "" {
+		t.Fatalf("currentWorkItemID = %q, want empty before navigation", app.currentWorkItemID)
 	}
-	app.sidebar.MoveDown()
-	sel = app.sidebar.Selected()
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil for ready-to-plan selection", cmd)
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.WorkItemID != "wi-new" {
+		t.Fatalf("selected work item after first MoveDown = %v, want wi-new", sel)
+	}
+	if updated.currentWorkItemID != "wi-new" {
+		t.Fatalf("currentWorkItemID after first MoveDown = %q, want wi-new", updated.currentWorkItemID)
+	}
+	if updated.content.Mode() != ContentModeReadyToPlan {
+		t.Fatalf("content mode after first MoveDown = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	sel = updated.sidebar.Selected()
 	if sel == nil || sel.WorkItemID != "wi-old" {
-		t.Fatalf("second work item = %v, want wi-old", sel)
+		t.Fatalf("selected work item after second MoveDown = %v, want wi-old", sel)
 	}
 }
 
@@ -409,7 +429,7 @@ func TestWorkItemDuplicateOpenedMsgFocusesExistingWorkItemOverview(t *testing.T)
 	}
 
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"SUB-1 · Existing item", "Description", "Next step", "Summary", "This is important.", "Press [Enter]"} {
+	for _, want := range []string{"SUB-1 · Existing item", "Details", "Next step", "Summary", "This is important.", "Press [Enter]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -501,24 +521,54 @@ func newSidebarDrilldownTestApp() App {
 	return app
 }
 
-func TestSidebarRightDrillsIntoRunsOverview(t *testing.T) {
+func TestSidebarSessionsHintsUseTasksLabel(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	hints := app.currentHints()
+
+	for _, hint := range hints {
+		if hint.Key != "→" {
+			continue
+		}
+		if hint.Label != "Tasks" {
+			t.Fatalf("right-arrow hint label = %q, want %q", hint.Label, "Tasks")
+		}
+		return
+	}
+
+	t.Fatal("missing right-arrow hint in sessions sidebar state")
+}
+
+func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated, ok := model.(App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
-	if updated.sidebarMode != sidebarPaneRuns {
-		t.Fatalf("sidebarMode = %v, want sidebarPaneRuns", updated.sidebarMode)
+	if updated.sidebarMode != sidebarPaneTasks {
+		t.Fatalf("sidebarMode = %v, want sidebarPaneTasks", updated.sidebarMode)
 	}
 	if updated.mainFocus != mainFocusSidebar {
 		t.Fatalf("mainFocus = %v, want mainFocusSidebar", updated.mainFocus)
+	}
+	foundTaskHint := false
+	for _, hint := range updated.currentHints() {
+		if hint.Key != "↑/↓" {
+			continue
+		}
+		foundTaskHint = true
+		if hint.Label != "Tasks" {
+			t.Fatalf("task-pane up/down hint label = %q, want %q", hint.Label, "Tasks")
+		}
+	}
+	if !foundTaskHint {
+		t.Fatal("missing up/down hint in tasks sidebar state")
 	}
 	if updated.sidebar.title != "SUB-1 · Tasks" {
 		t.Fatalf("sidebar title = %q, want %q", updated.sidebar.title, "SUB-1 · Tasks")
 	}
 	sel := updated.sidebar.Selected()
-	if sel == nil || sel.Kind != SidebarEntrySessionOverview || sel.SessionID != "" {
+	if sel == nil || sel.Kind != SidebarEntryTaskOverview || sel.SessionID != "" {
 		t.Fatalf("selected entry = %#v, want overview row", sel)
 	}
 	if updated.content.Mode() != ContentModeImplementing {
@@ -529,18 +579,18 @@ func TestSidebarRightDrillsIntoRunsOverview(t *testing.T) {
 	}
 }
 
-func TestSidebarRunSelectionShowsRunContent(t *testing.T) {
+func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated := model.(App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = model.(App)
 	sel := updated.sidebar.Selected()
-	if sel == nil || sel.Kind != SidebarEntrySessionRun || sel.SessionID != "sess-1" {
-		t.Fatalf("selected entry = %#v, want run row for sess-1", sel)
+	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "sess-1" {
+		t.Fatalf("selected entry = %#v, want task row for sess-1", sel)
 	}
-	if updated.selectedRunSessionID() != "sess-1" {
-		t.Fatalf("selected run session = %q, want sess-1", updated.selectedRunSessionID())
+	if updated.selectedTaskSessionID() != "sess-1" {
+		t.Fatalf("selected task session = %q, want sess-1", updated.selectedTaskSessionID())
 	}
 	if updated.content.Mode() != ContentModeSessionInteraction {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSessionInteraction)
@@ -549,11 +599,11 @@ func TestSidebarRunSelectionShowsRunContent(t *testing.T) {
 		t.Fatalf("session log session id = %q, want sess-1", updated.content.sessionLog.sessionID)
 	}
 	if cmd == nil {
-		t.Fatal("expected selecting a run to tail its log")
+		t.Fatal("expected selecting a task to tail its log")
 	}
 }
 
-func TestSidebarLeftBacksOutFromRunContentToSessions(t *testing.T) {
+func TestSidebarLeftBacksOutFromTaskContentToSessions(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated := model.(App)
@@ -566,8 +616,8 @@ func TestSidebarLeftBacksOutFromRunContentToSessions(t *testing.T) {
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	updated = model.(App)
-	if updated.mainFocus != mainFocusSidebar || updated.sidebarMode != sidebarPaneRuns {
-		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in run pane", updated.mainFocus, updated.sidebarMode)
+	if updated.mainFocus != mainFocusSidebar || updated.sidebarMode != sidebarPaneTasks {
+		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in task pane", updated.mainFocus, updated.sidebarMode)
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	updated = model.(App)

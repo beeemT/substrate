@@ -51,7 +51,7 @@ func TestRenderTopRightOverlay_RespectsBottomInset(t *testing.T) {
 	t.Parallel()
 
 	got := renderTopRightOverlay("aaaaaaaa\nbbbbbbbb\ncccccccc\ndddddddd", "XX\nYY", 8, 1, 1)
-	want := "aaaaaaaa\nbbbbbbXX\nccccccYY\ndddddddd"
+	want := "aaaaaaaa\nbbbbXXbb\nccccYYcc\ndddddddd"
 	if got != want {
 		t.Fatalf("overlay result = %q, want %q", got, want)
 	}

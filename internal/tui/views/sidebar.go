@@ -19,8 +19,8 @@ type SidebarEntryKind int
 const (
 	SidebarEntryWorkItem SidebarEntryKind = iota
 	SidebarEntrySessionHistory
-	SidebarEntrySessionOverview
-	SidebarEntrySessionRun
+	SidebarEntryTaskOverview
+	SidebarEntryTaskSession
 )
 
 // SidebarEntry is one selectable row in the sidebar.
@@ -44,16 +44,16 @@ type SidebarEntry struct {
 
 func (e SidebarEntry) titlePrefix() string {
 	switch e.Kind {
-	case SidebarEntrySessionOverview:
+	case SidebarEntryTaskOverview:
 		return "Overview"
-	case SidebarEntrySessionRun:
+	case SidebarEntryTaskSession:
 		if e.RepositoryName != "" {
 			return e.RepositoryName
 		}
 		if e.SessionID != "" {
-			return "Run " + shortSessionID(e.SessionID)
+			return "Task " + shortSessionID(e.SessionID)
 		}
-		return "Run"
+		return "Task"
 	default:
 		if e.ExternalID != "" {
 			return e.ExternalID
@@ -67,7 +67,7 @@ func (e SidebarEntry) titlePrefix() string {
 
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
-	if e.Kind == SidebarEntrySessionRun {
+	if e.Kind == SidebarEntryTaskSession {
 		switch e.SessionStatus {
 		case domain.AgentSessionCompleted:
 			return st.Success.Render("✓")
@@ -103,7 +103,7 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 
 // Subtitle returns the human-readable status line for this sidebar entry.
 func (e SidebarEntry) Subtitle() string {
-	if e.Kind == SidebarEntrySessionRun {
+	if e.Kind == SidebarEntryTaskSession {
 		return sessionStatusLabel(e.SessionStatus)
 	}
 	status := ""
@@ -156,29 +156,36 @@ type SidebarModel struct {
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
 func NewSidebarModel(st styles.Styles) SidebarModel {
-	return SidebarModel{styles: st, width: SidebarWidth, title: "Sessions"}
+	return SidebarModel{styles: st, width: SidebarWidth, title: "Sessions", cursor: -1}
 }
 
 // SetEntries replaces the sidebar entries and preserves selection when possible.
 func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 	selectedWorkItemID := ""
 	selectedSessionID := ""
+	hadSelection := false
 	if current := m.Selected(); current != nil {
 		selectedWorkItemID = current.WorkItemID
 		selectedSessionID = current.SessionID
+		hadSelection = true
 	}
 	m.entries = entries
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		return
+	}
+	if !hadSelection {
+		m.cursor = -1
+		return
+	}
 	for i, entry := range m.entries {
 		if entry.WorkItemID == selectedWorkItemID && entry.SessionID == selectedSessionID {
 			m.cursor = i
 			return
 		}
 	}
-	if m.cursor >= len(m.entries) && len(m.entries) > 0 {
+	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
-	}
-	if len(m.entries) == 0 {
-		m.cursor = 0
 	}
 }
 
@@ -197,6 +204,14 @@ func (m *SidebarModel) SetTitle(title string) {
 
 // MoveUp moves the cursor up by one entry.
 func (m *SidebarModel) MoveUp() {
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		return
+	}
+	if m.cursor < 0 {
+		m.cursor = len(m.entries) - 1
+		return
+	}
 	if m.cursor > 0 {
 		m.cursor--
 	}
@@ -204,6 +219,14 @@ func (m *SidebarModel) MoveUp() {
 
 // MoveDown moves the cursor down by one entry.
 func (m *SidebarModel) MoveDown() {
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		return
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+		return
+	}
 	if m.cursor < len(m.entries)-1 {
 		m.cursor++
 	}
@@ -211,14 +234,25 @@ func (m *SidebarModel) MoveDown() {
 
 // GotoTop moves the cursor to the first entry.
 func (m *SidebarModel) GotoTop() {
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		return
+	}
 	m.cursor = 0
 }
 
 // GotoBottom moves the cursor to the last entry.
 func (m *SidebarModel) GotoBottom() {
-	if len(m.entries) > 0 {
-		m.cursor = len(m.entries) - 1
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		return
 	}
+	m.cursor = len(m.entries) - 1
+}
+
+// ClearSelection clears the current sidebar selection.
+func (m *SidebarModel) ClearSelection() {
+	m.cursor = -1
 }
 
 // SelectEntry moves the cursor to the matching work-item/session pair when present.
@@ -284,7 +318,7 @@ func (m SidebarModel) View() string {
 		line1 := truncate(icon+" "+entry.titlePrefix(), width)
 		titleLine := truncate("  "+entry.Title, width)
 		var line3 string
-		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntrySessionOverview) && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
+		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
 			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4))
 			line3 = "  " + truncate(bar, max(1, width-2))
 		} else {
