@@ -1,4 +1,5 @@
 # 05 - Orchestration
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
 Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
 
@@ -248,7 +249,7 @@ When resuming an interrupted session:
 - keep the old session as audit history
 - assign ownership to the current instance
 - start a new session in the same worktree
-- pass the original sub-plan plus recent session-log context
+- pass the original sub-plan plus the latest tail of the interrupted session log as resume context
 - instruct the harness to inspect existing partial changes before continuing
 - emit `AgentSessionResumed`
 
@@ -268,10 +269,11 @@ On clean shutdown:
 
 ### 7e. Session logs
 
-Session logs are the durable output stream used for:
-- live observation across instances
-- resume context
-- audit history
+Session logs are per-agent-session durable output streams used for:
+- live observation and tailing across instances
+- review/output extraction for individual runs
+- resume context by carrying the latest interrupted-session log tail into the replacement run
+- audit history behind the work-item-centric session browser and search, which aggregate child sessions and surface the latest contributing session plus interruption/question counts
 - rotated storage for long-running sessions
 
 Schema, lock-table ownership, and session-log persistence details are specified in `02-layered-architecture.md` and `07-implementation-plan.md`.

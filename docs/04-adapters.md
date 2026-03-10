@@ -1,4 +1,5 @@
 # 04 - Adapter Implementations
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
 Concrete implementations of interfaces from `02-layered-architecture.md`. Each adapter lives under `internal/adapter/`.
 
@@ -327,9 +328,10 @@ type AdapterCapabilities struct {
 
 Shared semantic rules:
 - `ScopeIssues` is the normalization baseline across providers.
-- `Provider = All` is honest only where shared semantics exist; in the current implementation that means issues-first browsing.
-- Common controls should mean the same thing whenever they are shown.
+- `Provider = All` is honest only where shared semantics exist; in the current implementation that means issue browsing only.
+- Common controls are derived from the intersection of declared adapter capabilities for the active provider/scope set, not from provider-name special cases.
 - Unsupported controls should be hidden or disabled from declared capabilities, not silently ignored.
+- Multi-select resolves through exactly one provider at a time; mixed-provider selections are rejected even when the browser view is unified.
 - Provider-specific escape hatches stay in `Metadata` until they earn a stable shared field.
 
 ### Normalized Issue Filter Vocabulary
@@ -398,19 +400,8 @@ func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
                 SupportsRepo:   true,
                 SupportsGroup:  true,
             },
-            domain.ScopeProjects: {
-                States:         []string{"active", "closed", "all"},
-                SupportsSearch: true,
-                SupportsOffset: true,
-                SupportsGroup:  true,
-                SupportsRepo:   true,
-            },
-            domain.ScopeInitiatives: {
-                States:         []string{"active", "closed", "all"},
-                SupportsSearch: true,
-                SupportsOffset: true,
-                SupportsGroup:  true,
-            },
+            domain.ScopeProjects: {SupportsOffset: true, SupportsRepo: true},
+            domain.ScopeInitiatives: {SupportsOffset: true, SupportsGroup: true},
         },
     }
 }
@@ -493,10 +484,7 @@ func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
                 SupportsRepo:   true,
             },
             domain.ScopeProjects: {
-                States:         []string{"open", "closed", "all"},
-                SupportsSearch: true,
                 SupportsOffset: true,
-                SupportsOwner:  true,
                 SupportsRepo:   true,
             },
         },

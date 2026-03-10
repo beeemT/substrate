@@ -1,6 +1,7 @@
 # 07 - Implementation Plan
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
-Phased build-out of Substrate over ~12 weeks. Each phase has deliverables, quality gates, and test commands. See `02-layered-architecture.md` for layering, `03-event-system.md` for events, `06-tui-design.md` for TUI.
+Phased build-out of Substrate over ~12 weeks. Each phase has deliverables, quality gates, and test commands. See `02-layered-architecture.md` for layering, `03-event-system.md` for events, and `06-tui-design.md` for the shipped TUI model.
 
 ## Directory Structure
 
@@ -65,7 +66,7 @@ The config file is self-healing: if deleted, Substrate recreates it on next laun
 
 **First-start flow (two-phase):**
 - **Phase A — Global Init (automatic):** Above self-initialization runs transparently on every launch.
-- **Phase B — Workspace Init (TUI-driven, Phase 12f):** If cwd has no `.substrate-workspace`, the TUI presents the Workspace Initialization Modal (see `06-tui-design.md` §4c) to create workspace identity, scan for git-work repos, and register in DB.
+- **Phase B — Workspace Init (TUI-driven, Phase 12f):** If cwd has no `.substrate-workspace`, the TUI presents the Workspace Initialization Modal (see `06-tui-design.md` §4d) to create workspace identity, scan for git-work repos, and register in DB.
 
 `substrate init` is the CLI equivalent of Phase B: creates `.substrate-workspace` with a ULID, scans for git-work repos, warns about plain clones, inserts workspace into DB.
 **[UPDATED - IMPLEMENTED]** `go-atomic`'s `isRetryable()` must be extended to include `SQLITE_BUSY` (error code 5) and `SQLITE_LOCKED` (error code 6). go-atomic is a first-party library; add this in Phase 0 as a minor internal change.
@@ -83,7 +84,7 @@ The config file is self-healing: if deleted, Substrate recreates it on next laun
 - `critiques.suggestion TEXT` — optional improvement suggestion from review agent.
 - `questions.context TEXT` — surrounding context from agent.
 
-**[UPDATED - IMPLEMENTED]** go-atomic Resources pattern: Each repo struct accepts `generic.SQLXRemote` in its constructor. A `Resources` struct aggregates all repos AND services constructed from them. `ResourcesFactory` creates a `Resources` from a transaction handle. Business logic in the orchestrator uses `Transacter.Transact()` to wrap multi-repo operations in a single atomic transaction with automatic retry and backoff on transient errors. Transaction flattening: nested `Transact` calls reuse the outer transaction.
+**[UPDATED - IMPLEMENTED]** go-atomic Resources pattern: Each repo struct accepts `generic.SQLXRemote` in its constructor. `ResourcesFactory` creates a transaction-bound `Resources` bundle of repositories (`WorkItems`, `Plans`, `SubPlans`, `Workspaces`, `Sessions`, `Reviews`, `Questions`, `Events`, `Instances`) from a transaction handle. Business logic in the orchestrator uses `Transacter.Transact()` to wrap multi-repo operations in a single atomic transaction with automatic retry and backoff on transient errors. Transaction flattening: nested `Transact` calls reuse the outer transaction.
 
 ```go
 // DI wiring
@@ -93,13 +94,13 @@ executor := sqlxexec.NewExecuter(db)
 transacter := generic.NewTransacter[generic.SQLXRemote, Resources](executor, ResourcesFactory)
 ```
 
-**[UPDATED - IMPLEMENTED]** `Resources` struct includes services (PlanSvc, WorkItemSvc, SessionSvc, ReviewSvc) constructed from transaction-bound repos. Business logic calls service methods directly inside `Transact` — state-machine guards and persistence are always atomic.
+**[UPDATED - IMPLEMENTED]** Services are constructor-injected around repository interfaces rather than embedded inside `Resources`. Orchestration code creates the service it needs from transaction-bound repos inside `Transact`, so state-machine guards and persistence remain atomic without turning `Resources` into a service container.
 
 **Gate:** 100% of repo interface methods have a test. FK constraint tests prove invalid references error. Transact wraps multi-repo write and rolls back on error. `go test ./internal/repository/... -count=1`
 
 ## Phase 2: Service Layer (Week 2-3)
 
-**[UPDATED - IMPLEMENTED]** `WorkItemService`, `PlanService`, `WorkspaceService`, `SessionService`, `ReviewService`, `EventService`. State machine enforcement: invalid transitions return typed `ErrInvalidTransition{From, To, Entity}`. Mock repositories (interface-based, hand-written or `moq`-generated).
+**[UPDATED - IMPLEMENTED]** `WorkItemService`, `PlanService`, `WorkspaceService`, `SessionService`, `ReviewService`, `QuestionService`, and `InstanceService`. State machine enforcement: invalid transitions return typed `ErrInvalidTransition{From, To, Entity}`. Mock repositories (interface-based, hand-written or `moq`-generated).
 
 **[UPDATED - IMPLEMENTED]** Services own domain model types. Services depend on repository interfaces (injected). Services never call other services — cross-service coordination belongs in business logic layer. Services return domain errors, not SQL errors.
 
@@ -107,7 +108,7 @@ transacter := generic.NewTransacter[generic.SQLXRemote, Resources](executor, Res
 
 ## Phase 3: Event Bus + Adapter Interfaces (Week 3)
 
-**[UPDATED - IMPLEMENTED]** Channel-based pub/sub with topic routing. Synchronous pre-hooks (abort on error), async post-hooks. Configurable per-hook timeout (default 30s for post-hooks; pre-hooks use caller's context deadline). Event persistence to `EventRepository` before dispatch. Pre-hook types tracked in `map[EventType]bool` with `EventWorktreeCreating` as the only pre-hook by default.
+**[UPDATED - IMPLEMENTED]** Channel-based pub/sub with topic routing. Synchronous pre-hooks and asynchronous post-hooks are both supported. For regular events, persistence happens first; for registered pre-hook event types such as `EventWorktreeCreating`, pre-hooks run before persistence so a rejection aborts the operation without writing the event. Hook timeouts are configurable (default 30s for post-hooks; pre-hooks use the caller's context deadline).
 
 **[UPDATED - IMPLEMENTED]** Bus supports `WithDropHandler(fn func(subscriberID string, event SystemEvent)) BusOption` — when set (by TUI), dropped events enqueue a warning toast instead of just logging.
 
@@ -430,35 +431,20 @@ Deliver the remaining provider adapters plus the normalized browse semantics nee
 
 | Sub-phase | Scope | Gate |
 |-----------|-------|------|
-| 12a | Shell + two-pane layout + sidebar (session list with status icons) + header + status bar + New Session overlay | Dashboard renders list, navigation works, New Session flow completes |
-| 12b | Content panel modes: Plan review (approve/request changes/edit in `$EDITOR`/reject) | Approve triggers `PlanApproved` event |
-| 12c | Implementing mode (repo status row, output stream per repo, Tab cycling), Question sub-mode (Foreman proposed answer, human iteration) | Events render real-time, question escalation works |
-| 12d | Reviewing mode (diff summaries, critiques with severity, per-repo tabs) + toast notifications | Critiques render, toast on escalation |
-| 12e | Settings page (full-screen sectioned editor, keychain-backed app secrets, harness-driven provider login, save/apply/test flows) | Changes persist via keychain/config refs and apply without restart |
-| 12f | Workspace init modal (repo discovery, plain clone warnings, workspace registration) | Modal displays on fresh install in non-workspace directory, workspace registers in DB |
+| 12a | Shipped shell: two-pane chrome, work-item sessions sidebar, per-work-item runs/tasks drilldown, footer, help, and session-history search overlay | Dashboard renders work-item overviews, `→` drilldown works, and search can open current or historical sessions |
+| 12b | Content modes: ready-to-plan, planning, session interaction, plan review, and awaiting implementation | Mode mapping follows `ContentMode`, and historical/run drilldown reuses the session-interaction surface |
+| 12c | Active execution modes: implementing, question, and interrupted | Per-repo activity renders in real time; Foreman follow-up and resume/abandon flows work with ownership gating |
+| 12d | Review/completion/failure views plus toast notifications | Review output, completion summaries, and failures render without layout overflow |
+| 12e | Unified work browser and full-screen settings page | Capability-driven browse flow works; settings save/apply/test/login/reveal flows persist and reload services correctly |
+| 12f | Workspace init modal, multi-instance shell behavior, and shipped design-system cutover across `styles/`, `components/`, and `views/` | Fresh-install flow works; pane/overlay/footer chrome is driven by shared semantic primitives |
 
-**[NEW] Persistent two-pane layout:** Fixed-width (~26 char) session sidebar on left, dynamic content panel on right. No navigation stack — content panel re-renders in place based on selected session state.
+**[UPDATED - IMPLEMENTED] Aggregate session UX:** the default sidebar is work-item-centric, not a flat per-agent-session list. Each row summarizes the work item plus latest child-session metadata and attention signals. `→` drills into the selected work item's runs/tasks pane; `←` returns to the overview pane.
 
-**[NEW] Session sidebar status icons:**
-- `●` running/active (green)
-- `◐` pending human action (amber)
-- `✓` completed (dim green)
-- `⊘` interrupted (amber)
-- `✗` failed (red)
+**[UPDATED - IMPLEMENTED] Session history search:** `/` opens a split overlay with workspace/global scope, result preview, and open-to-live-or-historical behavior. Remote results use the historical session-interaction view instead of pretending to be live sessions.
 
-**[NEW] Content panel modes:** Driven by `WorkItemState` plus `AgentSessionStatus` for sub-modes (question, interrupted). See `06-tui-design.md` §2c for mapping.
+**[UPDATED - IMPLEMENTED] Design system:** shared visual semantics now live in `internal/tui/styles/theme.go` and `internal/tui/styles/chrome.go`, while reusable chrome primitives live in `internal/tui/components/` and Bubble Tea state remains in `internal/tui/views/`.
 
-**[NEW] Unified Work Browser:**
-- Replace the legacy new-session overlay with a unified provider browser: All / Linear / GitHub / GitLab source modes, capability-driven scope selection, server-side search, normalized filters, provider-qualified container narrowing, and manual work item creation as a separate action path.
-- `All` mode is issue-first and must not imply false shared semantics for non-issue scopes. Controls shown in the UI come from adapter capabilities, not provider name checks.
-
-**[NEW] Multi-instance support:**
-- Instance registration in `substrate_instances` with heartbeat every 5s.
-- Session ownership via `owner_instance_id`. Only owning instance can answer/resume/abandon.
-- Dead owner (missing row or stale heartbeat >15s) → any instance may take over.
-- Agent output tailed from session log file; TUI handles log rotation via inode/size detection.
-
-**Gate:** Full walkthrough: launch (global init automatic) → workspace init modal (if not in workspace) → dashboard → select item → view plan → approve → see sessions → answer question → view review → completion. `go test ./internal/tui/...`
+**Gate:** Full walkthrough: launch (global init automatic) → workspace init modal (if not in workspace) → dashboard → search or browse work items → select a work item overview → drill into runs/tasks when needed → approve a plan → watch implementation → answer a question or resume an interruption → review → completion. `go test ./internal/tui/...`
 
 ## Phase 13: End-to-End Integration (Week 11-12)
 

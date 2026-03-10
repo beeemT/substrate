@@ -1,8 +1,17 @@
 # TUI Design System Refactor Plan
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
+
+## Status
+
+Implemented. The design-system refactor described here has landed. The current TUI now uses semantic theme tokens from `internal/tui/styles/theme.go`, shared chrome metrics from `internal/tui/styles/chrome.go`, and reusable primitives in `internal/tui/components/` such as `pane.go`, `header_block.go`, `keyhints.go`, `tabs.go`, `callout.go`, and `overlay_frame.go`, while `internal/tui/views/` still owns Bubble Tea state, focus, sizing, and message routing.
+
+This document remains valuable as the canonical rationale, boundary contract, and delivery record for that refactor. Read the phased sections below as both: (1) the reasoning that justified the shipped split, and (2) the contract future TUI work should continue to preserve.
+
+---
 
 ## Goal
 
-Move the TUI toward a small semantic design system that centralizes visual semantics and repeated chrome without over-componentizing Bubble Tea state.
+The original goal was to move the TUI toward a small semantic design system that centralizes visual semantics and repeated chrome without over-componentizing Bubble Tea state.
 
 The target architecture is:
 
@@ -12,17 +21,15 @@ The target architecture is:
 
 This is explicitly not a React-style deep component tree. Bubble Tea requires explicit size propagation and local message handling, so the design system should standardize rendering and layout contracts, not hide workflow state in nested child models.
 
----
-
 ## Why this refactor makes sense
 
 The repository already intends a split between views, components, and styles:
 
-- `docs/07-implementation-plan.md:27-29`
+- `docs/07-implementation-plan.md` Directory Structure section
 
 The TUI design already assumes a central theme and shared palette semantics:
 
-- `docs/06-tui-design.md:584-614`
+- `docs/06-tui-design.md` §5-§6
 
 The repository also already has partial shared infrastructure:
 
@@ -30,9 +37,9 @@ The repository also already has partial shared infrastructure:
 - Overlay geometry and split-pane layout primitives: `internal/tui/components/overlay_frame.go:10-166`
 - Reusable toast, confirm, and progress components: `internal/tui/components/toast.go:19-118`, `internal/tui/components/confirm.go:8-41`, `internal/tui/components/progress.go:10-30`
 
-The gap is that only part of the styling is centralized today. Many views still recreate the same headers, dividers, hint rows, borders, pane chrome, and color choices inline.
+Before this refactor landed, only part of the styling was centralized. Many views still recreated the same headers, dividers, hint rows, borders, pane chrome, and color choices inline.
 
-Examples of repeated or drifting chrome:
+Examples of repeated or drifting chrome at the time of the refactor:
 
 - Workflow views:
   - `internal/tui/views/planning_view.go:121-151`
@@ -52,7 +59,7 @@ Examples of repeated or drifting chrome:
 - Settings:
   - `internal/tui/views/settings_page.go:809-1182`
 
-That makes a semantic design-system refactor worthwhile.
+That duplication is what made the semantic design-system refactor worthwhile, and the shipped implementation is the result.
 
 ---
 
@@ -70,11 +77,11 @@ That makes a semantic design-system refactor worthwhile.
 
 ### Architectural contracts
 
-- `docs/07-implementation-plan.md:27-29` — intended split between `views/`, `components/`, and `styles/`
-- `docs/06-tui-design.md:24-34` — persistent two-pane shell
-- `docs/06-tui-design.md:198-205` — unified work browser / overlay behavior
-- `docs/06-tui-design.md:568-570` — status bar and toast behavior
-- `docs/07-implementation-plan.md:431-461` — TUI sub-phase gates and final walkthrough
+- `docs/07-implementation-plan.md` Directory Structure section — intended split between `views/`, `components/`, and `styles/`
+- `docs/06-tui-design.md` §2a — persistent two-pane shell
+- `docs/06-tui-design.md` §4b — unified work browser / overlay behavior
+- `docs/06-tui-design.md` §5-§6 — footer, toast, and design-system chrome behavior
+- `docs/07-implementation-plan.md` §Phase 12 — TUI sub-phase gates and walkthrough
 
 ### Layout contracts
 
@@ -198,7 +205,7 @@ The view layer must keep:
 
 ## Styles cutover plan
 
-Current issue: `internal/tui/styles/theme.go:5-97` centralizes only part of the visual language. Reusable components and many views still own raw palette values.
+Original issue addressed by this refactor: `internal/tui/styles/theme.go:5-97` centralized only part of the visual language. Reusable components and many views still owned raw palette values.
 
 ### Phase 1A — expand `Theme`
 
@@ -411,7 +418,7 @@ Deliverables:
 Validation:
 
 - re-run `go test ./internal/tui/...`
-- re-check the documented TUI walkthrough expectations in `docs/07-implementation-plan.md:431-461` whenever shell or overlay infrastructure changes
+- re-check the documented TUI walkthrough expectations in `docs/07-implementation-plan.md` §Phase 12 whenever shell or overlay infrastructure changes
 
 
 ## Phase 3 — workflow chrome first
@@ -720,7 +727,7 @@ Run targeted tests for any shared component or view touched.
 For the geometry foundation, also re-run:
 
 - `go test ./internal/tui/...`
-- the documented TUI walkthrough expectations in `docs/07-implementation-plan.md:431-461` for the affected shell and overlay phases
+- the documented TUI walkthrough expectations in `docs/07-implementation-plan.md` §Phase 12 for the affected shell and overlay phases
 ### After workflow phases
 
 Run targeted view tests, including:
@@ -745,7 +752,7 @@ Run:
 
 - `go test ./internal/tui/...`
 
-This matches the documented TUI gate in `docs/07-implementation-plan.md:461`.
+This matches the documented TUI gate in `docs/07-implementation-plan.md` §Phase 12.
 
 ---
 
@@ -816,7 +823,7 @@ Why:
 - [x] Migrate `internal/tui/views/overlay_workspace_init.go` to semantic overlay styles
 - [x] Migrate `internal/tui/views/settings_page.go` to a shared settings subtheme
 - [x] Run targeted tests after each migration phase
-- [x] Re-check the documented TUI walkthrough expectations in `docs/07-implementation-plan.md:431-461` after shell and overlay infrastructure changes
+- [x] Re-check the documented TUI walkthrough expectations in `docs/07-implementation-plan.md` §Phase 12 after shell and overlay infrastructure changes
 - [x] Run `go test ./internal/tui/...` as the final verification gate
 
 ---

@@ -1,4 +1,5 @@
 # 03 - Event System
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
 The event system is Substrate's integration backbone. Every meaningful state transition emits an event. Work item adapters subscribe to mutate external trackers (Linear, GitLab, GitHub), repo lifecycle adapters subscribe to create or advance GitLab merge requests and GitHub pull requests, and harness-driven orchestration publishes session/review/question events. The bus is in-process, channel-based, and persisted to SQLite for audit and replay.
 See `02-layered-architecture.md` for where the event bus sits in the service layer. See `04-adapters.md` for the adapter and harness implementations that consume these events, and `06-tui-design.md` for how the TUI subscribes to events for reactive updates.
@@ -109,7 +110,7 @@ type EventBus interface {
 
 ### Implementation
 
-The bus is in-process, no external broker. Each subscriber gets a buffered channel (cap 256). SQLite persistence is the first step in `Publish`, so events survive crashes. Pre-hook events run handlers synchronously; post-hook events fan out to channels asynchronously.
+The bus is in-process, no external broker. Each subscriber gets a buffered channel (cap 256). Pre-hook event types such as `WorktreeCreating` run synchronous pre-hooks before persistence so a rejection aborts the operation without writing the event. Regular events persist first, then run synchronous pre-hooks, dispatch to subscribers, and fan out post-hooks asynchronously.
 
 ```go
 type subscriber struct {
@@ -444,9 +445,9 @@ sequenceDiagram
     participant LifecycleAdapter
     participant RepoHost
     Orchestrator->>EventBus: Publish(WorktreeCreatingEvent)
-    EventBus->>SQLite: Persist event
     EventBus->>PreHookHandlers: Run synchronously
     PreHookHandlers-->>EventBus: OK (no error)
+    EventBus->>SQLite: Persist event
     EventBus-->>Orchestrator: nil (proceed)
     Orchestrator->>GitWork: checkout -b <branch>
     GitWork-->>Orchestrator: worktree path

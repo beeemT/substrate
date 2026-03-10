@@ -1,4 +1,5 @@
 # 01 - Domain Model
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
 Core domain types, state machines, and workspace layout for Substrate.
 See `02-layered-architecture.md` for how these types flow through the system layers.
@@ -215,25 +216,33 @@ type SubstrateInstance struct {
 }
 ```
 An instance is considered live if `LastHeartbeat` is within 15 seconds of the current time. An instance is considered dead if its row is missing or the heartbeat is stale.
-### SessionSummary
+### SessionHistoryEntry
+A work-item-centric projection used for searchable session history. One work item can accumulate multiple child agent sessions as implementation retries, review-driven rework, and human-assisted resumes create new runs over time. Each entry keeps the work item as the primary identity while surfacing the latest contributing child-session metadata plus aggregate counts and flags.
 ```go
-// SessionSummary is a TUI projection type for the session sidebar. It aggregates
-// WorkItem and active AgentSession state into a single value for rendering.
-type SessionSummary struct {
-	WorkItemID    string             `json:"work_item_id"`
-	ExternalID    string             `json:"external_id"`   // e.g. "LIN-FOO-123"
-	Title         string             `json:"title"`
-	State         WorkItemState      `json:"state"`
-	ActiveSession *ActiveSessionInfo `json:"active_session,omitempty"`
-	ReposDone     int                `json:"repos_done"`
-	ReposTotal    int                `json:"repos_total"`
-	CompletedAt   *time.Time         `json:"completed_at,omitempty"`
+type SessionHistoryEntry struct {
+	SessionID          string             `json:"session_id"`
+	WorkspaceID        string             `json:"workspace_id"`
+	WorkspaceName      string             `json:"workspace_name"`
+	WorkItemID         string             `json:"work_item_id"`
+	WorkItemExternalID string             `json:"work_item_external_id"`
+	WorkItemTitle      string             `json:"work_item_title"`
+	WorkItemState      WorkItemState      `json:"work_item_state"`
+	RepositoryName     string             `json:"repository_name"`
+	HarnessName        string             `json:"harness_name"`
+	Status             AgentSessionStatus `json:"status"`
+	AgentSessionCount  int                `json:"agent_session_count"`
+	HasOpenQuestion    bool               `json:"has_open_question"`
+	HasInterrupted     bool               `json:"has_interrupted"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+	CompletedAt        *time.Time         `json:"completed_at,omitempty"`
 }
 
-type ActiveSessionInfo struct {
-	ID     string             `json:"id"`
-	Status AgentSessionStatus `json:"status"`
-	Repo   string             `json:"repo"`  // repository being processed
+type SessionHistoryFilter struct {
+	WorkspaceID *string `json:"workspace_id,omitempty"`
+	Search      string  `json:"search"`
+	Limit       int     `json:"limit"`
+	Offset      int     `json:"offset"`
 }
 ```
 

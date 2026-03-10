@@ -1,29 +1,24 @@
 # 06 - TUI Design
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
-bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration, `03-event-system.md` for event bridging.
+bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bridging.
 
 ---
 
 ## 1. Framework
 
-bubbletea enforces: `Msg -> Update(model, msg) -> (model', Cmd) -> View(model') -> terminal`.
+bubbletea still enforces `Msg -> Update(model, msg) -> (model', Cmd) -> View(model') -> terminal`, but the shipped TUI is organized around a small set of explicit shell models rather than a stacked navigation tree. The top-level app owns:
 
-```go
-type App struct {
-    sidebar     SidebarModel
-    content     ContentModel
-    overlay     tea.Model        // nil when no overlay is active
-    header      HeaderModel
-    statusBar   StatusBarModel
-    toasts      ToastModel
-    services    *service.Container
-    windowSize  tea.WindowSizeMsg
-}
-```
+- a left sidebar pane
+- a right content pane
+- a single footer/status row
+- centered overlays for the unified work browser, session-history search, workspace init, and help
+- a full-screen settings page
+- a toast stack rendered over the shell
 
-The top-level `App` maintains a persistent two-pane layout: a fixed-width session sidebar on the left and a dynamic content panel on the right. Navigation between modes does not push/pop a stack — the content panel re-renders in place based on the selected session's state.
+`internal/tui/views/` owns Bubble Tea state, routing, and sizing decisions. Shared visual semantics live in `internal/tui/styles/`, and reusable chrome lives in `internal/tui/components/`.
 
-**Widgets**: viewport (plan review, agent output, diffs), list (sidebar sessions, issue picker), spinner (active ops), textinput (feedback, answers, filter), table (diffs, config), help (keybind overlay).
+**Widgets**: viewport (plan review, agent output, historical session interaction, diffs), list (sidebar, search results, browser results), spinner (active ops), textinput (feedback, answers, filter), and table-like structured rows in settings and review surfaces.
 
 ---
 
@@ -31,113 +26,102 @@ The top-level `App` maintains a persistent two-pane layout: a fixed-width sessio
 
 ### 2a. Persistent Two-Pane Layout
 
-The main chrome is always visible. The sidebar lists all work item sessions. The content panel fills the remainder of the terminal width and renders based on whichever session is selected and what state it is in.
+The main shell is always a pair of rounded panes plus a single footer row. There is no persistent header bar; workspace metadata and active-session counts live in the footer, and each pane renders its own centered title.
+
+The default sidebar shows work-item session overviews. The content pane renders the selected work item or selected run in place. Centered overlays sit above the shell without changing the underlying layout, while the settings page temporarily takes over the full screen.
 
 ```
-┌─ Substrate ─ myproject ───────────────────────────────────────────────────────────┐
-│ Sessions         F1    │ <dynamic content panel — fills remainder of width>       │
-│──────────────────────  │                                                          │
-│ ● LIN-FOO-123          │                                                          │
-│   Fix auth flow        │                                                          │
-│   ████░░ 2/3 repos     │                                                          │
-│                        │                                                          │
-│ ◐ LIN-FOO-456          │                                                          │
-│   Rate limiting        │                                                          │
-│   Plan review needed   │                                                          │
-│                        │                                                          │
-│ ✓ LIN-FOO-100          │                                                          │
-│   Update docs          │                                                          │
-│   2h ago               │                                                          │
-│                        │                                                          │
-│ ⊘ LIN-FOO-099          │                                                          │
-│   Refactor billing     │                                                          │
-│   Interrupted          │                                                          │
-│                        │                                                          │
-│ ──────────────────── │                                                          │
-│ [n] New  [q] Quit      │                                                          │
-└──────────────────────────────────────────────────────────────────────────────────┘
+┌────── Sessions ──────┐┌────────────── Content ───────────────────────────────────────┐
+│ SUB-123              ││ SUB-123 · Design system                                       │
+│ Semantic cleanup     ││ <mode-specific work item or run view>                         │
+│ Waiting for answer   ││                                                                │
+│                      ││                                                                │
+│ SUB-118              ││                                                                │
+│ Refresh docs         ││                                                                │
+│ Completed            ││                                                                │
+╰──────────────────────╯╰────────────────────────────────────────────────────────────────╯
+[↑/↓] Sessions  [→] Runs  [/] Search sessions  [n] New session  [c] Settings      workspace · 2 active sessions
 ```
 
-### 2b. Session Sidebar
+### 2b. Sessions Sidebar
 
-Fixed ~26 characters wide. Lists all work item sessions, grouped by status (active first, then pending-action, then completed and interrupted last). Scrolls independently of the content panel when the list overflows.
+Fixed ~26 characters wide. The default title is `Sessions`. Entries are **work-item overviews**, not a flat list of individual agent sessions. Each row summarizes the work item state plus the latest child-session metadata that should be visible at a glance: current status, progress, latest repo/session context, and whether the work item currently has an open question or interruption.
+
+Press `→` on a selected work item to drill into a second sidebar pane titled `{externalID} · Tasks`. That pane contains the work-item overview row plus the child agent runs for that work item. Selecting a run opens that run's interaction transcript in the content pane. Press `←` from the runs pane to return to the top-level sessions list.
+
+Historical search is separate from the live sidebar list: `/` opens the session-history overlay, which can search within the current workspace or across all workspaces and then open either the live work item or a historical interaction transcript.
 
 **Status icons:**
 - `●` running/active (green)
-- `◐` pending human action (amber) — plan review needed, agent question, or interrupted awaiting decision
+- `◐` pending human action (amber) — plan review needed, open question, or similar attention state
 - `✓` completed (dim green)
 - `⊘` interrupted (amber)
 - `✗` failed (red)
+- `◌` inactive/default (muted)
 
-**Entry layout** (two lines + optional progress bar):
-- Line 1: `{icon} {workItemID}`
+**Entry layout** (three lines):
+- Line 1: `{icon} {workItemID or run label}`
 - Line 2: `  {short title}`
-- Line 3 (implementing only): `  {progress bar} {n}/{m} repos`
-- Line 3 (otherwise): `  {subtitle}` — e.g. "Plan review needed", "2h ago", "Interrupted"
+- Line 3: implementing work items show repo progress; otherwise the row shows a concise status subtitle such as `Plan review`, `Waiting for answer`, `Completed`, or a run status
 
 **Keys:**
-- `↑`/`↓` or `j`/`k` — navigate sessions
+- `↑`/`↓` or `j`/`k` — navigate sessions or runs
+- `→` — drill into runs from the sessions pane, or move focus from runs to content
+- `←` — return from content to runs, or from runs to sessions
+- `/` — open session-history search
 - `n` — open the Unified Work Browser
 - `c` — open Settings page
+- `?` — open Help
 - `q` — quit
 
 ```go
 type SidebarModel struct {
-    sessions    []domain.SessionSummary
-    cursor      int
-    viewport    viewport.Model  // for overflow scrolling
+    title    string
+    entries   []SidebarEntry
+    cursor    int
+    viewport  viewport.Model
 }
 ```
 
-**Workspace name** in the header comes from the `.substrate-workspace` YAML file (e.g., `myproject`).
+The footer, not a header, carries workspace context such as `workspace · 2 active sessions`.
 
 ### 2c. Content Panel
 
-Renders based on the selected session's state. There is no navigation stack. The panel switches mode in place.
+The content panel re-renders in place based on the selected work item, selected run, or selected historical search result. There is no navigation stack.
 
-| WorkItem state    | Content panel mode      |
-|-------------------|-------------------------|
-| `ingested`        | Ready to plan           |
-| `planning`        | Planning output         |
-| `plan_review`     | Plan review             |
-| `approved`        | Awaiting implementation |
-| `implementing`    | Implementing            |
-| `reviewing`       | Review output + diff    |
-| `completed`       | Completion summary      |
-| `failed`          | Failure detail          |
+| Selection / state | Content panel mode |
+|-------------------|--------------------|
+| nothing selected | Empty |
+| work item `ingested` | Ready to plan |
+| work item `planning` | Planning output |
+| selected task run or remote history result | Session interaction |
+| work item `plan_review` | Plan review |
+| work item `approved` | Awaiting implementation |
+| work item `implementing` with open question | Question |
+| work item `implementing` with interrupted child session | Interrupted |
+| work item `implementing` otherwise | Implementing |
+| work item `reviewing` | Reviewing |
+| work item `completed` | Completed |
+| work item `failed` | Failed |
 
-> Within `implementing`, the content panel switches to **Agent question** sub-mode when the active `AgentSession.Status` is `waiting_for_answer`, and to **Interruption notice** sub-mode when it is `interrupted`. These are driven by `AgentSessionStatus`, not `WorkItemState`.
+`ContentModeSessionInteraction` is used for both local run drilldown and remote historical transcripts. `ContentModeQuestion` and `ContentModeInterrupted` are live implementation sub-modes selected from current agent-session state rather than a separate work-item state.
+
 ```go
 type ContentMode int
 
 const (
-    ContentModeEmpty        ContentMode = iota // no session selected
-    ContentModeReadyToPlan                     // ingested: work item ready for planning
-    ContentModePlanning                         // planning: agent running
-    ContentModePlanReview                       // plan_review: awaiting human review
-    ContentModeAwaitingImpl                     // approved: plan approved, awaiting implementation start
-    ContentModeImplementing                     // implementing: agents running
-    ContentModeReviewing                        // reviewing: review agent running
-    ContentModeCompleted                        // completed: all repos passed review
-    ContentModeFailed                           // failed: unrecoverable error
-    ContentModeInterrupted                      // sub-mode of implementing: session interrupted
-    ContentModeQuestion                         // sub-mode of implementing: waiting for human answer
-)
-```
-```go
-type ContentModel struct {
-    mode        ContentMode
-    // per-mode sub-models
-    readyToPlan  viewport.Model   // ingested: static info panel
-    awaitingImpl viewport.Model   // approved: static info panel
-    planOutput   viewport.Model
-    planReview  PlanReviewModel
-    implementing ImplementingModel
-    reviewing   ReviewModel
-    completed   CompletedModel
-    failed      FailedModel
-    interrupted InterruptedModel
-    question    QuestionModel
+    ContentModeEmpty              ContentMode = iota // no session selected
+    ContentModeReadyToPlan                           // ingested: work item ready for planning
+    ContentModePlanning                              // planning: agent running, log tailing
+    ContentModeSessionInteraction                    // historical session interaction view
+    ContentModePlanReview                            // plan_review: awaiting human review
+    ContentModeAwaitingImpl                          // approved: plan approved, awaiting impl start
+    ContentModeImplementing                          // implementing: agents running
+    ContentModeReviewing                             // reviewing: review agent running
+    ContentModeCompleted                             // completed: all repos passed review
+    ContentModeFailed                                // failed: unrecoverable error
+    ContentModeInterrupted                           // live implementation sub-mode
+    ContentModeQuestion                              // waiting for human answer
 }
 ```
 
@@ -147,7 +131,7 @@ type ContentModel struct {
 
 ### 3a. Planning Mode
 
-Tails `~/.substrate/sessions/<session-id>.log` (JSONL) as the planning agent runs. New lines are appended in real time via `fsnotify`.
+Reads incremental output from `~/.substrate/sessions/<session-id>.log` (JSONL) as the planning agent runs. New lines are appended into the viewport while the session is active.
 
 ```
 │ LIN-FOO-789 · Update docs · Planning                                              │
@@ -193,89 +177,26 @@ Full plan markdown rendered in a scrollable viewport. All sub-plans shown in seq
 
 **Keys**: `↑`/`↓` scroll, `a` approve, `c` request changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject.
 
-### 3c. Unified Work Browser
+### 3c. Session Interaction Mode
 
-The legacy provider-specific new-session overlay is replaced by a unified work browser. This view is keyboard-first and capability-driven: the UI renders only sources, scopes, and filters that the active adapter selection can honor honestly.
+Used when the human drills into a specific child run from the `{externalID} · Tasks` sidebar or opens a non-live result from session-history search. This mode reuses the session-log rendering surface, but the content is a stored interaction transcript rather than the currently active planning/implementation tail.
+
+The header metadata is work-item-centric and includes whatever historical context is available: work item label, workspace, repository, and latest agent-session identifier. If Substrate has no child agent-session log for the selected historical entry, the panel falls back to a static summary instead of showing an empty transcript.
 
 ```
-│ New Session                                                                    │
-│───────────────────────────────────────────────────────────────────────────────│
-│ Source: [All ▼]   Scope: [Issues ▼]   View: [Assigned to me ▼]                │
-│ Search: [oauth token refresh_____________]                                    │
-│ Filters: state=open  labels=auth,backend  owner=myorg  repo=api              │
-│                                                                               │
-│ GitHub  GH-myorg-api-42   Fix OAuth refresh handling            open          │
-│ GitLab  GL-1234-77        Rotate token after callback            opened       │
-│ Linear  LIN-PLAT-91       Unify work browser filters              started      │
-│                                                                               │
-│ Preview                                                                         │
-│ <description, container metadata, labels, provider details, source link>       │
-│                                                                               │
-│ [Enter] Create session  [m] Manual work item  [Tab] Next control  [Esc] Close │
+│ SUB-118 · Refresh docs · Session interaction                                        │
+│────────────────────────────────────────────────────────────────────────────────────│
+│ Work item SUB-118 · docs-workspace · latest agent session sess-remote              │
+│                                                                                    │
+│ > Read current docs state                                                          │
+│ > Compare against repository head                                                  │
+│ > Summarize gaps in TUI design documentation                                       │
+│                                                                                    │
+│ [↑↓] Scroll                                                                        │
 ```
 
-**Browser model**
-- **Source**: `All`, `Linear`, `GitHub`, `GitLab`
-- **Scope**: capability-driven; `All` mode is issues-first and must not imply false shared semantics for projects or initiatives
-- **Search**: server-side when the adapter declares search support
-- **Primary filters**: normalized issue views such as `assigned_to_me`, `created_by_me`, `mentioned`, `subscribed`, `all`
-- **Secondary filters**: state, labels, and container narrowing (`team`, `owner`, `repo`, `group`) when supported
-- **Pagination**: offset or cursor, depending on adapter capabilities
-- **Manual work item creation**: separate explicit action, not a fake provider tab
+**Keys**: `↑`/`↓` scroll. Global back-navigation still applies from the footer (`←` back to runs or sessions).
 
-**Provider and scope rules**
-- `All` mode is the honest default only for issue browsing.
-- Non-issue scopes remain provider-qualified unless the active selection has real shared semantics.
-- Multi-select is allowed only within one provider and one compatible scope.
-- The browser must not show a filter the active provider/scope cannot honor.
-- Empty, loading, and error states must be provider-aware and should explain capability constraints rather than silently hiding results.
-
-**Row and preview model**
-- rows show provider badge, stable identifier, title, parent container reference, state, labels, and updated time
-- preview shows description/body, parent/container metadata, provider-specific fields, and source URL when available
-
-**Keys (browser)**
-- `Tab` / `Shift-Tab` — move between source, scope, search, filter, list, and preview regions
-- `↑` / `↓` or `j` / `k` — navigate list rows
-- `Enter` — create a session from the current selection
-- `Space` — toggle item selection when same-provider multi-select is valid
-- `/` — focus search
-- `m` — switch to manual work item creation
-- `Esc` — close the browser
-
-**Keys (manual action)**
-- `Tab` / `Shift-Tab` — cycle form fields
-- `Enter` on the final field — create manual work item
-- `Esc` — return to the browser
-
-```go
-type UnifiedBrowserModel struct {
-    source         string
-    scope          domain.SelectionScope
-    search         textinput.Model
-    filters        BrowseUIState
-    items          list.Model
-    preview        viewport.Model
-    manualMode     bool
-    manualForm     ManualWorkItemForm
-    loading        bool
-    err            error
-}
-
-type BrowseUIState struct {
-    view       string
-    state      string
-    labels     []string
-    owner      string
-    repo       string
-    group      string
-    team       string
-    cursor     string
-    offset     int
-}
-```
-
-### 3d. Implementing Mode
 ### 3d. Implementing Mode
 
 Two parts: a repo status row at the top, and the output stream for the currently selected repo below.
@@ -314,24 +235,19 @@ type ImplementingModel struct {
 
 ### 3e. Reviewing Mode
 
-Diff summaries and review agent critiques post-implementation. Per-repo tabs at top.
+Review summaries and critiques post-implementation, grouped by repository tabs at the top. The active repo shows either a success message (`✓ No critiques for this repo.`) or a critique list. The selected critique is indicated inline, and its suggestion is expanded in place rather than in a separate diff pane.
 
 **Model**:
 ```go
 type ReviewModel struct {
-    repos      []RepoReviewResult  // per-repo: FilesChanged, Insertions, Deletions
-    critiques  list.Model          // expandable critique list
-    diffView   viewport.Model      // expanded diff for selected critique
+    repos      []RepoReviewResult  // each repo carries review cycles and critiques
     activeRepo int
+    cursor     int                 // critique cursor within the active repo
 }
-
-// Critique: use domain.Critique from 01-domain-model.md.
-// Rendering maps: FilePath → display path, Description → message text,
-// LineNumber → optional line indicator, Suggestion → optional fix hint.
-// Severity constants (CritiqueSeverityCritical etc.) map to theme colors.
 ```
+`RepoReviewResult` carries the repo name plus accumulated `[]domain.ReviewCycle` and `[]domain.Critique`. Severity styling comes from shared semantic status styles, and the selected critique may show its `Suggestion` inline.
 
-**Keys**: `j`/`k` navigate critiques, `Enter` expand/collapse detail+diff, `Tab` switch repo tabs, `r` re-implement, `o` override accept (with confirm).
+**Keys**: `j`/`k` navigate critiques in the active repo, `Tab` switch repo tabs, `r` re-implement, `o` override accept.
 
 ### 3f. Completed Mode
 
@@ -420,78 +336,40 @@ type QuestionModel struct {
 
 ## 4. Overlays
 
-### 4a. New Session Overlay
+### 4a. Session History Search Overlay
 
-Triggered by `n` from anywhere. A modal over the current layout.
+Triggered by `/` from the main shell. This is a centered split overlay with four logical regions: scope, query input, results list, and preview.
 
-**Linear source** — shows a filterable issue list:
+When Substrate is inside a workspace, the default search scope is `workspace`; otherwise the overlay falls back to `global`. The human can toggle scope from the scope control, with arrow keys, or via `Ctrl+S`. Results are work-item-centric `SessionHistoryEntry` records ordered by most recent activity and enriched with latest child-session metadata, `AgentSessionCount`, `HasOpenQuestion`, and `HasInterrupted`.
 
-```
-┌─ New Session ────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Source: [ Linear ▼ ]                                                │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │ Filter: ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░          │   │
-│  │──────────────────────────────────────────────────────────── │   │
-│  │ ● LIN-FOO-124  Add OAuth2 provider support            High  │   │
-│  │   LIN-FOO-125  Fix pagination in list endpoints       Med   │   │
-│  │   LIN-FOO-126  Improve error messages                 Low   │   │
-│  │   LIN-FOO-127  Database connection pooling            High  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  [Enter] Start session  [Space] Multi-select  [Esc] Cancel           │
-└──────────────────────────────────────────────────────────────────────┘
-```
+`Enter` opens the selected result. If the result belongs to the current workspace, the TUI restores the live work-item context. If it is historical or remote, the content pane switches to the session-interaction view and loads the stored transcript; when no agent-session log exists, the panel shows a static summary instead of a live tail.
 
-**Manual source** — shows a text form instead of a list:
+**Keys:** `Tab` / `Shift-Tab` cycle scope, input, results, and preview; `↑` / `↓` move between regions or results; `←` / `→` move focus or change scope; `Ctrl+S` toggles workspace/global; `Enter` opens; `Esc` closes.
 
-```
-┌─ New Session ────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Source: [ Manual ▼ ]                                                │
-│                                                                      │
-│  Title:       [                                               ]      │
-│  Description: [                                               ]      │
-│               [                                               ]      │
-│                                                                      │
-│  [Tab] Next field  [Enter] Start session  [Esc] Cancel               │
-└──────────────────────────────────────────────────────────────────────┘
-```
+### 4b. Unified Work Browser
 
-**Model**:
-```go
-type NewSessionOverlay struct {
-    source        SourceKind        // Linear | Manual
-    filter        textinput.Model
-    issueList     list.Model        // Linear only; filterable, multi-select
-    manualTitle   textinput.Model   // Manual only
-    manualDesc    textarea.Model    // Manual only
-    selectedItems []domain.SelectableItem
-    focusIndex    int
-}
-```
+Triggered by `n` from anywhere. This is the shipped replacement for the older provider-specific new-session modal. The browser is keyboard-first and capability-driven: the UI only shows sources, scopes, filters, and search controls that the active adapter selection can support honestly.
 
-**Keys (Linear)**: `↑`/`↓` navigate, `Space` toggle selection, `/` focus filter, `Tab` cycle source dropdown, `Enter` start, `Esc` cancel.
+- **Source**: `All`, `Linear`, `GitHub`, `GitLab`
+- **Scope**: capability-driven; `All` remains issue-first and does not pretend that non-issue scopes are shared when they are not
+- **Search**: server-side when the active adapter supports it
+- **Filters**: normalized issue views plus provider-qualified container narrowing where available
+- **Manual work item creation**: separate explicit action, not a fake provider tab
 
-**Keys (Manual)**: `Tab`/`S-Tab` cycle fields, `Enter` on last field starts, `Esc` cancel.
+### 4c. Settings Page
 
-### 4b. Settings Page
+Accessed via `c` from anywhere. The settings UI is a full-screen page with a left navigation tree and a right detail/editor pane. It covers commit, planning, review, Foreman, harness, provider, and repo-lifecycle configuration, with provider status and field descriptions visible alongside editable values.
 
-Accessed via `c` from anywhere. Renders as a full-screen settings page rather than the legacy configuration modal.
+Provider secrets owned by Substrate are stored in the OS keychain, while the config file stores stable secret references such as `api_key_ref` and `token_ref`. Harness-owned credentials are handled through harness actions instead of being written directly by the TUI. oh-my-pi remains the default verified interactive harness; Claude Code and Codex are selectable but are not documented as having full interaction parity for every corrective workflow.
 
-Settings are organized into sections for commit/planning/review/Foreman behavior, harness routing, harness configuration, provider configuration, and repo overrides.
+The footer hints are focus-sensitive. In the tree view they expose navigation, expand/collapse, focus transfer, close, save, apply, test, login, and reveal actions. In the field view they expose field navigation, edit, boolean toggle, return-to-groups, save, apply, test, login, and reveal actions. While editing a field, the footer collapses to save/cancel hints only.
 
-Provider secrets owned by Substrate are stored in the OS keychain. The config file stores stable secret references such as `api_key_ref` / `token_ref`, while runtime hydration loads the actual secret values before adapters are built. GitHub still supports `gh auth token` fallback when no keychain-backed token is configured.
+**Keys:**
+- Tree focus: `↑`/`↓` navigate, `→` expand/open, `←` collapse/up, `Enter` focus settings, `Esc` close
+- Field focus: `↑`/`↓` settings, `Enter` edit, `Space` toggle bool, `←`/`Esc` back to groups, `s` save, `a` apply, `t` test, `g` login, `r` reveal
+- Edit mode: `Enter` save edit, `Esc` cancel edit
 
-Harness-owned credentials are handled by the relevant harness via structured harness actions rather than being persisted directly by the TUI. The settings page must make the current maturity boundary clear: oh-my-pi is the default verified interactive harness, while Claude Code and Codex are selectable but may lack proven `SendMessage` parity for planning/review correction and Foreman handling.
-
-**Model**: typed settings sections/fields with secret-aware rendering, inline editing, provider status, save/apply actions, connection tests, and harness-driven login actions. Harness routing fields include default harness, fallback order, and per-phase overrides.
-
-**Keys**: `j`/`k` navigate fields, `h`/`l` switch sections, `Enter` edit, `Space` toggle booleans, `r` reveal/hide secrets, `s` save, `a` apply, `t` test provider connection, `g` run provider login through the relevant harness, `Esc` close.
-
-
-### 4c. First-Start Initialization Modal
+### 4d. First-Start Initialization Modal
 
 Global initialization (creating `~/.substrate/`, `config.toml`, `state.db`, `sessions/`) happens automatically on first CLI launch (see `07-implementation-plan.md` Phase 0). The TUI modal handles **workspace initialization** only.
 
@@ -542,79 +420,33 @@ If `[n]` is pressed, Substrate exits cleanly.
 
 ## 5. Layout System
 
-```go
-func (a App) View() string {
-    header    := a.header.View(workspaceName, a.windowSize.Width)
-    sidebar   := a.sidebar.View(a.windowSize.Height - 4)
-    content   := a.content.View(a.windowSize.Width - sidebarWidth - 1, a.windowSize.Height - 4)
-    statusBar := a.statusBar.View(a.content.KeybindHints(), a.windowSize.Width)
+The shipped shell geometry is centralized instead of being recalculated ad hoc in each view.
 
-    body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, divider, content)
+- `internal/tui/styles/chrome.go` owns the shared frame metrics for panes, overlays, callouts, the settings footer, and the single-row main footer.
+- `styles.ComputeMainPageLayout(...)` computes the sidebar/content pane sizes from those metrics.
+- `components.RenderPane(...)` renders both main panes, so the sidebar and content panel share the same rounded shell behavior.
+- Centered overlays use shared overlay-frame primitives, while the settings page uses its own full-screen split layout and local footer.
 
-    rendered := lipgloss.JoinVertical(lipgloss.Left, header, body, statusBar)
-    if a.overlay != nil {
-        rendered = renderOverlay(rendered, a.overlay.View(), a.windowSize)
-    }
-    return rendered
-}
-```
+**Footer / status bar**
 
-**Header** (1 line): Left-aligned `Substrate ─ {workspace}`. Right-aligned phase badge with status color. Workspace name read from `.substrate-workspace`.
+The main shell footer is a single borderless row. Its left side shows focus-sensitive key hints from the sidebar or content pane plus the global commands. Its right side shows workspace context and the count of truly active sessions. That count includes only agent sessions in `pending`, `running`, or `waiting_for_answer`; completed, failed, and interrupted sessions do not inflate the number.
 
-**Sidebar** (fixed ~26 chars wide): Always visible. Scrolls independently.
+**Toasts**
 
-**Content panel** (fills remainder): Re-renders in place on mode change.
-
-**Status Bar** (1 line): Context-sensitive keybinds from the active content panel mode. Bracket letter styled with accent color. Right-aligned metadata (e.g., session count).
-
-**Toasts**: Transient overlays, bottom-right. Auto-dismiss after 3s or on keypress. Levels: Info, Success, Warning, Error. Examples: "MR created for backend-api", "Agent session failed: timeout".
-
-```go
-type Toast struct {
-    Message string
-    Level   ToastLevel
-    Expires time.Time
-}
-```
+Toasts render as stacked top-right overlays anchored below the top inset and above the footer. They do not add rows to the main layout.
 
 ---
 
 ## 6. Color Scheme
 
-Muted, professional palette (Linear aesthetic). Central `Theme` struct for future customization.
+The shipped design system is semantic rather than per-view palette code.
 
-```go
-var DefaultTheme = Theme{
-    // Chrome
-    HeaderBg:      "#1a1a2e",  HeaderFg:      "#e0e0e0",
-    StatusBarBg:   "#16213e",  StatusBarFg:    "#a0a0a0",
-    KeybindAccent: "#5b8def",
-    // Status
-    Pending:     "#6b7280",  // dim gray
-    Active:      "#5b8def",  // blue
-    Success:     "#34d399",  // green
-    Error:       "#f87171",  // red
-    Warning:     "#fbbf24",  // amber
-    Interrupted: "#f59e0b",  // amber (same as pending-action)
-    // Content
-    Title: "#f0f0f0", Subtitle: "#b0b0b0", Muted: "#6b7280",
-    Border: "#2d2d44", SelectedBg: "#1e293b",
-    // Diff + Plan
-    DiffAdd: "#34d399", DiffDel: "#f87171", CodeBlockBg: "#0f0f1a",
-}
-```
+- `internal/tui/styles/theme.go` owns semantic color tokens for status, text roles, selection, panes, overlays, settings, and diffs.
+- `internal/tui/styles/chrome.go` owns shared geometry such as pane frames, overlay padding, footer height, and toast placement.
+- `internal/tui/components/` owns reusable chrome primitives including `pane.go`, `header_block.go`, `keyhints.go`, `tabs.go`, `callout.go`, and `overlay_frame.go`.
+- `internal/tui/views/` keeps Bubble Tea state, focus transitions, viewport sizing, reserved-row math, and mode-specific rendering decisions.
 
-**Application rules**:
-- Status badges: status color as foreground, transparent bg
-- Selected items: `SelectedBg` background, no fg override
-- Borders: `Border` color, rounded style
-- Progress bars: `Muted` (incomplete), `Active` (in progress), `Success` (done)
-- Agent questions: `Warning` fg + bold
-- Critique severity: critical=`Error`, major=`Warning`, minor=`Muted`, nit=`Muted` (extra dim)
-- Diffs: additions=`DiffAdd`, deletions=`DiffDel`
-- Interrupted state: `Interrupted` fg
-
----
+The default theme remains muted and professional, but views are expected to consume semantic roles instead of reaching for raw colors. Status icons and badges come from shared status styles, selected rows use shared selection styles, question/interruption states use warning/interrupted semantics, and diffs use shared add/delete styles.
 
 ## 7. Multi-Instance Support
 
@@ -631,7 +463,7 @@ If the owning instance is dead (row missing or heartbeat stale >15s), any other 
 
 **Keybind gating:** `[a]nswer`, `[r]esume`, `[a]bandon` are active only when `currentInstanceOwnsSession || ownerIsDead`.
 
-**Agent output:** All output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL). Any instance can tail this file via `fsnotify`. The tailing logic handles log rotation: on detecting a size regression or inode change at the watched path, the offset is reset to 0 to follow the new segment.
+**Agent output:** All output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL). Any instance can tail this file from disk. The tailing logic handles log rotation: on detecting a size regression or inode change at the watched path, the offset is reset to 0 to follow the new segment.
 
 **State visibility:** Session state changes in the DB are visible to all instances within a poll interval (2s).
 ---
@@ -651,7 +483,7 @@ Vim-style primary, arrow keys as aliases.
 
 ### Global Keybinds (handled before delegation)
 
-`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` new session overlay, `c` settings page, `Ctrl+c` force quit.
+`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `c` settings page, `Ctrl+c` force quit.
 
 ### Input Modes
 

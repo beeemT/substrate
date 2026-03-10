@@ -1,4 +1,5 @@
 # 02 - Layered Architecture
+<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
 
 ## 1. Layer Diagram
 
@@ -9,21 +10,21 @@ graph TD
     end
     subgraph "Service Layer (owns domain models)"
         WIS[WorkItemService] & PS[PlanService] & WSS[WorkspaceService]
-        SS[SessionService] & RS[ReviewService] & ES[EventService]
+        SS[SessionService] & RS[ReviewService] & QS[QuestionService] & IS[InstanceService]
     end
     subgraph "Repository Layer (interfaces)"
-        WIR[WorkItemRepo] & PR[PlanRepo] & WSR[WorkspaceRepo]
-        SR[SessionRepo] & RR[ReviewRepo] & ER[EventRepo]
+        WIR[WorkItemRepo] & PR[PlanRepo/SubPlanRepo] & WSR[WorkspaceRepo]
+        SR[SessionRepo] & RR[ReviewRepo] & QR[QuestionRepo] & ER[EventRepo] & IR[InstanceRepo]
     end
     subgraph "Storage"
         DB[(~/.substrate/state.db)]
     end
-    ORCH --> WIS & PS & WSS & SS & RS & ES
+    ORCH --> WIS & PS & WSS & SS & RS & QS & IS
     PP --> PS & WIS
-    RP --> RS & SS & PS
+    RP --> RS & SS & QS
     WIS --> WIR; PS --> PR; WSS --> WSR; SS --> SR
-    DS --> DR; RS --> RR; ES --> ER
-    WIR & PR & WSR & SR & RR & ER --> DB
+    RS --> RR; QS --> QR; IS --> IR
+    WIR & PR & WSR & SR & RR & QR & ER & IR --> DB
 ```
 
 Dependencies flow downward only. The TUI (see `06-tui-design.md`) sits above business logic; it calls in but is never called by it.
@@ -51,6 +52,15 @@ type WorkItemFilter struct {
     Limit, Offset int
 }
 ```
+
+The session repository also owns the searchable history projection used by the TUI's work-item session surfaces and history overlay:
+```go
+type SessionRepository interface {
+    SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error)
+}
+```
+`SearchHistory` returns work-item-centric history entries and can be scoped to a single workspace or the global session corpus via `SessionHistoryFilter`.
+
 
 ```go
 // --- SQLite implementation (package sqlite) ---
@@ -169,115 +179,67 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 
 ### Resources Registry
 
-All repos are grouped into a `Resources` struct, instantiated together via `ResourcesFactory`. When business logic calls `transacter.Transact`, the factory creates every repo bound to the same `*sqlx.Tx`.
+All transaction-bound repositories are grouped into `sqlite.Resources`, instantiated together via `ResourcesFactory`. When business logic opens a transaction through `generic.Transacter`, the factory binds every repository to the same `*sqlx.Tx`. Services are constructed separately from repository interfaces; `Resources` is a repository bundle, not a service container.
 
 ```go
-// Resources groups all transaction-bound repos AND services constructed from them.
-// Every field is bound to the same *sqlx.Tx; business logic calls service methods
-// directly inside Transact — state-machine guards run transactionally.
 type Resources struct {
-	// Repositories (transaction-bound)
-	WorkItems  WorkItemRepo
-	Plans      PlanRepo
-	SubPlans   SubPlanRepo
-	Workspaces WorkspaceRepo
-	Sessions   SessionRepo
-	Reviews    ReviewRepo
-	Events     EventRepo
-	Instances  InstanceRepo
-	// Services (constructed from the transaction-bound repos above).
-	// Business logic calls these; repos are an implementation detail.
-	PlanSvc     *service.PlanService
-	WorkItemSvc *service.WorkItemService
-	SessionSvc  *service.SessionService
-	ReviewSvc   *service.ReviewService
+    WorkItems  WorkItemRepo
+    Plans      PlanRepo
+    SubPlans   SubPlanRepo
+    Workspaces WorkspaceRepo
+    Sessions   SessionRepo
+    Reviews    ReviewRepo
+    Questions  QuestionRepo
+    Events     EventRepo
+    Instances  InstanceRepo
 }
 
 func ResourcesFactory(
-	ctx context.Context,
-	_ *generic.Transacter[generic.SQLXRemote, Resources],
-	tx generic.SQLXRemote,
-) (Resources, error) {
-	plans    := NewPlanRepo(tx)
-	subPlans := NewSubPlanRepo(tx)
-	workItems := NewWorkItemRepo(tx)
-	sessions := NewSessionRepo(tx)
-	reviews  := NewReviewRepo(tx)
-	return Resources{
-		WorkItems:  workItems,
-		Plans:      plans,
-		SubPlans:   subPlans,
-		Workspaces: NewWorkspaceRepo(tx),
-		Sessions:   sessions,
-		Reviews:    reviews,
-		Events:     NewEventRepo(tx),
-		Instances:  NewInstanceRepo(tx),
-		PlanSvc:    service.NewPlanService(plans, subPlans),
-		WorkItemSvc: service.NewWorkItemService(workItems),
-		SessionSvc: service.NewSessionService(sessions),
-		ReviewSvc:  service.NewReviewService(reviews),
-	}, nil
+    _ context.Context,
+    _ *generic.Transacter[generic.SQLXRemote, Resources],
+    tx generic.SQLXRemote,
+ ) (Resources, error) {
+    return Resources{
+        WorkItems:  NewWorkItemRepo(tx),
+        Plans:      NewPlanRepo(tx),
+        SubPlans:   NewSubPlanRepo(tx),
+        Workspaces: NewWorkspaceRepo(tx),
+        Sessions:   NewSessionRepo(tx),
+        Reviews:    NewReviewRepo(tx),
+        Questions:  NewQuestionRepo(tx),
+        Events:     NewEventRepo(tx),
+        Instances:  NewInstanceRepo(tx),
+    }, nil
 }
 ```
 
 ## 3. Service Layer
 
-**Rules:** (1) Services **own** domain model types (`domain.WorkItem`, `domain.Plan`, etc.). (2) Contain domain logic: validation, state transitions, derived queries. (3) Depend on repository **interfaces** (injected). (4) Never call other services -- cross-service coordination belongs in business logic. (5) Return domain errors, not SQL errors.
+**Rules:** (1) Services **own** domain model types (`domain.WorkItem`, `domain.Plan`, etc.). (2) They contain domain logic: validation, state transitions, and derived queries. (3) They depend on repository **interfaces** supplied at construction time. (4) They do not call each other; cross-service coordination belongs in business logic. (5) They return domain errors, not SQL errors.
+
+Current domain services are `WorkItemService`, `PlanService`, `SessionService`, `ReviewService`, `QuestionService`, `WorkspaceService`, and `InstanceService`. Event persistence belongs to `EventRepository`, while publication is handled by the event bus documented in `03-event-system.md`.
 
 ```go
-package service
-
-var (
-    ErrPlanNotFound      = errors.New("plan not found")
-    ErrInvalidTransition = errors.New("invalid plan status transition")
-)
-
-type PlanService struct {
-    plans    repository.PlanRepository
-    subPlans repository.SubPlanRepository
+type SessionService struct {
+    repo repository.SessionRepository
 }
 
-func NewPlanService(plans repository.PlanRepository, subPlans repository.SubPlanRepository) *PlanService {
-    return &PlanService{plans: plans, subPlans: subPlans}
+func NewSessionService(repo repository.SessionRepository) *SessionService {
+    return &SessionService{repo: repo}
 }
 
-func (s *PlanService) CreateDraft(ctx context.Context, workItemID, content string) (domain.Plan, error) {
-    plan := domain.Plan{
-		ID: domain.NewID(), WorkItemID: workItemID, OrchestratorPlan: content,
-		Status: domain.PlanDraft, Version: 1,
-        CreatedAt: domain.Now(), UpdatedAt: domain.Now(),
-    }
-    if err := plan.Validate(); err != nil {
-        return domain.Plan{}, fmt.Errorf("validate plan: %w", err)
-    }
-    return plan, s.plans.Create(ctx, plan)
+func (s *SessionService) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+    return s.repo.SearchHistory(ctx, filter)
 }
-
-func (s *PlanService) SubmitForReview(ctx context.Context, planID string) (domain.Plan, error) {
-    plan, err := s.plans.Get(ctx, planID)
-    if err != nil {
-        return domain.Plan{}, ErrPlanNotFound
-    }
-	if plan.Status != domain.PlanDraft && plan.Status != domain.PlanRejected {
-        return domain.Plan{}, fmt.Errorf("%w: cannot submit %s", ErrInvalidTransition, plan.Status)
-    }
-	plan.Status = domain.PlanPendingReview
-    plan.UpdatedAt = domain.Now()
-    return plan, s.plans.Update(ctx, plan)
-}
-
-// Approve: guards pending_review -> approved. Same fetch-guard-transition-persist pattern.
-// Reject:  guards pending_review -> rejected. Resets work item to Ingested.
-// AttachSubPlan: sets PlanID + timestamps, delegates to subPlans.Create().
 ```
 
-State transitions are explicit and guarded. The service delegates persistence to the repository interface.
+Other services follow the same constructor-injected pattern: validate transitions, expose targeted queries such as question or instance lookups, and delegate persistence to repository interfaces.
 
 ## 4. Business Logic Layer
 
-**Rules:** (1) Composes multiple services into workflows. (2) Orchestrates sequencing, error handling, rollback. (3) Emits system events via `EventService` (see `03-event-system.md`). (4) Invokes adapter hooks for external trackers and repository hosts — e.g. Linear/GitLab/GitHub tracker mutation plus GitLab MR or GitHub PR lifecycle. (5) Owns cross-cutting concerns like "on plan approval -> create worktrees -> spawn agents."
+**Rules:** (1) Composes multiple services into workflows. (2) Orchestrates sequencing, error handling, rollback. (3) Publishes system events through the event bus backed by `EventRepository` (see `03-event-system.md`). (4) Invokes adapter hooks for external trackers and repository hosts — e.g. Linear/GitLab/GitHub tracker mutation plus GitLab MR or GitHub PR lifecycle. (5) Owns cross-cutting concerns like "on plan approval -> create worktrees -> spawn agents."
 
-The Orchestrator receives a `generic.Transacter` and uses `Transact` to wrap multi-repo mutations in a single atomic transaction. Inside each `Transact` closure, business logic calls **service methods** (available on `Resources`) whose repos are bound to the same transaction — so state-machine guards and persistence are always atomic. Events are emitted **after** the transaction commits.
+The Orchestrator receives a `generic.Transacter` and uses `Transact` to wrap multi-repo mutations in a single atomic transaction. `ResourcesFactory` supplies repository handles bound to that transaction; services remain constructor-injected collaborators around repository interfaces, and events are published only after commit.
 
 ```go
 package orchestrator
@@ -289,27 +251,26 @@ type Orchestrator struct {
 	// work item adapters, repo lifecycle adapters, and other dependencies...
 }
 
-// OnPlanApproved delegates to PlanService.Approve inside a transaction so the
+// OnPlanApproved wraps transaction-bound repositories in a PlanService so the
 // state-machine guard and the DB write are atomic. Event emission is after commit.
 func (o *Orchestrator) OnPlanApproved(ctx context.Context, planID string) error {
 	var approvedPlan domain.Plan
 	if err := o.transacter.Transact(ctx, func(ctx context.Context, res Resources) error {
-		plan, err := res.PlanSvc.Approve(ctx, planID) // guards pending_review → approved
+		planSvc := service.NewPlanService(res.Plans, res.SubPlans)
+		plan, err := planSvc.Approve(ctx, planID)
 		if err != nil { return err }
 		approvedPlan = plan
 		return nil
 	}); err != nil {
 		return err
 	}
-	// Transaction committed. Safe to emit — adapter side effects (tracker mutations,
-	// repo lifecycle hooks, harness session startup) run after this point.
+
 	return o.eventBus.Publish(ctx, PlanApprovedEvent{
 		BaseEvent: newBaseEvent(EventPlanApproved),
 		Plan:      approvedPlan,
 	})
 }
 ```
-
 `PlanningPipeline` and `ReviewPipeline` follow the same pattern. See `01-domain-model.md` for the full state machine.
 
 ## 5. SQLite Schema
@@ -499,9 +460,9 @@ func main() {
 	executor := sqlxexec.NewExecuter(db)
 	transacter := generic.NewTransacter[generic.SQLXRemote, Resources](executor, ResourcesFactory)
 
-	// ResourcesFactory creates repos AND services bound to the same *sqlx.Tx.
-	// Business logic (Orchestrator, Pipelines) calls service methods inside Transact:
-	// state-machine guards + persistence are always atomic. No separate service injection.
+	// ResourcesFactory creates transaction-bound repositories for a shared *sqlx.Tx.
+	// Services are constructed separately from repository interfaces and passed into the TUI/business logic.
+	// The event bus persists through EventRepo; transaction scope stays at the repository layer.
 
 	// Adapters
 	workItemAdapters := app.BuildWorkItemAdapters(cfg)
