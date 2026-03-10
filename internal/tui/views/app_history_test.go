@@ -397,7 +397,7 @@ func TestWorkItemDuplicateOpenedMsgFocusesExistingWorkItemOverview(t *testing.T)
 	if sel == nil || sel.WorkItemID != existing.ID {
 		t.Fatalf("selected sidebar entry = %v, want %q", sel, existing.ID)
 	}
-	toastView := stripBrowseANSI(updated.toasts.View("", ""))
+	toastView := stripBrowseANSI(updated.toasts.View())
 	if !strings.Contains(toastView, "ℹ Work item already exists: opened existing item SUB-1") {
 		t.Fatalf("toast view = %q", toastView)
 	}

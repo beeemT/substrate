@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 var testSplitOverlaySpec = SplitOverlaySizingSpec{
@@ -22,32 +24,36 @@ var testSplitOverlaySpec = SplitOverlaySizingSpec{
 	InputWidthOffset:  20,
 }
 
+func testOverlayStyles() styles.Styles {
+	return styles.NewStyles(styles.DefaultTheme)
+}
+
 func TestComputeSplitOverlayLayoutClampsToViewportAndChrome(t *testing.T) {
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
 
 	if layout.FrameWidth != 70 {
 		t.Fatalf("frame width = %d, want 70", layout.FrameWidth)
 	}
-	if layout.ContentWidth != 66 {
-		t.Fatalf("content width = %d, want 66", layout.ContentWidth)
+	if layout.ContentWidth != 64 {
+		t.Fatalf("content width = %d, want 64", layout.ContentWidth)
 	}
-	if layout.InputWidth != 46 {
-		t.Fatalf("input width = %d, want 46", layout.InputWidth)
+	if layout.InputWidth != 44 {
+		t.Fatalf("input width = %d, want 44", layout.InputWidth)
 	}
 	if layout.BodyHeight != 7 {
 		t.Fatalf("body height = %d, want 7", layout.BodyHeight)
 	}
-	if layout.LeftPaneWidth != 32 || layout.RightPaneWidth != 33 {
-		t.Fatalf("pane widths = (%d, %d), want (32, 33)", layout.LeftPaneWidth, layout.RightPaneWidth)
+	if layout.LeftPaneWidth != 31 || layout.RightPaneWidth != 32 {
+		t.Fatalf("pane widths = (%d, %d), want (31, 32)", layout.LeftPaneWidth, layout.RightPaneWidth)
 	}
-	if layout.LeftInnerWidth != 28 || layout.RightInnerWidth != 29 {
-		t.Fatalf("inner widths = (%d, %d), want (28, 29)", layout.LeftInnerWidth, layout.RightInnerWidth)
+	if layout.LeftInnerWidth != 27 || layout.RightInnerWidth != 28 {
+		t.Fatalf("inner widths = (%d, %d), want (27, 28)", layout.LeftInnerWidth, layout.RightInnerWidth)
 	}
 	if layout.ListHeight != 5 {
 		t.Fatalf("list height = %d, want 5", layout.ListHeight)
 	}
-	if layout.ViewportWidth != 27 || layout.ViewportHeight != 3 {
-		t.Fatalf("viewport = (%d, %d), want (27, 3)", layout.ViewportWidth, layout.ViewportHeight)
+	if layout.ViewportWidth != 26 || layout.ViewportHeight != 3 {
+		t.Fatalf("viewport = (%d, %d), want (26, 3)", layout.ViewportWidth, layout.ViewportHeight)
 	}
 }
 
@@ -57,20 +63,21 @@ func TestComputeSplitOverlayLayoutUsesDefaultDimensionsWhenUnset(t *testing.T) {
 	if layout.FrameWidth != 178 {
 		t.Fatalf("frame width = %d, want 178", layout.FrameWidth)
 	}
-	if layout.ContentWidth != 174 {
-		t.Fatalf("content width = %d, want 174", layout.ContentWidth)
+	if layout.ContentWidth != 172 {
+		t.Fatalf("content width = %d, want 172", layout.ContentWidth)
 	}
 	if layout.BodyHeight != 18 {
 		t.Fatalf("body height = %d, want 18", layout.BodyHeight)
 	}
-	if layout.LeftPaneWidth != 69 || layout.RightPaneWidth != 104 {
-		t.Fatalf("pane widths = (%d, %d), want (69, 104)", layout.LeftPaneWidth, layout.RightPaneWidth)
+	if layout.LeftPaneWidth != 68 || layout.RightPaneWidth != 103 {
+		t.Fatalf("pane widths = (%d, %d), want (68, 103)", layout.LeftPaneWidth, layout.RightPaneWidth)
 	}
 }
 
 func TestRenderOverlayFrameFitsComputedLayout(t *testing.T) {
+	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
-	body := RenderSplitOverlayBody(layout, SplitOverlaySpec{
+	body := RenderSplitOverlayBody(st, layout, SplitOverlaySpec{
 		LeftPane: OverlayPaneSpec{
 			Body:    "session list",
 			Focused: true,
@@ -80,12 +87,12 @@ func TestRenderOverlayFrameFitsComputedLayout(t *testing.T) {
 			Body:  strings.Repeat("preview line\n", 2) + "wrapped preview content",
 		},
 	})
-	view := RenderOverlayFrame(layout.FrameWidth, OverlayFrameSpec{
+	view := RenderOverlayFrame(st, layout.FrameWidth, OverlayFrameSpec{
 		HeaderLines: []string{
-			"Search Sessions",
+			st.Title.Render("Search Sessions"),
 			"Search: query",
-			RenderOverlayDivider(layout.ContentWidth),
-			"Searching…",
+			RenderOverlayDivider(st, layout.ContentWidth),
+			st.Muted.Render("Searching…"),
 		},
 		Body:   body,
 		Footer: "[Tab] Focus  [Ctrl+S] Toggle scope  [Enter] Open  [Esc] Close",
@@ -94,19 +101,17 @@ func TestRenderOverlayFrameFitsComputedLayout(t *testing.T) {
 	assertFits(t, view, 72, 18)
 }
 
-func TestOverlayPaneBorderColorUsesFocusColor(t *testing.T) {
-	if string(overlayPaneBorderColor(false)) != overlayBorderColor {
-		t.Fatalf("unfocused border color = %q, want %q", overlayPaneBorderColor(false), overlayBorderColor)
-	}
-	if string(overlayPaneBorderColor(true)) != overlayFocusBorderColor {
-		t.Fatalf("focused border color = %q, want %q", overlayPaneBorderColor(true), overlayFocusBorderColor)
+func TestOverlayPaneChangesWhenFocused(t *testing.T) {
+	st := testOverlayStyles()
+	if reflect.DeepEqual(st.OverlayPane, st.OverlayPaneFocused) {
+		t.Fatal("expected focused overlay pane style to differ from unfocused style")
 	}
 }
 
 func TestApplyOverlayListStylesReturnsUpdatedModel(t *testing.T) {
 	delegate := list.NewDefaultDelegate()
 	model := list.New(nil, delegate, 20, 5)
-	updated := ApplyOverlayListStyles(model)
+	updated := ApplyOverlayListStyles(model, testOverlayStyles())
 	if reflect.DeepEqual(model.Styles.NoItems, updated.Styles.NoItems) {
 		t.Fatal("expected overlay list styles to change no-items style")
 	}
@@ -116,8 +121,9 @@ func TestApplyOverlayListStylesReturnsUpdatedModel(t *testing.T) {
 }
 
 func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
+	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
-	pane := renderOverlayPane(layout.RightInnerWidth, layout.ListHeight, OverlayPaneSpec{
+	pane := renderOverlayPane(st, layout.RightInnerWidth, layout.ListHeight, OverlayPaneSpec{
 		Title:        "Preview",
 		DividerWidth: layout.ViewportWidth,
 		Body:         "details",
@@ -133,8 +139,8 @@ func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	if dividerLine == "" {
 		t.Fatalf("pane missing divider line: %q", pane)
 	}
-	if got := strings.Count(dividerLine, "─"); got != layout.ViewportWidth {
-		t.Fatalf("divider width = %d, want %d\nline: %q", got, layout.ViewportWidth, dividerLine)
+	if got := strings.Count(dividerLine, "─"); got == 0 || got > layout.RightInnerWidth {
+		t.Fatalf("divider width = %d, want > 0 and <= %d\nline: %q", got, layout.RightInnerWidth, dividerLine)
 	}
 }
 

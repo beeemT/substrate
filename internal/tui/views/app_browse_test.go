@@ -13,7 +13,6 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -709,7 +708,7 @@ func TestRenderDetailContentVisuallySeparatesMetadata(t *testing.T) {
 	t.Parallel()
 
 	const exampleURL = "https://example.com/issue/42"
-	rendered := stripBrowseANSI(renderDetailContent(adapter.ListItem{
+	rendered := stripBrowseANSI(renderDetailContent(styles.NewStyles(styles.DefaultTheme), adapter.ListItem{
 		Provider:    "github",
 		Identifier:  "#42",
 		Title:       "Issue title",
@@ -738,7 +737,7 @@ func TestRenderDetailContentVisuallySeparatesMetadata(t *testing.T) {
 func TestRenderDetailContentRendersMarkdownLinksWithHrefText(t *testing.T) {
 	t.Parallel()
 
-	rendered := stripBrowseANSI(renderDetailContent(adapter.ListItem{
+	rendered := stripBrowseANSI(renderDetailContent(styles.NewStyles(styles.DefaultTheme), adapter.ListItem{
 		Title:       "Issue title",
 		Description: "Read [the guide](https://example.com/guide) for details.",
 	}, 80))
@@ -814,8 +813,8 @@ func TestNewSessionOverlayNoItemsBackgroundMatchesOverlay(t *testing.T) {
 	t.Parallel()
 
 	overlay := NewNewSessionOverlay(nil, "ws-1", styles.NewStyles(styles.DefaultTheme))
-	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(components.OverlayBackgroundColor) {
-		t.Fatalf("no-items background = %v, want %q", got, components.OverlayBackgroundColor)
+	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(styles.DefaultTheme.OverlayBg) {
+		t.Fatalf("no-items background = %v, want %q", got, styles.DefaultTheme.OverlayBg)
 	}
 }
 

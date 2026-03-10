@@ -6,9 +6,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -163,47 +163,40 @@ func (m ImplementingModel) View() string {
 		return ""
 	}
 
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
-	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44"))
-	dimLine := dividerStyle.Render(strings.Repeat("─", m.width))
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   m.title + " · Implementing",
+		Width:   m.width,
+		Divider: true,
+	})
 
-	header := titleStyle.Render(m.title + " · Implementing")
-
-	// Repo status row.
 	var repoParts []string
 	for i, r := range m.repos {
 		icon := repoStatusIcon(r.Status, m.styles)
-		label := r.Name
+		label := m.styles.TabInactive.Render(r.Name)
 		if i == m.selectedRepo {
-			label = lipgloss.NewStyle().Underline(true).Render(label)
+			label = m.styles.TabActive.Render(r.Name)
 		}
 		repoParts = append(repoParts, icon+" "+label)
 	}
-	repoRow := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0")).Render("Repos:  ") +
-		strings.Join(repoParts, "   ")
+	repoRow := m.styles.Label.Render("Repos:  ") + strings.Join(repoParts, "   ")
 
-	// Output block for the selected repo.
 	selectedName := m.selectedRepoName()
-	outputBlock := lipgloss.NewStyle().Height(m.viewportHeight()).Render("")
+	outputBlock := strings.Repeat("\n", max(0, m.viewportHeight()-1))
 	if selectedName != "" {
-		// Guard against negative repeat count from very narrow terminals.
 		dashCount := m.width - len(selectedName) - 5
 		if dashCount < 0 {
 			dashCount = 0
 		}
-		repoHeader := dividerStyle.Render(
-			fmt.Sprintf("─── %s ", selectedName) + strings.Repeat("─", dashCount),
-		)
+		repoHeader := m.styles.Divider.Render(fmt.Sprintf("─── %s ", selectedName) + strings.Repeat("─", dashCount))
 		vp := m.viewports[selectedName]
 		outputBlock = repoHeader + "\n" + vp.View()
 	}
 
-	pauseLabel := ""
+	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
 	if m.paused {
-		pauseLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Render(" [PAUSED]")
+		hints += m.styles.Warning.Render(" [PAUSED]")
 	}
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
-		"[Tab] Cycle repos  [↑↓] Scroll  [p] Pause") + pauseLabel
 
-	return fitViewBox(strings.Join([]string{header, dimLine, repoRow, outputBlock, hints}, "\n"), m.width, m.height)
+	parts := append(strings.Split(header, "\n"), repoRow, outputBlock, hints)
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -50,8 +51,16 @@ func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
 func (m *PlanReviewModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.viewport.Width = width
-	m.viewport.Height = height - 4 // header + divider + feedback row + hints
+	m.syncViewportSize()
+}
+
+func (m *PlanReviewModel) syncViewportSize() {
+	reservedRows := 4 // header block + divider above hints + hint row
+	if m.inputMode != planReviewNormal {
+		reservedRows++
+	}
+	m.viewport.Width = m.width
+	m.viewport.Height = max(1, m.height-reservedRows)
 }
 
 func (m *PlanReviewModel) SetTitle(title string) { m.title = title }
@@ -87,11 +96,13 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				m.feedbackInput.Blur()
 				if m.inputMode == planReviewChanges {
 					m.inputMode = planReviewNormal
+					m.syncViewportSize()
 					return m, func() tea.Msg {
 						return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
 					}
 				}
 				m.inputMode = planReviewNormal
+				m.syncViewportSize()
 				return m, func() tea.Msg {
 					return PlanRejectMsg{PlanID: m.planID, Reason: text, WorkItemID: m.workItemID}
 				}
@@ -99,6 +110,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				m.inputMode = planReviewNormal
 				m.feedbackInput.SetValue("")
 				m.feedbackInput.Blur()
+				m.syncViewportSize()
 			default:
 				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
 			}
@@ -113,16 +125,19 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.inputMode = planReviewChanges
 			m.feedbackInput.Placeholder = "Describe the changes needed…"
 			m.feedbackInput.Focus()
+			m.syncViewportSize()
 		case "r":
 			m.inputMode = planReviewReject
 			m.feedbackInput.Placeholder = "Reason for rejection…"
 			m.feedbackInput.Focus()
+			m.syncViewportSize()
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.planContent)
 		case "up", "k", "down", "j", "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 	case tea.WindowSizeMsg:
+		m.syncViewportSize()
 		m.viewport, cmd = m.viewport.Update(msg)
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -131,9 +146,11 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 }
 
 func (m PlanReviewModel) View() string {
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
-	header := titleStyle.Render(m.title + " · Plan Review")
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   m.title + " · Plan Review",
+		Width:   m.width,
+		Divider: true,
+	})
 
 	body := m.viewport.View()
 
@@ -143,21 +160,21 @@ func (m PlanReviewModel) View() string {
 		if m.inputMode == planReviewReject {
 			label = "Rejection reason: "
 		}
-		feedbackRow = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Render(label) + m.feedbackInput.View()
+		feedbackRow = m.styles.Warning.Render(label) + m.feedbackInput.View()
 	}
 
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width)) + "\n"
-	hints += lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
-		"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("a") + "] Approve  " +
-			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("c") + "] Changes  " +
-			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("e") + "] Editor  " +
-			"[" + lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("r") + "] Reject")
+	hints := components.RenderKeyHints(m.styles, []components.KeyHint{
+		{Key: "a", Label: "Approve"},
+		{Key: "c", Label: "Changes"},
+		{Key: "e", Label: "Editor"},
+		{Key: "r", Label: "Reject"},
+	}, "  ")
 
-	parts := []string{header, divider, body}
+	parts := append(strings.Split(header, "\n"), body)
 	if feedbackRow != "" {
 		parts = append(parts, feedbackRow)
 	}
-	parts = append(parts, hints)
+	parts = append(parts, components.RenderDivider(m.styles, m.width), hints)
 	return strings.Join(parts, "\n")
 }
 
@@ -226,25 +243,8 @@ func (m ReadyToPlanModel) View() string {
 		description = "_No description provided._"
 	}
 
-	sectionLabelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
-	descriptionBoxStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#334155")).
-		Padding(0, 1)
-	descriptionInnerWidth := m.width - descriptionBoxStyle.GetHorizontalFrameSize()
-	if descriptionInnerWidth < 1 {
-		descriptionInnerWidth = 1
-	}
-
-	nextStepBoxStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("#2d2d44")).
-		Padding(0, 1)
-	nextStepInnerWidth := m.width - nextStepBoxStyle.GetHorizontalFrameSize()
-	if nextStepInnerWidth < 1 {
-		nextStepInnerWidth = 1
-	}
-
+	descriptionInnerWidth := components.CalloutInnerWidth(m.styles, m.width)
+	nextStepInnerWidth := components.CalloutInnerWidth(m.styles, m.width)
 	nextStep := m.styles.Muted.Render("Press ") +
 		m.styles.KeybindAccent.Render("[Enter]") +
 		m.styles.Muted.Render(" to start planning.")
@@ -254,12 +254,12 @@ func (m ReadyToPlanModel) View() string {
 
 	topBlocks := []string{
 		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
-		sectionLabelStyle.Render("Description"),
-		descriptionBoxStyle.Render(descriptionContent),
+		m.styles.SectionLabel.Render("Description"),
+		components.RenderCallout(m.styles, components.CalloutSpec{Body: descriptionContent, Width: m.width}),
 	}
 	bottomBlocks := []string{
-		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, sectionLabelStyle.Render("Next step")),
-		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, nextStepBoxStyle.Render(nextStepContent)),
+		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, m.styles.SectionLabel.Render("Next step")),
+		lipgloss.PlaceHorizontal(m.width, lipgloss.Right, components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: m.width, Variant: components.CalloutCard})),
 	}
 
 	topLineCount := 0
@@ -311,7 +311,7 @@ func (m AwaitingImplModel) View() string {
 	}
 	return strings.Join([]string{
 		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
-		m.styles.Muted.Render(strings.Repeat("─", m.width)),
+		components.RenderDivider(m.styles, m.width),
 		"",
 		m.styles.Active.Render("Plan approved."),
 		m.styles.Subtitle.Render("Implementation will begin shortly."),

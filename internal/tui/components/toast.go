@@ -5,6 +5,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 type ToastLevel int
@@ -23,7 +25,12 @@ type Toast struct {
 }
 
 type ToastModel struct {
+	styles styles.Styles
 	toasts []Toast
+}
+
+func NewToastModel(st styles.Styles) ToastModel {
+	return ToastModel{styles: st}
 }
 
 func (m *ToastModel) AddToast(msg string, level ToastLevel) {
@@ -47,50 +54,48 @@ func (m *ToastModel) Prune() {
 
 func (m *ToastModel) HasToasts() bool { return len(m.toasts) > 0 }
 
-func (m *ToastModel) View(fg, bg string) string {
+func (m *ToastModel) View() string {
 	if len(m.toasts) == 0 {
 		return ""
 	}
-	return renderToast(m.toasts[len(m.toasts)-1])
+	return renderToast(m.styles, m.toasts[len(m.toasts)-1])
 }
 
 func (m *ToastModel) StackView(pinned ...Toast) string {
 	if len(pinned) == 0 {
-		return m.View("", "")
+		return m.View()
 	}
 	views := make([]string, 0, len(pinned)+len(m.toasts))
 	for _, toast := range pinned {
-		views = append(views, renderToast(toast))
+		views = append(views, renderToast(m.styles, toast))
 	}
 	for i := len(m.toasts) - 1; i >= 0; i-- {
-		views = append(views, renderToast(m.toasts[i]))
+		views = append(views, renderToast(m.styles, m.toasts[i]))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, views...)
 }
 
-func renderToast(t Toast) string {
-	color := colorForLevel(t.Level)
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f0f0f0")).
-		Background(lipgloss.Color("#1a1a2e")).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(color)).
+func renderToast(st styles.Styles, t Toast) string {
+	style := st.OverlayPane.Copy().
+		Foreground(lipgloss.Color(st.Theme.Title)).
+		Background(lipgloss.Color(st.Theme.OverlayBg)).
+		BorderForeground(borderColorForLevel(st, t.Level)).
 		Padding(0, 1).
 		Bold(true)
 	prefix := prefixForLevel(t.Level)
 	return style.Render(prefix + t.Message)
 }
 
-func colorForLevel(l ToastLevel) string {
+func borderColorForLevel(st styles.Styles, l ToastLevel) lipgloss.TerminalColor {
 	switch l {
 	case ToastSuccess:
-		return "#34d399"
+		return lipgloss.Color(st.Theme.Success)
 	case ToastWarning:
-		return "#fbbf24"
+		return lipgloss.Color(st.Theme.Warning)
 	case ToastError:
-		return "#f87171"
+		return lipgloss.Color(st.Theme.Error)
 	default:
-		return "#5b8def"
+		return lipgloss.Color(st.Theme.Active)
 	}
 }
 

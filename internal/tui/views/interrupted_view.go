@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -26,7 +26,7 @@ func NewInterruptedModel(st styles.Styles) InterruptedModel {
 	return InterruptedModel{styles: st}
 }
 
-func (m *InterruptedModel) SetSize(w, h int) { m.width = w; m.height = h }
+func (m *InterruptedModel) SetSize(w, h int)  { m.width = w; m.height = h }
 func (m *InterruptedModel) SetTitle(t string) { m.title = t }
 
 func (m *InterruptedModel) SetSession(sessionID, subPlanID, repoName, worktree string, canAct bool) {
@@ -70,10 +70,16 @@ func (m InterruptedModel) Update(msg tea.Msg) (InterruptedModel, tea.Cmd) {
 }
 
 func (m InterruptedModel) View() string {
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
-	header := m.styles.Title.Render(m.title + " · Interrupted")
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   m.title + " · Interrupted",
+		Width:   m.width,
+		Divider: true,
+	})
 
-	lines := []string{header, divider, ""}
+	lines := append(strings.Split(header, "\n"), "")
 	lines = append(lines, m.styles.Interrupted.Render("⊘ Session interrupted (substrate closed while agent was running)"), "")
 
 	if m.repoName != "" {
@@ -92,12 +98,7 @@ func (m InterruptedModel) View() string {
 
 	if !m.canAct {
 		lines = append(lines, m.styles.Muted.Render("(Owned by another instance — take over not yet available)"))
-	} else {
-		lines = append(lines,
-			m.styles.KeybindAccent.Render("[r]")+m.styles.Subtitle.Render(" Resume  ")+
-				m.styles.KeybindAccent.Render("[a]")+m.styles.Subtitle.Render(" Abandon (mark failed)"),
-		)
 	}
-
-	return strings.Join(lines, "\n")
+	lines = append(lines, components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  "))
+	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

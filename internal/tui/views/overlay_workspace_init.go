@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
@@ -173,11 +172,8 @@ func (m WorkspaceInitModal) View() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#2d2d44")).
-		Background(lipgloss.Color("#1a1a2e")).
+	boxStyle := m.styles.OverlayFrame.Copy().
 		Padding(1, 2).
-		Width(w)
+		Width(m.styles.Chrome.OverlayFrame.InnerWidth(w))
 	return boxStyle.Render(content)
 }

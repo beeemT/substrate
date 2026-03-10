@@ -5,22 +5,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
-)
 
-const (
-	// OverlayHorizontalFrame is the horizontal border width consumed by the outer overlay frame.
-	OverlayHorizontalFrame = 2
-	// OverlayHorizontalPad is the horizontal padding consumed by the outer overlay frame.
-	OverlayHorizontalPad = 4
-	// PaneHorizontalFrame is the horizontal border plus padding width consumed by a pane.
-	PaneHorizontalFrame = 4
-	// PaneVerticalFrame is the vertical border width consumed by a pane.
-	PaneVerticalFrame = 2
-	// OverlayBackgroundColor is the shared background color used for overlay content.
-	OverlayBackgroundColor = "#1a1a2e"
-
-	overlayBorderColor      = "#2d2d44"
-	overlayFocusBorderColor = "#60a5fa"
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 // SplitOverlaySizingSpec describes the geometry constraints for a split list/detail overlay.
@@ -74,19 +60,24 @@ type SplitOverlaySpec struct {
 }
 
 // ApplyOverlayListStyles applies shared overlay background styling to list empty states.
-func ApplyOverlayListStyles(m list.Model) list.Model {
-	bg := lipgloss.Color(OverlayBackgroundColor)
-	m.Styles.NoItems = m.Styles.NoItems.Background(bg)
-	m.Styles.StatusEmpty = m.Styles.StatusEmpty.Background(bg)
+func ApplyOverlayListStyles(m list.Model, st styles.Styles) list.Model {
+	bg := lipgloss.Color(st.Theme.OverlayBg)
+	muted := lipgloss.Color(st.Theme.Muted)
+	m.Styles.NoItems = m.Styles.NoItems.Background(bg).Foreground(muted)
+	m.Styles.StatusEmpty = m.Styles.StatusEmpty.Background(bg).Foreground(muted)
 	return m
 }
 
 // ComputeSplitOverlayLayout calculates the shared geometry for split overlays.
 func ComputeSplitOverlayLayout(termWidth, termHeight, chromeLines int, spec SplitOverlaySizingSpec) SplitOverlayLayout {
-	frameWidth := overlayFrameWidth(termWidth, spec.MaxOverlayWidth)
-	contentWidth := maxInt(1, frameWidth-OverlayHorizontalPad)
+	chrome := styles.DefaultChromeMetrics
+	frameWidth := overlayFrameWidth(termWidth, spec.MaxOverlayWidth, chrome)
+	contentWidth := chrome.OverlayFrame.InnerWidth(frameWidth)
 	bodyHeight := overlayBodyHeight(termHeight, chromeLines, spec)
 	leftPaneWidth, rightPaneWidth := splitPaneWidths(contentWidth, spec)
+	leftInnerWidth := chrome.OverlayPane.InnerWidth(leftPaneWidth)
+	rightInnerWidth := chrome.OverlayPane.InnerWidth(rightPaneWidth)
+	paneInnerHeight := chrome.OverlayPane.InnerHeight(bodyHeight)
 
 	return SplitOverlayLayout{
 		FrameWidth:      frameWidth,
@@ -95,16 +86,16 @@ func ComputeSplitOverlayLayout(termWidth, termHeight, chromeLines int, spec Spli
 		BodyHeight:      bodyHeight,
 		LeftPaneWidth:   leftPaneWidth,
 		RightPaneWidth:  rightPaneWidth,
-		LeftInnerWidth:  maxInt(1, leftPaneWidth-PaneHorizontalFrame),
-		RightInnerWidth: maxInt(1, rightPaneWidth-PaneHorizontalFrame),
-		ListHeight:      maxInt(1, bodyHeight-PaneVerticalFrame),
-		ViewportWidth:   maxInt(1, rightPaneWidth-PaneHorizontalFrame-2),
-		ViewportHeight:  maxInt(1, bodyHeight-PaneVerticalFrame-2),
+		LeftInnerWidth:  leftInnerWidth,
+		RightInnerWidth: rightInnerWidth,
+		ListHeight:      paneInnerHeight,
+		ViewportWidth:   maxInt(1, rightInnerWidth-2),
+		ViewportHeight:  maxInt(1, paneInnerHeight-2),
 	}
 }
 
 // RenderOverlayFrame renders the outer overlay shell around header, body, and footer content.
-func RenderOverlayFrame(frameWidth int, spec OverlayFrameSpec) string {
+func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec) string {
 	parts := append([]string{}, spec.HeaderLines...)
 	if spec.Body != "" {
 		if len(parts) > 0 {
@@ -116,65 +107,54 @@ func RenderOverlayFrame(frameWidth int, spec OverlayFrameSpec) string {
 		parts = append(parts, spec.Footer)
 	}
 	content := strings.Join(parts, "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(overlayBorderColor)).
-		Background(lipgloss.Color(OverlayBackgroundColor)).
-		Padding(0, 2).
-		Width(maxInt(1, frameWidth)).
+	return st.OverlayFrame.Copy().
+		Width(st.Chrome.OverlayFrame.InnerWidth(maxInt(1, frameWidth))).
 		Render(content)
 }
 
 // RenderSplitOverlayBody renders a split left/right pane body using a computed layout.
-func RenderSplitOverlayBody(layout SplitOverlayLayout, spec SplitOverlaySpec) string {
-	leftPane := renderOverlayPane(layout.LeftInnerWidth, layout.ListHeight, spec.LeftPane)
-	rightPane := renderOverlayPane(layout.RightInnerWidth, layout.ListHeight, spec.RightPane)
+func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec SplitOverlaySpec) string {
+	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
+	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
 }
 
-// RenderOverlayDivider renders a muted divider line for overlay content.
-func RenderOverlayDivider(width int) string {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(overlayBorderColor)).
-		Width(maxInt(1, width)).
-		Render(strings.Repeat("─", maxInt(1, width)))
+// RenderOverlayDivider renders a semantic divider line for overlay content.
+func RenderOverlayDivider(st styles.Styles, width int) string {
+	return st.Divider.Render(strings.Repeat("─", maxInt(1, width)))
 }
 
-func renderOverlayPane(width, height int, spec OverlayPaneSpec) string {
+func renderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec) string {
 	body := spec.Body
 	if spec.Title != "" {
-		dividerWidth := spec.DividerWidth
-		if dividerWidth <= 0 {
-			dividerWidth = maxInt(1, width-2)
+		titleLines := []string{st.Title.Render(spec.Title)}
+		if spec.DividerWidth > 0 {
+			titleLines = append(titleLines, RenderOverlayDivider(st, spec.DividerWidth+st.Chrome.OverlayPane.HorizontalFrame()))
 		}
-		body = strings.Join([]string{spec.Title, RenderOverlayDivider(dividerWidth), spec.Body}, "\n")
+		titleLines = append(titleLines, spec.Body)
+		body = strings.Join(titleLines, "\n")
 	}
-	return lipgloss.NewStyle().
-		Width(maxInt(1, width)).
-		Height(maxInt(1, height)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(overlayPaneBorderColor(spec.Focused)).
-		Padding(0, 1).
+	paneStyle := st.OverlayPane
+	if spec.Focused {
+		paneStyle = st.OverlayPaneFocused
+	}
+	return paneStyle.Copy().
+		Width(st.Chrome.OverlayPane.InnerWidth(maxInt(1, width))).
+		Height(st.Chrome.OverlayPane.InnerHeight(maxInt(1, height))).
 		Render(body)
 }
 
-func overlayPaneBorderColor(focused bool) lipgloss.Color {
-	if focused {
-		return lipgloss.Color(overlayFocusBorderColor)
-	}
-	return lipgloss.Color(overlayBorderColor)
-}
-
-func overlayFrameWidth(termWidth, maxOverlayWidth int) int {
+func overlayFrameWidth(termWidth, maxOverlayWidth int, chrome styles.ChromeMetrics) int {
+	reservedHorizontalInset := chrome.OverlayFrame.BorderLeft + chrome.OverlayFrame.BorderRight
 	if termWidth <= 0 {
 		if maxOverlayWidth > 0 {
-			return maxInt(1, maxOverlayWidth-OverlayHorizontalFrame)
+			return maxInt(1, maxOverlayWidth-reservedHorizontalInset)
 		}
 		return 1
 	}
-	frameWidth := maxInt(1, termWidth-OverlayHorizontalFrame)
+	frameWidth := maxInt(1, termWidth-reservedHorizontalInset)
 	if maxOverlayWidth > 0 {
-		frameWidth = maxInt(1, minInt(frameWidth, maxOverlayWidth-OverlayHorizontalFrame))
+		frameWidth = maxInt(1, minInt(frameWidth, maxOverlayWidth-reservedHorizontalInset))
 	}
 	return frameWidth
 }

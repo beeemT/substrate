@@ -821,24 +821,24 @@ func (m SettingsPage) View() string {
 	footer := lipgloss.NewStyle().
 		Width(max(1, m.width-2)).
 		BorderTop(true).
-		BorderForeground(lipgloss.Color("#334155")).
+		BorderForeground(lipgloss.Color(m.styles.Theme.PaneBorder)).
 		Padding(0, 1).
-		Render(m.styles.Muted.Render(m.footerText()))
+		Render(m.styles.Hint.Render(m.footerText()))
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }
 
 func (m SettingsPage) sidebarBorderColor() lipgloss.Color {
 	if m.focus == settingsFocusSections && !m.editing {
-		return lipgloss.Color("#60a5fa")
+		return lipgloss.Color(m.styles.Theme.PaneBorderFocused)
 	}
-	return lipgloss.Color("#334155")
+	return lipgloss.Color(m.styles.Theme.PaneBorder)
 }
 
 func (m SettingsPage) mainBorderColor() lipgloss.Color {
 	if m.fieldsFocused() || m.editing {
-		return lipgloss.Color("#60a5fa")
+		return lipgloss.Color(m.styles.Theme.PaneBorderFocused)
 	}
-	return lipgloss.Color("#334155")
+	return lipgloss.Color(m.styles.Theme.PaneBorder)
 }
 
 func (m SettingsPage) renderSidebarPane(width int, height int) string {
@@ -877,12 +877,12 @@ func (m SettingsPage) renderSidebarContent(width int, height int) string {
 		style := lipgloss.NewStyle().Width(lineWidth)
 		if node.key == selectedKey {
 			if m.focus == settingsFocusSections && !m.editing {
-				style = style.Background(lipgloss.Color("#1e293b")).Foreground(lipgloss.Color("#f8fafc")).Bold(true)
+				style = m.styles.SettingsSelectionActive.Copy().Width(lineWidth)
 			} else {
-				style = style.Background(lipgloss.Color("#122033")).Foreground(lipgloss.Color("#dbeafe")).Bold(true)
+				style = m.styles.SettingsSelectionInactive.Copy().Width(lineWidth)
 			}
 		} else {
-			style = style.Foreground(lipgloss.Color("#94a3b8"))
+			style = m.styles.Label.Copy().Width(lineWidth)
 		}
 		lines = append(lines, style.Render(line))
 	}
@@ -955,12 +955,11 @@ func (m SettingsPage) renderMainScrollbar(vp viewport.Model, height int) string 
 		return ""
 	}
 	lines := make([]string, height)
-	trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b"))
-	thumbColor := lipgloss.Color("#cbd5e1")
+	trackStyle := m.styles.ScrollbarTrack
+	thumbStyle := m.styles.ScrollbarThumb
 	if m.fieldsFocused() || m.editing {
-		thumbColor = lipgloss.Color("#60a5fa")
+		thumbStyle = m.styles.ScrollbarThumbFocused
 	}
-	thumbStyle := lipgloss.NewStyle().Foreground(thumbColor)
 	total := vp.TotalLineCount()
 	thumbHeight := height
 	thumbTop := 0
@@ -1019,12 +1018,12 @@ func (m SettingsPage) renderStickySectionHeader(width int) string {
 		breadcrumb = m.sectionBreadcrumb(m.sectionCursor)
 	}
 	lines := []string{
-		lipgloss.NewStyle().Width(width).Bold(true).Foreground(lipgloss.Color("#f8fafc")).Render(truncate(title, width)),
+		m.styles.SettingsTextStrong.Copy().Width(width).Render(truncate(title, width)),
 	}
 	if breadcrumb != "" {
-		lines = append(lines, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#93c5fd")).Render(truncate(breadcrumb, width)))
+		lines = append(lines, m.styles.SettingsBreadcrumb.Copy().Width(width).Render(truncate(breadcrumb, width)))
 	}
-	lines = append(lines, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#334155")).Render(strings.Repeat("─", max(1, width))))
+	lines = append(lines, m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
 	return strings.Join(lines, "\n")
 }
 
@@ -1046,9 +1045,9 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 				if len(lines) > 0 {
 					lines = append(lines, "", "")
 				}
-				appendRendered(lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#334155")).Render(strings.Repeat("═", max(1, width))))
-				appendRendered(lipgloss.NewStyle().Width(width).Bold(true).Foreground(lipgloss.Color("#93c5fd")).Render(group.label))
-				appendRendered(lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#334155")).Render(strings.Repeat("─", max(1, width))))
+				appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("═", max(1, width))))
+				appendRendered(m.styles.SettingsSection.Copy().Width(width).Render(group.label))
+				appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
 				lines = append(lines, "")
 				lastSyntheticGroup = group.key
 			}
@@ -1060,26 +1059,26 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			lines = append(lines, "")
 		}
 		if depth == 0 {
-			appendRendered(lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#334155")).Render(strings.Repeat("─", max(1, width))))
+			appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
 		}
 
 		sectionAnchors[i] = len(lines)
 		title := truncate(strings.Repeat(" ", indent)+m.sectionDisplayTitle(i), width)
-		headerStyle := lipgloss.NewStyle().Width(width).Bold(true).Foreground(lipgloss.Color("#e2e8f0"))
+		headerStyle := m.styles.SettingsText.Copy().Width(width).Bold(true)
 		if depth == 0 {
-			headerStyle = headerStyle.Foreground(lipgloss.Color("#f8fafc"))
+			headerStyle = m.styles.SettingsTextStrong.Copy().Width(width)
 		}
 		if i == m.sectionCursor {
 			if m.focus == settingsFocusSections && !m.editing {
-				headerStyle = headerStyle.Background(lipgloss.Color("#1e293b")).Foreground(lipgloss.Color("#f8fafc"))
+				headerStyle = m.styles.SettingsSelectionActive.Copy().Width(width)
 			} else {
-				headerStyle = headerStyle.Background(lipgloss.Color("#122033")).Foreground(lipgloss.Color("#dbeafe"))
+				headerStyle = m.styles.SettingsSelectionInactive.Copy().Width(width)
 			}
 		}
 		appendRendered(headerStyle.Render(title))
 
 		metaPrefix := strings.Repeat(" ", indent+2)
-		metaStyle := lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("#64748b"))
+		metaStyle := m.styles.Muted.Copy().Width(width)
 		if sec.Description != "" {
 			appendRendered(metaStyle.Render(truncate(metaPrefix+sec.Description, width)))
 		}
@@ -1105,12 +1104,12 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			rowStyle := lipgloss.NewStyle().Width(width)
 			if i == m.sectionCursor && j == m.fieldCursor {
 				if m.fieldsFocused() || m.editing {
-					rowStyle = rowStyle.Background(lipgloss.Color("#16314f")).Foreground(lipgloss.Color("#f8fafc")).Bold(true)
+					rowStyle = m.styles.SettingsSelectionActive.Copy().Width(width)
 				} else {
-					rowStyle = rowStyle.Background(lipgloss.Color("#122033")).Foreground(lipgloss.Color("#dbeafe"))
+					rowStyle = m.styles.SettingsSelectionInactive.Copy().Width(width)
 				}
 			} else {
-				rowStyle = rowStyle.Foreground(lipgloss.Color("#94a3b8"))
+				rowStyle = m.styles.Label.Copy().Width(width)
 			}
 			if contentWidth < 18 {
 				rowLine := ansi.Truncate(strings.Repeat(" ", indent+2)+label+": "+value, width, "…")
@@ -1123,7 +1122,7 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			}
 			valueWidth := max(1, contentWidth-labelWidth)
 			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Width(labelWidth).Foreground(lipgloss.Color("#cbd5e1")).Render(truncate(label, labelWidth)),
+				m.styles.SettingsText.Copy().Width(labelWidth).Render(truncate(label, labelWidth)),
 				lipgloss.NewStyle().Width(valueWidth).Render(ansi.Truncate(value, valueWidth, "…")),
 			)
 			rowLine := ansi.Truncate(strings.Repeat(" ", indent+2)+row, width, "…")
@@ -1165,19 +1164,17 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 		if len(field.Options) > 0 {
 			lines = append(lines, m.styles.Muted.Render("Options: "+strings.Join(field.Options, ", ")))
 		}
+
 		if field.Status != "" {
 			lines = append(lines, m.styles.Muted.Render("Status: "+field.Status))
 		}
 		if field.Error != "" {
-			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")).Render("Field error: "+field.Error))
+			lines = append(lines, m.styles.Error.Render("Field error: "+field.Error))
 		}
 	}
-	return lipgloss.NewStyle().
-		Width(max(1, width-4)).
+	return m.styles.Callout.Copy().
+		Width(m.styles.Chrome.Callout.InnerWidth(max(1, width))).
 		Height(max(1, height-2)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#334155")).
-		Padding(0, 1).
 		Render(strings.Join(lines, "\n"))
 }
 

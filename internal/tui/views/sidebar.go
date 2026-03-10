@@ -261,10 +261,10 @@ func (m SidebarModel) View() string {
 	if strings.TrimSpace(titleText) == "" {
 		titleText = "Sessions"
 	}
-	title := m.styles.Muted.Render(titleText)
+	title := m.styles.SectionLabel.Render(titleText)
 	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
-	lines = append(lines, m.styles.Muted.Render(strings.Repeat("─", width)))
+	lines = append(lines, components.RenderDivider(m.styles, width))
 
 	visibleEntryCount := 0
 	if availableRows := m.height - len(lines); availableRows > 0 {
@@ -285,14 +285,14 @@ func (m SidebarModel) View() string {
 		titleLine := truncate("  "+entry.Title, width)
 		var line3 string
 		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntrySessionOverview) && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
-			bar := components.RenderProgressBar(entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4), "#5b8def", "#34d399", "#2d2d44")
+			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4))
 			line3 = "  " + truncate(bar, max(1, width-2))
 		} else {
 			line3 = "  " + m.styles.Subtitle.Render(truncate(entry.Subtitle(), max(1, width-2)))
 		}
 		block := strings.Join([]string{line1, titleLine, line3}, "\n")
 		if selected {
-			lines = append(lines, lipgloss.NewStyle().Width(width).Background(lipgloss.Color("#1e293b")).Render(block))
+			lines = append(lines, m.styles.SidebarSelected.Copy().Width(width).Render(block))
 		} else {
 			lines = append(lines, lipgloss.NewStyle().Width(width).Render(block))
 		}

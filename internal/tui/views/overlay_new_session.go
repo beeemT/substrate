@@ -232,7 +232,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	il.SetShowStatusBar(false)
 	il.SetFilteringEnabled(true)
 	il.SetShowHelp(false)
-	il = components.ApplyOverlayListStyles(il)
+	il = components.ApplyOverlayListStyles(il, st)
 
 	browseAdapters := make([]adapter.WorkItemAdapter, 0, len(adapters))
 	for _, a := range adapters {
@@ -676,9 +676,9 @@ func (m NewSessionOverlay) isBrowseControlFocused(control browseControl) bool {
 }
 
 func (m NewSessionOverlay) controlLabel(label string, control browseControl) string {
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0"))
+	style := m.styles.Label
 	if m.isBrowseControlFocused(control) {
-		style = style.Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
+		style = m.styles.Title
 	}
 	return style.Render(label)
 }
@@ -1037,7 +1037,7 @@ func (m NewSessionOverlay) browserChromeLines(advancedRows int, renderWidth int)
 
 func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
 	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
-	chromeLines := m.browserChromeLines(len(m.advancedFilterRows()), baseLayout.ContentWidth)
+	chromeLines := m.browserChromeLines(len(m.advancedFilterRows()), maxInt(1, baseLayout.ContentWidth-4))
 	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, browseSizingSpec)
 }
 
@@ -1060,7 +1060,7 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 
 	item, ok := m.currentListItem()
 	if !ok {
-		content := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
+		content := m.styles.Muted.Render(
 			"No work item selected yet.\n\nUse the browse list to review results, switch to details for more context, or press Ctrl+N to create a manual item.")
 		m.detailViewport.SetContent(ansi.Hardwrap(content, viewportWidth, true))
 		m.detailViewport.GotoTop()
@@ -1071,7 +1071,7 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 	if !forceTop && item.ID == m.detailItemID && viewportWidth == m.detailWidth {
 		return
 	}
-	content := renderDetailContent(item, viewportWidth)
+	content := renderDetailContent(m.styles, item, viewportWidth)
 	m.detailViewport.SetContent(content)
 	if forceTop || item.ID != m.detailItemID || viewportWidth != m.detailWidth {
 		m.detailViewport.GotoTop()
@@ -1080,36 +1080,31 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 	m.detailWidth = viewportWidth
 }
 
-func renderDetailContent(item adapter.ListItem, width int) string {
+func renderDetailContent(st styles.Styles, item adapter.ListItem, width int) string {
 	if width < 20 {
 		width = 20
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0"))
-	sectionLabelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
-	metaBoxStyle := lipgloss.NewStyle().
-		Width(width).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#334155")).
-		Padding(0, 1)
-
-	metaInnerWidth := maxInt(1, width-metaBoxStyle.GetHorizontalFrameSize())
+	metaInnerWidth := components.CalloutInnerWidth(st, width)
 	sections := []string{
-		titleStyle.Render(ansi.Hardwrap(detailTitle(item), width, true)),
-		sectionLabelStyle.Render("Metadata"),
-		metaBoxStyle.Render(renderDetailMetadata(item, metaInnerWidth)),
-		sectionLabelStyle.Render("Description"),
+		st.Title.Render(ansi.Hardwrap(detailTitle(item), width, true)),
+		st.SectionLabel.Render("Metadata"),
+		components.RenderCallout(st, components.CalloutSpec{
+			Body:  renderDetailMetadata(st, item, metaInnerWidth),
+			Width: width,
+		}),
+		st.SectionLabel.Render("Description"),
 		renderMarkdownDocument(detailMarkdown(item), width),
 	}
 
 	return strings.Join(sections, "\n\n")
 }
 
-func renderDetailMetadata(item adapter.ListItem, width int) string {
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94a3b8"))
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e5e7eb"))
-	linkStyle := valueStyle.Copy().Foreground(lipgloss.Color("#7dd3fc")).Underline(true)
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+func renderDetailMetadata(st styles.Styles, item adapter.ListItem, width int) string {
+	labelStyle := st.SectionLabel
+	valueStyle := st.SettingsText
+	linkStyle := st.Link
+	mutedStyle := st.Muted
 
 	rows := make([]string, 0, 6)
 	add := func(label, value string, style lipgloss.Style) {
@@ -1679,15 +1674,18 @@ func (m *NewSessionOverlay) View() string {
 	}
 
 	layout := m.browserLayout()
+	renderWidth := maxInt(1, layout.ContentWidth-4)
 	m.resizeInputs(layout.InputWidth)
 	m.syncDetailViewportWithLayout(layout, false)
 
+	activeLabelStyle := m.styles.Accent
+	inactiveLabelStyle := m.styles.Hint
 	providerLabels := make([]string, 0, len(m.activeProviderOptions()))
 	for _, option := range m.activeProviderOptions() {
 		if option.Key == m.currentProvider() {
-			providerLabels = append(providerLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true).Render("[► "+option.Label+" ◄]"))
+			providerLabels = append(providerLabels, activeLabelStyle.Render("[► "+option.Label+" ◄]"))
 		} else {
-			providerLabels = append(providerLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(option.Label))
+			providerLabels = append(providerLabels, inactiveLabelStyle.Render(option.Label))
 		}
 	}
 
@@ -1695,9 +1693,9 @@ func (m *NewSessionOverlay) View() string {
 	for _, option := range m.availableScopes() {
 		label := strings.Title(string(option))
 		if option == m.currentScope() {
-			scopeLabels = append(scopeLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")).Bold(true).Render("["+label+"]"))
+			scopeLabels = append(scopeLabels, activeLabelStyle.Render("["+label+"]"))
 		} else {
-			scopeLabels = append(scopeLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(label))
+			scopeLabels = append(scopeLabels, inactiveLabelStyle.Render(label))
 		}
 	}
 
@@ -1705,21 +1703,21 @@ func (m *NewSessionOverlay) View() string {
 	for _, option := range m.availableViewOptions() {
 		label := strings.ReplaceAll(option, "_", " ")
 		if option == m.currentView() {
-			viewLabels = append(viewLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true).Render("["+label+"]"))
+			viewLabels = append(viewLabels, activeLabelStyle.Render("["+label+"]"))
 		} else {
-			viewLabels = append(viewLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(label))
+			viewLabels = append(viewLabels, inactiveLabelStyle.Render(label))
 		}
 	}
 	stateLabels := make([]string, 0, len(m.availableStateOptions()))
 	for _, option := range m.availableStateOptions() {
 		if option == m.currentState() {
-			stateLabels = append(stateLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa")).Bold(true).Render("["+option+"]"))
+			stateLabels = append(stateLabels, activeLabelStyle.Render("["+option+"]"))
 		} else {
-			stateLabels = append(stateLabels, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(option))
+			stateLabels = append(stateLabels, inactiveLabelStyle.Render(option))
 		}
 	}
 	header := []string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true).Render("Browse Work Items"),
+		m.styles.Title.Render("Browse Work Items"),
 		m.controlLabel("Source: ", browseControlSource) + strings.Join(providerLabels, "  "),
 		m.controlLabel("Scope:  ", browseControlScope) + strings.Join(scopeLabels, "  "),
 	}
@@ -1730,19 +1728,19 @@ func (m *NewSessionOverlay) View() string {
 		header = append(header, m.controlLabel("State:  ", browseControlState)+strings.Join(stateLabels, "  "))
 	}
 	if m.statusMessage != "" {
-		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Render(m.statusMessage))
+		header = append(header, m.styles.Warning.Render(m.statusMessage))
 	}
 
 	var body string
 	footer := ""
 	if m.showManual {
-		body = m.manualView(layout.ContentWidth)
+		body = m.manualView(renderWidth)
 	} else {
 		body = m.browserView(layout)
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(m.wrappedBrowserHintText(layout.ContentWidth))
+		footer = m.styles.Hint.Render(m.wrappedBrowserHintText(renderWidth))
 	}
 
-	return components.RenderOverlayFrame(layout.FrameWidth, components.OverlayFrameSpec{
+	return components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        body,
 		Footer:      footer,
@@ -1757,7 +1755,7 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	if len(advancedRows) > 0 {
 		lines = append(lines, advancedRows...)
 	}
-	lines = append(lines, components.RenderOverlayDivider(layout.ContentWidth))
+	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
 	m.issueList.SetWidth(layout.LeftInnerWidth)
 	m.issueList.SetHeight(layout.ListHeight)
@@ -1765,22 +1763,21 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 
 	leftContent := m.issueList.View()
 	if m.loading && len(m.allItems) == 0 {
-		leftContent = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading…")
+		leftContent = m.styles.Muted.Render("Loading…")
 	}
 	if m.loading && len(m.allItems) > 0 {
-		leftContent += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading more…")
+		leftContent += "\n" + m.styles.Muted.Render("Loading more…")
 	}
 
-	panes := components.RenderSplitOverlayBody(layout, components.SplitOverlaySpec{
+	panes := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{
 		LeftPane: components.OverlayPaneSpec{
 			Body:    leftContent,
 			Focused: m.browseFocus != browseFocusDetails,
 		},
 		RightPane: components.OverlayPaneSpec{
-			Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Details"),
-			DividerWidth: layout.ViewportWidth,
-			Body:         m.detailViewport.View(),
-			Focused:      m.browseFocus == browseFocusDetails,
+			Title:   "Details",
+			Body:    m.detailViewport.View(),
+			Focused: m.browseFocus == browseFocusDetails,
 		},
 	})
 	lines = append(lines, panes)
@@ -1844,9 +1841,9 @@ func (m NewSessionOverlay) browserHintLineCount(width int) int {
 }
 
 func (m NewSessionOverlay) manualView(width int) string {
-	titleLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0")).Render("Title:       ")
-	descLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0")).Render("Description: ")
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
+	titleLabel := m.styles.Label.Render("Title:       ")
+	descLabel := m.styles.Label.Render("Description: ")
+	hints := m.styles.Hint.Render(
 		truncate("[Tab] Next field  [Enter] Start  [Tab on desc] Return to browser  [Esc] Cancel", maxInt(1, width)))
 	return strings.Join([]string{
 		titleLabel + m.manualTitle.View(),

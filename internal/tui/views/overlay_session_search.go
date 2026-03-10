@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -109,7 +108,7 @@ func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
 	resultList.SetShowStatusBar(false)
 	resultList.SetFilteringEnabled(false)
 	resultList.SetShowHelp(false)
-	resultList = components.ApplyOverlayListStyles(resultList)
+	resultList = components.ApplyOverlayListStyles(resultList, st)
 
 	return SessionSearchOverlay{
 		input:  input,
@@ -441,56 +440,57 @@ func (m SessionSearchOverlay) View() string {
 	}
 
 	layout := m.layout()
+	renderWidth := max(1, layout.ContentWidth-4)
 	m.input.Width = layout.InputWidth
 	m.list.SetWidth(layout.LeftInnerWidth)
 	m.list.SetHeight(layout.ListHeight)
 	m.syncDetailViewportWithLayout(layout, false)
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Search Sessions")
-	scopePrefix := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Scope:")
-	activeScopeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true)
+	title := m.styles.Title.Render("Search Sessions")
+	scopePrefixStyle := m.styles.Hint
+	activeScopeStyle := m.styles.Warning.Copy().Bold(true)
 	if m.focus == sessionSearchFocusScope {
-		scopePrefix = lipgloss.NewStyle().Foreground(lipgloss.Color("#60a5fa")).Bold(true).Render("Scope:")
+		scopePrefixStyle = m.styles.Accent
 		activeScopeStyle = activeScopeStyle.Underline(true)
 	}
-	scopeWorkspace := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("workspace")
+	scopePrefix := scopePrefixStyle.Render("Scope:")
+	scopeWorkspace := m.styles.Hint.Render("workspace")
 	if m.workspaceAvailable && m.scope == sessionHistoryScopeWorkspace {
 		scopeWorkspace = activeScopeStyle.Render("[workspace]")
 	}
-	scopeGlobal := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("global")
+	scopeGlobal := m.styles.Hint.Render("global")
 	if m.scope == sessionHistoryScopeGlobal || !m.workspaceAvailable {
 		scopeGlobal = activeScopeStyle.Render("[global]")
 	}
 	header := []string{
 		title,
-		truncate(scopePrefix+" "+scopeWorkspace+"  "+scopeGlobal, layout.ContentWidth),
+		truncate(scopePrefix+" "+scopeWorkspace+"  "+scopeGlobal, renderWidth),
 		"Search: " + m.input.View(),
-		components.RenderOverlayDivider(layout.ContentWidth),
+		components.RenderOverlayDivider(m.styles, renderWidth),
 	}
 	if m.loading {
-		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Searching…"))
+		header = append(header, m.styles.Muted.Render("Searching…"))
 	}
 
 	leftContent := m.list.View()
 	if m.loading && len(m.entries) == 0 {
-		leftContent = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("Loading…")
+		leftContent = m.styles.Muted.Render("Loading…")
 	}
 
-	body := components.RenderSplitOverlayBody(layout, components.SplitOverlaySpec{
+	body := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{
 		LeftPane: components.OverlayPaneSpec{
 			Body:    leftContent,
 			Focused: m.focus == sessionSearchFocusResults,
 		},
 		RightPane: components.OverlayPaneSpec{
-			Title:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f0f0f0")).Render("Preview"),
-			DividerWidth: layout.ViewportWidth,
-			Body:         m.detail.View(),
-			Focused:      m.focus == sessionSearchFocusPreview,
+			Title:   "Preview",
+			Body:    m.detail.View(),
+			Focused: m.focus == sessionSearchFocusPreview,
 		},
 	})
 
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(truncate(m.hintText(), layout.ContentWidth))
-	return components.RenderOverlayFrame(layout.FrameWidth, components.OverlayFrameSpec{
+	hints := m.styles.Hint.Render(truncate(m.hintText(), renderWidth))
+	return components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        body,
 		Footer:      hints,

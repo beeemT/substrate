@@ -139,6 +139,7 @@ func NewApp(svcs Services) App {
 		sessionSearch:          NewSessionSearchOverlay(st),
 		settingsPage:           NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:            NewHelpOverlay(st),
+		toasts:                 components.NewToastModel(st),
 		subPlans:               make(map[string][]domain.SubPlan),
 		plans:                  make(map[string]*domain.Plan),
 		questions:              make(map[string][]domain.Question),
@@ -476,10 +477,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.windowWidth = msg.Width
 		a.windowHeight = msg.Height
-		sidebarPaneWidth, contentPaneWidth, _, paneInnerHeight := mainPageLayoutMetrics(msg.Width, msg.Height)
-		a.sidebar.SetWidth(max(0, sidebarPaneWidth-2))
-		a.sidebar.SetHeight(paneInnerHeight)
-		a.content.SetSize(max(0, contentPaneWidth-2), paneInnerHeight)
+		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome)
+		a.sidebar.SetWidth(layout.SidebarInnerWidth)
+		a.sidebar.SetHeight(layout.PaneInnerHeight)
+		a.content.SetSize(layout.ContentInnerWidth, layout.PaneInnerHeight)
 		a.workspaceModal.SetSize(msg.Width, msg.Height)
 		a.newSession.SetSize(msg.Width, msg.Height)
 		a.sessionSearch.SetSize(msg.Width, msg.Height)
@@ -1233,7 +1234,7 @@ func (a *App) canActOnSession(s domain.AgentSession) bool {
 }
 
 func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
-	a.confirm = components.NewConfirmDialog(title, message, onYes)
+	a.confirm = components.NewConfirmDialog(a.statusBar.styles, title, message, onYes)
 	a.confirmActive = true
 }
 
@@ -1380,34 +1381,33 @@ func (a App) View() string {
 		return renderOverlay(a.confirm.View(), a.windowWidth, a.windowHeight)
 	}
 
-	sidebarPaneWidth, contentPaneWidth, _, paneInnerHeight := mainPageLayoutMetrics(a.windowWidth, a.windowHeight)
-	borderColor := lipgloss.Color("#334155")
+	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
 
-	sidebarInnerWidth := max(0, sidebarPaneWidth-2)
 	sidebarContent := lipgloss.NewStyle().
-		Width(sidebarInnerWidth).
-		Height(paneInnerHeight).
-		Render(fitViewBox(a.sidebar.View(), sidebarInnerWidth, paneInnerHeight))
-	sidebarPane := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Render(sidebarContent)
+		Width(layout.SidebarInnerWidth).
+		Height(layout.PaneInnerHeight).
+		Render(fitViewBox(a.sidebar.View(), layout.SidebarInnerWidth, layout.PaneInnerHeight))
+	sidebarPane := components.RenderPane(a.statusBar.styles, components.PaneSpec{
+		Content: sidebarContent,
+		Width:   layout.SidebarPaneWidth,
+		Height:  layout.BodyHeight,
+	})
 
-	contentInnerWidth := max(0, contentPaneWidth-2)
 	contentContent := lipgloss.NewStyle().
-		Width(contentInnerWidth).
-		Height(paneInnerHeight).
-		Render(fitViewBox(a.content.View(), contentInnerWidth, paneInnerHeight))
-	contentPane := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Render(contentContent)
+		Width(layout.ContentInnerWidth).
+		Height(layout.PaneInnerHeight).
+		Render(fitViewBox(a.content.View(), layout.ContentInnerWidth, layout.PaneInnerHeight))
+	contentPane := components.RenderPane(a.statusBar.styles, components.PaneSpec{
+		Content: contentContent,
+		Width:   layout.ContentPaneWidth,
+		Height:  layout.BodyHeight,
+	})
 
 	bodyParts := make([]string, 0, 2)
-	if sidebarPaneWidth > 0 {
+	if layout.SidebarPaneWidth > 0 {
 		bodyParts = append(bodyParts, sidebarPane)
 	}
-	if contentPaneWidth > 0 {
+	if layout.ContentPaneWidth > 0 {
 		bodyParts = append(bodyParts, contentPane)
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, bodyParts...)
@@ -1421,10 +1421,11 @@ func (a App) View() string {
 	if readOnlyToast, ok := a.readOnlyToast(); ok {
 		toastView = a.toasts.StackView(readOnlyToast)
 	} else {
-		toastView = a.toasts.View("", "")
+		toastView = a.toasts.View()
 	}
 	if toastView != "" {
-		base = renderTopRightOverlay(base, toastView, a.windowWidth, 1, lipgloss.Height(statusBar))
+		placement := styles.ComputeToastPlacement(a.statusBar.styles.Chrome)
+		base = renderTopRightOverlay(base, toastView, a.windowWidth, placement.TopInset, placement.BottomInset)
 	}
 
 	if a.activeOverlay == overlayNewSession {
@@ -1444,18 +1445,8 @@ func (a App) View() string {
 }
 
 func mainPageLayoutMetrics(totalWidth, totalHeight int) (sidebarPaneWidth, contentPaneWidth, bodyHeight, paneInnerHeight int) {
-	bodyHeight = max(0, totalHeight-statusBarHeight)
-	paneInnerHeight = max(0, bodyHeight-2)
-
-	sidebarPaneWidth = min(SidebarWidth+2, max(0, totalWidth))
-	contentPaneWidth = max(0, totalWidth-sidebarPaneWidth)
-	if contentPaneWidth > 0 && contentPaneWidth < 2 {
-		shift := 2 - contentPaneWidth
-		sidebarPaneWidth = max(0, sidebarPaneWidth-shift)
-		contentPaneWidth = totalWidth - sidebarPaneWidth
-	}
-
-	return sidebarPaneWidth, contentPaneWidth, bodyHeight, paneInnerHeight
+	layout := styles.ComputeMainPageLayout(totalWidth, totalHeight, SidebarWidth, styles.DefaultChromeMetrics)
+	return layout.SidebarPaneWidth, layout.ContentPaneWidth, layout.BodyHeight, layout.PaneInnerHeight
 }
 
 func (a App) statusBarText() string {

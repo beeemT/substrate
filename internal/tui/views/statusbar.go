@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -34,30 +35,10 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 		innerWidth = width - 2
 	}
 
-	type hintPart struct {
-		raw      string
-		rendered string
-	}
-
-	parts := make([]hintPart, 0, len(hints))
-	for _, h := range hints {
-		keyRaw := "[" + h.Key + "]"
-		labelRaw := " " + h.Label
-		key := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#5b8def")).
-			Bold(true).
-			Render(keyRaw)
-		label := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#a0a0a0")).
-			Render(labelRaw)
-		parts = append(parts, hintPart{
-			raw:      keyRaw + labelRaw,
-			rendered: key + label,
-		})
-	}
+	parts := components.RenderKeyHintFragments(s.styles, componentHints(hints))
 
 	rightText = truncate(rightText, innerWidth)
-	right := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(rightText)
+	right := s.styles.Muted.Render(rightText)
 	rightLen := lipgloss.Width(rightText)
 
 	requiredGap := 0
@@ -68,8 +49,8 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	leftRawParts := make([]string, 0, len(parts))
 	leftRenderedParts := make([]string, 0, len(parts))
 	for _, part := range parts {
-		leftRawParts = append(leftRawParts, part.raw)
-		leftRenderedParts = append(leftRenderedParts, part.rendered)
+		leftRawParts = append(leftRawParts, part.Raw)
+		leftRenderedParts = append(leftRenderedParts, part.Rendered)
 	}
 
 	leftRaw := strings.Join(leftRawParts, "  ")
@@ -87,10 +68,7 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	}
 
 	line := left + strings.Repeat(" ", gapLen) + right
-	lineStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#a0a0a0")).
-		Padding(0, horizontalPadding)
-
+	lineStyle := s.styles.StatusBar.Copy().Padding(0, horizontalPadding)
 	return lineStyle.Render(line)
 }
 

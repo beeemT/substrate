@@ -5,9 +5,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -102,59 +102,59 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 
 // View renders the question escalation UI.
 func (m QuestionModel) View() string {
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
-	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44"))
-	questionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Bold(true)
-	contextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0"))
-	subtleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0"))
-	accentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#5b8def")).Bold(true)
-	hintsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-
-	contentWidth := m.width - 2
-	if contentWidth < 1 {
-		contentWidth = 1
+	if m.width <= 0 || m.height <= 0 {
+		return ""
 	}
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   m.title + " · Implementing  ◐ Question",
+		Width:   m.width,
+		Divider: true,
+	})
 
-	header := titleStyle.Render(m.title + " · Implementing  ◐ Question")
-	divider := dividerStyle.Render(strings.Repeat("─", m.width))
+	questionLabel := m.styles.Warning.Render("Agent question:")
+	questionBox := components.RenderCallout(m.styles, components.CalloutSpec{
+		Body:    m.question.Content,
+		Width:   m.width,
+		Variant: components.CalloutWarning,
+	})
 
-	qLabel := questionStyle.Render("Agent question:")
-	qContent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f0f0f0")).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#2d2d44")).
-		Width(contentWidth).
-		Padding(0, 1).
-		Render(m.question.Content)
-
-	var ctxBlock string
+	ctxBlock := ""
 	if m.question.Context != "" {
-		ctxBlock = contextStyle.Render("Context: " + m.question.Context)
+		ctxBlock = m.styles.Subtitle.Render("Context: " + m.question.Context)
 	}
 
 	uncertainLabel := ""
 	if m.foremanUncertain {
-		uncertainLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Render(" (uncertain)")
+		uncertainLabel = m.styles.Warning.Render(" (uncertain)")
 	}
-	foremanLabel := subtleStyle.Render("Foreman's proposed answer") + uncertainLabel
-	foremanBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5b8def")).
-		Width(contentWidth).
-		Padding(0, 1).
-		Render(m.foremanProposed)
+	foremanLabel := m.styles.Subtitle.Render("Foreman's proposed answer") + uncertainLabel
+	foremanBox := components.RenderCallout(m.styles, components.CalloutSpec{
+		Body:  m.foremanProposed,
+		Width: m.width,
+	})
 
-	replyLabel := subtleStyle.Render("Your reply (or press ") +
-		accentStyle.Render("[A]") +
-		subtleStyle.Render(" to approve):")
-	inputBox := m.input.View()
+	replyLabel := m.styles.Subtitle.Render("Your reply (or press ") +
+		m.styles.KeybindAccent.Render("[A]") +
+		m.styles.Subtitle.Render(" to approve):")
+	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
 
-	hints := hintsStyle.Render("[Enter] Send to Foreman  [A] Approve & forward  [Esc] Skip")
-
-	parts := []string{header, divider, qLabel, qContent}
+	headerLines := strings.Split(header, "\n")
+	middleBlocks := []string{questionLabel, questionBox}
 	if ctxBlock != "" {
-		parts = append(parts, ctxBlock)
+		middleBlocks = append(middleBlocks, ctxBlock)
 	}
-	parts = append(parts, "", foremanLabel, foremanBox, "", replyLabel, inputBox, "", hints)
-	return strings.Join(parts, "\n")
+	middleBlocks = append(middleBlocks, "", foremanLabel, foremanBox)
+	footerBlocks := []string{"", replyLabel, m.input.View(), "", hints}
+	reserved := len(headerLines)
+	for _, block := range footerBlocks {
+		reserved += len(strings.Split(block, "\n"))
+	}
+	middleHeight := max(0, m.height-reserved)
+	middle := fitViewHeight(strings.Join(middleBlocks, "\n"), middleHeight)
+	parts := append([]string{}, headerLines...)
+	if middle != "" {
+		parts = append(parts, strings.Split(middle, "\n")...)
+	}
+	parts = append(parts, footerBlocks...)
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -123,30 +123,27 @@ func (m SessionLogModel) View() string {
 		return ""
 	}
 
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
 	headerText := m.title
 	if m.modeLabel != "" {
 		headerText += " · " + m.modeLabel
 	}
-	header := titleStyle.Render(headerText)
-	pauseHint := ""
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   headerText,
+		Meta:    m.meta,
+		Width:   m.width,
+		Divider: true,
+	})
 	if m.paused {
-		pauseHint = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")).Render(" [PAUSED]")
+		headerLines := strings.Split(header, "\n")
+		headerLines[0] += m.styles.Warning.Render(" [PAUSED]")
+		header = strings.Join(headerLines, "\n")
 	}
-	meta := ""
-	if strings.TrimSpace(m.meta) != "" {
-		meta = lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")).Render(m.meta)
-	}
+
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
-		body = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("No session output captured.")
+		body = m.styles.Muted.Render("No session output captured.")
 	}
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render("[↑↓] Scroll  [p] Pause/unpause")
-	parts := []string{header + pauseHint, divider}
-	if meta != "" {
-		parts = append(parts, meta)
-	}
-	parts = append(parts, body, hints)
+	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
+	parts := append(strings.Split(header, "\n"), body, hints)
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

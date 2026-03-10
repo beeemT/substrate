@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -98,21 +99,20 @@ func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 }
 
 func (m ReviewModel) View() string {
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Bold(true)
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
-
-	header := titleStyle.Render(m.title + " · Reviewing")
-
-	// Repo tabs
-	var tabs []string
-	for i, r := range m.repos {
-		if i == m.activeRepo {
-			tabs = append(tabs, lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Underline(true).Render(r.RepoName))
-		} else {
-			tabs = append(tabs, lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(r.RepoName))
-		}
+	if m.width <= 0 || m.height <= 0 {
+		return ""
 	}
-	tabRow := strings.Join(tabs, "  │  ")
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+		Title:   m.title + " · Reviewing",
+		Width:   m.width,
+		Divider: true,
+	})
+
+	labels := make([]string, 0, len(m.repos))
+	for _, repo := range m.repos {
+		labels = append(labels, repo.RepoName)
+	}
+	tabRow := components.RenderTabs(m.styles, labels, m.activeRepo, "  │  ")
 
 	var body strings.Builder
 	if len(m.repos) > m.activeRepo {
@@ -128,20 +128,24 @@ func (m ReviewModel) View() string {
 					prefix = "▶ "
 				}
 				line := prefix + sevStyle.Render(fmt.Sprintf("[%s] ", strings.ToUpper(string(c.Severity))))
-				line += lipgloss.NewStyle().Foreground(lipgloss.Color("#f0f0f0")).Render(c.Description)
+				line += m.styles.Title.Render(c.Description)
 				if c.FilePath != "" {
-					line += lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(" — " + c.FilePath)
+					line += m.styles.Muted.Render(" — " + c.FilePath)
 				}
 				if c.Suggestion != "" && i == m.cursor {
-					line += "\n    " + lipgloss.NewStyle().Foreground(lipgloss.Color("#b0b0b0")).Render("Suggestion: "+c.Suggestion)
+					line += "\n    " + m.styles.Subtitle.Render("Suggestion: "+c.Suggestion)
 				}
 				body.WriteString(line + "\n")
 			}
 		}
 	}
 
-	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Render(
-		"[j/k] Navigate  [Tab] Switch repo  [r] Re-implement  [o] Override accept")
-
-	return strings.Join([]string{header, divider, tabRow, divider, body.String(), hints}, "\n")
+	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
+	headerLines := strings.Split(header, "\n")
+	bodyHeight := max(1, m.height-len(headerLines)-1-1-1)
+	bodyBlock := fitViewBox(body.String(), m.width, bodyHeight)
+	parts := append(headerLines, tabRow, components.RenderDivider(m.styles, m.width))
+	parts = append(parts, strings.Split(bodyBlock, "\n")...)
+	parts = append(parts, hints)
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

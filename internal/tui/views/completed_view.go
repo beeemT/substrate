@@ -5,8 +5,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -33,7 +33,7 @@ func NewCompletedModel(st styles.Styles) CompletedModel {
 	return CompletedModel{styles: st}
 }
 
-func (m *CompletedModel) SetSize(w, h int) { m.width = w; m.height = h }
+func (m *CompletedModel) SetSize(w, h int)  { m.width = w; m.height = h }
 func (m *CompletedModel) SetTitle(t string) { m.title = t }
 
 func (m *CompletedModel) SetData(completedAt time.Time, mrLinks []MRInfo, warnings []string) {
@@ -47,8 +47,11 @@ func (m CompletedModel) Update(_ tea.Msg) (CompletedModel, tea.Cmd) {
 }
 
 func (m CompletedModel) View() string {
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("#2d2d44")).Render(strings.Repeat("─", m.width))
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
 	header := m.styles.Title.Render(m.title) + "  " + m.styles.Success.Render("✓ Completed")
+	divider := components.RenderDivider(m.styles, m.width)
 
 	var lines []string
 	lines = append(lines, header, divider, "")
@@ -58,7 +61,7 @@ func (m CompletedModel) View() string {
 	}
 
 	if len(m.mrLinks) > 0 {
-		lines = append(lines, m.styles.Title.Render("Repos:"))
+		lines = append(lines, m.styles.SectionLabel.Render("Repos:"))
 		for _, mr := range m.mrLinks {
 			icon := m.styles.Success.Render("✓")
 			status := ""
@@ -76,6 +79,6 @@ func (m CompletedModel) View() string {
 		lines = append(lines, m.styles.Warning.Render("⚠ "+w))
 	}
 
-	lines = append(lines, "", m.styles.Muted.Render("[↑↓] Scroll"))
-	return strings.Join(lines, "\n")
+	lines = append(lines, "", components.RenderKeyHints(m.styles, []components.KeyHint{{Key: "↑↓", Label: "Scroll"}}, "  "))
+	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

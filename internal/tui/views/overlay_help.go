@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -87,9 +85,7 @@ func (h HelpOverlay) View() string {
 
 	sb.WriteString("\n" + h.st.Muted.Render("Esc  close"))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(h.st.Theme.Border)).
+	return h.st.OverlayFrame.Copy().
 		Padding(1, 3).
 		Render(sb.String())
 }
