@@ -68,6 +68,72 @@ func TestWorkItemService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects overlapping source item ids in same workspace", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-existing",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:issue:acme/rocket#42",
+			Title:         "Issue 42",
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"acme/rocket#42"},
+		}
+		aggregate := domain.WorkItem{
+			ID:            "wi-aggregate",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:issue:acme/rocket#7",
+			Title:         "Issue 7 (+1 more)",
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"acme/rocket#7", "acme/rocket#42"},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing issue: %v", err)
+		}
+		err := svc.Create(ctx, aggregate)
+		if err == nil {
+			t.Fatal("expected overlap create error")
+		}
+		if _, ok := err.(ErrAlreadyExists); !ok {
+			t.Errorf("error type = %T, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("allows distinct source item ids in same workspace", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-existing-distinct",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:issue:acme/rocket#42",
+			Title:         "Issue 42",
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"acme/rocket#42"},
+		}
+		aggregate := domain.WorkItem{
+			ID:            "wi-aggregate-distinct",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:issue:acme/rocket#7",
+			Title:         "Issue 7 (+1 more)",
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"acme/rocket#7", "acme/rocket#8"},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing issue: %v", err)
+		}
+		if err := svc.Create(ctx, aggregate); err != nil {
+			t.Fatalf("Create distinct aggregate: %v", err)
+		}
+	})
+
 	t.Run("allows same external id in different workspaces", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
 		svc := NewWorkItemService(repo)

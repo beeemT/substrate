@@ -12,10 +12,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func newTestSettingsPage(cfg *config.Config) SettingsPage {
-	page := NewSettingsPage(&SettingsService{}, SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}, styles.NewStyles(styles.DefaultTheme))
+func newTestSettingsPageWithSnapshot(snapshot SettingsSnapshot) SettingsPage {
+	page := NewSettingsPage(&SettingsService{}, snapshot, styles.NewStyles(styles.DefaultTheme))
 	page.SetSize(120, 40)
 	return page
+}
+
+func newTestSettingsPage(cfg *config.Config) SettingsPage {
+	return newTestSettingsPageWithSnapshot(SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)})
 }
 
 func findSectionIndex(t *testing.T, page SettingsPage, sectionID string) int {
@@ -299,6 +303,61 @@ func TestSettingsPage_ViewShowsTreeAndFieldHelp(t *testing.T) {
 	}
 	if !strings.Contains(view, "▐") {
 		t.Fatal("expected the main viewport to render the custom narrow scrollbar thumb")
+	}
+}
+
+func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
+	t.Parallel()
+
+	snapshot := SettingsSnapshot{
+		Sections:       buildSettingsSections(&config.Config{}),
+		Providers:      buildProviderStatuses(&config.Config{}),
+		HarnessWarning: "Planning unavailable — open Settings → Harness Routing",
+	}
+	for i := range snapshot.Sections {
+		if snapshot.Sections[i].ID == "harness" {
+			snapshot.Sections[i].Status = "warning"
+			snapshot.Sections[i].Error = `Planning unavailable: codex binary "codex" not found`
+			break
+		}
+	}
+
+	page := newTestSettingsPageWithSnapshot(snapshot)
+	page.sectionCursor = findSectionIndex(t, page, "harness")
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.syncMainViewport()
+	rendered := ansi.Strip(page.View())
+	if !strings.Contains(rendered, "warning: Planning unavailable — open Settings → Harness Routing") {
+		t.Fatalf("view = %q, want footer warning", rendered)
+	}
+	doc, _, _ := page.buildMainDocument(80)
+	if !strings.Contains(ansi.Strip(doc), `Planning unavailable: codex binary "codex" not found`) {
+		t.Fatalf("document = %q, want section error detail", ansi.Strip(doc))
+	}
+}
+
+func TestSettingsPage_ViewWithHarnessWarningFitsNarrowWidth(t *testing.T) {
+	t.Parallel()
+
+	snapshot := SettingsSnapshot{
+		Sections:       buildSettingsSections(&config.Config{}),
+		Providers:      buildProviderStatuses(&config.Config{}),
+		HarnessWarning: "Harness configuration warnings — open Settings → Harness Routing",
+	}
+	for i := range snapshot.Sections {
+		if snapshot.Sections[i].ID == "harness" {
+			snapshot.Sections[i].Status = "warning"
+			snapshot.Sections[i].Error = `Planning unavailable: codex binary "codex" not found`
+			break
+		}
+	}
+
+	page := newTestSettingsPageWithSnapshot(snapshot)
+	page.SetSize(36, 18)
+	for i, line := range strings.Split(page.View(), "\n") {
+		if got := ansi.StringWidth(line); got > 36 {
+			t.Fatalf("line %d width = %d, want <= %d", i+1, got, 36)
+		}
 	}
 }
 

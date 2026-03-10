@@ -444,6 +444,25 @@ func (a App) readOnlyToast() (components.Toast, bool) {
 	return components.Toast{Message: "Read only", Level: components.ToastWarning}, true
 }
 
+func (a App) harnessWarningToast() (components.Toast, bool) {
+	warning := strings.TrimSpace(a.svcs.SettingsData.HarnessWarning)
+	if warning == "" {
+		return components.Toast{}, false
+	}
+	return components.Toast{Message: warning, Level: components.ToastWarning}, true
+}
+
+func (a App) pinnedToasts() []components.Toast {
+	pinned := make([]components.Toast, 0, 2)
+	if readOnlyToast, ok := a.readOnlyToast(); ok {
+		pinned = append(pinned, readOnlyToast)
+	}
+	if harnessWarning, ok := a.harnessWarningToast(); ok {
+		pinned = append(pinned, harnessWarning)
+	}
+	return pinned
+}
+
 func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 	a.tailingSessionIDs = make(map[string]bool)
 	a.currentHistoryEntry = SidebarEntry{}
@@ -1424,8 +1443,8 @@ func (a App) View() string {
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 
 	toastView := ""
-	if readOnlyToast, ok := a.readOnlyToast(); ok {
-		toastView = a.toasts.StackView(readOnlyToast)
+	if pinned := a.pinnedToasts(); len(pinned) > 0 {
+		toastView = a.toasts.StackView(pinned...)
 	} else {
 		toastView = a.toasts.View()
 	}

@@ -84,8 +84,13 @@ func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) erro
 			return err
 		}
 		if len(existing) > 0 {
-			return newAlreadyExistsError("work item", item.ExternalID)
+			return newAlreadyExistsError("work item", existing[0].ExternalID)
 		}
+	}
+	if duplicateID, err := s.duplicateSourceItemID(ctx, item); err != nil {
+		return err
+	} else if duplicateID != "" {
+		return newAlreadyExistsError("work item", duplicateID)
 	}
 	// Set timestamps
 	now := time.Now()
@@ -93,6 +98,48 @@ func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) erro
 	item.UpdatedAt = now
 
 	return s.repo.Create(ctx, item)
+}
+
+func (s *WorkItemService) duplicateSourceItemID(ctx context.Context, item domain.WorkItem) (string, error) {
+	if strings.TrimSpace(item.Source) == "" || item.SourceScope == "" || len(item.SourceItemIDs) == 0 {
+		return "", nil
+	}
+	selected := make(map[string]struct{}, len(item.SourceItemIDs))
+	for _, id := range item.SourceItemIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		selected[trimmed] = struct{}{}
+	}
+	if len(selected) == 0 {
+		return "", nil
+	}
+	workspaceID := item.WorkspaceID
+	source := item.Source
+	existing, err := s.repo.List(ctx, repository.WorkItemFilter{
+		WorkspaceID: &workspaceID,
+		Source:      &source,
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, current := range existing {
+		if current.SourceScope != item.SourceScope {
+			continue
+		}
+		for _, id := range current.SourceItemIDs {
+			trimmed := strings.TrimSpace(id)
+			if _, ok := selected[trimmed]; !ok {
+				continue
+			}
+			if strings.TrimSpace(current.ExternalID) != "" {
+				return current.ExternalID, nil
+			}
+			return trimmed, nil
+		}
+	}
+	return "", nil
 }
 
 // Transition transitions a work item to a new state.

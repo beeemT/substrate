@@ -232,27 +232,42 @@ func run() error {
 		return fmt.Errorf("building agent harnesses: %w", err)
 	}
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
-	planningSvc, err := orchestrator.NewPlanningService(
-		planningCfg, discoverer, gitClient, harnesses.Planning,
-		planSvc, workItemSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, cfg,
-	)
-	if err != nil {
-		slog.Warn("failed to build planning service; planning unavailable", "err", err)
+	var planningSvc *orchestrator.PlanningService
+	if harnesses.Planning != nil {
+		planningSvc, err = orchestrator.NewPlanningService(
+			planningCfg, discoverer, gitClient, harnesses.Planning,
+			planSvc, workItemSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, cfg,
+		)
+		if err != nil {
+			slog.Warn("failed to build planning service; planning unavailable", "err", err)
+		}
 	}
-	implSvc := orchestrator.NewImplementationService(
-		cfg, harnesses.Implementation, gitClient, bus,
-		planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc,
-	)
-	reviewPipeline := orchestrator.NewReviewPipeline(
-		cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
-		sessionRepo, planRepo, bus,
-	)
-	resumption := orchestrator.NewResumption(
-		harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus,
-	)
-	foreman := orchestrator.NewForeman(
-		cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, planRepo, bus,
-	)
+	var implSvc *orchestrator.ImplementationService
+	if harnesses.Implementation != nil {
+		implSvc = orchestrator.NewImplementationService(
+			cfg, harnesses.Implementation, gitClient, bus,
+			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc,
+		)
+	}
+	var reviewPipeline *orchestrator.ReviewPipeline
+	if harnesses.Review != nil {
+		reviewPipeline = orchestrator.NewReviewPipeline(
+			cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
+			sessionRepo, planRepo, bus,
+		)
+	}
+	var resumption *orchestrator.Resumption
+	if harnesses.Resume != nil {
+		resumption = orchestrator.NewResumption(
+			harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus,
+		)
+	}
+	var foreman *orchestrator.Foreman
+	if harnesses.Foreman != nil {
+		foreman = orchestrator.NewForeman(
+			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, planRepo, bus,
+		)
+	}
 	settingsData, err := settingsSvc.Snapshot(cfg)
 	if err != nil {
 		return fmt.Errorf("load settings snapshot: %w", err)

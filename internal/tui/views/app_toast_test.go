@@ -148,3 +148,37 @@ func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Settings:      &SettingsService{},
+		SettingsData: SettingsSnapshot{
+			Sections:       buildSettingsSections(cfg),
+			Providers:      buildProviderStatuses(cfg),
+			HarnessWarning: "Planning unavailable — open Settings → Harness Routing",
+		},
+	})
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	updated.toasts.AddToast("Sync complete", components.ToastSuccess)
+
+	rendered := updated.View()
+	assertAppViewFitsWindow(t, rendered, 80, 16)
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+	warningLine := findLineContaining(lines, "Planning unavailable")
+	syncLine := findLineContaining(lines, "Sync complete")
+	if warningLine == -1 || syncLine == -1 {
+		t.Fatalf("view missing warning stack: %q", strings.Join(lines, "\n"))
+	}
+	if warningLine >= syncLine {
+		t.Fatalf("toast order = warning:%d sync:%d, want pinned warning above transient toast", warningLine, syncLine)
+	}
+}

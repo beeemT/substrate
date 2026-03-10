@@ -86,6 +86,7 @@ type SettingsPage struct {
 	styles           styles.Styles
 	errorText        string
 	statusText       string
+	warningText      string
 }
 
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
@@ -102,6 +103,7 @@ func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.
 		mainViewport:     vp,
 		editInput:        ti,
 		styles:           st,
+		warningText:      snapshot.HarnessWarning,
 	}
 }
 
@@ -138,6 +140,7 @@ func (m *SettingsPage) SetSnapshot(snapshot SettingsSnapshot) {
 	m.dirty = false
 	m.errorText = ""
 	m.statusText = ""
+	m.warningText = snapshot.HarnessWarning
 	m.editing = false
 	m.editInput.Blur()
 	m.expandedSections = defaultExpandedSections(snapshot.Sections)
@@ -818,12 +821,13 @@ func (m SettingsPage) View() string {
 	}
 	bodyParts = append(bodyParts, m.renderMainPane(mainWidth, bodyHeight))
 	body := lipgloss.JoinHorizontal(lipgloss.Top, bodyParts...)
+	footerText := truncate(m.footerText(), max(1, m.width-4))
 	footer := lipgloss.NewStyle().
 		Width(max(1, m.width-2)).
 		BorderTop(true).
 		BorderForeground(lipgloss.Color(m.styles.Theme.PaneBorder)).
 		Padding(0, 1).
-		Render(m.styles.Hint.Render(m.footerText()))
+		Render(m.styles.Hint.Render(footerText))
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }
 
@@ -1083,6 +1087,12 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			appendRendered(metaStyle.Render(truncate(metaPrefix+sec.Description, width)))
 		}
 		appendRendered(metaStyle.Render(truncate(metaPrefix+"Section status: "+sec.Status, width)))
+		if sec.Error != "" {
+			errorStyle := m.styles.Error.Copy().Width(width)
+			for _, line := range strings.Split(sec.Error, "\n") {
+				appendRendered(errorStyle.Render(truncate(metaPrefix+line, width)))
+			}
+		}
 		if provider := providerForSection(&sec); provider != "" {
 			if st, ok := m.providerStatus[provider]; ok {
 				appendRendered(m.renderProviderStatusLine(metaPrefix, st, width))
@@ -1179,13 +1189,25 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 }
 
 func (m SettingsPage) footerText() string {
+	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
 	if m.editing {
-		return "[enter] save edit  [esc] cancel edit"
+		hint = "[enter] save edit  [esc] cancel edit"
+	} else if m.fieldsFocused() {
+		hint = "[↑↓] settings  [enter] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
 	}
-	if m.fieldsFocused() {
-		return "[↑↓] settings  [enter] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+	extras := make([]string, 0, 2)
+	if m.warningText != "" {
+		extras = append(extras, "warning: "+m.warningText)
 	}
-	return "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+	if m.errorText != "" {
+		extras = append(extras, "error: "+m.errorText)
+	} else if m.statusText != "" {
+		extras = append(extras, m.statusText)
+	}
+	if len(extras) == 0 {
+		return hint
+	}
+	return strings.Join(extras, "  │  ") + "  │  " + hint
 }
 
 func providerForSection(section *SettingsSection) string {
