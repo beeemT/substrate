@@ -70,6 +70,7 @@ type MainPageLayout struct {
 	SidebarInnerWidth int
 	ContentPaneWidth  int
 	ContentInnerWidth int
+	PaneGapWidth      int
 	BodyHeight        int
 	PaneInnerHeight   int
 }
@@ -80,12 +81,20 @@ func ComputeMainPageLayout(totalWidth, totalHeight, sidebarInnerWidth int, chrom
 	paneInnerHeight := chrome.Pane.InnerHeight(bodyHeight)
 
 	sidebarPaneWidth := minInt(maxInt(0, totalWidth), maxInt(0, sidebarInnerWidth)+chrome.Pane.HorizontalFrame())
-	contentPaneWidth := maxInt(0, totalWidth-sidebarPaneWidth)
+	paneGapWidth := 0
+	if sidebarPaneWidth > 0 && totalWidth-sidebarPaneWidth > 1 {
+		paneGapWidth = 1
+	}
+	contentPaneWidth := maxInt(0, totalWidth-sidebarPaneWidth-paneGapWidth)
 	minPaneWidth := chrome.Pane.HorizontalFrame()
 	if contentPaneWidth > 0 && contentPaneWidth < minPaneWidth {
 		shift := minPaneWidth - contentPaneWidth
 		sidebarPaneWidth = maxInt(0, sidebarPaneWidth-shift)
-		contentPaneWidth = totalWidth - sidebarPaneWidth
+		paneGapWidth = 0
+		if sidebarPaneWidth > 0 && totalWidth-sidebarPaneWidth > 1 {
+			paneGapWidth = 1
+		}
+		contentPaneWidth = maxInt(0, totalWidth-sidebarPaneWidth-paneGapWidth)
 	}
 
 	return MainPageLayout{
@@ -93,6 +102,7 @@ func ComputeMainPageLayout(totalWidth, totalHeight, sidebarInnerWidth int, chrom
 		SidebarInnerWidth: chrome.Pane.InnerWidth(sidebarPaneWidth),
 		ContentPaneWidth:  contentPaneWidth,
 		ContentInnerWidth: chrome.Pane.InnerWidth(contentPaneWidth),
+		PaneGapWidth:      paneGapWidth,
 		BodyHeight:        bodyHeight,
 		PaneInnerHeight:   paneInnerHeight,
 	}

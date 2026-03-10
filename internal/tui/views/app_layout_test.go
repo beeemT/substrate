@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 func TestAppStatusBarTextIncludesWorkspace(t *testing.T) {
@@ -163,6 +164,43 @@ func assertBodyEndsAboveFooter(t *testing.T, lines []string) {
 	}
 	if strings.Contains(lines[len(lines)-1], "─") {
 		t.Fatalf("footer line = %q, want borderless status bar", lines[len(lines)-1])
+	}
+}
+
+func TestComputeMainPageLayoutReservesSettingsStylePaneGap(t *testing.T) {
+	t.Parallel()
+
+	layout := styles.ComputeMainPageLayout(80, 20, SidebarWidth, styles.DefaultChromeMetrics)
+
+	if layout.PaneGapWidth != 1 {
+		t.Fatalf("pane gap width = %d, want 1", layout.PaneGapWidth)
+	}
+	if got := layout.SidebarPaneWidth + layout.ContentPaneWidth + layout.PaneGapWidth; got != 80 {
+		t.Fatalf("layout width = %d, want 80", got)
+	}
+}
+
+func TestComputeMainPageLayoutDropsPaneGapWhenContentDoesNotFit(t *testing.T) {
+	t.Parallel()
+
+	layout := styles.ComputeMainPageLayout(36, 20, SidebarWidth, styles.DefaultChromeMetrics)
+
+	if layout.PaneGapWidth != 0 {
+		t.Fatalf("pane gap width = %d, want 0", layout.PaneGapWidth)
+	}
+	if layout.ContentPaneWidth != 0 {
+		t.Fatalf("content pane width = %d, want 0", layout.ContentPaneWidth)
+	}
+}
+
+func TestAppViewRendersSingleColumnPaneGap(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 80, 20)
+
+	lines := assertAppViewFitsWindow(t, app.View(), 80, 20)
+	if !strings.Contains(ansi.Strip(lines[0]), "╮ ╭") {
+		t.Fatalf("top body line = %q, want a single-column gap between panes", ansi.Strip(lines[0]))
 	}
 }
 

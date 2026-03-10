@@ -1171,16 +1171,16 @@ func (a *App) updateContentFromState() tea.Cmd {
 	}
 
 	a.content.SetWorkItem(wi)
+	showSourceDetails := false
 	if a.sidebarMode == sidebarPaneTasks {
 		if taskSessionID := a.selectedTaskSessionID(); taskSessionID != "" {
 			if taskSessionID == taskSidebarSourceDetailsID {
-				a.content.SetMode(ContentModeSourceDetails)
-				return nil
-			}
-			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
+				showSourceDetails = true
+			} else if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
 				return a.showTaskContent(wi, session)
+			} else {
+				a.setSelectedTaskSessionID("")
 			}
-			a.setSelectedTaskSessionID("")
 		}
 	}
 
@@ -1311,6 +1311,9 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.failed.SetFailure("Work item failed", "")
 	}
 
+	if showSourceDetails && a.content.mode == ContentModeImplementing {
+		a.content.SetMode(ContentModeSourceDetails)
+	}
 	if prevMode != a.content.mode {
 		if prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction {
 			a.tailingSessionIDs = make(map[string]bool)
@@ -1573,9 +1576,12 @@ func (a App) View() string {
 		Height:  layout.BodyHeight,
 	})
 
-	bodyParts := make([]string, 0, 2)
+	bodyParts := make([]string, 0, 3)
 	if layout.SidebarPaneWidth > 0 {
 		bodyParts = append(bodyParts, sidebarPane)
+	}
+	if layout.PaneGapWidth > 0 && layout.SidebarPaneWidth > 0 && layout.ContentPaneWidth > 0 {
+		bodyParts = append(bodyParts, strings.Repeat(" ", layout.PaneGapWidth))
 	}
 	if layout.ContentPaneWidth > 0 {
 		bodyParts = append(bodyParts, contentPane)
