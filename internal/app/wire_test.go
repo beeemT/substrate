@@ -124,6 +124,7 @@ func createWorkspaceRepo(t *testing.T, repoDir, remoteURL string) {
 	runGit(t, repoDir, "init")
 	runGit(t, repoDir, "config", "user.email", "test@example.com")
 	runGit(t, repoDir, "config", "user.name", "Test User")
+	runGit(t, repoDir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
 		t.Fatalf("write README: %v", err)
 	}

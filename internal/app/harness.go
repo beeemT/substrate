@@ -35,20 +35,10 @@ type HarnessPhaseDiagnostic struct {
 	Failures  []HarnessCandidateFailure
 }
 
-func (d HarnessPhaseDiagnostic) SummaryMessage() string {
-	if len(d.Failures) == 0 {
-		return ""
-	}
-
-	return fmt.Sprintf("%s unavailable. Check Harness Routing.", displayHarnessPhase(d.Phase))
-}
-
-func (d HarnessPhaseDiagnostic) WarningMessage() string {
-	if len(d.Failures) == 0 {
-		return ""
-	}
-
-	return fmt.Sprintf("%s: %s.", displayHarnessPhase(d.Phase), d.Failures[0].SettingsReason())
+type settingsWarningGroup struct {
+	Harness config.HarnessName
+	Reason  string
+	Phases  []string
 }
 
 type HarnessDiagnostics struct {
@@ -65,50 +55,60 @@ func (d HarnessDiagnostics) HasWarnings() bool {
 }
 
 func (d HarnessDiagnostics) WarningSummary() string {
-	warnings := d.phaseSummaries()
-	if len(warnings) == 0 {
+	groups := d.warningGroups()
+	if len(groups) == 0 {
 		return ""
 	}
-	if len(warnings) == 1 {
-		return warnings[0]
+	if len(groups) == 1 && len(groups[0].Phases) == 1 {
+		return fmt.Sprintf("%s unavailable. Check Harness Routing.", groups[0].Phases[0])
 	}
 	return "Harnesses unavailable. Check Harness Routing."
 }
 
 func (d HarnessDiagnostics) PhaseWarnings() []string {
-	warnings := make([]string, 0, len(d.Phases))
-	for _, phase := range d.Phases {
-		if warning := phase.WarningMessage(); warning != "" {
-			warnings = append(warnings, warning)
-		}
-	}
-	return warnings
-}
-
-func (d HarnessDiagnostics) phaseSummaries() []string {
-	warnings := make([]string, 0, len(d.Phases))
-	for _, phase := range d.Phases {
-		if warning := phase.SummaryMessage(); warning != "" {
-			warnings = append(warnings, warning)
-		}
+	groups := d.warningGroups()
+	warnings := make([]string, 0, len(groups))
+	for _, group := range groups {
+		warnings = append(warnings, formatGroupedPhaseWarning(group.Phases, group.Reason))
 	}
 	return warnings
 }
 
 func (d HarnessDiagnostics) HarnessWarnings() map[config.HarnessName][]string {
 	warnings := make(map[config.HarnessName][]string)
-	for _, phase := range d.Phases {
-		seen := make(map[config.HarnessName]bool)
-		for _, failure := range phase.Failures {
-			if seen[failure.Harness] {
-				continue
-			}
-			seen[failure.Harness] = true
-			message := fmt.Sprintf("%s: %s.", displayHarnessPhase(phase.Phase), failure.SettingsReason())
-			warnings[failure.Harness] = appendUniqueWarning(warnings[failure.Harness], message)
-		}
+	for _, group := range d.warningGroups() {
+		warnings[group.Harness] = append(warnings[group.Harness], formatGroupedPhaseWarning(group.Phases, group.Reason))
 	}
 	return warnings
+}
+
+func (d HarnessDiagnostics) warningGroups() []settingsWarningGroup {
+	groups := make([]settingsWarningGroup, 0, len(d.Phases))
+	indexes := make(map[string]int, len(d.Phases))
+	for _, phase := range d.Phases {
+		if len(phase.Failures) == 0 {
+			continue
+		}
+		failure := phase.Failures[0]
+		reason := failure.SettingsReason()
+		phaseLabel := displayHarnessPhase(phase.Phase)
+		key := string(failure.Harness) + "\x00" + reason
+		if idx, ok := indexes[key]; ok {
+			groups[idx].Phases = append(groups[idx].Phases, phaseLabel)
+			continue
+		}
+		indexes[key] = len(groups)
+		groups = append(groups, settingsWarningGroup{
+			Harness: failure.Harness,
+			Reason:  reason,
+			Phases:  []string{phaseLabel},
+		})
+	}
+	return groups
+}
+
+func formatGroupedPhaseWarning(phases []string, reason string) string {
+	return fmt.Sprintf("%s: %s.", strings.Join(phases, ", "), reason)
 }
 
 func settingsHarnessFailureReason(harness config.HarnessName, message string) string {

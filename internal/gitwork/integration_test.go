@@ -278,6 +278,11 @@ func seedTestGitRepo(repoDir string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git config name: %w (output: %s)", err, string(output))
 	}
+	cmd = exec.Command("git", "config", "commit.gpgsign", "false")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config commit.gpgsign: %w (output: %s)", err, string(output))
+	}
 
 	// Create an initial commit (required for git-work init)
 	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {

@@ -105,10 +105,13 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	}
 
 	var routing *SettingsSection
+	var claude *SettingsSection
 	for i := range result.Services.SettingsData.Sections {
-		if result.Services.SettingsData.Sections[i].ID == "harness" {
+		switch result.Services.SettingsData.Sections[i].ID {
+		case "harness":
 			routing = &result.Services.SettingsData.Sections[i]
-			break
+		case "harness.claude":
+			claude = &result.Services.SettingsData.Sections[i]
 		}
 	}
 	if routing == nil {
@@ -117,11 +120,17 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if routing.Status != "warning" {
 		t.Fatalf("routing status = %q, want warning", routing.Status)
 	}
-	if !strings.Contains(routing.Error, "Planning: Claude Code binary not found.") {
-		t.Fatalf("routing error = %q, want concise Claude Code detail", routing.Error)
+	if routing.Error != "Planning, Implementation, Review, Foreman: Claude Code binary not found." {
+		t.Fatalf("routing error = %q, want grouped Claude Code detail", routing.Error)
 	}
 	if strings.Contains(routing.Error, "Binary Path") {
 		t.Fatalf("routing error = %q, want short warning without settings copy", routing.Error)
+	}
+	if claude == nil {
+		t.Fatal("expected Claude Code harness section in settings snapshot")
+	}
+	if claude.Error != "Planning, Implementation, Review, Foreman: Claude Code binary not found." {
+		t.Fatalf("claude section error = %q, want grouped Claude Code detail", claude.Error)
 	}
 
 	cfgPath, err := config.ConfigPath()
@@ -193,8 +202,11 @@ func TestBuildSettingsSections_LeavesUnusedHarnessSectionsQuiet(t *testing.T) {
 	if ohmypi == nil || claude == nil || codex == nil {
 		t.Fatal("expected harness sections in settings snapshot")
 	}
-	if ohmypi.Status != "warning" || !strings.Contains(ohmypi.Error, "Oh My Pi bridge not found") {
-		t.Fatalf("ohmypi section = %+v, want concise warning", *ohmypi)
+	if ohmypi.Status != "warning" || ohmypi.Error != "Planning, Implementation, Review, Foreman: Oh My Pi bridge not found." {
+		t.Fatalf("ohmypi section = %+v, want grouped concise warning", *ohmypi)
+	}
+	if strings.Contains(ohmypi.Error, "\n") {
+		t.Fatalf("ohmypi section error = %q, want one grouped line", ohmypi.Error)
 	}
 	if claude.Status == "warning" || claude.Error != "" {
 		t.Fatalf("claude section = %+v, want unused harness to stay quiet", *claude)

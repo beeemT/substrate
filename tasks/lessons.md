@@ -1,5 +1,13 @@
 # Lessons Learned
 
+## 2026-03-10 - Settings Focused State Must Stay Visible And Non-Repetitive
+
+**Mistake**: I let settings warnings repeat the same per-phase harness failure four times and let the sticky detail pane consume so much of the main column that wheel scrolling could leave the focused field offscreen.
+**Pattern**: I preserved raw diagnostic granularity and a fixed detail-pane budget instead of shaping both around what the operator can actually scan in the visible viewport.
+**Rule**: On settings surfaces, collapse identical multi-phase failures into one grouped message and ensure sticky detail chrome never leaves the focused field effectively hidden from the scrollable region.
+**Applied**: Harness routing warnings, grouped settings diagnostics, sticky detail panes, and any scrollable inspector UI that keeps a separate focused-details panel on screen.
+
+
 ## 2026-03-10 - Settings Scroll State Must Clamp To Viewport Bounds
 
 **Mistake**: I let the settings page carry stale viewport offsets without clamping them to the current content height and ignored direct mouse-wheel scrolling semantics.

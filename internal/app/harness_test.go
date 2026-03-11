@@ -131,14 +131,15 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) 
 	if !diagnostics.HasWarnings() {
 		t.Fatal("expected harness diagnostics to report warnings")
 	}
-	if warnings := diagnostics.PhaseWarnings(); len(warnings) != 4 {
-		t.Fatalf("phase warnings = %d, want 4", len(warnings))
+	warnings := diagnostics.PhaseWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("phase warnings = %d, want 1 grouped warning", len(warnings))
 	}
 	if summary := diagnostics.WarningSummary(); summary != "Harnesses unavailable. Check Harness Routing." {
 		t.Fatalf("warning summary = %q, want short aggregated warning", summary)
 	}
-	if warning := diagnostics.PhaseWarnings()[0]; warning != "Planning: Codex binary not found." {
-		t.Fatalf("planning warning = %q, want concise codex detail", warning)
+	if warnings[0] != "Planning, Implementation, Review, Foreman: Codex binary not found." {
+		t.Fatalf("planning warning = %q, want grouped codex detail", warnings[0])
 	}
 }
 
@@ -166,8 +167,8 @@ func TestDiagnoseHarnesses_SummarizesOhMyPiBridgeLookupForUsers(t *testing.T) {
 
 	diagnostics := DiagnoseHarnesses(cfg, "/tmp")
 	warning := diagnostics.PhaseWarnings()[0]
-	if warning != "Planning: Oh My Pi bridge not found." {
-		t.Fatalf("warning = %q, want concise bridge guidance", warning)
+	if warning != "Planning, Implementation, Review, Foreman: Oh My Pi bridge not found." {
+		t.Fatalf("warning = %q, want concise grouped bridge guidance", warning)
 	}
 	if strings.Contains(warning, "checked ") {
 		t.Fatalf("warning = %q, want concise message without checked path dump", warning)

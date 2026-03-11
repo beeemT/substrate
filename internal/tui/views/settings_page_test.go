@@ -70,9 +70,9 @@ func TestSettingsPage_TextEditModalShowsTypedInput(t *testing.T) {
 	page.fieldCursor = fieldIndex
 	page.focus = settingsFocusFields
 
-	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}, Services{})
 	if cmd != nil {
-		t.Fatalf("unexpected command opening text editor: %v", cmd)
+		t.Fatalf("unexpected command opening text editor with e: %v", cmd)
 	}
 	if !updated.editing || updated.editMode != settingsEditModeText {
 		t.Fatalf("editing state = (%v, %v), want text modal", updated.editing, updated.editMode)
@@ -99,9 +99,9 @@ func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
 	page.fieldCursor = fieldIndex
 	page.focus = settingsFocusFields
 
-	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}, Services{})
 	if cmd != nil {
-		t.Fatalf("unexpected command opening selection modal: %v", cmd)
+		t.Fatalf("unexpected command opening selection modal with e: %v", cmd)
 	}
 	if !updated.editing || updated.editMode != settingsEditModeSelect {
 		t.Fatalf("editing state = (%v, %v), want selection modal", updated.editing, updated.editMode)
@@ -632,6 +632,36 @@ func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T
 	want := max(0, maxOffset-updated.mainViewport.MouseWheelDelta)
 	if updated.mainViewport.YOffset != want {
 		t.Fatalf("y offset = %d, want %d after wheel up from overscrolled state", updated.mainViewport.YOffset, want)
+	}
+}
+
+func TestSettingsPage_MouseWheelKeepsSelectedFieldVisible(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "harness")
+	page.fieldCursor = findFieldIndex(t, page, "harness", "default")
+	page.focus = settingsFocusFields
+	page.SetSize(80, 12)
+
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset
+
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	_, _, fieldAnchors := updated.buildMainDocument(viewportWidth)
+	anchor, ok := fieldAnchors[settingsFieldAnchorKey(updated.sectionCursor, updated.fieldCursor)]
+	if !ok {
+		t.Fatalf("missing field anchor for section=%d field=%d", updated.sectionCursor, updated.fieldCursor)
+	}
+	top := updated.mainViewport.YOffset
+	bottom := top + updated.mainViewport.Height - 1
+	if anchor < top || anchor > bottom {
+		t.Fatalf("selected field anchor = %d, want between %d and %d", anchor, top, bottom)
 	}
 }
 

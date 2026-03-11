@@ -281,6 +281,7 @@ func createReviewContextRepo(t *testing.T, branch string) string {
 	runCmdGit(t, repoDir, "init")
 	runCmdGit(t, repoDir, "config", "user.email", "test@example.com")
 	runCmdGit(t, repoDir, "config", "user.name", "Test User")
+	runCmdGit(t, repoDir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

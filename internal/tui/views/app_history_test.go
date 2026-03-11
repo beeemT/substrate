@@ -955,17 +955,26 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 		t.Fatalf("mainFocus = %v, want mainFocusSidebar", updated.mainFocus)
 	}
 	foundTaskHint := false
+	foundBackHint := false
 	for _, hint := range updated.currentHints() {
-		if hint.Key != "↑/↓" {
-			continue
-		}
-		foundTaskHint = true
-		if hint.Label != "Tasks" {
-			t.Fatalf("task-pane up/down hint label = %q, want %q", hint.Label, "Tasks")
+		switch hint.Key {
+		case "↑/↓":
+			foundTaskHint = true
+			if hint.Label != "Tasks" {
+				t.Fatalf("task-pane up/down hint label = %q, want %q", hint.Label, "Tasks")
+			}
+		case "←/Esc":
+			foundBackHint = true
+			if hint.Label != "Sessions" {
+				t.Fatalf("task-pane back hint label = %q, want %q", hint.Label, "Sessions")
+			}
 		}
 	}
 	if !foundTaskHint {
 		t.Fatal("missing up/down hint in tasks sidebar state")
+	}
+	if !foundBackHint {
+		t.Fatal("missing back hint in tasks sidebar state")
 	}
 	if updated.sidebar.title != "SUB-1 · Tasks" {
 		t.Fatalf("sidebar title = %q, want %q", updated.sidebar.title, "SUB-1 · Tasks")
@@ -1124,6 +1133,50 @@ func TestSidebarLeftBacksOutFromTaskContentToSessions(t *testing.T) {
 		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in task pane", updated.mainFocus, updated.sidebarMode)
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated = model.(App)
+	if updated.sidebarMode != sidebarPaneSessions {
+		t.Fatalf("sidebarMode = %v, want sidebarPaneSessions", updated.sidebarMode)
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.Kind != SidebarEntryWorkItem || sel.WorkItemID != "wi-1" {
+		t.Fatalf("selected entry = %#v, want parent work item row", sel)
+	}
+	if updated.content.Mode() != ContentModeImplementing {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeImplementing)
+	}
+}
+
+func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated = model.(App)
+
+	foundBackHint := false
+	for _, hint := range updated.currentHints() {
+		if hint.Key != "←/Esc" {
+			continue
+		}
+		foundBackHint = true
+		if hint.Label != "Back" {
+			t.Fatalf("content back hint label = %q, want %q", hint.Label, "Back")
+		}
+	}
+	if !foundBackHint {
+		t.Fatal("missing escape back hint in content focus state")
+	}
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated = model.(App)
+	if updated.mainFocus != mainFocusSidebar || updated.sidebarMode != sidebarPaneTasks {
+		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in task pane", updated.mainFocus, updated.sidebarMode)
+	}
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated = model.(App)
 	if updated.sidebarMode != sidebarPaneSessions {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneSessions", updated.sidebarMode)

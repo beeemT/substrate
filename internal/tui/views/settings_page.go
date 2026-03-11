@@ -551,10 +551,8 @@ func (m SettingsPage) mainViewportSize() (width, height, detailHeight int) {
 		headerHeight = max(1, innerHeight-1)
 	}
 	remainingHeight := max(1, innerHeight-headerHeight)
-	detailHeight = desiredDetailHeight
-	if detailHeight >= remainingHeight {
-		detailHeight = max(0, remainingHeight-1)
-	}
+	minViewportHeight := min(3, remainingHeight)
+	detailHeight = min(desiredDetailHeight, max(0, remainingHeight-minViewportHeight))
 	width = max(1, innerWidth)
 	if width > 2 {
 		width -= 2
@@ -594,6 +592,61 @@ func (m SettingsPage) preparedMainViewport(width int, height int, alignSelection
 	}
 	vp.SetYOffset(vp.YOffset)
 	return vp
+}
+
+func (m *SettingsPage) syncSelectionToVisibleRange(_ map[int]int, fieldAnchors map[string]int, top int, bottom int) {
+	if bottom < top || !m.fieldsFocused() {
+		return
+	}
+	anchor, ok := fieldAnchors[settingsFieldAnchorKey(m.sectionCursor, m.fieldCursor)]
+	if ok && anchor >= top && anchor <= bottom {
+		return
+	}
+	m.selectVisibleField(fieldAnchors, top, bottom)
+}
+
+func (m *SettingsPage) selectVisibleField(fieldAnchors map[string]int, top int, bottom int) bool {
+	beforeSectionIndex := -1
+	beforeFieldIndex := -1
+	afterSectionIndex := -1
+	afterFieldIndex := -1
+	for sectionIndex, sec := range m.sections {
+		for fieldIndex := range sec.Fields {
+			anchor, ok := fieldAnchors[settingsFieldAnchorKey(sectionIndex, fieldIndex)]
+			if !ok {
+				continue
+			}
+			if anchor < top {
+				beforeSectionIndex = sectionIndex
+				beforeFieldIndex = fieldIndex
+				continue
+			}
+			if anchor <= bottom {
+				m.sectionCursor = sectionIndex
+				m.fieldCursor = fieldIndex
+				m.navCursor = m.sections[sectionIndex].ID
+				return true
+			}
+			afterSectionIndex = sectionIndex
+			afterFieldIndex = fieldIndex
+			goto selectNearestField
+		}
+	}
+
+selectNearestField:
+	if afterSectionIndex >= 0 {
+		m.sectionCursor = afterSectionIndex
+		m.fieldCursor = afterFieldIndex
+		m.navCursor = m.sections[afterSectionIndex].ID
+		return true
+	}
+	if beforeSectionIndex >= 0 {
+		m.sectionCursor = beforeSectionIndex
+		m.fieldCursor = beforeFieldIndex
+		m.navCursor = m.sections[beforeSectionIndex].ID
+		return true
+	}
+	return false
 }
 
 func (m *SettingsPage) syncMainViewport() {
@@ -775,7 +828,11 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
 		var cmd tea.Cmd
 		m.mainViewport, cmd = m.mainViewport.Update(mouseMsg)
-		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
+		content, sectionAnchors, fieldAnchors := m.buildMainDocument(viewportWidth)
+		m.mainViewport.SetContent(content)
+		m.mainViewport.SetYOffset(m.mainViewport.YOffset)
+		m.syncSelectionToVisibleRange(sectionAnchors, fieldAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1)
+		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, m.fieldsFocused())
 		return m, cmd
 	}
 
@@ -831,6 +888,10 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				return m, nil
 			}
 			m.openFieldEditor()
+		case "e":
+			if m.fieldsFocused() {
+				m.openFieldEditor()
+			}
 		case " ":
 			if f := m.currentField(); m.fieldsFocused() && f != nil && f.Type == SettingsFieldBool {
 				if parseBool(f.Value) {
@@ -1370,8 +1431,8 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 		}
 	}
 	return m.styles.Callout.Copy().
-		Width(m.styles.Chrome.Callout.InnerWidth(max(1, width))).
-		Height(max(1, height-2)).
+		Width(max(1, width)).
+		Height(max(1, height)).
 		Render(strings.Join(lines, "\n"))
 }
 
@@ -1380,7 +1441,7 @@ func (m SettingsPage) footerText() string {
 	if m.editing {
 		hint = "[enter] save edit  [esc] cancel edit"
 	} else if m.fieldsFocused() {
-		hint = "[↑↓] settings  [enter] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
 	}
 	extras := make([]string, 0, 2)
 	if m.warningText != "" {

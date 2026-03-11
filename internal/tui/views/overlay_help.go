@@ -33,7 +33,7 @@ func (h HelpOverlay) View() string {
 		{"k / ↑", "Navigate up"},
 		{"g", "Go to top"},
 		{"G", "Go to bottom"},
-		{"Esc", "Close overlay / cancel"},
+		{"Esc", "Back / close overlay / cancel"},
 		{"q", "Quit"},
 		{"Ctrl+C", "Force quit"},
 	}

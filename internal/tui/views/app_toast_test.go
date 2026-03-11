@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -22,7 +23,15 @@ func lastNonSpaceColumn(line string) int {
 	if trimmed == "" {
 		return -1
 	}
-	return len(trimmed) - 1
+	return ansi.StringWidth(trimmed) - 1
+}
+
+func visibleColumn(line, needle string) int {
+	idx := strings.Index(line, needle)
+	if idx < 0 {
+		return -1
+	}
+	return ansi.StringWidth(line[:idx])
 }
 
 func findLineContaining(lines []string, needle string) int {
@@ -147,23 +156,26 @@ func TestAppView_ReadOnlyToastStackRightAlignsNarrowerToasts(t *testing.T) {
 	assertAppViewFitsWindow(t, rendered, 80, 16)
 	lines := strings.Split(stripToastANSI(rendered), "\n")
 
+	readOnlyLine := findLineContaining(lines, "Read only")
 	tinyLine := findLineContaining(lines, "tiny")
 	longLine := findLineContaining(lines, "This transient toast is intentionally much longer")
-	if tinyLine == -1 || longLine == -1 {
+	if readOnlyLine == -1 || tinyLine == -1 || longLine == -1 {
 		t.Fatalf("view missing stacked toasts: %q", strings.Join(lines, "\n"))
 	}
-	tinyCol := strings.Index(lines[tinyLine], "tiny")
-	longCol := strings.Index(lines[longLine], "This transient toast is intentionally much longer")
-	if tinyCol == -1 || longCol == -1 {
-		t.Fatalf("toast columns not found in lines: tiny=%q long=%q", lines[tinyLine], lines[longLine])
+	readOnlyCol := visibleColumn(lines[readOnlyLine], "│ ⚠ Read only")
+	tinyCol := visibleColumn(lines[tinyLine], "│ ℹ tiny")
+	longCol := visibleColumn(lines[longLine], "│ ✓ This transient toast is intentionally much longer")
+	if readOnlyCol == -1 || tinyCol == -1 || longCol == -1 {
+		t.Fatalf("toast columns not found in lines: read-only=%q tiny=%q long=%q", lines[readOnlyLine], lines[tinyLine], lines[longLine])
 	}
-	if tinyCol <= longCol {
-		t.Fatalf("toast columns = tiny:%d long:%d, want narrower toast shifted right", tinyCol, longCol)
+	if readOnlyCol != longCol || tinyCol != longCol {
+		t.Fatalf("toast left edges = read-only:%d tiny:%d long:%d, want equal shared left edge", readOnlyCol, tinyCol, longCol)
 	}
+	readOnlyRight := lastNonSpaceColumn(lines[readOnlyLine])
 	tinyRight := lastNonSpaceColumn(lines[tinyLine])
 	longRight := lastNonSpaceColumn(lines[longLine])
-	if tinyRight != longRight {
-		t.Fatalf("toast right edge = tiny:%d long:%d, want equal shared right edge", tinyRight, longRight)
+	if readOnlyRight != longRight || tinyRight != longRight {
+		t.Fatalf("toast right edges = read-only:%d tiny:%d long:%d, want equal shared right edge", readOnlyRight, tinyRight, longRight)
 	}
 }
 

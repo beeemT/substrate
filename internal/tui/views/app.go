@@ -257,11 +257,11 @@ func (a App) currentHints() []KeybindHint {
 		return append([]KeybindHint{{Key: "d", Label: "Delete session"}}, hints...)
 	}
 	if a.mainFocus == mainFocusContent {
-		hints := append([]KeybindHint{{Key: "←", Label: "Back"}}, a.content.KeybindHints()...)
+		hints := append([]KeybindHint{{Key: "←/Esc", Label: "Back"}}, a.content.KeybindHints()...)
 		return append(prependDelete(hints), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
-		return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←", Label: "Sessions"}}), global...)
+		return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}), global...)
 	}
 	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}), global...)
 }
@@ -1060,13 +1060,13 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.showDeleteSessionConfirm(sessionID)
 			return a, nil
 		}
-	case "esc":
-		if a.activeOverlay != overlayNone {
-			a.activeOverlay = overlayNone
-			a.newSession.Close()
-			a.sessionSearch.Close()
-			a.settingsPage.Close()
+	case "esc", "left":
+		if a.mainFocus == mainFocusContent {
+			a.mainFocus = mainFocusSidebar
 			return a, nil
+		}
+		if a.sidebarMode == sidebarPaneTasks {
+			return a, a.exitTaskSidebar()
 		}
 	case "right":
 		if a.mainFocus == mainFocusContent {
@@ -1077,14 +1077,6 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.mainFocus = mainFocusContent
 		return a, nil
-	case "left":
-		if a.mainFocus == mainFocusContent {
-			a.mainFocus = mainFocusSidebar
-			return a, nil
-		}
-		if a.sidebarMode == sidebarPaneTasks {
-			return a, a.exitTaskSidebar()
-		}
 	case "up", "k":
 		if a.mainFocus == mainFocusContent {
 			a.content, cmd = a.content.Update(msg)
