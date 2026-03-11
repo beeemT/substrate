@@ -229,7 +229,9 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	delegate.ShowDescription = true
 	il := list.New([]list.Item{}, delegate, 60, 10)
 	il.Title = "Work Items"
+	il.SetShowTitle(false)
 	il.SetShowStatusBar(false)
+	il.SetShowPagination(false)
 	il.SetFilteringEnabled(true)
 	il.SetShowHelp(false)
 	il = components.ApplyOverlayListStyles(il, st)
@@ -1021,23 +1023,77 @@ func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
 	m.manualDesc.SetWidth(inputWidth)
 }
 
-func (m NewSessionOverlay) browserChromeLines(advancedRows int, renderWidth int) int {
+func countAdvancedBrowseFilterRows(filters adapter.BrowseFilterCapabilities) int {
+	rows := 0
+	if filters.SupportsLabels {
+		rows++
+	}
+	if filters.SupportsOwner {
+		rows++
+	}
+	if filters.SupportsRepo {
+		rows++
+	}
+	if filters.SupportsGroup {
+		rows++
+	}
+	if filters.SupportsTeam {
+		rows++
+	}
+	return rows
+}
+
+type browseChromeBudget struct {
+	hasViews         bool
+	hasStates        bool
+	hasStatusMessage bool
+	advancedRows     int
+}
+
+func (m NewSessionOverlay) stableBrowseChromeBudget() browseChromeBudget {
+	budget := browseChromeBudget{}
+	for _, browseAdapter := range m.browseAdapters {
+		caps := browseAdapter.Capabilities()
+		for _, scope := range caps.BrowseScopes {
+			filters, ok := caps.BrowseFilters[scope]
+			if !ok {
+				continue
+			}
+			if len(filters.Views) > 0 {
+				budget.hasViews = true
+			}
+			if len(filters.States) > 0 {
+				budget.hasStates = true
+			}
+			if scope == domain.ScopeIssues && len(filters.Views) == 0 && filters.SupportsTeam {
+				budget.hasStatusMessage = true
+			}
+			if rows := countAdvancedBrowseFilterRows(filters); rows > budget.advancedRows {
+				budget.advancedRows = rows
+			}
+		}
+	}
+	return budget
+}
+
+func (m NewSessionOverlay) browserChromeLines(renderWidth int) int {
+	budget := m.stableBrowseChromeBudget()
 	headerLines := 3
-	if len(m.availableViewOptions()) > 0 {
+	if budget.hasViews {
 		headerLines++
 	}
-	if len(m.availableStateOptions()) > 0 {
+	if budget.hasStates {
 		headerLines++
 	}
-	if m.statusMessage != "" {
+	if budget.hasStatusMessage {
 		headerLines++
 	}
-	return headerLines + advancedRows + 5 + m.browserHintLineCount(renderWidth)
+	return headerLines + budget.advancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
 }
 
 func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
 	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
-	chromeLines := m.browserChromeLines(len(m.advancedFilterRows()), maxInt(1, baseLayout.ContentWidth-4))
+	chromeLines := m.browserChromeLines(maxInt(1, baseLayout.ContentWidth-4))
 	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, browseSizingSpec)
 }
 
@@ -1087,7 +1143,6 @@ func renderDetailContent(st styles.Styles, item adapter.ListItem, width int) str
 
 	metaInnerWidth := components.CalloutInnerWidth(st, width)
 	sections := []string{
-		st.Title.Render(ansi.Hardwrap(detailTitle(item), width, true)),
 		st.SectionLabel.Render("Metadata"),
 		components.RenderCallout(st, components.CalloutSpec{
 			Body:  renderDetailMetadata(st, item, metaInnerWidth),
@@ -1143,6 +1198,15 @@ func detailProviderLabel(provider string) string {
 		}
 	}
 	return strings.Title(provider)
+}
+
+func detailPaneTitle(st styles.Styles, item adapter.ListItem, width int) string {
+	availableWidth := maxInt(1, width-st.Title.GetHorizontalFrameSize())
+	title := ansi.Truncate(strings.TrimSpace(detailTitle(item)), availableWidth, "…")
+	if title == "" {
+		return "Details"
+	}
+	return title
 }
 
 func detailTitle(item adapter.ListItem) string {
@@ -1758,24 +1822,31 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
 	m.issueList.SetWidth(layout.LeftInnerWidth)
-	m.issueList.SetHeight(layout.ListHeight)
+	m.issueList.SetHeight(layout.ViewportHeight)
 	m.syncDetailViewportWithLayout(layout, false)
 
 	leftContent := m.issueList.View()
 	if m.loading && len(m.allItems) == 0 {
-		leftContent = m.styles.Muted.Render("Loading…")
+		leftContent = lipgloss.NewStyle().Width(layout.LeftInnerWidth).Height(layout.ViewportHeight).Render(m.styles.Muted.Render("Loading…"))
 	}
 	if m.loading && len(m.allItems) > 0 {
 		leftContent += "\n" + m.styles.Muted.Render("Loading more…")
 	}
 
+	leftPaneTitle := "Work Items"
+	rightPaneTitle := "Details"
+	if item, ok := m.currentListItem(); ok {
+		rightPaneTitle = detailPaneTitle(m.styles, item, layout.RightInnerWidth)
+	}
+
 	panes := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{
 		LeftPane: components.OverlayPaneSpec{
+			Title:   leftPaneTitle,
 			Body:    leftContent,
 			Focused: m.browseFocus != browseFocusDetails,
 		},
 		RightPane: components.OverlayPaneSpec{
-			Title:   "Details",
+			Title:   rightPaneTitle,
 			Body:    m.detailViewport.View(),
 			Focused: m.browseFocus == browseFocusDetails,
 		},
@@ -1784,23 +1855,22 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	return strings.Join(lines, "\n")
 }
 
-func (m NewSessionOverlay) browserHintText() string {
+func browserHintParts(includeState, includeView bool) []string {
 	parts := []string{"Ctrl+O open", "Ctrl+R clear", "Ctrl+N manual"}
-	if len(m.availableStateOptions()) > 0 {
+	if includeState {
 		parts = append(parts, "Ctrl+T state")
 	}
-	if len(m.availableViewOptions()) > 0 {
+	if includeView {
 		parts = append(parts, "Ctrl+V view")
 	}
 	parts = append(parts, "Enter start", "Space select", "Tab source", "Ctrl+S scope", "Esc cancel", "Multi-select: one provider")
-	return strings.Join(parts, "  ")
+	return parts
 }
 
-func (m NewSessionOverlay) wrappedBrowserHintText(width int) string {
+func wrapBrowserHintParts(parts []string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	parts := strings.Split(m.browserHintText(), "  ")
 	lines := make([]string, 0, len(parts))
 	current := ""
 	for _, part := range parts {
@@ -1832,12 +1902,24 @@ func (m NewSessionOverlay) wrappedBrowserHintText(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m NewSessionOverlay) browserHintLineCount(width int) int {
-	wrapped := m.wrappedBrowserHintText(width)
+func browserHintLineCountForParts(parts []string, width int) int {
+	wrapped := wrapBrowserHintParts(parts, width)
 	if wrapped == "" {
 		return 1
 	}
 	return strings.Count(wrapped, "\n") + 1
+}
+
+func (m NewSessionOverlay) browserHintText() string {
+	return strings.Join(browserHintParts(len(m.availableStateOptions()) > 0, len(m.availableViewOptions()) > 0), "  ")
+}
+
+func (m NewSessionOverlay) wrappedBrowserHintText(width int) string {
+	return wrapBrowserHintParts(browserHintParts(len(m.availableStateOptions()) > 0, len(m.availableViewOptions()) > 0), width)
+}
+
+func (m NewSessionOverlay) browserHintLineCount(width int) int {
+	return browserHintLineCountForParts(browserHintParts(len(m.availableStateOptions()) > 0, len(m.availableViewOptions()) > 0), width)
 }
 
 func (m NewSessionOverlay) manualView(width int) string {

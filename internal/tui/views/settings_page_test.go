@@ -59,6 +59,47 @@ func assertSettingsPageFitsWindow(t *testing.T, rendered string, width, height i
 	return lines
 }
 
+func assertSelectedFieldVisibleInViewport(t *testing.T, page SettingsPage) {
+	t.Helper()
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	_, _, fieldAnchors := page.buildMainDocument(viewportWidth)
+	anchor, ok := fieldAnchors[settingsFieldAnchorKey(page.sectionCursor, page.fieldCursor)]
+	if !ok {
+		t.Fatalf("missing field anchor for section=%d field=%d", page.sectionCursor, page.fieldCursor)
+	}
+	vp := page.configuredMainViewport(viewportWidth, viewportHeight)
+	top := vp.YOffset
+	bottom := top + vp.Height - 1
+	if anchor < top || anchor > bottom {
+		t.Fatalf("selected field anchor = %d, want between %d and %d", anchor, top, bottom)
+	}
+}
+
+func assertSelectedSectionVisibleInViewport(t *testing.T, page SettingsPage) {
+	t.Helper()
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	_, sectionAnchors, _ := page.buildMainDocument(viewportWidth)
+	anchor, ok := sectionAnchors[page.sectionCursor]
+	if !ok {
+		t.Fatalf("missing section anchor for section=%d", page.sectionCursor)
+	}
+	vp := page.configuredMainViewport(viewportWidth, viewportHeight)
+	top := vp.YOffset
+	bottom := top + vp.Height - 1
+	if anchor < top || anchor > bottom {
+		t.Fatalf("selected section anchor = %d, want between %d and %d", anchor, top, bottom)
+	}
+}
+
+func scrollbarThumbTop(rendered string) int {
+	for i, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "▐") {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestSettingsPage_TextEditModalShowsTypedInput(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
@@ -610,15 +651,12 @@ func TestSettingsPage_MouseWheelScrollMovesWithinBounds(t *testing.T) {
 		t.Fatal("expected settings content to overflow the viewport")
 	}
 
-	start := page.mainViewport.YOffset
 	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if updated.mainViewport.YOffset <= start {
-		t.Fatalf("y offset = %d, want > %d after wheel down", updated.mainViewport.YOffset, start)
-	}
 	maxOffset := max(0, updated.mainViewport.TotalLineCount()-updated.mainViewport.Height)
 	if updated.mainViewport.YOffset > maxOffset {
 		t.Fatalf("y offset = %d, want <= %d", updated.mainViewport.YOffset, maxOffset)
 	}
+	assertSelectedSectionVisibleInViewport(t, updated)
 }
 
 func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T) {
@@ -635,13 +673,13 @@ func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T
 	page.mainViewport.YOffset = maxOffset + 20
 
 	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
-	want := max(0, maxOffset-updated.mainViewport.MouseWheelDelta)
-	if updated.mainViewport.YOffset != want {
-		t.Fatalf("y offset = %d, want %d after wheel up from overscrolled state", updated.mainViewport.YOffset, want)
+	if updated.mainViewport.YOffset > maxOffset {
+		t.Fatalf("y offset = %d, want <= %d after recovering from overscroll", updated.mainViewport.YOffset, maxOffset)
 	}
+	assertSelectedSectionVisibleInViewport(t, updated)
 }
 
-func TestSettingsPage_MouseWheelKeepsSelectedFieldVisible(t *testing.T) {
+func TestSettingsPage_MouseWheelAdvancesFocusedFieldSelection(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
@@ -657,17 +695,111 @@ func TestSettingsPage_MouseWheelKeepsSelectedFieldVisible(t *testing.T) {
 		t.Fatal("expected settings content to overflow the viewport")
 	}
 	page.mainViewport.YOffset = maxOffset
+	originalSection := page.sectionCursor
+	originalField := page.fieldCursor
 
 	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
-	_, _, fieldAnchors := updated.buildMainDocument(viewportWidth)
-	anchor, ok := fieldAnchors[settingsFieldAnchorKey(updated.sectionCursor, updated.fieldCursor)]
-	if !ok {
-		t.Fatalf("missing field anchor for section=%d field=%d", updated.sectionCursor, updated.fieldCursor)
+	if updated.sectionCursor == originalSection && updated.fieldCursor == originalField {
+		t.Fatalf("selection stayed at section=%d field=%d, want the focused field to advance with wheel scrolling", updated.sectionCursor, updated.fieldCursor)
 	}
-	top := updated.mainViewport.YOffset
-	bottom := top + updated.mainViewport.Height - 1
-	if anchor < top || anchor > bottom {
-		t.Fatalf("selected field anchor = %d, want between %d and %d", anchor, top, bottom)
+	assertSelectedFieldVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelAdvancesFocusedSectionSelection(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "provider.github")
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.focus = settingsFocusSections
+	page.SetSize(80, 12)
+
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset
+	originalSection := page.sectionCursor
+
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if updated.sectionCursor == originalSection {
+		t.Fatalf("section cursor stayed at %d, want the focused section to advance with wheel scrolling", updated.sectionCursor)
+	}
+	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_ScrollbarTracksSelectedFieldMovement(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "commit")
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	initialViewport := page.configuredMainViewport(viewportWidth, viewportHeight)
+	initialScrollbar := page.renderMainScrollbar(initialViewport, initialViewport.Height)
+	initialThumbTop := scrollbarThumbTop(initialScrollbar)
+	if initialThumbTop == -1 {
+		t.Fatal("expected initial scrollbar thumb")
+	}
+
+	updated := page
+	for i := 0; i < 40; i++ {
+		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+		updated = next
+	}
+	updatedViewport := updated.configuredMainViewport(viewportWidth, viewportHeight)
+	if updatedViewport.YOffset <= 0 {
+		t.Fatalf("y offset = %d, want > 0 after moving selection", updatedViewport.YOffset)
+	}
+	updatedScrollbar := updated.renderMainScrollbar(updatedViewport, updatedViewport.Height)
+	updatedThumbTop := scrollbarThumbTop(updatedScrollbar)
+	if updatedThumbTop == -1 {
+		t.Fatal("expected updated scrollbar thumb")
+	}
+	if updatedScrollbar == initialScrollbar {
+		t.Fatalf("scrollbar did not change after moving selection\ninitial:\n%s\nupdated:\n%s", initialScrollbar, updatedScrollbar)
+	}
+	assertSelectedFieldVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_KeyNavigationKeepsSelectedSectionVisible(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "commit")
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.focus = settingsFocusSections
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	updated := page
+	for i := 0; i < 10; i++ {
+		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+		updated = next
+		assertSelectedSectionVisibleInViewport(t, updated)
+	}
+}
+
+func TestSettingsPage_KeyNavigationKeepsSelectedFieldVisible(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "commit")
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	updated := page
+	for i := 0; i < 10; i++ {
+		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+		updated = next
+		assertSelectedFieldVisibleInViewport(t, updated)
 	}
 }
 
@@ -700,6 +832,25 @@ func TestSettingsPage_ViewFitsAvailableWidthAtNarrowSizes(t *testing.T) {
 				if got := ansi.StringWidth(line); got > width {
 					t.Fatalf("line %d width = %d, want <= %d", i+1, got, width)
 				}
+			}
+		})
+	}
+}
+
+func TestSettingsPage_ViewFitsAvailableHeightWithSelectedField(t *testing.T) {
+	t.Parallel()
+
+	for _, height := range []int{12, 18, 24} {
+		t.Run(fmt.Sprintf("height=%d", height), func(t *testing.T) {
+			page := newTestSettingsPage(&config.Config{})
+			page.SetSize(80, height)
+			page.sectionCursor = findSectionIndex(t, page, "provider.github")
+			page.fieldCursor = findFieldIndex(t, page, "provider.github", "token_ref")
+			page.focus = settingsFocusFields
+
+			lines := assertSettingsPageFitsWindow(t, page.View(), 80, height)
+			if len(lines) == 0 || !strings.Contains(lines[0], "╭") {
+				t.Fatalf("top line = %q, want visible settings chrome", strings.Join(lines, "\n"))
 			}
 		})
 	}

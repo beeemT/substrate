@@ -717,7 +717,7 @@ func TestRenderDetailContentVisuallySeparatesMetadata(t *testing.T) {
 		URL:         exampleURL,
 	}, 80))
 
-	for _, want := range []string{"#42 · Issue title", "Metadata", "Description", "Summary", "This is important.", "Provider: GitHub", "URL: " + exampleURL} {
+	for _, want := range []string{"Metadata", "Description", "Summary", "This is important.", "Provider: GitHub", "URL: " + exampleURL} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered = %q, want %q in detail content", rendered, want)
 		}
@@ -742,7 +742,7 @@ func TestRenderDetailContentRendersMarkdownLinksWithHrefText(t *testing.T) {
 		Description: "Read [the guide](https://example.com/guide) for details.",
 	}, 80))
 
-	for _, want := range []string{"Issue title", "Description", "the guide", "https://example.com/guide", "for details."} {
+	for _, want := range []string{"Description", "the guide", "https://example.com/guide", "for details."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered = %q, want %q in detail content", rendered, want)
 		}
@@ -843,6 +843,108 @@ func TestNewSessionOverlayViewFitsRequestedSize(t *testing.T) {
 	overlay.SetSize(80, 20)
 	manual, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	assertOverlayFits(t, manual.View(), 80, 20)
+}
+
+func TestNewSessionOverlayKeepsStablePaneGeometryAcrossLoadingAndLoadedState(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 24)
+	overlay.loading = true
+
+	loadingView := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, loadingView, 120, 24)
+	loadingLayout := overlay.browserLayout()
+	if got := overlay.detailViewport.Height; got != loadingLayout.ViewportHeight {
+		t.Fatalf("loading detail viewport height = %d, want %d", got, loadingLayout.ViewportHeight)
+	}
+	for _, want := range []string{"Work Items", "Details", "Loading…"} {
+		if !strings.Contains(loadingView, want) {
+			t.Fatalf("view = %q, want %q in loading state", loadingView, want)
+		}
+	}
+
+	overlay.loading = false
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-1", Provider: "github", Title: "Issue title", Description: strings.Repeat("Detail line\n", 8)}))
+
+	loadedView := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, loadedView, 120, 24)
+	loadedLayout := overlay.browserLayout()
+	if loadedLayout != loadingLayout {
+		t.Fatalf("loaded layout = %+v, want stable layout %+v", loadedLayout, loadingLayout)
+	}
+	if got := overlay.detailViewport.Height; got != loadedLayout.ViewportHeight {
+		t.Fatalf("loaded detail viewport height = %d, want %d", got, loadedLayout.ViewportHeight)
+	}
+	for _, want := range []string{"Work Items", "Issue title"} {
+		if !strings.Contains(loadedView, want) {
+			t.Fatalf("view = %q, want %q in loaded state", loadedView, want)
+		}
+	}
+}
+
+func TestNewSessionOverlayKeepsStableHeightWhenBrowseResultsAppearAfterViewSwitch(t *testing.T) {
+	t.Parallel()
+
+	linearAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "created_by_me", "all"}},
+		},
+	}
+	linearAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+		switch opts.View {
+		case "assigned_to_me":
+			return &adapter.ListResult{}, nil
+		case "created_by_me":
+			return &adapter.ListResult{Items: []adapter.ListItem{
+				{
+					ID:           "lin-1",
+					Provider:     "linear",
+					Identifier:   "LIN-1234",
+					Title:        "Investigate browse pane resize after items load into the overlay list",
+					ContainerRef: "platform-inbox-with-a-very-long-container-name",
+					State:        "open",
+				},
+			}}, nil
+		default:
+			return &adapter.ListResult{}, nil
+		}
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{linearAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.providerIndex = providerOptionIndex("linear")
+	overlay.Open()
+	overlay.SetSize(72, 18)
+	overlay = applyOverlayCmds(t, overlay, overlay.reloadItems())
+
+	emptyView := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, emptyView, 72, 18)
+	emptyLineCount := len(strings.Split(emptyView, "\n"))
+	if got := overlay.currentView(); got != "assigned_to_me" {
+		t.Fatalf("view = %q, want assigned_to_me before switching", got)
+	}
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd == nil {
+		t.Fatal("expected switching browse view to trigger a reload")
+	}
+	if got := updated.currentView(); got != "created_by_me" {
+		t.Fatalf("view = %q, want created_by_me after switching", got)
+	}
+	overlay = applyOverlayCmds(t, updated, cmd)
+
+	loadedView := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, loadedView, 72, 18)
+	if got := len(strings.Split(loadedView, "\n")); got != emptyLineCount {
+		t.Fatalf("loaded line count = %d, want %d for stable overlay height\nview:\n%s", got, emptyLineCount, loadedView)
+	}
+	if !strings.Contains(loadedView, "LIN-1234") {
+		t.Fatalf("view = %q, want created_by_me item rendered after reload", loadedView)
+	}
 }
 
 func TestNewSessionOverlayBrowsePanesShareBottomBorderRow(t *testing.T) {
@@ -988,11 +1090,17 @@ func TestNewSessionOverlaySelectingLinearSourceExposesSupportedScopesAndFilters(
 	overlay.SetSize(120, 30)
 	overlay.setBrowseControlFocus(browseControlSource)
 
+	initialLayout := overlay.browserLayout()
+
 	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRight})
 	if updated.currentProvider() != "linear" {
 		t.Fatalf("provider = %q, want linear after source change", updated.currentProvider())
 	}
 	updated = applyOverlayCmds(t, updated, cmd)
+
+	if updatedLayout := updated.browserLayout(); updatedLayout != initialLayout {
+		t.Fatalf("layout after source change = %+v, want stable layout %+v", updatedLayout, initialLayout)
+	}
 
 	view := stripBrowseANSI(updated.View())
 	for _, want := range []string{"Projects", "Initiatives", "View:", "State:", "Labels:", "Team:"} {

@@ -52,8 +52,11 @@ func TestComputeSplitOverlayLayoutClampsToViewportAndChrome(t *testing.T) {
 	if layout.ListHeight != 5 {
 		t.Fatalf("list height = %d, want 5", layout.ListHeight)
 	}
-	if layout.ViewportWidth != 26 || layout.ViewportHeight != 3 {
-		t.Fatalf("viewport = (%d, %d), want (26, 3)", layout.ViewportWidth, layout.ViewportHeight)
+	if layout.ViewportWidth != 26 || layout.ViewportHeight != 4 {
+		t.Fatalf("viewport = (%d, %d), want (26, 4)", layout.ViewportWidth, layout.ViewportHeight)
+	}
+	if layout.ViewportHeight+1 != layout.ListHeight {
+		t.Fatalf("viewport height = %d, want detail title to reserve exactly one row from list height %d", layout.ViewportHeight, layout.ListHeight)
 	}
 }
 
@@ -123,7 +126,7 @@ func TestApplyOverlayListStylesReturnsUpdatedModel(t *testing.T) {
 func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
-	pane := renderOverlayPane(st, layout.RightInnerWidth, layout.ListHeight, OverlayPaneSpec{
+	pane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
 		Title:        "Preview",
 		DividerWidth: layout.ViewportWidth,
 		Body:         "details",
@@ -141,6 +144,20 @@ func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	}
 	if got := strings.Count(dividerLine, "─"); got == 0 || got > layout.RightInnerWidth {
 		t.Fatalf("divider width = %d, want > 0 and <= %d\nline: %q", got, layout.RightInnerWidth, dividerLine)
+	}
+}
+
+func TestRenderOverlayPaneClipsBodyToRequestedHeight(t *testing.T) {
+	st := testOverlayStyles()
+	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
+	pane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
+		Title: "Preview",
+		Body:  strings.Repeat("overflow line that must stay inside the pane\n", layout.BodyHeight+4) + "tail",
+	})
+
+	assertFits(t, pane, layout.RightPaneWidth, layout.BodyHeight)
+	if !strings.Contains(pane, "Preview") {
+		t.Fatalf("pane = %q, want title preserved after clipping", pane)
 	}
 }
 

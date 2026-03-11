@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -90,7 +91,7 @@ func ComputeSplitOverlayLayout(termWidth, termHeight, chromeLines int, spec Spli
 		RightInnerWidth: rightInnerWidth,
 		ListHeight:      paneInnerHeight,
 		ViewportWidth:   maxInt(1, rightInnerWidth-2),
-		ViewportHeight:  maxInt(1, paneInnerHeight-2),
+		ViewportHeight:  maxInt(1, paneInnerHeight-1),
 	}
 }
 
@@ -125,6 +126,17 @@ func RenderOverlayDivider(st styles.Styles, width int) string {
 }
 
 func renderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec) string {
+	paneStyle := st.OverlayPane
+	if spec.Focused {
+		paneStyle = st.OverlayPaneFocused
+	}
+
+	boxWidth := maxInt(1, width)
+	boxHeight := maxInt(1, height)
+	contentWidth := maxInt(1, st.Chrome.OverlayPane.InnerWidth(boxWidth))
+	contentHeight := maxInt(1, st.Chrome.OverlayPane.InnerHeight(boxHeight))
+	renderWidth := maxInt(1, contentWidth-paneStyle.GetHorizontalFrameSize())
+
 	body := spec.Body
 	if spec.Title != "" {
 		titleLines := []string{st.Title.Render(spec.Title)}
@@ -134,14 +146,31 @@ func renderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec
 		titleLines = append(titleLines, spec.Body)
 		body = strings.Join(titleLines, "\n")
 	}
-	paneStyle := st.OverlayPane
-	if spec.Focused {
-		paneStyle = st.OverlayPaneFocused
-	}
+	body = fitRenderedBox(body, renderWidth, contentHeight)
+
 	return paneStyle.Copy().
-		Width(st.Chrome.OverlayPane.InnerWidth(maxInt(1, width))).
-		Height(st.Chrome.OverlayPane.InnerHeight(maxInt(1, height))).
+		Width(contentWidth).
+		Height(contentHeight).
 		Render(body)
+}
+
+func fitRenderedBox(rendered string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+
+	lines := strings.Split(rendered, "\n")
+	fitted := make([]string, 0, len(lines))
+	for _, line := range lines {
+		fitted = append(fitted, lipgloss.NewStyle().Width(width).Render(ansi.Truncate(line, width, "")))
+	}
+	if len(fitted) > height {
+		fitted = fitted[:height]
+	}
+	for len(fitted) < height {
+		fitted = append(fitted, "")
+	}
+	return strings.Join(fitted, "\n")
 }
 
 func overlayFrameWidth(termWidth, maxOverlayWidth int, chrome styles.ChromeMetrics) int {

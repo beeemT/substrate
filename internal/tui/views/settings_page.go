@@ -545,6 +545,7 @@ func (m SettingsPage) layoutMetrics() (leftWidth, mainWidth, bodyHeight, detailH
 func (m SettingsPage) mainViewportSize() (width, height, detailHeight int) {
 	_, mainWidth, bodyHeight, desiredDetailHeight := m.layoutMetrics()
 	innerWidth := max(1, mainWidth-2)
+	contentWidth := max(1, innerWidth-2)
 	innerHeight := max(1, bodyHeight-2)
 	headerHeight := m.stickySectionHeaderHeight()
 	if headerHeight >= innerHeight {
@@ -553,7 +554,7 @@ func (m SettingsPage) mainViewportSize() (width, height, detailHeight int) {
 	remainingHeight := max(1, innerHeight-headerHeight)
 	minViewportHeight := min(3, remainingHeight)
 	detailHeight = min(desiredDetailHeight, max(0, remainingHeight-minViewportHeight))
-	width = max(1, innerWidth)
+	width = max(1, contentWidth)
 	if width > 2 {
 		width -= 2
 	}
@@ -583,7 +584,10 @@ func (m SettingsPage) preparedMainViewport(width int, height int, alignSelection
 		anchor := m.selectedDocumentAnchor(sectionAnchors, fieldAnchors)
 		top := vp.YOffset
 		bottom := top + vp.Height - 1
-		margin := 1
+		margin := 0
+		if vp.Height > 2 {
+			margin = 1
+		}
 		if anchor < top+margin {
 			vp.SetYOffset(max(0, anchor-margin))
 		} else if anchor > bottom-margin {
@@ -592,61 +596,6 @@ func (m SettingsPage) preparedMainViewport(width int, height int, alignSelection
 	}
 	vp.SetYOffset(vp.YOffset)
 	return vp
-}
-
-func (m *SettingsPage) syncSelectionToVisibleRange(_ map[int]int, fieldAnchors map[string]int, top int, bottom int) {
-	if bottom < top || !m.fieldsFocused() {
-		return
-	}
-	anchor, ok := fieldAnchors[settingsFieldAnchorKey(m.sectionCursor, m.fieldCursor)]
-	if ok && anchor >= top && anchor <= bottom {
-		return
-	}
-	m.selectVisibleField(fieldAnchors, top, bottom)
-}
-
-func (m *SettingsPage) selectVisibleField(fieldAnchors map[string]int, top int, bottom int) bool {
-	beforeSectionIndex := -1
-	beforeFieldIndex := -1
-	afterSectionIndex := -1
-	afterFieldIndex := -1
-	for sectionIndex, sec := range m.sections {
-		for fieldIndex := range sec.Fields {
-			anchor, ok := fieldAnchors[settingsFieldAnchorKey(sectionIndex, fieldIndex)]
-			if !ok {
-				continue
-			}
-			if anchor < top {
-				beforeSectionIndex = sectionIndex
-				beforeFieldIndex = fieldIndex
-				continue
-			}
-			if anchor <= bottom {
-				m.sectionCursor = sectionIndex
-				m.fieldCursor = fieldIndex
-				m.navCursor = m.sections[sectionIndex].ID
-				return true
-			}
-			afterSectionIndex = sectionIndex
-			afterFieldIndex = fieldIndex
-			goto selectNearestField
-		}
-	}
-
-selectNearestField:
-	if afterSectionIndex >= 0 {
-		m.sectionCursor = afterSectionIndex
-		m.fieldCursor = afterFieldIndex
-		m.navCursor = m.sections[afterSectionIndex].ID
-		return true
-	}
-	if beforeSectionIndex >= 0 {
-		m.sectionCursor = beforeSectionIndex
-		m.fieldCursor = beforeFieldIndex
-		m.navCursor = m.sections[beforeSectionIndex].ID
-		return true
-	}
-	return false
 }
 
 func (m *SettingsPage) syncMainViewport() {
@@ -821,19 +770,25 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		if m.editing || m.width <= 0 || m.height <= 0 {
 			return m, nil
 		}
-		viewportWidth, viewportHeight, _ := m.mainViewportSize()
-		if viewportWidth <= 0 || viewportHeight <= 0 {
+		if mouseMsg.Action != tea.MouseActionPress {
 			return m, nil
 		}
-		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
-		var cmd tea.Cmd
-		m.mainViewport, cmd = m.mainViewport.Update(mouseMsg)
-		content, sectionAnchors, fieldAnchors := m.buildMainDocument(viewportWidth)
-		m.mainViewport.SetContent(content)
-		m.mainViewport.SetYOffset(m.mainViewport.YOffset)
-		m.syncSelectionToVisibleRange(sectionAnchors, fieldAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1)
-		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, m.fieldsFocused())
-		return m, cmd
+		direction := 0
+		switch mouseMsg.Button {
+		case tea.MouseButtonWheelDown:
+			direction = 1
+		case tea.MouseButtonWheelUp:
+			direction = -1
+		default:
+			return m, nil
+		}
+		if m.fieldsFocused() {
+			m.moveField(direction)
+		} else {
+			m.moveSection(direction)
+		}
+		m.syncMainViewport()
+		return m, nil
 	}
 
 	defer m.syncMainViewport()
@@ -1152,7 +1107,10 @@ func (m SettingsPage) renderSidebarContent(width int, height int) string {
 		}
 		lines = append(lines, style.Render(line))
 	}
-	return lipgloss.NewStyle().Padding(1).Width(max(1, width-2)).Height(max(1, height-2)).Render(strings.Join(lines, "\n"))
+	bodyWidth := max(1, width-2)
+	bodyHeight := max(1, height-2)
+	content := fitViewBox(strings.Join(lines, "\n"), bodyWidth, bodyHeight)
+	return lipgloss.NewStyle().Padding(1).Render(content)
 }
 
 func (m SettingsPage) sidebarLabel(sectionIndex int) string {
@@ -1166,20 +1124,22 @@ func (m SettingsPage) sidebarLabel(sectionIndex int) string {
 func (m SettingsPage) renderMainPane(width int, height int) string {
 	innerWidth := max(1, width-2)
 	innerHeight := max(1, height-2)
+	contentAreaWidth := max(1, innerWidth-2)
 	contentWidth, contentHeight, detailHeight := m.mainViewportSize()
-	if contentWidth > innerWidth-2 {
-		contentWidth = max(1, innerWidth-2)
+	if contentWidth > max(1, contentAreaWidth-2) {
+		contentWidth = max(1, contentAreaWidth-2)
 	}
 	vp := m.configuredMainViewport(contentWidth, contentHeight)
-	header := m.renderStickySectionHeader(innerWidth)
+	header := m.renderStickySectionHeader(contentAreaWidth)
 	bodyParts := []string{
 		header,
-		m.renderViewportWithScrollbar(vp, innerWidth, contentHeight),
+		m.renderViewportWithScrollbar(vp, contentAreaWidth, contentHeight),
 	}
-	if detail := m.renderStickyFieldDetails(innerWidth, detailHeight); detail != "" {
+	if detail := m.renderStickyFieldDetails(contentAreaWidth, detailHeight); detail != "" {
 		bodyParts = append(bodyParts, detail)
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, bodyParts...)
+	body := fitViewBox(lipgloss.JoinVertical(lipgloss.Left, bodyParts...), contentAreaWidth, innerHeight)
+	body = lipgloss.NewStyle().Padding(0, 1).Width(innerWidth).Height(innerHeight).Render(body)
 	return lipgloss.NewStyle().
 		Width(innerWidth).
 		Height(innerHeight).
@@ -1189,7 +1149,7 @@ func (m SettingsPage) renderMainPane(width int, height int) string {
 }
 
 func (m SettingsPage) configuredMainViewport(width int, height int) viewport.Model {
-	return m.preparedMainViewport(width, height, false)
+	return m.preparedMainViewport(width, height, true)
 }
 
 func (m SettingsPage) renderViewportWithScrollbar(vp viewport.Model, width int, height int) string {
@@ -1223,7 +1183,7 @@ func (m SettingsPage) renderMainScrollbar(vp viewport.Model, height int) string 
 		thumbRange := max(0, height-thumbHeight)
 		scrollRange := max(1, total-height)
 		if thumbRange > 0 {
-			thumbTop = (vp.YOffset * thumbRange) / scrollRange
+			thumbTop = (vp.YOffset*thumbRange + scrollRange/2) / scrollRange
 		}
 	}
 	for i := range lines {
@@ -1430,10 +1390,13 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 			lines = append(lines, m.styles.Error.Render("Field error: "+field.Error))
 		}
 	}
+	innerWidth := m.styles.Chrome.Callout.InnerWidth(max(1, width))
+	innerHeight := m.styles.Chrome.Callout.InnerHeight(max(1, height))
+	content := fitViewBox(strings.Join(lines, "\n"), max(1, innerWidth), max(1, innerHeight))
 	return m.styles.Callout.Copy().
-		Width(max(1, width)).
-		Height(max(1, height)).
-		Render(strings.Join(lines, "\n"))
+		Width(max(1, innerWidth)).
+		Height(max(1, innerHeight)).
+		Render(content)
 }
 
 func (m SettingsPage) footerText() string {

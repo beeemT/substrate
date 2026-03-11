@@ -1,5 +1,26 @@
 # Lessons Learned
 
+## 2026-03-10 - Loading States Must Keep The Same Pane Chrome
+
+**Mistake**: I stabilized the overlay layout math but still let the browse pane switch from a raw loading string to the list component after items arrived, which changed the pane’s internal chrome and made the loaded state look resized.
+**Pattern**: I verified geometry structs and loaded rendering separately, but I did not compare the actual loading render against the loaded render that users transition through.
+**Rule**: For async pane content, keep loading, empty, and loaded states on the same owning chrome. Do not replace a titled/scrollable component with a raw placeholder during loading; render the same pane header and scroll container in every state.
+**Applied**: New-session browse panes, list/detail overlays, and any TUI surface that swaps between loading placeholders and interactive content.
+
+## 2026-03-10 - Stable Overlays Need Stable Internal Chrome
+
+**Mistake**: I treated the new-session detail-row mismatch as a pure viewport-height problem and then as a full-height fix, but I still let loaded detail content introduce a title row that empty state did not reserve.
+**Pattern**: I checked outer pane alignment without verifying whether empty and loaded states reserved the same fixed internal chrome before the scrollable content started.
+**Rule**: For overlay panes that switch between placeholder and loaded detail content, keep fixed headers stable across both states and move variable content into the scrollable viewport instead of letting loaded content steal rows from the body.
+**Applied**: New-session details panes, placeholder-to-loaded overlays, and any split TUI surface where content appears after async loading.
+
+## 2026-03-10 - Pane Height Must Follow The Owning Header
+
+**Mistake**: I fixed the new-session overlay by changing shared titled-viewport math, but I did not re-check whether that overlay’s detail content already rendered its own header, so the details column still lost a visible row after tickets loaded.
+**Pattern**: I optimized for a shared layout formula instead of verifying which layer actually owned the title row in the rendered pane.
+**Rule**: For split-pane overlays, decide whether the header belongs to the pane chrome or the pane content before reserving viewport rows; if the content already includes its own title, do not spend another pane row on a duplicate header, and test the loaded state that makes the duplicate visible.
+**Applied**: New-session detail panes, preview/detail overlays, and any TUI viewport where both container chrome and inner content can introduce headings.
+
 ## 2026-03-10 - Settings Focused State Must Stay Visible And Non-Repetitive
 
 **Mistake**: I let settings warnings repeat the same per-phase harness failure four times and let the sticky detail pane consume so much of the main column that wheel scrolling could leave the focused field offscreen.

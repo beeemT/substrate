@@ -131,6 +131,7 @@ func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
                 States:         []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"},
                 SupportsSearch: true,
                 SupportsCursor: true,
+                SupportsRepo:   true,
             },
         },
     }
@@ -139,9 +140,10 @@ func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
 
 Important decisions:
 - **issues only** in v1
-- no labels support unless the API exposes a clean, first-class equivalent we actually want in the UI
-- no owner / repo / group / team filters; Sentry scoping comes from config plus Sentry query syntax
-- no fake compatibility layer that pretends Sentry is a repository host
+- reuse the shared `repo` filter as the Sentry project selector; update the field placeholder from `Repository / project path…` to `Repository / Project…`
+- owner and labels remain unsupported for Sentry and should be disabled or hidden in place when Sentry is selected, without causing overlay resize or choppy reflow
+- no fake repo-lifecycle abstraction for Sentry
+- no new Sentry-only browse controls in v1; stay within the shared overlay filter model
 
 ## Browse model
 
@@ -162,12 +164,13 @@ Only `domain.ScopeIssues` is supported.
 - state `resolved` -> add `is:resolved`
 - state `archived` -> add `is:archived`
 - free-text search -> append the raw search text to the query expression
-- configured `projects` -> constrain the request to those projects
+- repo -> map to a Sentry project constraint; prefer a first-class project request parameter when the endpoint supports it cleanly, otherwise append `project:<value>` to the Sentry query string
+- owner -> no mapping; disable or hide this control in place when the Sentry provider is selected
+- labels -> no mapping; disable or hide this control in place when the Sentry provider is selected
+- configured `projects` -> constrain the request to those projects as an allowlist
 - cursor pagination -> parse / forward Sentry cursor values from the `Link` header
 
-The browse UI should not gain Sentry-only controls in this work item. If users need tighter scoping, they can use:
-- config-level `projects`
-- the shared search box with Sentry query syntax
+The browse UI should not gain new Sentry-only controls in this work item. When Sentry is selected, keep the overlay dimensions stable: reuse the shared repo field with placeholder `Repository / Project…`, and disable or hide owner / labels without resizing the overlay.
 
 ### List item mapping
 
@@ -281,7 +284,10 @@ Changes:
 - add settings section for provider configuration
 - add provider status entry and provider test flow (`ListSelectable(..., Limit: 1)` like existing providers)
 - keep login manual for now; no harness-mediated Sentry login is required in this work item
-- add browse tests that show Sentry appears as a provider with the intended states / views
+- update the shared browse overlay so the repo field placeholder reads `Repository / Project…`
+- when the Sentry provider is active, map the repo field to Sentry project filtering
+- when the Sentry provider is active, disable or hide owner / labels in place without changing overlay dimensions
+- add browse tests that show Sentry appears as a provider with the intended states / views and stable filter layout
 
 ### Phase 4 - Documentation follow-through after implementation
 
@@ -301,7 +307,7 @@ Changes:
 Add focused tests for:
 - config defaults and secret loading for `adapters.sentry`
 - adapter registration only when required Sentry config is present
-- Sentry query generation from view / state / search combinations
+- Sentry query generation from view / state / search / repo combinations
 - cursor parsing from `Link` headers
 - issue list response mapping into `adapter.ListResult`
 - single-item resolve
@@ -322,6 +328,8 @@ Add tests proving:
 Add tests proving:
 - Sentry appears as a browse provider when configured
 - Sentry only exposes `ScopeIssues`
+- the shared repo field is available for Sentry project filtering and uses placeholder text `Repository / Project…`
+- owner and labels are disabled or hidden when Sentry is selected without resizing the overlay
 - Sentry-specific state options appear and unsupported controls stay hidden
 - cursor pagination integrates cleanly with the existing browse overlay state machine
 
@@ -332,9 +340,9 @@ These choices should be treated as settled for this work item:
 1. **Sentry is a work-item source, not a repo-lifecycle system.**
 2. **No repository-flow integration belongs in this adapter.**
 3. **No watch / mutate behavior in v1.**
-4. **No new provider-specific browse UI controls in v1.**
+4. **No new provider-specific browse UI controls in v1; reuse the shared repo filter as the Sentry project selector.**
 5. **Use organization issues API plus cursor pagination, not deprecated project issues endpoints.**
-6. **Project scoping should come from config, not fake repo concepts.**
+6. **Project scoping should come from config allowlists plus the shared repo filter, not repo lifecycle integration.**
 
 ## Definition of done
 
