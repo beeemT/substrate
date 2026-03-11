@@ -9,7 +9,7 @@ import (
 func writeTestConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "substrate.toml")
+	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +42,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Harness.Default != HarnessOhMyPi {
 		t.Errorf("harness.default = %q, want %q", cfg.Harness.Default, HarnessOhMyPi)
 	}
-	if len(cfg.Harness.Fallback) != 2 || cfg.Harness.Fallback[0] != HarnessClaudeCode || cfg.Harness.Fallback[1] != HarnessCodex {
-		t.Errorf("harness.fallback = %v, want [%s %s]", cfg.Harness.Fallback, HarnessClaudeCode, HarnessCodex)
-	}
 	if cfg.Harness.Phase.Planning != HarnessOhMyPi || cfg.Harness.Phase.Implementation != HarnessOhMyPi || cfg.Harness.Phase.Review != HarnessOhMyPi || cfg.Harness.Phase.Foreman != HarnessOhMyPi {
 		t.Errorf("harness phase defaults = %+v, want all ohmypi", cfg.Harness.Phase)
 	}
@@ -70,19 +67,19 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadExplicitValues(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit]
-strategy = "granular"
-message_format = "conventional"
+commit:
+  strategy: granular
+  message_format: conventional
 
-[plan]
-max_parse_retries = 5
+plan:
+  max_parse_retries: 5
 
-[review]
-pass_threshold = "no_critiques"
-max_cycles = 7
+review:
+  pass_threshold: no_critiques
+  max_cycles: 7
 
-[foreman]
-question_timeout = "45s"
+foreman:
+  question_timeout: 45s
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -102,7 +99,7 @@ question_timeout = "45s"
 		t.Errorf("review.pass_threshold = %q, want %q", cfg.Review.PassThreshold, PassThresholdNoCritiques)
 	}
 	if *cfg.Review.MaxCycles != 7 {
-		t.Errorf("review.max_cycles = %d, want 7", *cfg.Review.MaxCycles)
+		t.Errorf("review.max_cycles = %d, want %d", *cfg.Review.MaxCycles, 7)
 	}
 	if cfg.Foreman.QuestionTimeout != "45s" {
 		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "45s")
@@ -111,8 +108,8 @@ question_timeout = "45s"
 
 func TestLoadCustomMessageFormatRequiresTemplate(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit]
-message_format = "custom"
+commit:
+  message_format: custom
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -122,9 +119,9 @@ message_format = "custom"
 
 func TestLoadCustomMessageFormatWithTemplate(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit]
-message_format = "custom"
-message_template = "feat({{.Scope}}): {{.Description}}"
+commit:
+  message_format: custom
+  message_template: 'feat({{.Scope}}): {{.Description}}'
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -137,8 +134,8 @@ message_template = "feat({{.Scope}}): {{.Description}}"
 
 func TestLoadInvalidStrategy(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit]
-strategy = "invalid"
+commit:
+  strategy: invalid
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -148,8 +145,8 @@ strategy = "invalid"
 
 func TestLoadInvalidMessageFormat(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit]
-message_format = "invalid"
+commit:
+  message_format: invalid
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -159,8 +156,8 @@ message_format = "invalid"
 
 func TestLoadInvalidPassThreshold(t *testing.T) {
 	path := writeTestConfig(t, `
-[review]
-pass_threshold = "invalid"
+review:
+  pass_threshold: invalid
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -169,26 +166,51 @@ pass_threshold = "invalid"
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	_, err := Load("/nonexistent/path/substrate.toml")
+	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {
 		t.Fatal("Load() should error on missing file")
 	}
 }
 
-func TestLoadInvalidTOML(t *testing.T) {
+func TestLoadInvalidYAML(t *testing.T) {
 	path := writeTestConfig(t, `
-[commit
-strategy = "granular"
+commit:
+  strategy: granular
+  broken: [1, 2
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("Load() should error on invalid TOML")
+		t.Fatal("Load() should error on invalid YAML")
+	}
+}
+
+func TestLoadIgnoresUnknownFields(t *testing.T) {
+	path := writeTestConfig(t, `
+commit:
+  strategy: granular
+unknown_top_level: true
+harness:
+  default: codex
+  fallback:
+    - claude-code
+  unknown_nested: value
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Commit.Strategy != CommitStrategyGranular {
+		t.Fatalf("commit.strategy = %q, want %q", cfg.Commit.Strategy, CommitStrategyGranular)
+	}
+	if cfg.Harness.Default != HarnessCodex {
+		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessCodex)
 	}
 }
 
 func TestLoadWithRepos(t *testing.T) {
 	path := writeTestConfig(t, `
-[repos.myrepo]
+repos:
+  myrepo: {}
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -201,25 +223,20 @@ func TestLoadWithRepos(t *testing.T) {
 
 func TestLoadHarnessConfig(t *testing.T) {
 	path := writeTestConfig(t, `
-	[harness]
-	default = "codex"
-	fallback = ["claude-code", "ohmypi"]
-
-	[harness.phase]
-	planning = "claude-code"
-	implementation = "codex"
-	review = "claude-code"
-	foreman = "ohmypi"
-	`)
+harness:
+  default: codex
+  phase:
+    planning: claude-code
+    implementation: codex
+    review: claude-code
+    foreman: ohmypi
+`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	if cfg.Harness.Default != HarnessCodex {
 		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessCodex)
-	}
-	if len(cfg.Harness.Fallback) != 2 || cfg.Harness.Fallback[0] != HarnessClaudeCode || cfg.Harness.Fallback[1] != HarnessOhMyPi {
-		t.Fatalf("unexpected harness.fallback: %v", cfg.Harness.Fallback)
 	}
 	if cfg.Harness.Phase.Foreman != HarnessOhMyPi {
 		t.Fatalf("harness.phase.foreman = %q, want %q", cfg.Harness.Phase.Foreman, HarnessOhMyPi)
@@ -228,9 +245,9 @@ func TestLoadHarnessConfig(t *testing.T) {
 
 func TestLoadInvalidHarnessDefault(t *testing.T) {
 	path := writeTestConfig(t, `
-	[harness]
-	default = "invalid"
-	`)
+harness:
+  default: invalid
+`)
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("Load() should error on invalid harness.default")

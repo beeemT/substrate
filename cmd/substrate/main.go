@@ -304,55 +304,52 @@ func run() error {
 	return views.RunTUI(svcs)
 }
 
-// initializeGlobalConfig creates the default config file.
+// initializeGlobalConfig creates the default config.yaml file.
 func initializeGlobalConfig(cfgPath string) error {
 	defaultConfig := `# Substrate Configuration
 	# This file was auto-generated with default values.
 	# All settings have sensible defaults - customize as needed.
-
-	[commit]
-	# strategy = "semi-regular"
-	# message_format = "ai-generated"
-	# message_template = "feat({{.Scope}}): {{.Description}}"
-	
-	[plan]
-	# max_parse_retries = 2
-	
-	[review]
-	# pass_threshold = "minor_ok"
-	# max_cycles = 3
-	
-	[harness]
-	# default = "ohmypi"
-	# fallback = ["claude-code", "codex"]
-	
-	[harness.phase]
-	# planning = "ohmypi"
-	# implementation = "ohmypi"
-	# review = "ohmypi"
-	# foreman = "ohmypi"
-	
-	[foreman]
-	# question_timeout = "0"
-	
-	[adapters.claude_code]
-	# binary_path = "claude"
-	# model = "sonnet"
-	# permission_mode = "auto"
-	# max_turns = 50
-	# max_budget_usd = 10.0
-	
-	[adapters.codex]
-	# binary_path = "codex"
-	# model = "o4"
-	# approval_mode = "full-auto"
-	# full_auto = false
-	# quiet = false
-	
-	[adapters.ohmypi]
-	# thinking_level = "high"
-	# bun_path = "/opt/homebrew/bin/bun"       # optional override when using a source bridge script
-	# bridge_path = "/custom/path/to/omp-bridge" # optional override; default uses packaged compiled bridge
+	#
+	# commit:
+	#   strategy: semi-regular
+	#   message_format: ai-generated
+	#   message_template: "feat({{.Scope}}): {{.Description}}"
+	#
+	# plan:
+	#   max_parse_retries: 2
+	#
+	# review:
+	#   pass_threshold: minor_ok
+	#   max_cycles: 3
+	#
+	# harness:
+	#   default: ohmypi
+	#   phase:
+	#     planning: ohmypi
+	#     implementation: ohmypi
+	#     review: ohmypi
+	#     foreman: ohmypi
+	#
+	# foreman:
+	#   question_timeout: "0"
+	#
+	# adapters:
+	#   claude_code:
+	#     binary_path: claude
+	#     model: sonnet
+	#     permission_mode: auto
+	#     max_turns: 50
+	#     max_budget_usd: 10.0
+	#   codex:
+	#     binary_path: codex
+	#     model: o4
+	#     approval_mode: full-auto
+	#     full_auto: false
+	#     quiet: false
+	#   ohmypi:
+	#     thinking_level: high
+	#     bun_path: /opt/homebrew/bin/bun
+	#     bridge_path: /custom/path/to/omp-bridge
 	`
 
 	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o644); err != nil {

@@ -426,34 +426,35 @@ CREATE INDEX idx_instances_workspace ON substrate_instances(workspace_id);
 
 Plain constructor injection via go-atomic. No framework, no container.
 
-**`substrate.toml` configuration:**
-```toml
-[commit]
-strategy        = "semi-regular"   # "granular" | "semi-regular" | "single"
-message_format  = "ai-generated"   # "ai-generated" | "conventional" | "custom"
-message_template = ""              # used when message_format = "custom"
+**`config.yaml` configuration:**
+```yaml
+commit:
+  strategy: semi-regular        # "granular" | "semi-regular" | "single"
+  message_format: ai-generated  # "ai-generated" | "conventional" | "custom"
+  message_template: ""          # used when message_format = "custom"
 
-[plan]
-max_parse_retries = 2              # correction loop attempts before surfacing to human
+plan:
+  max_parse_retries: 2          # correction loop attempts before surfacing to human
 
-[review]
-pass_threshold = "minor_ok"        # "nit_only" | "minor_ok" | "no_critiques"
-max_cycles     = 3                 # max re-implementation cycles before human escalation
+review:
+  pass_threshold: minor_ok      # "nit_only" | "minor_ok" | "no_critiques"
+  max_cycles: 3                 # max re-implementation cycles before human escalation
 
-[adapters.ohmypi]
-thinking_level  = "xhigh"          # oh-my-pi thinkingLevel for all sessions
-# bun_path      = "/opt/homebrew/bin/bun"         # optional override when using a source bridge script
-# bridge_path   = "/custom/path/to/omp-bridge"   # optional override; default uses packaged compiled bridge
+adapters:
+  ohmypi:
+    thinking_level: xhigh       # oh-my-pi thinkingLevel for all sessions
+    # bun_path: /opt/homebrew/bin/bun       # optional override when using a source bridge script
+    # bridge_path: /custom/path/to/omp-bridge # optional override; default uses packaged compiled bridge
 
-[foreman]
-question_timeout = "0"             # duration string; "0" = wait indefinitely
-
+foreman:
+  question_timeout: "0"         # duration string; "0" = wait indefinitely
 
 ```go
 func main() {
-	cfg, _ := config.Load("substrate.toml")
+	cfg, _ := config.Load("config.yaml")
 
-	db, _ := sqlx.Open("sqlite", cfg.GlobalDBPath()) // ~/.substrate/state.db
+	dbPath, _ := config.GlobalDBPath() // ~/.substrate/state.db
+	db, _ := sqlx.Open("sqlite", dbPath)
 	defer db.Close()
 	db.MustExec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
 

@@ -1237,6 +1237,10 @@ func (a *App) updateContentFromState() tea.Cmd {
 				return nil
 			}
 		}
+		if showSourceDetails {
+			a.content.SetMode(ContentModeSourceDetails)
+			return nil
+		}
 		a.content.SetMode(ContentModeImplementing)
 		if plan != nil {
 			repos := a.buildRepoProgress(plan)
@@ -1311,9 +1315,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.failed.SetFailure("Work item failed", "")
 	}
 
-	if showSourceDetails && a.content.mode == ContentModeImplementing {
-		a.content.SetMode(ContentModeSourceDetails)
-	}
 	if prevMode != a.content.mode {
 		if prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction {
 			a.tailingSessionIDs = make(map[string]bool)

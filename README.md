@@ -133,37 +133,37 @@ If you have existing repos, simply place them in this directory. When you run Su
 - Register the workspace in the global DB (`~/.substrate/state.db`)
 ### 2. Configure
 
-Substrate uses a global config file at `~/.substrate/config.toml`. This file is auto-generated with helpful comments on first run.
+Substrate uses a global config file at `~/.substrate/config.yaml`. This file is auto-generated with helpful comments on first run.
 
 To customize settings, edit the config file:
 
 ```bash
 # View/edit the config
-$EDITOR ~/.substrate/config.toml
+$EDITOR ~/.substrate/config.yaml
 ```
 
 Example configuration:
 
-```toml
-[commit]
-strategy       = "semi-regular"   # granular | semi-regular | single
-message_format = "ai-generated"   # ai-generated | conventional | custom
+```yaml
+commit:
+  strategy: semi-regular        # granular | semi-regular | single
+  message_format: ai-generated  # ai-generated | conventional | custom
 
-[plan]
-max_parse_retries = 2
+plan:
+  max_parse_retries: 2
 
-[review]
-pass_threshold = "minor_ok"       # nit_only | minor_ok | no_critiques
-max_cycles     = 3
+review:
+  pass_threshold: minor_ok      # nit_only | minor_ok | no_critiques
+  max_cycles: 3
 
-[adapters.ohmypi]
-thinking_level = "xhigh"
+adapters:
+  ohmypi:
+    thinking_level: xhigh
+    # bun_path: /opt/homebrew/bin/bun
+    # bridge_path: /custom/path/to/omp-bridge
 
-# `bun_path` and `bridge_path` are optional advanced overrides for source-checkout bridge development.
-# Brew installs use the packaged compiled bridge automatically.
-
-[foreman]
-question_timeout = "0"            # "0" = wait indefinitely
+foreman:
+  question_timeout: "0"         # "0" = wait indefinitely
 ```
 ### 3. Run the TUI
 
@@ -220,7 +220,7 @@ The TUI lets you:
     └── main/
 ```
 
-Configuration is stored globally at `~/.substrate/config.toml`. See `SUBSTRATE_HOME` environment variable to customize the location.
+Configuration is stored globally at `~/.substrate/config.yaml`. See `SUBSTRATE_HOME` environment variable to customize the location.
 
 ---
 
@@ -248,7 +248,7 @@ Configuration is stored globally at `~/.substrate/config.toml`. See `SUBSTRATE_H
 | **Database** | SQLite + sqlx + go-atomic | Local-only, no server, Unit of Work pattern |
 | **Git** | git-work + CLI | Machine-readable stdout, subprocess isolation |
 | **Agent Harness** | Bun bridge (subprocess) | Fault isolation, language independence |
-| **Config** | TOML | Human-readable, hierarchical |
+| **Config** | YAML | Human-readable, hierarchical |
 
 ---
 

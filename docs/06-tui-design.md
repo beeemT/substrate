@@ -371,7 +371,7 @@ The footer hints are focus-sensitive. In the tree view they expose navigation, e
 
 ### 4d. First-Start Initialization Modal
 
-Global initialization (creating `~/.substrate/`, `config.toml`, `state.db`, `sessions/`) happens automatically on first CLI launch (see `07-implementation-plan.md` Phase 0). The TUI modal handles **workspace initialization** only.
+Global initialization (creating `~/.substrate/`, `config.yaml`, `state.db`, `sessions/`) happens automatically on first CLI launch (see `07-implementation-plan.md` Phase 0). The TUI modal handles **workspace initialization** only.
 
 When Substrate launches and the current directory is not a registered workspace, the Workspace Initialization Modal is shown:
 

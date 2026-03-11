@@ -3,8 +3,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
@@ -14,6 +16,7 @@ import (
 	manualadapter "github.com/beeemT/substrate/internal/adapter/manual"
 	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/repository"
 )
@@ -74,7 +77,7 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 	for _, platform := range platforms {
 		switch platform {
 		case remotedetect.PlatformGitLab:
-			adapters = append(adapters, gladapter.New(cfg.Adapters.Glab))
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.New(cfg.Adapters.Glab)})
 		case remotedetect.PlatformGitHub:
 			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 				slog.Warn("skipping github lifecycle adapter: no github auth configured")
@@ -85,12 +88,105 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 				slog.Warn("skipping github lifecycle adapter", "err", err)
 				continue
 			}
-			adapters = append(adapters, githubAdapter)
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: githubAdapter})
 		default:
 			slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
 		}
 	}
 	return adapters
+}
+
+type routedRepoLifecycleAdapter struct {
+	provider remotedetect.Platform
+	adapter  adapter.RepoLifecycleAdapter
+}
+
+func (a routedRepoLifecycleAdapter) Name() string { return a.adapter.Name() }
+
+func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.SystemEvent) error {
+	provider, ok := repoLifecycleEventPlatform(evt)
+	if !ok || provider != a.provider {
+		return nil
+	}
+	return a.adapter.OnEvent(ctx, evt)
+}
+
+func repoLifecycleEventPlatform(evt domain.SystemEvent) (remotedetect.Platform, bool) {
+	var payload struct {
+		Review      domain.ReviewRef `json:"review"`
+		ExternalID  string           `json:"external_id"`
+		ExternalIDs []string         `json:"external_ids"`
+	}
+	if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+		return remotedetect.PlatformUnknown, false
+	}
+	if provider, ok := repoLifecycleEventPlatformFromReview(payload.Review); ok {
+		return provider, true
+	}
+	return repoLifecycleEventPlatformFromExternalIDs(payload.ExternalID, payload.ExternalIDs)
+}
+
+func repoLifecycleEventPlatformFromReview(review domain.ReviewRef) (remotedetect.Platform, bool) {
+	base, baseOK := repoLifecycleEventPlatformFromProvider(review.BaseRepo.Provider)
+	head, headOK := repoLifecycleEventPlatformFromProvider(review.HeadRepo.Provider)
+	switch {
+	case baseOK && headOK && base != head:
+		return remotedetect.PlatformUnknown, false
+	case baseOK:
+		return base, true
+	case headOK:
+		return head, true
+	default:
+		return remotedetect.PlatformUnknown, false
+	}
+}
+
+func repoLifecycleEventPlatformFromProvider(provider string) (remotedetect.Platform, bool) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case remotedetect.PlatformGitHub.String():
+		return remotedetect.PlatformGitHub, true
+	case remotedetect.PlatformGitLab.String():
+		return remotedetect.PlatformGitLab, true
+	default:
+		return remotedetect.PlatformUnknown, false
+	}
+}
+
+func repoLifecycleEventPlatformFromExternalIDs(externalID string, externalIDs []string) (remotedetect.Platform, bool) {
+	provider, ok := repoLifecycleEventPlatformFromExternalID(externalID)
+	if !ok {
+		provider = remotedetect.PlatformUnknown
+	}
+	for _, candidate := range externalIDs {
+		next, nextOK := repoLifecycleEventPlatformFromExternalID(candidate)
+		if !nextOK {
+			continue
+		}
+		if provider == remotedetect.PlatformUnknown {
+			provider = next
+			ok = true
+			continue
+		}
+		if provider != next {
+			return remotedetect.PlatformUnknown, false
+		}
+	}
+	if !ok || provider == remotedetect.PlatformUnknown {
+		return remotedetect.PlatformUnknown, false
+	}
+	return provider, true
+}
+
+func repoLifecycleEventPlatformFromExternalID(externalID string) (remotedetect.Platform, bool) {
+	trimmed := strings.TrimSpace(externalID)
+	switch {
+	case strings.HasPrefix(trimmed, "gh:"):
+		return remotedetect.PlatformGitHub, true
+	case strings.HasPrefix(trimmed, "gl:"):
+		return remotedetect.PlatformGitLab, true
+	default:
+		return remotedetect.PlatformUnknown, false
+	}
 }
 
 func detectWorkspaceLifecyclePlatforms(ctx context.Context, cfg *config.Config, workspaceDir string) ([]remotedetect.Platform, error) {

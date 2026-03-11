@@ -427,8 +427,9 @@ func TestAllWavesCompletedEmptyPlan(t *testing.T) {
 }
 
 type implementationWorkItemRepo struct {
-	mu    sync.Mutex
-	items map[string]domain.WorkItem
+	mu         sync.Mutex
+	items      map[string]domain.WorkItem
+	updateHook func(context.Context, domain.WorkItem) error
 }
 
 func (r *implementationWorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, error) {
@@ -461,6 +462,11 @@ func (r *implementationWorkItemRepo) Create(ctx context.Context, item domain.Wor
 func (r *implementationWorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateHook != nil {
+		if err := r.updateHook(ctx, item); err != nil {
+			return err
+		}
+	}
 	r.items[item.ID] = item
 	return nil
 }
@@ -640,5 +646,103 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 	}
 	if got := eventRepo.events[0].EventType; got != string(domain.EventImplementationStarted) {
 		t.Fatalf("event type = %q, want %q", got, domain.EventImplementationStarted)
+	}
+}
+
+func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.T) {
+	svc, workItemRepo, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	workItemRepo.updateHook = func(ctx context.Context, item domain.WorkItem) error {
+		if item.State == domain.WorkItemImplementing {
+			cancel()
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	_, err := svc.Implement(ctx, "plan-1")
+	if err == nil {
+		t.Fatal("expected implementation to fail when worktree preparation fails")
+	}
+	if !strings.Contains(err.Error(), "prepare worktrees") {
+		t.Fatalf("expected prepare worktrees error, got %v", err)
+	}
+
+	workItem, getErr := workItemRepo.Get(context.Background(), "wi-1")
+	if getErr != nil {
+		t.Fatalf("get work item: %v", getErr)
+	}
+	if workItem.State != domain.WorkItemFailed {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemFailed)
+	}
+	if len(eventRepo.events) != 1 {
+		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
+	}
+	if got := eventRepo.events[0].EventType; got != string(domain.EventImplementationStarted) {
+		t.Fatalf("event type = %q, want %q", got, domain.EventImplementationStarted)
+	}
+}
+
+func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
+	svc, _, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	sessionRepo, ok := svc.sessionRepo.(*mockSessionRepo)
+	if !ok {
+		t.Fatal("expected mock session repo")
+	}
+	sessionRepo.updateErr = repository.ErrNotFound
+	sessionRepo.updateErrStatus = domain.AgentSessionRunning
+
+	harness := &captureHarness{}
+	svc.harness = harness
+
+	subPlanRepo, ok := svc.subPlanRepo.(*mockSubPlanRepo)
+	if !ok {
+		t.Fatal("expected mock sub-plan repo")
+	}
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workItem := domain.WorkItem{
+		ID:          "wi-1",
+		WorkspaceID: "ws-1",
+		ExternalID:  "MAN-1",
+		Source:      "manual",
+		Title:       "Implement the change",
+		State:       domain.WorkItemImplementing,
+	}
+	state := NewExecutionState("plan-1", []domain.SubPlan{subPlan})
+
+	result, warning := svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		&workspace,
+		&plan,
+		&workItem,
+		"sub-MAN-1-implement-the-change",
+		map[string]string{"repo-a": t.TempDir()},
+		state,
+	)
+
+	if result.Status != domain.AgentSessionFailed {
+		t.Fatalf("session status = %q, want %q", result.Status, domain.AgentSessionFailed)
+	}
+	if warning == nil || warning.Type != "session_start_failed" {
+		t.Fatalf("warning = %#v, want session_start_failed", warning)
+	}
+	if len(harness.captured) != 0 {
+		t.Fatalf("expected no harness starts, got %d", len(harness.captured))
+	}
+	if _, err := sessionRepo.Get(context.Background(), result.SessionID); err != repository.ErrNotFound {
+		t.Fatalf("expected pending session cleanup, got %v", err)
+	}
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventAgentSessionStarted) {
+			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentSessionStarted)
+		}
 	}
 }

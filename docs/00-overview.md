@@ -48,7 +48,7 @@ Substrate is organized around a few stable seams:
 | Agent harness | Multi-harness subprocess adapters | oh-my-pi via Bun bridge is the default verified interactive harness; Claude Code and Codex are selectable but not yet parity-proven for all interactive flows |
 | Work item trackers | Linear GraphQL + GitHub/GitLab REST adapters | Common work item contract with provider-specific capabilities behind the boundary |
 | Repo lifecycle | glab CLI + GitHub REST API | GitLab MR automation stays in `glab`; GitHub PR automation uses REST; startup remote detection selects the right lifecycle path |
-| Config | TOML | Human-editable structured configuration with stable defaults |
+| Config | YAML | Human-editable structured configuration with stable defaults |
 
 ## Design Principles
 

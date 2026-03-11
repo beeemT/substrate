@@ -27,7 +27,6 @@ That last failure is included below as a fix-prep blocker.
 | ID | Severity | Area | Short description |
 |---|---|---|---|
 | BA-001 | High | Event wiring | Plan approval and work-item completion hooks are effectively dead because runtime code never emits the events adapters subscribe to |
-| BA-002 | High | Harness fallback | `ohmypi` is selected before its bridge/runtime dependencies are validated, so configured fallback harnesses never engage |
 | BA-003 | High | Workspace recovery | A valid `.substrate-workspace` file without a matching DB row drops the user into an init flow that cannot recover |
 | BA-004 | High | Implementation lifecycle | Implementation marks the work item `implementing` before repo/worktree preflight; early failures can leave it stuck in the wrong state |
 | BA-005 | High | Resume lifecycle | Resume can start a real harness session and then return an error without aborting it if the DB transition to `running` fails |

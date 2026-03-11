@@ -290,7 +290,7 @@ func (r SessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHis
 		)`
 		args = append(args, like, like, like, like, like, like, like, like, like, like, like, like, like)
 	}
-	query += ` ORDER BY updated_at DESC, wi.created_at DESC, wi.id`
+	query += ` ORDER BY updated_at DESC, COALESCE(ss.latest_session_updated_at, '') DESC, wi.updated_at DESC, wi.created_at DESC, wi.id`
 	limit := filter.Limit
 	if limit == 0 {
 		limit = 100

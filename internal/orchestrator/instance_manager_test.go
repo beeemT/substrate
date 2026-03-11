@@ -525,7 +525,7 @@ func TestResumeSession_OldSessionRemainInterrupted(t *testing.T) {
 	}
 }
 
-func TestResumeSession_StartFailureAbortsHarnessAndDeletesSession(t *testing.T) {
+func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartingHarness(t *testing.T) {
 	fix := newPhase9bFixture()
 	ctx := context.Background()
 
@@ -548,7 +548,7 @@ func TestResumeSession_StartFailureAbortsHarnessAndDeletesSession(t *testing.T) 
 	fix.sessionRepo.updateErr = repository.ErrNotFound
 	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
 
-	harness := &captureHarness{sessionsDir: sessionsDir, abortErr: repository.ErrNotFound}
+	harness := &captureHarness{sessionsDir: sessionsDir}
 	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus)
 
 	interrupted := fix.sessionRepo.sessions["sess-int3"]
@@ -560,17 +560,78 @@ func TestResumeSession_StartFailureAbortsHarnessAndDeletesSession(t *testing.T) 
 		t.Fatalf("expected original start-transition error, got %v", err)
 	}
 
-	if len(harness.captured) != 1 {
-		t.Fatalf("expected one harness start, got %d", len(harness.captured))
+	if len(harness.captured) != 0 {
+		t.Fatalf("expected no harness start, got %d", len(harness.captured))
 	}
-	newSessionID := harness.captured[0].SessionID
-	if _, getErr := fix.sessionRepo.Get(ctx, newSessionID); getErr != repository.ErrNotFound {
-		t.Fatalf("expected resumed session %q to be deleted, got %v", newSessionID, getErr)
-	}
-	if harness.lastSession == nil || !harness.lastSession.aborted {
-		t.Fatal("expected resumed harness session to be aborted")
+	for id, session := range fix.sessionRepo.sessions {
+		if id == "sess-int3" {
+			continue
+		}
+		if session.Status == domain.AgentSessionPending {
+			t.Fatalf("unexpected pending resumed session left behind: %+v", session)
+		}
 	}
 	if got := fix.getSessionStatus("sess-int3"); got != domain.AgentSessionInterrupted {
+		t.Errorf("old session must remain interrupted; got %q", got)
+	}
+}
+
+func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellation(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	origHome := os.Getenv("SUBSTRATE_HOME")
+	os.Setenv("SUBSTRATE_HOME", tmpDir)
+	defer func() {
+		if origHome == "" {
+			os.Unsetenv("SUBSTRATE_HOME")
+		} else {
+			os.Setenv("SUBSTRATE_HOME", origHome)
+		}
+	}()
+
+	fix.seedInterruptedSession("sess-int4")
+	fix.sessionRepo.updateHook = func(ctx context.Context, session domain.AgentSession) error {
+		if session.Status == domain.AgentSessionRunning {
+			cancel()
+		}
+		return nil
+	}
+	fix.sessionRepo.updateErr = repository.ErrNotFound
+	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
+	fix.sessionRepo.deleteHook = func(ctx context.Context, id string) error {
+		return ctx.Err()
+	}
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus)
+
+	interrupted := fix.sessionRepo.sessions["sess-int4"]
+	_, err := r.ResumeSession(ctx, interrupted, "inst-new4")
+	if err == nil {
+		t.Fatal("expected ResumeSession to fail when transition to running fails")
+	}
+	if !strings.Contains(err.Error(), "transition resumed session to running") {
+		t.Fatalf("expected original start-transition error, got %v", err)
+	}
+	if len(harness.captured) != 0 {
+		t.Fatalf("expected no harness start, got %d", len(harness.captured))
+	}
+	for id, session := range fix.sessionRepo.sessions {
+		if id == "sess-int4" {
+			continue
+		}
+		if session.Status == domain.AgentSessionPending {
+			t.Fatalf("unexpected pending resumed session left behind after cancellation: %+v", session)
+		}
+	}
+	if got := fix.getSessionStatus("sess-int4"); got != domain.AgentSessionInterrupted {
 		t.Errorf("old session must remain interrupted; got %q", got)
 	}
 }

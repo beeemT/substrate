@@ -152,7 +152,9 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		if err == nil || !implementingStarted {
 			return
 		}
-		if failErr := s.workItemSvc.FailWorkItem(ctx, workItem.ID); failErr != nil {
+		cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
+		defer cleanupCancel()
+		if failErr := s.workItemSvc.FailWorkItem(cleanupCtx, workItem.ID); failErr != nil {
 			slog.Warn("failed to transition work item to failed after implementation error",
 				"error", failErr,
 				"plan_id", planID,
@@ -242,13 +244,16 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 
 	result.CompletedAt = time.Now()
 
-	// Update work item state based on overall result
+	// Update work item state based on overall result using a detached cleanup context
+	// so cancellation cannot strand the work item in implementing.
+	cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
+	defer cleanupCancel()
 	if state.AllWavesCompleted() {
-		if reviewErr := s.workItemSvc.SubmitForReview(ctx, workItem.ID); reviewErr != nil {
+		if reviewErr := s.workItemSvc.SubmitForReview(cleanupCtx, workItem.ID); reviewErr != nil {
 			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
 		}
 	} else {
-		if failErr := s.workItemSvc.FailWorkItem(ctx, workItem.ID); failErr != nil {
+		if failErr := s.workItemSvc.FailWorkItem(cleanupCtx, workItem.ID); failErr != nil {
 			slog.Warn("failed to transition work item to failed", "error", failErr)
 		}
 	}
@@ -369,14 +374,29 @@ func (s *ImplementationService) executeSubPlan(
 	}
 	result.SessionID = sessionID
 
-	// Emit AgentSessionStarted event
+	// Transition the session to running before launching the harness so no external
+	// session can exist without a durable running row.
+	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
+		result.Status = domain.AgentSessionFailed
+		result.Summary = fmt.Sprintf("failed to transition session to running: %v", err)
+		result.CompletedAt = ptrTime(time.Now())
+		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
+		return result, &ImplementationWarning{
+			Type:      "session_start_failed",
+			Message:   result.Summary,
+			RepoName:  subPlan.RepositoryName,
+			SessionID: sessionID,
+		}
+	}
+	now := time.Now()
+	session.Status = domain.AgentSessionRunning
+	session.StartedAt = &now
+	session.UpdatedAt = now
+
+	// Emit AgentSessionStarted only after the durable running transition succeeds.
 	if err := s.emitSessionStarted(ctx, &session, workspace.ID); err != nil {
 		slog.Warn("failed to emit session started event", "error", err)
-	}
-
-	// Transition session to running
-	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
-		slog.Warn("failed to start session", "error", err)
 	}
 
 	// Build session options
@@ -388,7 +408,9 @@ func (s *ImplementationService) executeSubPlan(
 		result.Status = domain.AgentSessionFailed
 		result.Summary = fmt.Sprintf("failed to start agent: %v", err)
 		result.CompletedAt = ptrTime(time.Now())
-		_ = s.sessionSvc.Fail(ctx, sessionID, ptrInt(1))
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail session after harness start error", "error", failErr, "session_id", sessionID)
+		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
 		return result, &ImplementationWarning{
 			Type:      "harness_start_failed",
@@ -413,15 +435,15 @@ func (s *ImplementationService) executeSubPlan(
 		result.Status = domain.AgentSessionFailed
 		result.Summary = waitErr.Error()
 		result.ExitCode = ptrInt(1)
-		if err := s.sessionSvc.Fail(ctx, sessionID, ptrInt(1)); err != nil {
-			slog.Warn("failed to fail session", "error", err)
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
 		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), waitErr)
 	} else {
 		result.Status = domain.AgentSessionCompleted
 		result.Summary = "Session completed successfully"
-		if err := s.sessionSvc.Complete(ctx, sessionID); err != nil {
-			slog.Warn("failed to complete session", "error", err)
+		if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
+			slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
 		}
 		state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
 
@@ -799,6 +821,39 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 }
 
 // Helper functions
+
+const durableCleanupTimeout = 30 * time.Second
+
+func durableCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), durableCleanupTimeout)
+}
+
+func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.SessionService, sessionID string, exitCode *int) {
+	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
+	defer cleanupCancel()
+
+	if err := sessionSvc.Delete(cleanupCtx, sessionID); err == nil {
+		return
+	} else {
+		slog.Warn("failed to delete pending session during cleanup", "error", err, "session_id", sessionID)
+	}
+
+	if err := sessionSvc.Fail(cleanupCtx, sessionID, exitCode); err != nil {
+		slog.Warn("failed to terminalize pending session during cleanup", "error", err, "session_id", sessionID)
+	}
+}
+
+func failSessionDurably(parent context.Context, sessionSvc *service.SessionService, sessionID string, exitCode *int) error {
+	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
+	defer cleanupCancel()
+	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
+}
+
+func completeSessionDurably(parent context.Context, sessionSvc *service.SessionService, sessionID string) error {
+	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
+	defer cleanupCancel()
+	return sessionSvc.Complete(cleanupCtx, sessionID)
+}
 
 func marshalJSONOrEmpty(v interface{}) string {
 	b, err := json.Marshal(v)

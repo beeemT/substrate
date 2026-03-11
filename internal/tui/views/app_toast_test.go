@@ -17,6 +17,14 @@ func stripToastANSI(s string) string {
 	return toastANSIPattern.ReplaceAllString(s, "")
 }
 
+func lastNonSpaceColumn(line string) int {
+	trimmed := strings.TrimRight(line, " ")
+	if trimmed == "" {
+		return -1
+	}
+	return len(trimmed) - 1
+}
+
 func findLineContaining(lines []string, needle string) int {
 	for i, line := range lines {
 		if strings.Contains(line, needle) {
@@ -152,6 +160,11 @@ func TestAppView_ReadOnlyToastStackRightAlignsNarrowerToasts(t *testing.T) {
 	if tinyCol <= longCol {
 		t.Fatalf("toast columns = tiny:%d long:%d, want narrower toast shifted right", tinyCol, longCol)
 	}
+	tinyRight := lastNonSpaceColumn(lines[tinyLine])
+	longRight := lastNonSpaceColumn(lines[longLine])
+	if tinyRight != longRight {
+		t.Fatalf("toast right edge = tiny:%d long:%d, want equal shared right edge", tinyRight, longRight)
+	}
 }
 
 func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
@@ -194,7 +207,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 		SettingsData: SettingsSnapshot{
 			Sections:       buildSettingsSections(cfg),
 			Providers:      buildProviderStatuses(cfg),
-			HarnessWarning: "Planning unavailable. Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.",
+			HarnessWarning: "Planning unavailable. Check Harness Routing.",
 		},
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
@@ -207,7 +220,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	rendered := updated.View()
 	assertAppViewFitsWindow(t, rendered, 80, 16)
 	lines := strings.Split(stripToastANSI(rendered), "\n")
-	warningLine := findLineContaining(lines, "Codex CLI not found in PATH")
+	warningLine := findLineContaining(lines, "Planning unavailable. Check Harness Routing.")
 	syncLine := findLineContaining(lines, "Sync complete")
 	if warningLine == -1 || syncLine == -1 {
 		t.Fatalf("view missing warning stack: %q", strings.Join(lines, "\n"))

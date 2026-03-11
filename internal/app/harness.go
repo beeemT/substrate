@@ -25,17 +25,22 @@ type HarnessCandidateFailure struct {
 	Message string
 }
 
-func (f HarnessCandidateFailure) UserMessage() string {
-	return userFacingHarnessFailure(f.Harness, f.Message)
+func (f HarnessCandidateFailure) SettingsReason() string {
+	return settingsHarnessFailureReason(f.Harness, f.Message)
 }
 
 type HarnessPhaseDiagnostic struct {
-	Phase         string
-	Requested     config.HarnessName
-	Resolved      config.HarnessName
-	Available     bool
-	UsingFallback bool
-	Failures      []HarnessCandidateFailure
+	Phase     string
+	Available bool
+	Failures  []HarnessCandidateFailure
+}
+
+func (d HarnessPhaseDiagnostic) SummaryMessage() string {
+	if len(d.Failures) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s unavailable. Check Harness Routing.", displayHarnessPhase(d.Phase))
 }
 
 func (d HarnessPhaseDiagnostic) WarningMessage() string {
@@ -43,23 +48,7 @@ func (d HarnessPhaseDiagnostic) WarningMessage() string {
 		return ""
 	}
 
-	phase := displayHarnessPhase(d.Phase)
-	if d.Available {
-		reason := d.Failures[0].UserMessage()
-		for _, failure := range d.Failures {
-			if failure.Harness == d.Requested {
-				reason = failure.UserMessage()
-				break
-			}
-		}
-		return fmt.Sprintf("%s requested %s, but %s Falling back to %s.", phase, displayHarnessName(d.Requested), reason, displayHarnessName(d.Resolved))
-	}
-
-	parts := make([]string, 0, len(d.Failures))
-	for _, failure := range d.Failures {
-		parts = append(parts, failure.UserMessage())
-	}
-	return fmt.Sprintf("%s unavailable. %s", phase, strings.Join(parts, " "))
+	return fmt.Sprintf("%s: %s.", displayHarnessPhase(d.Phase), d.Failures[0].SettingsReason())
 }
 
 type HarnessDiagnostics struct {
@@ -76,14 +65,14 @@ func (d HarnessDiagnostics) HasWarnings() bool {
 }
 
 func (d HarnessDiagnostics) WarningSummary() string {
-	warnings := d.PhaseWarnings()
+	warnings := d.phaseSummaries()
 	if len(warnings) == 0 {
 		return ""
 	}
 	if len(warnings) == 1 {
 		return warnings[0]
 	}
-	return "Some harnesses are unavailable. Open Settings → Harness Routing."
+	return "Harnesses unavailable. Check Harness Routing."
 }
 
 func (d HarnessDiagnostics) PhaseWarnings() []string {
@@ -96,60 +85,71 @@ func (d HarnessDiagnostics) PhaseWarnings() []string {
 	return warnings
 }
 
+func (d HarnessDiagnostics) phaseSummaries() []string {
+	warnings := make([]string, 0, len(d.Phases))
+	for _, phase := range d.Phases {
+		if warning := phase.SummaryMessage(); warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings
+}
+
 func (d HarnessDiagnostics) HarnessWarnings() map[config.HarnessName][]string {
 	warnings := make(map[config.HarnessName][]string)
 	for _, phase := range d.Phases {
+		seen := make(map[config.HarnessName]bool)
 		for _, failure := range phase.Failures {
-			prefix := displayHarnessPhase(phase.Phase)
-			if failure.Harness != phase.Requested {
-				prefix += " fallback"
+			if seen[failure.Harness] {
+				continue
 			}
-			message := fmt.Sprintf("%s: %s", prefix, failure.UserMessage())
+			seen[failure.Harness] = true
+			message := fmt.Sprintf("%s: %s.", displayHarnessPhase(phase.Phase), failure.SettingsReason())
 			warnings[failure.Harness] = appendUniqueWarning(warnings[failure.Harness], message)
 		}
 	}
 	return warnings
 }
 
-func userFacingHarnessFailure(harness config.HarnessName, message string) string {
+func settingsHarnessFailureReason(harness config.HarnessName, message string) string {
 	message = strings.TrimSpace(message)
 	switch harness {
 	case config.HarnessOhMyPi:
-		return userFacingOhMyPiFailure(message)
+		return settingsOhMyPiFailureReason(message)
 	case config.HarnessClaudeCode:
-		return userFacingBinaryFailure("Claude Code", "claude", message)
+		return settingsBinaryFailureReason("Claude Code", "claude", message)
 	case config.HarnessCodex:
-		return userFacingBinaryFailure("Codex", "codex", message)
+		return settingsBinaryFailureReason("Codex", "codex", message)
 	default:
 		return message
 	}
 }
 
-func userFacingOhMyPiFailure(message string) string {
+func settingsOhMyPiFailureReason(message string) string {
 	detail := strings.TrimSpace(strings.TrimPrefix(message, "ohmypi unavailable:"))
 	switch {
 	case strings.HasPrefix(detail, "resolve ohmypi bridge: no bridge binary or script found"):
-		return "Oh My Pi bridge not found. Install the bridge or set Bridge Path in Settings → Harness Routing → Oh My Pi."
+		return "Oh My Pi bridge not found"
 	case strings.HasPrefix(detail, "resolve bun "):
-		return "Bun runtime not found for the Oh My Pi bridge. Install Bun or set Bun Path in Settings → Harness Routing → Oh My Pi."
+		return "Bun not found for Oh My Pi"
 	case strings.Contains(detail, "source bridge dependencies missing under "):
-		return "Oh My Pi bridge dependencies are missing. Run `bun install` in the bridge directory or use a packaged bridge."
+		return "Oh My Pi bridge dependencies missing"
 	case strings.Contains(detail, "check bridge package metadata"):
-		return "Oh My Pi bridge directory could not be read. Check Bridge Path in Settings → Harness Routing → Oh My Pi."
+		return "Oh My Pi bridge path unreadable"
 	default:
-		return "Oh My Pi is unavailable. Check Bridge Path and Bun Path in Settings → Harness Routing → Oh My Pi."
+		return "Oh My Pi unavailable"
 	}
 }
 
-func userFacingBinaryFailure(name string, defaultBinary string, message string) string {
+func settingsBinaryFailureReason(name string, defaultBinary string, message string) string {
 	binary, ok := extractQuotedValue(message)
 	if !ok {
-		return fmt.Sprintf("%s CLI is unavailable. Install %s or set Binary Path in Settings → Harness Routing → %s.", name, name, name)
+		return fmt.Sprintf("%s unavailable", name)
 	}
 	if binary == defaultBinary {
-		return fmt.Sprintf("%s CLI not found in PATH. Install %s or set Binary Path in Settings → Harness Routing → %s.", name, name, name)
+		return fmt.Sprintf("%s not found", name)
 	}
-	return fmt.Sprintf("%s CLI %q not found. Install %s or set Binary Path in Settings → Harness Routing → %s.", name, binary, name, name)
+	return fmt.Sprintf("%s binary not found", name)
 }
 
 func extractQuotedValue(message string) (string, bool) {
@@ -210,35 +210,14 @@ type resolvedHarnessPhase struct {
 }
 
 func resolveHarnessPhase(cfg *config.Config, phase string, name config.HarnessName, workspaceRoot string) resolvedHarnessPhase {
-	diagnostic := HarnessPhaseDiagnostic{Phase: phase, Requested: name}
-	for _, candidate := range uniqueHarnessCandidates(name, cfg.Harness.Fallback) {
-		harness, err := instantiateHarness(cfg, candidate, workspaceRoot)
-		if err == nil {
-			diagnostic.Resolved = candidate
-			diagnostic.Available = true
-			diagnostic.UsingFallback = candidate != name
-			return resolvedHarnessPhase{harness: harness, diagnostic: diagnostic}
-		}
-		diagnostic.Failures = append(diagnostic.Failures, HarnessCandidateFailure{Harness: candidate, Message: err.Error()})
+	diagnostic := HarnessPhaseDiagnostic{Phase: phase}
+	harness, err := instantiateHarness(cfg, name, workspaceRoot)
+	if err == nil {
+		diagnostic.Available = true
+		return resolvedHarnessPhase{harness: harness, diagnostic: diagnostic}
 	}
+	diagnostic.Failures = append(diagnostic.Failures, HarnessCandidateFailure{Harness: name, Message: err.Error()})
 	return resolvedHarnessPhase{diagnostic: diagnostic}
-}
-
-func uniqueHarnessCandidates(primary config.HarnessName, fallbacks []config.HarnessName) []config.HarnessName {
-	seen := make(map[config.HarnessName]bool, 1+len(fallbacks))
-	candidates := make([]config.HarnessName, 0, 1+len(fallbacks))
-	appendCandidate := func(name config.HarnessName) {
-		if name == "" || seen[name] {
-			return
-		}
-		seen[name] = true
-		candidates = append(candidates, name)
-	}
-	appendCandidate(primary)
-	for _, fallback := range fallbacks {
-		appendCandidate(fallback)
-	}
-	return candidates
 }
 
 func appendUniqueWarning(existing []string, message string) []string {
@@ -248,22 +227,6 @@ func appendUniqueWarning(existing []string, message string) []string {
 		}
 	}
 	return append(existing, message)
-}
-
-func displayHarnessName(name config.HarnessName) string {
-	switch name {
-	case config.HarnessOhMyPi:
-		return "Oh My Pi"
-	case config.HarnessClaudeCode:
-		return "Claude Code"
-	case config.HarnessCodex:
-		return "Codex"
-	default:
-		if name == "" {
-			return "Unconfigured harness"
-		}
-		return string(name)
-	}
 }
 
 func displayHarnessPhase(phase string) string {

@@ -1,5 +1,21 @@
 # Lessons Learned
 
+## 2026-03-10 - Settings Scroll State Must Clamp To Viewport Bounds
+
+**Mistake**: I let the settings page carry stale viewport offsets without clamping them to the current content height and ignored direct mouse-wheel scrolling semantics.
+**Pattern**: I treated viewport content refresh as enough state management and forgot that wrapped content, resized panes, and wheel input all need the scroll offset normalized against the current visible range.
+**Rule**: Any TUI viewport that rebuilds content dynamically must clamp `YOffset` after sizing/content changes and before applying wheel deltas so reverse scrolling responds immediately at the real edge.
+**Applied**: Settings overlay viewports, detail panes with rebuilt content, and any Bubble viewport that keeps scroll state across layout/content recomputation.
+
+
+## 2026-03-10 - Settings Warning Copy Must Stay Terse
+
+**Mistake**: I reused full harness remediation copy for the settings footer and section warnings, which turned one missing harness into long repetitive error text and exposed irrelevant fallback/tooling noise.
+**Pattern**: I optimized for reusing existing human-readable strings instead of matching the information density each settings surface actually needs.
+**Rule**: When surfacing configuration problems inside Settings, keep the footer to a short summary, keep section errors to short phase-scoped detail, and avoid listing unrelated harness/tool warnings just because other harness sections exist.
+**Applied**: Harness routing warnings, settings-page footers, per-section validation copy, and any TUI surface where detailed remediation belongs in the selected section rather than the global chrome.
+
+
 ## 2026-03-10 - Duplicate-Flow UX Corrections
 
 **Mistake**: I implemented duplicate work-item handling as a hard redirect to the existing item after fixing the dedup bug, even though the user actually wanted a choice between canceling, opening the duplicate, or proceeding with the duplicate work item.
@@ -14,6 +30,14 @@
 **Pattern**: I verified the interaction behavior but stopped short of validating the visual contract of adjacent overlay elements.
 **Rule**: When adding or moving overlays, verify alignment and background ownership explicitly in the rendered view and add layout tests for the final placement rather than assuming container styling propagates correctly.
 **Applied**: Toast stacks, modal dialogs, callouts, and any TUI overlay composed from nested lipgloss blocks.
+
+
+## 2026-03-10 - Right-Edge Alignment Means Shared Edge, Not Relative Shift
+
+**Mistake**: I fixed stacked toast alignment by shifting narrower transient toasts relative to wider transient toasts, which still let the first toast drift left from the shared right edge once multiple toast widths were involved.
+**Pattern**: I satisfied a local alignment assertion inside the stack without checking that every toast line actually terminated on the same final screen column.
+**Rule**: For top-right overlay stacks, test and implement against the final shared right edge of every rendered line, not just relative ordering between toast columns inside the stack.
+**Applied**: Toast stacks, notification piles, right-anchored callouts, and any overlay where multiple independently sized blocks must share one visual edge.
 
 
 ## 2026-03-10 - Overview Granularity vs Source Detail

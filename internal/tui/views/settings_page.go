@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -13,21 +15,24 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-type settingsAction int
-
-const (
-	settingsActionSave settingsAction = iota
-	settingsActionApply
-	settingsActionTestProvider
-	settingsActionLoginProvider
-)
-
 type settingsFocus int
 
 const (
 	settingsFocusSections settingsFocus = iota
 	settingsFocusFields
 )
+
+type settingsEditMode int
+
+const (
+	settingsEditModeText settingsEditMode = iota
+	settingsEditModeSelect
+)
+
+type settingsEditOption struct {
+	Label string
+	Value string
+}
 
 type SettingsSavedMsg struct {
 	Raw     string
@@ -80,6 +85,9 @@ type SettingsPage struct {
 	expandedSections map[string]bool
 	mainViewport     viewport.Model
 	editing          bool
+	editMode         settingsEditMode
+	editOptions      []settingsEditOption
+	editOptionCursor int
 	revealSecrets    bool
 	dirty            bool
 	editInput        textinput.Model
@@ -92,12 +100,13 @@ type SettingsPage struct {
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
 	ti := textinput.New()
 	ti.CharLimit = 1000
+	ti.Prompt = ""
 	vp := viewport.New(0, 0)
 	return SettingsPage{
 		service:          svc,
 		sections:         snapshot.Sections,
 		providerStatus:   snapshot.Providers,
-		rawContent:       snapshot.RawTOML,
+		rawContent:       snapshot.RawYAML,
 		focus:            settingsFocusSections,
 		expandedSections: defaultExpandedSections(snapshot.Sections),
 		mainViewport:     vp,
@@ -110,8 +119,7 @@ func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.
 func (m *SettingsPage) Open() {
 	m.active = true
 	m.focusSections()
-	m.editing = false
-	m.editInput.Blur()
+	m.closeFieldEditor()
 	m.clampCursor()
 	m.syncMainViewport()
 }
@@ -119,8 +127,7 @@ func (m *SettingsPage) Open() {
 func (m *SettingsPage) Close() {
 	m.active = false
 	m.focusSections()
-	m.editing = false
-	m.editInput.Blur()
+	m.closeFieldEditor()
 	m.errorText = ""
 	m.syncMainViewport()
 }
@@ -136,13 +143,12 @@ func (m *SettingsPage) SetSize(w, h int) {
 func (m *SettingsPage) SetSnapshot(snapshot SettingsSnapshot) {
 	m.sections = snapshot.Sections
 	m.providerStatus = snapshot.Providers
-	m.rawContent = snapshot.RawTOML
+	m.rawContent = snapshot.RawYAML
 	m.dirty = false
 	m.errorText = ""
 	m.statusText = ""
 	m.warningText = snapshot.HarnessWarning
-	m.editing = false
-	m.editInput.Blur()
+	m.closeFieldEditor()
 	m.expandedSections = defaultExpandedSections(snapshot.Sections)
 	m.clampCursor()
 	m.syncMainViewport()
@@ -161,6 +167,139 @@ func (m *SettingsPage) currentField() *SettingsField {
 		return nil
 	}
 	return &sec.Fields[m.fieldCursor]
+}
+
+func (m *SettingsPage) closeFieldEditor() {
+	m.editing = false
+	m.editMode = settingsEditModeText
+	m.editOptions = nil
+	m.editOptionCursor = 0
+	m.editInput.Blur()
+}
+
+func (m *SettingsPage) fieldEditOptions(field *SettingsField) []settingsEditOption {
+	if field == nil {
+		return nil
+	}
+	if field.Type == SettingsFieldBool {
+		return []settingsEditOption{{Label: "Enabled", Value: "true"}, {Label: "Disabled", Value: "false"}}
+	}
+	if len(field.Options) == 0 {
+		return nil
+	}
+	options := make([]settingsEditOption, 0, len(field.Options))
+	for _, option := range field.Options {
+		options = append(options, settingsEditOption{Label: displaySettingsOption(field, option), Value: option})
+	}
+	return options
+}
+
+func displaySettingsOption(field *SettingsField, value string) string {
+	if field == nil {
+		return value
+	}
+	switch field.Section {
+	case "harness", "harness.phase":
+		switch config.HarnessName(value) {
+		case config.HarnessOhMyPi:
+			return "Oh My Pi"
+		case config.HarnessClaudeCode:
+			return "Claude Code"
+		case config.HarnessCodex:
+			return "Codex"
+		}
+	}
+	return value
+}
+
+func (m *SettingsPage) openFieldEditor() {
+	field := m.currentField()
+	if field == nil {
+		return
+	}
+	m.errorText = ""
+	if options := m.fieldEditOptions(field); len(options) > 0 {
+		m.editMode = settingsEditModeSelect
+		m.editOptions = options
+		m.editOptionCursor = 0
+		for i, option := range options {
+			if option.Value == field.Value {
+				m.editOptionCursor = i
+				break
+			}
+		}
+		m.editing = true
+		return
+	}
+	m.editMode = settingsEditModeText
+	m.editOptions = nil
+	m.editOptionCursor = 0
+	m.editInput.SetValue(field.Value)
+	m.editInput.SetCursor(len([]rune(field.Value)))
+	m.editInput.Focus()
+	m.editing = true
+}
+
+func (m *SettingsPage) commitFieldEditor() {
+	field := m.currentField()
+	if field == nil {
+		m.closeFieldEditor()
+		return
+	}
+	if m.editMode == settingsEditModeSelect {
+		if len(m.editOptions) == 0 || m.editOptionCursor < 0 || m.editOptionCursor >= len(m.editOptions) {
+			m.closeFieldEditor()
+			return
+		}
+		field.Value = m.editOptions[m.editOptionCursor].Value
+	} else {
+		field.Value = m.editInput.Value()
+	}
+	field.Dirty = true
+	m.dirty = true
+	m.statusText = "Field updated"
+	m.closeFieldEditor()
+}
+
+func (m *SettingsPage) cycleEditOption(delta int) {
+	if len(m.editOptions) == 0 {
+		m.editOptionCursor = 0
+		return
+	}
+	m.editOptionCursor = (m.editOptionCursor + delta + len(m.editOptions)) % len(m.editOptions)
+}
+
+func (m *SettingsPage) updateFieldEditor(msg tea.KeyMsg) tea.Cmd {
+	if m.editMode == settingsEditModeSelect {
+		switch msg.String() {
+		case "up", "k", "shift+tab", "left", "h":
+			m.cycleEditOption(-1)
+			return nil
+		case "down", "j", "tab", "right", "l":
+			m.cycleEditOption(1)
+			return nil
+		case "enter":
+			m.commitFieldEditor()
+			return nil
+		case "esc":
+			m.closeFieldEditor()
+			return nil
+		default:
+			return nil
+		}
+	}
+	switch msg.String() {
+	case "enter":
+		m.commitFieldEditor()
+		return nil
+	case "esc":
+		m.closeFieldEditor()
+		return nil
+	default:
+		var cmd tea.Cmd
+		m.editInput, cmd = m.editInput.Update(msg)
+		return cmd
+	}
 }
 
 func sectionParentIndexFor(sections []SettingsSection, sectionIndex int) int {
@@ -435,20 +574,26 @@ func (m SettingsPage) selectedDocumentAnchor(sectionAnchors map[int]int, fieldAn
 	return 0
 }
 
-func (m *SettingsPage) alignViewportToAnchor(anchor int) {
-	if m.mainViewport.Height <= 0 {
-		return
+func (m SettingsPage) preparedMainViewport(width int, height int, alignSelection bool) viewport.Model {
+	vp := m.mainViewport
+	vp.Width = width
+	vp.Height = height
+	content, sectionAnchors, fieldAnchors := m.buildMainDocument(width)
+	vp.SetContent(content)
+	vp.SetYOffset(vp.YOffset)
+	if alignSelection && vp.Height > 0 {
+		anchor := m.selectedDocumentAnchor(sectionAnchors, fieldAnchors)
+		top := vp.YOffset
+		bottom := top + vp.Height - 1
+		margin := 1
+		if anchor < top+margin {
+			vp.SetYOffset(max(0, anchor-margin))
+		} else if anchor > bottom-margin {
+			vp.SetYOffset(max(0, anchor-vp.Height+1+margin))
+		}
 	}
-	top := m.mainViewport.YOffset
-	bottom := top + m.mainViewport.Height - 1
-	margin := 1
-	if anchor < top+margin {
-		m.mainViewport.SetYOffset(max(0, anchor-margin))
-		return
-	}
-	if anchor > bottom-margin {
-		m.mainViewport.SetYOffset(max(0, anchor-m.mainViewport.Height+1+margin))
-	}
+	vp.SetYOffset(vp.YOffset)
+	return vp
 }
 
 func (m *SettingsPage) syncMainViewport() {
@@ -456,11 +601,7 @@ func (m *SettingsPage) syncMainViewport() {
 		return
 	}
 	viewportWidth, viewportHeight, _ := m.mainViewportSize()
-	m.mainViewport.Width = viewportWidth
-	m.mainViewport.Height = viewportHeight
-	content, sectionAnchors, fieldAnchors := m.buildMainDocument(viewportWidth)
-	m.mainViewport.SetContent(content)
-	m.alignViewportToAnchor(m.selectedDocumentAnchor(sectionAnchors, fieldAnchors))
+	m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, true)
 }
 
 func (m SettingsPage) fieldsFocused() bool {
@@ -623,30 +764,26 @@ func (m *SettingsPage) moveField(delta int) {
 }
 
 func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd) {
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if m.editing || m.width <= 0 || m.height <= 0 {
+			return m, nil
+		}
+		viewportWidth, viewportHeight, _ := m.mainViewportSize()
+		if viewportWidth <= 0 || viewportHeight <= 0 {
+			return m, nil
+		}
+		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
+		var cmd tea.Cmd
+		m.mainViewport, cmd = m.mainViewport.Update(mouseMsg)
+		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
+		return m, cmd
+	}
+
 	defer m.syncMainViewport()
-	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.editing {
-			switch msg.String() {
-			case "enter":
-				if f := m.currentField(); f != nil {
-					f.Value = m.editInput.Value()
-					f.Dirty = true
-					m.dirty = true
-					m.statusText = "Field updated"
-				}
-				m.editing = false
-				m.editInput.Blur()
-				return m, nil
-			case "esc":
-				m.editing = false
-				m.editInput.Blur()
-				return m, nil
-			default:
-				m.editInput, cmd = m.editInput.Update(msg)
-				return m, cmd
-			}
+			return m, m.updateFieldEditor(msg)
 		}
 		switch msg.String() {
 		case "up", "k":
@@ -693,11 +830,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				m.focusFields()
 				return m, nil
 			}
-			if f := m.currentField(); f != nil {
-				m.editInput.SetValue(f.Value)
-				m.editInput.Focus()
-				m.editing = true
-			}
+			m.openFieldEditor()
 		case " ":
 			if f := m.currentField(); m.fieldsFocused() && f != nil && f.Type == SettingsFieldBool {
 				if parseBool(f.Value) {
@@ -809,6 +942,68 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 	}
 }
 
+func (m SettingsPage) editModalFooterText() string {
+	if m.editMode == settingsEditModeSelect {
+		return "[↑↓] choose  [enter] select  [esc] cancel"
+	}
+	return "[enter] save  [esc] cancel"
+}
+
+func (m SettingsPage) renderEditModal() string {
+	field := m.currentField()
+	if field == nil {
+		return ""
+	}
+	frameWidth := min(96, max(24, m.width-4))
+	if m.width > 0 {
+		frameWidth = min(frameWidth, m.width)
+	}
+	contentWidth := m.styles.Chrome.OverlayFrame.InnerWidth(max(1, frameWidth))
+	header := []string{m.styles.Title.Render(field.Label)}
+	if field.Description != "" {
+		header = append(header, m.styles.Muted.Render(truncate(field.Description, contentWidth)))
+	}
+	body := m.renderTextEditBody(contentWidth, field)
+	if m.editMode == settingsEditModeSelect {
+		body = m.renderSelectEditBody(contentWidth, field)
+	}
+	footer := m.styles.Hint.Render(truncate(m.editModalFooterText(), contentWidth))
+	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
+		HeaderLines: header,
+		Body:        body,
+		Footer:      footer,
+	})
+}
+
+func (m SettingsPage) renderTextEditBody(width int, field *SettingsField) string {
+	input := m.editInput
+	input.Width = max(1, width-4)
+	lines := []string{
+		m.styles.Subtitle.Render("Value"),
+		input.View(),
+	}
+	if field != nil && field.DefaultValue != "" {
+		lines = append(lines, "", m.styles.Muted.Render(truncate("Default: "+field.DefaultValue, width)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m SettingsPage) renderSelectEditBody(width int, field *SettingsField) string {
+	lines := make([]string, 0, len(m.editOptions)+2)
+	for i, option := range m.editOptions {
+		line := truncate(option.Label, max(1, width-2))
+		if i == m.editOptionCursor {
+			lines = append(lines, m.styles.Accent.Render("› "+line))
+			continue
+		}
+		lines = append(lines, m.styles.Subtitle.Render("  "+line))
+	}
+	if field != nil && field.DefaultValue != "" {
+		lines = append(lines, "", m.styles.Muted.Render(truncate("Default: "+field.DefaultValue, width)))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m SettingsPage) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
@@ -828,7 +1023,13 @@ func (m SettingsPage) View() string {
 		BorderForeground(lipgloss.Color(m.styles.Theme.PaneBorder)).
 		Padding(0, 1).
 		Render(m.styles.Hint.Render(footerText))
-	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	base := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	if m.editing {
+		if modal := m.renderEditModal(); modal != "" {
+			return renderOverlay(modal, m.width, m.height)
+		}
+	}
+	return base
 }
 
 func (m SettingsPage) sidebarBorderColor() lipgloss.Color {
@@ -927,21 +1128,7 @@ func (m SettingsPage) renderMainPane(width int, height int) string {
 }
 
 func (m SettingsPage) configuredMainViewport(width int, height int) viewport.Model {
-	vp := m.mainViewport
-	vp.Width = width
-	vp.Height = height
-	content, sectionAnchors, fieldAnchors := m.buildMainDocument(width)
-	vp.SetContent(content)
-	anchor := m.selectedDocumentAnchor(sectionAnchors, fieldAnchors)
-	top := vp.YOffset
-	bottom := top + vp.Height - 1
-	margin := 1
-	if anchor < top+margin {
-		vp.SetYOffset(max(0, anchor-margin))
-	} else if anchor > bottom-margin {
-		vp.SetYOffset(max(0, anchor-vp.Height+1+margin))
-	}
-	return vp
+	return m.preparedMainViewport(width, height, false)
 }
 
 func (m SettingsPage) renderViewportWithScrollbar(vp viewport.Model, width int, height int) string {

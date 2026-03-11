@@ -193,6 +193,22 @@ func TestComputeMainPageLayoutDropsPaneGapWhenContentDoesNotFit(t *testing.T) {
 	}
 }
 
+func TestComputeMainPageLayoutShrinksSidebarToPreserveGapAndContentFrame(t *testing.T) {
+	t.Parallel()
+
+	layout := styles.ComputeMainPageLayout(37, 20, SidebarWidth, styles.DefaultChromeMetrics)
+
+	if layout.PaneGapWidth != 1 {
+		t.Fatalf("pane gap width = %d, want 1", layout.PaneGapWidth)
+	}
+	if layout.ContentPaneWidth != styles.DefaultChromeMetrics.Pane.HorizontalFrame() {
+		t.Fatalf("content pane width = %d, want %d", layout.ContentPaneWidth, styles.DefaultChromeMetrics.Pane.HorizontalFrame())
+	}
+	if got := layout.SidebarPaneWidth + layout.ContentPaneWidth + layout.PaneGapWidth; got != 37 {
+		t.Fatalf("layout width = %d, want 37", got)
+	}
+}
+
 func TestAppViewRendersSingleColumnPaneGap(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,9 +31,9 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
-	for _, want := range []string{"api_key_ref = 'keychain:linear.api_key'", "token_ref = 'keychain:github.token'"} {
+	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token"} {
 		if !strings.Contains(raw, want) {
-			t.Fatalf("serialized config missing %q\n%s", want, raw)
+			t.Fatalf("serialized YAML missing %q\n%s", want, raw)
 		}
 	}
 	if rebuilt.Adapters.Linear.APIKeyRef != "keychain:linear.api_key" || rebuilt.Adapters.GitHub.TokenRef != "keychain:github.token" {
@@ -99,8 +100,8 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if result.Services.Services.Foreman != nil {
 		t.Fatal("Apply() foreman service = non-nil, want nil when harness is unavailable")
 	}
-	if !strings.Contains(result.Services.SettingsData.HarnessWarning, "Some harnesses are unavailable") {
-		t.Fatalf("Apply() harness warning = %q, want aggregated warning", result.Services.SettingsData.HarnessWarning)
+	if result.Services.SettingsData.HarnessWarning != "Harnesses unavailable. Check Harness Routing." {
+		t.Fatalf("Apply() harness warning = %q, want short aggregated warning", result.Services.SettingsData.HarnessWarning)
 	}
 
 	var routing *SettingsSection
@@ -116,8 +117,11 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if routing.Status != "warning" {
 		t.Fatalf("routing status = %q, want warning", routing.Status)
 	}
-	if !strings.Contains(routing.Error, "Claude Code CLI") {
+	if !strings.Contains(routing.Error, "Planning: Claude Code binary not found.") {
 		t.Fatalf("routing error = %q, want concise Claude Code detail", routing.Error)
+	}
+	if strings.Contains(routing.Error, "Binary Path") {
+		t.Fatalf("routing error = %q, want short warning without settings copy", routing.Error)
 	}
 
 	cfgPath, err := config.ConfigPath()
@@ -157,11 +161,57 @@ func TestSettingsApply_ReturnsRebuiltServicesOnSuccess(t *testing.T) {
 	if result.Services.Services.Foreman == nil {
 		t.Fatal("Apply() returned nil foreman service")
 	}
-	if result.Services.SettingsData.RawTOML != raw {
-		t.Fatalf("Apply() snapshot raw = %q, want %q", result.Services.SettingsData.RawTOML, raw)
+	if result.Services.SettingsData.RawYAML != raw {
+		t.Fatalf("Apply() snapshot raw = %q, want %q", result.Services.SettingsData.RawYAML, raw)
 	}
 	if result.Services.SettingsData.HarnessWarning != "" {
 		t.Fatalf("Apply() harness warning = %q, want empty", result.Services.SettingsData.HarnessWarning)
+	}
+}
+
+func TestBuildSettingsSections_LeavesUnusedHarnessSectionsQuiet(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessOhMyPi
+	cfg.Harness.Phase.Planning = config.HarnessOhMyPi
+	cfg.Harness.Phase.Implementation = config.HarnessOhMyPi
+	cfg.Harness.Phase.Review = config.HarnessOhMyPi
+	cfg.Harness.Phase.Foreman = config.HarnessOhMyPi
+	cfg.Adapters.OhMyPi.BridgePath = filepath.Join(t.TempDir(), "missing-bridge")
+
+	sections := buildSettingsSections(cfg)
+	var ohmypi, claude, codex *SettingsSection
+	for i := range sections {
+		switch sections[i].ID {
+		case "harness.ohmypi":
+			ohmypi = &sections[i]
+		case "harness.claude":
+			claude = &sections[i]
+		case "harness.codex":
+			codex = &sections[i]
+		}
+	}
+	if ohmypi == nil || claude == nil || codex == nil {
+		t.Fatal("expected harness sections in settings snapshot")
+	}
+	if ohmypi.Status != "warning" || !strings.Contains(ohmypi.Error, "Oh My Pi bridge not found") {
+		t.Fatalf("ohmypi section = %+v, want concise warning", *ohmypi)
+	}
+	if claude.Status == "warning" || claude.Error != "" {
+		t.Fatalf("claude section = %+v, want unused harness to stay quiet", *claude)
+	}
+	if codex.Status == "warning" || codex.Error != "" {
+		t.Fatalf("codex section = %+v, want unused harness to stay quiet", *codex)
+	}
+}
+
+func TestBuildSettingsSections_OmitsHarnessFallbackField(t *testing.T) {
+	sections := buildSettingsSections(&config.Config{})
+	for _, section := range sections {
+		for _, field := range section.Fields {
+			if field.Section == "harness" && field.Key == "fallback" {
+				t.Fatalf("unexpected fallback field in settings sections: %+v", field)
+			}
+		}
 	}
 }
 

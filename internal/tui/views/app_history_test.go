@@ -1025,6 +1025,60 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 	}
 }
 
+func TestSidebarSourceDetailsYieldsToEscalatedQuestion(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+
+	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
+	updated.questions["sess-1"] = []domain.Question{{
+		ID:             "q-1",
+		AgentSessionID: "sess-1",
+		Content:        "Need approval before continuing",
+		ProposedAnswer: "Approve the follow-up.",
+		Status:         domain.QuestionEscalated,
+		CreatedAt:      time.Now(),
+	}}
+
+	cmd := updated.updateContentFromState()
+	if cmd != nil {
+		t.Fatal("expected escalated question refresh to avoid starting a tail command")
+	}
+	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
+		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
+	}
+	if updated.content.Mode() != ContentModeQuestion {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeQuestion)
+	}
+	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Need approval before continuing") {
+		t.Fatalf("content view = %q, want escalated question text", view)
+	}
+}
+
+func TestSidebarSourceDetailsYieldsToCompletedState(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+
+	updated.workItems[0].State = domain.WorkItemCompleted
+	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+
+	cmd := updated.updateContentFromState()
+	if cmd != nil {
+		t.Fatal("expected completed-state refresh to avoid starting a tail command")
+	}
+	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
+		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
+	}
+	if updated.content.Mode() != ContentModeCompleted {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeCompleted)
+	}
+}
+
 func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})

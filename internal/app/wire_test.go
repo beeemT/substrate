@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,12 +89,29 @@ func TestBuildRepoLifecycleAdapters_PreservesSupportedPlatformsInMixedWorkspace(
 	createWorkspaceRepo(t, filepath.Join(workspaceDir, "gitlab-repo"), "git@gitlab.com:group/repo.git")
 	createWorkspaceRepo(t, filepath.Join(workspaceDir, "github-repo"), "git@github.com:org/repo.git")
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir)
-	if len(adapters) != 1 {
-		t.Fatalf("adapters len = %d, want 1", len(adapters))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user" {
+			t.Fatalf("unexpected github request path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"octocat"}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.Token = "token"
+	cfg.Adapters.GitHub.BaseURL = server.URL
+
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir)
+	if len(adapters) != 2 {
+		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
-	if adapters[0].Name() != "glab" {
-		t.Fatalf("adapter name = %q, want glab", adapters[0].Name())
+	seen := make(map[string]bool, len(adapters))
+	for _, lifecycleAdapter := range adapters {
+		seen[lifecycleAdapter.Name()] = true
+	}
+	if !seen["glab"] || !seen["github"] {
+		t.Fatalf("adapter names = %#v, want glab and github", seen)
 	}
 }
 

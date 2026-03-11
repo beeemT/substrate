@@ -108,7 +108,7 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 	}
 	content := strings.Join(parts, "\n")
 	return st.OverlayFrame.Copy().
-		Width(st.Chrome.OverlayFrame.InnerWidth(maxInt(1, frameWidth))).
+		Width(maxInt(1, frameWidth)).
 		Render(content)
 }
 

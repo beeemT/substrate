@@ -99,7 +99,18 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 		return ResumeSessionResult{}, fmt.Errorf("create resumed session: %w", err)
 	}
 
-	// Start the harness session.
+	// Transition the new session to running before launching the harness so the
+	// durable session row never lags external state.
+	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
+		deleteOrFailPendingSession(ctx, r.sessionSvc, newSession.ID, nil)
+		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
+	}
+	now = time.Now()
+	newSession.Status = domain.AgentSessionRunning
+	newSession.StartedAt = &now
+	newSession.UpdatedAt = now
+
+	// Start the harness session once the row is durably running.
 	opts := adapter.SessionOpts{
 		SessionID:    newSession.ID,
 		Mode:         adapter.SessionModeAgent,
@@ -112,24 +123,12 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 	}
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
-		// Best-effort: fail the new session so it doesn't dangle as pending.
-		_ = r.sessionSvc.Fail(ctx, newSession.ID, nil)
+		if failErr := failSessionDurably(ctx, r.sessionSvc, newSession.ID, nil); failErr != nil {
+			slog.Warn("failed to fail resumed session after harness start error",
+				"error", failErr,
+				"session_id", newSession.ID)
+		}
 		return ResumeSessionResult{}, fmt.Errorf("start harness session: %w", err)
-	}
-
-	// Transition new session to running.
-	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
-		if abortErr := harnessSession.Abort(ctx); abortErr != nil {
-			slog.Warn("failed to abort resumed harness session after start transition error",
-				"error", abortErr,
-				"session_id", newSession.ID)
-		}
-		if deleteErr := r.sessionSvc.Delete(ctx, newSession.ID); deleteErr != nil {
-			slog.Warn("failed to delete resumed session after start transition error",
-				"error", deleteErr,
-				"session_id", newSession.ID)
-		}
-		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
 	}
 
 	if r.eventBus != nil {

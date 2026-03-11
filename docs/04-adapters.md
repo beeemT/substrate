@@ -271,7 +271,7 @@ func (a *ManualAdapter) AddComment(_ context.Context, _ string, _ string) error 
 func (a *ManualAdapter) OnEvent(_ context.Context, _ domain.SystemEvent) error                { return nil }
 ```
 
-No TOML configuration needed. The manual adapter is always available as a built-in option, registered unconditionally at startup in `internal/app/wire.go`.
+No YAML configuration needed. The manual adapter is always available as a built-in option, registered unconditionally at startup in `internal/app/wire.go`.
 
 ExternalID format: `MAN-N` (incrementing sequence with no fixed width, e.g. `MAN-1`, `MAN-42`, `MAN-1000`). The counter is derived by counting existing manual work items in the DB for the current workspace — no separate counter column is required.
 
@@ -707,17 +707,16 @@ The current shared contract is intentionally small. Do not document richer share
 
 ### Harness Selection and Operational Policy
 
-Harness routing is config-driven. The repository supports a default harness, fallback order, and per-phase overrides (planning, implementation, review, foreman). The current operational policy is:
+Harness routing is config-driven. The repository supports a default harness and per-phase overrides (planning, implementation, review, foreman). The current operational policy is:
 - default to **oh-my-pi**
-- allow **Claude Code** then **Codex** as fallback/opt-in harnesses
-- fail early when the selected harness binary is unavailable
+- allow **Claude Code** and **Codex** as explicit opt-in harnesses
+- keep startup non-blocking when a configured harness is unavailable so the user can reach Settings and repair it
 - keep oh-my-pi as the documented safe path until Claude Code and Codex have real interactive messaging coverage
 
 Representative config shape:
 ```toml
 [harness]
 default = "ohmypi"
-fallback = ["claude-code", "codex"]
 
 [harness.phase]
 planning = "ohmypi"

@@ -45,6 +45,108 @@ func findFieldIndex(t *testing.T, page SettingsPage, sectionID, key string) int 
 	return -1
 }
 
+func assertSettingsPageFitsWindow(t *testing.T, rendered string, width, height int) []string {
+	t.Helper()
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > height {
+		t.Fatalf("line count = %d, want <= %d\nview:\n%s", len(lines), height, rendered)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d\nview:\n%s", i+1, got, width, rendered)
+		}
+	}
+	return lines
+}
+
+func TestSettingsPage_TextEditModalShowsTypedInput(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Adapters.Codex.Model = "gpt"
+	page := newTestSettingsPage(cfg)
+	sectionIndex := findSectionIndex(t, page, "harness.codex")
+	fieldIndex := findFieldIndex(t, page, "harness.codex", "model")
+	page.sectionCursor = sectionIndex
+	page.fieldCursor = fieldIndex
+	page.focus = settingsFocusFields
+
+	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if cmd != nil {
+		t.Fatalf("unexpected command opening text editor: %v", cmd)
+	}
+	if !updated.editing || updated.editMode != settingsEditModeText {
+		t.Fatalf("editing state = (%v, %v), want text modal", updated.editing, updated.editMode)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}, Services{})
+	rendered := ansi.Strip(updated.View())
+	if !strings.Contains(rendered, "gptx") {
+		t.Fatalf("view = %q, want visible typed input", rendered)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if got := updated.sections[sectionIndex].Fields[fieldIndex].Value; got != "gptx" {
+		t.Fatalf("field value = %q, want gptx", got)
+	}
+}
+
+func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessOhMyPi
+	page := newTestSettingsPage(cfg)
+	sectionIndex := findSectionIndex(t, page, "harness")
+	fieldIndex := findFieldIndex(t, page, "harness", "default")
+	page.sectionCursor = sectionIndex
+	page.fieldCursor = fieldIndex
+	page.focus = settingsFocusFields
+
+	updated, cmd := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if cmd != nil {
+		t.Fatalf("unexpected command opening selection modal: %v", cmd)
+	}
+	if !updated.editing || updated.editMode != settingsEditModeSelect {
+		t.Fatalf("editing state = (%v, %v), want selection modal", updated.editing, updated.editMode)
+	}
+	rendered := ansi.Strip(updated.View())
+	for _, want := range []string{"Oh My Pi", "Claude Code", "Codex"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("view = %q, want %q in selection modal", rendered, want)
+		}
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if got := updated.sections[sectionIndex].Fields[fieldIndex].Value; got != string(config.HarnessClaudeCode) {
+		t.Fatalf("field value = %q, want %q", got, config.HarnessClaudeCode)
+	}
+}
+
+func TestSettingsPage_EditModalFitsNarrowWindow(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Adapters.Codex.Model = "gpt-5"
+	page := newTestSettingsPage(cfg)
+	page.SetSize(36, 12)
+	page.sectionCursor = findSectionIndex(t, page, "harness.codex")
+	page.fieldCursor = findFieldIndex(t, page, "harness.codex", "model")
+	page.focus = settingsFocusFields
+
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	assertSettingsPageFitsWindow(t, updated.View(), 36, 12)
+}
+
+func TestSettingsPage_SelectModalFitsNarrowWindow(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessOhMyPi
+	page := newTestSettingsPage(cfg)
+	page.SetSize(36, 12)
+	page.sectionCursor = findSectionIndex(t, page, "harness")
+	page.fieldCursor = findFieldIndex(t, page, "harness", "default")
+	page.focus = settingsFocusFields
+
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	assertSettingsPageFitsWindow(t, updated.View(), 36, 12)
+}
+
 func TestSettingsPage_TogglesBoolField(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
@@ -312,12 +414,12 @@ func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
 	snapshot := SettingsSnapshot{
 		Sections:       buildSettingsSections(&config.Config{}),
 		Providers:      buildProviderStatuses(&config.Config{}),
-		HarnessWarning: "Planning unavailable. Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.",
+		HarnessWarning: "Planning unavailable. Check Harness Routing.",
 	}
 	for i := range snapshot.Sections {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
-			snapshot.Sections[i].Error = `Planning: Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.`
+			snapshot.Sections[i].Error = `Planning: Codex not found.`
 			break
 		}
 	}
@@ -327,11 +429,11 @@ func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
 	page.navCursor = page.sections[page.sectionCursor].ID
 	page.syncMainViewport()
 	rendered := ansi.Strip(page.View())
-	if !strings.Contains(rendered, "warning: Planning unavailable. Codex CLI not found in PATH.") {
+	if !strings.Contains(rendered, "warning: Planning unavailable. Check Harness Routing.") {
 		t.Fatalf("view = %q, want footer warning", rendered)
 	}
 	doc, _, _ := page.buildMainDocument(80)
-	if !strings.Contains(ansi.Strip(doc), `Planning: Codex CLI not found in PATH.`) {
+	if !strings.Contains(ansi.Strip(doc), `Planning: Codex not found.`) {
 		t.Fatalf("document = %q, want section error detail", ansi.Strip(doc))
 	}
 }
@@ -342,12 +444,12 @@ func TestSettingsPage_ViewWithHarnessWarningFitsNarrowWidth(t *testing.T) {
 	snapshot := SettingsSnapshot{
 		Sections:       buildSettingsSections(&config.Config{}),
 		Providers:      buildProviderStatuses(&config.Config{}),
-		HarnessWarning: "Some harnesses are unavailable. Open Settings → Harness Routing.",
+		HarnessWarning: "Harnesses unavailable. Check Harness Routing.",
 	}
 	for i := range snapshot.Sections {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
-			snapshot.Sections[i].Error = `Planning: Codex CLI not found in PATH. Install Codex or set Binary Path in Settings → Harness Routing → Codex.`
+			snapshot.Sections[i].Error = `Planning: Codex not found.`
 			break
 		}
 	}
@@ -488,6 +590,48 @@ func TestSettingsPage_MainScrollbarVisibleWithoutOverflow(t *testing.T) {
 	rendered := page.renderMainScrollbar(vp, 4)
 	if !strings.Contains(rendered, "▐") {
 		t.Fatal("expected scrollbar thumb to remain visible even when content fits")
+	}
+}
+
+func TestSettingsPage_MouseWheelScrollMovesWithinBounds(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	if page.mainViewport.TotalLineCount() <= page.mainViewport.Height {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+
+	start := page.mainViewport.YOffset
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if updated.mainViewport.YOffset <= start {
+		t.Fatalf("y offset = %d, want > %d after wheel down", updated.mainViewport.YOffset, start)
+	}
+	maxOffset := max(0, updated.mainViewport.TotalLineCount()-updated.mainViewport.Height)
+	if updated.mainViewport.YOffset > maxOffset {
+		t.Fatalf("y offset = %d, want <= %d", updated.mainViewport.YOffset, maxOffset)
+	}
+}
+
+func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset + 20
+
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	want := max(0, maxOffset-updated.mainViewport.MouseWheelDelta)
+	if updated.mainViewport.YOffset != want {
+		t.Fatalf("y offset = %d, want %d after wheel up from overscrolled state", updated.mainViewport.YOffset, want)
 	}
 }
 

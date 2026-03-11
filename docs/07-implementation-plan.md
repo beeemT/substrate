@@ -23,7 +23,7 @@ internal/
         remotedetect/  # git remote host detection for lifecycle adapter registration
     event/             # pub/sub bus, hook dispatch
     gitwork/           # git-work CLI wrapper
-    config/            # TOML config loading
+    config/            # YAML config loading
     tui/
         views/         # bubbletea view models
         components/    # reusable TUI components
@@ -35,28 +35,28 @@ migrations/001_initial.sql
 
 ## Phase 0: Project Bootstrap (Week 1)
 
-**[UPDATED - IMPLEMENTED]** Go module init, scaffold all packages, dependencies (`jmoiron/sqlx`, `modernc.org/sqlite`, `pelletier/go-toml`, `charmbracelet/bubbletea`, `go-atomic`). SQLite migration runner (embedded SQL via `embed.FS`, `_migrations` tracking table), TOML config loader into typed `config.Config`, `cmd/substrate/main.go` that loads config + opens DB via `sqlx.Open` + runs migrations.
+**[UPDATED - IMPLEMENTED]** Go module init, scaffold all packages, dependencies (`jmoiron/sqlx`, `modernc.org/sqlite`, `gopkg.in/yaml.v3`, `charmbracelet/bubbletea`, `go-atomic`). SQLite migration runner (embedded SQL via `embed.FS`, `_migrations` tracking table), YAML config loader into typed `config.Config`, `cmd/substrate/main.go` that loads config + opens DB via `sqlx.Open` + runs migrations.
 
 Config loading validates:
-- `[commit]` block: `strategy` enum (`granular` | `semi-regular` | `single`, default `semi-regular`), `message_format` enum (`ai-generated` | `conventional` | `custom`, default `ai-generated`), optional `message_template` string (required when `message_format = "custom"`).
-- `[plan]` block (`max_parse_retries` int, default 2).
-- `[review]` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3).
-- `[foreman]` block **[UPDATED - IMPLEMENTED]**: `question_timeout` duration string (default "0" = wait indefinitely).
-- `[harness]` block **[UPDATED - IMPLEMENTED]**: default harness, fallback order, and per-phase overrides (`planning`, `implementation`, `review`, `foreman`). oh-my-pi remains the generated default because it is the only harness with verified interactive correction support.
-- `[adapters.ohmypi]` block **[UPDATED - IMPLEMENTED]**: `bridge_path` and `thinking_level`, plus `bun_path` as a source-bridge-only override. Brew installs use the packaged compiled bridge by default.
-- Per-repo `[repos.<name>]` sections are optional.
+- `commit:` block: `strategy` enum (`granular` | `semi-regular` | `single`, default `semi-regular`), `message_format` enum (`ai-generated` | `conventional` | `custom`, default `ai-generated`), optional `message_template` string (required when `message_format = "custom"`).
+- `plan:` block (`max_parse_retries` int, default 2).
+- `review:` block (`pass_threshold` enum, default `minor_ok`; `max_cycles` int, default 3).
+- `foreman:` block **[UPDATED - IMPLEMENTED]**: `question_timeout` duration string (default "0" = wait indefinitely).
+- `harness:` block **[UPDATED - IMPLEMENTED]**: default harness and per-phase overrides (`planning`, `implementation`, `review`, `foreman`). oh-my-pi remains the generated default because it is the only harness with verified interactive correction support.
+- `adapters.ohmypi:` block **[UPDATED - IMPLEMENTED]**: `bridge_path` and `thinking_level`, plus `bun_path` as a source-bridge-only override. Brew installs use the packaged compiled bridge by default.
+- Per-repo `repos.<name>:` entries are optional.
 
 **[UPDATED - IMPLEMENTED] Global Self-Initialization:** On first start, the CLI auto-initializes global resources without user interaction:
 
 The `SUBSTRATE_HOME` environment variable controls the location of all global resources (defaults to `~/.substrate/`). The directory contains:
-- `config.toml` — user configuration (auto-generated with comments on first run)
+- `config.yaml` — user configuration (auto-generated with comments on first run)
 - `state.db` — SQLite database (all workspace state)
 - `sessions/` — agent session log storage
 
 Self-initialization flow:
 1. Resolve `SUBSTRATE_HOME` (env var or `~/.substrate`)
 2. Ensure directory exists
-3. If `config.toml` missing, write default with helpful comments
+3. If `config.yaml` missing, write default with helpful comments
 4. Load and validate config
 5. Ensure `sessions/` directory exists
 6. Open/create `state.db` (SQLite handles file creation)
@@ -264,7 +264,6 @@ Representative config shape:
 ```toml
 [harness]
 default = "ohmypi"
-fallback = ["claude-code", "codex"]
 
 [harness.phase]
 planning = "ohmypi"
@@ -315,7 +314,7 @@ Context assembly:
 - Worktree creation: check via `git-work list` before creating; skip if exists.
 - MR creation: glab adapter checks if MR exists for branch before creating.
 
-**[NEW] Build and test validation:** Each repo's `AGENTS.md` is the canonical source for validation instructions. Agent reads `AGENTS.md` at session start and runs whatever build, format, and test checks are specified. No separate validation command in `substrate.toml`.
+**[NEW] Build and test validation:** Each repo's `AGENTS.md` is the canonical source for validation instructions. Agent reads `AGENTS.md` at session start and runs whatever build, format, and test checks are specified. No separate validation command in `config.yaml`.
 
 **Gate:** `BuildWaves` with `Order` values `[0,0,1]` produces 2 waves: 2 parallel sub-plans then 1. Sub-plans in the same wave start within 100ms of each other. Wave 1 does not start until all wave 0 sub-plans reach `completed`. `go test ./internal/orchestrator/... -race`
 

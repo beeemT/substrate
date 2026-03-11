@@ -134,6 +134,138 @@ func TestWorkItemService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("allows github milestones with same number in different repos", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-gh-ms-1",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:milestone:acme/rocket",
+			Title:         "Rocket v1",
+			Source:        "github",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"7"},
+		}
+		candidate := domain.WorkItem{
+			ID:            "wi-gh-ms-2",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gh:milestone:acme/booster",
+			Title:         "Booster v1",
+			Source:        "github",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"7"},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing milestone: %v", err)
+		}
+		if err := svc.Create(ctx, candidate); err != nil {
+			t.Fatalf("Create cross-repo milestone: %v", err)
+		}
+	})
+
+	t.Run("allows gitlab milestones with same id in different projects", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-gl-ms-1",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gl:milestone:1234",
+			Title:         "Platform",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"77"},
+			Metadata:      map[string]any{"project_id": int64(1234)},
+		}
+		candidate := domain.WorkItem{
+			ID:            "wi-gl-ms-2",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gl:milestone:5678",
+			Title:         "Platform",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"77"},
+			Metadata:      map[string]any{"project_id": int64(5678)},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing GitLab milestone: %v", err)
+		}
+		if err := svc.Create(ctx, candidate); err != nil {
+			t.Fatalf("Create cross-project GitLab milestone: %v", err)
+		}
+	})
+
+	t.Run("rejects gitlab milestones with same id in same project", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-gl-ms-same-1",
+			WorkspaceID:   "ws-1",
+			Title:         "Platform",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"77"},
+			Metadata:      map[string]any{"project_id": int64(1234)},
+		}
+		candidate := domain.WorkItem{
+			ID:            "wi-gl-ms-same-2",
+			WorkspaceID:   "ws-1",
+			Title:         "Platform duplicate",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: []string{"77"},
+			Metadata:      map[string]any{"project_id": int64(1234)},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing same-project GitLab milestone: %v", err)
+		}
+		err := svc.Create(ctx, candidate)
+		if err == nil {
+			t.Fatal("expected same-project GitLab milestone duplicate error")
+		}
+		if _, ok := err.(ErrAlreadyExists); !ok {
+			t.Errorf("error type = %T, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("allows gitlab epics with same iid in different groups", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewWorkItemService(repo)
+
+		existing := domain.WorkItem{
+			ID:            "wi-gl-epic-1",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gl:epic:9",
+			Title:         "Epic 9",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeInitiatives,
+			SourceItemIDs: []string{"9"},
+			Metadata:      map[string]any{"group_id": int64(11)},
+		}
+		candidate := domain.WorkItem{
+			ID:            "wi-gl-epic-2",
+			WorkspaceID:   "ws-1",
+			ExternalID:    "gl:epic:9",
+			Title:         "Epic 9",
+			Source:        "gitlab",
+			SourceScope:   domain.ScopeInitiatives,
+			SourceItemIDs: []string{"9"},
+			Metadata:      map[string]any{"group_id": int64(22)},
+		}
+
+		if err := svc.Create(ctx, existing); err != nil {
+			t.Fatalf("Create existing GitLab epic: %v", err)
+		}
+		if err := svc.Create(ctx, candidate); err != nil {
+			t.Fatalf("Create cross-group GitLab epic: %v", err)
+		}
+	})
+
 	t.Run("allows same external id in different workspaces", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
 		svc := NewWorkItemService(repo)

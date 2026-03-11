@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 )
@@ -42,9 +43,12 @@ func (f *fakeWorkItemAdapter) OnEvent(_ context.Context, evt domain.SystemEvent)
 	return nil
 }
 
-type fakeRepoLifecycleAdapter struct{ events chan domain.SystemEvent }
+type fakeRepoLifecycleAdapter struct {
+	name   string
+	events chan domain.SystemEvent
+}
 
-func (f *fakeRepoLifecycleAdapter) Name() string { return "fake-lifecycle" }
+func (f *fakeRepoLifecycleAdapter) Name() string { return f.name }
 func (f *fakeRepoLifecycleAdapter) OnEvent(_ context.Context, evt domain.SystemEvent) error {
 	f.events <- evt
 	return nil
@@ -81,7 +85,7 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 	defer bus.Close()
 
 	work := &fakeWorkItemAdapter{events: make(chan domain.SystemEvent, 4)}
-	life := &fakeRepoLifecycleAdapter{events: make(chan domain.SystemEvent, 4)}
+	life := &fakeRepoLifecycleAdapter{name: "glab", events: make(chan domain.SystemEvent, 4)}
 	if err := wireAdapterSubscriptions(bus, []adapter.WorkItemAdapter{work}, []adapter.RepoLifecycleAdapter{life}); err != nil {
 		t.Fatalf("wireAdapterSubscriptions: %v", err)
 	}
@@ -115,5 +119,77 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for adapter event fanout")
 		}
+	}
+}
+
+func TestWireAdapterSubscriptions_RoutesLifecycleEventsByProvider(t *testing.T) {
+	bus := event.NewBus(event.BusConfig{})
+	defer bus.Close()
+
+	work := &fakeWorkItemAdapter{events: make(chan domain.SystemEvent, 8)}
+	githubLife := &fakeRepoLifecycleAdapter{name: "github", events: make(chan domain.SystemEvent, 4)}
+	gitlabLife := &fakeRepoLifecycleAdapter{name: "glab", events: make(chan domain.SystemEvent, 4)}
+	if err := wireAdapterSubscriptions(bus, []adapter.WorkItemAdapter{work}, []adapter.RepoLifecycleAdapter{
+		routedRepoLifecycleAdapter{provider: remotedetect.PlatformGitHub, adapter: githubLife},
+		routedRepoLifecycleAdapter{provider: remotedetect.PlatformGitLab, adapter: gitlabLife},
+	}); err != nil {
+		t.Fatalf("wireAdapterSubscriptions: %v", err)
+	}
+
+	githubEvent := domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventWorktreeCreated),
+		Payload:   `{"review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"}}}`,
+		CreatedAt: time.Now(),
+	}
+	if err := bus.Publish(context.Background(), githubEvent); err != nil {
+		t.Fatalf("publish github worktree created: %v", err)
+	}
+	expectLifecycleEvent(t, githubLife.events, string(domain.EventWorktreeCreated))
+	expectNoLifecycleEvent(t, gitlabLife.events)
+
+	gitlabEvent := domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventWorkItemCompleted),
+		Payload:   `{"external_id":"gl:issue:1234#42"}`,
+		CreatedAt: time.Now(),
+	}
+	if err := bus.Publish(context.Background(), gitlabEvent); err != nil {
+		t.Fatalf("publish gitlab work item completed: %v", err)
+	}
+	expectLifecycleEvent(t, gitlabLife.events, string(domain.EventWorkItemCompleted))
+	expectNoLifecycleEvent(t, githubLife.events)
+
+	missingReview := domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventWorktreeCreated),
+		Payload:   `{}`,
+		CreatedAt: time.Now(),
+	}
+	if err := bus.Publish(context.Background(), missingReview); err != nil {
+		t.Fatalf("publish missing review worktree created: %v", err)
+	}
+	expectNoLifecycleEvent(t, githubLife.events)
+	expectNoLifecycleEvent(t, gitlabLife.events)
+}
+
+func expectLifecycleEvent(t *testing.T, ch <-chan domain.SystemEvent, wantType string) {
+	t.Helper()
+	select {
+	case evt := <-ch:
+		if evt.EventType != wantType {
+			t.Fatalf("event type = %s, want %s", evt.EventType, wantType)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", wantType)
+	}
+}
+
+func expectNoLifecycleEvent(t *testing.T, ch <-chan domain.SystemEvent) {
+	t.Helper()
+	select {
+	case evt := <-ch:
+		t.Fatalf("unexpected lifecycle event %s", evt.EventType)
+	case <-time.After(100 * time.Millisecond):
 	}
 }

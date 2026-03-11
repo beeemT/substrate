@@ -481,4 +481,4 @@ const (
 )
 ```
 
-Configured per workspace in `substrate.toml` under the `[commit]` block. `CommitStrategySemiRegular` is the default: commit when a logical unit of work is complete (e.g. after implementing a complete function or adding all files for a feature). AI-generated commit messages are the default; instructions are passed to the agent harness as part of session context.
+Configured globally in `config.yaml` under the `commit:` block. `CommitStrategySemiRegular` is the default: commit when a logical unit of work is complete (e.g. after implementing a complete function or adding all files for a feature). AI-generated commit messages are the default; instructions are passed to the agent harness as part of session context.

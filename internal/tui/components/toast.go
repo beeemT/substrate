@@ -65,21 +65,25 @@ func (m *ToastModel) StackView(pinned ...Toast) string {
 	if len(pinned) == 0 {
 		return m.View()
 	}
-	pinnedViews := make([]string, 0, len(pinned))
+	views := make([]string, 0, len(pinned)+len(m.toasts))
 	for _, toast := range pinned {
-		pinnedViews = append(pinnedViews, renderToast(m.styles, toast))
+		views = append(views, renderToast(m.styles, toast))
 	}
-	if len(m.toasts) == 0 {
-		return lipgloss.JoinVertical(lipgloss.Left, pinnedViews...)
-	}
-	transientViews := make([]string, 0, len(m.toasts))
 	for i := len(m.toasts) - 1; i >= 0; i-- {
-		transientViews = append(transientViews, renderToast(m.styles, m.toasts[i]))
+		views = append(views, renderToast(m.styles, m.toasts[i]))
 	}
-	stack := make([]string, 0, len(pinnedViews)+1)
-	stack = append(stack, pinnedViews...)
-	stack = append(stack, lipgloss.JoinVertical(lipgloss.Right, transientViews...))
-	return lipgloss.JoinVertical(lipgloss.Left, stack...)
+	maxWidth := 0
+	for _, view := range views {
+		maxWidth = max(maxWidth, lipgloss.Width(view))
+	}
+	if maxWidth <= 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, views...)
+	}
+	aligned := make([]string, 0, len(views))
+	for _, view := range views {
+		aligned = append(aligned, lipgloss.NewStyle().Width(maxWidth).Align(lipgloss.Right).Render(view))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, aligned...)
 }
 
 func renderToast(st styles.Styles, t Toast) string {

@@ -22,7 +22,7 @@ import (
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
-	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
 type SettingsFieldType int
@@ -74,7 +74,7 @@ type ProviderStatus struct {
 type SettingsSnapshot struct {
 	Sections       []SettingsSection
 	Providers      map[string]ProviderStatus
-	RawTOML        string
+	RawYAML        string
 	HarnessWarning string
 }
 
@@ -145,7 +145,7 @@ func (s *SettingsService) Snapshot(cfg *config.Config) (SettingsSnapshot, error)
 	return SettingsSnapshot{
 		Sections:       buildSettingsSections(cfg),
 		Providers:      buildProviderStatuses(cfg),
-		RawTOML:        string(raw),
+		RawYAML:        string(raw),
 		HarnessWarning: diagnostics.WarningSummary(),
 	}, nil
 }
@@ -159,18 +159,18 @@ func (s *SettingsService) SaveRaw(raw string) error {
 }
 
 func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) {
-	tmp, err := os.CreateTemp("", "substrate-settings-*.toml")
+	tmp, err := os.CreateTemp("", "substrate-settings-*.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("create temp config: %w", err)
+		return nil, fmt.Errorf("create temp YAML config: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.WriteString(raw); err != nil {
 		_ = tmp.Close()
-		return nil, fmt.Errorf("write temp config: %w", err)
+		return nil, fmt.Errorf("write temp YAML config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return nil, fmt.Errorf("close temp config: %w", err)
+		return nil, fmt.Errorf("close temp YAML config: %w", err)
 	}
 	cfg, err := config.Load(tmpPath)
 	if err != nil {
@@ -193,11 +193,11 @@ func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config
 	if err := config.SaveSecrets(cfg, s.secretStore); err != nil {
 		return "", nil, err
 	}
-	var buf strings.Builder
-	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
-		return "", nil, fmt.Errorf("encode config: %w", err)
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", nil, fmt.Errorf("encode YAML config: %w", err)
 	}
-	return buf.String(), cfg, nil
+	return string(data), cfg, nil
 }
 
 func (s *SettingsService) Apply(ctx context.Context, raw string, current Services) (SettingsApplyResult, error) {
@@ -215,7 +215,7 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 	if current.Foreman != nil {
 		_ = current.Foreman.Stop(ctx)
 	}
-	reloaded.SettingsData.RawTOML = raw
+	reloaded.SettingsData.RawYAML = raw
 	return SettingsApplyResult{Services: reloaded, Message: "Settings applied"}, nil
 }
 
@@ -475,7 +475,6 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Description: "Select which harness runs each phase",
 			Fields: []SettingsField{
 				{Section: "harness", Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex"}, Required: true},
-				{Section: "harness", Key: "fallback", Label: "Fallback Harnesses", Type: SettingsFieldStringList, Value: strings.Join(harnessNamesToStrings(cfg.Harness.Fallback), ",")},
 				{Section: "harness.phase", Key: "planning", Label: "Planning Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Planning), Options: []string{"ohmypi", "claude-code", "codex"}},
 				{Section: "harness.phase", Key: "implementation", Label: "Implementation Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Implementation), Options: []string{"ohmypi", "claude-code", "codex"}},
 				{Section: "harness.phase", Key: "review", Label: "Review Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Review), Options: []string{"ohmypi", "claude-code", "codex"}},
@@ -573,27 +572,54 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		annotateFieldPresentation(&sections[i])
 		sections[i].Status = sectionStatus(sections[i])
 	}
-	annotateHarnessWarnings(sections, app.DiagnoseHarnesses(cfg, ""))
+	annotateHarnessWarnings(sections, cfg, app.DiagnoseHarnesses(cfg, ""))
 	return sections
 }
 
-func annotateHarnessWarnings(sections []SettingsSection, diagnostics app.HarnessDiagnostics) {
+func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, diagnostics app.HarnessDiagnostics) {
 	if !diagnostics.HasWarnings() {
 		return
 	}
 	harnessWarnings := diagnostics.HarnessWarnings()
+	routedHarnesses := configuredPhaseHarnesses(cfg)
 	for i := range sections {
 		switch sections[i].ID {
 		case "harness":
 			setSectionWarning(&sections[i], diagnostics.PhaseWarnings())
 		case "harness.ohmypi":
-			setSectionWarning(&sections[i], harnessWarnings[config.HarnessOhMyPi])
+			setHarnessSectionWarning(&sections[i], config.HarnessOhMyPi, routedHarnesses, harnessWarnings[config.HarnessOhMyPi])
 		case "harness.claude":
-			setSectionWarning(&sections[i], harnessWarnings[config.HarnessClaudeCode])
+			setHarnessSectionWarning(&sections[i], config.HarnessClaudeCode, routedHarnesses, harnessWarnings[config.HarnessClaudeCode])
 		case "harness.codex":
-			setSectionWarning(&sections[i], harnessWarnings[config.HarnessCodex])
+			setHarnessSectionWarning(&sections[i], config.HarnessCodex, routedHarnesses, harnessWarnings[config.HarnessCodex])
 		}
 	}
+}
+
+func configuredPhaseHarnesses(cfg *config.Config) map[config.HarnessName]bool {
+	harnesses := make(map[config.HarnessName]bool, 4)
+	if cfg == nil {
+		return harnesses
+	}
+	for _, harness := range []config.HarnessName{
+		cfg.Harness.Phase.Planning,
+		cfg.Harness.Phase.Implementation,
+		cfg.Harness.Phase.Review,
+		cfg.Harness.Phase.Foreman,
+	} {
+		if harness == "" {
+			continue
+		}
+		harnesses[harness] = true
+	}
+	return harnesses
+}
+
+func setHarnessSectionWarning(section *SettingsSection, harness config.HarnessName, routedHarnesses map[config.HarnessName]bool, warnings []string) {
+	if !routedHarnesses[harness] {
+		return
+	}
+	setSectionWarning(section, warnings)
 }
 
 func setSectionWarning(section *SettingsSection, warnings []string) {
@@ -671,8 +697,6 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Foreman.QuestionTimeout = value
 	case "harness.default":
 		cfg.Harness.Default = config.HarnessName(value)
-	case "harness.fallback":
-		cfg.Harness.Fallback = parseHarnessList(value)
 	case "harness.phase.planning":
 		cfg.Harness.Phase.Planning = config.HarnessName(value)
 	case "harness.phase.implementation":
@@ -773,12 +797,12 @@ func validateSettingsConfig(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	var buf strings.Builder
-	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+	tmp := cfgPath + ".settings-validate"
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
 		return err
 	}
-	tmp := cfgPath + ".settings-validate"
-	if err := os.WriteFile(tmp, []byte(buf.String()), 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
@@ -845,8 +869,6 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "How long Foreman waits before timing out a question; 0 disables the timeout.", "0"
 	case "harness.default":
 		return "Primary harness used whenever a phase-specific override is not set.", "ohmypi"
-	case "harness.fallback":
-		return "Ordered fallback harnesses used when the preferred harness is unavailable.", "claude-code, codex"
 	case "harness.phase.planning":
 		return "Overrides the harness used for the planning phase.", "inherits harness.default"
 	case "harness.phase.implementation":
@@ -938,14 +960,6 @@ func boolStr(v bool) string {
 	return "false"
 }
 
-func harnessNamesToStrings(names []config.HarnessName) []string {
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		out = append(out, string(n))
-	}
-	return out
-}
-
 func int64Str(v int64) string {
 	if v == 0 {
 		return ""
@@ -1028,15 +1042,6 @@ func parseList(v string) []string {
 		if trimmed != "" {
 			out = append(out, trimmed)
 		}
-	}
-	return out
-}
-
-func parseHarnessList(v string) []config.HarnessName {
-	parts := parseList(v)
-	out := make([]config.HarnessName, 0, len(parts))
-	for _, part := range parts {
-		out = append(out, config.HarnessName(part))
 	}
 	return out
 }

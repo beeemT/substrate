@@ -215,6 +215,8 @@ type mockSessionRepo struct {
 	updateErr       error
 	updateErrStatus domain.AgentSessionStatus
 	deleteErr       error
+	updateHook      func(context.Context, domain.AgentSession) error
+	deleteHook      func(context.Context, string) error
 }
 
 func newMockSessionRepo() *mockSessionRepo {
@@ -284,6 +286,11 @@ func (r *mockSessionRepo) Create(ctx context.Context, s domain.AgentSession) err
 func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateHook != nil {
+		if err := r.updateHook(ctx, s); err != nil {
+			return err
+		}
+	}
 	if r.updateErr != nil && (r.updateErrStatus == "" || s.Status == r.updateErrStatus) {
 		return r.updateErr
 	}
@@ -294,6 +301,11 @@ func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) err
 func (r *mockSessionRepo) Delete(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.deleteHook != nil {
+		if err := r.deleteHook(ctx, id); err != nil {
+			return err
+		}
+	}
 	if r.deleteErr != nil {
 		return r.deleteErr
 	}
