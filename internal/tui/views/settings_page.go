@@ -1087,7 +1087,7 @@ func (m SettingsPage) View() string {
 	base := lipgloss.JoinVertical(lipgloss.Left, body, footer)
 	if m.editing {
 		if modal := m.renderEditModal(); modal != "" {
-			return renderOverlay(modal, m.width, m.height)
+			return renderCenteredOverlay(base, modal, m.width, m.height)
 		}
 	}
 	return base

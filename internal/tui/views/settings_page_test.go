@@ -79,6 +79,9 @@ func TestSettingsPage_TextEditModalShowsTypedInput(t *testing.T) {
 	}
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}, Services{})
 	rendered := ansi.Strip(updated.View())
+	if !strings.Contains(rendered, "Settings") {
+		t.Fatalf("view = %q, want underlying settings page to remain visible", rendered)
+	}
 	if !strings.Contains(rendered, "gptx") {
 		t.Fatalf("view = %q, want visible typed input", rendered)
 	}
@@ -107,6 +110,9 @@ func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
 		t.Fatalf("editing state = (%v, %v), want selection modal", updated.editing, updated.editMode)
 	}
 	rendered := ansi.Strip(updated.View())
+	if !strings.Contains(rendered, "Settings") {
+		t.Fatalf("view = %q, want underlying settings page to remain visible", rendered)
+	}
 	for _, want := range []string{"Oh My Pi", "Claude Code", "Codex"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q in selection modal", rendered, want)

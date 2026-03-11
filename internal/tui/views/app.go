@@ -1557,6 +1557,7 @@ func (a App) View() string {
 		Content: sidebarContent,
 		Width:   layout.SidebarPaneWidth,
 		Height:  layout.BodyHeight,
+		Focused: a.mainFocus == mainFocusSidebar,
 	})
 
 	contentContent := lipgloss.NewStyle().
@@ -1567,6 +1568,7 @@ func (a App) View() string {
 		Content: contentContent,
 		Width:   layout.ContentPaneWidth,
 		Height:  layout.BodyHeight,
+		Focused: a.mainFocus == mainFocusContent,
 	})
 
 	bodyParts := make([]string, 0, 3)
@@ -1645,6 +1647,67 @@ func renderOverlay(overlay string, w, h int) string {
 		overlay,
 		lipgloss.WithWhitespaceChars(" "),
 	)
+}
+
+// renderCenteredOverlay overlays centered content on top of an existing base view without replacing the background.
+func renderCenteredOverlay(base, overlay string, width, height int) string {
+	if overlay == "" || width <= 0 || height <= 0 {
+		return base
+	}
+	if base == "" {
+		return renderOverlay(overlay, width, height)
+	}
+
+	baseLines := strings.Split(base, "\n")
+	if len(baseLines) < height {
+		baseLines = append(baseLines, make([]string, height-len(baseLines))...)
+	} else if len(baseLines) > height {
+		baseLines = baseLines[:height]
+	}
+	overlayLines := strings.Split(overlay, "\n")
+	if len(overlayLines) > height {
+		overlayLines = overlayLines[:height]
+	}
+	blockWidth := 0
+	for _, overlayLine := range overlayLines {
+		blockWidth = max(blockWidth, ansi.StringWidth(overlayLine))
+	}
+	if blockWidth <= 0 {
+		return base
+	}
+	if blockWidth > width {
+		blockWidth = width
+	}
+	startRow := max(0, (height-len(overlayLines))/2)
+	if startRow+len(overlayLines) > height {
+		startRow = max(0, height-len(overlayLines))
+	}
+	startCol := max(0, (width-blockWidth)/2)
+	for i, overlayLine := range overlayLines {
+		target := startRow + i
+		if target < 0 || target >= len(baseLines) {
+			break
+		}
+		line := overlayLine
+		if ansi.StringWidth(line) > blockWidth {
+			line = ansi.Truncate(line, blockWidth, "")
+		}
+		overlayWidth := ansi.StringWidth(line)
+		prefix := ansi.Cut(baseLines[target], 0, startCol)
+		if got := ansi.StringWidth(prefix); got < startCol {
+			prefix += strings.Repeat(" ", startCol-got)
+		}
+		overlaySegment := line
+		if overlayWidth < blockWidth {
+			overlaySegment += strings.Repeat(" ", blockWidth-overlayWidth)
+		}
+		suffix := ""
+		if startCol+blockWidth < width {
+			suffix = ansi.Cut(baseLines[target], startCol+blockWidth, width)
+		}
+		baseLines[target] = prefix + overlaySegment + suffix
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 // renderCentered centers content in the terminal window.

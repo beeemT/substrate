@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -121,6 +123,32 @@ func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	}
 	if strings.Contains(lines[len(lines)-1], "─") {
 		t.Fatalf("footer line = %q, want borderless status bar", lines[len(lines)-1])
+	}
+}
+
+func TestAppViewHighlightsActivePaneWithoutChangingBodyText(t *testing.T) {
+	t.Parallel()
+
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+
+	app := sizedLayoutTestApp(t, 80, 20)
+
+	sidebarLines := assertAppViewFitsWindow(t, app.View(), 80, 20)
+	assertBodyEndsAboveFooter(t, sidebarLines)
+	sidebarBody := strings.Join(sidebarLines[:len(sidebarLines)-1], "\n")
+
+	app.mainFocus = mainFocusContent
+	contentLines := assertAppViewFitsWindow(t, app.View(), 80, 20)
+	assertBodyEndsAboveFooter(t, contentLines)
+	contentBody := strings.Join(contentLines[:len(contentLines)-1], "\n")
+
+	if sidebarBody == contentBody {
+		t.Fatal("expected app body styling to change when focus moves between sidebar and content panes")
+	}
+	if ansi.Strip(sidebarBody) != ansi.Strip(contentBody) {
+		t.Fatal("expected pane focus change to affect styling only, not body text layout")
 	}
 }
 
