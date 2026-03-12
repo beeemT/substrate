@@ -9,6 +9,7 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 	"github.com/beeemT/substrate/internal/tui/views"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func makeSidebarStyles() styles.Styles {
@@ -92,6 +93,34 @@ func TestSidebarHeaderCentersSessionsTitle(t *testing.T) {
 	wantStart := (views.SidebarWidth - lipgloss.Width(title)) / 2
 	if got := headerStart(header, title); got != wantStart {
 		t.Fatalf("expected %q header to start at column %d, got %d in %q", title, wantStart, got, header)
+	}
+}
+
+func TestSidebarUsesDisplayWidthForStyledWorkItemPrefix(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(12)
+	m.SetHeight(8)
+	m.SetEntries([]views.SidebarEntry{{
+		Kind:       views.SidebarEntryWorkItem,
+		WorkItemID: "wi-1",
+		ExternalID: "SUB-123",
+		Title:      "Short title",
+		State:      domain.WorkItemImplementing,
+	}})
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("sidebar lines = %d, want at least 3", len(lines))
+	}
+
+	prefixLine := strings.TrimRight(ansi.Strip(lines[2]), " ")
+	if got := ansi.StringWidth(lines[2]); got > 12 {
+		t.Fatalf("prefix line width = %d, want <= 12\nline: %q", got, lines[2])
+	}
+	if prefixLine != "● SUB-123" {
+		t.Fatalf("prefix line = %q, want full visible prefix without premature ellipsis", prefixLine)
 	}
 }
 

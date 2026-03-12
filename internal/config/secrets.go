@@ -38,7 +38,6 @@ func SecretKeys() map[string]string {
 		"adapters.linear.api_key": "linear.api_key",
 		"adapters.gitlab.token":   "gitlab.token",
 		"adapters.github.token":   "github.token",
-		"adapters.sentry.token":   "sentry.token",
 	}
 }
 
@@ -52,6 +51,12 @@ func LoadSecrets(cfg *Config, store SecretStore) error {
 			continue
 		}
 		setSecretField(cfg, field, value)
+	}
+	if key, ok := sentryTokenKey(cfg); ok {
+		value, err := store.Get(key)
+		if err == nil {
+			cfg.Adapters.Sentry.Token = value
+		}
 	}
 	return nil
 }
@@ -73,7 +78,39 @@ func SaveSecrets(cfg *Config, store SecretStore) error {
 		}
 		setSecretField(cfg, field, "")
 	}
+	if key, ok := sentryTokenKey(cfg); ok {
+		value := cfg.Adapters.Sentry.Token
+		if strings.TrimSpace(value) == "" {
+			if err := store.Delete(key); err != nil && err != keyring.ErrNotFound {
+				return fmt.Errorf("delete secret %s: %w", "adapters.sentry.token", err)
+			}
+		} else {
+			if err := store.Set(key, value); err != nil {
+				return fmt.Errorf("save secret %s: %w", "adapters.sentry.token", err)
+			}
+			cfg.Adapters.Sentry.Token = ""
+		}
+	}
 	return nil
+}
+
+func sentryTokenKey(cfg *Config) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	return keychainSecretKey(cfg.Adapters.Sentry.TokenRef)
+}
+
+func keychainSecretKey(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "keychain:") {
+		return "", false
+	}
+	key := strings.TrimSpace(strings.TrimPrefix(ref, "keychain:"))
+	if key == "" {
+		return "", false
+	}
+	return key, true
 }
 
 func setSecretField(cfg *Config, field, value string) {

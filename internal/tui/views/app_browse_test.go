@@ -1151,6 +1151,7 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 	overlay.providerIndex = providerOptionIndex("github")
 	overlay.normalizeSelectionOptions()
 	overlay.setBrowseControlFocus(browseControlSource)
+	overlay.repoInput.SetValue("acme/rocket")
 
 	beforeView := stripBrowseANSI(overlay.View())
 	assertOverlayFits(t, beforeView, 120, 30)
@@ -1166,6 +1167,9 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 	if updated.currentProvider() != "sentry" {
 		t.Fatalf("provider = %q, want sentry after source change", updated.currentProvider())
 	}
+	if updated.repoInput.Value() != "" {
+		t.Fatalf("repo filter = %q, want cleared when switching to Sentry", updated.repoInput.Value())
+	}
 	if cmd == nil {
 		t.Fatal("expected reload after source change")
 	}
@@ -1179,6 +1183,9 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 	}
 	if sentryAdapter.lastListOpts.Scope != domain.ScopeIssues {
 		t.Fatalf("scope = %q, want issues list reload", sentryAdapter.lastListOpts.Scope)
+	}
+	if sentryAdapter.lastListOpts.Repo != "" {
+		t.Fatalf("repo filter = %q, want cleared on sentry reload", sentryAdapter.lastListOpts.Repo)
 	}
 	if updated.repoInput.Placeholder != "Repository / Project…" {
 		t.Fatalf("repo placeholder = %q, want Repository / Project…", updated.repoInput.Placeholder)
@@ -1197,10 +1204,89 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 			t.Fatalf("view = %q, want %q after selecting Sentry", afterView, want)
 		}
 	}
-	for _, avoid := range []string{"Projects", "Initiatives", "Labels:", "Owner:", "Group:", "Team:"} {
+	for _, avoid := range []string{"acme/rocket", "Projects", "Initiatives", "Labels:", "Owner:", "Group:", "Team:"} {
 		if strings.Contains(afterView, avoid) {
 			t.Fatalf("view = %q, must not show %q for Sentry", afterView, avoid)
 		}
+	}
+}
+
+func TestNewSessionOverlayClearsRepoFilterAcrossSentryBoundary(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		repoHost      string
+		startProvider string
+		key           tea.KeyType
+		startValue    string
+		wantProvider  string
+	}{
+		{name: "github to sentry", repoHost: "github", startProvider: "github", key: tea.KeyRight, startValue: "acme/rocket", wantProvider: "sentry"},
+		{name: "sentry to github", repoHost: "github", startProvider: "sentry", key: tea.KeyLeft, startValue: "frontend", wantProvider: "github"},
+		{name: "gitlab to sentry", repoHost: "gitlab", startProvider: "gitlab", key: tea.KeyRight, startValue: "acme/platform", wantProvider: "sentry"},
+		{name: "sentry to gitlab", repoHost: "gitlab", startProvider: "sentry", key: tea.KeyLeft, startValue: "backend", wantProvider: "gitlab"},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repoAdapter := &browseTestAdapter{
+				name:         tc.repoHost,
+				browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+				browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+					domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, SupportsRepo: true},
+				},
+			}
+			sentryAdapter := &browseTestAdapter{
+				name:         "sentry",
+				browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+				browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+					domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, SupportsRepo: true},
+				},
+			}
+
+			overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{repoAdapter, sentryAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+			overlay.Open()
+			overlay.SetSize(120, 30)
+			overlay.providerIndex = providerOptionIndex(tc.startProvider)
+			overlay.normalizeSelectionOptions()
+			overlay.setBrowseControlFocus(browseControlSource)
+			overlay.repoInput.SetValue(tc.startValue)
+
+			updated, cmd := overlay.Update(tea.KeyMsg{Type: tc.key})
+			if updated.currentProvider() != tc.wantProvider {
+				t.Fatalf("provider = %q, want %q", updated.currentProvider(), tc.wantProvider)
+			}
+			if updated.repoInput.Value() != "" {
+				t.Fatalf("repo filter = %q, want cleared when crossing sentry boundary", updated.repoInput.Value())
+			}
+			if cmd == nil {
+				t.Fatal("expected reload after source change")
+			}
+			updated = applyOverlayCmds(t, updated, cmd)
+
+			var lastOpts adapter.ListOpts
+			switch tc.wantProvider {
+			case "sentry":
+				lastOpts = sentryAdapter.lastListOpts
+			default:
+				lastOpts = repoAdapter.lastListOpts
+			}
+			if lastOpts.Provider != tc.wantProvider {
+				t.Fatalf("provider = %q, want %q on reload", lastOpts.Provider, tc.wantProvider)
+			}
+			if lastOpts.Repo != "" {
+				t.Fatalf("repo filter = %q, want cleared on reload", lastOpts.Repo)
+			}
+			afterView := stripBrowseANSI(updated.View())
+			if strings.Contains(afterView, tc.startValue) {
+				t.Fatalf("view = %q, must not show stale repo/project filter %q", afterView, tc.startValue)
+			}
+			if !strings.Contains(afterView, "Repository / Project…") {
+				t.Fatalf("view = %q, want shared repo/project placeholder", afterView)
+			}
+		})
 	}
 }
 

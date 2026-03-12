@@ -32,14 +32,9 @@ func (s *memorySecretStore) Delete(key string) error {
 	return nil
 }
 
-func TestSecretKeysIncludesSentry(t *testing.T) {
-	if got := SecretKeys()["adapters.sentry.token"]; got != "sentry.token" {
-		t.Fatalf("SecretKeys()[%q] = %q, want %q", "adapters.sentry.token", got, "sentry.token")
-	}
-}
-
-func TestLoadSecretsHydratesSentryToken(t *testing.T) {
+func TestLoadSecretsHydratesSentryDefaultTokenRef(t *testing.T) {
 	cfg := &Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
 	store := &memorySecretStore{values: map[string]string{"sentry.token": "secret-token"}}
 
 	if err := LoadSecrets(cfg, store); err != nil {
@@ -50,16 +45,61 @@ func TestLoadSecretsHydratesSentryToken(t *testing.T) {
 	}
 }
 
-func TestSaveSecretsPersistsAndClearsSentryToken(t *testing.T) {
+func TestLoadSecretsHydratesSentryCustomTokenRef(t *testing.T) {
 	cfg := &Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:custom.sentry.token"
+	store := &memorySecretStore{values: map[string]string{
+		"sentry.token":        "wrong-token",
+		"custom.sentry.token": "secret-token",
+	}}
+
+	if err := LoadSecrets(cfg, store); err != nil {
+		t.Fatalf("LoadSecrets() error = %v", err)
+	}
+	if cfg.Adapters.Sentry.Token != "secret-token" {
+		t.Fatalf("cfg.Adapters.Sentry.Token = %q, want %q", cfg.Adapters.Sentry.Token, "secret-token")
+	}
+}
+
+func TestLoadSecretsSkipsSentryWithoutTokenRef(t *testing.T) {
+	cfg := &Config{}
+	store := &memorySecretStore{values: map[string]string{"sentry.token": "secret-token"}}
+
+	if err := LoadSecrets(cfg, store); err != nil {
+		t.Fatalf("LoadSecrets() error = %v", err)
+	}
+	if cfg.Adapters.Sentry.Token != "" {
+		t.Fatalf("cfg.Adapters.Sentry.Token = %q, want empty without token_ref", cfg.Adapters.Sentry.Token)
+	}
+}
+
+func TestLoadSecretsSkipsUnsupportedSentryTokenRef(t *testing.T) {
+	cfg := &Config{}
+	cfg.Adapters.Sentry.TokenRef = "env:SENTRY_TOKEN"
+	store := &memorySecretStore{values: map[string]string{"sentry.token": "secret-token"}}
+
+	if err := LoadSecrets(cfg, store); err != nil {
+		t.Fatalf("LoadSecrets() error = %v", err)
+	}
+	if cfg.Adapters.Sentry.Token != "" {
+		t.Fatalf("cfg.Adapters.Sentry.Token = %q, want empty for unsupported token_ref", cfg.Adapters.Sentry.Token)
+	}
+}
+
+func TestSaveSecretsPersistsSentryTokenToConfiguredRef(t *testing.T) {
+	cfg := &Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:custom.sentry.token"
 	cfg.Adapters.Sentry.Token = "secret-token"
 	store := &memorySecretStore{}
 
 	if err := SaveSecrets(cfg, store); err != nil {
 		t.Fatalf("SaveSecrets() error = %v", err)
 	}
-	if got := store.values["sentry.token"]; got != "secret-token" {
-		t.Fatalf("store.values[%q] = %q, want %q", "sentry.token", got, "secret-token")
+	if got := store.values["custom.sentry.token"]; got != "secret-token" {
+		t.Fatalf("store.values[%q] = %q, want %q", "custom.sentry.token", got, "secret-token")
+	}
+	if _, ok := store.values["sentry.token"]; ok {
+		t.Fatal("store.values should not write sentry.token when token_ref points elsewhere")
 	}
 	if cfg.Adapters.Sentry.Token != "" {
 		t.Fatalf("cfg.Adapters.Sentry.Token = %q, want empty after SaveSecrets", cfg.Adapters.Sentry.Token)
@@ -68,6 +108,7 @@ func TestSaveSecretsPersistsAndClearsSentryToken(t *testing.T) {
 
 func TestSaveSecretsDeletesBlankSentryToken(t *testing.T) {
 	cfg := &Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
 	store := &memorySecretStore{values: map[string]string{"sentry.token": "secret-token"}}
 
 	if err := SaveSecrets(cfg, store); err != nil {

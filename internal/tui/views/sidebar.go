@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -374,14 +375,16 @@ func shortSessionID(id string) string {
 	return id[:8]
 }
 
-// truncate trims s to maxLen runes, appending "…" if truncated.
+// truncate trims s to maxLen display cells, appending "…" if truncated.
 func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= maxLen {
 		return s
 	}
-	if maxLen <= 1 {
+	if maxLen == 1 {
 		return "…"
 	}
-	return string(runes[:maxLen-1]) + "…"
+	return ansi.Truncate(s, maxLen, "…")
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -614,6 +613,32 @@ func TestSettingsPage_SentrySectionRendersProviderStatusAndDetails(t *testing.T)
 	}
 }
 
+func TestSettingsPage_SentryOmitsLoginAction(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "provider.sentry")
+	if strings.Contains(page.footerText(), "[g] login") {
+		t.Fatalf("footer = %q, want Sentry login hint hidden", page.footerText())
+	}
+	page.focus = settingsFocusFields
+	if strings.Contains(page.footerText(), "[g] login") {
+		t.Fatalf("field footer = %q, want Sentry login hint hidden", page.footerText())
+	}
+	if cmd := page.loginProviderCmd(Services{}); cmd != nil {
+		t.Fatal("expected Sentry login command to be suppressed")
+	}
+
+	githubPage := newTestSettingsPage(&config.Config{})
+	githubPage.sectionCursor = findSectionIndex(t, githubPage, "provider.github")
+	if !strings.Contains(githubPage.footerText(), "[g] login") {
+		t.Fatalf("footer = %q, want GitHub login hint", githubPage.footerText())
+	}
+	if cmd := githubPage.loginProviderCmd(Services{}); cmd == nil {
+		t.Fatal("expected GitHub login command to remain available")
+	}
+}
+
 func TestSettingsPage_SyntheticProvidersGroupCollapsesAndExpands(t *testing.T) {
 	t.Parallel()
 	page := newTestSettingsPage(&config.Config{})
@@ -723,62 +748,6 @@ func TestSettingsPage_MainScrollbarVisibleWithoutOverflow(t *testing.T) {
 	rendered := page.renderMainScrollbar(vp, 4)
 	if !strings.Contains(rendered, "▐") {
 		t.Fatal("expected scrollbar thumb to remain visible even when content fits")
-	}
-}
-
-func TestSettingsPage_MouseWheelCoalescesSameDirectionBurst(t *testing.T) {
-	t.Parallel()
-
-	page := newTestSettingsPage(&config.Config{})
-	page.SetSize(80, 12)
-	viewportWidth, viewportHeight, _ := page.mainViewportSize()
-	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
-	if page.mainViewport.TotalLineCount() <= page.mainViewport.Height {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	now := time.Unix(1, 0)
-	page.now = func() time.Time { return now }
-
-	first, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if first.mainViewport.YOffset <= page.mainViewport.YOffset {
-		t.Fatalf("first y offset = %d, want > %d", first.mainViewport.YOffset, page.mainViewport.YOffset)
-	}
-
-	now = now.Add(settingsWheelMinInterval / 2)
-	second, _ := first.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if second.mainViewport.YOffset != first.mainViewport.YOffset {
-		t.Fatalf("throttled y offset = %d, want %d", second.mainViewport.YOffset, first.mainViewport.YOffset)
-	}
-
-	now = now.Add(settingsWheelMinInterval)
-	third, _ := second.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if third.mainViewport.YOffset <= second.mainViewport.YOffset {
-		t.Fatalf("post-throttle y offset = %d, want > %d", third.mainViewport.YOffset, second.mainViewport.YOffset)
-	}
-}
-
-func TestSettingsPage_MouseWheelDirectionChangeBypassesThrottle(t *testing.T) {
-	t.Parallel()
-
-	page := newTestSettingsPage(&config.Config{})
-	page.SetSize(80, 12)
-	viewportWidth, viewportHeight, _ := page.mainViewportSize()
-	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
-	if page.mainViewport.TotalLineCount() <= page.mainViewport.Height {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	now := time.Unix(1, 0)
-	page.now = func() time.Time { return now }
-
-	down, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if down.mainViewport.YOffset <= page.mainViewport.YOffset {
-		t.Fatalf("down y offset = %d, want > %d", down.mainViewport.YOffset, page.mainViewport.YOffset)
-	}
-
-	now = now.Add(settingsWheelMinInterval / 2)
-	up, _ := down.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
-	if up.mainViewport.YOffset >= down.mainViewport.YOffset {
-		t.Fatalf("up y offset = %d, want < %d", up.mainViewport.YOffset, down.mainViewport.YOffset)
 	}
 }
 

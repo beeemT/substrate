@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -29,8 +28,6 @@ const (
 	settingsEditModeText settingsEditMode = iota
 	settingsEditModeSelect
 )
-
-const settingsWheelMinInterval = time.Second / 60
 
 type settingsEditOption struct {
 	Label string
@@ -103,9 +100,6 @@ type SettingsPage struct {
 	errorText          string
 	statusText         string
 	warningText        string
-	now                func() time.Time
-	lastWheelAt        time.Time
-	lastWheelDirection int
 }
 
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
@@ -125,7 +119,6 @@ func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.
 		editInput:        ti,
 		styles:           st,
 		warningText:      snapshot.HarnessWarning,
-		now:              time.Now,
 	}
 }
 
@@ -644,22 +637,6 @@ func (m *SettingsPage) syncMainViewport() {
 	m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, true)
 }
 
-func (m *SettingsPage) shouldThrottleWheel(direction int) bool {
-	if direction == 0 {
-		return false
-	}
-	now := time.Now()
-	if m.now != nil {
-		now = m.now()
-	}
-	if direction == m.lastWheelDirection && !m.lastWheelAt.IsZero() && now.Sub(m.lastWheelAt) < settingsWheelMinInterval {
-		return true
-	}
-	m.lastWheelAt = now
-	m.lastWheelDirection = direction
-	return false
-}
-
 func (m SettingsPage) wheelAtViewportEdge(direction int) bool {
 	if direction == 0 || m.mainViewport.Height <= 0 {
 		return false
@@ -995,7 +972,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		if m.mainViewport.Width != viewportWidth || m.mainViewport.Height != viewportHeight || m.mainViewport.TotalLineCount() == 0 || m.mainSectionAnchors == nil || m.mainFieldAnchors == nil {
 			m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
 		}
-		if m.wheelAtViewportEdge(direction) || m.shouldThrottleWheel(direction) {
+		if m.wheelAtViewportEdge(direction) {
 			return m, nil
 		}
 		previousOffset := m.mainViewport.YOffset
@@ -1008,18 +985,12 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		if m.mainViewport.YOffset == previousOffset {
 			return m, nil
 		}
-		previousSection, previousField, previousNav := m.sectionCursor, m.fieldCursor, m.navCursor
-		alignSelection := false
+		top := m.mainViewport.YOffset
+		bottom := top + m.mainViewport.Height - 1
 		if m.fieldsFocused() {
-			alignSelection = !m.syncFieldSelectionToScroll(m.mainFieldAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1, direction)
+			m.syncFieldSelectionToScroll(m.mainFieldAnchors, top, bottom, direction)
 		} else {
-			alignSelection = !m.syncSectionSelectionToScroll(m.mainSectionAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1, direction)
-		}
-		selectionChanged := m.sectionCursor != previousSection || m.fieldCursor != previousField || m.navCursor != previousNav
-		if selectionChanged || alignSelection {
-			m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, alignSelection)
-		} else {
-			m.mainViewport.SetYOffset(m.mainViewport.YOffset)
+			m.syncSectionSelectionToScroll(m.mainSectionAnchors, top, bottom, direction)
 		}
 		return m, nil
 	}
@@ -1181,7 +1152,7 @@ func (m SettingsPage) testProviderCmd() tea.Cmd {
 
 func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 	provider := providerForSection(m.currentSection())
-	if provider == "" {
+	if !providerSupportsLogin(provider) {
 		return nil
 	}
 	harness := harnessForProvider(provider)
@@ -1636,11 +1607,17 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 }
 
 func (m SettingsPage) footerText() string {
-	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [r] reveal"
+	if providerSupportsLogin(providerForSection(m.currentSection())) {
+		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+	}
 	if m.editing {
 		hint = "[enter] save edit  [esc] cancel edit"
 	} else if m.fieldsFocused() {
-		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [r] reveal"
+		if providerSupportsLogin(providerForSection(m.currentSection())) {
+			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+		}
 	}
 	extras := make([]string, 0, 2)
 	if m.warningText != "" {
@@ -1673,6 +1650,10 @@ func providerForSection(section *SettingsSection) string {
 	default:
 		return ""
 	}
+}
+
+func providerSupportsLogin(provider string) bool {
+	return harnessForProvider(provider) != ""
 }
 
 func harnessForProvider(provider string) string {

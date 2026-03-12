@@ -156,6 +156,34 @@ func TestSessionSearchOverlayArrowKeysMoveFocus(t *testing.T) {
 	}
 }
 
+func TestSessionSearchOverlayUpArrowReturnsToInputFromTopResult(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, true)
+	overlay.SetEntries([]domain.SessionHistoryEntry{{
+		SessionID:          "sess-1",
+		WorkspaceID:        "ws-1",
+		WorkspaceName:      "workspace",
+		WorkItemID:         "wi-1",
+		WorkItemExternalID: "SUB-1",
+		WorkItemTitle:      "Work item",
+		UpdatedAt:          time.Now(),
+		CreatedAt:          time.Now(),
+	}})
+
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated.focus != sessionSearchFocusResults {
+		t.Fatalf("focus after down = %v, want results", updated.focus)
+	}
+	if updated.list.Index() != 0 {
+		t.Fatalf("list index after down = %d, want 0", updated.list.Index())
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if updated.focus != sessionSearchFocusInput {
+		t.Fatalf("focus after up = %v, want input", updated.focus)
+	}
+}
+
 func TestSessionSearchOverlayArrowKeysToggleScope(t *testing.T) {
 	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
 	overlay.Open(sessionHistoryScopeGlobal, true)

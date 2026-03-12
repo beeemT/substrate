@@ -784,8 +784,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		}
 		cfg.Adapters.Codex.Quiet = parsed
 	case "adapters.linear.api_key_ref":
-		cfg.Adapters.Linear.APIKey = value
-		cfg.Adapters.Linear.APIKeyRef = secretRef("linear.api_key")
+		cfg.Adapters.Linear.APIKey, cfg.Adapters.Linear.APIKeyRef = applySecretField(value, "linear.api_key")
 	case "adapters.linear.team_id":
 		cfg.Adapters.Linear.TeamID = value
 	case "adapters.linear.assignee_filter":
@@ -795,8 +794,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 	case "adapters.linear.state_mappings":
 		cfg.Adapters.Linear.StateMappings = parseMap(value)
 	case "adapters.gitlab.token_ref":
-		cfg.Adapters.GitLab.Token = value
-		cfg.Adapters.GitLab.TokenRef = secretRef("gitlab.token")
+		cfg.Adapters.GitLab.Token, cfg.Adapters.GitLab.TokenRef = applySecretField(value, "gitlab.token")
 	case "adapters.gitlab.base_url":
 		cfg.Adapters.GitLab.BaseURL = value
 	case "adapters.gitlab.assignee":
@@ -806,8 +804,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 	case "adapters.gitlab.state_mappings":
 		cfg.Adapters.GitLab.StateMappings = parseMap(value)
 	case "adapters.sentry.token_ref":
-		cfg.Adapters.Sentry.Token = value
-		cfg.Adapters.Sentry.TokenRef = secretRef("sentry.token")
+		cfg.Adapters.Sentry.Token, cfg.Adapters.Sentry.TokenRef = applySecretField(value, "sentry.token")
 	case "adapters.sentry.base_url":
 		cfg.Adapters.Sentry.BaseURL = value
 	case "adapters.sentry.organization":
@@ -815,8 +812,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 	case "adapters.sentry.projects":
 		cfg.Adapters.Sentry.Projects = parseList(value)
 	case "adapters.github.token_ref":
-		cfg.Adapters.GitHub.Token = value
-		cfg.Adapters.GitHub.TokenRef = secretRef("github.token")
+		cfg.Adapters.GitHub.Token, cfg.Adapters.GitHub.TokenRef = applySecretField(value, "github.token")
 	case "adapters.github.assignee":
 		cfg.Adapters.GitHub.Assignee = value
 	case "adapters.github.poll_interval":
@@ -1132,6 +1128,17 @@ func formatMap(m map[string]string) string {
 
 func secretRef(name string) string {
 	return "keychain:" + name
+}
+
+func applySecretField(value, defaultRef string) (string, string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(trimmed, "keychain:") {
+		return "", trimmed
+	}
+	return trimmed, secretRef(defaultRef)
 }
 
 func secretDisplayValue(ref, value string) string {

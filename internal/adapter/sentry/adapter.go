@@ -205,7 +205,8 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 	if !ok {
 		return nil, true, nil
 	}
-	terms := make([]string, 0, 3)
+
+	terms := make([]string, 0, 4)
 	switch strings.TrimSpace(opts.View) {
 	case "", "all":
 	case "assigned_to_me":
@@ -213,6 +214,7 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 	default:
 		return nil, false, fmt.Errorf("sentry issue view %q is not supported", opts.View)
 	}
+
 	switch state := strings.TrimSpace(opts.State); state {
 	case "", "unresolved", "for_review", "regressed", "escalating", "resolved", "archived":
 		if state != "" {
@@ -221,15 +223,17 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 	default:
 		return nil, false, fmt.Errorf("sentry issue state %q is not supported", opts.State)
 	}
+
+	if projectQuery := issueProjectQuery(projects); projectQuery != "" {
+		terms = append(terms, projectQuery)
+	}
 	if search := strings.TrimSpace(opts.Search); search != "" {
 		terms = append(terms, search)
 	}
+
 	values := url.Values{}
 	if len(terms) > 0 {
 		values.Set("query", strings.Join(terms, " "))
-	}
-	for _, project := range projects {
-		values.Add("project", project)
 	}
 	if cursor := strings.TrimSpace(opts.Cursor); cursor != "" {
 		values.Set("cursor", cursor)
@@ -238,6 +242,17 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 		values.Set("limit", fmt.Sprintf("%d", limit))
 	}
 	return values, false, nil
+}
+
+func issueProjectQuery(projects []string) string {
+	switch len(projects) {
+	case 0:
+		return ""
+	case 1:
+		return "project:" + projects[0]
+	default:
+		return "project:[" + strings.Join(projects, ",") + "]"
+	}
 }
 
 func normalizeProjects(projects []string) []string {
@@ -466,10 +481,10 @@ func issueSection(issue sentryIssue) string {
 	if culprit := strings.TrimSpace(issue.Culprit); culprit != "" {
 		lines = append(lines, "culprit: "+culprit)
 	}
-	if count := strings.TrimSpace(issue.Count); count != "" {
+	if count := strings.TrimSpace(issue.Count.String()); count != "" {
 		lines = append(lines, "events: "+count)
 	}
-	if users := strings.TrimSpace(issue.UserCount); users != "" {
+	if users := strings.TrimSpace(issue.UserCount.String()); users != "" {
 		lines = append(lines, "users: "+users)
 	}
 	if level := strings.TrimSpace(issue.Level); level != "" {

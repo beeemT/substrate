@@ -375,6 +375,10 @@ func (m NewSessionOverlay) currentProvider() string {
 	return providerOptions[m.providerIndex].Key
 }
 
+func crossesSentryProjectFilterBoundary(fromProvider, toProvider string) bool {
+	return (fromProvider == "sentry") != (toProvider == "sentry")
+}
+
 func (m NewSessionOverlay) activeProviderOptions() []providerOption {
 	indices := m.activeProviderIndices()
 	options := make([]providerOption, 0, len(indices))
@@ -886,7 +890,12 @@ func (m *NewSessionOverlay) cycleProvider(delta int) tea.Cmd {
 			break
 		}
 	}
+	currentProvider := m.currentProvider()
 	next := (current + delta + len(indices)) % len(indices)
+	nextProvider := providerOptions[indices[next]].Key
+	if crossesSentryProjectFilterBoundary(currentProvider, nextProvider) {
+		m.repoInput.SetValue("")
+	}
 	m.providerIndex = indices[next]
 	m.normalizeSelectionOptions()
 	return m.reloadItems()

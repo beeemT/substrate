@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,14 +140,14 @@ adapters:
 }
 
 func TestLoadInvalidSentryBaseURL(t *testing.T) {
-	path := writeTestConfig(t, `
-adapters:
-  sentry:
-    base_url: ://bad-url
-`)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load() should error on invalid adapters.sentry.base_url")
+	for _, raw := range []string{"://bad-url", "/api/0", "ftp://sentry.io/api/0"} {
+		t.Run(raw, func(t *testing.T) {
+			path := writeTestConfig(t, fmt.Sprintf("adapters:\n  sentry:\n    base_url: %s\n", raw))
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load() should error on invalid adapters.sentry.base_url")
+			}
+		})
 	}
 }
 

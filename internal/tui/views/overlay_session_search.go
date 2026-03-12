@@ -537,6 +537,13 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 				return m, nil
 			}
 		case "up":
+			if m.focus == sessionSearchFocusPreview && m.focusResults() {
+				return m, nil
+			}
+			if m.focus == sessionSearchFocusResults && m.list.Index() <= 0 {
+				m.focusInput()
+				return m, nil
+			}
 			if m.focus == sessionSearchFocusInput && m.focusScope() {
 				return m, nil
 			}

@@ -52,6 +52,66 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	}
 }
 
+func TestSettingsSerialize_ClearsSentryTokenRefWhenSecretFieldBlank(t *testing.T) {
+	t.Setenv("SUBSTRATE_HOME", t.TempDir())
+
+	svc := &SettingsService{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
+	cfg.Adapters.Sentry.Organization = "acme"
+
+	sections := buildSettingsSections(cfg)
+	setSettingsFieldValue(t, sections, "adapters.sentry", "token_ref", "")
+
+	raw, rebuilt, err := svc.Serialize(sections)
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	if strings.Contains(raw, "token_ref: keychain:sentry.token") {
+		t.Fatalf("serialized YAML retained cleared Sentry token ref\n%s", raw)
+	}
+	if rebuilt.Adapters.Sentry.Token != "" || rebuilt.Adapters.Sentry.TokenRef != "" {
+		t.Fatalf("rebuilt sentry auth = (%q, %q), want both cleared", rebuilt.Adapters.Sentry.Token, rebuilt.Adapters.Sentry.TokenRef)
+	}
+	status := buildProviderStatuses(rebuilt)["sentry"]
+	if status.Configured {
+		t.Fatalf("sentry status = %+v, want Configured=false after clearing token", status)
+	}
+	if status.AuthSource != "unset" {
+		t.Fatalf("sentry auth source = %q, want %q", status.AuthSource, "unset")
+	}
+}
+
+func TestSettingsSerialize_PreservesSentryKeychainRefWithoutPendingSave(t *testing.T) {
+	t.Setenv("SUBSTRATE_HOME", t.TempDir())
+
+	svc := &SettingsService{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
+	cfg.Adapters.Sentry.Organization = "acme"
+
+	raw, rebuilt, err := svc.Serialize(buildSettingsSections(cfg))
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	if !strings.Contains(raw, "token_ref: keychain:sentry.token") {
+		t.Fatalf("serialized YAML missing Sentry token ref\n%s", raw)
+	}
+	if rebuilt.Adapters.Sentry.Token != "" {
+		t.Fatalf("rebuilt sentry token = %q, want empty when preserving keychain ref", rebuilt.Adapters.Sentry.Token)
+	}
+	if rebuilt.Adapters.Sentry.TokenRef != "keychain:sentry.token" {
+		t.Fatalf("rebuilt sentry token ref = %q, want %q", rebuilt.Adapters.Sentry.TokenRef, "keychain:sentry.token")
+	}
+	status := buildProviderStatuses(rebuilt)["sentry"]
+	if !status.Configured {
+		t.Fatalf("sentry status = %+v, want Configured=true with keychain ref", status)
+	}
+	if status.AuthSource != "keychain" {
+		t.Fatalf("sentry auth source = %q, want %q", status.AuthSource, "keychain")
+	}
+}
+
 func TestSettingsSerialize_RejectsInvalidScalarInput(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 

@@ -364,7 +364,7 @@ func validate(cfg *Config) error {
 	}
 
 	if cfg.Adapters.Sentry.BaseURL != "" {
-		if _, err := url.ParseRequestURI(cfg.Adapters.Sentry.BaseURL); err != nil {
+		if err := validateAbsoluteHTTPURL(cfg.Adapters.Sentry.BaseURL); err != nil {
 			return fmt.Errorf("invalid sentry base_url: %w", err)
 		}
 	}
@@ -389,4 +389,20 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func validateAbsoluteHTTPURL(raw string) error {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return err
+	}
+	if !parsed.IsAbs() || parsed.Host == "" {
+		return fmt.Errorf("must be an absolute URL")
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		return nil
+	default:
+		return fmt.Errorf("must use http or https")
+	}
 }

@@ -70,6 +70,32 @@ func testIssue(id, shortID, title, project string) sentryIssue {
 	}
 }
 
+func issuePayload(issue sentryIssue, userCount any) map[string]any {
+	payload := map[string]any{
+		"id":        issue.ID,
+		"shortId":   issue.ShortID,
+		"title":     issue.Title,
+		"culprit":   issue.Culprit,
+		"permalink": issue.Permalink,
+		"status":    issue.Status,
+		"level":     issue.Level,
+		"count":     issue.Count.String(),
+		"userCount": userCount,
+		"project": map[string]any{
+			"id":   issue.Project.ID,
+			"slug": issue.Project.Slug,
+			"name": issue.Project.Name,
+		},
+	}
+	if issue.FirstSeen != nil {
+		payload["firstSeen"] = issue.FirstSeen.Time.Format(time.RFC3339Nano)
+	}
+	if issue.LastSeen != nil {
+		payload["lastSeen"] = issue.LastSeen.Time.Format(time.RFC3339Nano)
+	}
+	return payload
+}
+
 func TestNewRequiresTokenAndOrganization(t *testing.T) {
 	t.Parallel()
 
@@ -136,11 +162,11 @@ func TestBuildIssueListQueryAppliesFiltersAndAllowlist(t *testing.T) {
 	if empty {
 		t.Fatal("empty result = true, want query values")
 	}
-	if got := values.Get("query"); got != "assigned:me is:resolved memory leak" {
+	if got := values.Get("query"); got != "assigned:me is:resolved project:web memory leak" {
 		t.Fatalf("query = %q", got)
 	}
-	if got := values["project"]; len(got) != 1 || got[0] != "web" {
-		t.Fatalf("project = %#v, want [web]", got)
+	if got := values["project"]; len(got) != 0 {
+		t.Fatalf("project params = %#v, want none", got)
 	}
 	if got := values.Get("cursor"); got != "0:100:0" {
 		t.Fatalf("cursor = %q, want 0:100:0", got)
@@ -156,8 +182,11 @@ func TestBuildIssueListQueryAppliesFiltersAndAllowlist(t *testing.T) {
 	if empty {
 		t.Fatal("default query unexpectedly empty")
 	}
-	if got := values["project"]; !equalStrings(got, []string{"web", "api"}) {
-		t.Fatalf("default allowlist projects = %#v", got)
+	if got := values.Get("query"); got != "project:[web,api]" {
+		t.Fatalf("default query = %q", got)
+	}
+	if got := values["project"]; len(got) != 0 {
+		t.Fatalf("default project params = %#v, want none", got)
 	}
 
 	_, empty, err = a.buildIssueListQuery(adapter.ListOpts{Repo: "payments"})
@@ -198,7 +227,7 @@ func TestListSelectableMapsIssuesAndPagination(t *testing.T) {
 		}
 		header := http.Header{}
 		header.Set("Link", `<https://sentry.example/api/0/organizations/acme/issues/?cursor=0:100:0>; rel="next"; results="true"; cursor="0:100:0"`)
-		return jsonResponse(t, http.StatusOK, header, []sentryIssue{issue}), nil
+		return jsonResponse(t, http.StatusOK, header, []map[string]any{issuePayload(issue, 3)}), nil
 	}))
 
 	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{
@@ -216,11 +245,11 @@ func TestListSelectableMapsIssuesAndPagination(t *testing.T) {
 	if seenPath != "/api/0/organizations/acme/issues/" {
 		t.Fatalf("path = %q, want org issues endpoint", seenPath)
 	}
-	if got := seenQuery.Get("query"); got != "assigned:me is:resolved checkout panic" {
+	if got := seenQuery.Get("query"); got != "assigned:me is:resolved project:web checkout panic" {
 		t.Fatalf("query = %q", got)
 	}
-	if got := seenQuery["project"]; !equalStrings(got, []string{"web"}) {
-		t.Fatalf("project params = %#v", got)
+	if got := seenQuery["project"]; len(got) != 0 {
+		t.Fatalf("project params = %#v, want none", got)
 	}
 	if got := seenQuery.Get("cursor"); got != "0:0:0" {
 		t.Fatalf("cursor = %q", got)
@@ -279,7 +308,7 @@ func TestResolveSingleIssue(t *testing.T) {
 		if req.URL.Path != "/api/0/organizations/acme/issues/101/" {
 			t.Fatalf("path = %q, want detail endpoint", req.URL.Path)
 		}
-		return jsonResponse(t, http.StatusOK, nil, issue), nil
+		return jsonResponse(t, http.StatusOK, nil, issuePayload(issue, 3)), nil
 	}))
 
 	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"101"}})
@@ -356,7 +385,7 @@ func TestFetchParsesExternalIDAndFallsBackToNumericIdentifier(t *testing.T) {
 		if req.URL.Path != "/api/0/organizations/acme-prod/issues/303/" {
 			t.Fatalf("path = %q, want org from external id", req.URL.Path)
 		}
-		return jsonResponse(t, http.StatusOK, nil, issue), nil
+		return jsonResponse(t, http.StatusOK, nil, issuePayload(issue, 3)), nil
 	}))
 
 	item, err := a.Fetch(context.Background(), "SEN-acme-prod-303")
@@ -365,6 +394,9 @@ func TestFetchParsesExternalIDAndFallsBackToNumericIdentifier(t *testing.T) {
 	}
 	if item.ExternalID != "SEN-acme-prod-303" {
 		t.Fatalf("ExternalID = %q", item.ExternalID)
+	}
+	if !strings.Contains(item.Description, "users: 3") {
+		t.Fatalf("description = %q, want users line", item.Description)
 	}
 	if got := item.Metadata["sentry_identifier"]; got != "303" {
 		t.Fatalf("sentry_identifier = %v, want fallback numeric ID", got)
