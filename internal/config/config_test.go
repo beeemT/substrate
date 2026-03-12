@@ -57,6 +57,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Adapters.GitHub.BaseURL != "https://api.github.com" {
 		t.Errorf("adapters.github.base_url = %q, want %q", cfg.Adapters.GitHub.BaseURL, "https://api.github.com")
 	}
+	if cfg.Adapters.Sentry.BaseURL != "https://sentry.io/api/0" {
+		t.Errorf("adapters.sentry.base_url = %q, want %q", cfg.Adapters.Sentry.BaseURL, "https://sentry.io/api/0")
+	}
 	if cfg.Adapters.GitLab.PollInterval != "60s" {
 		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "60s")
 	}
@@ -103,6 +106,47 @@ foreman:
 	}
 	if cfg.Foreman.QuestionTimeout != "45s" {
 		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "45s")
+	}
+}
+
+func TestLoadSentryConfig(t *testing.T) {
+	path := writeTestConfig(t, `
+adapters:
+  sentry:
+    token_ref: keychain:sentry.token
+    organization: acme
+    projects:
+      - web
+      - api
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Adapters.Sentry.TokenRef != "keychain:sentry.token" {
+		t.Fatalf("adapters.sentry.token_ref = %q, want %q", cfg.Adapters.Sentry.TokenRef, "keychain:sentry.token")
+	}
+	if cfg.Adapters.Sentry.BaseURL != "https://sentry.io/api/0" {
+		t.Fatalf("adapters.sentry.base_url = %q, want %q", cfg.Adapters.Sentry.BaseURL, "https://sentry.io/api/0")
+	}
+	if cfg.Adapters.Sentry.Organization != "acme" {
+		t.Fatalf("adapters.sentry.organization = %q, want %q", cfg.Adapters.Sentry.Organization, "acme")
+	}
+	if len(cfg.Adapters.Sentry.Projects) != 2 || cfg.Adapters.Sentry.Projects[0] != "web" || cfg.Adapters.Sentry.Projects[1] != "api" {
+		t.Fatalf("adapters.sentry.projects = %#v, want %#v", cfg.Adapters.Sentry.Projects, []string{"web", "api"})
+	}
+}
+
+func TestLoadInvalidSentryBaseURL(t *testing.T) {
+	path := writeTestConfig(t, `
+adapters:
+  sentry:
+    base_url: ://bad-url
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() should error on invalid adapters.sentry.base_url")
 	}
 }
 

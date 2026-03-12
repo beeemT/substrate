@@ -91,6 +91,64 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	}
 }
 
+func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+
+	if got := app.deletableSessionID(); got != "sess-1" {
+		t.Fatalf("deletable session id = %q, want sess-1", got)
+	}
+
+	hints := app.currentHints()
+	found := false
+	for _, hint := range hints {
+		if hint.Key == "d" && hint.Label == "Delete session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("current hints = %#v, want delete session hint", hints)
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil while showing confirm dialog", cmd)
+	}
+	if !updated.confirmActive {
+		t.Fatal("expected delete shortcut to open confirm dialog")
+	}
+	confirmView := stripBrowseANSI(updated.confirm.View())
+	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "review data") {
+		t.Fatalf("confirm view = %q, want delete session confirmation copy", confirmView)
+	}
+}
+
+func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
+	updated := model.(App)
+
+	if got := updated.deletableSessionID(); got != "sess-1" {
+		t.Fatalf("deletable session id = %q, want sess-1", got)
+	}
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 72, 18)
+	footer := stripBrowseANSI(lines[len(lines)-1])
+	if !strings.Contains(footer, "Delete session") {
+		t.Fatalf("footer = %q, want delete hint for selected single-session work item", footer)
+	}
+}
+
 func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
 	t.Parallel()
 

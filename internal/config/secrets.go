@@ -38,6 +38,7 @@ func SecretKeys() map[string]string {
 		"adapters.linear.api_key": "linear.api_key",
 		"adapters.gitlab.token":   "gitlab.token",
 		"adapters.github.token":   "github.token",
+		"adapters.sentry.token":   "sentry.token",
 	}
 }
 
@@ -83,6 +84,8 @@ func setSecretField(cfg *Config, field, value string) {
 		cfg.Adapters.GitLab.Token = value
 	case "adapters.github.token":
 		cfg.Adapters.GitHub.Token = value
+	case "adapters.sentry.token":
+		cfg.Adapters.Sentry.Token = value
 	}
 }
 
@@ -94,6 +97,8 @@ func getSecretField(cfg *Config, field string) string {
 		return cfg.Adapters.GitLab.Token
 	case "adapters.github.token":
 		return cfg.Adapters.GitHub.Token
+	case "adapters.sentry.token":
+		return cfg.Adapters.Sentry.Token
 	default:
 		return ""
 	}

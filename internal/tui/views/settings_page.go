@@ -1666,6 +1666,8 @@ func providerForSection(section *SettingsSection) string {
 		return "linear"
 	case "provider.gitlab":
 		return "gitlab"
+	case "provider.sentry":
+		return "sentry"
 	case "provider.github":
 		return "github"
 	default:

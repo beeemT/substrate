@@ -30,6 +30,7 @@ var providerOptions = []providerOption{
 	{Key: "linear", Label: "Linear"},
 	{Key: "github", Label: "GitHub"},
 	{Key: "gitlab", Label: "GitLab"},
+	{Key: "sentry", Label: "Sentry"},
 }
 
 var scopeOptions = []domain.SelectionScope{
@@ -204,7 +205,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	owner.CharLimit = 200
 
 	repo := textinput.New()
-	repo.Placeholder = "Repository / project path…"
+	repo.Placeholder = "Repository / Project…"
 	repo.CharLimit = 200
 
 	group := textinput.New()
@@ -1742,6 +1743,7 @@ func (m *NewSessionOverlay) View() string {
 	m.resizeInputs(layout.InputWidth)
 	m.syncDetailViewportWithLayout(layout, false)
 
+	budget := m.stableBrowseChromeBudget()
 	activeLabelStyle := m.styles.Accent
 	inactiveLabelStyle := m.styles.Hint
 	providerLabels := make([]string, 0, len(m.activeProviderOptions()))
@@ -1785,14 +1787,26 @@ func (m *NewSessionOverlay) View() string {
 		m.controlLabel("Source: ", browseControlSource) + strings.Join(providerLabels, "  "),
 		m.controlLabel("Scope:  ", browseControlScope) + strings.Join(scopeLabels, "  "),
 	}
-	if len(viewLabels) > 0 {
-		header = append(header, m.controlLabel("View:   ", browseControlView)+strings.Join(viewLabels, "  "))
+	if budget.hasViews {
+		if len(viewLabels) > 0 {
+			header = append(header, m.controlLabel("View:   ", browseControlView)+strings.Join(viewLabels, "  "))
+		} else {
+			header = append(header, "")
+		}
 	}
-	if len(stateLabels) > 0 {
-		header = append(header, m.controlLabel("State:  ", browseControlState)+strings.Join(stateLabels, "  "))
+	if budget.hasStates {
+		if len(stateLabels) > 0 {
+			header = append(header, m.controlLabel("State:  ", browseControlState)+strings.Join(stateLabels, "  "))
+		} else {
+			header = append(header, "")
+		}
 	}
-	if m.statusMessage != "" {
-		header = append(header, m.styles.Warning.Render(m.statusMessage))
+	if budget.hasStatusMessage {
+		if m.statusMessage != "" {
+			header = append(header, m.styles.Warning.Render(m.statusMessage))
+		} else {
+			header = append(header, "")
+		}
 	}
 
 	var body string
@@ -1812,12 +1826,17 @@ func (m *NewSessionOverlay) View() string {
 }
 
 func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) string {
-	lines := make([]string, 0, 5)
+	budget := m.stableBrowseChromeBudget()
+	lines := make([]string, 0, 5+budget.advancedRows)
 	advancedRows := m.advancedFilterRows()
 	filterRow := m.controlLabel("Search: ", browseControlSearch) + m.filterInput.View()
 	lines = append(lines, filterRow)
 	if len(advancedRows) > 0 {
 		lines = append(lines, advancedRows...)
+	}
+	for len(advancedRows) < budget.advancedRows {
+		lines = append(lines, "")
+		advancedRows = append(advancedRows, "")
 	}
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 

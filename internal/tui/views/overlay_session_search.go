@@ -98,7 +98,7 @@ type SessionSearchOverlay struct {
 
 func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
 	input := textinput.New()
-	input.Placeholder = "Search work item sessions…"
+	input.Placeholder = "Search sessions…"
 	input.CharLimit = 200
 
 	delegate := list.NewDefaultDelegate()
@@ -368,7 +368,7 @@ func (m SessionSearchOverlay) detailContent() string {
 		if m.loading {
 			return "Loading sessions…"
 		}
-		return "No work item sessions found for the current scope and query."
+		return "No sessions found for the current scope and query."
 	}
 
 	workspace := entry.WorkspaceName
@@ -390,7 +390,7 @@ func (m SessionSearchOverlay) detailContent() string {
 		fmt.Sprintf("Updated:              %s", entry.UpdatedAt.Local().Format("2006-01-02 15:04:05")),
 		fmt.Sprintf("Finished:             %s", formatSessionTime(entry.CompletedAt)),
 		"",
-		"Press Enter to open the selected work item session.",
+		"Press Enter to open the selected session.",
 	}
 	if strings.TrimSpace(entry.SessionID) != "" {
 		lines = append(lines, "Press d to delete the latest agent session and related records.")

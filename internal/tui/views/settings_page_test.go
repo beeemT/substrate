@@ -574,6 +574,46 @@ func TestSettingsPage_RenderProviderStatusLineColorsConnectedGreen(t *testing.T)
 	}
 }
 
+func TestSettingsPage_SentrySectionRendersProviderStatusAndDetails(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	cfg.Adapters.Sentry.Organization = "acme"
+	cfg.Adapters.Sentry.Projects = []string{"web", "api"}
+
+	page := newTestSettingsPage(cfg)
+	page.sectionCursor = findSectionIndex(t, page, "provider.sentry")
+	page.fieldCursor = findFieldIndex(t, page, "provider.sentry", "token_ref")
+
+	header := page.renderStickySectionHeader(32)
+	if !strings.Contains(header, "Sentry") {
+		t.Fatalf("header = %q, want selected Sentry title", header)
+	}
+	if !strings.Contains(header, "Providers") {
+		t.Fatalf("header = %q, want Providers breadcrumb", header)
+	}
+
+	details := ansi.Strip(page.renderStickyFieldDetails(70, 10))
+	if !strings.Contains(details, "Sentry token stored in config or the OS keychain") {
+		t.Fatalf("details = %q, want Sentry token description", details)
+	}
+	if !strings.Contains(details, "Default: empty") {
+		t.Fatalf("details = %q, want default value line", details)
+	}
+
+	doc, _, _ := page.buildMainDocument(80)
+	rendered := ansi.Strip(doc)
+	if !strings.Contains(rendered, "Provider auth: pending save") {
+		t.Fatalf("document = %q, want Sentry provider status", rendered)
+	}
+	for _, want := range []string{"Organization", "Projects"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("document = %q, want %q in Sentry section", rendered, want)
+		}
+	}
+}
+
 func TestSettingsPage_SyntheticProvidersGroupCollapsesAndExpands(t *testing.T) {
 	t.Parallel()
 	page := newTestSettingsPage(&config.Config{})

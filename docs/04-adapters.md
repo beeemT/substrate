@@ -528,7 +528,74 @@ Lifecycle event coverage matches `glab`: `WorktreeCreated` and `WorkItemComplete
 
 ---
 
-## 5. glab Adapter (RepoLifecycleAdapter)
+## 5. Sentry Adapter (WorkItemAdapter)
+
+Package: `internal/adapter/sentry`. Sentry is implemented as a source-only work item adapter: it can browse issues, resolve one or more selected issues into a Substrate `domain.WorkItem`, and fetch a previously selected issue again by stable external ID. It does **not** participate in repository lifecycle automation.
+
+### Configuration
+
+```yaml
+adapters:
+  sentry:
+    token_ref: keychain:sentry.token
+    base_url: https://sentry.io/api/0
+    organization: acme
+    projects:
+      - web
+      - api
+```
+
+`organization` is required for live requests. `projects` is optional and acts as a project allowlist for browsing. Authentication uses `Authorization: Bearer <token>` against the organization issues REST API.
+
+### Capabilities and Browse Contract
+
+Current implementation declares Sentry as issues-only, browse-and-resolve only:
+
+```go
+func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
+    return adapter.AdapterCapabilities{
+        CanWatch:   false,
+        CanBrowse:  true,
+        CanMutate:  false,
+        BrowseScopes: []domain.SelectionScope{domain.ScopeIssues},
+        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+            domain.ScopeIssues: {
+                Views:          []string{"assigned_to_me", "all"},
+                States:         []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"},
+                SupportsSearch: true,
+                SupportsCursor: true,
+                SupportsRepo:   true,
+            },
+        },
+    }
+}
+```
+
+Browse requests use `GET /api/0/organizations/{organization}/issues/` plus cursor pagination from the response `Link` header. Shared browse controls are translated as follows:
+
+- `View=assigned_to_me` -> add `assigned:me` to the Sentry query
+- `View=all` -> no assignment clause
+- `State` -> add `is:<state>`
+- free-text search -> append raw search text to the query expression
+- shared `Repo` filter -> mapped to Sentry project selection
+- configured `projects` -> enforced as an allowlist; an out-of-scope project filter returns no results instead of widening the request
+
+No provider-specific browse controls are added in the TUI. The shared repo field is reused with placeholder text `Repository / Project…`.
+
+> There is no Sentry `RepoLifecycleAdapter`. Sentry is intentionally excluded from `BuildRepoLifecycleAdapters(...)` and remote-detection flows.
+
+### Resolve, Fetch, and Unsupported Operations
+
+Single-issue resolve produces a Sentry-backed `domain.WorkItem` with `Source="sentry"`, `SourceScope=domain.ScopeIssues`, `SourceItemIDs=[]string{issueID}`, and durable source facts in metadata / description rather than invented repo semantics. Multi-select resolve aggregates multiple issues into one work item with per-issue sections in the description.
+
+Stable external IDs use the format `SEN-{organization}-{issueID}` (for example `SEN-acme-123456789`). `Fetch` reparses that ID and calls the Sentry issue-detail endpoint so a Sentry-backed work item can be rehydrated without relying on stale browse results.
+
+Unsupported operations stay explicitly source-only: `Watch` returns a closed channel, and `UpdateState`, `AddComment`, and `OnEvent` are no-ops that return `nil`.
+
+---
+
+
+## 6. glab Adapter (RepoLifecycleAdapter)
 
 Package: `internal/adapter/glab`. Requires `glab` CLI installed and authenticated. Validates at startup. Unlike `internal/adapter/gitlab`, this package owns GitLab merge request lifecycle only; tracker issue data lives in the GitLab work item adapter.
 
@@ -595,7 +662,7 @@ auto_push         = true
 
 ---
 
-## 6. Remote Detection for RepoLifecycleAdapter Registration
+## 7. Remote Detection for RepoLifecycleAdapter Registration
 
 > Repo lifecycle adapters are not registered unconditionally. Startup inspects the workspace's git remotes and only enables the lifecycle adapter that matches the observed hosting platform.
 
@@ -628,7 +695,7 @@ If `workspaceDir == ""`, skip remote detection and register no lifecycle adapter
 
 ---
 
-## 7. Agent Harness Interface
+## 8. Agent Harness Interface
 
 Package: `internal/domain/harness`. The orchestrator is harness-agnostic, but harness selection is now multi-provider: oh-my-pi remains the default documented execution path because it is the only harness with proven interactive correction and Foreman messaging support. Claude Code and Codex are wired behind the same contract for startup, progress, completion, and fallback selection, but they are not yet considered interaction-complete substitutes for oh-my-pi.
 
@@ -725,7 +792,7 @@ review = "ohmypi"
 foreman = "ohmypi"
 ```
 
-### 7a. oh-my-pi Harness (default, fully interactive)
+### 8a. oh-my-pi Harness (default, fully interactive)
 
 Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge script. This remains the default harness in generated config and runtime selection because its bidirectional protocol is the only one currently verified for planning correction loops, review correction loops, and Foreman question/answer flows.
 
@@ -754,7 +821,7 @@ The `answer` stdin message resolves a pending `ask_foreman` tool call in an agen
 - Linux namespace-based isolation remains the intended equivalent.
 - Session modes remain `agent` and `foreman`; review reuses the read-only foreman-style tool restriction rather than introducing a separate shared mode in the current contract.
 
-### 7b. Claude Code Harness (wired, messaging parity not yet verified)
+### 8b. Claude Code Harness (wired, messaging parity not yet verified)
 
 Package: `internal/adapter/claudecode`. This adapter exists behind the shared `AgentHarness` contract and is a viable non-interactive/streaming harness, but it is not yet a fully equivalent replacement for oh-my-pi because real interactive `SendMessage` continuation behavior has not been validated against an installed `claude` binary.
 
@@ -779,7 +846,7 @@ max_budget_usd = 10.00
 - still blocked on verifying the live CLI continuation protocol needed for correctness-critical `SendMessage` flows
 - should remain behind explicit selection/fallback rather than replacing the oh-my-pi default until that verification exists
 
-### 7c. Codex Harness (wired, messaging parity not yet verified)
+### 8c. Codex Harness (wired, messaging parity not yet verified)
 
 Package: `internal/adapter/codex`. This adapter also exists behind the shared contract and is intended to provide reliable headless execution with conservative progress extraction first, richer event fidelity second.
 

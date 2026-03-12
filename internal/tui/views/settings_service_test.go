@@ -2,6 +2,8 @@ package views
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,18 +28,27 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	cfg.Adapters.Linear.TeamID = "team-1"
 	cfg.Adapters.GitHub.Token = "gh-secret"
 	cfg.Adapters.GitLab.Token = "gl-secret"
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	cfg.Adapters.Sentry.Organization = "acme"
+	cfg.Adapters.Sentry.Projects = []string{"web", "api"}
 
 	raw, rebuilt, err := svc.Serialize(buildSettingsSections(cfg))
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
-	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token"} {
+	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token", "token_ref: keychain:sentry.token", "organization: acme", "- web", "- api"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("serialized YAML missing %q\n%s", want, raw)
 		}
 	}
-	if rebuilt.Adapters.Linear.APIKeyRef != "keychain:linear.api_key" || rebuilt.Adapters.GitHub.TokenRef != "keychain:github.token" {
+	if rebuilt.Adapters.Linear.APIKeyRef != "keychain:linear.api_key" || rebuilt.Adapters.GitHub.TokenRef != "keychain:github.token" || rebuilt.Adapters.Sentry.TokenRef != "keychain:sentry.token" {
 		t.Fatalf("rebuilt config mismatch: %+v", rebuilt.Adapters)
+	}
+	if rebuilt.Adapters.Sentry.Organization != "acme" {
+		t.Fatalf("rebuilt sentry organization = %q, want %q", rebuilt.Adapters.Sentry.Organization, "acme")
+	}
+	if got := rebuilt.Adapters.Sentry.Projects; len(got) != 2 || got[0] != "web" || got[1] != "api" {
+		t.Fatalf("rebuilt sentry projects = %#v, want %#v", got, []string{"web", "api"})
 	}
 }
 
@@ -236,10 +247,144 @@ func TestBuildProviderStatuses_UsesGithubFallback(t *testing.T) {
 	}
 }
 
+func TestBuildSettingsSections_IncludesSentryProviderSection(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	cfg.Adapters.Sentry.Organization = "acme"
+	cfg.Adapters.Sentry.Projects = []string{"web", "api"}
+
+	section := findSection(buildSettingsSections(cfg), "provider.sentry")
+	if section.ID == "" {
+		t.Fatal("expected provider.sentry section in settings snapshot")
+	}
+	if section.Title != "Provider · Sentry" {
+		t.Fatalf("section title = %q, want %q", section.Title, "Provider · Sentry")
+	}
+	if len(section.Fields) != 4 {
+		t.Fatalf("field count = %d, want 4", len(section.Fields))
+	}
+	if section.Fields[0].Key != "token_ref" || section.Fields[1].Key != "base_url" || section.Fields[2].Key != "organization" || section.Fields[3].Key != "projects" {
+		t.Fatalf("unexpected field keys = %#v", []string{section.Fields[0].Key, section.Fields[1].Key, section.Fields[2].Key, section.Fields[3].Key})
+	}
+	if !strings.Contains(section.Fields[0].Description, "Sentry token stored in config or the OS keychain") {
+		t.Fatalf("token description = %q, want Sentry credential copy", section.Fields[0].Description)
+	}
+	if section.Fields[1].DefaultValue != "https://sentry.io/api/0" {
+		t.Fatalf("base_url default = %q, want %q", section.Fields[1].DefaultValue, "https://sentry.io/api/0")
+	}
+}
+
+func TestBuildProviderStatuses_TracksSentryTokenState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	statuses := buildProviderStatuses(cfg)
+	if got := statuses["sentry"]; got.Configured {
+		t.Fatalf("unconfigured sentry status = %+v, want Configured=false", got)
+	}
+
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	got := buildProviderStatuses(cfg)["sentry"]
+	if !got.Configured {
+		t.Fatalf("configured sentry status = %+v, want Configured=true", got)
+	}
+	if got.AuthSource != "pending save" {
+		t.Fatalf("sentry auth source = %q, want %q", got.AuthSource, "pending save")
+	}
+}
+
+func TestSettingsService_TestProviderSentryReportsConstructorError(t *testing.T) {
+	t.Parallel()
+
+	svc := &SettingsService{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+
+	status, err := svc.TestProvider(context.Background(), "sentry", buildSettingsSections(cfg))
+	if err == nil {
+		t.Fatal("TestProvider(sentry) error = nil, want constructor error")
+	}
+	if !strings.Contains(err.Error(), "sentry organization is required") {
+		t.Fatalf("TestProvider(sentry) error = %q, want organization requirement", err)
+	}
+	if status.Connected {
+		t.Fatalf("status = %+v, want Connected=false", status)
+	}
+	if !status.Configured {
+		t.Fatalf("status = %+v, want Configured=true when token is present", status)
+	}
+	if status.LastError != "sentry organization is required" {
+		t.Fatalf("status.LastError = %q, want %q", status.LastError, "sentry organization is required")
+	}
+}
+
+func TestSettingsService_TestProviderSentryMarksConnectedOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/0/organizations/acme/issues/" {
+			t.Fatalf("path = %q, want org issues endpoint", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sentry-secret" {
+			t.Fatalf("authorization = %q, want bearer token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	svc := &SettingsService{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	cfg.Adapters.Sentry.BaseURL = server.URL + "/api/0"
+	cfg.Adapters.Sentry.Organization = "acme"
+
+	status, err := svc.TestProvider(context.Background(), "sentry", buildSettingsSections(cfg))
+	if err != nil {
+		t.Fatalf("TestProvider(sentry): %v", err)
+	}
+	if !status.Configured || !status.Connected {
+		t.Fatalf("status = %+v, want configured connected provider", status)
+	}
+	if status.LastError != "" {
+		t.Fatalf("status.LastError = %q, want empty", status.LastError)
+	}
+}
+
+func TestSettingsService_TestProviderSentrySurfacesAPIError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream unavailable"))
+	}))
+	defer server.Close()
+
+	svc := &SettingsService{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "sentry-secret"
+	cfg.Adapters.Sentry.BaseURL = server.URL + "/api/0"
+	cfg.Adapters.Sentry.Organization = "acme"
+
+	status, err := svc.TestProvider(context.Background(), "sentry", buildSettingsSections(cfg))
+	if err == nil {
+		t.Fatal("TestProvider(sentry) error = nil, want API failure")
+	}
+	if status.Connected {
+		t.Fatalf("status = %+v, want Connected=false", status)
+	}
+	if !strings.Contains(status.LastError, "upstream unavailable") {
+		t.Fatalf("status.LastError = %q, want API error body", status.LastError)
+	}
+}
+
 func TestProviderForSection(t *testing.T) {
 	cases := map[string]string{
 		"provider.linear": "linear",
 		"provider.gitlab": "gitlab",
+		"provider.sentry": "sentry",
 		"provider.github": "github",
 		"commit":          "",
 	}

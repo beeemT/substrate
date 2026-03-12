@@ -279,9 +279,23 @@ func sessionHistoryEntryMatches(entry domain.SessionHistoryEntry, search string)
 }
 
 func (a App) localSessionSearchEntry(wi domain.WorkItem) (domain.SessionHistoryEntry, bool) {
+	workspaceName := ""
+	if wi.WorkspaceID == a.svcs.WorkspaceID {
+		workspaceName = strings.TrimSpace(a.svcs.WorkspaceName)
+	}
+	entry := domain.SessionHistoryEntry{
+		WorkspaceID:        wi.WorkspaceID,
+		WorkspaceName:      workspaceName,
+		WorkItemID:         wi.ID,
+		WorkItemExternalID: wi.ExternalID,
+		WorkItemTitle:      wi.Title,
+		WorkItemState:      wi.State,
+		CreatedAt:          wi.CreatedAt,
+		UpdatedAt:          wi.UpdatedAt,
+	}
 	sessions := a.sessionsForWorkItem(wi.ID)
 	if len(sessions) == 0 {
-		return domain.SessionHistoryEntry{}, false
+		return entry, true
 	}
 
 	latest := sessions[0]
@@ -298,33 +312,18 @@ func (a App) localSessionSearchEntry(wi domain.WorkItem) (domain.SessionHistoryE
 			hasInterrupted = true
 		}
 	}
-
-	updatedAt := wi.UpdatedAt
-	if latest.UpdatedAt.After(updatedAt) {
-		updatedAt = latest.UpdatedAt
+	if latest.UpdatedAt.After(entry.UpdatedAt) {
+		entry.UpdatedAt = latest.UpdatedAt
 	}
-	workspaceName := ""
-	if wi.WorkspaceID == a.svcs.WorkspaceID {
-		workspaceName = strings.TrimSpace(a.svcs.WorkspaceName)
-	}
-	return domain.SessionHistoryEntry{
-		SessionID:          latest.ID,
-		WorkspaceID:        wi.WorkspaceID,
-		WorkspaceName:      workspaceName,
-		WorkItemID:         wi.ID,
-		WorkItemExternalID: wi.ExternalID,
-		WorkItemTitle:      wi.Title,
-		WorkItemState:      wi.State,
-		RepositoryName:     latest.RepositoryName,
-		HarnessName:        latest.HarnessName,
-		Status:             latest.Status,
-		AgentSessionCount:  len(sessions),
-		HasOpenQuestion:    hasOpenQuestion,
-		HasInterrupted:     hasInterrupted,
-		CreatedAt:          wi.CreatedAt,
-		UpdatedAt:          updatedAt,
-		CompletedAt:        latest.CompletedAt,
-	}, true
+	entry.SessionID = latest.ID
+	entry.RepositoryName = latest.RepositoryName
+	entry.HarnessName = latest.HarnessName
+	entry.Status = latest.Status
+	entry.AgentSessionCount = len(sessions)
+	entry.HasOpenQuestion = hasOpenQuestion
+	entry.HasInterrupted = hasInterrupted
+	entry.CompletedAt = latest.CompletedAt
+	return entry, true
 }
 
 func (a App) localSessionSearchEntries(filter domain.SessionHistoryFilter) []domain.SessionHistoryEntry {
@@ -506,17 +505,31 @@ func (a App) deletableSessionID() string {
 	if a.currentHistorySessionID != "" {
 		return a.currentHistorySessionID
 	}
-	if a.sidebarMode != sidebarPaneTasks {
+	if a.sidebarMode == sidebarPaneTasks {
+		sessionID := a.selectedTaskSessionID()
+		if sessionID == "" || sessionID == taskSidebarSourceDetailsID {
+			return ""
+		}
+		if a.workItemTaskSession(a.currentWorkItemID, sessionID) == nil {
+			return ""
+		}
+		return sessionID
+	}
+	if a.sidebarMode == sidebarPaneSessions {
+		return a.deletableSelectedWorkItemSessionID()
+	}
+	return ""
+}
+
+func (a App) deletableSelectedWorkItemSessionID() string {
+	if a.currentWorkItemID == "" {
 		return ""
 	}
-	sessionID := a.selectedTaskSessionID()
-	if sessionID == "" || sessionID == taskSidebarSourceDetailsID {
+	sessions := a.sessionsForWorkItem(a.currentWorkItemID)
+	if len(sessions) != 1 {
 		return ""
 	}
-	if a.workItemTaskSession(a.currentWorkItemID, sessionID) == nil {
-		return ""
-	}
-	return sessionID
+	return sessions[0].ID
 }
 
 func (a *App) enterTaskSidebar() tea.Cmd {

@@ -51,6 +51,23 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 	}
 }
 
+func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	repo := stubWorkItemRepo{}
+	cfg := &config.Config{}
+	cfg.Adapters.Sentry.Token = "token"
+	cfg.Adapters.Sentry.Organization = "acme"
+
+	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	if len(adapters) != 2 {
+		t.Fatalf("adapters len = %d, want 2", len(adapters))
+	}
+	if adapters[0].Name() != "manual" || adapters[1].Name() != "sentry" {
+		t.Fatalf("adapter order = [%q %q], want [manual sentry]", adapters[0].Name(), adapters[1].Name())
+	}
+}
+
 func TestBuildRepoLifecycleAdapters_EmptyWorkspace(t *testing.T) {
 	cfg := &config.Config{}
 	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, ""); len(adapters) != 0 {

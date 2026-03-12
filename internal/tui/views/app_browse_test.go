@@ -1053,7 +1053,7 @@ func TestNewSessionOverlayShowsOnlyConfiguredProviderSources(t *testing.T) {
 	if !strings.Contains(view, "GitHub") {
 		t.Fatalf("view = %q, want configured GitHub source", view)
 	}
-	for _, avoid := range []string{"Linear", "GitLab"} {
+	for _, avoid := range []string{"Linear", "GitLab", "Sentry"} {
 		if strings.Contains(view, avoid) {
 			t.Fatalf("view = %q, must not advertise unavailable %s source", view, avoid)
 		}
@@ -1108,9 +1108,98 @@ func TestNewSessionOverlaySelectingLinearSourceExposesSupportedScopesAndFilters(
 			t.Fatalf("view = %q, want %q after selecting Linear source", view, want)
 		}
 	}
-	for _, avoid := range []string{"GitHub", "GitLab"} {
+	for _, avoid := range []string{"GitHub", "GitLab", "Sentry"} {
 		if strings.Contains(view, avoid) {
 			t.Fatalf("view = %q, must not show unsupported %s source", view, avoid)
+		}
+	}
+}
+
+func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				States:         []string{"open", "closed", "all"},
+				SupportsLabels: true,
+				SupportsOwner:  true,
+				SupportsRepo:   true,
+			},
+			domain.ScopeProjects: {SupportsOffset: true},
+		},
+	}
+	sentryAdapter := &browseTestAdapter{
+		name:         "sentry",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				States:         []string{"unresolved", "resolved"},
+				SupportsSearch: true,
+				SupportsRepo:   true,
+			},
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter, sentryAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 30)
+	overlay.providerIndex = providerOptionIndex("github")
+	overlay.normalizeSelectionOptions()
+	overlay.setBrowseControlFocus(browseControlSource)
+
+	beforeView := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, beforeView, 120, 30)
+	beforeLayout := overlay.browserLayout()
+	beforeLines := len(strings.Split(beforeView, "\n"))
+	for _, want := range []string{"Labels:", "Owner:", "Repo:"} {
+		if !strings.Contains(beforeView, want) {
+			t.Fatalf("view = %q, want %q before switching to Sentry", beforeView, want)
+		}
+	}
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if updated.currentProvider() != "sentry" {
+		t.Fatalf("provider = %q, want sentry after source change", updated.currentProvider())
+	}
+	if cmd == nil {
+		t.Fatal("expected reload after source change")
+	}
+	updated = applyOverlayCmds(t, updated, cmd)
+
+	if scopes := updated.availableScopes(); len(scopes) != 1 || scopes[0] != domain.ScopeIssues {
+		t.Fatalf("scopes = %#v, want only issues for sentry", scopes)
+	}
+	if sentryAdapter.lastListOpts.Provider != "sentry" {
+		t.Fatalf("provider = %q, want sentry list reload", sentryAdapter.lastListOpts.Provider)
+	}
+	if sentryAdapter.lastListOpts.Scope != domain.ScopeIssues {
+		t.Fatalf("scope = %q, want issues list reload", sentryAdapter.lastListOpts.Scope)
+	}
+	if updated.repoInput.Placeholder != "Repository / Project…" {
+		t.Fatalf("repo placeholder = %q, want Repository / Project…", updated.repoInput.Placeholder)
+	}
+
+	afterView := stripBrowseANSI(updated.View())
+	assertOverlayFits(t, afterView, 120, 30)
+	if updatedLayout := updated.browserLayout(); updatedLayout != beforeLayout {
+		t.Fatalf("layout after source change = %+v, want stable layout %+v", updatedLayout, beforeLayout)
+	}
+	if got := len(strings.Split(afterView, "\n")); got != beforeLines {
+		t.Fatalf("line count after source change = %d, want %d for stable overlay height\nview:\n%s", got, beforeLines, afterView)
+	}
+	for _, want := range []string{"Sentry", "Repo:", "Repository / Project…"} {
+		if !strings.Contains(afterView, want) {
+			t.Fatalf("view = %q, want %q after selecting Sentry", afterView, want)
+		}
+	}
+	for _, avoid := range []string{"Projects", "Initiatives", "Labels:", "Owner:", "Group:", "Team:"} {
+		if strings.Contains(afterView, avoid) {
+			t.Fatalf("view = %q, must not show %q for Sentry", afterView, avoid)
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	gladapter "github.com/beeemT/substrate/internal/adapter/glab"
 	linearadapter "github.com/beeemT/substrate/internal/adapter/linear"
 	manualadapter "github.com/beeemT/substrate/internal/adapter/manual"
+	sentryadapter "github.com/beeemT/substrate/internal/adapter/sentry"
 	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -55,6 +56,14 @@ func BuildWorkItemAdapters(
 			slog.Warn("skipping github work item adapter", "err", err)
 		} else {
 			adapters = append(adapters, githubAdapter)
+		}
+	}
+	if strings.TrimSpace(cfg.Adapters.Sentry.Token) != "" && strings.TrimSpace(cfg.Adapters.Sentry.Organization) != "" {
+		sentryAdapter, err := sentryadapter.New(cfg.Adapters.Sentry)
+		if err != nil {
+			slog.Warn("skipping sentry work item adapter", "err", err)
+		} else {
+			adapters = append(adapters, sentryAdapter)
 		}
 	}
 

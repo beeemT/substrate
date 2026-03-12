@@ -171,6 +171,60 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	}
 }
 
+func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	app.workItems = []domain.WorkItem{{
+		ID:          "wi-preplan",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-0",
+		Title:       "New item awaiting planning",
+		State:       domain.WorkItemIngested,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}}
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model after resize = %T, want App", model)
+	}
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if cmd == nil {
+		t.Fatal("expected session search command")
+	}
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model after opening search = %T, want App", model)
+	}
+	sel := updated.sessionSearch.Selected()
+	if sel == nil {
+		t.Fatal("selected entry = nil, want pre-planning work item session")
+	}
+	if sel.WorkItemID != "wi-preplan" {
+		t.Fatalf("selected work item = %q, want wi-preplan", sel.WorkItemID)
+	}
+	if sel.SessionID != "" {
+		t.Fatalf("selected session id = %q, want empty for pre-planning session", sel.SessionID)
+	}
+	if sel.AgentSessionCount != 0 {
+		t.Fatalf("agent session count = %d, want 0", sel.AgentSessionCount)
+	}
+	view := stripBrowseANSI(updated.sessionSearch.View())
+	assertOverlayFits(t, view, 80, 20)
+	for _, want := range []string{"SUB-0", "Ready to plan · local", "Search Sessions"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("session search view = %q, want %q", view, want)
+		}
+	}
+}
+
 func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 	t.Parallel()
 
@@ -244,7 +298,7 @@ func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *t
 	}
 	view := stripBrowseANSI(updated.sessionSearch.View())
 	assertOverlayFits(t, view, 80, 20)
-	if strings.Contains(view, "No work item sessions found") {
+	if strings.Contains(view, "No sessions found") {
 		t.Fatalf("session search view = %q, want local seeded session instead of empty state", view)
 	}
 }
@@ -365,8 +419,12 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if len(updated.sessions) != 0 {
 		t.Fatalf("sessions len = %d, want 0", len(updated.sessions))
 	}
-	if updated.sessionSearch.Selected() != nil {
-		t.Fatalf("selected entry = %#v, want nil after deletion", updated.sessionSearch.Selected())
+	sel := updated.sessionSearch.Selected()
+	if sel == nil {
+		t.Fatal("selected entry = nil, want work item session after deleting latest agent session")
+	}
+	if sel.WorkItemID != "wi-1" || sel.SessionID != "" || sel.AgentSessionCount != 0 {
+		t.Fatalf("selected entry = %#v, want work item with no agent sessions after deletion", sel)
 	}
 	if _, ok := repo.sessions["sess-1"]; ok {
 		t.Fatal("expected session repo entry to be deleted")
@@ -384,8 +442,8 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		}
 	}
 	searchView := stripBrowseANSI(updated.sessionSearch.View())
-	if !strings.Contains(searchView, "No items.") {
-		t.Fatalf("search view = %q, want list empty state after deletion", searchView)
+	if strings.Contains(searchView, "No items.") || strings.Contains(searchView, "No sessions found") {
+		t.Fatalf("search view = %q, want surviving work item session after deletion", searchView)
 	}
 }
 

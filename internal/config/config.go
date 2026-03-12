@@ -99,6 +99,7 @@ type AdaptersConfig struct {
 	Glab       GlabConfig       `yaml:"glab"`
 	GitLab     GitlabConfig     `yaml:"gitlab"`
 	GitHub     GithubConfig     `yaml:"github"`
+	Sentry     SentryConfig     `yaml:"sentry"`
 }
 
 // LinearConfig configures the Linear GraphQL adapter.
@@ -129,6 +130,14 @@ type GithubConfig struct {
 	Reviewers     []string          `yaml:"reviewers"`
 	Labels        []string          `yaml:"labels"`
 	StateMappings map[string]string `yaml:"state_mappings"`
+}
+
+type SentryConfig struct {
+	TokenRef     string   `yaml:"token_ref"`
+	Token        string   `yaml:"-"`
+	BaseURL      string   `yaml:"base_url"`
+	Organization string   `yaml:"organization"`
+	Projects     []string `yaml:"projects"`
 }
 
 // GlabConfig configures the glab CLI adapter.
@@ -306,6 +315,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.GitHub.PollInterval == "" {
 		cfg.Adapters.GitHub.PollInterval = "60s"
 	}
+	if cfg.Adapters.Sentry.BaseURL == "" {
+		cfg.Adapters.Sentry.BaseURL = "https://sentry.io/api/0"
+	}
 }
 
 func validate(cfg *Config) error {
@@ -348,6 +360,12 @@ func validate(cfg *Config) error {
 	if cfg.Adapters.GitHub.BaseURL != "" {
 		if _, err := url.ParseRequestURI(cfg.Adapters.GitHub.BaseURL); err != nil {
 			return fmt.Errorf("invalid github base_url: %w", err)
+		}
+	}
+
+	if cfg.Adapters.Sentry.BaseURL != "" {
+		if _, err := url.ParseRequestURI(cfg.Adapters.Sentry.BaseURL); err != nil {
+			return fmt.Errorf("invalid sentry base_url: %w", err)
 		}
 	}
 

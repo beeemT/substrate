@@ -154,3 +154,10 @@
 **Pattern**: I optimized correctness of each wheel tick but not the throughput of an entire wheel burst across repeated renders of mostly unchanged content.
 **Rule**: For high-frequency wheel input in Bubble Tea, pace same-direction bursts to a sane frame rate and reuse cached document state whenever the rendered selection/content has not changed; otherwise inertial trackpad tails will overwhelm the TUI even when every individual update is logically correct.
 **Applied**: Settings page wheel handling, viewport-backed scroll surfaces, and any TUI view that processes trackpad momentum as many discrete mouse-wheel presses.
+
+## 2026-03-11 - Verify The Exact Main-Page State Before Fixing Footer Hints
+
+**Mistake**: I fixed delete-hint rendering for task-session drilldown states without first proving that the user was actually in the task pane; the reported footer was still the sessions-sidebar state, where delete availability was computed differently.
+**Pattern**: I matched the words "session focused" to an internal state I already knew instead of reproducing the exact footer text and navigation state the user reported.
+**Rule**: When a TUI bug report includes observed footer text or pane hints, reproduce that exact rendered state first and map it back to the owning mode/focus variables before changing rendering logic or hint priority.
+**Applied**: Main-page footer hints, sidebar/content focus bugs, mode-specific keybind rows, and any TUI behavior where similar states render different controls.

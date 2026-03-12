@@ -14,6 +14,7 @@ import (
 	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
 	gitlabadapter "github.com/beeemT/substrate/internal/adapter/gitlab"
 	linearadapter "github.com/beeemT/substrate/internal/adapter/linear"
+	sentryadapter "github.com/beeemT/substrate/internal/adapter/sentry"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -246,6 +247,23 @@ func (s *SettingsService) TestProvider(ctx context.Context, provider string, sec
 	case "gitlab":
 		status := buildProviderStatuses(cfg)[provider]
 		client, err := gitlabadapter.New(ctx, cfg.Adapters.GitLab)
+		if err != nil {
+			status.Connected = false
+			status.LastError = err.Error()
+			return status, err
+		}
+		_, err = client.ListSelectable(ctx, adapter.ListOpts{Scope: domain.ScopeIssues, Limit: 1})
+		if err != nil {
+			status.Connected = false
+			status.LastError = err.Error()
+			return status, err
+		}
+		status.Connected = true
+		status.LastError = ""
+		return status, nil
+	case "sentry":
+		status := buildProviderStatuses(cfg)[provider]
+		client, err := sentryadapter.New(cfg.Adapters.Sentry)
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
@@ -540,6 +558,17 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			},
 		},
 		{
+			ID:          "provider.sentry",
+			Title:       "Provider · Sentry",
+			Description: "Sentry issue source configuration",
+			Fields: []SettingsField{
+				{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token), Sensitive: true, Status: secretStatus(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token)},
+				{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: cfg.Adapters.Sentry.BaseURL},
+				{Section: "adapters.sentry", Key: "organization", Label: "Organization", Type: SettingsFieldString, Value: cfg.Adapters.Sentry.Organization},
+				{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Sentry.Projects, ",")},
+			},
+		},
+		{
 			ID:          "provider.github",
 			Title:       "Provider · GitHub",
 			Description: "GitHub issues and PR integration",
@@ -644,6 +673,13 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 			Configured:  cfg.Adapters.GitLab.TokenRef != "" || strings.TrimSpace(cfg.Adapters.GitLab.Token) != "",
 			Connected:   false,
 			AuthSource:  secretStatus(cfg.Adapters.GitLab.TokenRef, cfg.Adapters.GitLab.Token),
+			Description: "Uses OS keychain-backed token",
+		},
+		"sentry": {
+			Title:       "Sentry",
+			Configured:  cfg.Adapters.Sentry.TokenRef != "" || strings.TrimSpace(cfg.Adapters.Sentry.Token) != "",
+			Connected:   false,
+			AuthSource:  secretStatus(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token),
 			Description: "Uses OS keychain-backed token",
 		},
 		"github": {
@@ -769,6 +805,15 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.GitLab.PollInterval = value
 	case "adapters.gitlab.state_mappings":
 		cfg.Adapters.GitLab.StateMappings = parseMap(value)
+	case "adapters.sentry.token_ref":
+		cfg.Adapters.Sentry.Token = value
+		cfg.Adapters.Sentry.TokenRef = secretRef("sentry.token")
+	case "adapters.sentry.base_url":
+		cfg.Adapters.Sentry.BaseURL = value
+	case "adapters.sentry.organization":
+		cfg.Adapters.Sentry.Organization = value
+	case "adapters.sentry.projects":
+		cfg.Adapters.Sentry.Projects = parseList(value)
 	case "adapters.github.token_ref":
 		cfg.Adapters.GitHub.Token = value
 		cfg.Adapters.GitHub.TokenRef = secretRef("github.token")
@@ -935,6 +980,14 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Default labels applied to GitHub pull requests created by Substrate.", "empty"
 	case "adapters.github.state_mappings":
 		return "Maps Substrate tracker states to GitHub issue states.", "empty"
+	case "adapters.sentry.token_ref":
+		return "Sentry token stored in config or the OS keychain for organization issue APIs.", "empty"
+	case "adapters.sentry.base_url":
+		return "Base URL for the Sentry API used by the adapter.", "https://sentry.io/api/0"
+	case "adapters.sentry.organization":
+		return "Sentry organization slug required for browsing and resolving issues.", "empty"
+	case "adapters.sentry.projects":
+		return "Optional comma-separated Sentry project allowlist used to scope browsing.", "empty"
 	case "adapters.glab.reviewers":
 		return "Default GitLab merge request reviewers added by the glab lifecycle adapter.", "empty"
 	case "adapters.glab.labels":
