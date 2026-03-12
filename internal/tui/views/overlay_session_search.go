@@ -507,6 +507,31 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				switch m.focus {
+				case sessionSearchFocusResults:
+					before := ""
+					if entry := m.Selected(); entry != nil {
+						before = entry.WorkItemID
+					}
+					m.list, cmd = m.list.Update(msg)
+					after := ""
+					if entry := m.Selected(); entry != nil {
+						after = entry.WorkItemID
+					}
+					if before != after {
+						m.syncDetailViewport(true)
+					}
+					return m, cmd
+				case sessionSearchFocusPreview:
+					m.detail, cmd = m.detail.Update(msg)
+					return m, cmd
+				}
+			}
+		}
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":

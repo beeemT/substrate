@@ -51,6 +51,13 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 		case "up", "down", "j", "k", "pgup", "pgdown", "home", "end":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				m.viewport, cmd = m.viewport.Update(msg)
+			}
+		}
 	case tea.WindowSizeMsg:
 		m.syncViewport(false)
 	}

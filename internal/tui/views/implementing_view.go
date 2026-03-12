@@ -153,6 +153,21 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				name := m.selectedRepoName()
+				if name != "" {
+					vp := m.viewports[name]
+					var cmd tea.Cmd
+					vp, cmd = vp.Update(msg)
+					m.viewports[name] = vp
+					cmds = append(cmds, cmd)
+				}
+			}
+		}
 	}
 	return m, tea.Batch(cmds...)
 }

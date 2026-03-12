@@ -1496,6 +1496,26 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		m.normalizeBrowseFocus()
 		m.syncDetailViewport(true)
 
+	case tea.MouseMsg:
+		if !m.showManual && msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				switch m.browseFocus {
+				case browseFocusList:
+					m.issueList, cmd = m.issueList.Update(msg)
+					cmds = append(cmds, cmd)
+					if msg.Button == tea.MouseButtonWheelDown {
+						if cmd = m.maybeLoadMore(); cmd != nil {
+							cmds = append(cmds, cmd)
+						}
+					}
+				case browseFocusDetails:
+					m.detailViewport, cmd = m.detailViewport.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+			}
+		}
+
 	case tea.KeyMsg:
 		if m.showManual {
 			switch msg.String() {

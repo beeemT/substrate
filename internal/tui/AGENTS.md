@@ -14,3 +14,12 @@
 - For every non-trivial TUI layout change, add tests that assert rendered line width stays within the requested terminal width and rendered line count stays within the requested terminal height, including narrow-size cases.
 - Add coverage for session-present states, not only empty states, so dynamic headers, metadata rows, logs, and status hints cannot silently push layouts past the terminal bounds.
 - When you add a clipping, truncation, or viewport-sizing helper, add targeted tests for the helper or the specific view that depends on it.
+
+## Wheel / Scroll Handling
+- Every view with a scrollable `viewport.Model` or `list.Model` **must** forward `tea.MouseMsg` wheel events (`MouseButtonWheelUp`, `MouseButtonWheelDown`) to the component's `Update` method. Only forward press actions (`MouseActionPress`); ignore motion and release.
+- When a view has multiple focus zones (list pane, detail pane, controls), route wheel events to the focused component only. Do not forward wheel to unfocused or non-scrollable areas.
+- The bubbles `viewport` and `list` handle offset clamping and edge behaviour internally. Do **not** add custom edge detection or throttling when forwarding to these standard components.
+- For views with custom content rendering (not backed by a single bubbles component), use viewport-driven scrolling: change `viewport.YOffset` via `ScrollDown`/`ScrollUp`, then sync any selection cursor to the visible range. Do **not** rebuild the rendered document inside `Update`; let `View()` render once per frame.
+- Edge ticks (viewport already at top or bottom) must be O(1). Detect the edge before any content work and return immediately.
+- Do **not** throttle wheel events. Apple trackpads generate many discrete events after a gesture ends; throttling makes scrolling feel sticky and laggy. Instead, make each `Update` call as cheap as possible.
+- After wheel-scrolling a `list.Model` with infinite scroll or pagination, check the load-more trigger (e.g. `maybeLoadMore`) on wheel-down, same as for keyboard navigation.
