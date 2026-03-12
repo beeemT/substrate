@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -28,6 +29,8 @@ const (
 	settingsEditModeText settingsEditMode = iota
 	settingsEditModeSelect
 )
+
+const settingsWheelMinInterval = time.Second / 60
 
 type settingsEditOption struct {
 	Label string
@@ -71,30 +74,38 @@ type settingsSyntheticGroup struct {
 }
 
 type SettingsPage struct {
-	service          *SettingsService
-	sections         []SettingsSection
-	providerStatus   map[string]ProviderStatus
-	rawContent       string
-	active           bool
-	width            int
-	height           int
-	sectionCursor    int
-	fieldCursor      int
-	navCursor        string
-	focus            settingsFocus
-	expandedSections map[string]bool
-	mainViewport     viewport.Model
-	editing          bool
-	editMode         settingsEditMode
-	editOptions      []settingsEditOption
-	editOptionCursor int
-	revealSecrets    bool
-	dirty            bool
-	editInput        textinput.Model
-	styles           styles.Styles
-	errorText        string
-	statusText       string
-	warningText      string
+	service            *SettingsService
+	sections           []SettingsSection
+	providerStatus     map[string]ProviderStatus
+	rawContent         string
+	active             bool
+	width              int
+	height             int
+	sectionCursor      int
+	fieldCursor        int
+	navCursor          string
+	focus              settingsFocus
+	expandedSections   map[string]bool
+	mainViewport       viewport.Model
+	mainDocWidth       int
+	mainDocRevision    int
+	mainDocContentKey  string
+	mainSectionAnchors map[int]int
+	mainFieldAnchors   map[string]int
+	editing            bool
+	editMode           settingsEditMode
+	editOptions        []settingsEditOption
+	editOptionCursor   int
+	revealSecrets      bool
+	dirty              bool
+	editInput          textinput.Model
+	styles             styles.Styles
+	errorText          string
+	statusText         string
+	warningText        string
+	now                func() time.Time
+	lastWheelAt        time.Time
+	lastWheelDirection int
 }
 
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
@@ -110,9 +121,11 @@ func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.
 		focus:            settingsFocusSections,
 		expandedSections: defaultExpandedSections(snapshot.Sections),
 		mainViewport:     vp,
+		mainDocWidth:     -1,
 		editInput:        ti,
 		styles:           st,
 		warningText:      snapshot.HarnessWarning,
+		now:              time.Now,
 	}
 }
 
@@ -150,6 +163,7 @@ func (m *SettingsPage) SetSnapshot(snapshot SettingsSnapshot) {
 	m.warningText = snapshot.HarnessWarning
 	m.closeFieldEditor()
 	m.expandedSections = defaultExpandedSections(snapshot.Sections)
+	m.invalidateMainDocument()
 	m.clampCursor()
 	m.syncMainViewport()
 }
@@ -258,6 +272,7 @@ func (m *SettingsPage) commitFieldEditor() {
 	field.Dirty = true
 	m.dirty = true
 	m.statusText = "Field updated"
+	m.invalidateMainDocument()
 	m.closeFieldEditor()
 }
 
@@ -573,12 +588,35 @@ func (m SettingsPage) selectedDocumentAnchor(sectionAnchors map[int]int, fieldAn
 	return 0
 }
 
-func (m SettingsPage) preparedMainViewport(width int, height int, alignSelection bool) viewport.Model {
+func (m *SettingsPage) invalidateMainDocument() {
+	m.mainDocRevision++
+	m.mainDocWidth = -1
+	m.mainDocContentKey = ""
+	m.mainSectionAnchors = nil
+	m.mainFieldAnchors = nil
+}
+
+func (m SettingsPage) mainDocumentContentKey(width int) string {
+	return fmt.Sprintf("%d|%d|%d|%d|%d|%t|%t", width, m.mainDocRevision, m.sectionCursor, m.fieldCursor, m.focus, m.editing, m.revealSecrets)
+}
+
+func (m *SettingsPage) preparedMainViewport(width int, height int, alignSelection bool) viewport.Model {
 	vp := m.mainViewport
 	vp.Width = width
 	vp.Height = height
-	content, sectionAnchors, fieldAnchors := m.buildMainDocument(width)
-	vp.SetContent(content)
+	sectionAnchors := m.mainSectionAnchors
+	fieldAnchors := m.mainFieldAnchors
+	contentKey := m.mainDocumentContentKey(width)
+	if m.mainDocWidth != width || m.mainDocContentKey != contentKey || sectionAnchors == nil || fieldAnchors == nil || vp.TotalLineCount() == 0 {
+		content, builtSectionAnchors, builtFieldAnchors := m.buildMainDocument(width)
+		vp.SetContent(content)
+		sectionAnchors = builtSectionAnchors
+		fieldAnchors = builtFieldAnchors
+		m.mainDocWidth = width
+		m.mainDocContentKey = contentKey
+		m.mainSectionAnchors = sectionAnchors
+		m.mainFieldAnchors = fieldAnchors
+	}
 	vp.SetYOffset(vp.YOffset)
 	if alignSelection && vp.Height > 0 {
 		anchor := m.selectedDocumentAnchor(sectionAnchors, fieldAnchors)
@@ -604,6 +642,174 @@ func (m *SettingsPage) syncMainViewport() {
 	}
 	viewportWidth, viewportHeight, _ := m.mainViewportSize()
 	m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, true)
+}
+
+func (m *SettingsPage) shouldThrottleWheel(direction int) bool {
+	if direction == 0 {
+		return false
+	}
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	if direction == m.lastWheelDirection && !m.lastWheelAt.IsZero() && now.Sub(m.lastWheelAt) < settingsWheelMinInterval {
+		return true
+	}
+	m.lastWheelAt = now
+	m.lastWheelDirection = direction
+	return false
+}
+
+func (m SettingsPage) wheelAtViewportEdge(direction int) bool {
+	if direction == 0 || m.mainViewport.Height <= 0 {
+		return false
+	}
+	maxOffset := max(0, m.mainViewport.TotalLineCount()-m.mainViewport.Height)
+	switch {
+	case direction < 0:
+		return m.mainViewport.YOffset <= 0
+	case direction > 0:
+		return m.mainViewport.YOffset >= maxOffset
+	default:
+		return false
+	}
+}
+
+func (m *SettingsPage) syncFieldSelectionToScroll(fieldAnchors map[string]int, top int, bottom int, direction int) bool {
+	if !m.fieldsFocused() || bottom < top || direction == 0 {
+		return false
+	}
+	type visibleField struct {
+		section int
+		field   int
+	}
+	visible := make([]visibleField, 0, 8)
+	currentSection, currentField := m.sectionCursor, m.fieldCursor
+	above := visibleField{section: -1, field: -1}
+	below := visibleField{section: -1, field: -1}
+	for sectionIndex, sec := range m.sections {
+		for fieldIndex := range sec.Fields {
+			anchor, ok := fieldAnchors[settingsFieldAnchorKey(sectionIndex, fieldIndex)]
+			if !ok {
+				continue
+			}
+			field := visibleField{section: sectionIndex, field: fieldIndex}
+			switch {
+			case anchor < top:
+				above = field
+			case anchor > bottom:
+				if below.section == -1 {
+					below = field
+				}
+			default:
+				visible = append(visible, field)
+			}
+		}
+	}
+	choose := func(field visibleField) {
+		m.sectionCursor = field.section
+		m.fieldCursor = field.field
+		m.navCursor = m.sections[field.section].ID
+	}
+	if len(visible) == 0 {
+		if direction > 0 && below.section >= 0 {
+			choose(below)
+		}
+		if direction < 0 && above.section >= 0 {
+			choose(above)
+		}
+		return false
+	}
+	chosen := visible[0]
+	if direction < 0 {
+		chosen = visible[len(visible)-1]
+	}
+	if chosen.section == currentSection && chosen.field == currentField {
+		if direction > 0 {
+			if len(visible) > 1 {
+				chosen = visible[1]
+			} else if below.section >= 0 {
+				choose(below)
+				return false
+			}
+		} else {
+			if len(visible) > 1 {
+				chosen = visible[len(visible)-2]
+			} else if above.section >= 0 {
+				choose(above)
+				return false
+			}
+		}
+	}
+	choose(chosen)
+	return true
+}
+
+func (m *SettingsPage) syncSectionSelectionToScroll(sectionAnchors map[int]int, top int, bottom int, direction int) bool {
+	if m.fieldsFocused() || bottom < top || direction == 0 {
+		return false
+	}
+	type visibleSection struct {
+		section int
+	}
+	visible := make([]visibleSection, 0, 8)
+	currentSection := m.sectionCursor
+	above := visibleSection{section: -1}
+	below := visibleSection{section: -1}
+	for sectionIndex := range m.sections {
+		anchor, ok := sectionAnchors[sectionIndex]
+		if !ok {
+			continue
+		}
+		section := visibleSection{section: sectionIndex}
+		switch {
+		case anchor < top:
+			above = section
+		case anchor > bottom:
+			if below.section == -1 {
+				below = section
+			}
+		default:
+			visible = append(visible, section)
+		}
+	}
+	choose := func(section visibleSection) {
+		m.sectionCursor = section.section
+		m.fieldCursor = 0
+		m.navCursor = m.sections[section.section].ID
+	}
+	if len(visible) == 0 {
+		if direction > 0 && below.section >= 0 {
+			choose(below)
+		}
+		if direction < 0 && above.section >= 0 {
+			choose(above)
+		}
+		return false
+	}
+	chosen := visible[0]
+	if direction < 0 {
+		chosen = visible[len(visible)-1]
+	}
+	if chosen.section == currentSection {
+		if direction > 0 {
+			if len(visible) > 1 {
+				chosen = visible[1]
+			} else if below.section >= 0 {
+				choose(below)
+				return false
+			}
+		} else {
+			if len(visible) > 1 {
+				chosen = visible[len(visible)-2]
+			} else if above.section >= 0 {
+				choose(above)
+				return false
+			}
+		}
+	}
+	choose(chosen)
+	return true
 }
 
 func (m SettingsPage) fieldsFocused() bool {
@@ -782,12 +988,39 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		default:
 			return m, nil
 		}
-		if m.fieldsFocused() {
-			m.moveField(direction)
-		} else {
-			m.moveSection(direction)
+		viewportWidth, viewportHeight, _ := m.mainViewportSize()
+		if viewportWidth <= 0 || viewportHeight <= 0 {
+			return m, nil
 		}
-		m.syncMainViewport()
+		if m.mainViewport.Width != viewportWidth || m.mainViewport.Height != viewportHeight || m.mainViewport.TotalLineCount() == 0 || m.mainSectionAnchors == nil || m.mainFieldAnchors == nil {
+			m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
+		}
+		if m.wheelAtViewportEdge(direction) || m.shouldThrottleWheel(direction) {
+			return m, nil
+		}
+		previousOffset := m.mainViewport.YOffset
+		step := max(1, m.mainViewport.MouseWheelDelta)
+		if direction > 0 {
+			m.mainViewport.ScrollDown(step)
+		} else {
+			m.mainViewport.ScrollUp(step)
+		}
+		if m.mainViewport.YOffset == previousOffset {
+			return m, nil
+		}
+		previousSection, previousField, previousNav := m.sectionCursor, m.fieldCursor, m.navCursor
+		alignSelection := false
+		if m.fieldsFocused() {
+			alignSelection = !m.syncFieldSelectionToScroll(m.mainFieldAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1, direction)
+		} else {
+			alignSelection = !m.syncSectionSelectionToScroll(m.mainSectionAnchors, m.mainViewport.YOffset, m.mainViewport.YOffset+m.mainViewport.Height-1, direction)
+		}
+		selectionChanged := m.sectionCursor != previousSection || m.fieldCursor != previousField || m.navCursor != previousNav
+		if selectionChanged || alignSelection {
+			m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, alignSelection)
+		} else {
+			m.mainViewport.SetYOffset(m.mainViewport.YOffset)
+		}
 		return m, nil
 	}
 
@@ -856,6 +1089,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				}
 				f.Dirty = true
 				m.dirty = true
+				m.invalidateMainDocument()
 			}
 		case "r":
 			m.revealSecrets = !m.revealSecrets
@@ -885,6 +1119,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		m.SetSnapshot(msg.Reload.SettingsData)
 	case SettingsProviderTestedMsg:
 		m.providerStatus[msg.Provider] = msg.Status
+		m.invalidateMainDocument()
 		m.statusText = msg.Provider + " connection verified"
 		m.errorText = ""
 	case SettingsSectionPatchedMsg:
@@ -894,6 +1129,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				break
 			}
 		}
+		m.invalidateMainDocument()
 		m.dirty = true
 		m.statusText = msg.Message
 	case ErrMsg:

@@ -171,6 +171,84 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	}
 }
 
+func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model after resize = %T, want App", model)
+	}
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if cmd == nil {
+		t.Fatal("expected session search command")
+	}
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model after opening search = %T, want App", model)
+	}
+	if updated.activeOverlay != overlaySessionSearch {
+		t.Fatalf("activeOverlay = %v, want %v", updated.activeOverlay, overlaySessionSearch)
+	}
+	sel := updated.sessionSearch.Selected()
+	if sel == nil {
+		t.Fatal("selected entry = nil, want seeded local session")
+	}
+	if sel.WorkItemID != "wi-1" || sel.SessionID != "sess-1" {
+		t.Fatalf("selected entry = %#v, want local work item/session", sel)
+	}
+	view := stripBrowseANSI(updated.sessionSearch.View())
+	assertOverlayFits(t, view, 80, 20)
+	for _, want := range []string{"SUB-1", "Implementing · local", "Search Sessions"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("session search view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model after resize = %T, want App", model)
+	}
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if cmd == nil {
+		t.Fatal("expected session search command")
+	}
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model after opening search = %T, want App", model)
+	}
+
+	filter := updated.sessionSearchFilter()
+	model, _ = updated.Update(SessionHistoryLoadedMsg{Filter: filter, Entries: nil})
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model after empty history load = %T, want App", model)
+	}
+	if updated.sessionSearch.loading {
+		t.Fatal("expected loading indicator to clear after history response")
+	}
+	sel := updated.sessionSearch.Selected()
+	if sel == nil {
+		t.Fatal("selected entry = nil, want seeded local session retained")
+	}
+	if sel.WorkItemID != "wi-1" || sel.SessionID != "sess-1" {
+		t.Fatalf("selected entry after empty history load = %#v, want local work item/session", sel)
+	}
+	view := stripBrowseANSI(updated.sessionSearch.View())
+	assertOverlayFits(t, view, 80, 20)
+	if strings.Contains(view, "No work item sessions found") {
+		t.Fatalf("session search view = %q, want local seeded session instead of empty state", view)
+	}
+}
+
 func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	t.Parallel()
 

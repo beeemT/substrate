@@ -226,14 +226,157 @@ func (a App) sessionSearchFilter() domain.SessionHistoryFilter {
 	return a.sessionSearch.Filter(a.svcs.WorkspaceID)
 }
 
+func sessionHistoryEntryKey(entry domain.SessionHistoryEntry) string {
+	if entry.WorkItemID != "" {
+		return "work-item:" + entry.WorkspaceID + ":" + entry.WorkItemID
+	}
+	if entry.SessionID != "" {
+		return "session:" + entry.WorkspaceID + ":" + entry.SessionID
+	}
+	return fmt.Sprintf("fallback:%s:%s:%s", entry.WorkspaceID, entry.WorkItemExternalID, entry.WorkItemTitle)
+}
+
+func mergeSessionHistoryEntries(primary, secondary []domain.SessionHistoryEntry) []domain.SessionHistoryEntry {
+	merged := make([]domain.SessionHistoryEntry, 0, len(primary)+len(secondary))
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	appendUnique := func(entries []domain.SessionHistoryEntry) {
+		for _, entry := range entries {
+			key := sessionHistoryEntryKey(entry)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, entry)
+		}
+	}
+	appendUnique(primary)
+	appendUnique(secondary)
+	return merged
+}
+
+func sessionHistoryEntryMatches(entry domain.SessionHistoryEntry, search string) bool {
+	search = strings.TrimSpace(strings.ToLower(search))
+	if search == "" {
+		return true
+	}
+	fields := []string{
+		entry.WorkItemID,
+		entry.SessionID,
+		entry.WorkspaceName,
+		entry.WorkItemExternalID,
+		entry.WorkItemTitle,
+		entry.RepositoryName,
+		entry.HarnessName,
+		string(entry.WorkItemState),
+		string(entry.Status),
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), search) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a App) localSessionSearchEntry(wi domain.WorkItem) (domain.SessionHistoryEntry, bool) {
+	sessions := a.sessionsForWorkItem(wi.ID)
+	if len(sessions) == 0 {
+		return domain.SessionHistoryEntry{}, false
+	}
+
+	latest := sessions[0]
+	hasOpenQuestion := false
+	hasInterrupted := false
+	for _, session := range sessions {
+		if session.UpdatedAt.After(latest.UpdatedAt) || (session.UpdatedAt.Equal(latest.UpdatedAt) && (session.CreatedAt.After(latest.CreatedAt) || (session.CreatedAt.Equal(latest.CreatedAt) && session.ID > latest.ID))) {
+			latest = session
+		}
+		if session.Status == domain.AgentSessionWaitingForAnswer {
+			hasOpenQuestion = true
+		}
+		if session.Status == domain.AgentSessionInterrupted {
+			hasInterrupted = true
+		}
+	}
+
+	updatedAt := wi.UpdatedAt
+	if latest.UpdatedAt.After(updatedAt) {
+		updatedAt = latest.UpdatedAt
+	}
+	workspaceName := ""
+	if wi.WorkspaceID == a.svcs.WorkspaceID {
+		workspaceName = strings.TrimSpace(a.svcs.WorkspaceName)
+	}
+	return domain.SessionHistoryEntry{
+		SessionID:          latest.ID,
+		WorkspaceID:        wi.WorkspaceID,
+		WorkspaceName:      workspaceName,
+		WorkItemID:         wi.ID,
+		WorkItemExternalID: wi.ExternalID,
+		WorkItemTitle:      wi.Title,
+		WorkItemState:      wi.State,
+		RepositoryName:     latest.RepositoryName,
+		HarnessName:        latest.HarnessName,
+		Status:             latest.Status,
+		AgentSessionCount:  len(sessions),
+		HasOpenQuestion:    hasOpenQuestion,
+		HasInterrupted:     hasInterrupted,
+		CreatedAt:          wi.CreatedAt,
+		UpdatedAt:          updatedAt,
+		CompletedAt:        latest.CompletedAt,
+	}, true
+}
+
+func (a App) localSessionSearchEntries(filter domain.SessionHistoryFilter) []domain.SessionHistoryEntry {
+	if filter.WorkspaceID != nil && *filter.WorkspaceID != a.svcs.WorkspaceID {
+		return nil
+	}
+	entries := make([]domain.SessionHistoryEntry, 0, len(a.workItems))
+	for _, wi := range a.workItems {
+		entry, ok := a.localSessionSearchEntry(wi)
+		if !ok || !sessionHistoryEntryMatches(entry, filter.Search) {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if !entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+		}
+		if !entries[i].CreatedAt.Equal(entries[j].CreatedAt) {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return firstNonEmptyString(entries[i].WorkItemID, entries[i].SessionID) < firstNonEmptyString(entries[j].WorkItemID, entries[j].SessionID)
+	})
+	if filter.Offset >= len(entries) {
+		return nil
+	}
+	if filter.Offset > 0 {
+		entries = entries[filter.Offset:]
+	}
+	if filter.Limit > 0 && len(entries) > filter.Limit {
+		entries = entries[:filter.Limit]
+	}
+	return entries
+}
+
+func (a *App) refreshSessionSearchEntriesFromLocalState() {
+	if !a.sessionSearch.Active() {
+		return
+	}
+	a.sessionSearch.SetEntries(mergeSessionHistoryEntries(a.localSessionSearchEntries(a.sessionSearchFilter()), a.sessionSearch.entries))
+}
+
 func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 	if !a.sessionSearch.Active() {
 		return nil
 	}
+	filter := a.sessionSearchFilter()
 	if showLoading {
 		a.sessionSearch.SetLoading(true)
 	}
-	return SearchSessionHistoryCmd(a.svcs.Session, a.sessionSearchFilter())
+	a.sessionSearch.SetEntries(a.localSessionSearchEntries(filter))
+	return SearchSessionHistoryCmd(a.svcs.Session, filter)
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
@@ -608,6 +751,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.workItems = msg.Items
 		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
 		return a, nil
 
 	case SessionsLoadedMsg:
@@ -616,6 +760,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.sessions = msg.Sessions
 		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
 		for _, wi := range a.workItems {
 			cmds = append(cmds, LoadPlanCmd(a.svcs.Plan, wi.ID))
 		}
@@ -639,7 +784,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.sessionSearch.SetLoading(false)
-		a.sessionSearch.SetEntries(msg.Entries)
+		a.sessionSearch.SetEntries(mergeSessionHistoryEntries(a.localSessionSearchEntries(msg.Filter), msg.Entries))
 		return a, nil
 
 	case OpenSessionHistoryMsg:
@@ -661,14 +806,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.subPlans[msg.Plan.ID] = msg.SubPlans
 		}
 		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
-
 	case QuestionsLoadedMsg:
 		a.questions[msg.SessionID] = msg.Questions
 		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}

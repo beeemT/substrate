@@ -125,3 +125,32 @@
 **Pattern**: I treated tests added during a short-lived UI change as harmless residue instead of pruning them once the feature itself disappeared.
 **Rule**: When a UI element or behavior is removed, delete tests that exist only to defend that removed detail; keep only coverage for the surviving behavior.
 **Applied**: TUI labels, helper captions, short-lived UX experiments, and any feature rollback or simplification where the old behavior no longer exists.
+
+
+## 2026-03-10 - Wheel Scroll Feel Needs Viewport Motion, Not Selection Nudges
+
+**Mistake**: I treated the settings wheel-scroll stickiness as a pure selection-visibility problem and replaced viewport scrolling with single-step selection movement, which made reverse scrolling at overshoot edges still feel wrong even though the selected item stayed visible.
+**Pattern**: I optimized around keeping the highlight on screen instead of preserving the operator’s expectation that wheel input moves the viewport by a meaningful amount and ignores stale edge ticks.
+**Rule**: For wheel-driven TUI navigation, keep scrolling viewport-driven with an explicit line delta, update selection from the resulting visible range, and ignore wheel ticks that do not change the viewport offset at the edge.
+**Applied**: Settings page wheel scrolling, overshoot reversal handling, and any Bubble Tea surface where selection and viewport state both react to mouse-wheel input.
+
+## 2026-03-10 - No-Op Wheel Ticks Must Be Cheap
+
+**Mistake**: I fixed the visible edge behavior but still rebuilt settings viewport content and rescanned anchors for wheel ticks that could not move at the top/bottom edge, which made overshoot floods feel sticky and delayed later inputs like Esc.
+**Pattern**: I treated edge no-ops as harmless because the final state was unchanged, but I ignored the throughput cost of doing full viewport/selection work for every stale wheel tick in the queue.
+**Rule**: For wheel-driven TUI surfaces, detect already-clamped edge ticks before rebuilding content or syncing selection; no-op wheel events at the boundary must return immediately so overshoot floods cannot starve later input.
+**Applied**: Settings page overshoot handling, viewport-backed lists, and any Bubble Tea mouse-wheel path where repeated edge ticks can accumulate in the input queue.
+
+## 2026-03-11 - Footer Actions Need Narrow-Width Render Tests
+
+**Mistake**: I fixed footer hint priority only for widths where the full leading action label still fit, so the main-page delete action could still disappear once the footer became narrower than the full `[d] Delete session` text.
+**Pattern**: I verified the logical hint list and one moderately constrained render, but I did not test the real failure mode where the action itself had to truncate to survive.
+**Rule**: For one-line TUI footers, test both widths where the full action label fits only after dropping metadata and widths where the action label itself must truncate; the highest-priority local action must remain visible in both cases.
+**Applied**: Status bars, sticky footers, key-hint rows, and any single-line action surface that competes with right-aligned metadata.
+
+## 2026-03-10 - Smooth Scroll Floods Need Pacing And Cache Reuse
+
+**Mistake**: I focused only on edge no-ops and missed that Apple trackpad smooth scrolling can keep emitting same-direction wheel ticks during normal motion, which still rebuilt settings view state often enough to feel sticky and delay unrelated keys.
+**Pattern**: I optimized correctness of each wheel tick but not the throughput of an entire wheel burst across repeated renders of mostly unchanged content.
+**Rule**: For high-frequency wheel input in Bubble Tea, pace same-direction bursts to a sane frame rate and reuse cached document state whenever the rendered selection/content has not changed; otherwise inertial trackpad tails will overwhelm the TUI even when every individual update is logically correct.
+**Applied**: Settings page wheel handling, viewport-backed scroll surfaces, and any TUI view that processes trackpad momentum as many discrete mouse-wheel presses.

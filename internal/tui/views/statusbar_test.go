@@ -68,3 +68,49 @@ func TestStatusBarDropsHintsBeforeWrappingRightText(t *testing.T) {
 		t.Fatalf("content = %q, want keybind hints dropped before the session count wraps", lines[0])
 	}
 }
+
+func TestStatusBarPreservesLeadingContextualHintWhenSpaceIsTight(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewStatusBarModel(makeStatusBarStyles())
+	hints := []views.KeybindHint{{Key: "d", Label: "Delete session"}, {Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}}
+	rendered := m.View(hints, "workspace-with-a-very-long-name · 1 active sessions", 32)
+	plain := stripANSI(rendered)
+	lines := strings.Split(plain, "\n")
+
+	if len(lines) != 1 {
+		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
+	}
+	if got := len([]rune(lines[0])); got != 32 {
+		t.Fatalf("content width = %d, want 32; line=%q", got, lines[0])
+	}
+	if !strings.Contains(lines[0], "Delete session") {
+		t.Fatalf("content = %q, want leading contextual delete hint preserved", lines[0])
+	}
+	if strings.Contains(lines[0], "Tasks") {
+		t.Fatalf("content = %q, want lower-priority hints dropped first", lines[0])
+	}
+}
+
+func TestStatusBarKeepsDeleteKeyVisibleWhenHintTextMustTruncate(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewStatusBarModel(makeStatusBarStyles())
+	hints := []views.KeybindHint{{Key: "d", Label: "Delete session"}, {Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}}
+	rendered := m.View(hints, "workspace-with-a-very-long-name · 1 active sessions", 12)
+	plain := stripANSI(rendered)
+	lines := strings.Split(plain, "\n")
+
+	if len(lines) != 1 {
+		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
+	}
+	if got := len([]rune(lines[0])); got != 12 {
+		t.Fatalf("content width = %d, want 12; line=%q", got, lines[0])
+	}
+	if !strings.Contains(lines[0], "[d]") {
+		t.Fatalf("content = %q, want delete key preserved even when the label truncates", lines[0])
+	}
+	if strings.Contains(lines[0], "active sessions") {
+		t.Fatalf("content = %q, want right-side metadata dropped before the delete action", lines[0])
+	}
+}

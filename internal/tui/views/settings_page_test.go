@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -42,6 +43,51 @@ func findFieldIndex(t *testing.T, page SettingsPage, sectionID, key string) int 
 		}
 	}
 	t.Fatalf("field %q not found in section %q", key, sectionID)
+	return -1
+}
+
+func findFirstSectionWithFields(t *testing.T, page SettingsPage) int {
+	t.Helper()
+	for i, section := range page.sections {
+		if len(section.Fields) > 0 {
+			return i
+		}
+	}
+	t.Fatal("no section with fields found")
+	return -1
+}
+
+func findLastSectionWithFields(t *testing.T, page SettingsPage) int {
+	t.Helper()
+	for i := len(page.sections) - 1; i >= 0; i-- {
+		if len(page.sections[i].Fields) > 0 {
+			return i
+		}
+	}
+	t.Fatal("no section with fields found")
+	return -1
+}
+
+func findFirstVisibleSidebarSection(t *testing.T, page SettingsPage) int {
+	t.Helper()
+	for _, node := range page.visibleNavNodes() {
+		if node.sectionIndex >= 0 {
+			return node.sectionIndex
+		}
+	}
+	t.Fatal("no visible sidebar section found")
+	return -1
+}
+
+func findLastVisibleSidebarSection(t *testing.T, page SettingsPage) int {
+	t.Helper()
+	nodes := page.visibleNavNodes()
+	for i := len(nodes) - 1; i >= 0; i-- {
+		if nodes[i].sectionIndex >= 0 {
+			return nodes[i].sectionIndex
+		}
+	}
+	t.Fatal("no visible sidebar section found")
 	return -1
 }
 
@@ -640,6 +686,62 @@ func TestSettingsPage_MainScrollbarVisibleWithoutOverflow(t *testing.T) {
 	}
 }
 
+func TestSettingsPage_MouseWheelCoalescesSameDirectionBurst(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	if page.mainViewport.TotalLineCount() <= page.mainViewport.Height {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	now := time.Unix(1, 0)
+	page.now = func() time.Time { return now }
+
+	first, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if first.mainViewport.YOffset <= page.mainViewport.YOffset {
+		t.Fatalf("first y offset = %d, want > %d", first.mainViewport.YOffset, page.mainViewport.YOffset)
+	}
+
+	now = now.Add(settingsWheelMinInterval / 2)
+	second, _ := first.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if second.mainViewport.YOffset != first.mainViewport.YOffset {
+		t.Fatalf("throttled y offset = %d, want %d", second.mainViewport.YOffset, first.mainViewport.YOffset)
+	}
+
+	now = now.Add(settingsWheelMinInterval)
+	third, _ := second.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if third.mainViewport.YOffset <= second.mainViewport.YOffset {
+		t.Fatalf("post-throttle y offset = %d, want > %d", third.mainViewport.YOffset, second.mainViewport.YOffset)
+	}
+}
+
+func TestSettingsPage_MouseWheelDirectionChangeBypassesThrottle(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	if page.mainViewport.TotalLineCount() <= page.mainViewport.Height {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	now := time.Unix(1, 0)
+	page.now = func() time.Time { return now }
+
+	down, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if down.mainViewport.YOffset <= page.mainViewport.YOffset {
+		t.Fatalf("down y offset = %d, want > %d", down.mainViewport.YOffset, page.mainViewport.YOffset)
+	}
+
+	now = now.Add(settingsWheelMinInterval / 2)
+	up, _ := down.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if up.mainViewport.YOffset >= down.mainViewport.YOffset {
+		t.Fatalf("up y offset = %d, want < %d", up.mainViewport.YOffset, down.mainViewport.YOffset)
+	}
+}
+
 func TestSettingsPage_MouseWheelScrollMovesWithinBounds(t *testing.T) {
 	t.Parallel()
 
@@ -726,6 +828,142 @@ func TestSettingsPage_MouseWheelAdvancesFocusedSectionSelection(t *testing.T) {
 	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
 	if updated.sectionCursor == originalSection {
 		t.Fatalf("section cursor stayed at %d, want the focused section to advance with wheel scrolling", updated.sectionCursor)
+	}
+	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForFields(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findFirstSectionWithFields(t, page)
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = 0
+	overshot := page
+	for i := 0; i < 5; i++ {
+		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+		overshot = next
+	}
+	if overshot.mainViewport.YOffset != 0 {
+		t.Fatalf("y offset after top overshoot = %d, want 0", overshot.mainViewport.YOffset)
+	}
+	if overshot.sectionCursor != page.sectionCursor || overshot.fieldCursor != page.fieldCursor {
+		t.Fatalf("selection changed during top overshoot: got section=%d field=%d, want section=%d field=%d", overshot.sectionCursor, overshot.fieldCursor, page.sectionCursor, page.fieldCursor)
+	}
+
+	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if updated.mainViewport.YOffset <= overshot.mainViewport.YOffset {
+		t.Fatalf("y offset = %d, want > %d after reversing from top overshoot", updated.mainViewport.YOffset, overshot.mainViewport.YOffset)
+	}
+	assertSelectedFieldVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelUpMovesViewportImmediatelyFromBottomBoundaryForFields(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findLastSectionWithFields(t, page)
+	page.fieldCursor = len(page.sections[page.sectionCursor].Fields) - 1
+	page.focus = settingsFocusFields
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset
+	overshot := page
+	for i := 0; i < 5; i++ {
+		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+		overshot = next
+	}
+	if overshot.mainViewport.YOffset != maxOffset {
+		t.Fatalf("y offset after bottom overshoot = %d, want %d", overshot.mainViewport.YOffset, maxOffset)
+	}
+	if overshot.sectionCursor != page.sectionCursor || overshot.fieldCursor != page.fieldCursor {
+		t.Fatalf("selection changed during bottom overshoot: got section=%d field=%d, want section=%d field=%d", overshot.sectionCursor, overshot.fieldCursor, page.sectionCursor, page.fieldCursor)
+	}
+
+	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if updated.mainViewport.YOffset >= maxOffset {
+		t.Fatalf("y offset = %d, want < %d after reversing from bottom overshoot", updated.mainViewport.YOffset, maxOffset)
+	}
+	assertSelectedFieldVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForSections(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findFirstVisibleSidebarSection(t, page)
+	page.focus = settingsFocusSections
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = 0
+	overshot := page
+	for i := 0; i < 5; i++ {
+		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+		overshot = next
+	}
+	if overshot.mainViewport.YOffset != 0 {
+		t.Fatalf("y offset after top overshoot = %d, want 0", overshot.mainViewport.YOffset)
+	}
+	if overshot.sectionCursor != page.sectionCursor {
+		t.Fatalf("section cursor changed during top overshoot: got %d, want %d", overshot.sectionCursor, page.sectionCursor)
+	}
+
+	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if updated.mainViewport.YOffset <= overshot.mainViewport.YOffset {
+		t.Fatalf("y offset = %d, want > %d after reversing from top overshoot", updated.mainViewport.YOffset, overshot.mainViewport.YOffset)
+	}
+	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelUpMovesViewportImmediatelyFromBottomBoundaryForSections(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findLastVisibleSidebarSection(t, page)
+	page.focus = settingsFocusSections
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset
+	overshot := page
+	for i := 0; i < 5; i++ {
+		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+		overshot = next
+	}
+	if overshot.mainViewport.YOffset != maxOffset {
+		t.Fatalf("y offset after bottom overshoot = %d, want %d", overshot.mainViewport.YOffset, maxOffset)
+	}
+	if overshot.sectionCursor != page.sectionCursor {
+		t.Fatalf("section cursor changed during bottom overshoot: got %d, want %d", overshot.sectionCursor, page.sectionCursor)
+	}
+
+	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if updated.mainViewport.YOffset >= maxOffset {
+		t.Fatalf("y offset = %d, want < %d after reversing from bottom overshoot", updated.mainViewport.YOffset, maxOffset)
 	}
 	assertSelectedSectionVisibleInViewport(t, updated)
 }

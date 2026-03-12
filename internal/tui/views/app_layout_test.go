@@ -91,6 +91,89 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	}
 }
 
+func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
+	updated := model.(App)
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected task selection to tail its log")
+	}
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 44, 18)
+	footer := stripBrowseANSI(lines[len(lines)-1])
+	if !strings.Contains(footer, "Delete session") {
+		t.Fatalf("footer = %q, want delete hint for selected task session", footer)
+	}
+}
+
+func TestAppViewShowsDeleteHintForFocusedTaskSession(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
+	updated := model.(App)
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected task selection to tail its log")
+	}
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated = model.(App)
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 44, 18)
+	footer := stripBrowseANSI(lines[len(lines)-1])
+	if !strings.Contains(footer, "Delete session") {
+		t.Fatalf("footer = %q, want delete hint for focused task session", footer)
+	}
+}
+
+func TestAppViewKeepsDeleteKeyVisibleForSelectedTaskSessionAtNarrowWidth(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 18, Height: 18})
+	updated := model.(App)
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected task selection to tail its log")
+	}
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 18, 18)
+	footer := stripBrowseANSI(lines[len(lines)-1])
+	if !strings.Contains(footer, "[d]") {
+		t.Fatalf("footer = %q, want delete key visible for selected task session", footer)
+	}
+	if strings.Contains(footer, "active sessions") {
+		t.Fatalf("footer = %q, want workspace metadata dropped before the delete action", footer)
+	}
+}
+
 func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	app := NewApp(Services{
 		WorkspaceID:   "ws-1",
