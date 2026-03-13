@@ -550,6 +550,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 
 	subPlanRepo := newMockSubPlanRepo()
 	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{
+		ID:             "sp-1",
 		PlanID:         "plan-1",
 		RepositoryName: repoName,
 		Content:        "Implement the change",

@@ -149,9 +149,9 @@ type CommitConfig struct {
 
 // AgentEvent represents an event from a running agent session.
 type AgentEvent struct {
-	Type      string // "started", "text_delta", "tool_start", "tool_end", "done", "error", "question"
+	Type      string // e.g. "started", "input", "text_delta", "tool_start", "tool_output", "tool_result", "done", "error", "question", "foreman_proposed"
 	Timestamp time.Time
-	Payload   string // JSON or text payload depending on type
+	Payload   string // text payload for the event type
 	Metadata  map[string]any
 }
 

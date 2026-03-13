@@ -517,6 +517,9 @@ func (a *App) enterTaskSidebar() tea.Cmd {
 	}
 	a.sidebarMode = sidebarPaneTasks
 	a.mainFocus = mainFocusSidebar
+	if a.selectedTaskSessionID() == "" {
+		a.setSelectedTaskSessionID(a.defaultTaskSessionID(a.currentWorkItemID))
+	}
 	a.rebuildSidebar()
 	if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedTaskSessionID()) {
 		a.sidebar.SelectEntry(a.currentWorkItemID, "")
@@ -550,6 +553,72 @@ func (a App) workItemTaskSession(workItemID, sessionID string) *domain.Task {
 		}
 	}
 	return nil
+}
+
+func (a App) defaultTaskSessionID(workItemID string) string {
+	wi := a.workItemByID(workItemID)
+	if wi == nil || wi.State != domain.SessionPlanning {
+		return ""
+	}
+	if session := a.latestPlanningSession(workItemID); session != nil {
+		return session.ID
+	}
+	return ""
+}
+
+func (a App) latestPlanningSession(workItemID string) *domain.Task {
+	for _, session := range a.sessionsForWorkItem(workItemID) {
+		if session.Phase == domain.TaskPhasePlanning {
+			s := session
+			return &s
+		}
+	}
+	return nil
+}
+
+func (a App) latestImplementationSession(workItemID, subPlanID string) *domain.Task {
+	for _, session := range a.sessionsForWorkItem(workItemID) {
+		if session.Phase == domain.TaskPhaseImplementation && session.SubPlanID == subPlanID {
+			s := session
+			return &s
+		}
+	}
+	return nil
+}
+
+func taskSessionPhaseRank(phase domain.TaskPhase) int {
+	switch phase {
+	case domain.TaskPhasePlanning:
+		return 0
+	case domain.TaskPhaseImplementation:
+		return 1
+	case domain.TaskPhaseReview:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func taskSessionModeLabel(session *domain.Task) string {
+	switch session.Phase {
+	case domain.TaskPhasePlanning:
+		return "Planning"
+	case domain.TaskPhaseReview:
+		return "Review"
+	default:
+		return "Task"
+	}
+}
+
+func taskSessionDisplayName(session *domain.Task) string {
+	switch session.Phase {
+	case domain.TaskPhasePlanning:
+		return "Planning"
+	case domain.TaskPhaseReview:
+		return firstNonEmptyString(session.RepositoryName, "Review")
+	default:
+		return firstNonEmptyString(session.RepositoryName, "Task")
+	}
 }
 
 func (a App) historyEntrySummaryLines(entry SidebarEntry) []string {
@@ -1346,14 +1415,17 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.SetMode(ContentModeReadyToPlan)
 
 	case domain.SessionPlanning:
+		if planningSession := a.latestPlanningSession(wi.ID); planningSession != nil {
+			if a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() == "" {
+				a.setSelectedTaskSessionID(planningSession.ID)
+			}
+			return a.showTaskContent(wi, planningSession)
+		}
 		a.content.SetMode(ContentModePlanning)
+		a.content.sessionLog.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Planning")
 		a.content.sessionLog.SetModeLabel("Planning")
 		a.content.sessionLog.SetMeta("")
-		a.content.sessionLog.SetStaticContent([]string{
-			"Planning has started for this work item.",
-			"",
-			"Repository tasks appear after the plan is approved.",
-		})
+		a.content.sessionLog.SetStaticContent([]string{"Waiting for live planning transcript..."})
 	case domain.SessionPlanReview:
 		a.content.SetMode(ContentModePlanReview)
 		if plan := a.plans[wi.ID]; plan != nil {
@@ -1419,16 +1491,11 @@ func (a *App) updateContentFromState() tea.Cmd {
 		var repoResults []RepoReviewResult
 		if plan := a.plans[wi.ID]; plan != nil {
 			for _, sp := range a.subPlans[plan.ID] {
-				var sessionID string
-				for _, s := range a.sessions {
-					if s.SubPlanID == sp.ID {
-						sessionID = s.ID
-					}
-				}
-				if sessionID == "" {
+				implSession := a.latestImplementationSession(wi.ID, sp.ID)
+				if implSession == nil {
 					continue
 				}
-				rev := a.reviews[sessionID]
+				rev := a.reviews[implSession.ID]
 				var crits []domain.Critique
 				for _, cs := range rev.Critiques {
 					crits = append(crits, cs...)
@@ -1445,16 +1512,15 @@ func (a *App) updateContentFromState() tea.Cmd {
 		var tailCmds []tea.Cmd
 		if plan := a.plans[wi.ID]; plan != nil {
 			for _, sp := range a.subPlans[plan.ID] {
-				for _, s := range a.sessions {
-					if s.SubPlanID != sp.ID {
-						continue
-					}
-					if logPath, ok := a.reviewSessionLogs[s.ID]; ok {
-						reviewTailID := "review-" + s.ID
-						if !a.tailingSessionIDs[reviewTailID] {
-							a.tailingSessionIDs[reviewTailID] = true
-							tailCmds = append(tailCmds, TailSessionLogCmd(logPath, reviewTailID, 0))
-						}
+				implSession := a.latestImplementationSession(wi.ID, sp.ID)
+				if implSession == nil {
+					continue
+				}
+				if logPath, ok := a.reviewSessionLogs[implSession.ID]; ok {
+					reviewTailID := "review-" + implSession.ID
+					if !a.tailingSessionIDs[reviewTailID] {
+						a.tailingSessionIDs[reviewTailID] = true
+						tailCmds = append(tailCmds, TailSessionLogCmd(logPath, reviewTailID, 0))
 					}
 				}
 			}
@@ -1481,15 +1547,24 @@ func (a *App) updateContentFromState() tea.Cmd {
 }
 
 func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd {
-	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + firstNonEmptyString(session.RepositoryName, "Task")
+	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSessionDisplayName(session)
 	metaParts := []string{sessionStatusLabel(session.Status)}
 	if session.HarnessName != "" {
 		metaParts = append(metaParts, session.HarnessName)
 	}
 	metaParts = append(metaParts, session.ID)
-	a.content.SetMode(ContentModeSessionInteraction)
+	if session.Status == domain.AgentSessionInterrupted {
+		a.content.SetMode(ContentModeInterrupted)
+		a.content.interrupted.SetSession(session.ID, session.SubPlanID, session.RepositoryName, session.WorktreePath, a.canActOnSession(*session))
+		return nil
+	}
+	if session.Phase == domain.TaskPhasePlanning {
+		a.content.SetMode(ContentModePlanning)
+	} else {
+		a.content.SetMode(ContentModeSessionInteraction)
+	}
 	a.content.sessionLog.SetTitle(title)
-	a.content.sessionLog.SetModeLabel("Task")
+	a.content.sessionLog.SetModeLabel(taskSessionModeLabel(session))
 	a.content.sessionLog.SetMeta(strings.Join(metaParts, " · "))
 	logPath := filepath.Join(a.sessionsDir, session.ID+".log")
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
@@ -1605,32 +1680,41 @@ func (a App) sessionSidebarEntries() []SidebarEntry {
 
 func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
 	plan := a.plans[workItemID]
-	if plan == nil {
-		return nil
-	}
-	subPlanOrder := make(map[string]int, len(a.subPlans[plan.ID]))
-	for i, sp := range a.subPlans[plan.ID] {
-		subPlanOrder[sp.ID] = i
+	subPlanOrder := make(map[string]int)
+	if plan != nil {
+		for i, sp := range a.subPlans[plan.ID] {
+			subPlanOrder[sp.ID] = i
+		}
 	}
 	sessions := make([]domain.Task, 0)
 	for _, s := range a.sessions {
-		if _, ok := subPlanOrder[s.SubPlanID]; ok {
+		if s.WorkItemID == workItemID {
 			sessions = append(sessions, s)
 		}
 	}
 	sort.SliceStable(sessions, func(i, j int) bool {
-		orderI, okI := subPlanOrder[sessions[i].SubPlanID]
-		orderJ, okJ := subPlanOrder[sessions[j].SubPlanID]
-		if okI && okJ && orderI != orderJ {
-			return orderI < orderJ
+		rankI := taskSessionPhaseRank(sessions[i].Phase)
+		rankJ := taskSessionPhaseRank(sessions[j].Phase)
+		if rankI != rankJ {
+			return rankI < rankJ
 		}
-		if okI != okJ {
-			return okI
+		if rankI != taskSessionPhaseRank(domain.TaskPhasePlanning) {
+			orderI, okI := subPlanOrder[sessions[i].SubPlanID]
+			orderJ, okJ := subPlanOrder[sessions[j].SubPlanID]
+			if okI && okJ && orderI != orderJ {
+				return orderI < orderJ
+			}
+			if okI != okJ {
+				return okI
+			}
 		}
 		if !sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
 			return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 		}
-		return sessions[i].ID < sessions[j].ID
+		if !sessions[i].CreatedAt.Equal(sessions[j].CreatedAt) {
+			return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+		}
+		return sessions[i].ID > sessions[j].ID
 	})
 	return sessions
 }
@@ -1655,14 +1739,27 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		})
 	}
 	for _, session := range a.sessionsForWorkItem(workItemID) {
+		entryRepo := session.RepositoryName
+		switch session.Phase {
+		case domain.TaskPhasePlanning:
+			entryRepo = "Planning"
+		case domain.TaskPhaseReview:
+			entryRepo = firstNonEmptyString(entryRepo, "Review")
+		}
+		entryTitle := "Session " + shortSessionID(session.ID)
+		if session.Phase == domain.TaskPhasePlanning {
+			entryTitle = "Planning session " + shortSessionID(session.ID)
+		} else if session.Phase == domain.TaskPhaseReview {
+			entryTitle = "Review session " + shortSessionID(session.ID)
+		}
 		entries = append(entries, SidebarEntry{
 			Kind:           SidebarEntryTaskSession,
 			WorkItemID:     workItemID,
 			SessionID:      session.ID,
-			Title:          "Session " + shortSessionID(session.ID),
+			Title:          entryTitle,
 			State:          wi.State,
 			SessionStatus:  session.Status,
-			RepositoryName: session.RepositoryName,
+			RepositoryName: entryRepo,
 			LastActivity:   session.UpdatedAt,
 		})
 	}
@@ -1674,7 +1771,12 @@ func (a *App) rebuildSidebar() {
 		wi := a.workItemByID(a.currentWorkItemID)
 		a.sidebar.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Tasks")
 		a.sidebar.SetEntries(a.taskSidebarEntries(a.currentWorkItemID))
-		if !a.sidebar.SelectEntry(a.currentWorkItemID, a.selectedTaskSessionID()) {
+		selectedSessionID := a.selectedTaskSessionID()
+		if selectedSessionID == "" {
+			selectedSessionID = a.defaultTaskSessionID(a.currentWorkItemID)
+			a.setSelectedTaskSessionID(selectedSessionID)
+		}
+		if !a.sidebar.SelectEntry(a.currentWorkItemID, selectedSessionID) {
 			a.setSelectedTaskSessionID("")
 			if !a.sidebar.SelectEntry(a.currentWorkItemID, "") {
 				a.sidebar.ClearSelection()

@@ -7,19 +7,26 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+func implTask(id, workItemID, workspaceID, subPlanID string, status domain.TaskStatus) domain.Task {
+	return domain.Task{
+		ID:             id,
+		WorkItemID:     workItemID,
+		WorkspaceID:    workspaceID,
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      subPlanID,
+		RepositoryName: "repo1",
+		HarnessName:    "omp",
+		Status:         status,
+	}
+}
+
 func TestSessionService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
 	t.Run("creates session with pending status", func(t *testing.T) {
-		session := domain.Task{
-			ID:             "session-1",
-			WorkspaceID:    "ws-1",
-			SubPlanID:      "sp-1",
-			RepositoryName: "repo1",
-			HarnessName:    "omp",
-		}
+		session := implTask("session-1", "wi-1", "ws-1", "sp-1", "")
 		if err := svc.Create(ctx, session); err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -34,20 +41,33 @@ func TestSessionService_Create(t *testing.T) {
 	})
 
 	t.Run("rejects non-pending initial status", func(t *testing.T) {
-		session := domain.Task{
-			ID:             "session-2",
-			WorkspaceID:    "ws-1",
-			SubPlanID:      "sp-1",
-			RepositoryName: "repo1",
-			Status:         domain.AgentSessionRunning,
-		}
+		session := implTask("session-2", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 		err := svc.Create(ctx, session)
 		if err == nil {
 			t.Fatal("expected error for non-pending initial status")
 		}
-		_, ok := err.(ErrInvalidInput)
-		if !ok {
+		if _, ok := err.(ErrInvalidInput); !ok {
 			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("rejects missing work item", func(t *testing.T) {
+		session := implTask("session-3", "", "ws-1", "sp-1", "")
+		if err := svc.Create(ctx, session); err == nil {
+			t.Fatal("expected error for missing work item")
+		}
+	})
+
+	t.Run("allows planning sessions without subplan", func(t *testing.T) {
+		session := domain.Task{
+			ID:          "plan-1",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Phase:       domain.TaskPhasePlanning,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create planning session failed: %v", err)
 		}
 	})
 }
@@ -77,13 +97,7 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 			repo := NewMockSessionRepository()
 			svc := NewTaskService(repo)
 
-			session := domain.Task{
-				ID:             "session-test",
-				WorkspaceID:    "ws-1",
-				SubPlanID:      "sp-1",
-				RepositoryName: "repo1",
-				Status:         tc.from,
-			}
+			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
 
 			if err := svc.Transition(ctx, "session-test", tc.to); err != nil {
@@ -127,13 +141,7 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 			repo := NewMockSessionRepository()
 			svc := NewTaskService(repo)
 
-			session := domain.Task{
-				ID:             "session-test",
-				WorkspaceID:    "ws-1",
-				SubPlanID:      "sp-1",
-				RepositoryName: "repo1",
-				Status:         tc.from,
-			}
+			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
 
 			err := svc.Transition(ctx, "session-test", tc.to)
@@ -152,13 +160,7 @@ func TestSessionService_StartSetsStartedAt(t *testing.T) {
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
-	session := domain.Task{
-		ID:             "session-1",
-		WorkspaceID:    "ws-1",
-		SubPlanID:      "sp-1",
-		RepositoryName: "repo1",
-		Status:         domain.AgentSessionPending,
-	}
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionPending)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Start(ctx, "session-1"); err != nil {
@@ -176,13 +178,7 @@ func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
-	session := domain.Task{
-		ID:             "session-1",
-		WorkspaceID:    "ws-1",
-		SubPlanID:      "sp-1",
-		RepositoryName: "repo1",
-		Status:         domain.AgentSessionRunning,
-	}
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Complete(ctx, "session-1"); err != nil {
@@ -200,13 +196,7 @@ func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
-	session := domain.Task{
-		ID:             "session-1",
-		WorkspaceID:    "ws-1",
-		SubPlanID:      "sp-1",
-		RepositoryName: "repo1",
-		Status:         domain.AgentSessionRunning,
-	}
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Interrupt(ctx, "session-1"); err != nil {
@@ -224,13 +214,7 @@ func TestSessionService_FailSetsExitCode(t *testing.T) {
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
-	session := domain.Task{
-		ID:             "session-1",
-		WorkspaceID:    "ws-1",
-		SubPlanID:      "sp-1",
-		RepositoryName: "repo1",
-		Status:         domain.AgentSessionRunning,
-	}
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	exitCode := 1
@@ -249,11 +233,10 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repo)
 
-	// Create sessions with different statuses
-	repo.sessions["s-1"] = domain.Task{ID: "s-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
-	repo.sessions["s-2"] = domain.Task{ID: "s-2", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
-	repo.sessions["s-3"] = domain.Task{ID: "s-3", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
-	repo.sessions["s-4"] = domain.Task{ID: "s-4", WorkspaceID: "ws-2", SubPlanID: "sp-2", Status: domain.AgentSessionInterrupted}
+	repo.sessions["s-1"] = implTask("s-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	repo.sessions["s-2"] = implTask("s-2", "wi-2", "ws-1", "sp-1", domain.AgentSessionRunning)
+	repo.sessions["s-3"] = implTask("s-3", "wi-3", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	repo.sessions["s-4"] = implTask("s-4", "wi-4", "ws-2", "sp-2", domain.AgentSessionInterrupted)
 	repo.byWorkspace["ws-1"] = []string{"s-1", "s-2", "s-3"}
 	repo.byWorkspace["ws-2"] = []string{"s-4"}
 

@@ -58,9 +58,10 @@ type WorkspaceRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// TaskRepository provides CRUD for repo-scoped tasks.
+// TaskRepository provides CRUD for child agent sessions.
 type TaskRepository interface {
 	Get(ctx context.Context, id string) (domain.Task, error)
+	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error)
 	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error)
 	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error)

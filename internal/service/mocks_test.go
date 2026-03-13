@@ -288,9 +288,10 @@ func (m *MockWorkspaceRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// MockSessionRepository implements repository.SessionRepository for testing.
+// MockSessionRepository implements repository.TaskRepository for testing.
 type MockSessionRepository struct {
 	sessions        map[string]domain.Task
+	byWorkItem      map[string][]string
 	bySubPlan       map[string][]string
 	byWorkspace     map[string][]string
 	byOwnerInstance map[string][]string
@@ -300,6 +301,7 @@ type MockSessionRepository struct {
 func NewMockSessionRepository() *MockSessionRepository {
 	return &MockSessionRepository{
 		sessions:        make(map[string]domain.Task),
+		byWorkItem:      make(map[string][]string),
 		bySubPlan:       make(map[string][]string),
 		byWorkspace:     make(map[string][]string),
 		byOwnerInstance: make(map[string][]string),
@@ -315,6 +317,17 @@ func (m *MockSessionRepository) Get(ctx context.Context, id string) (domain.Task
 		return domain.Task{}, repository.ErrNotFound
 	}
 	return s, nil
+}
+
+func (m *MockSessionRepository) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var result []domain.Task
+	for _, id := range m.byWorkItem[workItemID] {
+		result = append(result, m.sessions[id])
+	}
+	return result, nil
 }
 
 func (m *MockSessionRepository) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
@@ -362,7 +375,10 @@ func (m *MockSessionRepository) Create(ctx context.Context, s domain.Task) error
 		return m.err
 	}
 	m.sessions[s.ID] = s
-	m.bySubPlan[s.SubPlanID] = append(m.bySubPlan[s.SubPlanID], s.ID)
+	m.byWorkItem[s.WorkItemID] = append(m.byWorkItem[s.WorkItemID], s.ID)
+	if s.SubPlanID != "" {
+		m.bySubPlan[s.SubPlanID] = append(m.bySubPlan[s.SubPlanID], s.ID)
+	}
 	m.byWorkspace[s.WorkspaceID] = append(m.byWorkspace[s.WorkspaceID], s.ID)
 	if s.OwnerInstanceID != nil {
 		m.byOwnerInstance[*s.OwnerInstanceID] = append(m.byOwnerInstance[*s.OwnerInstanceID], s.ID)
@@ -390,14 +406,22 @@ func (m *MockSessionRepository) Delete(ctx context.Context, id string) error {
 		return repository.ErrNotFound
 	}
 	delete(m.sessions, id)
-	// Remove from indexes
-	var newSubPlanIDs []string
-	for _, existingID := range m.bySubPlan[s.SubPlanID] {
+	var newWorkItemIDs []string
+	for _, existingID := range m.byWorkItem[s.WorkItemID] {
 		if existingID != id {
-			newSubPlanIDs = append(newSubPlanIDs, existingID)
+			newWorkItemIDs = append(newWorkItemIDs, existingID)
 		}
 	}
-	m.bySubPlan[s.SubPlanID] = newSubPlanIDs
+	m.byWorkItem[s.WorkItemID] = newWorkItemIDs
+	if s.SubPlanID != "" {
+		var newSubPlanIDs []string
+		for _, existingID := range m.bySubPlan[s.SubPlanID] {
+			if existingID != id {
+				newSubPlanIDs = append(newSubPlanIDs, existingID)
+			}
+		}
+		m.bySubPlan[s.SubPlanID] = newSubPlanIDs
+	}
 	var newWorkspaceIDs []string
 	for _, existingID := range m.byWorkspace[s.WorkspaceID] {
 		if existingID != id {

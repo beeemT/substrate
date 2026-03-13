@@ -353,7 +353,9 @@ func (s *ImplementationService) executeSubPlan(
 	sessionID := domain.NewID()
 	session := domain.Task{
 		ID:             sessionID,
+		WorkItemID:     workItem.ID,
 		WorkspaceID:    workspace.ID,
+		Phase:          domain.TaskPhaseImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		WorktreePath:   worktreePath,
@@ -770,6 +772,8 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
+		"work_item_id":  session.WorkItemID,
+		"phase":         session.Phase,
 		"sub_plan_id":   session.SubPlanID,
 		"repository":    session.RepositoryName,
 		"worktree_path": session.WorktreePath,
@@ -787,6 +791,8 @@ func (s *ImplementationService) emitSessionStarted(ctx context.Context, session 
 func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
+		"work_item_id":  session.WorkItemID,
+		"phase":         session.Phase,
 		"sub_plan_id":   session.SubPlanID,
 		"repository":    session.RepositoryName,
 		"worktree_path": session.WorktreePath,
@@ -804,6 +810,8 @@ func (s *ImplementationService) emitSessionCompleted(ctx context.Context, sessio
 func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
+		"work_item_id":  session.WorkItemID,
+		"phase":         session.Phase,
 		"sub_plan_id":   session.SubPlanID,
 		"repository":    session.RepositoryName,
 		"worktree_path": session.WorktreePath,

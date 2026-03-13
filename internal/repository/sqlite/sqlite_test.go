@@ -145,10 +145,16 @@ func makeInstance(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Subst
 
 func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.Task {
 	t.Helper()
+	var workItemID string
+	if err := tx.GetContext(context.Background(), &workItemID, `SELECT p.work_item_id FROM sub_plans sp JOIN plans p ON p.id = sp.plan_id WHERE sp.id = ?`, spID); err != nil {
+		t.Fatalf("lookup work item for session helper: %v", err)
+	}
 	s := domain.Task{
 		ID:             domain.NewID(),
+		WorkItemID:     workItemID,
 		SubPlanID:      spID,
 		WorkspaceID:    wsID,
+		Phase:          domain.TaskPhaseImplementation,
 		RepositoryName: "test-repo",
 		HarnessName:    "claude",
 		WorktreePath:   "/tmp/worktree",
@@ -446,6 +452,14 @@ func TestSessionCRUD(t *testing.T) {
 		t.Errorf("harness = %q, want %q", got.HarnessName, sess.HarnessName)
 	}
 
+	listByWorkItem, err := repo.ListByWorkItemID(ctx, wi.ID)
+	if err != nil {
+		t.Fatalf("list by work item: %v", err)
+	}
+	if len(listByWorkItem) != 1 {
+		t.Errorf("work item len = %d, want 1", len(listByWorkItem))
+	}
+
 	list, err := repo.ListBySubPlanID(ctx, sp.ID)
 	if err != nil {
 		t.Fatalf("list by sub-plan: %v", err)
@@ -661,9 +675,23 @@ func TestSessionSearchHistory(t *testing.T) {
 	planningOnlyItem.ExternalID = "REM-2"
 	planningOnlyItem.Title = "Planning only"
 	planningOnlyItem.State = domain.SessionPlanning
-	planningOnlyItem.UpdatedAt = now().Add(1 * time.Minute)
+	planningUpdatedAt := now().Add(1 * time.Minute)
+	planningOnlyItem.UpdatedAt = planningUpdatedAt
 	if err := workItemRepo.Update(ctx, planningOnlyItem); err != nil {
 		t.Fatalf("update planning-only work item: %v", err)
+	}
+	planningSession := domain.Task{
+		ID:          domain.NewID(),
+		WorkItemID:  planningOnlyItem.ID,
+		WorkspaceID: remoteWS.ID,
+		Phase:       domain.TaskPhasePlanning,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionRunning,
+		CreatedAt:   planningUpdatedAt,
+		UpdatedAt:   planningUpdatedAt,
+	}
+	if err := sessionRepo.Create(ctx, planningSession); err != nil {
+		t.Fatalf("create planning-only session: %v", err)
 	}
 	ingestedItem := makeWorkItem(t, tx, remoteWS.ID)
 	ingestedItem.ExternalID = "REM-3"
@@ -737,14 +765,14 @@ func TestSessionSearchHistory(t *testing.T) {
 	if recentEntries[0].WorkItemID != planningOnlyItem.ID {
 		t.Fatalf("recent first work item = %q, want %q", recentEntries[0].WorkItemID, planningOnlyItem.ID)
 	}
-	if recentEntries[0].SessionID != "" {
-		t.Fatalf("planning-only session id = %q, want empty", recentEntries[0].SessionID)
+	if recentEntries[0].SessionID != planningSession.ID {
+		t.Fatalf("planning-only session id = %q, want %q", recentEntries[0].SessionID, planningSession.ID)
 	}
-	if recentEntries[0].AgentSessionCount != 0 {
-		t.Fatalf("planning-only agent session count = %d, want 0", recentEntries[0].AgentSessionCount)
+	if recentEntries[0].AgentSessionCount != 1 {
+		t.Fatalf("planning-only agent session count = %d, want 1", recentEntries[0].AgentSessionCount)
 	}
 	if recentEntries[1].SessionID != remoteLatestSession.ID || recentEntries[2].SessionID != localSession.ID {
-		t.Fatalf("recent order = [%q %q %q], want [%q %q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, recentEntries[2].SessionID, "", remoteLatestSession.ID, localSession.ID)
+		t.Fatalf("recent order = [%q %q %q], want [%q %q %q]", recentEntries[0].SessionID, recentEntries[1].SessionID, recentEntries[2].SessionID, planningSession.ID, remoteLatestSession.ID, localSession.ID)
 	}
 }
 

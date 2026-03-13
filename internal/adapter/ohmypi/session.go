@@ -292,15 +292,57 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 	}
 
 	switch eventType {
-	case "progress":
+	case "input":
+		text, _ := eventMap["text"].(string)
+		inputKind, _ := eventMap["input_kind"].(string)
+		return &adapter.AgentEvent{
+			Type:      "input",
+			Timestamp: time.Now(),
+			Payload:   text,
+			Metadata:  map[string]any{"input_kind": inputKind},
+		}, nil
+
+	case "assistant_output":
 		text, ok := eventMap["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing progress text")
+			return nil, fmt.Errorf("missing assistant_output text")
 		}
 		return &adapter.AgentEvent{
 			Type:      "text_delta",
 			Timestamp: time.Now(),
 			Payload:   text,
+		}, nil
+
+	case "tool_start":
+		toolName, _ := eventMap["tool"].(string)
+		text, _ := eventMap["text"].(string)
+		intent, _ := eventMap["intent"].(string)
+		return &adapter.AgentEvent{
+			Type:      "tool_start",
+			Timestamp: time.Now(),
+			Payload:   text,
+			Metadata:  map[string]any{"tool": toolName, "intent": intent},
+		}, nil
+
+	case "tool_output":
+		toolName, _ := eventMap["tool"].(string)
+		text, _ := eventMap["text"].(string)
+		return &adapter.AgentEvent{
+			Type:      "tool_output",
+			Timestamp: time.Now(),
+			Payload:   text,
+			Metadata:  map[string]any{"tool": toolName},
+		}, nil
+
+	case "tool_result":
+		toolName, _ := eventMap["tool"].(string)
+		text, _ := eventMap["text"].(string)
+		isError, _ := eventMap["is_error"].(bool)
+		return &adapter.AgentEvent{
+			Type:      "tool_result",
+			Timestamp: time.Now(),
+			Payload:   text,
+			Metadata:  map[string]any{"tool": toolName, "is_error": isError},
 		}, nil
 
 	case "question":
@@ -329,36 +371,45 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 			Metadata:  map[string]any{"uncertain": uncertain},
 		}, nil
 
-	case "complete":
+	case "lifecycle":
+		stage, _ := eventMap["stage"].(string)
 		summary, _ := eventMap["summary"].(string)
-		return &adapter.AgentEvent{
-			Type:      "done",
-			Timestamp: time.Now(),
-			Payload:   summary,
-		}, nil
-
-	case "error":
-		msg, ok := eventMap["message"].(string)
-		if !ok {
-			msg = "unknown error"
+		message, _ := eventMap["message"].(string)
+		switch stage {
+		case "started":
+			return &adapter.AgentEvent{
+				Type:      "started",
+				Timestamp: time.Now(),
+				Payload:   firstNonEmpty(message, summary),
+			}, nil
+		case "completed":
+			return &adapter.AgentEvent{
+				Type:      "done",
+				Timestamp: time.Now(),
+				Payload:   summary,
+			}, nil
+		case "failed":
+			return &adapter.AgentEvent{
+				Type:      "error",
+				Timestamp: time.Now(),
+				Payload:   firstNonEmpty(message, summary, "unknown error"),
+			}, nil
+		default:
+			return nil, nil
 		}
-		return &adapter.AgentEvent{
-			Type:      "error",
-			Timestamp: time.Now(),
-			Payload:   msg,
-		}, nil
-
-	case "session_ready":
-		return &adapter.AgentEvent{
-			Type:      "started",
-			Timestamp: time.Now(),
-			Payload:   "session ready",
-		}, nil
 
 	default:
-		// Unknown event type, ignore
 		return nil, nil
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // readStderr reads stderr and logs it for debugging.

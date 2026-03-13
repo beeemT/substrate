@@ -126,6 +126,16 @@ func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.Task, error) 
 	return session, nil
 }
 
+func (r *cmdSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
+	for _, session := range r.sessions {
+		if session.WorkItemID == workItemID {
+			result = append(result, session)
+		}
+	}
+	return result, nil
+}
+
 func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
 	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {

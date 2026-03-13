@@ -89,17 +89,11 @@ func (h *mockAgentHarness) StartSession(ctx context.Context, opts adapter.Sessio
 	return newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"}), nil
 }
 
-// writeTestSessionLog writes output as a series of progress events in the ohmypi log format.
-// Each non-empty line of output becomes one progress event.
+// writeTestSessionLog writes output in the canonical session-log event format.
 func writeTestSessionLog(sessionsDir, sessionID, output string) error {
 	logPath := filepath.Join(sessionsDir, sessionID+".log")
-	var buf strings.Builder
-	for _, line := range strings.Split(output, "\n") {
-		// readSessionOutputFromLog looks for: "type":"event" AND "type":"progress" AND "text":"<val>"
-		buf.WriteString(fmt.Sprintf(`{"type":"event","event":{"type":"progress","text":%q}}`, line))
-		buf.WriteString("\n")
-	}
-	return os.WriteFile(logPath, []byte(buf.String()), 0o644)
+	entry := fmt.Sprintf(`{"type":"event","event":{"type":"assistant_output","text":%q}}`+"\n", output)
+	return os.WriteFile(logPath, []byte(entry), 0o644)
 }
 
 // ============================================================
@@ -230,6 +224,18 @@ func (r *mockSessionRepo) Get(ctx context.Context, id string) (domain.Task, erro
 		return s, nil
 	}
 	return domain.Task{}, repository.ErrNotFound
+}
+
+func (r *mockSessionRepo) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.Task
+	for _, s := range r.sessions {
+		if s.WorkItemID == workItemID {
+			result = append(result, s)
+		}
+	}
+	return result, nil
 }
 
 func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
@@ -552,10 +558,14 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.Task {
 	}
 
 	return domain.Task{
-		ID:          "session-1",
-		WorkspaceID: "ws-1",
-		SubPlanID:   subPlanID,
-		Status:      domain.AgentSessionCompleted,
+		ID:             "session-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      subPlanID,
+		RepositoryName: "repo-a",
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
 	}
 }
 

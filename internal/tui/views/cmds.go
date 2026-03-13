@@ -26,6 +26,7 @@ import (
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 const (
@@ -238,71 +239,13 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 	}
 }
 
-// normalizeSessionLogLine converts a raw session log line into display text.
+// normalizeSessionLogLine converts a raw session log line into transcript text.
 func normalizeSessionLogLine(line string) (string, bool) {
-	raw := strings.TrimSpace(line)
-	if raw == "" {
+	entry, ok := sessionlog.ParseLine(line)
+	if !ok {
 		return "", false
 	}
-	payload := raw
-	if idx := strings.IndexByte(raw, ' '); idx >= 0 && idx+1 < len(raw) && raw[idx+1] == '{' {
-		payload = raw[idx+1:]
-	}
-	if !strings.HasPrefix(payload, "{") {
-		return raw, true
-	}
-	var record struct {
-		Type  string `json:"type"`
-		Event struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			Question string `json:"question"`
-			Message  string `json:"message"`
-			Summary  string `json:"summary"`
-			Context  string `json:"context"`
-		} `json:"event"`
-	}
-	if err := json.Unmarshal([]byte(payload), &record); err != nil {
-		return raw, true
-	}
-	if record.Type != "event" {
-		return raw, true
-	}
-	switch record.Event.Type {
-	case "progress":
-		text := strings.TrimSpace(record.Event.Text)
-		return text, text != ""
-	case "question":
-		question := strings.TrimSpace(record.Event.Question)
-		contextText := strings.TrimSpace(record.Event.Context)
-		if question == "" {
-			return "", false
-		}
-		if contextText != "" {
-			question += " — " + contextText
-		}
-		return "Question: " + question, true
-	case "foreman_proposed":
-		text := strings.TrimSpace(record.Event.Text)
-		if text == "" {
-			return "", false
-		}
-		return "Foreman: " + text, true
-	case "error":
-		text := strings.TrimSpace(record.Event.Message)
-		if text == "" {
-			return "", false
-		}
-		return "Error: " + text, true
-	case "complete":
-		text := strings.TrimSpace(record.Event.Summary)
-		if text == "" {
-			text = "Session complete"
-		}
-		return text, true
-	default:
-		return "", false
-	}
+	return sessionlog.FormatForTranscript(entry)
 }
 
 func scanSessionInteraction(r io.Reader) ([]string, error) {

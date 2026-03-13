@@ -12,11 +12,13 @@ import (
 
 type sessionRow struct {
 	ID              string  `db:"id"`
-	SubPlanID       string  `db:"sub_plan_id"`
+	WorkItemID      string  `db:"work_item_id"`
+	SubPlanID       *string `db:"sub_plan_id"`
 	WorkspaceID     string  `db:"workspace_id"`
-	RepositoryName  string  `db:"repository_name"`
+	Phase           string  `db:"phase"`
+	RepositoryName  *string `db:"repository_name"`
 	HarnessName     string  `db:"harness_name"`
-	WorktreeDir     string  `db:"worktree_dir"`
+	WorktreePath    *string `db:"worktree_path"`
 	PID             *int    `db:"pid"`
 	Status          string  `db:"status"`
 	ExitCode        *int    `db:"exit_code"`
@@ -103,11 +105,13 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 	}
 	return domain.Task{
 		ID:              r.ID,
-		SubPlanID:       r.SubPlanID,
+		WorkItemID:      r.WorkItemID,
+		SubPlanID:       derefStr(r.SubPlanID),
 		WorkspaceID:     r.WorkspaceID,
-		RepositoryName:  r.RepositoryName,
+		Phase:           domain.TaskPhase(r.Phase),
+		RepositoryName:  derefStr(r.RepositoryName),
 		HarnessName:     r.HarnessName,
-		WorktreePath:    r.WorktreeDir,
+		WorktreePath:    derefStr(r.WorktreePath),
 		PID:             r.PID,
 		Status:          domain.TaskStatus(r.Status),
 		ExitCode:        r.ExitCode,
@@ -123,11 +127,13 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 func rowFromSession(s domain.Task) sessionRow {
 	return sessionRow{
 		ID:              s.ID,
-		SubPlanID:       s.SubPlanID,
+		WorkItemID:      s.WorkItemID,
+		SubPlanID:       strPtr(s.SubPlanID),
 		WorkspaceID:     s.WorkspaceID,
-		RepositoryName:  s.RepositoryName,
+		Phase:           string(s.Phase),
+		RepositoryName:  strPtr(s.RepositoryName),
 		HarnessName:     s.HarnessName,
-		WorktreeDir:     s.WorktreePath,
+		WorktreePath:    strPtr(s.WorktreePath),
 		PID:             s.PID,
 		Status:          string(s.Status),
 		ExitCode:        s.ExitCode,
@@ -155,42 +161,26 @@ func (r TaskRepo) Get(ctx context.Context, id string) (domain.Task, error) {
 	return row.toDomain()
 }
 
+func (r TaskRepo) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+	return r.list(ctx, `SELECT * FROM agent_sessions WHERE work_item_id = ? ORDER BY created_at`, workItemID)
+}
+
 func (r TaskRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
-	var rows []sessionRow
-	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM agent_sessions WHERE sub_plan_id = ? ORDER BY created_at`, subPlanID); err != nil {
-		return nil, fmt.Errorf("list sessions for sub-plan %s: %w", subPlanID, err)
-	}
-	sessions := make([]domain.Task, len(rows))
-	for i := range rows {
-		s, err := rows[i].toDomain()
-		if err != nil {
-			return nil, fmt.Errorf("convert session: %w", err)
-		}
-		sessions[i] = s
-	}
-	return sessions, nil
+	return r.list(ctx, `SELECT * FROM agent_sessions WHERE sub_plan_id = ? ORDER BY created_at`, subPlanID)
 }
 
 func (r TaskRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
-	var rows []sessionRow
-	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY created_at`, workspaceID); err != nil {
-		return nil, fmt.Errorf("list sessions for workspace %s: %w", workspaceID, err)
-	}
-	sessions := make([]domain.Task, len(rows))
-	for i := range rows {
-		s, err := rows[i].toDomain()
-		if err != nil {
-			return nil, fmt.Errorf("convert session: %w", err)
-		}
-		sessions[i] = s
-	}
-	return sessions, nil
+	return r.list(ctx, `SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY created_at`, workspaceID)
 }
 
 func (r TaskRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
+	return r.list(ctx, `SELECT * FROM agent_sessions WHERE owner_instance_id = ? ORDER BY created_at`, instanceID)
+}
+
+func (r TaskRepo) list(ctx context.Context, query string, args ...any) ([]domain.Task, error) {
 	var rows []sessionRow
-	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM agent_sessions WHERE owner_instance_id = ? ORDER BY created_at`, instanceID); err != nil {
-		return nil, fmt.Errorf("list sessions for instance %s: %w", instanceID, err)
+	if err := r.remote.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, err
 	}
 	sessions := make([]domain.Task, len(rows))
 	for i := range rows {
@@ -206,30 +196,26 @@ func (r TaskRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) 
 func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
 	query := `WITH latest_session AS (
 		SELECT
-			p.work_item_id AS work_item_id,
+			s.work_item_id AS work_item_id,
 			s.id AS session_id,
-			s.repository_name AS repository_name,
+			COALESCE(s.repository_name, '') AS repository_name,
 			s.harness_name AS harness_name,
 			s.status AS status,
 			s.completed_at AS completed_at,
 			ROW_NUMBER() OVER (
-				PARTITION BY p.work_item_id
+				PARTITION BY s.work_item_id
 				ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
 			) AS rn
 		FROM agent_sessions s
-		JOIN sub_plans sp ON sp.id = s.sub_plan_id
-		JOIN plans p ON p.id = sp.plan_id
 	), session_stats AS (
 		SELECT
-			p.work_item_id AS work_item_id,
+			s.work_item_id AS work_item_id,
 			COUNT(*) AS agent_session_count,
 			MAX(s.updated_at) AS latest_session_updated_at,
 			MAX(CASE WHEN s.status = 'waiting_for_answer' THEN 1 ELSE 0 END) AS has_open_question,
 			MAX(CASE WHEN s.status = 'interrupted' THEN 1 ELSE 0 END) AS has_interrupted
 		FROM agent_sessions s
-		JOIN sub_plans sp ON sp.id = s.sub_plan_id
-		JOIN plans p ON p.id = sp.plan_id
-		GROUP BY p.work_item_id
+		GROUP BY s.work_item_id
 	)
 	SELECT
 		COALESCE(ls.session_id, '') AS session_id,
@@ -278,9 +264,7 @@ func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistor
 			EXISTS (
 				SELECT 1
 				FROM agent_sessions s2
-				JOIN sub_plans sp2 ON sp2.id = s2.sub_plan_id
-				JOIN plans p2 ON p2.id = sp2.plan_id
-				WHERE p2.work_item_id = wi.id AND (
+				WHERE s2.work_item_id = wi.id AND (
 					lower(s2.id) LIKE ? OR
 					lower(COALESCE(s2.repository_name, '')) LIKE ? OR
 					lower(COALESCE(s2.harness_name, '')) LIKE ? OR
@@ -317,11 +301,11 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 	row := rowFromSession(s)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO agent_sessions
-		 (id, sub_plan_id, workspace_id, repository_name, harness_name, worktree_dir,
+		 (id, work_item_id, sub_plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
 		  pid, status, exit_code, started_at, shutdown_at, completed_at, created_at,
 		  owner_instance_id, updated_at)
 		 VALUES
-		 (:id, :sub_plan_id, :workspace_id, :repository_name, :harness_name, :worktree_dir,
+		 (:id, :work_item_id, :sub_plan_id, :workspace_id, :phase, :repository_name, :harness_name, :worktree_path,
 		  :pid, :status, :exit_code, :started_at, :shutdown_at, :completed_at, :created_at,
 		  :owner_instance_id, :updated_at)`, row)
 	if err != nil {
@@ -333,8 +317,8 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
 	row := rowFromSession(s)
 	res, err := r.remote.NamedExecContext(ctx,
-		`UPDATE agent_sessions SET sub_plan_id = :sub_plan_id, workspace_id = :workspace_id,
-		 repository_name = :repository_name, harness_name = :harness_name, worktree_dir = :worktree_dir,
+		`UPDATE agent_sessions SET work_item_id = :work_item_id, sub_plan_id = :sub_plan_id, workspace_id = :workspace_id,
+		 phase = :phase, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
 		 pid = :pid, status = :status, exit_code = :exit_code, started_at = :started_at,
 		 shutdown_at = :shutdown_at, completed_at = :completed_at, owner_instance_id = :owner_instance_id,
 		 updated_at = :updated_at WHERE id = :id`, row)

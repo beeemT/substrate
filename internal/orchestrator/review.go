@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 // ReviewPipeline orchestrates the review process for agent sessions.
@@ -236,8 +236,28 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
 
-	// Start review session in foreman mode (read-only tools)
+	// Persist the review session before launching the harness.
 	reviewSessionID := domain.NewID()
+	reviewTask := domain.Task{
+		ID:             reviewSessionID,
+		WorkItemID:     session.WorkItemID,
+		WorkspaceID:    session.WorkspaceID,
+		Phase:          domain.TaskPhaseReview,
+		SubPlanID:      session.SubPlanID,
+		RepositoryName: session.RepositoryName,
+		WorktreePath:   session.WorktreePath,
+		HarnessName:    p.harness.Name(),
+		Status:         domain.AgentSessionPending,
+	}
+	if err := p.sessionSvc.Create(ctx, reviewTask); err != nil {
+		return nil, "", "", fmt.Errorf("create review session: %w", err)
+	}
+	if err := p.sessionSvc.Start(ctx, reviewSessionID); err != nil {
+		deleteOrFailPendingSession(ctx, p.sessionSvc, reviewSessionID, ptrInt(1))
+		return nil, "", "", fmt.Errorf("transition review session to running: %w", err)
+	}
+
+	// Start review session in foreman mode (read-only tools).
 	opts := adapter.SessionOpts{
 		SessionID:    reviewSessionID,
 		Mode:         adapter.SessionModeForeman,
@@ -251,23 +271,34 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 
 	reviewSession, err := p.harness.StartSession(ctx, opts)
 	if err != nil {
+		if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail review session after harness start error", "error", failErr, "session_id", reviewSessionID)
+		}
 		return nil, "", "", fmt.Errorf("start review session: %w", err)
 	}
-	// Watch for done event instead of calling Wait()
-	// Add 5-minute timeout to prevent hanging
+	// Watch for done event instead of calling Wait().
+	// Add 5-minute timeout to prevent hanging.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	for {
 		select {
 		case <-timeoutCtx.Done():
+			if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
+				slog.Warn("failed to fail timed out review session", "error", failErr, "session_id", reviewSessionID)
+			}
 			return reviewSession, "", reviewSessionID, fmt.Errorf("review session timed out: %w", timeoutCtx.Err())
 		case evt, ok := <-reviewSession.Events():
 			if !ok {
+				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
+					slog.Warn("failed to fail closed review session", "error", failErr, "session_id", reviewSessionID)
+				}
 				return reviewSession, "", reviewSessionID, fmt.Errorf("review session events channel closed unexpectedly")
 			}
 			if evt.Type == "done" {
-				// Read output from session log file
+				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
+					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
+				}
 				output, err := p.readSessionOutputFromLog(ctx, reviewSessionID)
 				if err != nil {
 					slog.Warn("failed to read session log, returning NO_CRITIQUES", "error", err)
@@ -275,6 +306,9 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 				}
 				return reviewSession, output, reviewSessionID, nil
 			} else if evt.Type == "error" {
+				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
+					slog.Warn("failed to fail review session after agent error", "error", failErr, "session_id", reviewSessionID)
+				}
 				return reviewSession, "", reviewSessionID, fmt.Errorf("review session error: %s", evt.Payload)
 			}
 		}
@@ -511,28 +545,17 @@ func (p *ReviewPipeline) readSessionOutputFromLog(ctx context.Context, sessionID
 	var output strings.Builder
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		entry, ok := sessionlog.ParseLine(scanner.Text())
+		if !ok {
 			continue
 		}
-		if strings.HasPrefix(line, "{") {
-			var raw map[string]any
-			if err := json.Unmarshal([]byte(line), &raw); err == nil {
-				if eventType, _ := raw["type"].(string); eventType == "event" {
-					if event, ok := raw["event"].(map[string]any); ok {
-						if event["type"] == "progress" {
-							if text, ok := event["text"].(string); ok && text != "" {
-								output.WriteString(text)
-								output.WriteString("\n")
-							}
-						}
-					}
-					continue
-				}
-			}
+		switch entry.Kind {
+		case sessionlog.KindAssistant:
+			output.WriteString(entry.Text)
+		case sessionlog.KindPlain:
+			output.WriteString(strings.TrimSpace(entry.Text))
+			output.WriteString("\n")
 		}
-		output.WriteString(line)
-		output.WriteString("\n")
 	}
 
 	if err := scanner.Err(); err != nil {

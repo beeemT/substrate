@@ -83,6 +83,16 @@ func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.Task
 	return session, nil
 }
 
+func (r *sessionSearchDeleteRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
+	for _, session := range r.sessions {
+		if session.WorkItemID == workItemID {
+			result = append(result, session)
+		}
+	}
+	return result, nil
+}
+
 func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
 	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
@@ -321,7 +331,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	now := time.Now()
 	repo := &sessionSearchDeleteRepo{
 		sessions: map[string]domain.Task{
-			"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 		entry: domain.SessionHistoryEntry{
 			SessionID:          "sess-1",
@@ -466,7 +476,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	now := time.Now()
 	taskRepo := &sessionSearchDeleteRepo{
 		sessions: map[string]domain.Task{
-			"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
@@ -1024,11 +1034,11 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
 	}
 	view := stripBrowseANSI(updated.content.View())
-	if !strings.Contains(view, "Repository tasks appear after the plan is approved.") {
-		t.Fatalf("content view = %q, want updated repository tasks copy", view)
+	if !strings.Contains(view, "Waiting for live planning transcript...") {
+		t.Fatalf("content view = %q, want waiting planning transcript copy", view)
 	}
-	if strings.Contains(view, "Repository agent sessions appear after the plan is approved.") {
-		t.Fatalf("content view = %q, want stale repository agent sessions copy removed", view)
+	if strings.Contains(view, "Repository tasks appear after the plan is approved.") {
+		t.Fatalf("content view = %q, want placeholder task copy removed", view)
 	}
 	toastView := stripBrowseANSI(updated.toasts.View())
 	if !strings.Contains(toastView, "ℹ Starting planning with existing item SUB-1") {
@@ -1138,7 +1148,9 @@ func newSidebarDrilldownTestApp() App {
 	}
 	session := domain.Task{
 		ID:             "sess-1",
+		WorkItemID:     workItem.ID,
 		WorkspaceID:    "ws-local",
+		Phase:          domain.TaskPhaseImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		HarnessName:    "omp",
@@ -1154,6 +1166,204 @@ func newSidebarDrilldownTestApp() App {
 	app.sidebar.SelectWorkItem(workItem.ID)
 	_ = app.updateContentFromState()
 	return app
+}
+
+func newPlanningDrilldownTestApp() App {
+	now := time.Now()
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	workItem := domain.Session{
+		ID:            "wi-plan",
+		WorkspaceID:   "ws-local",
+		ExternalID:    "SUB-PLAN",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#99"},
+		Title:         "Plan this work",
+		State:         domain.SessionPlanning,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	planningSession := domain.Task{
+		ID:          "plan-sess-1",
+		WorkItemID:  workItem.ID,
+		WorkspaceID: workItem.WorkspaceID,
+		Phase:       domain.TaskPhasePlanning,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionRunning,
+		UpdatedAt:   now,
+		CreatedAt:   now,
+	}
+	app.workItems = []domain.Session{workItem}
+	app.sessions = []domain.Task{planningSession}
+	app.content.SetSize(80, 20)
+	app.rebuildSidebar()
+	app.currentWorkItemID = workItem.ID
+	app.sidebar.SelectWorkItem(workItem.ID)
+	_ = app.updateContentFromState()
+	return app
+}
+
+func TestPlanningSidebarRightDefaultsToPlanningSession(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.sidebarMode != sidebarPaneTasks {
+		t.Fatalf("sidebarMode = %v, want sidebarPaneTasks", updated.sidebarMode)
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "plan-sess-1" {
+		t.Fatalf("selected entry = %#v, want planning session row", sel)
+	}
+	if updated.selectedTaskSessionID() != "plan-sess-1" {
+		t.Fatalf("selected task session = %q, want plan-sess-1", updated.selectedTaskSessionID())
+	}
+	if updated.content.Mode() != ContentModePlanning {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	}
+	if updated.content.sessionLog.sessionID != "plan-sess-1" {
+		t.Fatalf("session log session id = %q, want plan-sess-1", updated.content.sessionLog.sessionID)
+	}
+	if got := len(updated.sidebar.entries); got != 3 {
+		t.Fatalf("task sidebar entries = %d, want overview + source details + planning session", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected planning drilldown to tail the planning session log")
+	}
+}
+
+func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
+	t.Parallel()
+
+	app := newPlanningDrilldownTestApp()
+	app.sessions[0].Status = domain.AgentSessionInterrupted
+
+	cmd := app.updateContentFromState()
+	if cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil for interrupted planning session", cmd)
+	}
+	if app.content.Mode() != ContentModeInterrupted {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeInterrupted)
+	}
+	if app.content.interrupted.sessionID != "plan-sess-1" {
+		t.Fatalf("interrupted session id = %q, want %q", app.content.interrupted.sessionID, "plan-sess-1")
+	}
+	view := stripBrowseANSI(app.content.View())
+	for _, want := range []string{"Session interrupted", "Resume", "Abandon"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestReviewingContentUsesImplementationSessionReviewData(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	now := time.Now().Add(2 * time.Minute)
+	app.workItems[0].State = domain.SessionReviewing
+	app.workItems[0].UpdatedAt = now
+	app.sessions[0].Status = domain.AgentSessionCompleted
+	app.sessions[0].UpdatedAt = now
+	app.sessions[0].CreatedAt = now
+	app.sessions = append(app.sessions, domain.Task{
+		ID:             "review-sess-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Phase:          domain.TaskPhaseReview,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp-review",
+		Status:         domain.AgentSessionCompleted,
+		CreatedAt:      now.Add(time.Minute),
+		UpdatedAt:      now.Add(time.Minute),
+	})
+	app.reviews["sess-1"] = ReviewsLoadedMsg{
+		SessionID: "sess-1",
+		Cycles: []domain.ReviewCycle{{
+			ID:             "cycle-1",
+			AgentSessionID: "sess-1",
+			CycleNumber:    1,
+			Status:         domain.ReviewCycleCritiquesFound,
+		}},
+		Critiques: map[string][]domain.Critique{
+			"cycle-1": {{
+				ID:            "crit-1",
+				ReviewCycleID: "cycle-1",
+				Severity:      domain.CritiqueMajor,
+				Description:   "Missing nil check before rendering review details",
+			}},
+		},
+	}
+
+	cmd := app.updateContentFromState()
+	if cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil without review log tail", cmd)
+	}
+	if app.content.Mode() != ContentModeReviewing {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeReviewing)
+	}
+	if got := len(app.content.reviewing.repos); got != 1 {
+		t.Fatalf("review repo count = %d, want 1", got)
+	}
+	repo := app.content.reviewing.repos[0]
+	if got := len(repo.Cycles); got != 1 {
+		t.Fatalf("cycle count = %d, want 1", got)
+	}
+	if repo.Cycles[0].AgentSessionID != "sess-1" {
+		t.Fatalf("cycle agent session id = %q, want %q", repo.Cycles[0].AgentSessionID, "sess-1")
+	}
+	if got := len(repo.Critiques); got != 1 {
+		t.Fatalf("critique count = %d, want 1", got)
+	}
+	if repo.Critiques[0].Description != "Missing nil check before rendering review details" {
+		t.Fatalf("critique description = %q", repo.Critiques[0].Description)
+	}
+	view := stripBrowseANSI(app.content.View())
+	if !strings.Contains(view, "Missing nil check before rendering review details") {
+		t.Fatalf("content view = %q, want critique text from implementation session review", view)
+	}
+}
+
+func TestHistoricalPlanningSessionRemainsSelectable(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	planningSession := domain.Task{
+		ID:          "plan-hist-1",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-local",
+		Phase:       domain.TaskPhasePlanning,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionCompleted,
+		UpdatedAt:   time.Now().Add(time.Minute),
+		CreatedAt:   time.Now().Add(time.Minute),
+	}
+	app.sessions = append(app.sessions, planningSession)
+	app.rebuildSidebar()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "plan-hist-1" {
+		t.Fatalf("selected entry = %#v, want historical planning session row", sel)
+	}
+	if updated.content.Mode() != ContentModePlanning {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	}
+	if updated.content.sessionLog.sessionID != "plan-hist-1" {
+		t.Fatalf("session log session id = %q, want plan-hist-1", updated.content.sessionLog.sessionID)
+	}
+	if cmd == nil {
+		t.Fatal("expected selecting historical planning session to tail its log")
+	}
 }
 
 func TestNewSessionOpensFromWorkItemWithExistingSession(t *testing.T) {

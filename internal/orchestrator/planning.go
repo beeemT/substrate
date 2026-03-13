@@ -50,6 +50,7 @@ type PlanningService struct {
 	harness      adapter.AgentHarness
 	planSvc      *service.PlanService
 	workItemSvc  *service.SessionService
+	sessionSvc   *service.TaskService
 	planRepo     repository.PlanRepository
 	subPlanRepo  repository.TaskPlanRepository
 	eventRepo    repository.EventRepository
@@ -97,6 +98,7 @@ func NewPlanningService(
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	planRepo repository.PlanRepository,
 	subPlanRepo repository.TaskPlanRepository,
 	eventRepo repository.EventRepository,
@@ -115,6 +117,7 @@ func NewPlanningService(
 		harness:      harness,
 		planSvc:      planSvc,
 		workItemSvc:  workItemSvc,
+		sessionSvc:   sessionSvc,
 		planRepo:     planRepo,
 		subPlanRepo:  subPlanRepo,
 		eventRepo:    eventRepo,
@@ -203,14 +206,37 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		slog.Warn("failed to read workspace AGENTS.md", "error", err)
 	}
 
-	// 6. Create session directory
+	// 6. Allocate and persist the planning session before launching the harness.
 	sessionID := domain.NewID()
+	planningSession := domain.Task{
+		ID:          sessionID,
+		WorkItemID:  workItem.ID,
+		WorkspaceID: workspace.ID,
+		Phase:       domain.TaskPhasePlanning,
+		HarnessName: s.harness.Name(),
+		Status:      domain.AgentSessionPending,
+	}
+	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		return nil, fmt.Errorf("create planning session: %w", err)
+	}
+
+	// 7. Create session directory.
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
+		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 
-	// 7. Build planning context
+	// 8. Transition the planning session to running before launching the harness.
+	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
+		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		return nil, fmt.Errorf("transition planning session to running: %w", err)
+	}
+
+	// 9. Build planning context.
 	planningCtx := &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
 			ID:          workItem.ID,
@@ -229,13 +255,16 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		CurrentPlanText:   currentPlanText,
 	}
 
-	// 8. Emit PlanningStarted event
+	// 10. Emit PlanningStarted event.
 	if err := s.emitPlanningStartedEvent(ctx, workItemID, sessionID, workspace.ID); err != nil {
 		slog.Warn("failed to emit planning started event", "error", err)
 	}
 
 	rawContent, retries, warnings, planErr := s.runPlanningWithCorrectionLoop(ctx, planningCtx, workItem.WorkspaceID)
 	if planErr != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
+		}
 		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
@@ -247,11 +276,14 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		}, planErr
 	}
 
-	// 9. Parse and validate the final plan
+	// 11. Parse and validate the final plan.
 	parser := NewPlanParser()
 	rawOutput, parseErrors := parser.ParseAndValidate(rawContent, repos)
 	if parseErrors.HasErrors() {
 		slog.Error("plan parsing failed after correction loop", "errors", parseErrors.Error())
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
+		}
 		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
@@ -263,19 +295,35 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		}, fmt.Errorf("plan parsing failed: %w", &parseErrors)
 	}
 
-	// 10. Build and persist plan + sub-plans
+	// 12. Build and persist plan + sub-plans.
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem)
 	if err != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
+		}
+		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+			slog.Warn("failed to emit plan failed event", "error", emitErr)
+		}
 		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
-	// 11. Transition work item to plan_review
+	// 13. Transition work item to plan_review.
 	if err := s.workItemSvc.SubmitPlanForReview(ctx, workItemID); err != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
+		}
+		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+			slog.Warn("failed to emit plan failed event", "error", emitErr)
+		}
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
 	}
 
-	// 12. Emit PlanGenerated event
+	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
+		slog.Warn("failed to complete planning session", "error", completeErr, "session_id", sessionID)
+	}
+
+	// 14. Emit PlanGenerated event.
 	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, workItemID, plan.Version, workspace.ID); err != nil {
 		slog.Warn("failed to emit plan generated event", "error", err)
 	}

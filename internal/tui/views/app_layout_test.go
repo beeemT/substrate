@@ -56,7 +56,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	app.taskSessionSelectionByWorkItem["wi-1"] = "sess-1"
 	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1"}}
-	app.sessions = []domain.Task{{ID: "sess-1", SubPlanID: "sp-1", Status: domain.AgentSessionCompleted}}
+	app.sessions = []domain.Task{{ID: "sess-1", WorkItemID: "wi-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionCompleted}}
 
 	if got := app.deletableSessionID(); got != "wi-1" {
 		t.Fatalf("deletable session id = %q, want wi-1", got)

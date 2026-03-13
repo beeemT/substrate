@@ -50,12 +50,17 @@ func (s *TaskService) Get(ctx context.Context, id string) (domain.Task, error) {
 	return task, nil
 }
 
-// ListBySubPlanID retrieves all tasks for a task plan.
+// ListByWorkItemID retrieves all child agent sessions for a work item.
+func (s *TaskService) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+	return s.repo.ListByWorkItemID(ctx, workItemID)
+}
+
+// ListBySubPlanID retrieves all child agent sessions for a sub-plan.
 func (s *TaskService) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
 	return s.repo.ListBySubPlanID(ctx, subPlanID)
 }
 
-// ListByWorkspaceID retrieves all tasks for a workspace.
+// ListByWorkspaceID retrieves all child agent sessions for a workspace.
 func (s *TaskService) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
 	return s.repo.ListByWorkspaceID(ctx, workspaceID)
 }
@@ -65,8 +70,27 @@ func (s *TaskService) SearchHistory(ctx context.Context, filter domain.SessionHi
 	return s.repo.SearchHistory(ctx, filter)
 }
 
-// Create creates a new task in pending status.
+// Create creates a new child agent session in pending status.
 func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
+	if task.WorkItemID == "" {
+		return newInvalidInputError("work item is required", "work_item_id")
+	}
+	if task.HarnessName == "" {
+		return newInvalidInputError("harness name is required", "harness_name")
+	}
+	if task.Phase == "" {
+		return newInvalidInputError("phase is required", "phase")
+	}
+	switch task.Phase {
+	case domain.TaskPhasePlanning:
+		// Planning sessions run at the workspace/work-item level and may omit repo-specific fields.
+	case domain.TaskPhaseImplementation, domain.TaskPhaseReview:
+		if task.SubPlanID == "" {
+			return newInvalidInputError("sub-plan is required for this phase", "sub_plan_id")
+		}
+	default:
+		return newInvalidInputError("unknown task phase", "phase")
+	}
 	if task.Status == "" {
 		task.Status = domain.AgentSessionPending
 	}

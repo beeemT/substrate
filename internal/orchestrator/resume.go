@@ -85,7 +85,9 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	now := time.Now()
 	newSession := domain.Task{
 		ID:              domain.NewID(),
+		WorkItemID:      interrupted.WorkItemID,
 		WorkspaceID:     interrupted.WorkspaceID,
+		Phase:           domain.TaskPhaseImplementation,
 		SubPlanID:       interrupted.SubPlanID,
 		RepositoryName:  interrupted.RepositoryName,
 		WorktreePath:    interrupted.WorktreePath,

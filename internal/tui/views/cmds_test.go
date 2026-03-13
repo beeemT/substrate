@@ -164,7 +164,11 @@ func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := strings.Join([]string{
-		`{"type":"event","event":{"type":"progress","text":"planning step"}}`,
+		`{"type":"event","event":{"type":"input","input_kind":"prompt","text":"Begin planning"}}`,
+		`{"type":"event","event":{"type":"assistant_output","text":"planning step"}}`,
+		`{"type":"event","event":{"type":"tool_start","tool":"read","text":"{\"path\":\"AGENTS.md\"}","intent":"Reading guidance"}}`,
+		`{"type":"event","event":{"type":"tool_output","tool":"read","text":"AGENTS contents"}}`,
+		`{"type":"event","event":{"type":"tool_result","tool":"read","text":"done","is_error":false}}`,
 		`{"type":"event","event":{"type":"question","question":"Need input","context":"missing token"}}`,
 		"plain fallback line",
 		"",
@@ -181,7 +185,51 @@ func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	want := []string{"planning step", "Question: Need input — missing token", "plain fallback line"}
+	want := []string{
+		"Prompt: Begin planning",
+		"planning step",
+		"Tool: read — Reading guidance\n  Args: {\"path\":\"AGENTS.md\"}",
+		"Tool output [read]: AGENTS contents",
+		"Tool result [read]: done",
+		"Question: Need input — missing token",
+		"plain fallback line",
+	}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	}
+	for i, line := range want {
+		if got.Lines[i] != line {
+			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
+		}
+	}
+}
+
+func TestTailSessionLogCmd_PreservesLegacyErrorAndCompleteEvents(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		`{"type":"event","event":{"type":"error","message":"bridge crashed"}}`,
+		`{"type":"event","event":{"type":"complete","summary":"Legacy completion summary"}}`,
+		`{"type":"event","event":{"type":"complete"}}`,
+		"",
+	}, "\n")
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(f.Name(), "legacy", 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	want := []string{"Error: bridge crashed", "Legacy completion summary", "Session complete"}
 	if len(got.Lines) != len(want) {
 		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
 	}
@@ -203,8 +251,8 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 	}
 	gz := gzip.NewWriter(compressedFile)
 	compressedContent := strings.Join([]string{
-		`{"type":"event","event":{"type":"progress","text":"first chunk"}}`,
-		`{"type":"event","event":{"type":"complete","summary":"done"}}`,
+		`{"type":"event","event":{"type":"assistant_output","text":"first chunk"}}`,
+		`{"type":"event","event":{"type":"lifecycle","stage":"completed","summary":"done"}}`,
 	}, "\n") + "\n"
 	if _, err := gz.Write([]byte(compressedContent)); err != nil {
 		t.Fatal(err)
@@ -227,6 +275,17 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 		t.Fatalf("expected SessionInteractionLoadedMsg, got %T", msg)
 	}
 	want := []string{"first chunk", "done", "live tail line"}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	}
+	for i, line := range want {
+		if got.Lines[i] != line {
+			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
+		}
+	}
+	if got.SessionID != sessionID {
+		t.Fatalf("SessionID: want %q, got %q", sessionID, got.SessionID)
+	}
 	if len(got.Lines) != len(want) {
 		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
 	}

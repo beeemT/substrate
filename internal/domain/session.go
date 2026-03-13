@@ -2,10 +2,21 @@ package domain
 
 import "time"
 
-// Task is a single agent harness invocation against one task plan.
+// TaskPhase identifies the kind of child agent session being tracked.
+type TaskPhase string
+
+const (
+	TaskPhasePlanning       TaskPhase = "planning"
+	TaskPhaseImplementation TaskPhase = "implementation"
+	TaskPhaseReview         TaskPhase = "review"
+)
+
+// Task is a single child agent session for a work item.
 type Task struct {
 	ID              string
+	WorkItemID      string
 	WorkspaceID     string
+	Phase           TaskPhase
 	SubPlanID       string
 	RepositoryName  string
 	WorktreePath    string
@@ -53,7 +64,7 @@ type SessionHistoryFilter struct {
 	Offset      int
 }
 
-// TaskStatus represents the lifecycle state of a task.
+// TaskStatus represents the lifecycle state of an agent session.
 type TaskStatus string
 
 const (

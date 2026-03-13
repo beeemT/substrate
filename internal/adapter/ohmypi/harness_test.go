@@ -68,10 +68,34 @@ func TestMapBridgeEvent(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "progress event",
+			name:      "input event",
 			rawType:   "event",
-			eventJSON: `{"type":"progress","text":"Reading file..."}`,
+			eventJSON: `{"type":"input","input_kind":"prompt","text":"Begin planning"}`,
+			wantType:  "input",
+		},
+		{
+			name:      "assistant output event",
+			rawType:   "event",
+			eventJSON: `{"type":"assistant_output","text":"Reading file..."}`,
 			wantType:  "text_delta",
+		},
+		{
+			name:      "tool start event",
+			rawType:   "event",
+			eventJSON: `{"type":"tool_start","tool":"read","text":"{\"path\":\"AGENTS.md\"}","intent":"Reading guidance"}`,
+			wantType:  "tool_start",
+		},
+		{
+			name:      "tool output event",
+			rawType:   "event",
+			eventJSON: `{"type":"tool_output","tool":"read","text":"line 1\nline 2"}`,
+			wantType:  "tool_output",
+		},
+		{
+			name:      "tool result event",
+			rawType:   "event",
+			eventJSON: `{"type":"tool_result","tool":"read","text":"done","is_error":false}`,
+			wantType:  "tool_result",
 		},
 		{
 			name:      "question event",
@@ -80,33 +104,27 @@ func TestMapBridgeEvent(t *testing.T) {
 			wantType:  "question",
 		},
 		{
-			name:      "foreman_proposed event with uncertain",
+			name:      "foreman proposed event",
 			rawType:   "event",
 			eventJSON: `{"type":"foreman_proposed","text":"The answer is 42","uncertain":true}`,
 			wantType:  "foreman_proposed",
 		},
 		{
-			name:      "foreman_proposed event confident",
+			name:      "lifecycle complete event",
 			rawType:   "event",
-			eventJSON: `{"type":"foreman_proposed","text":"The answer is 42","uncertain":false}`,
-			wantType:  "foreman_proposed",
-		},
-		{
-			name:      "complete event",
-			rawType:   "event",
-			eventJSON: `{"type":"complete","summary":"Task completed"}`,
+			eventJSON: `{"type":"lifecycle","stage":"completed","summary":"Task completed"}`,
 			wantType:  "done",
 		},
 		{
-			name:      "error event",
+			name:      "lifecycle failure event",
 			rawType:   "event",
-			eventJSON: `{"type":"error","message":"Something went wrong"}`,
+			eventJSON: `{"type":"lifecycle","stage":"failed","message":"Something went wrong"}`,
 			wantType:  "error",
 		},
 		{
-			name:      "session_ready event",
+			name:      "lifecycle started event",
 			rawType:   "event",
-			eventJSON: `{"type":"session_ready"}`,
+			eventJSON: `{"type":"lifecycle","stage":"started","message":"Session started"}`,
 			wantType:  "started",
 		},
 		{
@@ -122,9 +140,9 @@ func TestMapBridgeEvent(t *testing.T) {
 			wantNil:   true,
 		},
 		{
-			name:      "progress missing text returns error",
+			name:      "assistant output missing text returns error",
 			rawType:   "event",
-			eventJSON: `{"type":"progress"}`,
+			eventJSON: `{"type":"assistant_output"}`,
 			wantErr:   true,
 		},
 		{
@@ -168,12 +186,9 @@ func TestMapBridgeEvent(t *testing.T) {
 			if got == nil {
 				t.Fatal("expected non-nil event, got nil")
 			}
-
 			if got.Type != tt.wantType {
 				t.Errorf("Type mismatch: got %q, want %q", got.Type, tt.wantType)
 			}
-
-			// Verify timestamp is set and recent
 			if time.Since(got.Timestamp) > time.Minute {
 				t.Errorf("Timestamp seems incorrect: %v", got.Timestamp)
 			}
@@ -209,6 +224,29 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 		t.Errorf("context mismatch: got %q, want %q", ctx, "some context")
 	}
 
+	// Test tool_start event preserves tool metadata and intent.
+	raw = struct {
+		Type  string          `json:"type"`
+		Event json.RawMessage `json:"event"`
+	}{
+		Type:  "event",
+		Event: json.RawMessage(`{"type":"tool_start","tool":"read","text":"{}","intent":"Inspecting file"}`),
+	}
+
+	got, err = s.mapBridgeEvent(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if tool, ok := got.Metadata["tool"].(string); !ok || tool != "read" {
+		t.Fatalf("tool metadata = %#v, want read", got.Metadata["tool"])
+	}
+	if intent, ok := got.Metadata["intent"].(string); !ok || intent != "Inspecting file" {
+		t.Fatalf("intent metadata = %#v, want Inspecting file", got.Metadata["intent"])
+	}
+
 	// Test foreman_proposed event has uncertain in metadata
 	raw = struct {
 		Type  string          `json:"type"`
@@ -225,7 +263,6 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected non-nil event")
 	}
-
 	uncertain, ok := got.Metadata["uncertain"].(bool)
 	if !ok {
 		t.Fatal("expected uncertain in metadata")

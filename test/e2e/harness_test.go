@@ -185,6 +185,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		mockHarness,
 		planSvc,
 		workItemSvc,
+		sessionSvc,
 		planRepo,
 		subPlanRepo,
 		eventRepo,

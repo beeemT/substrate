@@ -437,7 +437,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, cfg)
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, cfg)
 		if err != nil {
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}
@@ -897,20 +897,24 @@ func applyField(cfg *config.Config, field SettingsField) error {
 }
 
 func validateSettingsConfig(cfg *config.Config) error {
-	cfgPath, err := config.ConfigPath()
-	if err != nil {
-		return err
-	}
-	tmp := cfgPath + ".settings-validate"
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp("", "substrate-settings-validate-*.yaml")
+	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
-	if _, err := config.Load(tmp); err != nil {
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if _, err := config.Load(tmpPath); err != nil {
 		return err
 	}
 	for _, durationValue := range []string{cfg.Adapters.Linear.PollInterval, cfg.Adapters.GitLab.PollInterval, cfg.Adapters.GitHub.PollInterval, cfg.Foreman.QuestionTimeout} {

@@ -215,7 +215,9 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 	owner := ownerInstanceID
 	f.sessionRepo.sessions[sessionID] = domain.Task{
 		ID:              sessionID,
+		WorkItemID:      "wi-1",
 		WorkspaceID:     f.workspaceID,
+		Phase:           domain.TaskPhaseImplementation,
 		SubPlanID:       "sub-plan-1",
 		RepositoryName:  "repo-a",
 		WorktreePath:    "/tmp/worktrees/repo-a",
@@ -229,7 +231,9 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 	f.sessionRepo.sessions[sessionID] = domain.Task{
 		ID:             sessionID,
+		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
+		Phase:          domain.TaskPhaseImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -429,9 +433,9 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 
 	// Write a log file with recognisable content.
 	logContent := strings.Join([]string{
-		`{"type":"event","event":{"type":"progress","text":"started working"}}`,
-		`{"type":"event","event":{"type":"progress","text":"wrote main.go"}}`,
-		`{"type":"event","event":{"type":"progress","text":"all tests passing"}}`,
+		`{"type":"event","event":{"type":"assistant_output","text":"started working"}}`,
+		`{"type":"event","event":{"type":"assistant_output","text":"wrote main.go"}}`,
+		`{"type":"event","event":{"type":"assistant_output","text":"all tests passing"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(sessionsDir, intID+".log"), []byte(logContent), 0o644); err != nil {
 		t.Fatalf("write log: %v", err)
