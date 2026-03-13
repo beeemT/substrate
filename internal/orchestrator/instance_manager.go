@@ -22,7 +22,7 @@ const (
 // maintains a liveness heartbeat, and reconciles orphaned sessions on startup.
 type InstanceManager struct {
 	instanceSvc *service.InstanceService
-	sessionSvc  *service.SessionService
+	sessionSvc  *service.TaskService
 	eventBus    *event.Bus
 
 	instanceID  string
@@ -34,7 +34,7 @@ type InstanceManager struct {
 // NewInstanceManager creates a new InstanceManager.
 func NewInstanceManager(
 	instanceSvc *service.InstanceService,
-	sessionSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	eventBus *event.Bus,
 ) *InstanceManager {
 	return &InstanceManager{

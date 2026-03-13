@@ -194,8 +194,8 @@ func TestSubPlanService_ValidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	validTransitions := []struct {
-		from domain.SubPlanStatus
-		to   domain.SubPlanStatus
+		from domain.TaskPlanStatus
+		to   domain.TaskPlanStatus
 		name string
 	}{
 		{domain.SubPlanPending, domain.SubPlanInProgress, "pending -> in_progress"},
@@ -210,7 +210,7 @@ func TestSubPlanService_ValidTransitions(t *testing.T) {
 			subPlanRepo := NewMockSubPlanRepository()
 			svc := NewPlanService(planRepo, subPlanRepo)
 
-			sp := domain.SubPlan{
+			sp := domain.TaskPlan{
 				ID:             "sp-test",
 				PlanID:         "plan-1",
 				RepositoryName: "repo1",
@@ -238,8 +238,8 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	invalidTransitions := []struct {
-		from domain.SubPlanStatus
-		to   domain.SubPlanStatus
+		from domain.TaskPlanStatus
+		to   domain.TaskPlanStatus
 		name string
 	}{
 		{domain.SubPlanPending, domain.SubPlanCompleted, "pending -> completed"},
@@ -257,7 +257,7 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 			subPlanRepo := NewMockSubPlanRepository()
 			svc := NewPlanService(planRepo, subPlanRepo)
 
-			sp := domain.SubPlan{
+			sp := domain.TaskPlan{
 				ID:             "sp-test",
 				PlanID:         "plan-1",
 				RepositoryName: "repo1",
@@ -294,8 +294,8 @@ func TestPlanService_AllSubPlansCompleted(t *testing.T) {
 	})
 
 	t.Run("returns true when all completed", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-1"] = domain.SubPlan{ID: "sp-1", PlanID: "plan-2", Status: domain.SubPlanCompleted}
-		subPlanRepo.subPlans["sp-2"] = domain.SubPlan{ID: "sp-2", PlanID: "plan-2", Status: domain.SubPlanCompleted}
+		subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-2", Status: domain.SubPlanCompleted}
+		subPlanRepo.subPlans["sp-2"] = domain.TaskPlan{ID: "sp-2", PlanID: "plan-2", Status: domain.SubPlanCompleted}
 		subPlanRepo.byPlan["plan-2"] = []string{"sp-1", "sp-2"}
 
 		done, err := svc.AllSubPlansCompleted(ctx, "plan-2")
@@ -308,8 +308,8 @@ func TestPlanService_AllSubPlansCompleted(t *testing.T) {
 	})
 
 	t.Run("returns false when some incomplete", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-3"] = domain.SubPlan{ID: "sp-3", PlanID: "plan-3", Status: domain.SubPlanCompleted}
-		subPlanRepo.subPlans["sp-4"] = domain.SubPlan{ID: "sp-4", PlanID: "plan-3", Status: domain.SubPlanInProgress}
+		subPlanRepo.subPlans["sp-3"] = domain.TaskPlan{ID: "sp-3", PlanID: "plan-3", Status: domain.SubPlanCompleted}
+		subPlanRepo.subPlans["sp-4"] = domain.TaskPlan{ID: "sp-4", PlanID: "plan-3", Status: domain.SubPlanInProgress}
 		subPlanRepo.byPlan["plan-3"] = []string{"sp-3", "sp-4"}
 
 		done, err := svc.AllSubPlansCompleted(ctx, "plan-3")

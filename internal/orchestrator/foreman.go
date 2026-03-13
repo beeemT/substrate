@@ -29,7 +29,7 @@ type Foreman struct {
 	harness     adapter.AgentHarness
 	planSvc     *service.PlanService
 	questionSvc *service.QuestionService
-	sessionSvc  *service.SessionService
+	sessionSvc  *service.TaskService
 	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
 
@@ -54,7 +54,7 @@ func NewForeman(
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
-	sessionSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	planRepo repository.PlanRepository,
 	eventBus *event.Bus,
 ) *Foreman {

@@ -2,8 +2,8 @@ package domain
 
 import "time"
 
-// WorkItem is the root aggregate representing an external ticket.
-type WorkItem struct {
+// Session is the root aggregate representing an external ticket.
+type Session struct {
 	ID            string
 	WorkspaceID   string
 	ExternalID    string
@@ -12,7 +12,7 @@ type WorkItem struct {
 	Description   string
 	Labels        []string
 	AssigneeID    string
-	State         WorkItemState
+	State         SessionState
 	Metadata      map[string]any
 	SourceScope   SelectionScope
 	SourceItemIDs []string
@@ -20,16 +20,16 @@ type WorkItem struct {
 	UpdatedAt     time.Time
 }
 
-// WorkItemState represents the lifecycle state of a work item.
-type WorkItemState string
+// SessionState represents the lifecycle state of a work item.
+type SessionState string
 
 const (
-	WorkItemIngested     WorkItemState = "ingested"
-	WorkItemPlanning     WorkItemState = "planning"
-	WorkItemPlanReview   WorkItemState = "plan_review"
-	WorkItemApproved     WorkItemState = "approved"
-	WorkItemImplementing WorkItemState = "implementing"
-	WorkItemReviewing    WorkItemState = "reviewing"
-	WorkItemCompleted    WorkItemState = "completed"
-	WorkItemFailed       WorkItemState = "failed"
+	SessionIngested     SessionState = "ingested"
+	SessionPlanning     SessionState = "planning"
+	SessionPlanReview   SessionState = "plan_review"
+	SessionApproved     SessionState = "approved"
+	SessionImplementing SessionState = "implementing"
+	SessionReviewing    SessionState = "reviewing"
+	SessionCompleted    SessionState = "completed"
+	SessionFailed       SessionState = "failed"
 )

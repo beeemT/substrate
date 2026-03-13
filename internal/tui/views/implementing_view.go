@@ -17,12 +17,12 @@ type RepoProgress struct {
 	Name      string
 	SubPlanID string
 	SessionID string
-	Status    domain.SubPlanStatus
+	Status    domain.TaskPlanStatus
 	LogPath   string
 }
 
 // repoStatusIcon returns the display icon for a repo's sub-plan status.
-func repoStatusIcon(status domain.SubPlanStatus, st styles.Styles) string {
+func repoStatusIcon(status domain.TaskPlanStatus, st styles.Styles) string {
 	switch status {
 	case domain.SubPlanCompleted:
 		return st.Success.Render("✓")

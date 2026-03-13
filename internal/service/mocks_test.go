@@ -9,32 +9,32 @@ import (
 
 // MockWorkItemRepository implements repository.WorkItemRepository for testing.
 type MockWorkItemRepository struct {
-	items map[string]domain.WorkItem
+	items map[string]domain.Session
 	err   error
 }
 
 func NewMockWorkItemRepository() *MockWorkItemRepository {
 	return &MockWorkItemRepository{
-		items: make(map[string]domain.WorkItem),
+		items: make(map[string]domain.Session),
 	}
 }
 
-func (m *MockWorkItemRepository) Get(ctx context.Context, id string) (domain.WorkItem, error) {
+func (m *MockWorkItemRepository) Get(ctx context.Context, id string) (domain.Session, error) {
 	if m.err != nil {
-		return domain.WorkItem{}, m.err
+		return domain.Session{}, m.err
 	}
 	item, ok := m.items[id]
 	if !ok {
-		return domain.WorkItem{}, repository.ErrNotFound
+		return domain.Session{}, repository.ErrNotFound
 	}
 	return item, nil
 }
 
-func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.WorkItem
+	var result []domain.Session
 	for _, item := range m.items {
 		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
 			continue
@@ -53,7 +53,7 @@ func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.Wor
 	return result, nil
 }
 
-func (m *MockWorkItemRepository) Create(ctx context.Context, item domain.WorkItem) error {
+func (m *MockWorkItemRepository) Create(ctx context.Context, item domain.Session) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -61,7 +61,7 @@ func (m *MockWorkItemRepository) Create(ctx context.Context, item domain.WorkIte
 	return nil
 }
 
-func (m *MockWorkItemRepository) Update(ctx context.Context, item domain.WorkItem) error {
+func (m *MockWorkItemRepository) Update(ctx context.Context, item domain.Session) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -161,41 +161,41 @@ func (m *MockPlanRepository) AppendFAQ(ctx context.Context, entry domain.FAQEntr
 
 // MockSubPlanRepository implements repository.SubPlanRepository for testing.
 type MockSubPlanRepository struct {
-	subPlans map[string]domain.SubPlan
+	subPlans map[string]domain.TaskPlan
 	byPlan   map[string][]string // planID -> []subPlanID
 	err      error
 }
 
 func NewMockSubPlanRepository() *MockSubPlanRepository {
 	return &MockSubPlanRepository{
-		subPlans: make(map[string]domain.SubPlan),
+		subPlans: make(map[string]domain.TaskPlan),
 		byPlan:   make(map[string][]string),
 	}
 }
 
-func (m *MockSubPlanRepository) Get(ctx context.Context, id string) (domain.SubPlan, error) {
+func (m *MockSubPlanRepository) Get(ctx context.Context, id string) (domain.TaskPlan, error) {
 	if m.err != nil {
-		return domain.SubPlan{}, m.err
+		return domain.TaskPlan{}, m.err
 	}
 	sp, ok := m.subPlans[id]
 	if !ok {
-		return domain.SubPlan{}, repository.ErrNotFound
+		return domain.TaskPlan{}, repository.ErrNotFound
 	}
 	return sp, nil
 }
 
-func (m *MockSubPlanRepository) ListByPlanID(ctx context.Context, planID string) ([]domain.SubPlan, error) {
+func (m *MockSubPlanRepository) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.SubPlan
+	var result []domain.TaskPlan
 	for _, id := range m.byPlan[planID] {
 		result = append(result, m.subPlans[id])
 	}
 	return result, nil
 }
 
-func (m *MockSubPlanRepository) Create(ctx context.Context, sp domain.SubPlan) error {
+func (m *MockSubPlanRepository) Create(ctx context.Context, sp domain.TaskPlan) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -204,7 +204,7 @@ func (m *MockSubPlanRepository) Create(ctx context.Context, sp domain.SubPlan) e
 	return nil
 }
 
-func (m *MockSubPlanRepository) Update(ctx context.Context, sp domain.SubPlan) error {
+func (m *MockSubPlanRepository) Update(ctx context.Context, sp domain.TaskPlan) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -290,7 +290,7 @@ func (m *MockWorkspaceRepository) Delete(ctx context.Context, id string) error {
 
 // MockSessionRepository implements repository.SessionRepository for testing.
 type MockSessionRepository struct {
-	sessions        map[string]domain.AgentSession
+	sessions        map[string]domain.Task
 	bySubPlan       map[string][]string
 	byWorkspace     map[string][]string
 	byOwnerInstance map[string][]string
@@ -299,51 +299,51 @@ type MockSessionRepository struct {
 
 func NewMockSessionRepository() *MockSessionRepository {
 	return &MockSessionRepository{
-		sessions:        make(map[string]domain.AgentSession),
+		sessions:        make(map[string]domain.Task),
 		bySubPlan:       make(map[string][]string),
 		byWorkspace:     make(map[string][]string),
 		byOwnerInstance: make(map[string][]string),
 	}
 }
 
-func (m *MockSessionRepository) Get(ctx context.Context, id string) (domain.AgentSession, error) {
+func (m *MockSessionRepository) Get(ctx context.Context, id string) (domain.Task, error) {
 	if m.err != nil {
-		return domain.AgentSession{}, m.err
+		return domain.Task{}, m.err
 	}
 	s, ok := m.sessions[id]
 	if !ok {
-		return domain.AgentSession{}, repository.ErrNotFound
+		return domain.Task{}, repository.ErrNotFound
 	}
 	return s, nil
 }
 
-func (m *MockSessionRepository) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error) {
+func (m *MockSessionRepository) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, id := range m.bySubPlan[subPlanID] {
 		result = append(result, m.sessions[id])
 	}
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
+func (m *MockSessionRepository) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, id := range m.byWorkspace[workspaceID] {
 		result = append(result, m.sessions[id])
 	}
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
+func (m *MockSessionRepository) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, id := range m.byOwnerInstance[instanceID] {
 		result = append(result, m.sessions[id])
 	}
@@ -357,7 +357,7 @@ func (m *MockSessionRepository) SearchHistory(ctx context.Context, filter domain
 	return nil, nil
 }
 
-func (m *MockSessionRepository) Create(ctx context.Context, s domain.AgentSession) error {
+func (m *MockSessionRepository) Create(ctx context.Context, s domain.Task) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -370,7 +370,7 @@ func (m *MockSessionRepository) Create(ctx context.Context, s domain.AgentSessio
 	return nil
 }
 
-func (m *MockSessionRepository) Update(ctx context.Context, s domain.AgentSession) error {
+func (m *MockSessionRepository) Update(ctx context.Context, s domain.Task) error {
 	if m.err != nil {
 		return m.err
 	}

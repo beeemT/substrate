@@ -85,11 +85,11 @@ type SettingsApplyResult struct {
 }
 
 type SettingsService struct {
-	workItemRepo  repository.WorkItemRepository
+	workItemRepo  repository.SessionRepository
 	planRepo      repository.PlanRepository
-	subPlanRepo   repository.SubPlanRepository
+	subPlanRepo   repository.TaskPlanRepository
 	workspaceRepo repository.WorkspaceRepository
-	sessionRepo   repository.SessionRepository
+	sessionRepo   repository.TaskRepository
 	questionRepo  repository.QuestionRepository
 	instanceRepo  repository.InstanceRepository
 	reviewRepo    repository.ReviewRepository
@@ -105,11 +105,11 @@ type viewsServicesReload struct {
 }
 
 func NewSettingsService(
-	workItemRepo repository.WorkItemRepository,
+	workItemRepo repository.SessionRepository,
 	planRepo repository.PlanRepository,
-	subPlanRepo repository.SubPlanRepository,
+	subPlanRepo repository.TaskPlanRepository,
 	workspaceRepo repository.WorkspaceRepository,
-	sessionRepo repository.SessionRepository,
+	sessionRepo repository.TaskRepository,
 	questionRepo repository.QuestionRepository,
 	instanceRepo repository.InstanceRepository,
 	reviewRepo repository.ReviewRepository,
@@ -328,10 +328,10 @@ func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness s
 }
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
-	workItemSvc := service.NewWorkItemService(s.workItemRepo)
+	workItemSvc := service.NewSessionService(s.workItemRepo)
 	planSvc := service.NewPlanService(s.planRepo, s.subPlanRepo)
 	workspaceSvc := service.NewWorkspaceService(s.workspaceRepo)
-	sessionSvc := service.NewSessionService(s.sessionRepo)
+	sessionSvc := service.NewTaskService(s.sessionRepo)
 	questionSvc := service.NewQuestionService(s.questionRepo)
 	instanceSvc := service.NewInstanceService(s.instanceRepo)
 	reviewSvc := service.NewReviewService(s.reviewRepo)
@@ -413,10 +413,10 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		SessionsDir:  sessionsDir,
 		SettingsData: snapshot,
 		Services: Services{
-			WorkItem:       workItemSvc,
+			Session:        workItemSvc,
 			Plan:           planSvc,
-			SubPlan:        s.subPlanRepo,
-			Session:        sessionSvc,
+			TaskPlan:       s.subPlanRepo,
+			Task:           sessionSvc,
 			Question:       questionSvc,
 			Instance:       instanceSvc,
 			Workspace:      workspaceSvc,

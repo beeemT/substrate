@@ -27,28 +27,28 @@ type workItemRow struct {
 	UpdatedAt     string  `db:"updated_at"`
 }
 
-func (r *workItemRow) toDomain() (domain.WorkItem, error) {
+func (r *workItemRow) toDomain() (domain.Session, error) {
 	labels, err := unmarshalStringSlice(r.Labels)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("unmarshal labels: %w", err)
+		return domain.Session{}, fmt.Errorf("unmarshal labels: %w", err)
 	}
 	sourceItemIDs, err := unmarshalStringSlice(r.SourceItemIDs)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("unmarshal source_item_ids: %w", err)
+		return domain.Session{}, fmt.Errorf("unmarshal source_item_ids: %w", err)
 	}
 	metadata, err := unmarshalMap(r.Metadata)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("unmarshal metadata: %w", err)
+		return domain.Session{}, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 	createdAt, err := parseTime(r.CreatedAt)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("created_at: %w", err)
+		return domain.Session{}, fmt.Errorf("created_at: %w", err)
 	}
 	updatedAt, err := parseTime(r.UpdatedAt)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("updated_at: %w", err)
+		return domain.Session{}, fmt.Errorf("updated_at: %w", err)
 	}
-	return domain.WorkItem{
+	return domain.Session{
 		ID:            r.ID,
 		WorkspaceID:   r.WorkspaceID,
 		ExternalID:    derefStr(r.ExternalID),
@@ -57,7 +57,7 @@ func (r *workItemRow) toDomain() (domain.WorkItem, error) {
 		Title:         r.Title,
 		Description:   derefStr(r.Description),
 		AssigneeID:    derefStr(r.AssigneeID),
-		State:         domain.WorkItemState(r.State),
+		State:         domain.SessionState(r.State),
 		Labels:        labels,
 		SourceItemIDs: sourceItemIDs,
 		Metadata:      metadata,
@@ -66,7 +66,7 @@ func (r *workItemRow) toDomain() (domain.WorkItem, error) {
 	}, nil
 }
 
-func rowFromWorkItem(item domain.WorkItem) (workItemRow, error) {
+func rowFromWorkItem(item domain.Session) (workItemRow, error) {
 	labels, err := marshalStringSlice(item.Labels)
 	if err != nil {
 		return workItemRow{}, fmt.Errorf("marshal labels: %w", err)
@@ -97,23 +97,23 @@ func rowFromWorkItem(item domain.WorkItem) (workItemRow, error) {
 	}, nil
 }
 
-// WorkItemRepo implements repository.WorkItemRepository using SQLite.
-type WorkItemRepo struct{ remote generic.SQLXRemote }
+// SessionRepo implements repository.WorkItemRepository using SQLite.
+type SessionRepo struct{ remote generic.SQLXRemote }
 
-// NewWorkItemRepo creates a new WorkItemRepo.
-func NewWorkItemRepo(remote generic.SQLXRemote) WorkItemRepo {
-	return WorkItemRepo{remote: remote}
+// NewSessionRepo creates a new WorkItemRepo.
+func NewSessionRepo(remote generic.SQLXRemote) SessionRepo {
+	return SessionRepo{remote: remote}
 }
 
-func (r WorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, error) {
+func (r SessionRepo) Get(ctx context.Context, id string) (domain.Session, error) {
 	var row workItemRow
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM work_items WHERE id = ?`, id); err != nil {
-		return domain.WorkItem{}, fmt.Errorf("get work item %s: %w", id, err)
+		return domain.Session{}, fmt.Errorf("get work item %s: %w", id, err)
 	}
 	return row.toDomain()
 }
 
-func (r WorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (r SessionRepo) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	query := `SELECT * FROM work_items WHERE 1=1`
 	var args []any
 	if filter.WorkspaceID != nil {
@@ -145,7 +145,7 @@ func (r WorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter
 	if err := r.remote.SelectContext(ctx, &rows, query, args...); err != nil {
 		return nil, fmt.Errorf("list work items: %w", err)
 	}
-	items := make([]domain.WorkItem, 0, len(rows))
+	items := make([]domain.Session, 0, len(rows))
 	for i := range rows {
 		item, err := rows[i].toDomain()
 		if err != nil {
@@ -156,7 +156,7 @@ func (r WorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter
 	return items, nil
 }
 
-func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
+func (r SessionRepo) Create(ctx context.Context, item domain.Session) error {
 	row, err := rowFromWorkItem(item)
 	if err != nil {
 		return fmt.Errorf("create work item %s: %w", item.ID, err)
@@ -174,7 +174,7 @@ func (r WorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
 	return nil
 }
 
-func (r WorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
+func (r SessionRepo) Update(ctx context.Context, item domain.Session) error {
 	row, err := rowFromWorkItem(item)
 	if err != nil {
 		return fmt.Errorf("update work item %s: %w", item.ID, err)
@@ -199,7 +199,7 @@ func (r WorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
 	return nil
 }
 
-func (r WorkItemRepo) Delete(ctx context.Context, id string) error {
+func (r SessionRepo) Delete(ctx context.Context, id string) error {
 	_, err := r.remote.NamedExecContext(ctx, `DELETE FROM work_items WHERE id = :id`, map[string]any{"id": id})
 	if err != nil {
 		return fmt.Errorf("delete work item %s: %w", id, err)

@@ -11,11 +11,11 @@ import (
 // PlanService provides business logic for plans and sub-plans.
 type PlanService struct {
 	planRepo    repository.PlanRepository
-	subPlanRepo repository.SubPlanRepository
+	subPlanRepo repository.TaskPlanRepository
 }
 
 // NewPlanService creates a new PlanService.
-func NewPlanService(planRepo repository.PlanRepository, subPlanRepo repository.SubPlanRepository) *PlanService {
+func NewPlanService(planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) *PlanService {
 	return &PlanService{
 		planRepo:    planRepo,
 		subPlanRepo: subPlanRepo,
@@ -44,14 +44,14 @@ func canTransitionPlan(from, to domain.PlanStatus) bool {
 }
 
 // SubPlan state transitions
-var validSubPlanTransitions = map[domain.SubPlanStatus][]domain.SubPlanStatus{
+var validSubPlanTransitions = map[domain.TaskPlanStatus][]domain.TaskPlanStatus{
 	domain.SubPlanPending:    {domain.SubPlanInProgress},
 	domain.SubPlanInProgress: {domain.SubPlanCompleted, domain.SubPlanFailed},
 	domain.SubPlanCompleted:  {},                      // Terminal state
 	domain.SubPlanFailed:     {domain.SubPlanPending}, // Allow retry
 }
 
-func canTransitionSubPlan(from, to domain.SubPlanStatus) bool {
+func canTransitionSubPlan(from, to domain.TaskPlanStatus) bool {
 	allowed, exists := validSubPlanTransitions[from]
 	if !exists {
 		return false
@@ -187,21 +187,21 @@ func (s *PlanService) DeletePlan(ctx context.Context, id string) error {
 // SubPlan operations
 
 // GetSubPlan retrieves a sub-plan by ID.
-func (s *PlanService) GetSubPlan(ctx context.Context, id string) (domain.SubPlan, error) {
+func (s *PlanService) GetSubPlan(ctx context.Context, id string) (domain.TaskPlan, error) {
 	sp, err := s.subPlanRepo.Get(ctx, id)
 	if err != nil {
-		return domain.SubPlan{}, newNotFoundError("sub-plan", id)
+		return domain.TaskPlan{}, newNotFoundError("sub-plan", id)
 	}
 	return sp, nil
 }
 
 // ListSubPlansByPlanID retrieves all sub-plans for a plan.
-func (s *PlanService) ListSubPlansByPlanID(ctx context.Context, planID string) ([]domain.SubPlan, error) {
+func (s *PlanService) ListSubPlansByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
 	return s.subPlanRepo.ListByPlanID(ctx, planID)
 }
 
 // CreateSubPlan creates a new sub-plan in pending status.
-func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.SubPlan) error {
+func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) error {
 	// Set initial status if not set
 	if sp.Status == "" {
 		sp.Status = domain.SubPlanPending
@@ -219,7 +219,7 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.SubPlan) erro
 }
 
 // TransitionSubPlan transitions a sub-plan to a new status.
-func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.SubPlanStatus) error {
+func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
 	sp, err := s.subPlanRepo.Get(ctx, id)
 	if err != nil {
 		return newNotFoundError("sub-plan", id)
@@ -282,7 +282,7 @@ func (s *PlanService) DeleteSubPlan(ctx context.Context, id string) error {
 }
 
 // CreateSubPlansBatch creates multiple sub-plans in a single call.
-func (s *PlanService) CreateSubPlansBatch(ctx context.Context, subPlans []domain.SubPlan) error {
+func (s *PlanService) CreateSubPlansBatch(ctx context.Context, subPlans []domain.TaskPlan) error {
 	for _, sp := range subPlans {
 		if err := s.CreateSubPlan(ctx, sp); err != nil {
 			return err

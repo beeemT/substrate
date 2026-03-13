@@ -35,8 +35,8 @@ type SidebarEntry struct {
 	ExternalID      string
 	Title           string
 	SubtitleText    string
-	State           domain.WorkItemState
-	SessionStatus   domain.AgentSessionStatus
+	State           domain.SessionState
+	SessionStatus   domain.TaskStatus
 	RepositoryName  string
 	LastActivity    time.Time
 	TotalSubPlans   int
@@ -92,15 +92,15 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 		}
 	}
 	switch {
-	case e.State == domain.WorkItemCompleted:
+	case e.State == domain.SessionCompleted:
 		return st.Success.Render("✓")
-	case e.State == domain.WorkItemFailed:
+	case e.State == domain.SessionFailed:
 		return st.Error.Render("✗")
-	case (e.State == domain.WorkItemImplementing || e.State == domain.WorkItemReviewing) && e.HasInterrupted:
+	case (e.State == domain.SessionImplementing || e.State == domain.SessionReviewing) && e.HasInterrupted:
 		return st.Interrupted.Render("⊘")
-	case e.State == domain.WorkItemPlanReview, e.State == domain.WorkItemImplementing && e.HasOpenQuestion:
+	case e.State == domain.SessionPlanReview || (e.State == domain.SessionImplementing && e.HasOpenQuestion):
 		return st.Warning.Render("◐")
-	case e.State == domain.WorkItemImplementing || e.State == domain.WorkItemPlanning || e.State == domain.WorkItemReviewing:
+	case e.State == domain.SessionImplementing || e.State == domain.SessionPlanning || e.State == domain.SessionReviewing:
 		return st.Active.Render("●")
 	case e.HasOpenQuestion || e.HasInterrupted:
 		return st.Warning.Render("◐")
@@ -119,15 +119,15 @@ func (e SidebarEntry) Subtitle() string {
 	}
 	status := ""
 	switch e.State {
-	case domain.WorkItemIngested:
+	case domain.SessionIngested:
 		status = "Ready to plan"
-	case domain.WorkItemPlanning:
+	case domain.SessionPlanning:
 		status = "Planning..."
-	case domain.WorkItemPlanReview:
+	case domain.SessionPlanReview:
 		status = "Plan review needed"
-	case domain.WorkItemApproved:
+	case domain.SessionApproved:
 		status = "Awaiting implementation"
-	case domain.WorkItemImplementing:
+	case domain.SessionImplementing:
 		if e.HasOpenQuestion {
 			status = "Waiting for answer"
 		} else if e.HasInterrupted {
@@ -135,11 +135,11 @@ func (e SidebarEntry) Subtitle() string {
 		} else {
 			status = "Implementing"
 		}
-	case domain.WorkItemReviewing:
+	case domain.SessionReviewing:
 		status = "Under review"
-	case domain.WorkItemCompleted:
+	case domain.SessionCompleted:
 		status = "Completed"
-	case domain.WorkItemFailed:
+	case domain.SessionFailed:
 		status = "Failed"
 	}
 	if e.Kind != SidebarEntrySessionHistory {
@@ -329,7 +329,7 @@ func (m SidebarModel) View() string {
 		line1 := truncate(icon+" "+entry.titlePrefix(), width)
 		titleLine := truncate("  "+entry.Title, width)
 		var line3 string
-		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.WorkItemImplementing && entry.TotalSubPlans > 0 {
+		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
 			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4))
 			line3 = "  " + truncate(bar, max(1, width-2))
 		} else {
@@ -349,7 +349,7 @@ func (m SidebarModel) View() string {
 	return fitViewBox(strings.Join(lines, "\n"), width, m.height)
 }
 
-func sessionStatusLabel(status domain.AgentSessionStatus) string {
+func sessionStatusLabel(status domain.TaskStatus) string {
 	switch status {
 	case domain.AgentSessionPending:
 		return "Pending"

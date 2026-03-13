@@ -16,18 +16,18 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 )
 
-type cmdWorkItemRepo struct{ items map[string]domain.WorkItem }
+type cmdWorkItemRepo struct{ items map[string]domain.Session }
 
-func (r *cmdWorkItemRepo) Get(_ context.Context, id string) (domain.WorkItem, error) {
+func (r *cmdWorkItemRepo) Get(_ context.Context, id string) (domain.Session, error) {
 	item, ok := r.items[id]
 	if !ok {
-		return domain.WorkItem{}, repository.ErrNotFound
+		return domain.Session{}, repository.ErrNotFound
 	}
 	return item, nil
 }
 
-func (r *cmdWorkItemRepo) List(_ context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
-	items := make([]domain.WorkItem, 0, len(r.items))
+func (r *cmdWorkItemRepo) List(_ context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
+	items := make([]domain.Session, 0, len(r.items))
 	for _, item := range r.items {
 		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
 			continue
@@ -37,12 +37,12 @@ func (r *cmdWorkItemRepo) List(_ context.Context, filter repository.WorkItemFilt
 	return items, nil
 }
 
-func (r *cmdWorkItemRepo) Create(_ context.Context, item domain.WorkItem) error {
+func (r *cmdWorkItemRepo) Create(_ context.Context, item domain.Session) error {
 	r.items[item.ID] = item
 	return nil
 }
 
-func (r *cmdWorkItemRepo) Update(_ context.Context, item domain.WorkItem) error {
+func (r *cmdWorkItemRepo) Update(_ context.Context, item domain.Session) error {
 	r.items[item.ID] = item
 	return nil
 }
@@ -79,18 +79,18 @@ func (r *cmdPlanRepo) Update(_ context.Context, plan domain.Plan) error {
 func (r *cmdPlanRepo) Delete(_ context.Context, id string) error            { delete(r.plans, id); return nil }
 func (r *cmdPlanRepo) AppendFAQ(_ context.Context, _ domain.FAQEntry) error { return nil }
 
-type cmdSubPlanRepo struct{ subPlans map[string]domain.SubPlan }
+type cmdSubPlanRepo struct{ subPlans map[string]domain.TaskPlan }
 
-func (r *cmdSubPlanRepo) Get(_ context.Context, id string) (domain.SubPlan, error) {
+func (r *cmdSubPlanRepo) Get(_ context.Context, id string) (domain.TaskPlan, error) {
 	sp, ok := r.subPlans[id]
 	if !ok {
-		return domain.SubPlan{}, repository.ErrNotFound
+		return domain.TaskPlan{}, repository.ErrNotFound
 	}
 	return sp, nil
 }
 
-func (r *cmdSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domain.SubPlan, error) {
-	result := make([]domain.SubPlan, 0, len(r.subPlans))
+func (r *cmdSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
+	result := make([]domain.TaskPlan, 0, len(r.subPlans))
 	for _, sp := range r.subPlans {
 		if sp.PlanID == planID {
 			result = append(result, sp)
@@ -99,12 +99,12 @@ func (r *cmdSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domai
 	return result, nil
 }
 
-func (r *cmdSubPlanRepo) Create(_ context.Context, sp domain.SubPlan) error {
+func (r *cmdSubPlanRepo) Create(_ context.Context, sp domain.TaskPlan) error {
 	r.subPlans[sp.ID] = sp
 	return nil
 }
 
-func (r *cmdSubPlanRepo) Update(_ context.Context, sp domain.SubPlan) error {
+func (r *cmdSubPlanRepo) Update(_ context.Context, sp domain.TaskPlan) error {
 	r.subPlans[sp.ID] = sp
 	return nil
 }
@@ -115,19 +115,19 @@ func (r *cmdSubPlanRepo) Delete(_ context.Context, id string) error {
 }
 
 type cmdSessionRepo struct {
-	sessions map[string]domain.AgentSession
+	sessions map[string]domain.Task
 }
 
-func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
+func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.Task, error) {
 	session, ok := r.sessions[id]
 	if !ok {
-		return domain.AgentSession{}, repository.ErrNotFound
+		return domain.Task{}, repository.ErrNotFound
 	}
 	return session, nil
 }
 
-func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.SubPlanID == subPlanID {
 			result = append(result, session)
@@ -136,8 +136,8 @@ func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([
 	return result, nil
 }
 
-func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkspaceID == workspaceID {
 			result = append(result, session)
@@ -146,8 +146,8 @@ func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string
 	return result, nil
 }
 
-func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.OwnerInstanceID != nil && *session.OwnerInstanceID == instanceID {
 			result = append(result, session)
@@ -160,12 +160,12 @@ func (r *cmdSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHistor
 	return nil, nil
 }
 
-func (r *cmdSessionRepo) Create(_ context.Context, session domain.AgentSession) error {
+func (r *cmdSessionRepo) Create(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
 	return nil
 }
 
-func (r *cmdSessionRepo) Update(_ context.Context, session domain.AgentSession) error {
+func (r *cmdSessionRepo) Update(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
 	return nil
 }
@@ -176,14 +176,14 @@ func (r *cmdSessionRepo) Delete(_ context.Context, id string) error {
 }
 
 func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
-	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.WorkItem{
-		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"}, State: domain.WorkItemPlanReview},
+	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"}, State: domain.SessionPlanReview},
 	}}
 	planRepo := &cmdPlanRepo{plans: map[string]domain.Plan{
 		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanPendingReview, OrchestratorPlan: "Overall plan text"},
 	}}
-	workItemSvc := service.NewWorkItemService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, &cmdSubPlanRepo{subPlans: map[string]domain.SubPlan{}})
+	workItemSvc := service.NewSessionService(workItemRepo)
+	planSvc := service.NewPlanService(planRepo, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}})
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 
@@ -223,21 +223,21 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 
 func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T) {
 	worktreePath := createReviewContextRepo(t, "sub-branch")
-	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.WorkItem{
-		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42"}, State: domain.WorkItemReviewing},
+	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42"}, State: domain.SessionReviewing},
 	}}
 	planRepo := &cmdPlanRepo{plans: map[string]domain.Plan{
 		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved},
 	}}
-	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.SubPlan{
+	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{
 		"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: filepath.Base(worktreePath)},
 	}}
-	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.AgentSession{
+	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
 		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
 	}}
-	workItemSvc := service.NewWorkItemService(workItemRepo)
+	workItemSvc := service.NewSessionService(workItemRepo)
 	planSvc := service.NewPlanService(planRepo, subPlanRepo)
-	sessionSvc := service.NewSessionService(sessionRepo)
+	sessionSvc := service.NewTaskService(sessionRepo)
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 

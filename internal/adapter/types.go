@@ -108,7 +108,7 @@ type WorkItemFilter struct {
 // WorkItemEvent represents a change detected by Watch.
 type WorkItemEvent struct {
 	Type      string // "created", "updated", "deleted"
-	WorkItem  domain.WorkItem
+	WorkItem  domain.Session
 	Timestamp time.Time
 }
 

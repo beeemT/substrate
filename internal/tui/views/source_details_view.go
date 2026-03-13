@@ -15,10 +15,10 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-// SourceDetailsModel renders source-system details for the selected work item.
+// SourceDetailsModel renders source-system details for the selected session.
 type SourceDetailsModel struct {
 	viewport viewport.Model
-	workItem *domain.WorkItem
+	session  *domain.Session
 	styles   styles.Styles
 	width    int
 	height   int
@@ -34,8 +34,8 @@ func (m *SourceDetailsModel) SetSize(w, h int) {
 	m.syncViewport(false)
 }
 
-func (m *SourceDetailsModel) SetWorkItem(wi *domain.WorkItem) {
-	m.workItem = wi
+func (m *SourceDetailsModel) SetSession(session *domain.Session) {
+	m.session = session
 	m.syncViewport(true)
 }
 
@@ -65,7 +65,7 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 }
 
 func (m SourceDetailsModel) View() string {
-	if m.workItem == nil || m.width <= 0 || m.height <= 0 {
+	if m.session == nil || m.width <= 0 || m.height <= 0 {
 		return ""
 	}
 	header := m.header()
@@ -81,11 +81,11 @@ func (m SourceDetailsModel) View() string {
 }
 
 func (m SourceDetailsModel) header() string {
-	if m.workItem == nil {
+	if m.session == nil {
 		return ""
 	}
 	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   m.workItem.ExternalID + " · " + m.workItem.Title,
+		Title:   m.session.ExternalID + " · " + m.session.Title,
 		Meta:    "Source details",
 		Width:   m.width,
 		Divider: true,
@@ -93,30 +93,30 @@ func (m SourceDetailsModel) header() string {
 }
 
 func (m *SourceDetailsModel) syncViewport(reset bool) {
-	if m.workItem == nil || m.width <= 0 || m.height <= 0 {
+	if m.session == nil || m.width <= 0 || m.height <= 0 {
 		return
 	}
 	headerHeight := len(strings.Split(m.header(), "\n"))
 	m.viewport.Width = m.width
 	m.viewport.Height = max(0, m.height-headerHeight)
-	m.viewport.SetContent(renderSourceDetailsDocument(m.styles, m.workItem, m.width))
+	m.viewport.SetContent(renderSourceDetailsDocument(m.styles, m.session, m.width))
 	if reset {
 		m.viewport.GotoTop()
 	}
 }
 
-func renderSourceDetailsDocument(st styles.Styles, wi *domain.WorkItem, width int) string {
-	if wi == nil || width <= 0 {
+func renderSourceDetailsDocument(st styles.Styles, session *domain.Session, width int) string {
+	if session == nil || width <= 0 {
 		return ""
 	}
 	sections := []string{
 		st.SectionLabel.Render("Summary"),
 		components.RenderCallout(st, components.CalloutSpec{
-			Body:  renderSourceSummaryBody(st, wi, components.CalloutInnerWidth(st, width)),
+			Body:  renderSourceSummaryBody(st, session, components.CalloutInnerWidth(st, width)),
 			Width: width,
 		}),
 	}
-	if references := renderSourceReferencesBody(st, wi, components.CalloutInnerWidth(st, width)); references != "" {
+	if references := renderSourceReferencesBody(st, session, components.CalloutInnerWidth(st, width)); references != "" {
 		sections = append(sections,
 			st.SectionLabel.Render("Selected items"),
 			components.RenderCallout(st, components.CalloutSpec{Body: references, Width: width, Variant: components.CalloutCard}),
@@ -125,7 +125,7 @@ func renderSourceDetailsDocument(st styles.Styles, wi *domain.WorkItem, width in
 	return strings.Join(sections, "\n\n")
 }
 
-func renderSourceSummaryBody(st styles.Styles, wi *domain.WorkItem, width int) string {
+func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width int) string {
 	labelStyle := st.SectionLabel
 	valueStyle := st.SettingsText
 	rows := make([]string, 0, 6)
@@ -136,22 +136,22 @@ func renderSourceSummaryBody(st styles.Styles, wi *domain.WorkItem, width int) s
 		rows = append(rows, ansi.Hardwrap(labelStyle.Render(label+": ")+valueStyle.Render(value), width, true))
 	}
 
-	add("Provider", detailProviderLabel(wi.Source))
-	add("Selected", workItemSourceSelectionSummary(wi))
-	if containers := workItemContainers(wi); len(containers) > 0 {
+	add("Provider", detailProviderLabel(session.Source))
+	add("Selected", sessionSourceSelectionSummary(session))
+	if containers := sessionContainers(session); len(containers) > 0 {
 		label := "Container"
 		if len(containers) > 1 {
 			label = "Containers"
 		}
 		add(label, strings.Join(containers, ", "))
 	}
-	if workItemSourceCount(wi) <= 1 {
-		add("State", workItemExternalState(wi))
-		if len(wi.Labels) > 0 {
-			add("Labels", strings.Join(wi.Labels, ", "))
+	if sessionSourceCount(session) <= 1 {
+		add("State", sessionExternalState(session))
+		if len(session.Labels) > 0 {
+			add("Labels", strings.Join(session.Labels, ", "))
 		}
-	} else if len(wi.Labels) > 0 {
-		rows = append(rows, ansi.Hardwrap(st.Muted.Render("Labels are omitted here because this work item aggregates multiple source items."), width, true))
+	} else if len(session.Labels) > 0 {
+		rows = append(rows, ansi.Hardwrap(st.Muted.Render("Labels are omitted here because this session aggregates multiple source items."), width, true))
 	}
 	if len(rows) == 0 {
 		return st.Muted.Render("No source summary available.")
@@ -159,14 +159,14 @@ func renderSourceSummaryBody(st styles.Styles, wi *domain.WorkItem, width int) s
 	return strings.Join(rows, "\n")
 }
 
-func renderSourceReferencesBody(st styles.Styles, wi *domain.WorkItem, width int) string {
-	refs := workItemTrackerRefs(wi.Metadata)
-	rows := make([]string, 0, max(len(refs), len(wi.SourceItemIDs)))
+func renderSourceReferencesBody(st styles.Styles, session *domain.Session, width int) string {
+	refs := sessionTrackerRefs(session.Metadata)
+	rows := make([]string, 0, max(len(refs), len(session.SourceItemIDs)))
 	for _, ref := range refs {
 		rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
 	}
 	if len(rows) == 0 {
-		for _, id := range wi.SourceItemIDs {
+		for _, id := range session.SourceItemIDs {
 			if strings.TrimSpace(id) == "" {
 				continue
 			}
@@ -179,42 +179,42 @@ func renderSourceReferencesBody(st styles.Styles, wi *domain.WorkItem, width int
 	return strings.Join(rows, "\n")
 }
 
-func workItemHasSourceDetails(wi *domain.WorkItem) bool {
-	if wi == nil || wi.Source == "" || wi.Source == "manual" {
+func sessionHasSourceDetails(session *domain.Session) bool {
+	if session == nil || session.Source == "" || session.Source == "manual" {
 		return false
 	}
-	if workItemSourceCount(wi) > 0 {
+	if sessionSourceCount(session) > 0 {
 		return true
 	}
-	if len(wi.Labels) > 0 {
+	if len(session.Labels) > 0 {
 		return true
 	}
-	if len(workItemContainers(wi)) > 0 {
+	if len(sessionContainers(session)) > 0 {
 		return true
 	}
-	return workItemExternalState(wi) != ""
+	return sessionExternalState(session) != ""
 }
 
-func workItemSourceSidebarSubtitle(wi *domain.WorkItem) string {
-	if wi == nil {
+func sessionSourceSidebarSubtitle(session *domain.Session) string {
+	if session == nil {
 		return ""
 	}
 	parts := make([]string, 0, 2)
-	if provider := detailProviderLabel(wi.Source); provider != "" {
+	if provider := detailProviderLabel(session.Source); provider != "" {
 		parts = append(parts, provider)
 	}
-	if selected := workItemSourceSelectionSummary(wi); selected != "" {
+	if selected := sessionSourceSelectionSummary(session); selected != "" {
 		parts = append(parts, selected)
 	}
 	return strings.Join(parts, " · ")
 }
 
-func workItemSourceSelectionSummary(wi *domain.WorkItem) string {
-	if wi == nil {
+func sessionSourceSelectionSummary(session *domain.Session) string {
+	if session == nil {
 		return ""
 	}
-	count := workItemSourceCount(wi)
-	noun := workItemSourceNoun(wi.SourceScope, count)
+	count := sessionSourceCount(session)
+	noun := sessionSourceNoun(session.SourceScope, count)
 	if noun == "" {
 		return ""
 	}
@@ -224,23 +224,23 @@ func workItemSourceSelectionSummary(wi *domain.WorkItem) string {
 	return fmt.Sprintf("%d %s", count, noun)
 }
 
-func workItemSourceCount(wi *domain.WorkItem) int {
-	if wi == nil {
+func sessionSourceCount(session *domain.Session) int {
+	if session == nil {
 		return 0
 	}
-	if len(wi.SourceItemIDs) > 0 {
-		return len(wi.SourceItemIDs)
+	if len(session.SourceItemIDs) > 0 {
+		return len(session.SourceItemIDs)
 	}
-	if refs := workItemTrackerRefs(wi.Metadata); len(refs) > 0 {
+	if refs := sessionTrackerRefs(session.Metadata); len(refs) > 0 {
 		return len(refs)
 	}
-	if wi.Source != "" && wi.Source != "manual" {
+	if session.Source != "" && session.Source != "manual" {
 		return 1
 	}
 	return 0
 }
 
-func workItemSourceNoun(scope domain.SelectionScope, count int) string {
+func sessionSourceNoun(scope domain.SelectionScope, count int) string {
 	plural := count != 1
 	switch scope {
 	case domain.ScopeIssues:
@@ -271,21 +271,21 @@ func workItemSourceNoun(scope domain.SelectionScope, count int) string {
 	}
 }
 
-func workItemContainers(wi *domain.WorkItem) []string {
-	if wi == nil {
+func sessionContainers(session *domain.Session) []string {
+	if session == nil {
 		return nil
 	}
-	if team := workItemMetadataString(wi.Metadata, "linear_team_key"); team != "" {
+	if team := sessionMetadataString(session.Metadata, "linear_team_key"); team != "" {
 		return []string{team}
 	}
-	if name := workItemMetadataString(wi.Metadata, "linear_project_name"); name != "" {
+	if name := sessionMetadataString(session.Metadata, "linear_project_name"); name != "" {
 		return []string{name}
 	}
-	if names := workItemMetadataStrings(wi.Metadata, "linear_project_names"); len(names) > 0 {
+	if names := sessionMetadataStrings(session.Metadata, "linear_project_names"); len(names) > 0 {
 		return append([]string(nil), names...)
 	}
 
-	refs := workItemTrackerRefs(wi.Metadata)
+	refs := sessionTrackerRefs(session.Metadata)
 	containers := make([]string, 0, len(refs))
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
@@ -302,19 +302,19 @@ func workItemContainers(wi *domain.WorkItem) []string {
 	return containers
 }
 
-func workItemExternalState(wi *domain.WorkItem) string {
-	if wi == nil {
+func sessionExternalState(session *domain.Session) string {
+	if session == nil {
 		return ""
 	}
 	for _, key := range []string{"state", "linear_state_name", "linear_project_state", "linear_initiative_status"} {
-		if value := workItemMetadataString(wi.Metadata, key); value != "" {
+		if value := sessionMetadataString(session.Metadata, key); value != "" {
 			return value
 		}
 	}
 	return ""
 }
 
-func workItemMetadataString(metadata map[string]any, key string) string {
+func sessionMetadataString(metadata map[string]any, key string) string {
 	if len(metadata) == 0 {
 		return ""
 	}
@@ -322,7 +322,7 @@ func workItemMetadataString(metadata map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func workItemMetadataStrings(metadata map[string]any, key string) []string {
+func sessionMetadataStrings(metadata map[string]any, key string) []string {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -345,7 +345,7 @@ func workItemMetadataStrings(metadata map[string]any, key string) []string {
 	return values
 }
 
-func workItemTrackerRefs(metadata map[string]any) []domain.TrackerReference {
+func sessionTrackerRefs(metadata map[string]any) []domain.TrackerReference {
 	if len(metadata) == 0 {
 		return nil
 	}

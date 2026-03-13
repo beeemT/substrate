@@ -50,11 +50,11 @@ func TestE2E_FullWorkflow_ManualItem_TwoRepos(t *testing.T) {
 		t.Fatal("Plan() returned nil plan")
 	}
 	planID := result.Plan.ID
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemPlanReview)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionPlanReview)
 
 	// --- Approve ---
 	env.approvePlan(t, ctx, item.ID, planID)
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemApproved)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionApproved)
 
 	// --- Implementation ---
 	implResult, err := env.implSvc.Implement(ctx, planID)
@@ -64,7 +64,7 @@ func TestE2E_FullWorkflow_ManualItem_TwoRepos(t *testing.T) {
 	if !implResult.State.AllWavesCompleted() {
 		t.Fatalf("implementation did not complete all waves: %+v", implResult.State)
 	}
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemReviewing)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionReviewing)
 
 	// --- Review ---
 	reviewResults := env.reviewAllSessions(t, ctx, ws.ID)
@@ -102,7 +102,7 @@ func TestE2E_FullWorkflow_ManualItem_TwoRepos(t *testing.T) {
 	if err := env.workItemSvc.CompleteWorkItem(ctx, item.ID); err != nil {
 		t.Fatalf("CompleteWorkItem(): %v", err)
 	}
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemCompleted)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionCompleted)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ func TestE2E_WorkItem_TraversesAllStates(t *testing.T) {
 	env.mockHarness.EnqueueReview("NO_CRITIQUES")
 
 	// Record each observed state in order.
-	var states []domain.WorkItemState
+	var states []domain.SessionState
 	snapshot := func(label string) {
 		t.Helper()
 		it, err := env.workItemSvc.Get(ctx, item.ID)
@@ -173,13 +173,13 @@ func TestE2E_WorkItem_TraversesAllStates(t *testing.T) {
 	}
 	snapshot("final")
 
-	want := []domain.WorkItemState{
-		domain.WorkItemIngested,
-		domain.WorkItemPlanReview,
-		domain.WorkItemApproved,
-		domain.WorkItemReviewing,
-		domain.WorkItemReviewing, // review doesn't auto-advance state
-		domain.WorkItemCompleted,
+	want := []domain.SessionState{
+		domain.SessionIngested,
+		domain.SessionPlanReview,
+		domain.SessionApproved,
+		domain.SessionReviewing,
+		domain.SessionReviewing, // review doesn't auto-advance state
+		domain.SessionCompleted,
 	}
 	// Verify observable state sequence.
 	if len(states) != len(want) {
@@ -296,7 +296,7 @@ func TestE2E_MultiWave_ExecutionOrder(t *testing.T) {
 	}
 
 	// Verify work item reached reviewing state.
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemReviewing)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionReviewing)
 }
 
 // ---------------------------------------------------------------------------

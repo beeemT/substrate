@@ -36,25 +36,25 @@ const (
 	PlanRejected      PlanStatus = "rejected"
 )
 
-// SubPlan is a single repository's portion of the plan.
-type SubPlan struct {
+// TaskPlan is a single repository's portion of the plan.
+type TaskPlan struct {
 	ID             string
 	PlanID         string
 	RepositoryName string
 	Content        string
 	Order          int
-	Status         SubPlanStatus
+	Status         TaskPlanStatus
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
-// SubPlanStatus represents the lifecycle state of a sub-plan.
-type SubPlanStatus string
+// TaskPlanStatus represents the lifecycle state of a task plan.
+type TaskPlanStatus string
 
 const (
-	SubPlanPending     SubPlanStatus = "pending"
-	SubPlanInProgress  SubPlanStatus = "in_progress"
-	SubPlanCompleted   SubPlanStatus = "completed"
-	SubPlanFailed      SubPlanStatus = "failed"
-	SubPlanInterrupted SubPlanStatus = "interrupted"
+	SubPlanPending     TaskPlanStatus = "pending"
+	SubPlanInProgress  TaskPlanStatus = "in_progress"
+	SubPlanCompleted   TaskPlanStatus = "completed"
+	SubPlanFailed      TaskPlanStatus = "failed"
+	SubPlanInterrupted TaskPlanStatus = "interrupted"
 )

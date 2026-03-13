@@ -13,21 +13,21 @@ type notFound struct{}
 
 func (notFound) Error() string { return "not found" }
 
-// WorkItemFilter constrains WorkItemRepository.List results.
-type WorkItemFilter struct {
+// SessionFilter constrains session repository List results.
+type SessionFilter struct {
 	WorkspaceID   *string
 	ExternalID    *string
-	State         *domain.WorkItemState
+	State         *domain.SessionState
 	Source        *string
 	Limit, Offset int
 }
 
-// WorkItemRepository provides CRUD for work items.
-type WorkItemRepository interface {
-	Get(ctx context.Context, id string) (domain.WorkItem, error)
-	List(ctx context.Context, filter WorkItemFilter) ([]domain.WorkItem, error)
-	Create(ctx context.Context, item domain.WorkItem) error
-	Update(ctx context.Context, item domain.WorkItem) error
+// SessionRepository provides CRUD for root sessions.
+type SessionRepository interface {
+	Get(ctx context.Context, id string) (domain.Session, error)
+	List(ctx context.Context, filter SessionFilter) ([]domain.Session, error)
+	Create(ctx context.Context, item domain.Session) error
+	Update(ctx context.Context, item domain.Session) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -38,16 +38,15 @@ type PlanRepository interface {
 	Create(ctx context.Context, plan domain.Plan) error
 	Update(ctx context.Context, plan domain.Plan) error
 	Delete(ctx context.Context, id string) error
-	// AppendFAQ adds a new FAQ entry to the plan's FAQ list.
 	AppendFAQ(ctx context.Context, entry domain.FAQEntry) error
 }
 
-// SubPlanRepository provides CRUD for sub-plans.
-type SubPlanRepository interface {
-	Get(ctx context.Context, id string) (domain.SubPlan, error)
-	ListByPlanID(ctx context.Context, planID string) ([]domain.SubPlan, error)
-	Create(ctx context.Context, sp domain.SubPlan) error
-	Update(ctx context.Context, sp domain.SubPlan) error
+// TaskPlanRepository provides CRUD for task plans.
+type TaskPlanRepository interface {
+	Get(ctx context.Context, id string) (domain.TaskPlan, error)
+	ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error)
+	Create(ctx context.Context, sp domain.TaskPlan) error
+	Update(ctx context.Context, sp domain.TaskPlan) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -59,15 +58,15 @@ type WorkspaceRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// SessionRepository provides CRUD for agent sessions.
-type SessionRepository interface {
-	Get(ctx context.Context, id string) (domain.AgentSession, error)
-	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error)
-	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error)
-	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error)
+// TaskRepository provides CRUD for repo-scoped tasks.
+type TaskRepository interface {
+	Get(ctx context.Context, id string) (domain.Task, error)
+	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error)
+	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error)
 	SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error)
-	Create(ctx context.Context, s domain.AgentSession) error
-	Update(ctx context.Context, s domain.AgentSession) error
+	Create(ctx context.Context, s domain.Task) error
+	Update(ctx context.Context, s domain.Task) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -90,10 +89,6 @@ type QuestionRepository interface {
 	ListBySessionID(ctx context.Context, sessionID string) ([]domain.Question, error)
 	Create(ctx context.Context, q domain.Question) error
 	Update(ctx context.Context, q domain.Question) error
-	// UpdateProposedAnswer atomically updates only the proposed_answer column for an
-	// escalated question. Uses a conditional WHERE status='escalated' clause so a
-	// concurrent ResolveEscalated that already transitioned the row to 'answered'
-	// will cause a no-op (0 rows affected) rather than reverting the status.
 	UpdateProposedAnswer(ctx context.Context, id, proposedAnswer string) error
 }
 

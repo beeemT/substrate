@@ -1,5 +1,19 @@
 # Lessons Learned
 
+## 2026-03-11 - Verify Current CLI Surface Before Planning Integrations
+
+**Mistake**: I planned the Sentry CLI integration around stale `sentry-cli` assumptions (`sentry-cli login`, private file parsing) instead of first confirming the current binary, commands, and documented auth surfaces.
+**Pattern**: I treated historical CLI naming and storage details as a stable contract, which pushed the plan toward brittle credential scraping rather than the documented command surface.
+**Rule**: For third-party CLI integrations, verify the current install command, login/status commands, and documented auth interfaces before designing fallbacks; prefer documented commands over private credential storage formats when the tool does not expose tokens directly.
+**Applied**: Sentry, GitHub, GitLab, and any provider integration that relies on an external CLI for authentication or API access.
+
+## 2026-03-12 - Scroll Bugs Need Rendered-Pane Proof
+
+**Mistake**: I treated the settings scroll report as a cursor/focus bookkeeping bug because the model state changed, but I did not prove that the rendered main pane visibly changed in the real scroll path the user described.
+**Pattern**: I validated selection indices and viewport offsets without comparing the rendered pane before and after the scroll event, so I fixed an internally consistent state transition that still missed the user-visible failure mode.
+**Rule**: For TUI scroll bugs, verify the owning pane's rendered output changes under the exact focused input path being fixed; cursor movement or `YOffset` changes alone are not enough evidence.
+**Applied**: Settings-page wheel scrolling, split-pane focus routing, and any viewport-backed TUI surface where model state can change without an obvious visual delta.
+
 ## 2026-03-10 - Loading States Must Keep The Same Pane Chrome
 
 **Mistake**: I stabilized the overlay layout math but still let the browse pane switch from a raw loading string to the list component after items arrived, which changed the pane’s internal chrome and made the loaded state look resized.

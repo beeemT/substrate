@@ -10,10 +10,10 @@ import (
 func TestSessionService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
 	t.Run("creates session with pending status", func(t *testing.T) {
-		session := domain.AgentSession{
+		session := domain.Task{
 			ID:             "session-1",
 			WorkspaceID:    "ws-1",
 			SubPlanID:      "sp-1",
@@ -34,7 +34,7 @@ func TestSessionService_Create(t *testing.T) {
 	})
 
 	t.Run("rejects non-pending initial status", func(t *testing.T) {
-		session := domain.AgentSession{
+		session := domain.Task{
 			ID:             "session-2",
 			WorkspaceID:    "ws-1",
 			SubPlanID:      "sp-1",
@@ -56,8 +56,8 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	validTransitions := []struct {
-		from domain.AgentSessionStatus
-		to   domain.AgentSessionStatus
+		from domain.TaskStatus
+		to   domain.TaskStatus
 		name string
 	}{
 		{domain.AgentSessionPending, domain.AgentSessionRunning, "pending -> running"},
@@ -75,9 +75,9 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewSessionService(repo)
+			svc := NewTaskService(repo)
 
-			session := domain.AgentSession{
+			session := domain.Task{
 				ID:             "session-test",
 				WorkspaceID:    "ws-1",
 				SubPlanID:      "sp-1",
@@ -105,8 +105,8 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	invalidTransitions := []struct {
-		from domain.AgentSessionStatus
-		to   domain.AgentSessionStatus
+		from domain.TaskStatus
+		to   domain.TaskStatus
 		name string
 	}{
 		{domain.AgentSessionPending, domain.AgentSessionCompleted, "pending -> completed"},
@@ -125,9 +125,9 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewSessionService(repo)
+			svc := NewTaskService(repo)
 
-			session := domain.AgentSession{
+			session := domain.Task{
 				ID:             "session-test",
 				WorkspaceID:    "ws-1",
 				SubPlanID:      "sp-1",
@@ -150,9 +150,9 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 func TestSessionService_StartSetsStartedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "session-1",
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
@@ -174,9 +174,9 @@ func TestSessionService_StartSetsStartedAt(t *testing.T) {
 func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "session-1",
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
@@ -198,9 +198,9 @@ func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "session-1",
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
@@ -222,9 +222,9 @@ func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 func TestSessionService_FailSetsExitCode(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "session-1",
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
@@ -247,13 +247,13 @@ func TestSessionService_FailSetsExitCode(t *testing.T) {
 func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
 	// Create sessions with different statuses
-	repo.sessions["s-1"] = domain.AgentSession{ID: "s-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
-	repo.sessions["s-2"] = domain.AgentSession{ID: "s-2", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
-	repo.sessions["s-3"] = domain.AgentSession{ID: "s-3", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
-	repo.sessions["s-4"] = domain.AgentSession{ID: "s-4", WorkspaceID: "ws-2", SubPlanID: "sp-2", Status: domain.AgentSessionInterrupted}
+	repo.sessions["s-1"] = domain.Task{ID: "s-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
+	repo.sessions["s-2"] = domain.Task{ID: "s-2", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
+	repo.sessions["s-3"] = domain.Task{ID: "s-3", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
+	repo.sessions["s-4"] = domain.Task{ID: "s-4", WorkspaceID: "ws-2", SubPlanID: "sp-2", Status: domain.AgentSessionInterrupted}
 	repo.byWorkspace["ws-1"] = []string{"s-1", "s-2", "s-3"}
 	repo.byWorkspace["ws-2"] = []string{"s-4"}
 

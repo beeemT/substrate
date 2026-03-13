@@ -119,8 +119,8 @@ func TestSessionSearchOverlayDeleteRequestsConfirmation(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd() message = %T, want ConfirmDeleteSessionMsg", msg)
 	}
-	if confirmMsg.SessionID != "sess-1" {
-		t.Fatalf("session id = %q, want sess-1", confirmMsg.SessionID)
+	if confirmMsg.SessionID != "wi-1" {
+		t.Fatalf("session id = %q, want wi-1", confirmMsg.SessionID)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestSessionSearchOverlayViewFitsSmallWindow(t *testing.T) {
 		WorkItemID:         "wi-1",
 		WorkItemExternalID: "SUBSTRATE-12345",
 		WorkItemTitle:      "A very long work item title that should wrap inside the preview pane instead of overflowing the terminal width",
-		WorkItemState:      domain.WorkItemImplementing,
+		WorkItemState:      domain.SessionImplementing,
 		RepositoryName:     "repository-name-that-is-deliberately-long",
 		HarnessName:        "claude-sonnet-4",
 		Status:             domain.AgentSessionWaitingForAnswer,

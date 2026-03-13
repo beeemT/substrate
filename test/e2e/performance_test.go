@@ -125,7 +125,7 @@ func TestE2E_Performance_FiveRepoPlan_CompletesInBudget(t *testing.T) {
 	if err := env.workItemSvc.CompleteWorkItem(ctx, item.ID); err != nil {
 		t.Fatalf("CompleteWorkItem(): %v", err)
 	}
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemCompleted)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionCompleted)
 
 	totalElapsed := time.Since(totalStart)
 	if totalElapsed > perfTotalWorkflowBudget {
@@ -188,7 +188,7 @@ func TestE2E_Performance_ParallelSessionsStartNearSimultaneously(t *testing.T) {
 	}
 
 	// Find the two impl sessions (completed, not the foreman).
-	var implSessions []domain.AgentSession
+	var implSessions []domain.Task
 	for _, s := range sessions {
 		if s.Status == domain.AgentSessionCompleted {
 			implSessions = append(implSessions, s)

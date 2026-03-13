@@ -12,13 +12,13 @@ import (
 // Example: SubPlans with Order values [0, 0, 1] produce 2 waves:
 //   - Wave 0: 2 parallel sub-plans
 //   - Wave 1: 1 sub-plan (runs after all wave 0 sub-plans complete)
-func BuildWaves(subPlans []domain.SubPlan) [][]domain.SubPlan {
+func BuildWaves(subPlans []domain.TaskPlan) [][]domain.TaskPlan {
 	if len(subPlans) == 0 {
 		return nil
 	}
 
 	// Group sub-plans by order
-	groups := make(map[int][]domain.SubPlan)
+	groups := make(map[int][]domain.TaskPlan)
 	for _, sp := range subPlans {
 		groups[sp.Order] = append(groups[sp.Order], sp)
 	}
@@ -31,7 +31,7 @@ func BuildWaves(subPlans []domain.SubPlan) [][]domain.SubPlan {
 	sort.Ints(orders)
 
 	// Build waves in order
-	waves := make([][]domain.SubPlan, len(orders))
+	waves := make([][]domain.TaskPlan, len(orders))
 	for i, order := range orders {
 		waves[i] = groups[order]
 	}
@@ -63,7 +63,7 @@ type SubPlanExecution struct {
 	SubPlanID   string
 	Order       int
 	WaveIndex   int
-	Status      domain.SubPlanStatus
+	Status      domain.TaskPlanStatus
 	StartedAt   int64 // Unix nano timestamp
 	CompletedAt int64 // Unix nano timestamp
 	Error       error
@@ -78,7 +78,7 @@ type ExecutionState struct {
 }
 
 // NewExecutionState creates a new execution state for a plan.
-func NewExecutionState(planID string, subPlans []domain.SubPlan) *ExecutionState {
+func NewExecutionState(planID string, subPlans []domain.TaskPlan) *ExecutionState {
 	waves := BuildWaves(subPlans)
 
 	waveStates := make([]WaveState, len(waves))

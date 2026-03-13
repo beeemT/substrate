@@ -22,16 +22,16 @@ func (f *fakeWorkItemAdapter) ListSelectable(context.Context, adapter.ListOpts) 
 	return nil, adapter.ErrBrowseNotSupported
 }
 
-func (f *fakeWorkItemAdapter) Resolve(context.Context, adapter.Selection) (domain.WorkItem, error) {
-	return domain.WorkItem{}, nil
+func (f *fakeWorkItemAdapter) Resolve(context.Context, adapter.Selection) (domain.Session, error) {
+	return domain.Session{}, nil
 }
 
 func (f *fakeWorkItemAdapter) Watch(context.Context, adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	return nil, adapter.ErrWatchNotSupported
 }
 
-func (f *fakeWorkItemAdapter) Fetch(context.Context, string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, nil
+func (f *fakeWorkItemAdapter) Fetch(context.Context, string) (domain.Session, error) {
+	return domain.Session{}, nil
 }
 
 func (f *fakeWorkItemAdapter) UpdateState(context.Context, string, domain.TrackerState) error {

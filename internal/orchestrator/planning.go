@@ -49,9 +49,9 @@ type PlanningService struct {
 	gitClient    *gitwork.Client
 	harness      adapter.AgentHarness
 	planSvc      *service.PlanService
-	workItemSvc  *service.WorkItemService
+	workItemSvc  *service.SessionService
 	planRepo     repository.PlanRepository
-	subPlanRepo  repository.SubPlanRepository
+	subPlanRepo  repository.TaskPlanRepository
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
 	globalCfg    *config.Config
@@ -96,9 +96,9 @@ func NewPlanningService(
 	gitClient *gitwork.Client,
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
-	workItemSvc *service.WorkItemService,
+	workItemSvc *service.SessionService,
 	planRepo repository.PlanRepository,
-	subPlanRepo repository.SubPlanRepository,
+	subPlanRepo repository.TaskPlanRepository,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 	globalCfg *config.Config,
@@ -239,7 +239,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
 			ParseErrors: planErr.ParseErrors,
@@ -255,7 +255,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
 			ParseErrors: &parseErrors,
@@ -266,7 +266,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	// 10. Build and persist plan + sub-plans
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem)
 	if err != nil {
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.WorkItemIngested)
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
@@ -482,8 +482,8 @@ func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (str
 func (s *PlanningService) buildAndPersistPlan(
 	ctx context.Context,
 	rawOutput domain.RawPlanOutput,
-	workItem domain.WorkItem,
-) (*domain.Plan, []domain.SubPlan, error) {
+	workItem domain.Session,
+) (*domain.Plan, []domain.TaskPlan, error) {
 	now := time.Now().UTC()
 	planID := domain.NewID()
 
@@ -503,9 +503,9 @@ func (s *PlanningService) buildAndPersistPlan(
 	}
 
 	// Create sub-plans
-	var subPlans []domain.SubPlan
+	var subPlans []domain.TaskPlan
 	for _, sp := range rawOutput.SubPlans {
-		subPlan := domain.SubPlan{
+		subPlan := domain.TaskPlan{
 			ID:             domain.NewID(),
 			PlanID:         planID,
 			RepositoryName: sp.RepoName,

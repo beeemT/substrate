@@ -150,7 +150,7 @@ type PlanningResult struct {
 	// Plan is the generated plan (nil if planning failed).
 	Plan *Plan
 	// SubPlans is the list of generated sub-plans.
-	SubPlans []SubPlan
+	SubPlans []TaskPlan
 	// Warnings is the list of non-fatal warnings.
 	Warnings []PlanningWarning
 	// ParseErrors contains parsing errors if the plan could not be parsed.

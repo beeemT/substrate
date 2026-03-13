@@ -27,12 +27,12 @@ import (
 // adapter is included when an API key is present in configuration.
 //
 // repo is used to back the ManualAdapter's WorkspaceStore; it is typically a
-// transaction-bound WorkItemRepository from the enclosing Transact call so that
+// transaction-bound SessionRepository from the enclosing Transact call so that
 // the ID counter and subsequent WorkItem.Create share the same transaction.
 func BuildWorkItemAdapters(
 	cfg *config.Config,
 	workspaceID string,
-	repo repository.WorkItemRepository,
+	repo repository.SessionRepository,
 ) []adapter.WorkItemAdapter {
 	store := manualadapter.NewWorkspaceStore(repo, workspaceID)
 	adapters := []adapter.WorkItemAdapter{

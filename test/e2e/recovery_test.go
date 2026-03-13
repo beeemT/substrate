@@ -53,7 +53,7 @@ func TestE2E_Recovery_CorruptPlan_ReturnsToIngested(t *testing.T) {
 	}
 
 	// Work item must revert to Ingested so the user can try again.
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemIngested)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionIngested)
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	plan := env.createApprovedPlan(t, ctx, item.ID, "Test orchestration plan.")
 
 	// Create sub-plan.
-	subPlan := domain.SubPlan{
+	subPlan := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         plan.ID,
 		RepositoryName: "repo-a",
@@ -93,10 +93,10 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	}
 
 	// Advance work item to implementing.
-	if err := env.workItemSvc.Transition(ctx, item.ID, domain.WorkItemPlanning); err != nil {
+	if err := env.workItemSvc.Transition(ctx, item.ID, domain.SessionPlanning); err != nil {
 		t.Fatalf("transition to planning: %v", err)
 	}
-	if err := env.workItemSvc.Transition(ctx, item.ID, domain.WorkItemPlanReview); err != nil {
+	if err := env.workItemSvc.Transition(ctx, item.ID, domain.SessionPlanReview); err != nil {
 		t.Fatalf("transition to plan_review: %v", err)
 	}
 	if err := env.workItemSvc.ApprovePlan(ctx, item.ID); err != nil {
@@ -107,7 +107,7 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	}
 
 	// Create an interrupted session (simulates a crash).
-	interruptedSession := domain.AgentSession{
+	interruptedSession := domain.Task{
 		ID:             domain.NewID(),
 		WorkspaceID:    ws.ID,
 		SubPlanID:      subPlan.ID,
@@ -218,7 +218,7 @@ func TestE2E_Recovery_AbandonInterrupted(t *testing.T) {
 
 	now := time.Now()
 	plan := env.createApprovedPlan(t, ctx, item.ID, "")
-	subPlan := domain.SubPlan{
+	subPlan := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         plan.ID,
 		RepositoryName: "repo-a",
@@ -231,7 +231,7 @@ func TestE2E_Recovery_AbandonInterrupted(t *testing.T) {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	sess := domain.AgentSession{
+	sess := domain.Task{
 		ID:             domain.NewID(),
 		WorkspaceID:    ws.ID,
 		SubPlanID:      subPlan.ID,
@@ -281,7 +281,7 @@ func TestE2E_Recovery_ReviewMaxCycles_Escalated(t *testing.T) {
 
 	now := time.Now()
 	plan := env.createApprovedPlan(t, ctx, item.ID, "Review test plan.")
-	subPlan := domain.SubPlan{
+	subPlan := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         plan.ID,
 		RepositoryName: "repo-a",
@@ -296,7 +296,7 @@ func TestE2E_Recovery_ReviewMaxCycles_Escalated(t *testing.T) {
 	}
 
 	// Create a completed session so ReviewSession can look it up.
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             domain.NewID(),
 		WorkspaceID:    ws.ID,
 		SubPlanID:      subPlan.ID,
@@ -419,7 +419,7 @@ func TestE2E_Recovery_GitWorkCheckoutFails(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get work item: %v", err)
 		}
-		if it.State == domain.WorkItemCompleted {
+		if it.State == domain.SessionCompleted {
 			t.Error("work item should not be completed after implementation error")
 		}
 		return
@@ -463,7 +463,7 @@ func TestE2E_Recovery_NetworkFailure_Backoff(t *testing.T) {
 	}
 
 	// Work item must revert to Ingested so the operator can retry.
-	env.requireWorkItemState(t, ctx, item.ID, domain.WorkItemIngested)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionIngested)
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +483,7 @@ func TestE2E_Recovery_ReviewPassAfterReimplementation(t *testing.T) {
 
 	now := time.Now()
 	plan := env.createApprovedPlan(t, ctx, item.ID, "Re-impl review test.")
-	subPlan := domain.SubPlan{
+	subPlan := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         plan.ID,
 		RepositoryName: "repo-a",
@@ -497,7 +497,7 @@ func TestE2E_Recovery_ReviewPassAfterReimplementation(t *testing.T) {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	sess := domain.AgentSession{
+	sess := domain.Task{
 		ID:             domain.NewID(),
 		WorkspaceID:    ws.ID,
 		SubPlanID:      subPlan.ID,

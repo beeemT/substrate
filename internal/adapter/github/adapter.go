@@ -222,18 +222,18 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 	}
 }
 
-func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	switch sel.Scope {
 	case domain.ScopeIssues:
 		issues := make([]githubIssue, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			owner, repo, num, err := parseIssueSelectionID("", "", itemID)
 			if err != nil {
-				return domain.WorkItem{}, fmt.Errorf("parse github issue id %q: %w", itemID, err)
+				return domain.Session{}, fmt.Errorf("parse github issue id %q: %w", itemID, err)
 			}
 			iss, err := a.fetchIssue(ctx, owner, repo, num)
 			if err != nil {
-				return domain.WorkItem{}, err
+				return domain.Session{}, err
 			}
 			issues = append(issues, iss)
 		}
@@ -247,25 +247,25 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		owner := strings.TrimSpace(metaOwner)
 		repo := strings.TrimSpace(metaRepo)
 		if owner == "" || repo == "" {
-			return domain.WorkItem{}, fmt.Errorf("github milestone selection requires owner and repo")
+			return domain.Session{}, fmt.Errorf("github milestone selection requires owner and repo")
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			num, err := strconv.ParseInt(itemID, 10, 64)
 			if err != nil {
-				return domain.WorkItem{}, fmt.Errorf("parse milestone number %q: %w", itemID, err)
+				return domain.Session{}, fmt.Errorf("parse milestone number %q: %w", itemID, err)
 			}
 			ms, err := a.fetchMilestone(ctx, owner, repo, num)
 			if err != nil {
-				return domain.WorkItem{}, err
+				return domain.Session{}, err
 			}
 			titles = append(titles, ms.Title)
 			parts = append(parts, strings.TrimSpace(ms.Title+"\n"+ms.Description))
 		}
-		return domain.WorkItem{ID: domain.NewID(), ExternalID: fmt.Sprintf("gh:milestone:%s/%s", owner, repo), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.WorkItemIngested, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gh:milestone:%s/%s", owner, repo), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
 	default:
-		return domain.WorkItem{}, adapter.ErrBrowseNotSupported
+		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
 }
 
@@ -308,14 +308,14 @@ func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 	return ch, nil
 }
 
-func (a *GithubAdapter) Fetch(ctx context.Context, externalID string) (domain.WorkItem, error) {
+func (a *GithubAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
 	owner, repo, number, err := parseExternalID(externalID)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	iss, err := a.fetchIssue(ctx, owner, repo, number)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	return issueToWorkItem(iss), nil
 }
@@ -807,12 +807,12 @@ func issueLabels(iss githubIssue) []string {
 	return labels
 }
 
-func issueToWorkItem(iss githubIssue) domain.WorkItem {
+func issueToWorkItem(iss githubIssue) domain.Session {
 	owner, repo := issueOwnerRepo(iss)
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, iss.Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{issueSelectionID(iss)}, Title: iss.Title, Description: iss.Body, Labels: issueLabels(iss), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.HTMLURL, "tracker_refs": githubTrackerRefs([]githubIssue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, iss.Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{issueSelectionID(iss)}, Title: iss.Title, Description: iss.Body, Labels: issueLabels(iss), State: domain.SessionIngested, Metadata: map[string]any{"url": iss.HTMLURL, "tracker_refs": githubTrackerRefs([]githubIssue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
 }
 
-func aggregateIssues(issues []githubIssue) domain.WorkItem {
+func aggregateIssues(issues []githubIssue) domain.Session {
 	labels := map[string]struct{}{}
 	parts := make([]string, 0, len(issues))
 	itemIDs := make([]string, 0, len(issues))
@@ -834,7 +834,7 @@ func aggregateIssues(issues []githubIssue) domain.WorkItem {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	owner, repo := issueOwnerRepo(issues[0])
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
 }
 
 func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {

@@ -13,9 +13,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("creates item with ingested state", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		item := domain.WorkItem{
+		item := domain.Session{
 			ID:          "wi-1",
 			WorkspaceID: "ws-1",
 			Title:       "Test Item",
@@ -29,17 +29,17 @@ func TestWorkItemService_Create(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get failed: %v", err)
 		}
-		if got.State != domain.WorkItemIngested {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemIngested)
+		if got.State != domain.SessionIngested {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionIngested)
 		}
 	})
 
 	t.Run("allows items without external id", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		first := domain.WorkItem{ID: "wi-no-ext-1", WorkspaceID: "ws-1", Title: "First", Source: "manual"}
-		second := domain.WorkItem{ID: "wi-no-ext-2", WorkspaceID: "ws-1", Title: "Second", Source: "manual"}
+		first := domain.Session{ID: "wi-no-ext-1", WorkspaceID: "ws-1", Title: "First", Source: "manual"}
+		second := domain.Session{ID: "wi-no-ext-2", WorkspaceID: "ws-1", Title: "Second", Source: "manual"}
 
 		if err := svc.Create(ctx, first); err != nil {
 			t.Fatalf("Create first without external id: %v", err)
@@ -51,10 +51,10 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects duplicate external id in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		first := domain.WorkItem{ID: "wi-dup-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
-		second := domain.WorkItem{ID: "wi-dup-2", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
+		first := domain.Session{ID: "wi-dup-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
+		second := domain.Session{ID: "wi-dup-2", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
 
 		if err := svc.Create(ctx, first); err != nil {
 			t.Fatalf("Create first duplicate candidate: %v", err)
@@ -70,9 +70,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects overlapping source item ids in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
+		existing := domain.Session{
 			ID:            "wi-existing",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:issue:acme/rocket#42",
@@ -81,7 +81,7 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceScope:   domain.ScopeIssues,
 			SourceItemIDs: []string{"acme/rocket#42"},
 		}
-		aggregate := domain.WorkItem{
+		aggregate := domain.Session{
 			ID:            "wi-aggregate",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:issue:acme/rocket#7",
@@ -105,9 +105,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows distinct source item ids in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
+		existing := domain.Session{
 			ID:            "wi-existing-distinct",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:issue:acme/rocket#42",
@@ -116,7 +116,7 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceScope:   domain.ScopeIssues,
 			SourceItemIDs: []string{"acme/rocket#42"},
 		}
-		aggregate := domain.WorkItem{
+		aggregate := domain.Session{
 			ID:            "wi-aggregate-distinct",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:issue:acme/rocket#7",
@@ -136,10 +136,10 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows github milestones with same number in different repos", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
-			ID:            "wi-gh-ms-1",
+		existing := domain.Session{
+			ID:            "Session-1",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:milestone:acme/rocket",
 			Title:         "Rocket v1",
@@ -147,11 +147,11 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceScope:   domain.ScopeProjects,
 			SourceItemIDs: []string{"7"},
 		}
-		candidate := domain.WorkItem{
+		candidate := domain.Session{
 			ID:            "wi-gh-ms-2",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gh:milestone:acme/booster",
-			Title:         "Booster v1",
+			Title:         "Rocket v1",
 			Source:        "github",
 			SourceScope:   domain.ScopeProjects,
 			SourceItemIDs: []string{"7"},
@@ -167,9 +167,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows gitlab milestones with same id in different projects", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
+		existing := domain.Session{
 			ID:            "wi-gl-ms-1",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gl:milestone:1234",
@@ -179,7 +179,7 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceItemIDs: []string{"77"},
 			Metadata:      map[string]any{"project_id": int64(1234)},
 		}
-		candidate := domain.WorkItem{
+		candidate := domain.Session{
 			ID:            "wi-gl-ms-2",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gl:milestone:5678",
@@ -200,9 +200,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects gitlab milestones with same id in same project", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
+		existing := domain.Session{
 			ID:            "wi-gl-ms-same-1",
 			WorkspaceID:   "ws-1",
 			Title:         "Platform",
@@ -211,7 +211,7 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceItemIDs: []string{"77"},
 			Metadata:      map[string]any{"project_id": int64(1234)},
 		}
-		candidate := domain.WorkItem{
+		candidate := domain.Session{
 			ID:            "wi-gl-ms-same-2",
 			WorkspaceID:   "ws-1",
 			Title:         "Platform duplicate",
@@ -235,9 +235,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows gitlab epics with same iid in different groups", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		existing := domain.WorkItem{
+		existing := domain.Session{
 			ID:            "wi-gl-epic-1",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gl:epic:9",
@@ -247,7 +247,7 @@ func TestWorkItemService_Create(t *testing.T) {
 			SourceItemIDs: []string{"9"},
 			Metadata:      map[string]any{"group_id": int64(11)},
 		}
-		candidate := domain.WorkItem{
+		candidate := domain.Session{
 			ID:            "wi-gl-epic-2",
 			WorkspaceID:   "ws-1",
 			ExternalID:    "gl:epic:9",
@@ -268,10 +268,10 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows same external id in different workspaces", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		first := domain.WorkItem{ID: "wi-cross-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
-		second := domain.WorkItem{ID: "wi-cross-2", WorkspaceID: "ws-2", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
+		first := domain.Session{ID: "wi-cross-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
+		second := domain.Session{ID: "wi-cross-2", WorkspaceID: "ws-2", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
 
 		if err := svc.Create(ctx, first); err != nil {
 			t.Fatalf("Create first workspace item: %v", err)
@@ -283,9 +283,9 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects missing workspace id", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		item := domain.WorkItem{
+		item := domain.Session{
 			ID:     "wi-missing-workspace",
 			Title:  "Test Item",
 			Source: "manual",
@@ -302,21 +302,20 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects non-ingested initial state", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewWorkItemService(repo)
+		svc := NewSessionService(repo)
 
-		item := domain.WorkItem{
+		item := domain.Session{
 			ID:          "wi-2",
 			WorkspaceID: "ws-1",
 			Title:       "Test Item",
 			Source:      "manual",
-			State:       domain.WorkItemPlanning,
+			State:       domain.SessionPlanning,
 		}
 		err := svc.Create(ctx, item)
 		if err == nil {
 			t.Fatal("expected error for non-ingested initial state")
 		}
-		_, ok := err.(ErrInvalidInput)
-		if !ok {
+		if _, ok := err.(ErrInvalidInput); !ok {
 			t.Errorf("error type = %T, want ErrInvalidInput", err)
 		}
 	})
@@ -327,32 +326,33 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 
 	// Define all valid transitions based on the state machine
 	validTransitions := []struct {
-		from domain.WorkItemState
-		to   domain.WorkItemState
+		from domain.SessionState
+		to   domain.SessionState
 		name string
 	}{
-		{domain.WorkItemIngested, domain.WorkItemPlanning, "ingested -> planning"},
-		{domain.WorkItemPlanning, domain.WorkItemPlanReview, "planning -> plan_review"},
-		{domain.WorkItemPlanning, domain.WorkItemFailed, "planning -> failed"},
-		{domain.WorkItemPlanReview, domain.WorkItemApproved, "plan_review -> approved"},
-		{domain.WorkItemPlanReview, domain.WorkItemPlanning, "plan_review -> planning"},
-		{domain.WorkItemPlanReview, domain.WorkItemFailed, "plan_review -> failed"},
-		{domain.WorkItemApproved, domain.WorkItemImplementing, "approved -> implementing"},
-		{domain.WorkItemApproved, domain.WorkItemFailed, "approved -> failed"},
-		{domain.WorkItemImplementing, domain.WorkItemReviewing, "implementing -> reviewing"},
-		{domain.WorkItemImplementing, domain.WorkItemFailed, "implementing -> failed"},
-		{domain.WorkItemReviewing, domain.WorkItemCompleted, "reviewing -> completed"},
-		{domain.WorkItemReviewing, domain.WorkItemImplementing, "reviewing -> implementing"},
-		{domain.WorkItemReviewing, domain.WorkItemFailed, "reviewing -> failed"},
+		{domain.SessionIngested, domain.SessionPlanning, "ingested -> planning"},
+		{domain.SessionPlanning, domain.SessionIngested, "planning -> ingested rollback"},
+		{domain.SessionPlanning, domain.SessionPlanReview, "planning -> plan_review"},
+		{domain.SessionPlanning, domain.SessionFailed, "planning -> failed"},
+		{domain.SessionPlanReview, domain.SessionApproved, "plan_review -> approved"},
+		{domain.SessionPlanReview, domain.SessionPlanning, "plan_review -> planning"},
+		{domain.SessionPlanReview, domain.SessionFailed, "plan_review -> failed"},
+		{domain.SessionApproved, domain.SessionImplementing, "approved -> implementing"},
+		{domain.SessionApproved, domain.SessionFailed, "approved -> failed"},
+		{domain.SessionImplementing, domain.SessionReviewing, "implementing -> reviewing"},
+		{domain.SessionImplementing, domain.SessionFailed, "implementing -> failed"},
+		{domain.SessionReviewing, domain.SessionCompleted, "reviewing -> completed"},
+		{domain.SessionReviewing, domain.SessionImplementing, "reviewing -> implementing"},
+		{domain.SessionReviewing, domain.SessionFailed, "reviewing -> failed"},
 	}
 
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkItemRepository()
-			svc := NewWorkItemService(repo)
+			svc := NewSessionService(repo)
 
 			// Create item in the 'from' state directly in repo
-			item := domain.WorkItem{
+			item := domain.Session{
 				ID:          "wi-test",
 				WorkspaceID: "ws-1",
 				Title:       "Test",
@@ -379,46 +379,36 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 func TestWorkItemService_InvalidTransitions(t *testing.T) {
 	ctx := context.Background()
 
-	// Define invalid transitions - at least one per state
 	invalidTransitions := []struct {
-		from domain.WorkItemState
-		to   domain.WorkItemState
+		from domain.SessionState
+		to   domain.SessionState
 		name string
 	}{
-		// From ingested - can't skip to approved
-		{domain.WorkItemIngested, domain.WorkItemApproved, "ingested -> approved"},
-		{domain.WorkItemIngested, domain.WorkItemCompleted, "ingested -> completed"},
-		{domain.WorkItemIngested, domain.WorkItemFailed, "ingested -> failed"},
-		// From planning - can't go directly to implementing
-		{domain.WorkItemPlanning, domain.WorkItemImplementing, "planning -> implementing"},
-		{domain.WorkItemPlanning, domain.WorkItemCompleted, "planning -> completed"},
-		// From plan_review - can't go directly to implementing
-		{domain.WorkItemPlanReview, domain.WorkItemImplementing, "plan_review -> implementing"},
-		{domain.WorkItemPlanReview, domain.WorkItemCompleted, "plan_review -> completed"},
-		// From approved - can't go back to planning
-		{domain.WorkItemApproved, domain.WorkItemPlanning, "approved -> planning"},
-		{domain.WorkItemApproved, domain.WorkItemCompleted, "approved -> completed"},
-		// From implementing - can't go directly to completed
-		{domain.WorkItemImplementing, domain.WorkItemCompleted, "implementing -> completed"},
-		{domain.WorkItemImplementing, domain.WorkItemPlanning, "implementing -> planning"},
-		// From reviewing - can't go back to planning
-		{domain.WorkItemReviewing, domain.WorkItemPlanning, "reviewing -> planning"},
-		{domain.WorkItemReviewing, domain.WorkItemApproved, "reviewing -> approved"},
-		// From completed - terminal state
-		{domain.WorkItemCompleted, domain.WorkItemPlanning, "completed -> planning"},
-		{domain.WorkItemCompleted, domain.WorkItemImplementing, "completed -> implementing"},
-		// From failed - terminal state
-		{domain.WorkItemFailed, domain.WorkItemPlanning, "failed -> planning"},
-		{domain.WorkItemFailed, domain.WorkItemIngested, "failed -> ingested"},
+		{domain.SessionIngested, domain.SessionApproved, "ingested -> approved"},
+		{domain.SessionIngested, domain.SessionCompleted, "ingested -> completed"},
+		{domain.SessionIngested, domain.SessionFailed, "ingested -> failed"},
+		{domain.SessionPlanning, domain.SessionImplementing, "planning -> implementing"},
+		{domain.SessionPlanning, domain.SessionCompleted, "planning -> completed"},
+		{domain.SessionPlanReview, domain.SessionImplementing, "plan_review -> implementing"},
+		{domain.SessionPlanReview, domain.SessionCompleted, "plan_review -> completed"},
+		{domain.SessionApproved, domain.SessionPlanning, "approved -> planning"},
+		{domain.SessionApproved, domain.SessionCompleted, "approved -> completed"},
+		{domain.SessionImplementing, domain.SessionCompleted, "implementing -> completed"},
+		{domain.SessionImplementing, domain.SessionPlanning, "implementing -> planning"},
+		{domain.SessionReviewing, domain.SessionPlanning, "reviewing -> planning"},
+		{domain.SessionReviewing, domain.SessionApproved, "reviewing -> approved"},
+		{domain.SessionCompleted, domain.SessionPlanning, "completed -> planning"},
+		{domain.SessionCompleted, domain.SessionImplementing, "completed -> implementing"},
+		{domain.SessionFailed, domain.SessionPlanning, "failed -> planning"},
+		{domain.SessionFailed, domain.SessionIngested, "failed -> ingested"},
 	}
 
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkItemRepository()
-			svc := NewWorkItemService(repo)
+			svc := NewSessionService(repo)
 
-			// Create item in the 'from' state
-			item := domain.WorkItem{
+			item := domain.Session{
 				ID:          "wi-test",
 				WorkspaceID: "ws-1",
 				Title:       "Test",
@@ -429,14 +419,8 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 
 			err := svc.Transition(ctx, "wi-test", tc.to)
 			if err == nil {
-				t.Fatalf("expected error for transition from %s to %s", tc.from, tc.to)
-			}
-
-			var transitionErr ErrInvalidTransition
-			if err == nil {
 				t.Fatalf("expected ErrInvalidTransition, got nil")
 			}
-			_ = transitionErr // Just check we got an error
 			if _, ok := err.(ErrInvalidTransition); !ok {
 				t.Errorf("error type = %T, want ErrInvalidTransition", err)
 			}
@@ -447,113 +431,104 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewWorkItemService(repo)
+	svc := NewSessionService(repo)
 
 	t.Run("StartPlanning", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemIngested}
-		repo.items["wi-1"] = item
+		repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionIngested}
 		if err := svc.StartPlanning(ctx, "wi-1"); err != nil {
 			t.Fatalf("StartPlanning failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-1")
-		if got.State != domain.WorkItemPlanning {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemPlanning)
+		if got.State != domain.SessionPlanning {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionPlanning)
 		}
 	})
 
 	t.Run("SubmitPlanForReview", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-2", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemPlanning}
-		repo.items["wi-2"] = item
+		repo.items["wi-2"] = domain.Session{ID: "wi-2", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionPlanning}
 		if err := svc.SubmitPlanForReview(ctx, "wi-2"); err != nil {
 			t.Fatalf("SubmitPlanForReview failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-2")
-		if got.State != domain.WorkItemPlanReview {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemPlanReview)
+		if got.State != domain.SessionPlanReview {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionPlanReview)
 		}
 	})
 
 	t.Run("ApprovePlan", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-3", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemPlanReview}
-		repo.items["wi-3"] = item
+		repo.items["wi-3"] = domain.Session{ID: "wi-3", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionPlanReview}
 		if err := svc.ApprovePlan(ctx, "wi-3"); err != nil {
 			t.Fatalf("ApprovePlan failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-3")
-		if got.State != domain.WorkItemApproved {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemApproved)
+		if got.State != domain.SessionApproved {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionApproved)
 		}
 	})
 
 	t.Run("RejectPlan", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-4", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemPlanReview}
-		repo.items["wi-4"] = item
+		repo.items["wi-4"] = domain.Session{ID: "wi-4", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionPlanReview}
 		if err := svc.RejectPlan(ctx, "wi-4"); err != nil {
 			t.Fatalf("RejectPlan failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-4")
-		if got.State != domain.WorkItemPlanning {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemPlanning)
+		if got.State != domain.SessionPlanning {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionPlanning)
 		}
 	})
 
 	t.Run("StartImplementation", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-5", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemApproved}
-		repo.items["wi-5"] = item
+		repo.items["wi-5"] = domain.Session{ID: "wi-5", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionApproved}
 		if err := svc.StartImplementation(ctx, "wi-5"); err != nil {
 			t.Fatalf("StartImplementation failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-5")
-		if got.State != domain.WorkItemImplementing {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemImplementing)
+		if got.State != domain.SessionImplementing {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionImplementing)
 		}
 	})
 
 	t.Run("SubmitForReview", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-6", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemImplementing}
-		repo.items["wi-6"] = item
+		repo.items["wi-6"] = domain.Session{ID: "wi-6", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionImplementing}
 		if err := svc.SubmitForReview(ctx, "wi-6"); err != nil {
 			t.Fatalf("SubmitForReview failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-6")
-		if got.State != domain.WorkItemReviewing {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemReviewing)
+		if got.State != domain.SessionReviewing {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionReviewing)
 		}
 	})
 
 	t.Run("CompleteWorkItem", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-7", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemReviewing}
-		repo.items["wi-7"] = item
+		repo.items["wi-7"] = domain.Session{ID: "wi-7", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionReviewing}
 		if err := svc.CompleteWorkItem(ctx, "wi-7"); err != nil {
 			t.Fatalf("CompleteWorkItem failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-7")
-		if got.State != domain.WorkItemCompleted {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemCompleted)
+		if got.State != domain.SessionCompleted {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionCompleted)
 		}
 	})
 
 	t.Run("RequestReimplementation", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-8", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemReviewing}
-		repo.items["wi-8"] = item
+		repo.items["wi-8"] = domain.Session{ID: "wi-8", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionReviewing}
 		if err := svc.RequestReimplementation(ctx, "wi-8"); err != nil {
 			t.Fatalf("RequestReimplementation failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-8")
-		if got.State != domain.WorkItemImplementing {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemImplementing)
+		if got.State != domain.SessionImplementing {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionImplementing)
 		}
 	})
 
 	t.Run("FailWorkItem", func(t *testing.T) {
-		item := domain.WorkItem{ID: "wi-9", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.WorkItemImplementing}
-		repo.items["wi-9"] = item
+		repo.items["wi-9"] = domain.Session{ID: "wi-9", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionImplementing}
 		if err := svc.FailWorkItem(ctx, "wi-9"); err != nil {
 			t.Fatalf("FailWorkItem failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "wi-9")
-		if got.State != domain.WorkItemFailed {
-			t.Errorf("State = %q, want %q", got.State, domain.WorkItemFailed)
+		if got.State != domain.SessionFailed {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionFailed)
 		}
 	})
 }
@@ -561,26 +536,24 @@ func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 func TestWorkItemService_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewWorkItemService(repo)
+	svc := NewSessionService(repo)
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")
 		if err == nil {
 			t.Fatal("expected error for nonexistent item")
 		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
+		if _, ok := err.(ErrNotFound); !ok {
 			t.Errorf("error type = %T, want ErrNotFound", err)
 		}
 	})
 
 	t.Run("Transition not found", func(t *testing.T) {
-		err := svc.Transition(ctx, "nonexistent", domain.WorkItemPlanning)
+		err := svc.Transition(ctx, "nonexistent", domain.SessionPlanning)
 		if err == nil {
 			t.Fatal("expected error for nonexistent item")
 		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
+		if _, ok := err.(ErrNotFound); !ok {
 			t.Errorf("error type = %T, want ErrNotFound", err)
 		}
 	})
@@ -590,8 +563,7 @@ func TestWorkItemService_NotFound(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for nonexistent item")
 		}
-		_, ok := err.(ErrNotFound)
-		if !ok {
+		if _, ok := err.(ErrNotFound); !ok {
 			t.Errorf("error type = %T, want ErrNotFound", err)
 		}
 	})
@@ -600,24 +572,24 @@ func TestWorkItemService_NotFound(t *testing.T) {
 func TestWorkItemService_List(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewWorkItemService(repo)
+	svc := NewSessionService(repo)
 
 	// Create test items
 	ws1 := "ws-1"
 	ws2 := "ws-2"
-	statePlanning := domain.WorkItemPlanning
+	statePlanning := domain.SessionPlanning
 
-	items := []domain.WorkItem{
-		{ID: "wi-1", WorkspaceID: ws1, Title: "Item 1", Source: "manual", State: domain.WorkItemIngested},
-		{ID: "wi-2", WorkspaceID: ws1, Title: "Item 2", Source: "linear", State: domain.WorkItemPlanning},
-		{ID: "wi-3", WorkspaceID: ws2, Title: "Item 3", Source: "manual", State: domain.WorkItemPlanning},
+	items := []domain.Session{
+		{ID: "wi-1", WorkspaceID: ws1, Title: "Item 1", Source: "manual", State: domain.SessionIngested},
+		{ID: "wi-2", WorkspaceID: ws1, Title: "Item 2", Source: "linear", State: domain.SessionPlanning},
+		{ID: "wi-3", WorkspaceID: ws2, Title: "Item 3", Source: "manual", State: domain.SessionPlanning},
 	}
 	for _, item := range items {
 		repo.items[item.ID] = item
 	}
 
 	t.Run("filter by workspace", func(t *testing.T) {
-		got, err := svc.List(ctx, repository.WorkItemFilter{WorkspaceID: &ws1})
+		got, err := svc.List(ctx, repository.SessionFilter{WorkspaceID: &ws1})
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
@@ -627,7 +599,7 @@ func TestWorkItemService_List(t *testing.T) {
 	})
 
 	t.Run("filter by state", func(t *testing.T) {
-		got, err := svc.List(ctx, repository.WorkItemFilter{State: &statePlanning})
+		got, err := svc.List(ctx, repository.SessionFilter{State: &statePlanning})
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
@@ -638,7 +610,7 @@ func TestWorkItemService_List(t *testing.T) {
 
 	t.Run("filter by source", func(t *testing.T) {
 		source := "manual"
-		got, err := svc.List(ctx, repository.WorkItemFilter{Source: &source})
+		got, err := svc.List(ctx, repository.SessionFilter{Source: &source})
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
@@ -651,20 +623,20 @@ func TestWorkItemService_List(t *testing.T) {
 func TestWorkItemService_Update(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewWorkItemService(repo)
+	svc := NewSessionService(repo)
 
 	// Create initial item
-	item := domain.WorkItem{
+	item := domain.Session{
 		ID:          "wi-1",
 		WorkspaceID: "ws-1",
 		Title:       "Original Title",
 		Source:      "manual",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 	}
 	repo.items["wi-1"] = item
 
 	t.Run("updates mutable fields", func(t *testing.T) {
-		updated := domain.WorkItem{
+		updated := domain.Session{
 			ID:          "wi-1",
 			Title:       "Updated Title",
 			Description: "New description",
@@ -681,13 +653,13 @@ func TestWorkItemService_Update(t *testing.T) {
 			t.Errorf("Description = %q, want %q", got.Description, "New description")
 		}
 		// State should be preserved
-		if got.State != domain.WorkItemIngested {
+		if got.State != domain.SessionIngested {
 			t.Errorf("State should be preserved, got %q", got.State)
 		}
 	})
 
 	t.Run("update nonexistent returns error", func(t *testing.T) {
-		updated := domain.WorkItem{ID: "nonexistent"}
+		updated := domain.Session{ID: "nonexistent"}
 		err := svc.Update(ctx, updated)
 		if err == nil {
 			t.Fatal("expected error for nonexistent item")

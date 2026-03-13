@@ -66,7 +66,7 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 
 	m := views.NewReadyToPlanModel(newTestStyles(t))
 	m.SetSize(48, 12)
-	m.SetWorkItem(&domain.WorkItem{
+	m.SetWorkItem(&domain.Session{
 		ID:          "wi-1",
 		ExternalID:  "SUB-1",
 		Source:      "github",

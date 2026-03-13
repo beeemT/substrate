@@ -86,9 +86,9 @@ type App struct {
 	toasts components.ToastModel
 
 	// State cache (refreshed by DB poll)
-	workItems []domain.WorkItem
-	sessions  []domain.AgentSession
-	subPlans  map[string][]domain.SubPlan  // keyed by planID
+	workItems []domain.Session
+	sessions  []domain.Task
+	subPlans  map[string][]domain.TaskPlan // keyed by planID
 	plans     map[string]*domain.Plan      // keyed by workItemID
 	questions map[string][]domain.Question // keyed by sessionID
 	reviews   map[string]ReviewsLoadedMsg  // keyed by sessionID
@@ -146,7 +146,7 @@ func NewApp(svcs Services) App {
 		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
 		toasts:                         components.NewToastModel(st),
-		subPlans:                       make(map[string][]domain.SubPlan),
+		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
 		questions:                      make(map[string][]domain.Question),
 		reviews:                        make(map[string]ReviewsLoadedMsg),
@@ -181,8 +181,8 @@ func (a App) Init() tea.Cmd {
 
 	if a.svcs.WorkspaceID != "" {
 		cmds = append(cmds,
-			LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
 			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+			LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 		)
 	}
 
@@ -278,7 +278,7 @@ func sessionHistoryEntryMatches(entry domain.SessionHistoryEntry, search string)
 	return false
 }
 
-func (a App) localSessionSearchEntry(wi domain.WorkItem) (domain.SessionHistoryEntry, bool) {
+func (a App) localSessionSearchEntry(wi domain.Session) (domain.SessionHistoryEntry, bool) {
 	workspaceName := ""
 	if wi.WorkspaceID == a.svcs.WorkspaceID {
 		workspaceName = strings.TrimSpace(a.svcs.WorkspaceName)
@@ -375,7 +375,7 @@ func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 		a.sessionSearch.SetLoading(true)
 	}
 	a.sessionSearch.SetEntries(a.localSessionSearchEntries(filter))
-	return SearchSessionHistoryCmd(a.svcs.Session, filter)
+	return SearchSessionHistoryCmd(a.svcs.Task, filter)
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
@@ -447,7 +447,7 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func (a App) workItemByID(workItemID string) *domain.WorkItem {
+func (a App) workItemByID(workItemID string) *domain.Session {
 	for i := range a.workItems {
 		if a.workItems[i].ID == workItemID {
 			return &a.workItems[i]
@@ -456,7 +456,7 @@ func (a App) workItemByID(workItemID string) *domain.WorkItem {
 	return nil
 }
 
-func (a *App) upsertWorkItem(workItem domain.WorkItem) {
+func (a *App) upsertWorkItem(workItem domain.Session) {
 	for i := range a.workItems {
 		if a.workItems[i].ID == workItem.ID {
 			a.workItems[i] = workItem
@@ -478,7 +478,7 @@ func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
 	return a.updateContentFromState()
 }
 
-func (a App) sessionByID(sessionID string) *domain.AgentSession {
+func (a App) sessionByID(sessionID string) *domain.Task {
 	for i := range a.sessions {
 		if a.sessions[i].ID == sessionID {
 			return &a.sessions[i]
@@ -502,34 +502,13 @@ func (a *App) setSelectedTaskSessionID(sessionID string) {
 }
 
 func (a App) deletableSessionID() string {
-	if a.currentHistorySessionID != "" {
-		return a.currentHistorySessionID
+	if a.currentHistoryEntry.WorkItemID != "" {
+		return a.currentHistoryEntry.WorkItemID
 	}
-	if a.sidebarMode == sidebarPaneTasks {
-		sessionID := a.selectedTaskSessionID()
-		if sessionID == "" || sessionID == taskSidebarSourceDetailsID {
-			return ""
-		}
-		if a.workItemTaskSession(a.currentWorkItemID, sessionID) == nil {
-			return ""
-		}
-		return sessionID
-	}
-	if a.sidebarMode == sidebarPaneSessions {
-		return a.deletableSelectedWorkItemSessionID()
+	if a.currentWorkItemID != "" {
+		return a.currentWorkItemID
 	}
 	return ""
-}
-
-func (a App) deletableSelectedWorkItemSessionID() string {
-	if a.currentWorkItemID == "" {
-		return ""
-	}
-	sessions := a.sessionsForWorkItem(a.currentWorkItemID)
-	if len(sessions) != 1 {
-		return ""
-	}
-	return sessions[0].ID
 }
 
 func (a *App) enterTaskSidebar() tea.Cmd {
@@ -563,7 +542,7 @@ func (a *App) exitTaskSidebar() tea.Cmd {
 	return a.updateContentFromState()
 }
 
-func (a App) workItemTaskSession(workItemID, sessionID string) *domain.AgentSession {
+func (a App) workItemTaskSession(workItemID, sessionID string) *domain.Task {
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		if session.ID == sessionID {
 			s := session
@@ -714,8 +693,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		if a.svcs.WorkspaceID != "" {
 			cmds = append(cmds,
-				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
 			)
 		}
@@ -735,8 +714,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.Prune()
 		if a.svcs.WorkspaceID != "" {
 			cmds = append(cmds,
-				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
 			)
 		}
@@ -758,7 +737,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, components.ToastTickCmd())
 		return a, tea.Batch(cmds...)
 
-	case WorkItemsLoadedMsg:
+	case SessionsLoadedMsg:
 		if msg.WorkspaceID != a.svcs.WorkspaceID {
 			return a, nil
 		}
@@ -767,7 +746,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.refreshSessionSearchEntriesFromLocalState()
 		return a, nil
 
-	case SessionsLoadedMsg:
+	case TasksLoadedMsg:
 		if msg.WorkspaceID != a.svcs.WorkspaceID {
 			return a, nil
 		}
@@ -877,7 +856,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.WorkItem, a.svcs.Plan, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:
@@ -899,7 +878,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanRejectMsg:
-		cmds = append(cmds, RejectPlanCmd(a.svcs.WorkItem, a.svcs.Plan, msg.WorkItemID, msg.PlanID, msg.Reason))
+		cmds = append(cmds, RejectPlanCmd(a.svcs.Session, a.svcs.Plan, msg.WorkItemID, msg.PlanID, msg.Reason))
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
@@ -920,18 +899,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResumeSessionMsg:
 		if a.svcs.Resumption != nil {
-			cmds = append(cmds, ResumeSessionCmd(a.svcs.Resumption, a.svcs.Session, msg.OldSessionID, a.svcs.InstanceID))
+			cmds = append(cmds, ResumeSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.OldSessionID, a.svcs.InstanceID))
 		} else {
 			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case AbandonSessionMsg:
-		cmds = append(cmds, abandonSessionCmd(a.svcs.Session, msg.SessionID))
+		cmds = append(cmds, abandonSessionCmd(a.svcs.Task, msg.SessionID))
 		return a, tea.Batch(cmds...)
 
 	case DeleteSessionMsg:
-		cmds = append(cmds, deleteSessionCmd(a.svcs.Session, a.sessionsDir, msg.SessionID, a.reviewSessionLogs[msg.SessionID]))
+		cmds = append(cmds, deleteSessionCmd(a.svcs, a.sessionsDir, msg.SessionID, a.reviewSessionLogs))
 		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
@@ -951,7 +930,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case OverrideAcceptMsg:
-		cmds = append(cmds, OverrideAcceptCmd(a.svcs.WorkItem, a.svcs.Plan, a.svcs.Session, a.svcs.Bus, msg.WorkItemID))
+		cmds = append(cmds, OverrideAcceptCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Task, a.svcs.Bus, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case NewSessionManualMsg:
@@ -1009,41 +988,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
-	case WorkItemCreatedMsg:
+	case SessionCreatedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		if a.svcs.Planning != nil {
-			msg.WorkItem.State = domain.WorkItemPlanning
+			msg.Session.State = domain.SessionPlanning
 		}
-		a.upsertWorkItem(msg.WorkItem)
-		cmds = append(cmds, a.focusWorkItemOverview(msg.WorkItem.ID))
+		a.upsertWorkItem(msg.Session)
+		cmds = append(cmds, a.focusWorkItemOverview(msg.Session.ID))
 		if a.svcs.Planning != nil {
-			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItem.ID))
+			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.Session.ID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
-	case WorkItemDuplicatePromptMsg:
-		a.showDuplicateSessionDialog(msg.RequestedWorkItem, msg.ExistingWorkItem)
+	case SessionDuplicatePromptMsg:
+		a.showDuplicateSessionDialog(msg.RequestedSession, msg.ExistingSession)
 		return a, nil
-	case WorkItemDuplicateActionMsg:
+	case SessionDuplicateActionMsg:
 		if !a.duplicateSessionActive {
 			return a, nil
 		}
-		existing := a.duplicateSession.ExistingWorkItem
+		existing := a.duplicateSession.ExistingSession
 		label := workItemDisplayLabel(existing)
 		a.closeDuplicateSessionDialog()
 		switch msg.Action {
-		case WorkItemDuplicateCancel:
+		case SessionDuplicateCancel:
 			return a, nil
-		case WorkItemDuplicateOpenExisting:
+		case SessionDuplicateOpenExisting:
 			a.toasts.AddToast("Opened existing item "+label, components.ToastInfo)
 			a.upsertWorkItem(existing)
 			return a, a.focusWorkItemOverview(existing.ID)
-		case WorkItemDuplicateCreateSession:
+		case SessionDuplicateCreateSession:
 			a.toasts.AddToast("Starting planning with existing item "+label, components.ToastInfo)
-			if a.svcs.Planning != nil && existing.State == domain.WorkItemIngested {
-				existing.State = domain.WorkItemPlanning
+			if a.svcs.Planning != nil && existing.State == domain.SessionIngested {
+				existing.State = domain.SessionPlanning
 			}
 			a.upsertWorkItem(existing)
 			cmds = append(cmds, a.focusWorkItemOverview(existing.ID))
@@ -1065,7 +1044,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
 		if a.svcs.ReviewPipeline != nil {
 			for _, sID := range msg.SessionIDs {
-				cmds = append(cmds, RunReviewSessionCmd(a.svcs.ReviewPipeline, a.svcs.Session, sID))
+				cmds = append(cmds, RunReviewSessionCmd(a.svcs.ReviewPipeline, a.svcs.Task, sID))
 			}
 		}
 		if a.svcs.Foreman != nil {
@@ -1085,31 +1064,58 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionDeletedMsg:
-		delete(a.questions, msg.SessionID)
-		delete(a.reviews, msg.SessionID)
-		delete(a.reviewSessionLogs, msg.SessionID)
-		delete(a.tailingSessionIDs, msg.SessionID)
-		delete(a.tailingSessionIDs, "review-"+msg.SessionID)
-		filtered := a.sessions[:0]
-		for _, session := range a.sessions {
-			if session.ID != msg.SessionID {
-				filtered = append(filtered, session)
+		if plan := a.plans[msg.SessionID]; plan != nil {
+			delete(a.subPlans, plan.ID)
+		}
+		delete(a.plans, msg.SessionID)
+		delete(a.taskSessionSelectionByWorkItem, msg.SessionID)
+
+		taskIDSet := make(map[string]struct{}, len(msg.TaskIDs))
+		for _, taskID := range msg.TaskIDs {
+			taskIDSet[taskID] = struct{}{}
+			delete(a.questions, taskID)
+			delete(a.reviews, taskID)
+			delete(a.reviewSessionLogs, taskID)
+			delete(a.tailingSessionIDs, taskID)
+			delete(a.tailingSessionIDs, "review-"+taskID)
+		}
+
+		filteredTasks := a.sessions[:0]
+		for _, task := range a.sessions {
+			if _, ok := taskIDSet[task.ID]; ok {
+				continue
 			}
+			filteredTasks = append(filteredTasks, task)
 		}
-		a.sessions = filtered
-		if a.selectedTaskSessionID() == msg.SessionID {
-			a.setSelectedTaskSessionID("")
+		a.sessions = filteredTasks
+
+		filteredSessions := a.workItems[:0]
+		for _, session := range a.workItems {
+			if session.ID == msg.SessionID {
+				continue
+			}
+			filteredSessions = append(filteredSessions, session)
 		}
-		if a.currentHistorySessionID == msg.SessionID {
+		a.workItems = filteredSessions
+
+		deletedCurrentSelection := a.currentWorkItemID == msg.SessionID || a.currentHistoryEntry.WorkItemID == msg.SessionID
+		if deletedCurrentSelection {
+			a.currentWorkItemID = ""
+			a.currentHistoryEntry = SidebarEntry{}
 			a.currentHistorySessionID = ""
-			a.currentHistoryEntry.SessionID = ""
-			a.content.SetSessionInteraction(a.historyEntryTitle(a.currentHistoryEntry), a.historyEntryMeta(a.currentHistoryEntry), a.historyEntrySummaryLines(a.currentHistoryEntry))
+			a.sidebarMode = sidebarPaneSessions
+			a.content.SetMode(ContentModeEmpty)
 		}
+
+		a.rebuildSidebar()
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if warning := strings.TrimSpace(msg.Warning); warning != "" {
+			a.toasts.AddToast(warning, components.ToastWarning)
+		}
 		if a.svcs.WorkspaceID != "" {
 			cmds = append(cmds,
-				LoadWorkItemsCmd(a.svcs.WorkItem, a.svcs.WorkspaceID),
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 			)
 		}
 		if a.currentWorkItemID != "" {
@@ -1336,10 +1342,10 @@ func (a *App) updateContentFromState() tea.Cmd {
 	}
 
 	switch wi.State {
-	case domain.WorkItemIngested:
+	case domain.SessionIngested:
 		a.content.SetMode(ContentModeReadyToPlan)
 
-	case domain.WorkItemPlanning:
+	case domain.SessionPlanning:
 		a.content.SetMode(ContentModePlanning)
 		a.content.sessionLog.SetModeLabel("Planning")
 		a.content.sessionLog.SetMeta("")
@@ -1348,19 +1354,19 @@ func (a *App) updateContentFromState() tea.Cmd {
 			"",
 			"Repository agent sessions appear after the plan is approved.",
 		})
-	case domain.WorkItemPlanReview:
+	case domain.SessionPlanReview:
 		a.content.SetMode(ContentModePlanReview)
 		if plan := a.plans[wi.ID]; plan != nil {
 			a.content.planReview.SetPlan(*plan)
 			a.content.planReview.SetWorkItemID(wi.ID)
 		}
 
-	case domain.WorkItemApproved:
+	case domain.SessionApproved:
 		a.content.SetMode(ContentModeAwaitingImpl)
 
-	case domain.WorkItemImplementing:
+	case domain.SessionImplementing:
 		plan := a.plans[wi.ID]
-		var activeSessions []domain.AgentSession
+		var activeSessions []domain.Task
 		if plan != nil {
 			for _, sp := range a.subPlans[plan.ID] {
 				for _, s := range a.sessions {
@@ -1408,7 +1414,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 			}
 		}
 
-	case domain.WorkItemReviewing:
+	case domain.SessionReviewing:
 		a.content.SetMode(ContentModeReviewing)
 		var repoResults []RepoReviewResult
 		if plan := a.plans[wi.ID]; plan != nil {
@@ -1457,11 +1463,11 @@ func (a *App) updateContentFromState() tea.Cmd {
 			return tea.Batch(tailCmds...)
 		}
 
-	case domain.WorkItemCompleted:
+	case domain.SessionCompleted:
 		a.content.SetMode(ContentModeCompleted)
 		a.content.completed.SetData(wi.UpdatedAt, nil, nil)
 
-	case domain.WorkItemFailed:
+	case domain.SessionFailed:
 		a.content.SetMode(ContentModeFailed)
 		a.content.failed.SetFailure("Work item failed", "")
 	}
@@ -1474,7 +1480,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 	return nil
 }
 
-func (a *App) showTaskContent(wi *domain.WorkItem, session *domain.AgentSession) tea.Cmd {
+func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd {
 	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + firstNonEmptyString(session.RepositoryName, "Task")
 	metaParts := []string{sessionStatusLabel(session.Status)}
 	if session.HarnessName != "" {
@@ -1516,7 +1522,7 @@ func (a *App) buildRepoProgress(plan *domain.Plan) []RepoProgress {
 	return repos
 }
 
-func (a *App) canActOnSession(s domain.AgentSession) bool {
+func (a *App) canActOnSession(s domain.Task) bool {
 	if a.svcs.InstanceID == "" || s.OwnerInstanceID == nil {
 		return true
 	}
@@ -1537,12 +1543,12 @@ func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 func (a *App) showDeleteSessionConfirm(sessionID string) {
 	sID := sessionID
 	a.showConfirm("Delete Session",
-		"Delete this agent session, its review data, questions, and logs?",
+		"Delete this full session and all related data?",
 		func() tea.Msg { return DeleteSessionMsg{SessionID: sID} },
 	)
 }
 
-func (a App) sidebarEntryFromWorkItem(wi domain.WorkItem) SidebarEntry {
+func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 	entry := SidebarEntry{
 		Kind:         SidebarEntryWorkItem,
 		WorkItemID:   wi.ID,
@@ -1597,7 +1603,7 @@ func (a App) sessionSidebarEntries() []SidebarEntry {
 	return entries
 }
 
-func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
+func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
 	plan := a.plans[workItemID]
 	if plan == nil {
 		return nil
@@ -1606,7 +1612,7 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
 	for i, sp := range a.subPlans[plan.ID] {
 		subPlanOrder[sp.ID] = i
 	}
-	sessions := make([]domain.AgentSession, 0)
+	sessions := make([]domain.Task, 0)
 	for _, s := range a.sessions {
 		if _, ok := subPlanOrder[s.SubPlanID]; ok {
 			sessions = append(sessions, s)
@@ -1637,14 +1643,14 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	overview := a.sidebarEntryFromWorkItem(*wi)
 	overview.Kind = SidebarEntryTaskOverview
 	entries := []SidebarEntry{overview}
-	if workItemHasSourceDetails(wi) {
+	if sessionHasSourceDetails(wi) {
 		entries = append(entries, SidebarEntry{
 			Kind:         SidebarEntryTaskSourceDetails,
 			WorkItemID:   workItemID,
 			SessionID:    taskSidebarSourceDetailsID,
 			ExternalID:   wi.ExternalID,
 			Title:        "Source details",
-			SubtitleText: workItemSourceSidebarSubtitle(wi),
+			SubtitleText: sessionSourceSidebarSubtitle(wi),
 			LastActivity: wi.UpdatedAt,
 		})
 	}
@@ -1958,7 +1964,7 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 
 // --- Command helpers ---
 
-func abandonSessionCmd(svc *service.SessionService, sessionID string) tea.Cmd {
+func abandonSessionCmd(svc *service.TaskService, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Fail(context.Background(), sessionID, nil); err != nil {
 			return ErrMsg{Err: err}
@@ -1967,22 +1973,93 @@ func abandonSessionCmd(svc *service.SessionService, sessionID string) tea.Cmd {
 	}
 }
 
-func deleteSessionCmd(svc *service.SessionService, sessionsDir, sessionID, reviewLogPath string) tea.Cmd {
+type sessionDeleteResult struct {
+	TaskIDs        []string
+	CleanupWarning error
+}
+
+func deleteSessionCmd(svcs Services, sessionsDir, sessionID string, reviewSessionLogs map[string]string) tea.Cmd {
 	return func() tea.Msg {
-		if err := svc.Delete(context.Background(), sessionID); err != nil {
+		result, err := deleteSessionTasksAndArtifacts(context.Background(), svcs, sessionsDir, sessionID, reviewSessionLogs)
+		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		message := "Session deleted"
-		if err := deleteSessionArtifacts(sessionsDir, sessionID, reviewLogPath); err != nil {
-			message = "Session deleted; some logs could not be removed"
+		msg := SessionDeletedMsg{SessionID: sessionID, TaskIDs: result.TaskIDs, Message: "Session deleted"}
+		if result.CleanupWarning != nil {
+			msg.Warning = "Session deleted, but some session logs could not be removed: " + result.CleanupWarning.Error()
 		}
-		return SessionDeletedMsg{SessionID: sessionID, Message: message}
+		return msg
 	}
 }
 
-func deleteSessionArtifacts(sessionsDir, sessionID, reviewLogPath string) error {
+func deleteSessionTasksAndArtifacts(ctx context.Context, svcs Services, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
+	if svcs.Session == nil {
+		return sessionDeleteResult{}, fmt.Errorf("session service not configured")
+	}
+	if svcs.Plan == nil {
+		return sessionDeleteResult{}, fmt.Errorf("plan service not configured")
+	}
+	if svcs.Task == nil {
+		return sessionDeleteResult{}, fmt.Errorf("task service not configured")
+	}
+
+	result := sessionDeleteResult{TaskIDs: make([]string, 0)}
+	artifactDeletes := make([]struct {
+		taskID        string
+		reviewLogPath string
+	}, 0)
+
+	plan, err := svcs.Plan.GetPlanByWorkItemID(ctx, sessionID)
+	var notFound service.ErrNotFound
+	if err != nil && !errors.As(err, &notFound) {
+		return sessionDeleteResult{}, err
+	}
+	if err == nil {
+		taskPlans, err := svcs.Plan.ListSubPlansByPlanID(ctx, plan.ID)
+		if err != nil {
+			return sessionDeleteResult{}, err
+		}
+		for _, taskPlan := range taskPlans {
+			tasks, err := svcs.Task.ListBySubPlanID(ctx, taskPlan.ID)
+			if err != nil {
+				return sessionDeleteResult{}, err
+			}
+			for _, task := range tasks {
+				result.TaskIDs = append(result.TaskIDs, task.ID)
+				artifactDeletes = append(artifactDeletes, struct {
+					taskID        string
+					reviewLogPath string
+				}{taskID: task.ID, reviewLogPath: reviewSessionLogs[task.ID]})
+				if err := svcs.Task.Delete(ctx, task.ID); err != nil {
+					return sessionDeleteResult{}, err
+				}
+			}
+			if err := svcs.Plan.DeleteSubPlan(ctx, taskPlan.ID); err != nil {
+				return sessionDeleteResult{}, err
+			}
+		}
+		if err := svcs.Plan.DeletePlan(ctx, plan.ID); err != nil {
+			return sessionDeleteResult{}, err
+		}
+	}
+
+	if err := svcs.Session.Delete(ctx, sessionID); err != nil {
+		return sessionDeleteResult{}, err
+	}
+
+	var cleanupErrs []error
+	for _, artifactDelete := range artifactDeletes {
+		if err := deleteTaskArtifacts(sessionsDir, artifactDelete.taskID, artifactDelete.reviewLogPath); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	result.CleanupWarning = errors.Join(cleanupErrs...)
+	return result, nil
+}
+
+func deleteTaskArtifacts(sessionsDir, taskID, reviewLogPath string) error {
 	var errs []error
-	for _, deleteID := range deleteSessionArtifactIDs(sessionsDir, sessionID, reviewLogPath) {
+	for _, deleteID := range deleteTaskArtifactIDs(sessionsDir, taskID, reviewLogPath) {
 		paths, err := sessionInteractionPaths(sessionsDir, deleteID)
 		if err != nil {
 			errs = append(errs, err)
@@ -1997,11 +2074,11 @@ func deleteSessionArtifacts(sessionsDir, sessionID, reviewLogPath string) error 
 	return errors.Join(errs...)
 }
 
-func deleteSessionArtifactIDs(sessionsDir, sessionID, reviewLogPath string) []string {
-	if strings.TrimSpace(sessionsDir) == "" || strings.TrimSpace(sessionID) == "" {
+func deleteTaskArtifactIDs(sessionsDir, taskID, reviewLogPath string) []string {
+	if strings.TrimSpace(sessionsDir) == "" || strings.TrimSpace(taskID) == "" {
 		return nil
 	}
-	ids := []string{sessionID}
+	ids := []string{taskID}
 	if strings.TrimSpace(reviewLogPath) == "" {
 		return ids
 	}
@@ -2012,14 +2089,14 @@ func deleteSessionArtifactIDs(sessionsDir, sessionID, reviewLogPath string) []st
 	base := filepath.Base(reviewLogPath)
 	if strings.HasSuffix(base, ".log") {
 		reviewID := strings.TrimSuffix(base, ".log")
-		if reviewID != "" && reviewID != sessionID {
+		if reviewID != "" && reviewID != taskID {
 			ids = append(ids, reviewID)
 		}
 	}
 	return ids
 }
 
-func workItemDisplayLabel(wi domain.WorkItem) string {
+func workItemDisplayLabel(wi domain.Session) string {
 	label := strings.TrimSpace(wi.ExternalID)
 	if label == "" {
 		label = strings.TrimSpace(wi.Title)
@@ -2030,31 +2107,31 @@ func workItemDisplayLabel(wi domain.WorkItem) string {
 	return label
 }
 
-func existingWorkItemByExternalID(svc *service.WorkItemService, workspaceID, externalID string) (domain.WorkItem, error) {
+func existingWorkItemByExternalID(svc *service.SessionService, workspaceID, externalID string) (domain.Session, error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if trimmedWorkspaceID == "" {
-		return domain.WorkItem{}, fmt.Errorf("workspace not configured")
+		return domain.Session{}, fmt.Errorf("workspace not configured")
 	}
 	trimmedExternalID := strings.TrimSpace(externalID)
 	if trimmedExternalID == "" {
-		return domain.WorkItem{}, fmt.Errorf("work item external_id is required")
+		return domain.Session{}, fmt.Errorf("work item external_id is required")
 	}
-	items, err := svc.List(context.Background(), repository.WorkItemFilter{
+	items, err := svc.List(context.Background(), repository.SessionFilter{
 		WorkspaceID: &trimmedWorkspaceID,
 		ExternalID:  &trimmedExternalID,
 		Limit:       1,
 	})
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	if len(items) > 0 {
 		return items[0], nil
 	}
-	return domain.WorkItem{}, service.ErrNotFound{Entity: "work item", ID: trimmedExternalID}
+	return domain.Session{}, service.ErrNotFound{Entity: "work item", ID: trimmedExternalID}
 }
 
-func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
-	if svcs.WorkItem == nil {
+func persistCreatedWorkItemMsg(svcs Services, wi domain.Session) tea.Msg {
+	if svcs.Session == nil {
 		return ErrMsg{Err: fmt.Errorf("work item service not configured")}
 	}
 	if strings.TrimSpace(svcs.WorkspaceID) == "" {
@@ -2062,25 +2139,25 @@ func persistCreatedWorkItemMsg(svcs Services, wi domain.WorkItem) tea.Msg {
 	}
 	wi.WorkspaceID = svcs.WorkspaceID
 	label := workItemDisplayLabel(wi)
-	if err := svcs.WorkItem.Create(context.Background(), wi); err != nil {
+	if err := svcs.Session.Create(context.Background(), wi); err != nil {
 		var alreadyExists service.ErrAlreadyExists
 		if errors.As(err, &alreadyExists) {
 			duplicateID := strings.TrimSpace(alreadyExists.ID)
 			if duplicateID == "" {
 				duplicateID = wi.ExternalID
 			}
-			existing, lookupErr := existingWorkItemByExternalID(svcs.WorkItem, svcs.WorkspaceID, duplicateID)
+			existing, lookupErr := existingWorkItemByExternalID(svcs.Session, svcs.WorkspaceID, duplicateID)
 			if lookupErr == nil {
-				return WorkItemDuplicatePromptMsg{
-					RequestedWorkItem: wi,
-					ExistingWorkItem:  existing,
+				return SessionDuplicatePromptMsg{
+					RequestedSession: wi,
+					ExistingSession:  existing,
 				}
 			}
 			return ErrMsg{Err: fmt.Errorf("work item already exists in this workspace: %s", label)}
 		}
 		return ErrMsg{Err: err}
 	}
-	return WorkItemCreatedMsg{WorkItem: wi, Message: "Session created: " + label}
+	return SessionCreatedMsg{Session: wi, Message: "Session created: " + label}
 }
 
 func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {

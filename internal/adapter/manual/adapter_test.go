@@ -53,8 +53,8 @@ func TestResolve_ValidInput(t *testing.T) {
 	if item.SourceScope != domain.ScopeManual {
 		t.Errorf("SourceScope = %q, want %q", item.SourceScope, domain.ScopeManual)
 	}
-	if item.State != domain.WorkItemIngested {
-		t.Errorf("State = %q, want %q", item.State, domain.WorkItemIngested)
+	if item.State != domain.SessionIngested {
+		t.Errorf("State = %q, want %q", item.State, domain.SessionIngested)
 	}
 	if item.ID == "" {
 		t.Error("ID must not be empty")

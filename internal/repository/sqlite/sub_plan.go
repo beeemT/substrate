@@ -20,28 +20,28 @@ type subPlanRow struct {
 	UpdatedAt string `db:"updated_at"`
 }
 
-func (r *subPlanRow) toDomain() (domain.SubPlan, error) {
+func (r *subPlanRow) toDomain() (domain.TaskPlan, error) {
 	createdAt, err := parseTime(r.CreatedAt)
 	if err != nil {
-		return domain.SubPlan{}, fmt.Errorf("created_at: %w", err)
+		return domain.TaskPlan{}, fmt.Errorf("created_at: %w", err)
 	}
 	updatedAt, err := parseTime(r.UpdatedAt)
 	if err != nil {
-		return domain.SubPlan{}, fmt.Errorf("updated_at: %w", err)
+		return domain.TaskPlan{}, fmt.Errorf("updated_at: %w", err)
 	}
-	return domain.SubPlan{
+	return domain.TaskPlan{
 		ID:             r.ID,
 		PlanID:         r.PlanID,
 		RepositoryName: r.RepoName,
 		Content:        r.Content,
 		Order:          r.ExecOrder,
-		Status:         domain.SubPlanStatus(r.Status),
+		Status:         domain.TaskPlanStatus(r.Status),
 		CreatedAt:      createdAt,
 		UpdatedAt:      updatedAt,
 	}, nil
 }
 
-func rowFromSubPlan(sp domain.SubPlan) subPlanRow {
+func rowFromSubPlan(sp domain.TaskPlan) subPlanRow {
 	return subPlanRow{
 		ID:        sp.ID,
 		PlanID:    sp.PlanID,
@@ -61,20 +61,20 @@ func NewSubPlanRepo(remote generic.SQLXRemote) SubPlanRepo {
 	return SubPlanRepo{remote: remote}
 }
 
-func (r SubPlanRepo) Get(ctx context.Context, id string) (domain.SubPlan, error) {
+func (r SubPlanRepo) Get(ctx context.Context, id string) (domain.TaskPlan, error) {
 	var row subPlanRow
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM sub_plans WHERE id = ?`, id); err != nil {
-		return domain.SubPlan{}, fmt.Errorf("get sub-plan %s: %w", id, err)
+		return domain.TaskPlan{}, fmt.Errorf("get sub-plan %s: %w", id, err)
 	}
 	return row.toDomain()
 }
 
-func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.SubPlan, error) {
+func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
 	var rows []subPlanRow
 	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM sub_plans WHERE plan_id = ? ORDER BY exec_order`, planID); err != nil {
 		return nil, fmt.Errorf("list sub-plans for plan %s: %w", planID, err)
 	}
-	sps := make([]domain.SubPlan, len(rows))
+	sps := make([]domain.TaskPlan, len(rows))
 	for i := range rows {
 		sp, err := rows[i].toDomain()
 		if err != nil {
@@ -85,7 +85,7 @@ func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.
 	return sps, nil
 }
 
-func (r SubPlanRepo) Create(ctx context.Context, sp domain.SubPlan) error {
+func (r SubPlanRepo) Create(ctx context.Context, sp domain.TaskPlan) error {
 	row := rowFromSubPlan(sp)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO sub_plans (id, plan_id, repo_name, content, exec_order, status, created_at, updated_at)
@@ -96,7 +96,7 @@ func (r SubPlanRepo) Create(ctx context.Context, sp domain.SubPlan) error {
 	return nil
 }
 
-func (r SubPlanRepo) Update(ctx context.Context, sp domain.SubPlan) error {
+func (r SubPlanRepo) Update(ctx context.Context, sp domain.TaskPlan) error {
 	row := rowFromSubPlan(sp)
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE sub_plans SET plan_id = :plan_id, repo_name = :repo_name, content = :content,

@@ -15,7 +15,7 @@ func TestSourceDetailsModelViewShowsSourceDetailsAndFitsSize(t *testing.T) {
 
 	m := views.NewSourceDetailsModel(newTestStyles(t))
 	m.SetSize(48, 18)
-	m.SetWorkItem(&domain.WorkItem{
+	m.SetSession(&domain.Session{
 		ID:            "wi-1",
 		ExternalID:    "SUB-1",
 		Source:        "github",

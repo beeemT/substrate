@@ -237,15 +237,15 @@ func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOp
 }
 
 // Resolve converts a user selection into a WorkItem, aggregating multiple items when needed.
-func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	switch sel.Scope {
 	case domain.ScopeIssues:
 		issues, err := a.fetchIssuesByIDs(ctx, sel.ItemIDs)
 		if err != nil {
-			return domain.WorkItem{}, fmt.Errorf("fetch issues: %w", err)
+			return domain.Session{}, fmt.Errorf("fetch issues: %w", err)
 		}
 		if len(issues) == 0 {
-			return domain.WorkItem{}, fmt.Errorf("no issues found for IDs: %v", sel.ItemIDs)
+			return domain.Session{}, fmt.Errorf("no issues found for IDs: %v", sel.ItemIDs)
 		}
 		if len(issues) == 1 {
 			return issueToWorkItem(issues[0]), nil
@@ -257,7 +257,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		for _, id := range sel.ItemIDs {
 			proj, err := a.fetchProjectWithIssues(ctx, id)
 			if err != nil {
-				return domain.WorkItem{}, fmt.Errorf("fetch project %s: %w", id, err)
+				return domain.Session{}, fmt.Errorf("fetch project %s: %w", id, err)
 			}
 			projects = append(projects, proj)
 		}
@@ -272,7 +272,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(firstID) > 8 {
 			extSuffix = firstID[:8]
 		}
-		return domain.WorkItem{
+		return domain.Session{
 			ID:            domain.NewID(),
 			ExternalID:    "LIN-PRJ-" + extSuffix,
 			Source:        "linear",
@@ -280,7 +280,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			SourceItemIDs: sel.ItemIDs,
 			Title:         strings.Join(names, ", "),
 			Description:   strings.Join(sections, "\n\n"),
-			State:         domain.WorkItemIngested,
+			State:         domain.SessionIngested,
 			Metadata: linearProjectMetadata(projects, domain.TrackerReference{
 				Provider: "linear",
 				Kind:     "project",
@@ -292,18 +292,18 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 
 	case domain.ScopeInitiatives:
 		if len(sel.ItemIDs) != 1 {
-			return domain.WorkItem{}, fmt.Errorf("initiatives scope requires exactly one ID, got %d", len(sel.ItemIDs))
+			return domain.Session{}, fmt.Errorf("initiatives scope requires exactly one ID, got %d", len(sel.ItemIDs))
 		}
 		id := sel.ItemIDs[0]
 		init, err := a.fetchInitiativeDeep(ctx, id)
 		if err != nil {
-			return domain.WorkItem{}, fmt.Errorf("fetch initiative %s: %w", id, err)
+			return domain.Session{}, fmt.Errorf("fetch initiative %s: %w", id, err)
 		}
 		extSuffix := id
 		if len(id) > 8 {
 			extSuffix = id[:8]
 		}
-		return domain.WorkItem{
+		return domain.Session{
 			ID:            domain.NewID(),
 			ExternalID:    "LIN-INIT-" + extSuffix,
 			Source:        "linear",
@@ -311,7 +311,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			SourceItemIDs: []string{id},
 			Title:         init.Name,
 			Description:   formatInitiativeWorkItem(init),
-			State:         domain.WorkItemIngested,
+			State:         domain.SessionIngested,
 			Metadata: linearInitiativeMetadata(init, domain.TrackerReference{
 				Provider: "linear",
 				Kind:     "initiative",
@@ -322,7 +322,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		}, nil
 
 	default:
-		return domain.WorkItem{}, fmt.Errorf("unsupported scope: %s", sel.Scope)
+		return domain.Session{}, fmt.Errorf("unsupported scope: %s", sel.Scope)
 	}
 }
 
@@ -358,7 +358,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 						}
 						ticker.Reset(backoff)
 					} else {
-						ch <- adapter.WorkItemEvent{Type: "error", WorkItem: domain.WorkItem{}, Timestamp: domain.Now()}
+						ch <- adapter.WorkItemEvent{Type: "error", WorkItem: domain.Session{}, Timestamp: domain.Now()}
 					}
 					continue
 				}
@@ -393,14 +393,14 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 
 // Fetch retrieves a work item by its Substrate ExternalID (e.g. "LIN-FOO-123").
 // It reconstructs the Linear identifier and queries by identifier.
-func (a *LinearAdapter) Fetch(ctx context.Context, externalID string) (domain.WorkItem, error) {
+func (a *LinearAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
 	identifier, err := substrateToLinearIdentifier(externalID)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("parse external ID: %w", err)
+		return domain.Session{}, fmt.Errorf("parse external ID: %w", err)
 	}
 	issue, err := a.fetchIssueByIdentifier(ctx, identifier)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("fetch issue by identifier %q: %w", identifier, err)
+		return domain.Session{}, fmt.Errorf("fetch issue by identifier %q: %w", identifier, err)
 	}
 	return issueToWorkItem(issue), nil
 }
@@ -678,12 +678,12 @@ func (a *LinearAdapter) externalIDToLinearID(ctx context.Context, externalID str
 
 // issueToWorkItem converts a linearIssue to a domain.WorkItem.
 // A new Substrate ID is generated on each call.
-func issueToWorkItem(issue linearIssue) domain.WorkItem {
+func issueToWorkItem(issue linearIssue) domain.Session {
 	assigneeID := ""
 	if issue.Assignee != nil {
 		assigneeID = issue.Assignee.ID
 	}
-	return domain.WorkItem{
+	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    linearExternalID(issue),
 		Source:        "linear",
@@ -692,7 +692,7 @@ func issueToWorkItem(issue linearIssue) domain.WorkItem {
 		Title:         issue.Title,
 		Description:   issue.Description,
 		Labels:        labelNames(issue.Labels),
-		State:         domain.WorkItemIngested,
+		State:         domain.SessionIngested,
 		AssigneeID:    assigneeID,
 		Metadata: linearIssueMetadata(issue, []domain.TrackerReference{{
 			Provider: "linear",
@@ -707,7 +707,7 @@ func issueToWorkItem(issue linearIssue) domain.WorkItem {
 
 // aggregateIssues merges multiple issues into a single WorkItem.
 // Must be called with at least 2 issues.
-func aggregateIssues(issues []linearIssue) domain.WorkItem {
+func aggregateIssues(issues []linearIssue) domain.Session {
 	// Deduplicate labels across all issues.
 	labelSet := make(map[string]struct{})
 	for _, issue := range issues {
@@ -733,7 +733,7 @@ func aggregateIssues(issues []linearIssue) domain.WorkItem {
 		sourceIDs[i] = issue.ID
 	}
 
-	return domain.WorkItem{
+	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    linearExternalID(issues[0]),
 		Source:        "linear",
@@ -742,7 +742,7 @@ func aggregateIssues(issues []linearIssue) domain.WorkItem {
 		Title:         issues[0].Title + fmt.Sprintf(" (+%d more)", len(issues)-1),
 		Description:   strings.Join(descs, "\n\n---\n\n"),
 		Labels:        labels,
-		State:         domain.WorkItemIngested,
+		State:         domain.SessionIngested,
 		Metadata:      linearIssueMetadata(issues[0], linearTrackerRefs(issues)),
 		CreatedAt:     derefTime(issues[0].CreatedAt),
 		UpdatedAt:     derefTime(issues[0].UpdatedAt),

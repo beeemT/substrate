@@ -23,18 +23,18 @@ const resumeLogLines = 50
 // Resumption handles Resume and Abandon workflows for interrupted agent sessions.
 type Resumption struct {
 	harness     adapter.AgentHarness
-	sessionSvc  *service.SessionService
+	sessionSvc  *service.TaskService
 	planSvc     *service.PlanService
-	sessionRepo repository.SessionRepository
+	sessionRepo repository.TaskRepository
 	eventBus    *event.Bus
 }
 
 // NewResumption creates a Resumption instance.
 func NewResumption(
 	harness adapter.AgentHarness,
-	sessionSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
-	sessionRepo repository.SessionRepository,
+	sessionRepo repository.TaskRepository,
 	eventBus *event.Bus,
 ) *Resumption {
 	return &Resumption{
@@ -48,7 +48,7 @@ func NewResumption(
 
 // ResumeSessionResult holds the outputs of a successful resume.
 type ResumeSessionResult struct {
-	NewSession     domain.AgentSession
+	NewSession     domain.Task
 	HarnessSession adapter.AgentSession
 }
 
@@ -56,7 +56,7 @@ type ResumeSessionResult struct {
 // The interrupted session remains in the DB as interrupted (audit trail).
 // The new session links to the same SubPlan and reuses the existing worktree.
 // currentInstanceID becomes the owner of the new session.
-func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.AgentSession, currentInstanceID string) (ResumeSessionResult, error) {
+func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task, currentInstanceID string) (ResumeSessionResult, error) {
 	if interrupted.Status != domain.AgentSessionInterrupted {
 		return ResumeSessionResult{}, fmt.Errorf("session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
 	}
@@ -83,7 +83,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 
 	// Create the new session record (pending).
 	now := time.Now()
-	newSession := domain.AgentSession{
+	newSession := domain.Task{
 		ID:              domain.NewID(),
 		WorkspaceID:     interrupted.WorkspaceID,
 		SubPlanID:       interrupted.SubPlanID,
@@ -164,7 +164,7 @@ func (r *Resumption) AbandonSession(ctx context.Context, id string) error {
 }
 
 // buildResumeSystemPrompt constructs the system prompt for a resumed agent session.
-func buildResumeSystemPrompt(subPlan domain.SubPlan, lastLogLines string) string {
+func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) string {
 	var sb strings.Builder
 	sb.WriteString("## Sub-Plan\n\n")
 	sb.WriteString(subPlan.Content)

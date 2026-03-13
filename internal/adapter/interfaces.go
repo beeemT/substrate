@@ -23,7 +23,7 @@ type WorkItemAdapter interface {
 	// Resolve converts a user's selection into a WorkItem.
 	// For multi-item selections (e.g., multiple issues), this aggregates
 	// them into a single comprehensive WorkItem.
-	Resolve(ctx context.Context, selection Selection) (domain.WorkItem, error)
+	Resolve(ctx context.Context, selection Selection) (domain.Session, error)
 
 	// Watch returns a channel that emits work item changes.
 	// Used for reactive auto-assignment when new work appears.
@@ -31,7 +31,7 @@ type WorkItemAdapter interface {
 	// The returned channel is closed when the context is canceled.
 	Watch(ctx context.Context, filter WorkItemFilter) (<-chan WorkItemEvent, error)
 	// Fetch retrieves a work item by its external ID.
-	Fetch(ctx context.Context, externalID string) (domain.WorkItem, error)
+	Fetch(ctx context.Context, externalID string) (domain.Session, error)
 
 	// UpdateState updates the work item's state in the external tracker.
 	// Maps TrackerState to the tracker's native states.

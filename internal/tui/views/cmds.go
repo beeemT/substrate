@@ -47,31 +47,31 @@ func HeartbeatTickCmd() tea.Cmd {
 	})
 }
 
-// LoadWorkItemsCmd fetches work items for a workspace from the DB.
-func LoadWorkItemsCmd(svc *service.WorkItemService, workspaceID string) tea.Cmd {
+// LoadSessionsCmd fetches sessions for a workspace from the DB.
+func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 	return func() tea.Msg {
-		filter := repository.WorkItemFilter{WorkspaceID: &workspaceID}
+		filter := repository.SessionFilter{WorkspaceID: &workspaceID}
 		items, err := svc.List(context.Background(), filter)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return WorkItemsLoadedMsg{WorkspaceID: workspaceID, Items: items}
+		return SessionsLoadedMsg{WorkspaceID: workspaceID, Items: items}
 	}
 }
 
-// LoadSessionsCmd fetches all agent sessions for a workspace.
-func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
+// LoadTasksCmd fetches all agent sessions for a workspace.
+func LoadTasksCmd(svc *service.TaskService, workspaceID string) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := svc.ListByWorkspaceID(context.Background(), workspaceID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return SessionsLoadedMsg{WorkspaceID: workspaceID, Sessions: sessions}
+		return TasksLoadedMsg{WorkspaceID: workspaceID, Sessions: sessions}
 	}
 }
 
 // SearchSessionHistoryCmd searches session history within the requested scope.
-func SearchSessionHistoryCmd(svc *service.SessionService, filter domain.SessionHistoryFilter) tea.Cmd {
+func SearchSessionHistoryCmd(svc *service.TaskService, filter domain.SessionHistoryFilter) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := svc.SearchHistory(context.Background(), filter)
 		if err != nil {
@@ -128,7 +128,7 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 
 // ApprovePlanCmd transitions work item to approved and emits plan approved.
 func ApprovePlanCmd(
-	workItemSvc *service.WorkItemService,
+	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
 	bus *event.Bus,
 	planID, workItemID string,
@@ -430,7 +430,7 @@ func SavePlanCmd(planSvc *service.PlanService, planID, content string) tea.Cmd {
 }
 
 // RejectPlanCmd transitions a work item and its plan back to the Ingested state.
-func RejectPlanCmd(workItemSvc *service.WorkItemService, planSvc *service.PlanService, workItemID, planID, reason string) tea.Cmd {
+func RejectPlanCmd(workItemSvc *service.SessionService, planSvc *service.PlanService, workItemID, planID, reason string) tea.Cmd {
 	return func() tea.Msg {
 		if err := planSvc.RejectPlan(context.Background(), planID); err != nil {
 			return ErrMsg{Err: err}
@@ -507,7 +507,7 @@ func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string
 
 // RunReviewSessionCmd runs the review pipeline for a single completed implementation session.
 // Returns ReviewCompleteMsg so the TUI can tail the review agent's log.
-func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *service.SessionService, sessionID string) tea.Cmd {
+func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *service.TaskService, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		session, err := sessionSvc.Get(context.Background(), sessionID)
 		if err != nil {
@@ -522,7 +522,7 @@ func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *serv
 }
 
 // ResumeSessionCmd resumes an interrupted agent session.
-func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.SessionService, oldSessionID, instanceID string) tea.Cmd {
+func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		session, err := sessionSvc.Get(context.Background(), oldSessionID)
 		if err != nil {
@@ -537,9 +537,9 @@ func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.S
 
 // OverrideAcceptCmd marks a work item completed despite outstanding critiques.
 func OverrideAcceptCmd(
-	workItemSvc *service.WorkItemService,
+	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
-	sessionSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	bus *event.Bus,
 	workItemID string,
 ) tea.Cmd {
@@ -555,7 +555,7 @@ func OverrideAcceptCmd(
 	}
 }
 
-func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.WorkItemService, planID, workItemID string) error {
+func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, planID, workItemID string) error {
 	if bus == nil {
 		return nil
 	}
@@ -581,7 +581,7 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
 }
 
-func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.SessionService, workItemSvc *service.WorkItemService, workItemID string) error {
+func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemSvc *service.SessionService, workItemID string) error {
 	if bus == nil {
 		return nil
 	}
@@ -623,7 +623,7 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 	})
 }
 
-func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.SessionService, workItemID string) (domain.ReviewRef, string, error) {
+func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemID string) (domain.ReviewRef, string, error) {
 	plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
 	if err != nil {
 		return domain.ReviewRef{}, "", err
@@ -658,7 +658,7 @@ func completionReviewContext(ctx context.Context, planSvc *service.PlanService, 
 	return domain.ReviewRef{}, "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
 }
 
-func workItemEventExternalIDs(workItem domain.WorkItem) []string {
+func workItemEventExternalIDs(workItem domain.Session) []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0, len(workItem.SourceItemIDs)+1)
 	appendID := func(id string) {

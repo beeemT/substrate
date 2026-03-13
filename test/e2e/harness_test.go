@@ -69,20 +69,20 @@ type testEnv struct {
 	sessionsDir  string // $SUBSTRATE_HOME/sessions
 
 	// Repos
-	workItemRepo  reposqlite.WorkItemRepo
+	workItemRepo  reposqlite.SessionRepo
 	planRepo      reposqlite.PlanRepo
 	subPlanRepo   reposqlite.SubPlanRepo
 	workspaceRepo reposqlite.WorkspaceRepo
-	sessionRepo   reposqlite.SessionRepo
+	sessionRepo   reposqlite.TaskRepo
 	reviewRepo    reposqlite.ReviewRepo
 	questionRepo  reposqlite.QuestionRepo
 	eventRepo     reposqlite.EventRepo
 	instanceRepo  reposqlite.InstanceRepo
 
 	// Services
-	workItemSvc  *service.WorkItemService
+	workItemSvc  *service.SessionService
 	planSvc      *service.PlanService
-	sessionSvc   *service.SessionService
+	sessionSvc   *service.TaskService
 	reviewSvc    *service.ReviewService
 	workspaceSvc *service.WorkspaceService
 	questionSvc  *service.QuestionService
@@ -144,20 +144,20 @@ func newTestEnv(t *testing.T) *testEnv {
 	// *sqlx.DB does not implement generic.SQLXRemote directly (missing
 	// NamedStmtContext).  Wrap it with dbRemote which adds the stub method.
 	dbR := newDBRemote(db)
-	workItemRepo := reposqlite.NewWorkItemRepo(dbR)
+	workItemRepo := reposqlite.NewSessionRepo(dbR)
 	planRepo := reposqlite.NewPlanRepo(dbR)
 	subPlanRepo := reposqlite.NewSubPlanRepo(dbR)
 	workspaceRepo := reposqlite.NewWorkspaceRepo(dbR)
-	sessionRepo := reposqlite.NewSessionRepo(dbR)
+	sessionRepo := reposqlite.NewTaskRepo(dbR)
 	reviewRepo := reposqlite.NewReviewRepo(dbR)
 	questionRepo := reposqlite.NewQuestionRepo(dbR)
 	eventRepo := reposqlite.NewEventRepo(dbR)
 	instanceRepo := reposqlite.NewInstanceRepo(dbR)
 
 	// --- Services ---
-	workItemSvc := service.NewWorkItemService(workItemRepo)
+	workItemSvc := service.NewSessionService(workItemRepo)
 	planSvc := service.NewPlanService(planRepo, subPlanRepo)
-	sessionSvc := service.NewSessionService(sessionRepo)
+	sessionSvc := service.NewTaskService(sessionRepo)
 	reviewSvc := service.NewReviewService(reviewRepo)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
 	questionSvc := service.NewQuestionService(questionRepo)
@@ -301,16 +301,16 @@ func (env *testEnv) createWorkspace(t *testing.T, ctx context.Context) domain.Wo
 }
 
 // createWorkItem inserts a WorkItem in ingested state and returns it.
-func (env *testEnv) createWorkItem(t *testing.T, ctx context.Context, wsID string) domain.WorkItem {
+func (env *testEnv) createWorkItem(t *testing.T, ctx context.Context, wsID string) domain.Session {
 	t.Helper()
-	item := domain.WorkItem{
+	item := domain.Session{
 		ID:          domain.NewID(),
 		WorkspaceID: wsID,
 		ExternalID:  "MAN-1",
 		Source:      "manual",
 		Title:       "Implement test feature",
 		Description: "E2E test work item for workflow validation.",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -321,7 +321,7 @@ func (env *testEnv) createWorkItem(t *testing.T, ctx context.Context, wsID strin
 }
 
 // requireWorkItemState asserts the work item is in the expected state.
-func (env *testEnv) requireWorkItemState(t *testing.T, ctx context.Context, id string, want domain.WorkItemState) {
+func (env *testEnv) requireWorkItemState(t *testing.T, ctx context.Context, id string, want domain.SessionState) {
 	t.Helper()
 	item, err := env.workItemSvc.Get(ctx, id)
 	if err != nil {

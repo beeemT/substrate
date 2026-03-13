@@ -85,8 +85,8 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("ListSubPlansByPlanID", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-1"] = domain.SubPlan{ID: "sp-1", PlanID: "plan-1", Status: domain.SubPlanPending}
-		subPlanRepo.subPlans["sp-2"] = domain.SubPlan{ID: "sp-2", PlanID: "plan-1", Status: domain.SubPlanPending}
+		subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", Status: domain.SubPlanPending}
+		subPlanRepo.subPlans["sp-2"] = domain.TaskPlan{ID: "sp-2", PlanID: "plan-1", Status: domain.SubPlanPending}
 		subPlanRepo.byPlan["plan-1"] = []string{"sp-1", "sp-2"}
 
 		got, err := svc.ListSubPlansByPlanID(ctx, "plan-1")
@@ -99,7 +99,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("CreateSubPlan", func(t *testing.T) {
-		sp := domain.SubPlan{
+		sp := domain.TaskPlan{
 			ID:             "sp-new",
 			PlanID:         "plan-1",
 			RepositoryName: "repo1",
@@ -119,7 +119,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("CreateSubPlan rejects non-pending status", func(t *testing.T) {
-		sp := domain.SubPlan{
+		sp := domain.TaskPlan{
 			ID:     "sp-bad",
 			PlanID: "plan-1",
 			Status: domain.SubPlanInProgress,
@@ -131,7 +131,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("StartSubPlan", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-start"] = domain.SubPlan{ID: "sp-start", PlanID: "plan-1", Status: domain.SubPlanPending}
+		subPlanRepo.subPlans["sp-start"] = domain.TaskPlan{ID: "sp-start", PlanID: "plan-1", Status: domain.SubPlanPending}
 		if err := svc.StartSubPlan(ctx, "sp-start"); err != nil {
 			t.Fatalf("StartSubPlan failed: %v", err)
 		}
@@ -142,7 +142,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("CompleteSubPlan", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-complete"] = domain.SubPlan{ID: "sp-complete", PlanID: "plan-1", Status: domain.SubPlanInProgress}
+		subPlanRepo.subPlans["sp-complete"] = domain.TaskPlan{ID: "sp-complete", PlanID: "plan-1", Status: domain.SubPlanInProgress}
 		if err := svc.CompleteSubPlan(ctx, "sp-complete"); err != nil {
 			t.Fatalf("CompleteSubPlan failed: %v", err)
 		}
@@ -153,7 +153,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("FailSubPlan", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-fail"] = domain.SubPlan{ID: "sp-fail", PlanID: "plan-1", Status: domain.SubPlanInProgress}
+		subPlanRepo.subPlans["sp-fail"] = domain.TaskPlan{ID: "sp-fail", PlanID: "plan-1", Status: domain.SubPlanInProgress}
 		if err := svc.FailSubPlan(ctx, "sp-fail"); err != nil {
 			t.Fatalf("FailSubPlan failed: %v", err)
 		}
@@ -164,7 +164,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("RetrySubPlan", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-retry"] = domain.SubPlan{ID: "sp-retry", PlanID: "plan-1", Status: domain.SubPlanFailed}
+		subPlanRepo.subPlans["sp-retry"] = domain.TaskPlan{ID: "sp-retry", PlanID: "plan-1", Status: domain.SubPlanFailed}
 		if err := svc.RetrySubPlan(ctx, "sp-retry"); err != nil {
 			t.Fatalf("RetrySubPlan failed: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("UpdateSubPlanContent", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-update"] = domain.SubPlan{ID: "sp-update", PlanID: "plan-1", Status: domain.SubPlanPending}
+		subPlanRepo.subPlans["sp-update"] = domain.TaskPlan{ID: "sp-update", PlanID: "plan-1", Status: domain.SubPlanPending}
 		if err := svc.UpdateSubPlanContent(ctx, "sp-update", "Updated content"); err != nil {
 			t.Fatalf("UpdateSubPlanContent failed: %v", err)
 		}
@@ -186,7 +186,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("DeleteSubPlan", func(t *testing.T) {
-		subPlanRepo.subPlans["sp-del"] = domain.SubPlan{ID: "sp-del", PlanID: "plan-1", Status: domain.SubPlanPending}
+		subPlanRepo.subPlans["sp-del"] = domain.TaskPlan{ID: "sp-del", PlanID: "plan-1", Status: domain.SubPlanPending}
 		subPlanRepo.byPlan["plan-1"] = append(subPlanRepo.byPlan["plan-1"], "sp-del")
 		if err := svc.DeleteSubPlan(ctx, "sp-del"); err != nil {
 			t.Fatalf("DeleteSubPlan failed: %v", err)
@@ -194,7 +194,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("CreateSubPlansBatch", func(t *testing.T) {
-		sps := []domain.SubPlan{
+		sps := []domain.TaskPlan{
 			{ID: "sp-b1", PlanID: "plan-1", RepositoryName: "repo1"},
 			{ID: "sp-b2", PlanID: "plan-1", RepositoryName: "repo2"},
 		}
@@ -207,9 +207,9 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 func TestSessionService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "session-1",
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
@@ -240,7 +240,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("WaitForAnswer", func(t *testing.T) {
-		repo.sessions["s-wait"] = domain.AgentSession{ID: "s-wait", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
+		repo.sessions["s-wait"] = domain.Task{ID: "s-wait", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
 		if err := svc.WaitForAnswer(ctx, "s-wait"); err != nil {
 			t.Fatalf("WaitForAnswer failed: %v", err)
 		}
@@ -251,7 +251,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("ResumeFromAnswer", func(t *testing.T) {
-		repo.sessions["s-resume"] = domain.AgentSession{ID: "s-resume", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
+		repo.sessions["s-resume"] = domain.Task{ID: "s-resume", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
 		if err := svc.ResumeFromAnswer(ctx, "s-resume"); err != nil {
 			t.Fatalf("ResumeFromAnswer failed: %v", err)
 		}
@@ -262,7 +262,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("Resume", func(t *testing.T) {
-		repo.sessions["s-resume2"] = domain.AgentSession{ID: "s-resume2", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
+		repo.sessions["s-resume2"] = domain.Task{ID: "s-resume2", WorkspaceID: "ws-1", SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
 		if err := svc.Resume(ctx, "s-resume2"); err != nil {
 			t.Fatalf("Resume failed: %v", err)
 		}
@@ -293,7 +293,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		repo.sessions["s-del"] = domain.AgentSession{ID: "s-del", WorkspaceID: "ws-1", SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
+		repo.sessions["s-del"] = domain.Task{ID: "s-del", WorkspaceID: "ws-1", SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
 		repo.bySubPlan["sp-del"] = []string{"s-del"}
 		repo.byWorkspace["ws-1"] = append(repo.byWorkspace["ws-1"], "s-del")
 		if err := svc.Delete(ctx, "s-del"); err != nil {
@@ -533,7 +533,7 @@ func TestErrors(t *testing.T) {
 func TestSessionService_FindRunningByOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
 	// FindRunningByOwner is a placeholder - just verify it returns nil
 	result, err := svc.FindRunningByOwner(ctx, "instance-1")
@@ -610,7 +610,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 func TestSessionService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewSessionService(repo)
+	svc := NewTaskService(repo)
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")

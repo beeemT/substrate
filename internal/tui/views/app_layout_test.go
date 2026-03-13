@@ -33,7 +33,7 @@ func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
 	})
-	app.sessions = []domain.AgentSession{
+	app.sessions = []domain.Task{
 		{ID: "pending", Status: domain.AgentSessionPending},
 		{ID: "running", Status: domain.AgentSessionRunning},
 		{ID: "waiting", Status: domain.AgentSessionWaitingForAnswer},
@@ -55,11 +55,11 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	app.currentWorkItemID = "wi-1"
 	app.taskSessionSelectionByWorkItem["wi-1"] = "sess-1"
 	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
-	app.subPlans["plan-1"] = []domain.SubPlan{{ID: "sp-1", PlanID: "plan-1"}}
-	app.sessions = []domain.AgentSession{{ID: "sess-1", SubPlanID: "sp-1", Status: domain.AgentSessionCompleted}}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1"}}
+	app.sessions = []domain.Task{{ID: "sess-1", SubPlanID: "sp-1", Status: domain.AgentSessionCompleted}}
 
-	if got := app.deletableSessionID(); got != "sess-1" {
-		t.Fatalf("deletable session id = %q, want sess-1", got)
+	if got := app.deletableSessionID(); got != "wi-1" {
+		t.Fatalf("deletable session id = %q, want wi-1", got)
 	}
 
 	hints := app.currentHints()
@@ -86,7 +86,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 		t.Fatal("expected delete shortcut to open confirm dialog")
 	}
 	confirmView := stripBrowseANSI(updated.confirm.View())
-	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "review data") {
+	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "full session") {
 		t.Fatalf("confirm view = %q, want delete session confirmation copy", confirmView)
 	}
 }
@@ -96,8 +96,8 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *
 
 	app := newSidebarDrilldownTestApp()
 
-	if got := app.deletableSessionID(); got != "sess-1" {
-		t.Fatalf("deletable session id = %q, want sess-1", got)
+	if got := app.deletableSessionID(); got != "wi-1" {
+		t.Fatalf("deletable session id = %q, want wi-1", got)
 	}
 
 	hints := app.currentHints()
@@ -124,7 +124,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *
 		t.Fatal("expected delete shortcut to open confirm dialog")
 	}
 	confirmView := stripBrowseANSI(updated.confirm.View())
-	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "review data") {
+	if !strings.Contains(confirmView, "Delete Session") || !strings.Contains(confirmView, "full session") {
 		t.Fatalf("confirm view = %q, want delete session confirmation copy", confirmView)
 	}
 }
@@ -138,8 +138,8 @@ func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
 	updated := model.(App)
 
-	if got := updated.deletableSessionID(); got != "sess-1" {
-		t.Fatalf("deletable session id = %q, want sess-1", got)
+	if got := updated.deletableSessionID(); got != "wi-1" {
+		t.Fatalf("deletable session id = %q, want wi-1", got)
 	}
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 72, 18)
@@ -401,7 +401,7 @@ func TestAppViewWithSessionInteractionFitsWindow(t *testing.T) {
 		Title:          "Investigate overflow",
 		WorkspaceName:  "workspace",
 		RepositoryName: "repo-1",
-		State:          domain.WorkItemImplementing,
+		State:          domain.SessionImplementing,
 		SessionStatus:  domain.AgentSessionRunning,
 	}})
 	app.content.SetSessionInteraction(
@@ -423,9 +423,9 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 		WorkItemID: "wi-1",
 		ExternalID: "SUB-1",
 		Title:      "Investigate overflow",
-		State:      domain.WorkItemIngested,
+		State:      domain.SessionIngested,
 	}})
-	app.content.SetWorkItem(&domain.WorkItem{
+	app.content.SetWorkItem(&domain.Session{
 		ID:          "wi-1",
 		ExternalID:  "SUB-1",
 		Source:      "github",
@@ -435,7 +435,7 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 		Metadata: map[string]any{
 			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
 		},
-		State: domain.WorkItemIngested,
+		State: domain.SessionIngested,
 	})
 	app.content.SetMode(ContentModeReadyToPlan)
 
@@ -467,14 +467,14 @@ func TestAppViewWithImplementingSessionFitsWindow(t *testing.T) {
 		WorkItemID:    "wi-1",
 		ExternalID:    "SUB-1",
 		Title:         "Implement overflow fix",
-		State:         domain.WorkItemImplementing,
+		State:         domain.SessionImplementing,
 		SessionStatus: domain.AgentSessionRunning,
 	}})
-	app.content.SetWorkItem(&domain.WorkItem{
+	app.content.SetWorkItem(&domain.Session{
 		ID:         "wi-1",
 		ExternalID: "SUB-1",
 		Title:      "Implement overflow fix",
-		State:      domain.WorkItemImplementing,
+		State:      domain.SessionImplementing,
 	})
 	app.content.SetMode(ContentModeImplementing)
 	app.content.implementing.SetRepos([]RepoProgress{{
@@ -493,13 +493,13 @@ func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
 
 	app := sizedLayoutTestApp(t, 48, 14)
 	app.showDuplicateSessionDialog(
-		domain.WorkItem{ID: "wi-requested", ExternalID: "SUB-99", Title: "Requested item"},
-		domain.WorkItem{ID: "wi-existing", ExternalID: "SUB-1", Title: "Existing item", State: domain.WorkItemIngested},
+		domain.Session{ID: "wi-requested", ExternalID: "SUB-99", Title: "Requested item"},
+		domain.Session{ID: "wi-existing", ExternalID: "SUB-1", Title: "Existing item", State: domain.SessionIngested},
 	)
 
 	lines := assertAppViewFitsWindow(t, app.View(), 48, 14)
 	plain := ansi.Strip(strings.Join(lines, "\n"))
-	for _, want := range []string{"Work item already exists", "Existing work item:", "Open existing", "Start planning"} {
+	for _, want := range []string{"Session already exists", "Existing session:", "Open existing", "Start planning"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q in duplicate-session dialog", plain, want)
 		}

@@ -20,21 +20,21 @@ type WorkspaceStore interface {
 	CountManualWorkItems(ctx context.Context, workspaceID string) (int, error)
 }
 
-// workItemStoreAdapter wraps a WorkItemRepository to satisfy WorkspaceStore.
+// workItemStoreAdapter wraps a SessionRepository to satisfy WorkspaceStore.
 type workItemStoreAdapter struct {
-	repo        repository.WorkItemRepository
+	repo        repository.SessionRepository
 	workspaceID string
 }
 
-// NewWorkspaceStore constructs a WorkspaceStore backed by a WorkItemRepository.
-func NewWorkspaceStore(repo repository.WorkItemRepository, workspaceID string) WorkspaceStore {
+// NewWorkspaceStore constructs a WorkspaceStore backed by a SessionRepository.
+func NewWorkspaceStore(repo repository.SessionRepository, workspaceID string) WorkspaceStore {
 	return &workItemStoreAdapter{repo: repo, workspaceID: workspaceID}
 }
 
 func (s *workItemStoreAdapter) CountManualWorkItems(ctx context.Context, workspaceID string) (int, error) {
 	src := "manual"
 	wsID := workspaceID
-	items, err := s.repo.List(ctx, repository.WorkItemFilter{
+	items, err := s.repo.List(ctx, repository.SessionFilter{
 		WorkspaceID: &wsID,
 		Source:      &src,
 		Limit:       10000, // safe upper bound for count
@@ -75,27 +75,27 @@ func (a *ManualAdapter) ListSelectable(_ context.Context, _ adapter.ListOpts) (*
 }
 
 // Resolve converts a manual selection into a WorkItem with a stable ExternalID.
-func (a *ManualAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *ManualAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	if sel.Manual == nil {
-		return domain.WorkItem{}, fmt.Errorf("manual adapter requires sel.Manual to be set")
+		return domain.Session{}, fmt.Errorf("manual adapter requires sel.Manual to be set")
 	}
 
 	n, err := a.store.CountManualWorkItems(ctx, a.workspaceID)
 	if err != nil {
-		return domain.WorkItem{}, fmt.Errorf("resolve manual work item: %w", err)
+		return domain.Session{}, fmt.Errorf("resolve manual work item: %w", err)
 	}
 
 	externalID := fmt.Sprintf("MAN-%d", n+1)
 	now := domain.Now()
 
-	return domain.WorkItem{
+	return domain.Session{
 		ID:          domain.NewID(),
 		ExternalID:  externalID,
 		Source:      "manual",
 		SourceScope: domain.ScopeManual,
 		Title:       sel.Manual.Title,
 		Description: sel.Manual.Description,
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -109,8 +109,8 @@ func (a *ManualAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-ch
 }
 
 // Fetch is not supported; manual work items have no external tracker to sync from.
-func (a *ManualAdapter) Fetch(_ context.Context, _ string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, ErrNotSupported
+func (a *ManualAdapter) Fetch(_ context.Context, _ string) (domain.Session, error) {
+	return domain.Session{}, ErrNotSupported
 }
 
 // UpdateState is a no-op for the manual adapter.

@@ -25,10 +25,10 @@ type ReviewPipeline struct {
 	cfg         *config.Config
 	harness     adapter.AgentHarness
 	reviewSvc   *service.ReviewService
-	sessionSvc  *service.SessionService
+	sessionSvc  *service.TaskService
 	planSvc     *service.PlanService
-	workItemSvc *service.WorkItemService
-	sessionRepo repository.SessionRepository
+	workItemSvc *service.SessionService
+	sessionRepo repository.TaskRepository
 	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
 }
@@ -38,10 +38,10 @@ func NewReviewPipeline(
 	cfg *config.Config,
 	harness adapter.AgentHarness,
 	reviewSvc *service.ReviewService,
-	sessionSvc *service.SessionService,
+	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
-	workItemSvc *service.WorkItemService,
-	sessionRepo repository.SessionRepository,
+	workItemSvc *service.SessionService,
+	sessionRepo repository.TaskRepository,
 	planRepo repository.PlanRepository,
 	eventBus *event.Bus,
 ) *ReviewPipeline {
@@ -97,7 +97,7 @@ type ReimplementationStartedPayload struct {
 }
 
 // ReviewSession reviews an agent session's output.
-func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.AgentSession) (*ReviewResult, error) {
+func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task) (*ReviewResult, error) {
 	// Get existing review cycles
 	cycles, err := p.reviewSvc.ListCyclesBySessionID(ctx, session.ID)
 	if err != nil {
@@ -232,7 +232,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Agent
 }
 
 // startReviewAgent starts a review agent session and returns the session (still alive) along with output.
-func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.AgentSession, subPlan domain.SubPlan, plan domain.Plan, cycle domain.ReviewCycle) (adapter.AgentSession, string, string, error) {
+func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Task, subPlan domain.TaskPlan, plan domain.Plan, cycle domain.ReviewCycle) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
 
@@ -282,7 +282,7 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ag
 }
 
 // buildReviewPrompt builds the prompt for the review agent.
-func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.SubPlan, plan domain.Plan) string {
+func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.TaskPlan, plan domain.Plan) string {
 	prompt := `## Task
 
 Review the changes in this repository against the plan. Compare the feature branch against main. Identify correctness, completeness, and quality issues.

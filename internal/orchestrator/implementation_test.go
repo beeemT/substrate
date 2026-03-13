@@ -18,19 +18,19 @@ import (
 func TestBuildWaves(t *testing.T) {
 	tests := []struct {
 		name        string
-		subPlans    []domain.SubPlan
+		subPlans    []domain.TaskPlan
 		wantWaves   int
 		wantPerWave []int
 	}{
 		{
 			name:        "empty sub-plans",
-			subPlans:    []domain.SubPlan{},
+			subPlans:    []domain.TaskPlan{},
 			wantWaves:   0,
 			wantPerWave: nil,
 		},
 		{
 			name: "single sub-plan",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 			},
 			wantWaves:   1,
@@ -38,7 +38,7 @@ func TestBuildWaves(t *testing.T) {
 		},
 		{
 			name: "two parallel sub-plans (same order)",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 				{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 			},
@@ -47,7 +47,7 @@ func TestBuildWaves(t *testing.T) {
 		},
 		{
 			name: "two sequential sub-plans (different orders)",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 				{ID: "sp2", Order: 1, RepositoryName: "repo2"},
 			},
@@ -56,7 +56,7 @@ func TestBuildWaves(t *testing.T) {
 		},
 		{
 			name: "three sub-plans with mixed orders [0,0,1]",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 				{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 				{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -66,7 +66,7 @@ func TestBuildWaves(t *testing.T) {
 		},
 		{
 			name: "complex wave pattern [0,0,1,2,2,2]",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 				{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 				{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -79,7 +79,7 @@ func TestBuildWaves(t *testing.T) {
 		},
 		{
 			name: "sparse orders [0,2,5]",
-			subPlans: []domain.SubPlan{
+			subPlans: []domain.TaskPlan{
 				{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 				{ID: "sp2", Order: 2, RepositoryName: "repo2"},
 				{ID: "sp3", Order: 5, RepositoryName: "repo3"},
@@ -109,7 +109,7 @@ func TestBuildWaves(t *testing.T) {
 // TestBuildWavesOrderPreservation tests that waves are ordered by Order value.
 func TestBuildWavesOrderPreservation(t *testing.T) {
 	// Sub-plans with orders 2, 0, 1 (out of order)
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 2, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 		{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -134,7 +134,7 @@ func TestBuildWavesOrderPreservation(t *testing.T) {
 
 // TestBuildWavesRaceCondition tests that BuildWaves is safe for concurrent use.
 func TestBuildWavesRaceCondition(t *testing.T) {
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 		{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -156,7 +156,7 @@ func TestBuildWavesRaceCondition(t *testing.T) {
 
 // TestExecutionState tests the ExecutionState tracking.
 func TestExecutionState(t *testing.T) {
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 		{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -209,7 +209,7 @@ func TestExecutionState(t *testing.T) {
 
 // TestExecutionStateFailure tests failure handling in execution state.
 func TestExecutionStateFailure(t *testing.T) {
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 	}
@@ -364,7 +364,7 @@ func TestWaveTimingConcurrentStart(t *testing.T) {
 	// This test verifies that sub-plans in the same wave can execute concurrently.
 	// We use a mock scenario to verify the timing characteristics.
 
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 		{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -390,7 +390,7 @@ func TestWaveTimingConcurrentStart(t *testing.T) {
 
 // TestGetWaveSubPlans tests getting sub-plan IDs for a specific wave.
 func TestGetWaveSubPlans(t *testing.T) {
-	subPlans := []domain.SubPlan{
+	subPlans := []domain.TaskPlan{
 		{ID: "sp1", Order: 0, RepositoryName: "repo1"},
 		{ID: "sp2", Order: 0, RepositoryName: "repo2"},
 		{ID: "sp3", Order: 1, RepositoryName: "repo3"},
@@ -420,7 +420,7 @@ func TestGetWaveSubPlans(t *testing.T) {
 // TestAllWavesCompletedEmptyPlan verifies that a plan with no sub-plans does not
 // vacuously report completion.
 func TestAllWavesCompletedEmptyPlan(t *testing.T) {
-	state := NewExecutionState("plan-empty", []domain.SubPlan{})
+	state := NewExecutionState("plan-empty", []domain.TaskPlan{})
 	if state.AllWavesCompleted() {
 		t.Error("AllWavesCompleted() = true for empty plan, want false")
 	}
@@ -428,38 +428,38 @@ func TestAllWavesCompletedEmptyPlan(t *testing.T) {
 
 type implementationWorkItemRepo struct {
 	mu         sync.Mutex
-	items      map[string]domain.WorkItem
-	updateHook func(context.Context, domain.WorkItem) error
+	items      map[string]domain.Session
+	updateHook func(context.Context, domain.Session) error
 }
 
-func (r *implementationWorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, error) {
+func (r *implementationWorkItemRepo) Get(ctx context.Context, id string) (domain.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.items[id]
 	if !ok {
-		return domain.WorkItem{}, repository.ErrNotFound
+		return domain.Session{}, repository.ErrNotFound
 	}
 	return item, nil
 }
 
-func (r *implementationWorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (r *implementationWorkItemRepo) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	items := make([]domain.WorkItem, 0, len(r.items))
+	items := make([]domain.Session, 0, len(r.items))
 	for _, item := range r.items {
 		items = append(items, item)
 	}
 	return items, nil
 }
 
-func (r *implementationWorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error {
+func (r *implementationWorkItemRepo) Create(ctx context.Context, item domain.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.items[item.ID] = item
 	return nil
 }
 
-func (r *implementationWorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error {
+func (r *implementationWorkItemRepo) Update(ctx context.Context, item domain.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updateHook != nil {
@@ -549,8 +549,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 	}
 
 	subPlanRepo := newMockSubPlanRepo()
-	subPlanRepo.subPlans["sp-1"] = domain.SubPlan{
-		ID:             "sp-1",
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{
 		PlanID:         "plan-1",
 		RepositoryName: repoName,
 		Content:        "Implement the change",
@@ -559,14 +558,14 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 	}
 
 	workItemRepo := &implementationWorkItemRepo{
-		items: map[string]domain.WorkItem{
+		items: map[string]domain.Session{
 			"wi-1": {
 				ID:          "wi-1",
 				WorkspaceID: "ws-1",
 				ExternalID:  "MAN-1",
 				Source:      "manual",
 				Title:       "Implement the change",
-				State:       domain.WorkItemApproved,
+				State:       domain.SessionApproved,
 			},
 		},
 	}
@@ -588,8 +587,8 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		nil,
 		nil,
 		service.NewPlanService(planRepo, subPlanRepo),
-		service.NewWorkItemService(workItemRepo),
-		service.NewSessionService(sessionRepo),
+		service.NewSessionService(workItemRepo),
+		service.NewTaskService(sessionRepo),
 		subPlanRepo,
 		sessionRepo,
 		eventRepo,
@@ -615,8 +614,8 @@ func TestImplement_DiscoverRepoFailureKeepsWorkItemApproved(t *testing.T) {
 	if getErr != nil {
 		t.Fatalf("get work item: %v", getErr)
 	}
-	if workItem.State != domain.WorkItemApproved {
-		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemApproved)
+	if workItem.State != domain.SessionApproved {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionApproved)
 	}
 	if len(eventRepo.events) != 0 {
 		t.Fatalf("expected no implementation-started events, got %d", len(eventRepo.events))
@@ -638,8 +637,8 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 	if getErr != nil {
 		t.Fatalf("get work item: %v", getErr)
 	}
-	if workItem.State != domain.WorkItemFailed {
-		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemFailed)
+	if workItem.State != domain.SessionFailed {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionFailed)
 	}
 	if len(eventRepo.events) != 1 {
 		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
@@ -654,8 +653,8 @@ func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	workItemRepo.updateHook = func(ctx context.Context, item domain.WorkItem) error {
-		if item.State == domain.WorkItemImplementing {
+	workItemRepo.updateHook = func(ctx context.Context, item domain.Session) error {
+		if item.State == domain.SessionImplementing {
 			cancel()
 			return nil
 		}
@@ -677,8 +676,8 @@ func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.
 	if getErr != nil {
 		t.Fatalf("get work item: %v", getErr)
 	}
-	if workItem.State != domain.WorkItemFailed {
-		t.Fatalf("work item state = %q, want %q", workItem.State, domain.WorkItemFailed)
+	if workItem.State != domain.SessionFailed {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionFailed)
 	}
 	if len(eventRepo.events) != 1 {
 		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
@@ -707,15 +706,15 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 	subPlan := subPlanRepo.subPlans["sp-1"]
 	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
 	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
-	workItem := domain.WorkItem{
+	workItem := domain.Session{
 		ID:          "wi-1",
 		WorkspaceID: "ws-1",
 		ExternalID:  "MAN-1",
 		Source:      "manual",
 		Title:       "Implement the change",
-		State:       domain.WorkItemImplementing,
+		State:       domain.SessionImplementing,
 	}
-	state := NewExecutionState("plan-1", []domain.SubPlan{subPlan})
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
 
 	result, warning := svc.executeSubPlan(
 		context.Background(),

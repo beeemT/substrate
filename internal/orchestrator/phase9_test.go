@@ -159,26 +159,26 @@ func (r *mockPlanRepo) AppendFAQ(ctx context.Context, entry domain.FAQEntry) err
 
 type mockSubPlanRepo struct {
 	mu       sync.Mutex
-	subPlans map[string]domain.SubPlan
+	subPlans map[string]domain.TaskPlan
 }
 
 func newMockSubPlanRepo() *mockSubPlanRepo {
-	return &mockSubPlanRepo{subPlans: make(map[string]domain.SubPlan)}
+	return &mockSubPlanRepo{subPlans: make(map[string]domain.TaskPlan)}
 }
 
-func (r *mockSubPlanRepo) Get(ctx context.Context, id string) (domain.SubPlan, error) {
+func (r *mockSubPlanRepo) Get(ctx context.Context, id string) (domain.TaskPlan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sp, ok := r.subPlans[id]; ok {
 		return sp, nil
 	}
-	return domain.SubPlan{}, repository.ErrNotFound
+	return domain.TaskPlan{}, repository.ErrNotFound
 }
 
-func (r *mockSubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.SubPlan, error) {
+func (r *mockSubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.SubPlan
+	var result []domain.TaskPlan
 	for _, sp := range r.subPlans {
 		if sp.PlanID == planID {
 			result = append(result, sp)
@@ -187,14 +187,14 @@ func (r *mockSubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]do
 	return result, nil
 }
 
-func (r *mockSubPlanRepo) Create(ctx context.Context, sp domain.SubPlan) error {
+func (r *mockSubPlanRepo) Create(ctx context.Context, sp domain.TaskPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subPlans[sp.ID] = sp
 	return nil
 }
 
-func (r *mockSubPlanRepo) Update(ctx context.Context, sp domain.SubPlan) error {
+func (r *mockSubPlanRepo) Update(ctx context.Context, sp domain.TaskPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subPlans[sp.ID] = sp
@@ -210,32 +210,32 @@ func (r *mockSubPlanRepo) Delete(ctx context.Context, id string) error {
 
 type mockSessionRepo struct {
 	mu              sync.Mutex
-	sessions        map[string]domain.AgentSession
+	sessions        map[string]domain.Task
 	searchHistory   []domain.SessionHistoryEntry
 	updateErr       error
-	updateErrStatus domain.AgentSessionStatus
+	updateErrStatus domain.TaskStatus
 	deleteErr       error
-	updateHook      func(context.Context, domain.AgentSession) error
+	updateHook      func(context.Context, domain.Task) error
 	deleteHook      func(context.Context, string) error
 }
 
 func newMockSessionRepo() *mockSessionRepo {
-	return &mockSessionRepo{sessions: make(map[string]domain.AgentSession)}
+	return &mockSessionRepo{sessions: make(map[string]domain.Task)}
 }
 
-func (r *mockSessionRepo) Get(ctx context.Context, id string) (domain.AgentSession, error) {
+func (r *mockSessionRepo) Get(ctx context.Context, id string) (domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s, ok := r.sessions[id]; ok {
 		return s, nil
 	}
-	return domain.AgentSession{}, repository.ErrNotFound
+	return domain.Task{}, repository.ErrNotFound
 }
 
-func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error) {
+func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, s := range r.sessions {
 		if s.SubPlanID == subPlanID {
 			result = append(result, s)
@@ -244,10 +244,10 @@ func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string)
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
+func (r *mockSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, s := range r.sessions {
 		if s.WorkspaceID == workspaceID {
 			result = append(result, s)
@@ -256,10 +256,10 @@ func (r *mockSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID str
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
+func (r *mockSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.AgentSession
+	var result []domain.Task
 	for _, s := range r.sessions {
 		if s.OwnerInstanceID != nil && *s.OwnerInstanceID == instanceID {
 			result = append(result, s)
@@ -276,14 +276,14 @@ func (r *mockSessionRepo) SearchHistory(ctx context.Context, filter domain.Sessi
 	return entries, nil
 }
 
-func (r *mockSessionRepo) Create(ctx context.Context, s domain.AgentSession) error {
+func (r *mockSessionRepo) Create(ctx context.Context, s domain.Task) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[s.ID] = s
 	return nil
 }
 
-func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
+func (r *mockSessionRepo) Update(ctx context.Context, s domain.Task) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updateHook != nil {
@@ -446,16 +446,16 @@ func (r *mockQuestionRepo) Update(ctx context.Context, q domain.Question) error 
 
 type mockWorkItemRepo struct{}
 
-func (r *mockWorkItemRepo) Get(ctx context.Context, id string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, repository.ErrNotFound
+func (r *mockWorkItemRepo) Get(ctx context.Context, id string) (domain.Session, error) {
+	return domain.Session{}, repository.ErrNotFound
 }
 
-func (r *mockWorkItemRepo) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (r *mockWorkItemRepo) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	return nil, nil
 }
-func (r *mockWorkItemRepo) Create(ctx context.Context, item domain.WorkItem) error { return nil }
-func (r *mockWorkItemRepo) Update(ctx context.Context, item domain.WorkItem) error { return nil }
-func (r *mockWorkItemRepo) Delete(ctx context.Context, id string) error            { return nil }
+func (r *mockWorkItemRepo) Create(ctx context.Context, item domain.Session) error { return nil }
+func (r *mockWorkItemRepo) Update(ctx context.Context, item domain.Session) error { return nil }
+func (r *mockWorkItemRepo) Delete(ctx context.Context, id string) error           { return nil }
 
 // ============================================================
 // Test helpers
@@ -515,8 +515,8 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	cfg := testReviewConfig(maxCycles)
 	reviewSvc := service.NewReviewService(reviewRepo)
 	planSvc := service.NewPlanService(planRepo, subPlanRepo)
-	sessionSvc := service.NewSessionService(sessionRepo)
-	workItemSvc := service.NewWorkItemService(workItemRepo)
+	sessionSvc := service.NewTaskService(sessionRepo)
+	workItemSvc := service.NewSessionService(workItemRepo)
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
 
@@ -534,8 +534,8 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 }
 
 // seedPlanAndSubPlan creates a plan+subplan in the fixture's repos and returns
-// a domain.AgentSession whose SubPlanID points to the sub-plan.
-func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSession {
+// a domain.Task whose SubPlanID points to the sub-plan.
+func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.Task {
 	t.Helper()
 
 	planID := "plan-1"
@@ -546,12 +546,12 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSes
 		t.Fatalf("create plan: %v", err)
 	}
 
-	subPlan := domain.SubPlan{ID: subPlanID, PlanID: planID, Content: "test sub-plan", Order: 0}
+	subPlan := domain.TaskPlan{ID: subPlanID, PlanID: planID, Content: "test sub-plan", Order: 0}
 	if err := f.subPlanRepo.Create(context.Background(), subPlan); err != nil {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	return domain.AgentSession{
+	return domain.Task{
 		ID:          "session-1",
 		WorkspaceID: "ws-1",
 		SubPlanID:   subPlanID,

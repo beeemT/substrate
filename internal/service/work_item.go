@@ -10,31 +10,31 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
-// WorkItemService provides business logic for work items.
-type WorkItemService struct {
-	repo repository.WorkItemRepository
+// SessionService provides business logic for work items.
+type SessionService struct {
+	repo repository.SessionRepository
 }
 
-// NewWorkItemService creates a new WorkItemService.
-func NewWorkItemService(repo repository.WorkItemRepository) *WorkItemService {
-	return &WorkItemService{repo: repo}
+// NewSessionService creates a new WorkItemService.
+func NewSessionService(repo repository.SessionRepository) *SessionService {
+	return &SessionService{repo: repo}
 }
 
-// validWorkItemTransitions defines the allowed state transitions.
-var validWorkItemTransitions = map[domain.WorkItemState][]domain.WorkItemState{
-	domain.WorkItemIngested:     {domain.WorkItemPlanning},
-	domain.WorkItemPlanning:     {domain.WorkItemPlanReview, domain.WorkItemIngested, domain.WorkItemFailed},
-	domain.WorkItemPlanReview:   {domain.WorkItemApproved, domain.WorkItemPlanning, domain.WorkItemFailed},
-	domain.WorkItemApproved:     {domain.WorkItemImplementing, domain.WorkItemFailed},
-	domain.WorkItemImplementing: {domain.WorkItemReviewing, domain.WorkItemFailed},
-	domain.WorkItemReviewing:    {domain.WorkItemCompleted, domain.WorkItemImplementing, domain.WorkItemFailed},
-	domain.WorkItemCompleted:    {}, // Terminal state
-	domain.WorkItemFailed:       {}, // Terminal state
+// validSessionTransitions defines the allowed state transitions.
+var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
+	domain.SessionIngested:     {domain.SessionPlanning},
+	domain.SessionPlanning:     {domain.SessionIngested, domain.SessionPlanReview, domain.SessionFailed},
+	domain.SessionPlanReview:   {domain.SessionApproved, domain.SessionPlanning, domain.SessionFailed},
+	domain.SessionApproved:     {domain.SessionImplementing, domain.SessionFailed},
+	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionFailed},
+	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
+	domain.SessionCompleted:    {}, // Terminal state
+	domain.SessionFailed:       {}, // Terminal state
 }
 
 // canTransition checks if a state transition is valid.
-func canTransition(from, to domain.WorkItemState) bool {
-	allowed, exists := validWorkItemTransitions[from]
+func canTransition(from, to domain.SessionState) bool {
+	allowed, exists := validSessionTransitions[from]
 	if !exists {
 		return false
 	}
@@ -47,36 +47,36 @@ func canTransition(from, to domain.WorkItemState) bool {
 }
 
 // Get retrieves a work item by ID.
-func (s *WorkItemService) Get(ctx context.Context, id string) (domain.WorkItem, error) {
+func (s *SessionService) Get(ctx context.Context, id string) (domain.Session, error) {
 	item, err := s.repo.Get(ctx, id)
 	if err != nil {
-		return domain.WorkItem{}, newNotFoundError("work item", id)
+		return domain.Session{}, newNotFoundError("work item", id)
 	}
 	return item, nil
 }
 
 // List retrieves work items based on filter.
-func (s *WorkItemService) List(ctx context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (s *SessionService) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	return s.repo.List(ctx, filter)
 }
 
 // Create creates a new work item in the ingested state.
-func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) error {
+func (s *SessionService) Create(ctx context.Context, item domain.Session) error {
 	if strings.TrimSpace(item.WorkspaceID) == "" {
 		return newInvalidInputError("workspace_id is required", "workspace_id")
 	}
 	// Set initial state if not set
 	if item.State == "" {
-		item.State = domain.WorkItemIngested
+		item.State = domain.SessionIngested
 	}
 	// Validate initial state
-	if item.State != domain.WorkItemIngested {
+	if item.State != domain.SessionIngested {
 		return newInvalidInputError("initial state must be ingested", "state")
 	}
 	if strings.TrimSpace(item.ExternalID) != "" && shouldEnforceExternalIDUniqueness(item) {
 		workspaceID := item.WorkspaceID
 		externalID := item.ExternalID
-		existing, err := s.repo.List(ctx, repository.WorkItemFilter{
+		existing, err := s.repo.List(ctx, repository.SessionFilter{
 			WorkspaceID: &workspaceID,
 			ExternalID:  &externalID,
 			Limit:       1,
@@ -101,7 +101,7 @@ func (s *WorkItemService) Create(ctx context.Context, item domain.WorkItem) erro
 	return s.repo.Create(ctx, item)
 }
 
-func (s *WorkItemService) duplicateSourceItemID(ctx context.Context, item domain.WorkItem) (string, error) {
+func (s *SessionService) duplicateSourceItemID(ctx context.Context, item domain.Session) (string, error) {
 	if strings.TrimSpace(item.Source) == "" || item.SourceScope == "" || len(item.SourceItemIDs) == 0 {
 		return "", nil
 	}
@@ -111,7 +111,7 @@ func (s *WorkItemService) duplicateSourceItemID(ctx context.Context, item domain
 	}
 	workspaceID := item.WorkspaceID
 	source := item.Source
-	existing, err := s.repo.List(ctx, repository.WorkItemFilter{
+	existing, err := s.repo.List(ctx, repository.SessionFilter{
 		WorkspaceID: &workspaceID,
 		Source:      &source,
 	})
@@ -149,7 +149,7 @@ type sourceSelectionIdentity struct {
 	hasContainerID bool
 }
 
-func scopedSourceSelectionIDs(item domain.WorkItem) map[string]sourceSelectionIdentity {
+func scopedSourceSelectionIDs(item domain.Session) map[string]sourceSelectionIdentity {
 	containerKey, hasContainerID := scopedSourceContainerKey(item)
 	selected := make(map[string]sourceSelectionIdentity, len(item.SourceItemIDs))
 	for _, id := range item.SourceItemIDs {
@@ -166,7 +166,7 @@ func scopedSourceSelectionIDs(item domain.WorkItem) map[string]sourceSelectionId
 	return selected
 }
 
-func scopedSourceSelectionIdentity(item domain.WorkItem, itemID string) sourceSelectionIdentity {
+func scopedSourceSelectionIdentity(item domain.Session, itemID string) sourceSelectionIdentity {
 	containerKey, hasContainerID := scopedSourceContainerKey(item)
 	return sourceSelectionIdentity{
 		itemID:         strings.TrimSpace(itemID),
@@ -188,7 +188,7 @@ func scopedSourceSelectionConflict(scope domain.SelectionScope, left, right sour
 	return left.containerKey == right.containerKey
 }
 
-func scopedSourceContainerKey(item domain.WorkItem) (string, bool) {
+func scopedSourceContainerKey(item domain.Session) (string, bool) {
 	switch item.Source {
 	case "github":
 		if item.SourceScope != domain.ScopeProjects {
@@ -250,7 +250,7 @@ func metadataInt64(metadata map[string]any, key string) (string, bool) {
 	return key[:len(key)-3] + ":" + strconv.FormatInt(value, 10), true
 }
 
-func shouldEnforceExternalIDUniqueness(item domain.WorkItem) bool {
+func shouldEnforceExternalIDUniqueness(item domain.Session) bool {
 	if len(item.SourceItemIDs) == 0 {
 		return true
 	}
@@ -263,7 +263,7 @@ func shouldEnforceExternalIDUniqueness(item domain.WorkItem) bool {
 }
 
 // Transition transitions a work item to a new state.
-func (s *WorkItemService) Transition(ctx context.Context, id string, to domain.WorkItemState) error {
+func (s *SessionService) Transition(ctx context.Context, id string, to domain.SessionState) error {
 	item, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return newNotFoundError("work item", id)
@@ -284,65 +284,65 @@ func (s *WorkItemService) Transition(ctx context.Context, id string, to domain.W
 }
 
 // StartPlanning transitions a work item from ingested to planning.
-func (s *WorkItemService) StartPlanning(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemPlanning)
+func (s *SessionService) StartPlanning(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionPlanning)
 }
 
 // SubmitPlanForReview transitions a work item from planning to plan_review.
-func (s *WorkItemService) SubmitPlanForReview(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemPlanReview)
+func (s *SessionService) SubmitPlanForReview(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionPlanReview)
 }
 
 // ApprovePlan transitions a work item from plan_review to approved.
-func (s *WorkItemService) ApprovePlan(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemApproved)
+func (s *SessionService) ApprovePlan(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionApproved)
 }
 
 // RejectPlan transitions a work item from plan_review back to planning.
-func (s *WorkItemService) RejectPlan(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemPlanning)
+func (s *SessionService) RejectPlan(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionPlanning)
 }
 
 // StartImplementation transitions a work item from approved to implementing.
-func (s *WorkItemService) StartImplementation(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemImplementing)
+func (s *SessionService) StartImplementation(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionImplementing)
 }
 
 // SubmitForReview transitions a work item from implementing to reviewing.
-func (s *WorkItemService) SubmitForReview(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemReviewing)
+func (s *SessionService) SubmitForReview(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionReviewing)
 }
 
 // CompleteWorkItem transitions a work item from reviewing to completed.
-func (s *WorkItemService) CompleteWorkItem(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemCompleted)
+func (s *SessionService) CompleteWorkItem(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionCompleted)
 }
 
 // RequestReimplementation transitions a work item from reviewing to implementing.
-func (s *WorkItemService) RequestReimplementation(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.WorkItemImplementing)
+func (s *SessionService) RequestReimplementation(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionImplementing)
 }
 
 // FailWorkItem transitions a work item to failed from any applicable state.
-func (s *WorkItemService) FailWorkItem(ctx context.Context, id string) error {
+func (s *SessionService) FailWorkItem(ctx context.Context, id string) error {
 	item, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return newNotFoundError("work item", id)
 	}
 
-	if !canTransition(item.State, domain.WorkItemFailed) {
+	if !canTransition(item.State, domain.SessionFailed) {
 		return newInvalidTransitionError(
 			workItemStateName(item.State),
-			workItemStateName(domain.WorkItemFailed),
+			workItemStateName(domain.SessionFailed),
 			"work item",
 		)
 	}
 
-	return s.Transition(ctx, id, domain.WorkItemFailed)
+	return s.Transition(ctx, id, domain.SessionFailed)
 }
 
 // Update updates a work item's mutable fields.
-func (s *WorkItemService) Update(ctx context.Context, item domain.WorkItem) error {
+func (s *SessionService) Update(ctx context.Context, item domain.Session) error {
 	existing, err := s.repo.Get(ctx, item.ID)
 	if err != nil {
 		return newNotFoundError("work item", item.ID)
@@ -359,7 +359,7 @@ func (s *WorkItemService) Update(ctx context.Context, item domain.WorkItem) erro
 }
 
 // Delete deletes a work item.
-func (s *WorkItemService) Delete(ctx context.Context, id string) error {
+func (s *SessionService) Delete(ctx context.Context, id string) error {
 	// Verify existence first
 	_, err := s.repo.Get(ctx, id)
 	if err != nil {

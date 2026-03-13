@@ -43,17 +43,17 @@ func (a *browseTestAdapter) ListSelectable(_ context.Context, opts adapter.ListO
 	return &adapter.ListResult{}, nil
 }
 
-func (a *browseTestAdapter) Resolve(_ context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *browseTestAdapter) Resolve(_ context.Context, sel adapter.Selection) (domain.Session, error) {
 	a.resolved = append(a.resolved, sel)
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: fmt.Sprintf("%s-session", a.name), Title: a.name, State: domain.WorkItemIngested}, nil
+	return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("%s-session", a.name), Title: a.name, State: domain.SessionIngested}, nil
 }
 
 func (a *browseTestAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	return nil, adapter.ErrWatchNotSupported
 }
 
-func (a *browseTestAdapter) Fetch(_ context.Context, _ string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, fmt.Errorf("not implemented")
+func (a *browseTestAdapter) Fetch(_ context.Context, _ string) (domain.Session, error) {
+	return domain.Session{}, fmt.Errorf("not implemented")
 }
 
 func (a *browseTestAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error {
@@ -1507,6 +1507,7 @@ func TestNewSessionOverlayShowsStateControlsByCapabilities(t *testing.T) {
 	if !strings.Contains(view, "[open]") {
 		t.Fatalf("view = %q, want default open state selected", view)
 	}
+
 	hint := overlay.browserHintText()
 	if !strings.Contains(hint, "Ctrl+T") {
 		t.Fatalf("hint = %q, want state hint", hint)
@@ -1680,16 +1681,21 @@ func (manualTestAdapter) ListSelectable(context.Context, adapter.ListOpts) (*ada
 	return nil, adapter.ErrBrowseNotSupported
 }
 
-func (manualTestAdapter) Resolve(_ context.Context, sel adapter.Selection) (domain.WorkItem, error) {
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: "MAN-1", Title: sel.Manual.Title}, nil
+func (manualTestAdapter) Resolve(_ context.Context, sel adapter.Selection) (domain.Session, error) {
+	return domain.Session{
+		ID:         domain.NewID(),
+		ExternalID: "MAN-1",
+		Title:      sel.Manual.Title,
+		State:      domain.SessionIngested,
+	}, nil
 }
 
 func (manualTestAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	return nil, adapter.ErrWatchNotSupported
 }
 
-func (manualTestAdapter) Fetch(_ context.Context, _ string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, fmt.Errorf("not implemented")
+func (manualTestAdapter) Fetch(_ context.Context, _ string) (domain.Session, error) {
+	return domain.Session{}, fmt.Errorf("not implemented")
 }
 
 func (manualTestAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error {

@@ -9,16 +9,16 @@ import (
 
 // --- DB polling / data loading ---
 
-// WorkItemsLoadedMsg is sent when the work item list is refreshed.
-type WorkItemsLoadedMsg struct {
-	WorkspaceID string
-	Items       []domain.WorkItem
-}
-
-// SessionsLoadedMsg is sent when sessions for a workspace are refreshed.
+// SessionsLoadedMsg is sent when the session list is refreshed.
 type SessionsLoadedMsg struct {
 	WorkspaceID string
-	Sessions    []domain.AgentSession
+	Items       []domain.Session
+}
+
+// TasksLoadedMsg is sent when tasks for a workspace are refreshed.
+type TasksLoadedMsg struct {
+	WorkspaceID string
+	Sessions    []domain.Task
 }
 
 // SessionHistoryLoadedMsg is sent when a session-history search completes.
@@ -31,7 +31,7 @@ type SessionHistoryLoadedMsg struct {
 type PlanLoadedMsg struct {
 	WorkItemID string
 	Plan       *domain.Plan // nil if not found
-	SubPlans   []domain.SubPlan
+	SubPlans   []domain.TaskPlan
 }
 
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
@@ -175,32 +175,34 @@ type DeleteSessionMsg struct{ SessionID string }
 // SessionDeletedMsg is sent after a session and its related records are removed.
 type SessionDeletedMsg struct {
 	SessionID string
+	TaskIDs   []string
 	Message   string
+	Warning   string
 }
 
-// WorkItemCreatedMsg is sent after the new-session flow persists a work item.
-type WorkItemCreatedMsg struct {
-	WorkItem domain.WorkItem
-	Message  string
+// SessionCreatedMsg is sent after the new-session flow persists a work item.
+type SessionCreatedMsg struct {
+	Session domain.Session
+	Message string
 }
 
-// WorkItemDuplicatePromptMsg is sent when new-session creation resolves to an existing work item.
-type WorkItemDuplicatePromptMsg struct {
-	RequestedWorkItem domain.WorkItem
-	ExistingWorkItem  domain.WorkItem
+// SessionDuplicatePromptMsg is sent when new-session creation resolves to an existing work item.
+type SessionDuplicatePromptMsg struct {
+	RequestedSession domain.Session
+	ExistingSession  domain.Session
 }
 
-// WorkItemDuplicateAction identifies how the user resolved a duplicate work-item prompt.
-type WorkItemDuplicateAction string
+// SessionDuplicateAction identifies how the user resolved a duplicate work-item prompt.
+type SessionDuplicateAction string
 
 const (
-	WorkItemDuplicateCancel        WorkItemDuplicateAction = "cancel"
-	WorkItemDuplicateOpenExisting  WorkItemDuplicateAction = "open_existing"
-	WorkItemDuplicateCreateSession WorkItemDuplicateAction = "create_session"
+	SessionDuplicateCancel        SessionDuplicateAction = "cancel"
+	SessionDuplicateOpenExisting  SessionDuplicateAction = "open_existing"
+	SessionDuplicateCreateSession SessionDuplicateAction = "create_session"
 )
 
-// WorkItemDuplicateActionMsg resolves the duplicate-session prompt.
-type WorkItemDuplicateActionMsg struct{ Action WorkItemDuplicateAction }
+// SessionDuplicateActionMsg resolves the duplicate-session prompt.
+type SessionDuplicateActionMsg struct{ Action SessionDuplicateAction }
 
 // --- Overlay control ---
 

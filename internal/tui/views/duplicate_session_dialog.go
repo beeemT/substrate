@@ -10,22 +10,22 @@ import (
 )
 
 type duplicateSessionDialogState struct {
-	RequestedWorkItem domain.WorkItem
-	ExistingWorkItem  domain.WorkItem
-	Selected          int
+	RequestedSession domain.Session
+	ExistingSession  domain.Session
+	Selected         int
 }
 
 type duplicateSessionDialogOption struct {
-	Action       WorkItemDuplicateAction
+	Action       SessionDuplicateAction
 	Title        string
 	CompactTitle string
 }
 
-func (a *App) showDuplicateSessionDialog(requested, existing domain.WorkItem) {
+func (a *App) showDuplicateSessionDialog(requested, existing domain.Session) {
 	a.duplicateSession = duplicateSessionDialogState{
-		RequestedWorkItem: requested,
-		ExistingWorkItem:  existing,
-		Selected:          1,
+		RequestedSession: requested,
+		ExistingSession:  existing,
+		Selected:         1,
 	}
 	a.duplicateSessionActive = true
 }
@@ -37,9 +37,9 @@ func (a *App) closeDuplicateSessionDialog() {
 
 func (a App) duplicateSessionOptions() []duplicateSessionDialogOption {
 	return []duplicateSessionDialogOption{
-		{Action: WorkItemDuplicateCancel, Title: "Cancel creation", CompactTitle: "Cancel"},
-		{Action: WorkItemDuplicateOpenExisting, Title: "Go to existing work item", CompactTitle: "Open existing"},
-		{Action: WorkItemDuplicateCreateSession, Title: "Start planning with existing work item", CompactTitle: "Start planning"},
+		{Action: SessionDuplicateCancel, Title: "Cancel creation", CompactTitle: "Cancel"},
+		{Action: SessionDuplicateOpenExisting, Title: "Go to existing session", CompactTitle: "Open existing"},
+		{Action: SessionDuplicateCreateSession, Title: "Start planning with existing session", CompactTitle: "Start planning"},
 	}
 }
 
@@ -52,10 +52,10 @@ func (a *App) cycleDuplicateSessionOption(delta int) {
 	a.duplicateSession.Selected = (a.duplicateSession.Selected + delta + len(options)) % len(options)
 }
 
-func (a App) selectedDuplicateSessionAction() WorkItemDuplicateAction {
+func (a App) selectedDuplicateSessionAction() SessionDuplicateAction {
 	options := a.duplicateSessionOptions()
 	if len(options) == 0 {
-		return WorkItemDuplicateCancel
+		return SessionDuplicateCancel
 	}
 	index := a.duplicateSession.Selected
 	if index < 0 || index >= len(options) {
@@ -73,14 +73,14 @@ func (a App) handleDuplicateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.cycleDuplicateSessionOption(1)
 		return a, nil
 	case "esc", "c":
-		return a, func() tea.Msg { return WorkItemDuplicateActionMsg{Action: WorkItemDuplicateCancel} }
+		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateCancel} }
 	case "o", "g":
-		return a, func() tea.Msg { return WorkItemDuplicateActionMsg{Action: WorkItemDuplicateOpenExisting} }
+		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateOpenExisting} }
 	case "s", "n":
-		return a, func() tea.Msg { return WorkItemDuplicateActionMsg{Action: WorkItemDuplicateCreateSession} }
+		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateCreateSession} }
 	case "enter":
 		action := a.selectedDuplicateSessionAction()
-		return a, func() tea.Msg { return WorkItemDuplicateActionMsg{Action: action} }
+		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: action} }
 	default:
 		return a, nil
 	}
@@ -114,17 +114,15 @@ func (a App) duplicateSessionDialogView() string {
 	keybindStyle := styles.KeybindAccent.Copy().Background(overlayBG)
 	compact := innerWidth < 40 || (a.windowHeight > 0 && a.windowHeight <= 14)
 
-	requested := workItemSummaryLabel(a.duplicateSession.RequestedWorkItem)
-	existing := workItemSummaryLabel(a.duplicateSession.ExistingWorkItem)
+	requested := sessionSummaryLabel(a.duplicateSession.RequestedSession)
+	existing := sessionSummaryLabel(a.duplicateSession.ExistingSession)
 	rows := []string{
-		titleStyle.Render("Work item already exists"),
+		titleStyle.Render("Session already exists"),
 		"",
-		content.Render(labelStyle.Render("Existing work item: ") + accentStyle.Render(existing)),
+		content.Render(labelStyle.Render("Existing session: ") + accentStyle.Render(existing)),
 	}
 	if !compact {
-		rows = append(rows,
-			content.Render(subtitleStyle.Render("This selection already exists in this workspace.")),
-		)
+		rows = append(rows, content.Render(subtitleStyle.Render("This selection already exists in this workspace.")))
 		if requested != "" && requested != existing {
 			rows = append(rows, content.Render(labelStyle.Render("Requested selection: ")+subtitleStyle.Render(requested)))
 		}
@@ -152,9 +150,9 @@ func (a App) duplicateSessionDialogView() string {
 	return frame.Render(strings.Join(rows, "\n"))
 }
 
-func workItemSummaryLabel(wi domain.WorkItem) string {
-	label := workItemDisplayLabel(wi)
-	title := strings.TrimSpace(wi.Title)
+func sessionSummaryLabel(session domain.Session) string {
+	label := workItemDisplayLabel(session)
+	title := strings.TrimSpace(session.Title)
 	if title != "" && title != label {
 		return label + " · " + title
 	}

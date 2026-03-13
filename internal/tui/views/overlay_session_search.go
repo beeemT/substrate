@@ -307,7 +307,7 @@ func (m *SessionSearchOverlay) toggleScope() tea.Cmd {
 	return m.setScope(sessionHistoryScopeWorkspace)
 }
 
-func humanAgentSessionStatus(status domain.AgentSessionStatus) string {
+func humanAgentSessionStatus(status domain.TaskStatus) string {
 	switch status {
 	case domain.AgentSessionPending:
 		return "Pending"
@@ -328,15 +328,15 @@ func humanAgentSessionStatus(status domain.AgentSessionStatus) string {
 
 func humanHistoryStatus(entry domain.SessionHistoryEntry) string {
 	switch entry.WorkItemState {
-	case domain.WorkItemIngested:
+	case domain.SessionIngested:
 		return "Ready to plan"
-	case domain.WorkItemPlanning:
+	case domain.SessionPlanning:
 		return "Planning"
-	case domain.WorkItemPlanReview:
+	case domain.SessionPlanReview:
 		return "Plan review needed"
-	case domain.WorkItemApproved:
+	case domain.SessionApproved:
 		return "Awaiting implementation"
-	case domain.WorkItemImplementing:
+	case domain.SessionImplementing:
 		if entry.HasOpenQuestion {
 			return "Waiting for answer"
 		}
@@ -344,11 +344,11 @@ func humanHistoryStatus(entry domain.SessionHistoryEntry) string {
 			return "Interrupted"
 		}
 		return "Implementing"
-	case domain.WorkItemReviewing:
+	case domain.SessionReviewing:
 		return "Under review"
-	case domain.WorkItemCompleted:
+	case domain.SessionCompleted:
 		return "Completed"
-	case domain.WorkItemFailed:
+	case domain.SessionFailed:
 		return "Failed"
 	default:
 		return firstNonEmpty(string(entry.WorkItemState), humanAgentSessionStatus(entry.Status), "Unknown")
@@ -610,8 +610,8 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 				return m, nil
 			}
 			if msg.String() == "d" {
-				if entry := m.Selected(); entry != nil && strings.TrimSpace(entry.SessionID) != "" {
-					return m, func() tea.Msg { return ConfirmDeleteSessionMsg{SessionID: entry.SessionID} }
+				if entry := m.Selected(); entry != nil && strings.TrimSpace(entry.WorkItemID) != "" {
+					return m, func() tea.Msg { return ConfirmDeleteSessionMsg{SessionID: entry.WorkItemID} }
 				}
 				return m, nil
 			}

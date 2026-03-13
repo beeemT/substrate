@@ -17,20 +17,25 @@ import (
 )
 
 type duplicateCreateWorkItemRepo struct {
-	items     []domain.WorkItem
+	items     []domain.Session
 	createErr error
 	listErr   error
 }
 
-func (r duplicateCreateWorkItemRepo) Get(context.Context, string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, repository.ErrNotFound
+func (r *duplicateCreateWorkItemRepo) Get(_ context.Context, id string) (domain.Session, error) {
+	for _, item := range r.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return domain.Session{}, repository.ErrNotFound
 }
 
-func (r duplicateCreateWorkItemRepo) List(_ context.Context, filter repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (r *duplicateCreateWorkItemRepo) List(_ context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
-	items := make([]domain.WorkItem, 0, len(r.items))
+	items := make([]domain.Session, 0, len(r.items))
 	for _, item := range r.items {
 		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
 			continue
@@ -46,33 +51,40 @@ func (r duplicateCreateWorkItemRepo) List(_ context.Context, filter repository.W
 	return items, nil
 }
 
-func (r duplicateCreateWorkItemRepo) Create(context.Context, domain.WorkItem) error {
+func (r *duplicateCreateWorkItemRepo) Create(context.Context, domain.Session) error {
 	return r.createErr
 }
 
-func (r duplicateCreateWorkItemRepo) Update(context.Context, domain.WorkItem) error {
+func (r *duplicateCreateWorkItemRepo) Update(context.Context, domain.Session) error {
 	return nil
 }
 
-func (r duplicateCreateWorkItemRepo) Delete(context.Context, string) error {
+func (r *duplicateCreateWorkItemRepo) Delete(_ context.Context, id string) error {
+	filtered := r.items[:0]
+	for _, item := range r.items {
+		if item.ID != id {
+			filtered = append(filtered, item)
+		}
+	}
+	r.items = filtered
 	return nil
 }
 
 type sessionSearchDeleteRepo struct {
-	sessions map[string]domain.AgentSession
+	sessions map[string]domain.Task
 	entry    domain.SessionHistoryEntry
 }
 
-func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
+func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.Task, error) {
 	session, ok := r.sessions[id]
 	if !ok {
-		return domain.AgentSession{}, repository.ErrNotFound
+		return domain.Task{}, repository.ErrNotFound
 	}
 	return session, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.SubPlanID == subPlanID {
 			result = append(result, session)
@@ -81,8 +93,8 @@ func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID s
 	return result, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkspaceID == workspaceID {
 			result = append(result, session)
@@ -91,8 +103,8 @@ func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspace
 	return result, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
-	result := make([]domain.AgentSession, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
+	result := make([]domain.Task, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.OwnerInstanceID != nil && *session.OwnerInstanceID == instanceID {
 			result = append(result, session)
@@ -111,12 +123,12 @@ func (r *sessionSearchDeleteRepo) SearchHistory(_ context.Context, filter domain
 	return []domain.SessionHistoryEntry{r.entry}, nil
 }
 
-func (r *sessionSearchDeleteRepo) Create(_ context.Context, session domain.AgentSession) error {
+func (r *sessionSearchDeleteRepo) Create(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
 	return nil
 }
 
-func (r *sessionSearchDeleteRepo) Update(_ context.Context, session domain.AgentSession) error {
+func (r *sessionSearchDeleteRepo) Update(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
 	return nil
 }
@@ -180,12 +192,12 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 	})
-	app.workItems = []domain.WorkItem{{
+	app.workItems = []domain.Session{{
 		ID:          "wi-preplan",
 		WorkspaceID: "ws-local",
 		ExternalID:  "SUB-0",
 		Title:       "New item awaiting planning",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}}
@@ -308,7 +320,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 
 	now := time.Now()
 	repo := &sessionSearchDeleteRepo{
-		sessions: map[string]domain.AgentSession{
+		sessions: map[string]domain.Task{
 			"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 		entry: domain.SessionHistoryEntry{
@@ -322,11 +334,11 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 			CreatedAt:          now,
 		},
 	}
-	workItemSvc := service.NewWorkItemService(duplicateCreateWorkItemRepo{items: []domain.WorkItem{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.WorkItemImplementing}}})
-	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{}}, &cmdSubPlanRepo{subPlans: map[string]domain.SubPlan{}})
+	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
+	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}})
 	app := NewApp(Services{
-		Session:       service.NewSessionService(repo),
-		WorkItem:      workItemSvc,
+		Task:          service.NewTaskService(repo),
+		Session:       service.NewSessionService(workItemRepo),
 		Plan:          planSvc,
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
@@ -344,9 +356,11 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	app.sessionsDir = tempDir
 	app.reviewSessionLogs["sess-1"] = filepath.Join(tempDir, "review-1.log")
-	app.sessions = []domain.AgentSession{repo.sessions["sess-1"]}
+	app.sessions = []domain.Task{repo.sessions["sess-1"]}
 	app.activeOverlay = overlaySessionSearch
 	app.sessionSearch.Open(sessionHistoryScopeWorkspace, true)
+	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{repo.entry})
+	app.sessionSearch.SetLoading(false)
 	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{repo.entry})
 	app.sessionSearch.SetLoading(false)
 
@@ -377,8 +391,8 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd() message = %T, want ConfirmDeleteSessionMsg", cmd())
 	}
-	if confirmMsg.SessionID != "sess-1" {
-		t.Fatalf("confirm session id = %q, want sess-1", confirmMsg.SessionID)
+	if confirmMsg.SessionID != "wi-1" {
+		t.Fatalf("confirm session id = %q, want wi-1", confirmMsg.SessionID)
 	}
 
 	model, cmd = updated.Update(confirmMsg)
@@ -394,7 +408,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	confirmView := stripBrowseANSI(updated.confirm.View())
 	assertOverlayFits(t, confirmView, 72, 18)
-	for _, want := range []string{"Delete Session", "review data", "[y]", "[n]"} {
+	for _, want := range []string{"Delete Session", "full session", "[y]", "[n]"} {
 		if !strings.Contains(confirmView, want) {
 			t.Fatalf("confirm view = %q, want %q", confirmView, want)
 		}
@@ -419,12 +433,11 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if len(updated.sessions) != 0 {
 		t.Fatalf("sessions len = %d, want 0", len(updated.sessions))
 	}
-	sel := updated.sessionSearch.Selected()
-	if sel == nil {
-		t.Fatal("selected entry = nil, want work item session after deleting latest agent session")
+	if sel := updated.sessionSearch.Selected(); sel != nil {
+		t.Fatalf("selected entry = %#v, want nil after deleting the full session", sel)
 	}
-	if sel.WorkItemID != "wi-1" || sel.SessionID != "" || sel.AgentSessionCount != 0 {
-		t.Fatalf("selected entry = %#v, want work item with no agent sessions after deletion", sel)
+	if len(updated.workItems) != 0 {
+		t.Fatalf("work items len = %d, want 0", len(updated.workItems))
 	}
 	if _, ok := repo.sessions["sess-1"]; ok {
 		t.Fatal("expected session repo entry to be deleted")
@@ -442,8 +455,62 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		}
 	}
 	searchView := stripBrowseANSI(updated.sessionSearch.View())
-	if strings.Contains(searchView, "No items.") || strings.Contains(searchView, "No sessions found") {
-		t.Fatalf("search view = %q, want surviving work item session after deletion", searchView)
+	if !strings.Contains(searchView, "No sessions found") {
+		t.Fatalf("search view = %q, want empty state after deleting the full session", searchView)
+	}
+}
+
+func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	taskRepo := &sessionSearchDeleteRepo{
+		sessions: map[string]domain.Task{
+			"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+		},
+	}
+	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
+	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}})
+	sessionsDir := filepath.Join(t.TempDir(), "[")
+
+	msg := deleteSessionCmd(Services{
+		Task:    service.NewTaskService(taskRepo),
+		Session: service.NewSessionService(workItemRepo),
+		Plan:    planSvc,
+	}, sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
+	deleted, ok := msg.(SessionDeletedMsg)
+	if !ok {
+		t.Fatalf("deleteSessionCmd() message = %T, want SessionDeletedMsg", msg)
+	}
+	if deleted.Message != "Session deleted" {
+		t.Fatalf("deleted message = %q, want Session deleted", deleted.Message)
+	}
+	if deleted.Warning == "" {
+		t.Fatal("expected cleanup warning when artifact removal fails after delete")
+	}
+	if !strings.Contains(deleted.Warning, "could not be removed") {
+		t.Fatalf("deleted warning = %q, want cleanup failure context", deleted.Warning)
+	}
+	if _, ok := taskRepo.sessions["sess-1"]; ok {
+		t.Fatal("expected task repo entry to be deleted despite cleanup warning")
+	}
+	if len(workItemRepo.items) != 0 {
+		t.Fatalf("work item repo items = %d, want 0 after successful delete", len(workItemRepo.items))
+	}
+
+	model, cmd := NewApp(Services{Settings: &SettingsService{}}).Update(deleted)
+	if cmd != nil {
+		t.Fatalf("unexpected follow-up command for warning toast: %v", cmd)
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model after delete warning = %T, want App", model)
+	}
+	toastView := stripToastANSI(updated.toasts.StackView())
+	for _, want := range []string{"Session deleted", deleted.Warning} {
+		if !strings.Contains(toastView, want) {
+			t.Fatalf("toast view = %q, want %q", toastView, want)
+		}
 	}
 }
 
@@ -454,7 +521,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 		Settings:      &SettingsService{},
 	})
 	app.content.SetSize(80, 20)
-	app.workItems = []domain.WorkItem{{
+	app.workItems = []domain.Session{{
 		ID:          "wi-1",
 		ExternalID:  "SUB-1",
 		Source:      "github",
@@ -464,7 +531,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 		Metadata: map[string]any{
 			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
 		},
-		State: domain.WorkItemIngested,
+		State: domain.SessionIngested,
 	}}
 
 	cmd := app.loadHistoryEntry(SidebarEntry{
@@ -569,7 +636,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 		WorkItemID:    "wi-remote",
 		ExternalID:    "SUB-3",
 		Title:         "Remote planning item",
-		State:         domain.WorkItemPlanning,
+		State:         domain.SessionPlanning,
 	})
 	if cmd != nil {
 		t.Fatalf("loadHistoryEntry() cmd = %v, want nil when no agent session exists", cmd)
@@ -585,6 +652,53 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 	}
 }
 
+func TestSessionDeletedMsg_ClearsOpenRemoteHistoryEntry(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(Services{Settings: &SettingsService{}})
+	app.content.SetSize(80, 20)
+
+	cmd := app.loadHistoryEntry(SidebarEntry{
+		Kind:          SidebarEntrySessionHistory,
+		WorkspaceID:   "ws-remote",
+		WorkspaceName: "remote",
+		WorkItemID:    "wi-remote",
+		ExternalID:    "SUB-3",
+		Title:         "Remote planning item",
+		State:         domain.SessionPlanning,
+	})
+	if cmd != nil {
+		t.Fatalf("loadHistoryEntry() cmd = %v, want nil when no agent session exists", cmd)
+	}
+	if view := app.content.View(); !strings.Contains(view, "No agent-session log is available") {
+		t.Fatalf("content view before delete = %q, want remote summary", view)
+	}
+
+	model, cmd := app.Update(SessionDeletedMsg{SessionID: "wi-remote", Message: "Session deleted"})
+	if cmd != nil {
+		t.Fatalf("unexpected command clearing remote history entry: %v", cmd)
+	}
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model after remote delete = %T, want App", model)
+	}
+	if updated.currentWorkItemID != "" {
+		t.Fatalf("currentWorkItemID = %q, want empty", updated.currentWorkItemID)
+	}
+	if updated.currentHistorySessionID != "" {
+		t.Fatalf("currentHistorySessionID = %q, want empty", updated.currentHistorySessionID)
+	}
+	if updated.currentHistoryEntry != (SidebarEntry{}) {
+		t.Fatalf("currentHistoryEntry = %#v, want empty", updated.currentHistoryEntry)
+	}
+	if updated.content.Mode() != ContentModeEmpty {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeEmpty)
+	}
+	if view := updated.content.View(); strings.Contains(view, "Remote planning item") || strings.Contains(view, "No agent-session log is available") {
+		t.Fatalf("content view after delete = %q, want remote history content cleared", view)
+	}
+}
+
 func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	now := time.Now()
 	older := now.Add(-2 * time.Hour)
@@ -595,9 +709,9 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 	})
-	app.workItems = []domain.WorkItem{
-		{ID: "wi-old", ExternalID: "SUB-1", Title: "Old", State: domain.WorkItemIngested, CreatedAt: older, UpdatedAt: older},
-		{ID: "wi-new", ExternalID: "SUB-2", Title: "New", State: domain.WorkItemIngested, CreatedAt: older, UpdatedAt: newer},
+	app.workItems = []domain.Session{
+		{ID: "wi-old", ExternalID: "SUB-1", Title: "Old", State: domain.SessionIngested, CreatedAt: older, UpdatedAt: older},
+		{ID: "wi-new", ExternalID: "SUB-2", Title: "New", State: domain.SessionIngested, CreatedAt: older, UpdatedAt: newer},
 	}
 
 	app.rebuildSidebar()
@@ -644,24 +758,24 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 	})
-	app.workItems = []domain.WorkItem{{
+	app.workItems = []domain.Session{{
 		ID:          "wi-old",
 		WorkspaceID: "ws-local",
 		ExternalID:  "SUB-1",
 		Title:       "Old item",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   older,
 		UpdatedAt:   older,
 	}}
 	app.rebuildSidebar()
 
-	model, _ := app.Update(WorkItemCreatedMsg{
-		WorkItem: domain.WorkItem{
+	model, _ := app.Update(SessionCreatedMsg{
+		Session: domain.Session{
 			ID:          "wi-new",
 			WorkspaceID: "ws-local",
 			ExternalID:  "SUB-2",
 			Title:       "New item",
-			State:       domain.WorkItemIngested,
+			State:       domain.SessionIngested,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		},
@@ -687,42 +801,42 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 }
 
 func TestPersistCreatedWorkItemMsgDuplicateReturnsPrompt(t *testing.T) {
-	existing := domain.WorkItem{
+	existing := domain.Session{
 		ID:          "wi-existing",
 		WorkspaceID: "ws-local",
 		ExternalID:  "SUB-1",
 		Title:       "Existing item",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 	}
-	repo := duplicateCreateWorkItemRepo{
-		items:     []domain.WorkItem{existing},
+	repo := &duplicateCreateWorkItemRepo{
+		items:     []domain.Session{existing},
 		createErr: service.ErrAlreadyExists{Entity: "work item", ID: existing.ExternalID},
 	}
 
-	requested := domain.WorkItem{
+	requested := domain.Session{
 		ID:         "wi-new",
 		ExternalID: existing.ExternalID,
 		Title:      "Duplicate item",
 	}
 	msg := persistCreatedWorkItemMsg(Services{
 		WorkspaceID: "ws-local",
-		WorkItem:    service.NewWorkItemService(repo),
+		Session:     service.NewSessionService(repo),
 	}, requested)
 
-	dup, ok := msg.(WorkItemDuplicatePromptMsg)
+	dup, ok := msg.(SessionDuplicatePromptMsg)
 	if !ok {
-		t.Fatalf("msg = %T, want WorkItemDuplicatePromptMsg", msg)
+		t.Fatalf("msg = %T, want SessionDuplicatePromptMsg", msg)
 	}
-	if dup.ExistingWorkItem.ID != existing.ID {
-		t.Fatalf("existing work item id = %q, want %q", dup.ExistingWorkItem.ID, existing.ID)
+	if dup.ExistingSession.ID != existing.ID {
+		t.Fatalf("existing session id = %q, want %q", dup.ExistingSession.ID, existing.ID)
 	}
-	if dup.RequestedWorkItem.ID != requested.ID {
-		t.Fatalf("requested work item id = %q, want %q", dup.RequestedWorkItem.ID, requested.ID)
+	if dup.RequestedSession.ID != requested.ID {
+		t.Fatalf("requested session id = %q, want %q", dup.RequestedSession.ID, requested.ID)
 	}
 }
 
 func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) {
-	existing := domain.WorkItem{
+	existing := domain.Session{
 		ID:            "wi-existing",
 		WorkspaceID:   "ws-local",
 		ExternalID:    "SUB-42",
@@ -730,14 +844,14 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 		Source:        "github",
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{"acme/rocket#42"},
-		State:         domain.WorkItemIngested,
+		State:         domain.SessionIngested,
 	}
-	repo := duplicateCreateWorkItemRepo{
-		items:     []domain.WorkItem{existing},
+	repo := &duplicateCreateWorkItemRepo{
+		items:     []domain.Session{existing},
 		createErr: service.ErrAlreadyExists{Entity: "work item", ID: existing.ExternalID},
 	}
 
-	requested := domain.WorkItem{
+	requested := domain.Session{
 		ID:            "wi-aggregate",
 		ExternalID:    "SUB-7",
 		Title:         "Issue 7 (+1 more)",
@@ -747,25 +861,25 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 	}
 	msg := persistCreatedWorkItemMsg(Services{
 		WorkspaceID: "ws-local",
-		WorkItem:    service.NewWorkItemService(repo),
+		Session:     service.NewSessionService(repo),
 	}, requested)
 
-	dup, ok := msg.(WorkItemDuplicatePromptMsg)
+	dup, ok := msg.(SessionDuplicatePromptMsg)
 	if !ok {
-		t.Fatalf("msg = %T, want WorkItemDuplicatePromptMsg", msg)
+		t.Fatalf("msg = %T, want SessionDuplicatePromptMsg", msg)
 	}
-	if dup.ExistingWorkItem.ID != existing.ID {
-		t.Fatalf("existing work item id = %q, want %q", dup.ExistingWorkItem.ID, existing.ID)
+	if dup.ExistingSession.ID != existing.ID {
+		t.Fatalf("existing session id = %q, want %q", dup.ExistingSession.ID, existing.ID)
 	}
-	if dup.RequestedWorkItem.ID != requested.ID {
-		t.Fatalf("requested work item id = %q, want %q", dup.RequestedWorkItem.ID, requested.ID)
+	if dup.RequestedSession.ID != requested.ID {
+		t.Fatalf("requested session id = %q, want %q", dup.RequestedSession.ID, requested.ID)
 	}
 }
 
-func newDuplicatePromptTestApp() (App, domain.WorkItem, domain.WorkItem, domain.WorkItem) {
+func newDuplicatePromptTestApp() (App, domain.Session, domain.Session, domain.Session) {
 	now := time.Now()
 	older := now.Add(-time.Hour)
-	existing := domain.WorkItem{
+	existing := domain.Session{
 		ID:          "wi-existing",
 		WorkspaceID: "ws-local",
 		ExternalID:  "SUB-1",
@@ -776,20 +890,20 @@ func newDuplicatePromptTestApp() (App, domain.WorkItem, domain.WorkItem, domain.
 		Metadata: map[string]any{
 			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
 		},
-		State:     domain.WorkItemIngested,
+		State:     domain.SessionIngested,
 		CreatedAt: older,
 		UpdatedAt: older,
 	}
-	other := domain.WorkItem{
+	other := domain.Session{
 		ID:          "wi-other",
 		WorkspaceID: "ws-local",
 		ExternalID:  "SUB-2",
 		Title:       "Other item",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	requested := domain.WorkItem{
+	requested := domain.Session{
 		ID:         "wi-requested",
 		ExternalID: "SUB-99",
 		Title:      "Requested item",
@@ -801,7 +915,7 @@ func newDuplicatePromptTestApp() (App, domain.WorkItem, domain.WorkItem, domain.
 		Planning:      new(orchestrator.PlanningService),
 	})
 	app.content.SetSize(80, 20)
-	app.workItems = []domain.WorkItem{existing, other}
+	app.workItems = []domain.Session{existing, other}
 	app.currentWorkItemID = other.ID
 	app.rebuildSidebar()
 	app.sidebar.SelectWorkItem(other.ID)
@@ -812,9 +926,9 @@ func newDuplicatePromptTestApp() (App, domain.WorkItem, domain.WorkItem, domain.
 func TestWorkItemDuplicatePromptShowsDecisionDialog(t *testing.T) {
 	app, existing, other, requested := newDuplicatePromptTestApp()
 
-	model, cmd := app.Update(WorkItemDuplicatePromptMsg{
-		RequestedWorkItem: requested,
-		ExistingWorkItem:  existing,
+	model, cmd := app.Update(SessionDuplicatePromptMsg{
+		RequestedSession: requested,
+		ExistingSession:  existing,
 	})
 	if cmd != nil {
 		t.Fatal("expected duplicate prompt to show dialog without command")
@@ -830,7 +944,7 @@ func TestWorkItemDuplicatePromptShowsDecisionDialog(t *testing.T) {
 		t.Fatalf("currentWorkItemID = %q, want %q before resolution", updated.currentWorkItemID, other.ID)
 	}
 	view := stripBrowseANSI(updated.duplicateSessionDialogView())
-	for _, want := range []string{"Work item already exists", "Existing work item: SUB-1 · Existing item", "Requested selection: SUB-99 · Requested item", "Go to existing work item", "Start planning with existing work item"} {
+	for _, want := range []string{"Session already exists", "Existing session: SUB-1 · Existing item", "Requested selection: SUB-99 · Requested item", "Go to existing session", "Start planning with existing session"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dialog view = %q, want %q", view, want)
 		}
@@ -840,12 +954,12 @@ func TestWorkItemDuplicatePromptShowsDecisionDialog(t *testing.T) {
 func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *testing.T) {
 	app, existing, _, requested := newDuplicatePromptTestApp()
 
-	model, _ := app.Update(WorkItemDuplicatePromptMsg{
-		RequestedWorkItem: requested,
-		ExistingWorkItem:  existing,
+	model, _ := app.Update(SessionDuplicatePromptMsg{
+		RequestedSession: requested,
+		ExistingSession:  existing,
 	})
 	updated := model.(App)
-	model, cmd := updated.Update(WorkItemDuplicateActionMsg{Action: WorkItemDuplicateOpenExisting})
+	model, cmd := updated.Update(SessionDuplicateActionMsg{Action: SessionDuplicateOpenExisting})
 	if cmd != nil {
 		t.Fatal("expected opening existing work item to avoid auto-starting planning")
 	}
@@ -881,12 +995,13 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(t *testing.T) {
 	app, existing, _, requested := newDuplicatePromptTestApp()
 
-	model, _ := app.Update(WorkItemDuplicatePromptMsg{
-		RequestedWorkItem: requested,
-		ExistingWorkItem:  existing,
+	model, _ := app.Update(SessionDuplicatePromptMsg{
+		RequestedSession: requested,
+		ExistingSession:  existing,
 	})
 	updated := model.(App)
-	model, cmd := updated.Update(WorkItemDuplicateActionMsg{Action: WorkItemDuplicateCreateSession})
+
+	model, cmd := updated.Update(SessionDuplicateActionMsg{Action: SessionDuplicateCreateSession})
 	if cmd == nil {
 		t.Fatal("expected planning command for duplicate-session start")
 	}
@@ -901,9 +1016,9 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 		t.Fatalf("currentWorkItemID = %q, want %q", updated.currentWorkItemID, existing.ID)
 	}
 	if got := updated.workItemByID(existing.ID); got == nil {
-		t.Fatalf("expected work item %q to remain present", existing.ID)
-	} else if got.State != domain.WorkItemPlanning {
-		t.Fatalf("work item state = %v, want %v", got.State, domain.WorkItemPlanning)
+		t.Fatalf("expected session %q to remain present", existing.ID)
+	} else if got.State != domain.SessionPlanning {
+		t.Fatalf("session state = %v, want %v", got.State, domain.SessionPlanning)
 	}
 	if updated.content.Mode() != ContentModePlanning {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
@@ -917,9 +1032,9 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 func TestWorkItemDuplicateCancelChoiceKeepsCurrentSelection(t *testing.T) {
 	app, existing, other, requested := newDuplicatePromptTestApp()
 
-	model, _ := app.Update(WorkItemDuplicatePromptMsg{
-		RequestedWorkItem: requested,
-		ExistingWorkItem:  existing,
+	model, _ := app.Update(SessionDuplicatePromptMsg{
+		RequestedSession: requested,
+		ExistingSession:  existing,
 	})
 	updated := model.(App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -952,13 +1067,13 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 		Planning:      &orchestrator.PlanningService{},
 	})
 
-	model, cmd := app.Update(WorkItemCreatedMsg{
-		WorkItem: domain.WorkItem{
+	model, cmd := app.Update(SessionCreatedMsg{
+		Session: domain.Session{
 			ID:          "wi-new",
 			WorkspaceID: "ws-local",
 			ExternalID:  "SUB-2",
 			Title:       "New item",
-			State:       domain.WorkItemIngested,
+			State:       domain.SessionIngested,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		},
@@ -974,7 +1089,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	if updated.content.Mode() != ContentModePlanning {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
 	}
-	if len(updated.workItems) != 1 || updated.workItems[0].State != domain.WorkItemPlanning {
+	if len(updated.workItems) != 1 || updated.workItems[0].State != domain.SessionPlanning {
 		t.Fatalf("work items = %#v, want one planning work item", updated.workItems)
 	}
 }
@@ -986,7 +1101,7 @@ func newSidebarDrilldownTestApp() App {
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 	})
-	workItem := domain.WorkItem{
+	workItem := domain.Session{
 		ID:            "wi-1",
 		WorkspaceID:   "ws-local",
 		ExternalID:    "SUB-1",
@@ -1001,19 +1116,20 @@ func newSidebarDrilldownTestApp() App {
 				{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 43},
 			},
 		},
-		State:     domain.WorkItemImplementing,
+		State:     domain.SessionImplementing,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	app.workItems = []domain.Session{workItem}
 	plan := &domain.Plan{ID: "plan-1", WorkItemID: workItem.ID}
-	subPlan := domain.SubPlan{
+	subPlan := domain.TaskPlan{
 		ID:             "sp-1",
 		PlanID:         plan.ID,
 		RepositoryName: "repo-a",
 		Status:         domain.SubPlanInProgress,
 		UpdatedAt:      now,
 	}
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             "sess-1",
 		WorkspaceID:    "ws-local",
 		SubPlanID:      subPlan.ID,
@@ -1022,10 +1138,9 @@ func newSidebarDrilldownTestApp() App {
 		Status:         domain.AgentSessionRunning,
 		UpdatedAt:      now,
 	}
-	app.workItems = []domain.WorkItem{workItem}
 	app.plans[workItem.ID] = plan
-	app.subPlans[plan.ID] = []domain.SubPlan{subPlan}
-	app.sessions = []domain.AgentSession{session}
+	app.subPlans[plan.ID] = []domain.TaskPlan{subPlan}
+	app.sessions = []domain.Task{session}
 	app.content.SetSize(80, 20)
 	app.rebuildSidebar()
 	app.currentWorkItemID = workItem.ID
@@ -1209,7 +1324,7 @@ func TestSidebarSourceDetailsYieldsToCompletedState(t *testing.T) {
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = model.(App)
 
-	updated.workItems[0].State = domain.WorkItemCompleted
+	updated.workItems[0].State = domain.SessionCompleted
 	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
 
 	cmd := updated.updateContentFromState()

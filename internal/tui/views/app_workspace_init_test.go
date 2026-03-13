@@ -22,16 +22,16 @@ func (a stubWorkspaceInitAdapter) ListSelectable(context.Context, adapter.ListOp
 	return nil, adapter.ErrBrowseNotSupported
 }
 
-func (a stubWorkspaceInitAdapter) Resolve(context.Context, adapter.Selection) (domain.WorkItem, error) {
-	return domain.WorkItem{}, fmt.Errorf("not implemented")
+func (a stubWorkspaceInitAdapter) Resolve(context.Context, adapter.Selection) (domain.Session, error) {
+	return domain.Session{}, fmt.Errorf("not implemented")
 }
 
 func (a stubWorkspaceInitAdapter) Watch(context.Context, adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	return nil, adapter.ErrWatchNotSupported
 }
 
-func (a stubWorkspaceInitAdapter) Fetch(context.Context, string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, fmt.Errorf("not implemented")
+func (a stubWorkspaceInitAdapter) Fetch(context.Context, string) (domain.Session, error) {
+	return domain.Session{}, fmt.Errorf("not implemented")
 }
 
 func (a stubWorkspaceInitAdapter) UpdateState(context.Context, string, domain.TrackerState) error {
@@ -235,12 +235,12 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 		Settings:      &SettingsService{},
 		SettingsData:  snapshot,
 	})
-	app.workItems = []domain.WorkItem{{ID: "wi-current", WorkspaceID: "ws-new", Title: "current"}}
-	app.sessions = []domain.AgentSession{{ID: "sess-current", WorkspaceID: "ws-new"}}
+	app.workItems = []domain.Session{{ID: "wi-current", WorkspaceID: "ws-new", Title: "current"}}
+	app.sessions = []domain.Task{{ID: "sess-current", WorkspaceID: "ws-new"}}
 
-	model, cmd := app.Update(WorkItemsLoadedMsg{
+	model, cmd := app.Update(SessionsLoadedMsg{
 		WorkspaceID: "ws-old",
-		Items:       []domain.WorkItem{{ID: "wi-stale", WorkspaceID: "ws-old", Title: "stale"}},
+		Items:       []domain.Session{{ID: "wi-stale", WorkspaceID: "ws-old", Title: "stale"}},
 	})
 	if cmd != nil {
 		t.Fatalf("expected no command for stale work item load, got %v", cmd)
@@ -253,9 +253,9 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 		t.Fatalf("work items = %#v, want current workspace data preserved", updated.workItems)
 	}
 
-	model, cmd = updated.Update(SessionsLoadedMsg{
+	model, cmd = updated.Update(TasksLoadedMsg{
 		WorkspaceID: "ws-old",
-		Sessions:    []domain.AgentSession{{ID: "sess-stale", WorkspaceID: "ws-old"}},
+		Sessions:    []domain.Task{{ID: "sess-stale", WorkspaceID: "ws-old"}},
 	})
 	if cmd != nil {
 		t.Fatalf("expected no command for stale session load, got %v", cmd)

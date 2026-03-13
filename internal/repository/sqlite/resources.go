@@ -9,11 +9,11 @@ import (
 // Resources groups all transaction-bound repos. Every field is bound to the
 // same *sqlx.Tx when created via ResourcesFactory inside a Transact call.
 type Resources struct {
-	WorkItems  WorkItemRepo
+	WorkItems  SessionRepo
 	Plans      PlanRepo
 	SubPlans   SubPlanRepo
 	Workspaces WorkspaceRepo
-	Sessions   SessionRepo
+	Sessions   TaskRepo
 	Reviews    ReviewRepo
 	Questions  QuestionRepo
 	Events     EventRepo
@@ -28,11 +28,11 @@ func ResourcesFactory(
 	tx generic.SQLXRemote,
 ) (Resources, error) {
 	return Resources{
-		WorkItems:  NewWorkItemRepo(tx),
+		WorkItems:  NewSessionRepo(tx),
 		Plans:      NewPlanRepo(tx),
 		SubPlans:   NewSubPlanRepo(tx),
 		Workspaces: NewWorkspaceRepo(tx),
-		Sessions:   NewSessionRepo(tx),
+		Sessions:   NewTaskRepo(tx),
 		Reviews:    NewReviewRepo(tx),
 		Questions:  NewQuestionRepo(tx),
 		Events:     NewEventRepo(tx),

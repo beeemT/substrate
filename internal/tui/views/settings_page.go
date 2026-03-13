@@ -637,6 +637,11 @@ func (m *SettingsPage) syncMainViewport() {
 	m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, true)
 }
 
+func (m *SettingsPage) returnWithSyncedMainViewport(cmd tea.Cmd) (SettingsPage, tea.Cmd) {
+	m.syncMainViewport()
+	return *m, cmd
+}
+
 func (m SettingsPage) wheelAtViewportEdge(direction int) bool {
 	if direction == 0 || m.mainViewport.Height <= 0 {
 		return false
@@ -702,73 +707,6 @@ func (m *SettingsPage) syncFieldSelectionToScroll(fieldAnchors map[string]int, t
 		chosen = visible[len(visible)-1]
 	}
 	if chosen.section == currentSection && chosen.field == currentField {
-		if direction > 0 {
-			if len(visible) > 1 {
-				chosen = visible[1]
-			} else if below.section >= 0 {
-				choose(below)
-				return false
-			}
-		} else {
-			if len(visible) > 1 {
-				chosen = visible[len(visible)-2]
-			} else if above.section >= 0 {
-				choose(above)
-				return false
-			}
-		}
-	}
-	choose(chosen)
-	return true
-}
-
-func (m *SettingsPage) syncSectionSelectionToScroll(sectionAnchors map[int]int, top int, bottom int, direction int) bool {
-	if m.fieldsFocused() || bottom < top || direction == 0 {
-		return false
-	}
-	type visibleSection struct {
-		section int
-	}
-	visible := make([]visibleSection, 0, 8)
-	currentSection := m.sectionCursor
-	above := visibleSection{section: -1}
-	below := visibleSection{section: -1}
-	for sectionIndex := range m.sections {
-		anchor, ok := sectionAnchors[sectionIndex]
-		if !ok {
-			continue
-		}
-		section := visibleSection{section: sectionIndex}
-		switch {
-		case anchor < top:
-			above = section
-		case anchor > bottom:
-			if below.section == -1 {
-				below = section
-			}
-		default:
-			visible = append(visible, section)
-		}
-	}
-	choose := func(section visibleSection) {
-		m.sectionCursor = section.section
-		m.fieldCursor = 0
-		m.navCursor = m.sections[section.section].ID
-	}
-	if len(visible) == 0 {
-		if direction > 0 && below.section >= 0 {
-			choose(below)
-		}
-		if direction < 0 && above.section >= 0 {
-			choose(above)
-		}
-		return false
-	}
-	chosen := visible[0]
-	if direction < 0 {
-		chosen = visible[len(visible)-1]
-	}
-	if chosen.section == currentSection {
 		if direction > 0 {
 			if len(visible) > 1 {
 				chosen = visible[1]
@@ -965,6 +903,17 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		default:
 			return m, nil
 		}
+		if !m.fieldsFocused() {
+			previousSection := m.sectionCursor
+			previousField := m.fieldCursor
+			previousNav := m.navCursor
+			m.moveSection(direction)
+			if m.sectionCursor == previousSection && m.fieldCursor == previousField && m.navCursor == previousNav {
+				return m, nil
+			}
+			m.syncMainViewport()
+			return m, nil
+		}
 		viewportWidth, viewportHeight, _ := m.mainViewportSize()
 		if viewportWidth <= 0 || viewportHeight <= 0 {
 			return m, nil
@@ -987,22 +936,17 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		}
 		top := m.mainViewport.YOffset
 		bottom := top + m.mainViewport.Height - 1
-		if m.fieldsFocused() {
-			if m.mainFieldAnchors != nil {
-				m.syncFieldSelectionToScroll(m.mainFieldAnchors, top, bottom, direction)
-			}
-		} else if m.mainSectionAnchors != nil {
-			m.syncSectionSelectionToScroll(m.mainSectionAnchors, top, bottom, direction)
+		if m.mainFieldAnchors != nil {
+			m.syncFieldSelectionToScroll(m.mainFieldAnchors, top, bottom, direction)
 		}
 		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
 		return m, nil
 	}
 
-	defer m.syncMainViewport()
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.editing {
-			return m, m.updateFieldEditor(msg)
+			return m.returnWithSyncedMainViewport(m.updateFieldEditor(msg))
 		}
 		switch msg.String() {
 		case "up", "k":
@@ -1040,14 +984,14 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			if m.focus == settingsFocusSections {
 				if node, _, ok := m.currentSidebarNode(); ok && node.synthetic {
 					if m.expandCurrentSection() {
-						return m, nil
+						return m.returnWithSyncedMainViewport(nil)
 					}
 					if m.focusFirstChildSection() {
-						return m, nil
+						return m.returnWithSyncedMainViewport(nil)
 					}
 				}
 				m.focusFields()
-				return m, nil
+				return m.returnWithSyncedMainViewport(nil)
 			}
 			m.openFieldEditor()
 		case "e":
@@ -1068,19 +1012,19 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		case "r":
 			m.revealSecrets = !m.revealSecrets
 		case "s":
-			return m, m.saveCmd()
+			return m.returnWithSyncedMainViewport(m.saveCmd())
 		case "a":
-			return m, m.applyCmd(svcs)
+			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
 		case "t":
-			return m, m.testProviderCmd()
+			return m.returnWithSyncedMainViewport(m.testProviderCmd())
 		case "g":
-			return m, m.loginProviderCmd(svcs)
+			return m.returnWithSyncedMainViewport(m.loginProviderCmd(svcs))
 		case "esc":
 			if m.fieldsFocused() {
 				m.focusSections()
-				return m, nil
+				return m.returnWithSyncedMainViewport(nil)
 			}
-			return m, func() tea.Msg { return CloseOverlayMsg{} }
+			return m.returnWithSyncedMainViewport(func() tea.Msg { return CloseOverlayMsg{} })
 		}
 	case SettingsSavedMsg:
 		m.rawContent = msg.Raw
@@ -1109,7 +1053,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 	case ErrMsg:
 		m.errorText = msg.Err.Error()
 	}
-	return m, nil
+	return m.returnWithSyncedMainViewport(nil)
 }
 
 func (m SettingsPage) saveCmd() tea.Cmd {

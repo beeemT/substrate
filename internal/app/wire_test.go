@@ -17,16 +17,16 @@ import (
 
 type stubWorkItemRepo struct{}
 
-func (stubWorkItemRepo) Get(context.Context, string) (domain.WorkItem, error) {
-	return domain.WorkItem{}, repository.ErrNotFound
+func (stubWorkItemRepo) Get(context.Context, string) (domain.Session, error) {
+	return domain.Session{}, repository.ErrNotFound
 }
 
-func (stubWorkItemRepo) List(context.Context, repository.WorkItemFilter) ([]domain.WorkItem, error) {
+func (stubWorkItemRepo) List(context.Context, repository.SessionFilter) ([]domain.Session, error) {
 	return nil, nil
 }
-func (stubWorkItemRepo) Create(context.Context, domain.WorkItem) error { return nil }
-func (stubWorkItemRepo) Update(context.Context, domain.WorkItem) error { return nil }
-func (stubWorkItemRepo) Delete(context.Context, string) error          { return nil }
+func (stubWorkItemRepo) Create(context.Context, domain.Session) error { return nil }
+func (stubWorkItemRepo) Update(context.Context, domain.Session) error { return nil }
+func (stubWorkItemRepo) Delete(context.Context, string) error         { return nil }
 
 func writeExecutable(t *testing.T, dir, name, content string) string {
 	t.Helper()

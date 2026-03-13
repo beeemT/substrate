@@ -123,21 +123,21 @@ func run() error {
 
 	// Build repositories.
 	remote := dbRemote{db}
-	workItemRepo := sqlite.NewWorkItemRepo(remote)
+	workItemRepo := sqlite.NewSessionRepo(remote)
 	planRepo := sqlite.NewPlanRepo(remote)
 	subPlanRepo := sqlite.NewSubPlanRepo(remote)
 	workspaceRepo := sqlite.NewWorkspaceRepo(remote)
-	sessionRepo := sqlite.NewSessionRepo(remote)
+	sessionRepo := sqlite.NewTaskRepo(remote)
 	questionRepo := sqlite.NewQuestionRepo(remote)
 	instanceRepo := sqlite.NewInstanceRepo(remote)
 	reviews := sqlite.NewReviewRepo(remote)
 	eventRepo := sqlite.NewEventRepo(remote)
 
 	// Build services.
-	workItemSvc := service.NewWorkItemService(workItemRepo)
+	workItemSvc := service.NewSessionService(workItemRepo)
 	planSvc := service.NewPlanService(planRepo, subPlanRepo)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
-	sessionSvc := service.NewSessionService(sessionRepo)
+	sessionSvc := service.NewTaskService(sessionRepo)
 	questionSvc := service.NewQuestionService(questionRepo)
 	instanceSvc := service.NewInstanceService(instanceRepo)
 	reviewSvc := service.NewReviewService(reviews)
@@ -276,10 +276,10 @@ func run() error {
 	}
 
 	svcs := views.Services{
-		WorkItem:       workItemSvc,
+		Session:        workItemSvc,
 		Plan:           planSvc,
-		SubPlan:        subPlanRepo,
-		Session:        sessionSvc,
+		TaskPlan:       subPlanRepo,
+		Task:           sessionSvc,
 		Question:       questionSvc,
 		Instance:       instanceSvc,
 		Workspace:      workspaceSvc,

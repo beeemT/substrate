@@ -30,10 +30,10 @@ type ImplementationService struct {
 	gitClient    *gitwork.Client
 	eventBus     *event.Bus
 	planSvc      *service.PlanService
-	workItemSvc  *service.WorkItemService
-	sessionSvc   *service.SessionService
-	subPlanRepo  repository.SubPlanRepository
-	sessionRepo  repository.SessionRepository
+	workItemSvc  *service.SessionService
+	sessionSvc   *service.TaskService
+	subPlanRepo  repository.TaskPlanRepository
+	sessionRepo  repository.TaskRepository
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
 	sessTimeout  time.Duration
@@ -58,10 +58,10 @@ func NewImplementationService(
 	gitClient *gitwork.Client,
 	eventBus *event.Bus,
 	planSvc *service.PlanService,
-	workItemSvc *service.WorkItemService,
-	sessionSvc *service.SessionService,
-	subPlanRepo repository.SubPlanRepository,
-	sessionRepo repository.SessionRepository,
+	workItemSvc *service.SessionService,
+	sessionSvc *service.TaskService,
+	subPlanRepo repository.TaskPlanRepository,
+	sessionRepo repository.TaskRepository,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 ) *ImplementationService {
@@ -99,7 +99,7 @@ type SessionResult struct {
 	Repository   string
 	WorktreePath string
 	Branch       string
-	Status       domain.AgentSessionStatus
+	Status       domain.TaskStatus
 	StartedAt    time.Time
 	CompletedAt  *time.Time
 	ExitCode     *int
@@ -264,10 +264,10 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 // executeWave executes all sub-plans in a wave concurrently.
 func (s *ImplementationService) executeWave(
 	ctx context.Context,
-	wave []domain.SubPlan,
+	wave []domain.TaskPlan,
 	workspace *domain.Workspace,
 	plan *domain.Plan,
-	workItem *domain.WorkItem,
+	workItem *domain.Session,
 	branch string,
 	worktreePaths map[string]string,
 	state *ExecutionState,
@@ -308,10 +308,10 @@ func (s *ImplementationService) executeWave(
 // executeSubPlan executes a single sub-plan.
 func (s *ImplementationService) executeSubPlan(
 	ctx context.Context,
-	subPlan domain.SubPlan,
+	subPlan domain.TaskPlan,
 	workspace *domain.Workspace,
 	plan *domain.Plan,
-	workItem *domain.WorkItem,
+	workItem *domain.Session,
 	branch string,
 	worktreePaths map[string]string,
 	state *ExecutionState,
@@ -351,7 +351,7 @@ func (s *ImplementationService) executeSubPlan(
 
 	// Create agent session record
 	sessionID := domain.NewID()
-	session := domain.AgentSession{
+	session := domain.Task{
 		ID:             sessionID,
 		WorkspaceID:    workspace.ID,
 		SubPlanID:      subPlan.ID,
@@ -557,7 +557,7 @@ func (s *ImplementationService) prepareWorktrees(
 	workspace *domain.Workspace,
 	workItemTitle string,
 	trackerRefs []domain.TrackerReference,
-	subPlans []domain.SubPlan,
+	subPlans []domain.TaskPlan,
 	branch string,
 	repoPaths map[string]string,
 ) (map[string]string, error) {
@@ -583,10 +583,10 @@ func (s *ImplementationService) prepareWorktrees(
 
 // buildSessionOpts builds session options for an agent session.
 func (s *ImplementationService) buildSessionOpts(
-	session domain.AgentSession,
-	subPlan domain.SubPlan,
+	session domain.Task,
+	subPlan domain.TaskPlan,
 	plan *domain.Plan,
-	workItem *domain.WorkItem,
+	workItem *domain.Session,
 	workspace *domain.Workspace,
 ) adapter.SessionOpts {
 	// Read AGENTS.md if it exists
@@ -606,7 +606,6 @@ func (s *ImplementationService) buildSessionOpts(
 		commitConfig.MessageFormat = string(s.cfg.Commit.MessageFormat)
 		commitConfig.MessageTemplate = s.cfg.Commit.MessageTemplate
 	}
-
 	// Build system prompt
 	systemPrompt := s.buildSystemPrompt(subPlan, plan, workItem, docContext)
 
@@ -628,9 +627,9 @@ func (s *ImplementationService) buildSessionOpts(
 
 // buildSystemPrompt builds the system prompt for an agent session.
 func (s *ImplementationService) buildSystemPrompt(
-	subPlan domain.SubPlan,
+	subPlan domain.TaskPlan,
 	plan *domain.Plan,
-	workItem *domain.WorkItem,
+	workItem *domain.Session,
 	docContext string,
 ) string {
 	var prompt strings.Builder
@@ -753,7 +752,7 @@ func trackerRefsFromMetadata(metadata map[string]any) []domain.TrackerReference 
 	return refs
 }
 
-func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.WorkItem, workspaceID string) error {
+func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {
 	payload := map[string]interface{}{
 		"plan_id":   plan.ID,
 		"work_item": workItem,
@@ -768,7 +767,7 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 	return s.eventRepo.Create(ctx, evt)
 }
 
-func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.AgentSession, workspaceID string) error {
+func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
 		"sub_plan_id":   session.SubPlanID,
@@ -785,7 +784,7 @@ func (s *ImplementationService) emitSessionStarted(ctx context.Context, session 
 	return s.eventRepo.Create(ctx, evt)
 }
 
-func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.AgentSession, workspaceID string) error {
+func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
 		"sub_plan_id":   session.SubPlanID,
@@ -802,7 +801,7 @@ func (s *ImplementationService) emitSessionCompleted(ctx context.Context, sessio
 	return s.eventRepo.Create(ctx, evt)
 }
 
-func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.AgentSession, errMsg string, workspaceID string) error {
+func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
 	payload := map[string]interface{}{
 		"session_id":    session.ID,
 		"sub_plan_id":   session.SubPlanID,
@@ -828,7 +827,7 @@ func durableCleanupContext(parent context.Context) (context.Context, context.Can
 	return context.WithTimeout(context.WithoutCancel(parent), durableCleanupTimeout)
 }
 
-func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.SessionService, sessionID string, exitCode *int) {
+func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 
@@ -843,13 +842,13 @@ func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.Sess
 	}
 }
 
-func failSessionDurably(parent context.Context, sessionSvc *service.SessionService, sessionID string, exitCode *int) error {
+func failSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) error {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
 }
 
-func completeSessionDurably(parent context.Context, sessionSvc *service.SessionService, sessionID string) error {
+func completeSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string) error {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Complete(cleanupCtx, sessionID)

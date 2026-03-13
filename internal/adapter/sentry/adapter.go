@@ -107,22 +107,22 @@ func (a *SentryAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 	}, nil
 }
 
-func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	if sel.Scope != domain.ScopeIssues {
-		return domain.WorkItem{}, adapter.ErrBrowseNotSupported
+		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
 	if len(sel.ItemIDs) == 0 {
-		return domain.WorkItem{}, fmt.Errorf("sentry resolve requires at least one issue ID")
+		return domain.Session{}, fmt.Errorf("sentry resolve requires at least one issue ID")
 	}
 	issues := make([]sentryIssue, 0, len(sel.ItemIDs))
 	for _, itemID := range sel.ItemIDs {
 		issueID := strings.TrimSpace(itemID)
 		if issueID == "" {
-			return domain.WorkItem{}, fmt.Errorf("sentry resolve requires non-empty issue IDs")
+			return domain.Session{}, fmt.Errorf("sentry resolve requires non-empty issue IDs")
 		}
 		issue, err := a.fetchIssue(ctx, a.organization, issueID)
 		if err != nil {
-			return domain.WorkItem{}, fmt.Errorf("fetch sentry issue %s: %w", issueID, err)
+			return domain.Session{}, fmt.Errorf("fetch sentry issue %s: %w", issueID, err)
 		}
 		issues = append(issues, issue)
 	}
@@ -138,14 +138,14 @@ func (a *SentryAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-ch
 	return ch, nil
 }
 
-func (a *SentryAdapter) Fetch(ctx context.Context, externalID string) (domain.WorkItem, error) {
+func (a *SentryAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
 	organization, issueID, err := parseExternalID(externalID)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	issue, err := a.fetchIssue(ctx, organization, issueID)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	return issueToWorkItem(organization, issue), nil
 }
@@ -317,9 +317,9 @@ func issueListItem(organization string, issue sentryIssue) adapter.ListItem {
 	}
 }
 
-func issueToWorkItem(organization string, issue sentryIssue) domain.WorkItem {
+func issueToWorkItem(organization string, issue sentryIssue) domain.Session {
 	issueID := strings.TrimSpace(issue.ID)
-	return domain.WorkItem{
+	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(organization, issueID),
 		Source:        "sentry",
@@ -327,14 +327,14 @@ func issueToWorkItem(organization string, issue sentryIssue) domain.WorkItem {
 		SourceItemIDs: []string{issueID},
 		Title:         strings.TrimSpace(issue.Title),
 		Description:   issueSection(issue),
-		State:         domain.WorkItemIngested,
+		State:         domain.SessionIngested,
 		Metadata:      issueMetadata(organization, []sentryIssue{issue}),
 		CreatedAt:     issueFirstSeen(issue),
 		UpdatedAt:     issueUpdatedAt(issue),
 	}
 }
 
-func aggregateIssues(organization string, issues []sentryIssue) domain.WorkItem {
+func aggregateIssues(organization string, issues []sentryIssue) domain.Session {
 	sourceIDs := make([]string, 0, len(issues))
 	sections := make([]string, 0, len(issues))
 	projects := make(map[string]struct{}, len(issues))
@@ -358,7 +358,7 @@ func aggregateIssues(organization string, issues []sentryIssue) domain.WorkItem 
 	if len(projectList) > 0 {
 		metadata["sentry_projects"] = projectList
 	}
-	return domain.WorkItem{
+	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(organization, strings.TrimSpace(issues[0].ID)),
 		Source:        "sentry",
@@ -366,7 +366,7 @@ func aggregateIssues(organization string, issues []sentryIssue) domain.WorkItem 
 		SourceItemIDs: sourceIDs,
 		Title:         title,
 		Description:   strings.Join(sections, "\n\n---\n\n"),
-		State:         domain.WorkItemIngested,
+		State:         domain.SessionIngested,
 		Metadata:      metadata,
 		CreatedAt:     issueFirstSeen(issues[0]),
 		UpdatedAt:     issueUpdatedAt(issues[0]),

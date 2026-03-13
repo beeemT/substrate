@@ -54,7 +54,7 @@ type ContentModel struct {
 	question      QuestionModel
 
 	// Current work item being displayed
-	currentWorkItem *domain.WorkItem
+	currentWorkItem *domain.Session
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
@@ -94,7 +94,7 @@ func (m *ContentModel) SetSize(width, height int) {
 func (m *ContentModel) SetMode(mode ContentMode) { m.mode = mode }
 func (m ContentModel) Mode() ContentMode         { return m.mode }
 
-func (m *ContentModel) SetWorkItem(wi *domain.WorkItem) {
+func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 	m.currentWorkItem = wi
 	if wi != nil {
 		title := wi.ExternalID + " · " + wi.Title
@@ -107,7 +107,7 @@ func (m *ContentModel) SetWorkItem(wi *domain.WorkItem) {
 		m.question.SetTitle(title)
 		m.sessionLog.SetTitle(title)
 		m.readyToPlan.SetWorkItem(wi)
-		m.sourceDetails.SetWorkItem(wi)
+		m.sourceDetails.SetSession(wi)
 		m.awaitingImpl.SetWorkItem(wi)
 	}
 }

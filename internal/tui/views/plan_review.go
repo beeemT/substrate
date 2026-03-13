@@ -211,7 +211,7 @@ func editPlanInEditorCmd(planID, content string) tea.Cmd {
 
 // ReadyToPlanModel shows work item details when state is "ingested".
 type ReadyToPlanModel struct {
-	workItem *domain.WorkItem
+	workItem *domain.Session
 	styles   styles.Styles
 	width    int
 	height   int
@@ -223,7 +223,7 @@ func NewReadyToPlanModel(st styles.Styles) ReadyToPlanModel {
 
 func (m *ReadyToPlanModel) SetSize(w, h int) { m.width = w; m.height = h }
 
-func (m *ReadyToPlanModel) SetWorkItem(wi *domain.WorkItem) { m.workItem = wi }
+func (m *ReadyToPlanModel) SetWorkItem(wi *domain.Session) { m.workItem = wi }
 
 func (m ReadyToPlanModel) Update(msg tea.Msg) (ReadyToPlanModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "enter" && m.workItem != nil {
@@ -276,7 +276,7 @@ func (m ReadyToPlanModel) View() string {
 
 // AwaitingImplModel shows plan summary when state is "approved".
 type AwaitingImplModel struct {
-	workItem *domain.WorkItem
+	workItem *domain.Session
 	styles   styles.Styles
 	width    int
 	height   int
@@ -288,7 +288,7 @@ func NewAwaitingImplModel(st styles.Styles) AwaitingImplModel {
 
 func (m *AwaitingImplModel) SetSize(w, h int) { m.width = w; m.height = h }
 
-func (m *AwaitingImplModel) SetWorkItem(wi *domain.WorkItem) { m.workItem = wi }
+func (m *AwaitingImplModel) SetWorkItem(wi *domain.Session) { m.workItem = wi }
 
 func (m AwaitingImplModel) View() string {
 	if m.workItem == nil {

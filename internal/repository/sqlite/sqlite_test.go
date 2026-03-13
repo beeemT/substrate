@@ -75,18 +75,18 @@ func makeWorkspace(t *testing.T, tx generic.SQLXRemote) domain.Workspace {
 	return ws
 }
 
-func makeWorkItem(t *testing.T, tx generic.SQLXRemote, wsID string) domain.WorkItem {
+func makeWorkItem(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Session {
 	t.Helper()
-	item := domain.WorkItem{
+	item := domain.Session{
 		ID:          domain.NewID(),
 		WorkspaceID: wsID,
 		Source:      "github",
 		Title:       "test-item",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 	}
-	if err := reposqlite.NewWorkItemRepo(tx).Create(context.Background(), item); err != nil {
+	if err := reposqlite.NewSessionRepo(tx).Create(context.Background(), item); err != nil {
 		t.Fatalf("create work item: %v", err)
 	}
 	return item
@@ -109,9 +109,9 @@ func makePlan(t *testing.T, tx generic.SQLXRemote, wiID string) domain.Plan {
 	return plan
 }
 
-func makeSubPlan(t *testing.T, tx generic.SQLXRemote, planID string) domain.SubPlan {
+func makeSubPlan(t *testing.T, tx generic.SQLXRemote, planID string) domain.TaskPlan {
 	t.Helper()
-	sp := domain.SubPlan{
+	sp := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         planID,
 		RepositoryName: "test-repo",
@@ -143,9 +143,9 @@ func makeInstance(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Subst
 	return inst
 }
 
-func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.AgentSession {
+func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.Task {
 	t.Helper()
-	s := domain.AgentSession{
+	s := domain.Task{
 		ID:             domain.NewID(),
 		SubPlanID:      spID,
 		WorkspaceID:    wsID,
@@ -156,7 +156,7 @@ func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.
 		CreatedAt:      now(),
 		UpdatedAt:      now(),
 	}
-	if err := reposqlite.NewSessionRepo(tx).Create(context.Background(), s); err != nil {
+	if err := reposqlite.NewTaskRepo(tx).Create(context.Background(), s); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	return s
@@ -211,15 +211,15 @@ func TestWorkItemCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	ws := makeWorkspace(t, tx)
-	repo := reposqlite.NewWorkItemRepo(tx)
+	repo := reposqlite.NewSessionRepo(tx)
 
-	item := domain.WorkItem{
+	item := domain.Session{
 		ID:          domain.NewID(),
 		WorkspaceID: ws.ID,
 		Source:      "github",
 		Title:       "my-item",
 		Description: "desc",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		Labels:      []string{"bug", "p0"},
 		Metadata:    map[string]any{"key": "val"},
 		CreatedAt:   now(),
@@ -240,14 +240,14 @@ func TestWorkItemCRUD(t *testing.T) {
 		t.Errorf("labels = %v, want [bug p0]", got.Labels)
 	}
 
-	item.State = domain.WorkItemPlanning
+	item.State = domain.SessionPlanning
 	item.UpdatedAt = now()
 	if err := repo.Update(ctx, item); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, _ = repo.Get(ctx, item.ID)
-	if got.State != domain.WorkItemPlanning {
-		t.Errorf("state = %q, want %q", got.State, domain.WorkItemPlanning)
+	if got.State != domain.SessionPlanning {
+		t.Errorf("state = %q, want %q", got.State, domain.SessionPlanning)
 	}
 
 	if err := repo.Delete(ctx, item.ID); err != nil {
@@ -261,15 +261,15 @@ func TestWorkItemListFilter(t *testing.T) {
 	ctx := context.Background()
 
 	ws := makeWorkspace(t, tx)
-	repo := reposqlite.NewWorkItemRepo(tx)
+	repo := reposqlite.NewSessionRepo(tx)
 
 	for i := 0; i < 3; i++ {
 		makeWorkItem(t, tx, ws.ID)
 	}
 
 	wsID := ws.ID
-	state := domain.WorkItemIngested
-	items, err := repo.List(ctx, repository.WorkItemFilter{
+	state := domain.SessionIngested
+	items, err := repo.List(ctx, repository.SessionFilter{
 		WorkspaceID: &wsID,
 		State:       &state,
 	})
@@ -286,8 +286,8 @@ func TestWorkItemListEmpty(t *testing.T) {
 	tx := beginTx(t, db)
 	ctx := context.Background()
 
-	repo := reposqlite.NewWorkItemRepo(tx)
-	items, err := repo.List(ctx, repository.WorkItemFilter{})
+	repo := reposqlite.NewSessionRepo(tx)
+	items, err := repo.List(ctx, repository.SessionFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestSessionCRUD(t *testing.T) {
 	wi := makeWorkItem(t, tx, ws.ID)
 	plan := makePlan(t, tx, wi.ID)
 	sp := makeSubPlan(t, tx, plan.ID)
-	repo := reposqlite.NewSessionRepo(tx)
+	repo := reposqlite.NewTaskRepo(tx)
 
 	sess := makeSession(t, tx, sp.ID, ws.ID)
 
@@ -486,7 +486,7 @@ func TestSessionDeleteCascadesDependents(t *testing.T) {
 	sp := makeSubPlan(t, tx, plan.ID)
 	sess := makeSession(t, tx, sp.ID, ws.ID)
 
-	sessionRepo := reposqlite.NewSessionRepo(tx)
+	sessionRepo := reposqlite.NewTaskRepo(tx)
 	reviewRepo := reposqlite.NewReviewRepo(tx)
 	questionRepo := reposqlite.NewQuestionRepo(tx)
 
@@ -574,8 +574,8 @@ func TestSessionSearchHistory(t *testing.T) {
 	ctx := context.Background()
 
 	workspaceRepo := reposqlite.NewWorkspaceRepo(tx)
-	workItemRepo := reposqlite.NewWorkItemRepo(tx)
-	sessionRepo := reposqlite.NewSessionRepo(tx)
+	workItemRepo := reposqlite.NewSessionRepo(tx)
+	sessionRepo := reposqlite.NewTaskRepo(tx)
 
 	localWS := makeWorkspace(t, tx)
 	localWS.Name = "local-workspace"
@@ -599,7 +599,7 @@ func TestSessionSearchHistory(t *testing.T) {
 	localItem := makeWorkItem(t, tx, localWS.ID)
 	localItem.ExternalID = "LOC-1"
 	localItem.Title = "Local planner"
-	localItem.State = domain.WorkItemPlanning
+	localItem.State = domain.SessionPlanning
 	localItem.UpdatedAt = now()
 	if err := workItemRepo.Update(ctx, localItem); err != nil {
 		t.Fatalf("update local work item: %v", err)
@@ -620,7 +620,7 @@ func TestSessionSearchHistory(t *testing.T) {
 	remoteItem := makeWorkItem(t, tx, remoteWS.ID)
 	remoteItem.ExternalID = "REM-1"
 	remoteItem.Title = "Remote search target"
-	remoteItem.State = domain.WorkItemReviewing
+	remoteItem.State = domain.SessionReviewing
 	remoteItem.UpdatedAt = now()
 	if err := workItemRepo.Update(ctx, remoteItem); err != nil {
 		t.Fatalf("update remote work item: %v", err)
@@ -634,7 +634,7 @@ func TestSessionSearchHistory(t *testing.T) {
 	if err := sessionRepo.Update(ctx, remoteSession); err != nil {
 		t.Fatalf("update remote session: %v", err)
 	}
-	remoteLatestSubPlan := domain.SubPlan{
+	remoteLatestSubPlan := domain.TaskPlan{
 		ID:             domain.NewID(),
 		PlanID:         remotePlan.ID,
 		RepositoryName: "latest-repo",
@@ -660,7 +660,7 @@ func TestSessionSearchHistory(t *testing.T) {
 	planningOnlyItem := makeWorkItem(t, tx, remoteWS.ID)
 	planningOnlyItem.ExternalID = "REM-2"
 	planningOnlyItem.Title = "Planning only"
-	planningOnlyItem.State = domain.WorkItemPlanning
+	planningOnlyItem.State = domain.SessionPlanning
 	planningOnlyItem.UpdatedAt = now().Add(1 * time.Minute)
 	if err := workItemRepo.Update(ctx, planningOnlyItem); err != nil {
 		t.Fatalf("update planning-only work item: %v", err)
@@ -939,13 +939,13 @@ func TestFKConstraintWorkItem(t *testing.T) {
 	tx := beginTx(t, db)
 	ctx := context.Background()
 
-	repo := reposqlite.NewWorkItemRepo(tx)
-	item := domain.WorkItem{
+	repo := reposqlite.NewSessionRepo(tx)
+	item := domain.Session{
 		ID:          domain.NewID(),
 		WorkspaceID: "nonexistent",
 		Source:      "github",
 		Title:       "orphan",
-		State:       domain.WorkItemIngested,
+		State:       domain.SessionIngested,
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 	}
@@ -969,7 +969,7 @@ func TestGetNotFound(t *testing.T) {
 		t.Errorf("workspace get not found: got %v, want sql.ErrNoRows", err)
 	}
 
-	_, err = reposqlite.NewWorkItemRepo(tx).Get(ctx, "nope")
+	_, err = reposqlite.NewSessionRepo(tx).Get(ctx, "nope")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("work item get not found: got %v, want sql.ErrNoRows", err)
 	}
@@ -984,7 +984,7 @@ func TestGetNotFound(t *testing.T) {
 		t.Errorf("sub-plan get not found: got %v, want sql.ErrNoRows", err)
 	}
 
-	_, err = reposqlite.NewSessionRepo(tx).Get(ctx, "nope")
+	_, err = reposqlite.NewTaskRepo(tx).Get(ctx, "nope")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("session get not found: got %v, want sql.ErrNoRows", err)
 	}
@@ -1097,7 +1097,7 @@ func TestEmptyLists(t *testing.T) {
 		t.Error("sub-plans should be non-nil empty slice")
 	}
 
-	sessions, err := reposqlite.NewSessionRepo(tx).ListBySubPlanID(ctx, "nonexistent-sp")
+	sessions, err := reposqlite.NewTaskRepo(tx).ListBySubPlanID(ctx, "nonexistent-sp")
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}

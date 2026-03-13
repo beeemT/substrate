@@ -13,10 +13,10 @@ import (
 
 // Services aggregates all dependencies needed by the TUI.
 type Services struct {
-	WorkItem  *service.WorkItemService
-	Plan      *service.PlanService
-	SubPlan   repository.SubPlanRepository
 	Session   *service.SessionService
+	Plan      *service.PlanService
+	TaskPlan  repository.TaskPlanRepository
+	Task      *service.TaskService
 	Question  *service.QuestionService
 	Instance  *service.InstanceService
 	Workspace *service.WorkspaceService

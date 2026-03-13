@@ -159,18 +159,18 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 	}
 }
 
-func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.WorkItem, error) {
+func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	switch sel.Scope {
 	case domain.ScopeIssues:
 		issues := make([]issue, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			projectID, iid, err := parseIssueSelectionID(0, itemID)
 			if err != nil {
-				return domain.WorkItem{}, err
+				return domain.Session{}, err
 			}
 			iss, err := a.fetchIssue(ctx, projectID, iid)
 			if err != nil {
-				return domain.WorkItem{}, err
+				return domain.Session{}, err
 			}
 			issues = append(issues, iss)
 		}
@@ -181,42 +181,42 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 	case domain.ScopeProjects:
 		projectID := resolveSelectionProjectID(sel)
 		if projectID == 0 {
-			return domain.WorkItem{}, fmt.Errorf("gitlab milestone selection requires project_id metadata")
+			return domain.Session{}, fmt.Errorf("gitlab milestone selection requires project_id metadata")
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			id, err := strconv.ParseInt(itemID, 10, 64)
 			if err != nil {
-				return domain.WorkItem{}, fmt.Errorf("parse milestone id %q: %w", itemID, err)
+				return domain.Session{}, fmt.Errorf("parse milestone id %q: %w", itemID, err)
 			}
 			ms, err := a.fetchMilestone(ctx, projectID, id)
 			if err != nil {
-				return domain.WorkItem{}, err
+				return domain.Session{}, err
 			}
 			titles = append(titles, ms.Title)
 			parts = append(parts, formatMilestone(ms))
 		}
-		return domain.WorkItem{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:milestone:%d", projectID), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.WorkItemIngested, Metadata: map[string]any{"project_id": projectID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:milestone:%d", projectID), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"project_id": projectID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
 	case domain.ScopeInitiatives:
 		groupID := parseGroupIDFromMetadata(sel.Metadata)
 		if groupID == 0 {
-			return domain.WorkItem{}, fmt.Errorf("gitlab epic selection requires group_id metadata")
+			return domain.Session{}, fmt.Errorf("gitlab epic selection requires group_id metadata")
 		}
 		if len(sel.ItemIDs) != 1 {
-			return domain.WorkItem{}, fmt.Errorf("initiatives scope requires exactly one selection")
+			return domain.Session{}, fmt.Errorf("initiatives scope requires exactly one selection")
 		}
 		iid, err := strconv.ParseInt(sel.ItemIDs[0], 10, 64)
 		if err != nil {
-			return domain.WorkItem{}, fmt.Errorf("parse epic iid %q: %w", sel.ItemIDs[0], err)
+			return domain.Session{}, fmt.Errorf("parse epic iid %q: %w", sel.ItemIDs[0], err)
 		}
 		ep, err := a.fetchEpic(ctx, groupID, iid)
 		if err != nil {
-			return domain.WorkItem{}, err
+			return domain.Session{}, err
 		}
-		return domain.WorkItem{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:epic:%d", ep.IID), Source: a.Name(), SourceScope: domain.ScopeInitiatives, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: ep.Title, Description: ep.Description, State: domain.WorkItemIngested, Metadata: map[string]any{"group_id": groupID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:epic:%d", ep.IID), Source: a.Name(), SourceScope: domain.ScopeInitiatives, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: ep.Title, Description: ep.Description, State: domain.SessionIngested, Metadata: map[string]any{"group_id": groupID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
 	default:
-		return domain.WorkItem{}, adapter.ErrBrowseNotSupported
+		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
 }
 
@@ -256,14 +256,14 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 	return ch, nil
 }
 
-func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.WorkItem, error) {
+func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
 	projectID, iid, err := parseExternalID(externalID)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	iss, err := a.fetchIssue(ctx, projectID, iid)
 	if err != nil {
-		return domain.WorkItem{}, err
+		return domain.Session{}, err
 	}
 	return issueToWorkItem(iss), nil
 }
@@ -533,13 +533,13 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	return nil
 }
 
-func issueToWorkItem(iss issue) domain.WorkItem {
+func issueToWorkItem(iss issue) domain.Session {
 	projectID := gitlabIssueProjectID(iss)
 	selectionID := gitlabIssueSelectionID(projectID, iss)
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{selectionID}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.WorkItemIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{selectionID}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.SessionIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
 }
 
-func aggregateIssues(issues []issue) domain.WorkItem {
+func aggregateIssues(issues []issue) domain.Session {
 	labels := map[string]struct{}{}
 	parts := make([]string, 0, len(issues))
 	itemIDs := make([]string, 0, len(issues))
@@ -560,7 +560,7 @@ func aggregateIssues(issues []issue) domain.WorkItem {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	projectID := gitlabIssueProjectID(issues[0])
-	return domain.WorkItem{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.WorkItemIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
 }
 
 func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {

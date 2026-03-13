@@ -755,6 +755,10 @@ func TestSettingsPage_MouseWheelScrollMovesWithinBounds(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findFirstSectionWithFields(t, page)
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.navCursor = page.sections[page.sectionCursor].ID
 	page.SetSize(80, 12)
 	viewportWidth, viewportHeight, _ := page.mainViewportSize()
 	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
@@ -767,13 +771,17 @@ func TestSettingsPage_MouseWheelScrollMovesWithinBounds(t *testing.T) {
 	if updated.mainViewport.YOffset > maxOffset {
 		t.Fatalf("y offset = %d, want <= %d", updated.mainViewport.YOffset, maxOffset)
 	}
-	assertSelectedSectionVisibleInViewport(t, updated)
+	assertSelectedFieldVisibleInViewport(t, updated)
 }
 
 func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findFirstSectionWithFields(t, page)
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.navCursor = page.sections[page.sectionCursor].ID
 	page.SetSize(80, 12)
 	viewportWidth, viewportHeight, _ := page.mainViewportSize()
 	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
@@ -787,7 +795,7 @@ func TestSettingsPage_MouseWheelUpRecoversImmediatelyFromOverscroll(t *testing.T
 	if updated.mainViewport.YOffset > maxOffset {
 		t.Fatalf("y offset = %d, want <= %d after recovering from overscroll", updated.mainViewport.YOffset, maxOffset)
 	}
-	assertSelectedSectionVisibleInViewport(t, updated)
+	assertSelectedFieldVisibleInViewport(t, updated)
 }
 
 func TestSettingsPage_MouseWheelAdvancesFocusedFieldSelection(t *testing.T) {
@@ -816,7 +824,7 @@ func TestSettingsPage_MouseWheelAdvancesFocusedFieldSelection(t *testing.T) {
 	assertSelectedFieldVisibleInViewport(t, updated)
 }
 
-func TestSettingsPage_MouseWheelAdvancesFocusedSectionSelection(t *testing.T) {
+func TestSettingsPage_MouseWheelSectionFocusAdvancesSectionAndChangesMainPane(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
@@ -824,19 +832,19 @@ func TestSettingsPage_MouseWheelAdvancesFocusedSectionSelection(t *testing.T) {
 	page.navCursor = page.sections[page.sectionCursor].ID
 	page.focus = settingsFocusSections
 	page.SetSize(80, 12)
-
-	viewportWidth, viewportHeight, _ := page.mainViewportSize()
-	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
-	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
-	if maxOffset == 0 {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	page.mainViewport.YOffset = maxOffset
+	page.syncMainViewport()
+	_, beforeMainWidth, beforeBodyHeight, _ := page.layoutMetrics()
+	beforeMain := ansi.Strip(page.renderMainPane(beforeMainWidth, beforeBodyHeight))
 	originalSection := page.sectionCursor
 
-	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
 	if updated.sectionCursor == originalSection {
 		t.Fatalf("section cursor stayed at %d, want the focused section to advance with wheel scrolling", updated.sectionCursor)
+	}
+	_, afterMainWidth, afterBodyHeight, _ := updated.layoutMetrics()
+	afterMain := ansi.Strip(updated.renderMainPane(afterMainWidth, afterBodyHeight))
+	if beforeMain == afterMain {
+		t.Fatal("main pane render did not change after section-focused wheel navigation")
 	}
 	assertSelectedSectionVisibleInViewport(t, updated)
 }
@@ -850,23 +858,73 @@ func TestSettingsPage_MouseWheelSectionFocusKeepsFieldCursorAtSectionStart(t *te
 	page.navCursor = page.sections[page.sectionCursor].ID
 	page.focus = settingsFocusSections
 	page.SetSize(80, 12)
+	page.syncMainViewport()
+	_, beforeMainWidth, beforeBodyHeight, _ := page.layoutMetrics()
+	beforeMain := ansi.Strip(page.renderMainPane(beforeMainWidth, beforeBodyHeight))
 
-	viewportWidth, viewportHeight, _ := page.mainViewportSize()
-	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
-	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
-	if maxOffset == 0 {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	page.mainViewport.YOffset = maxOffset
-
-	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
 	if updated.focus != settingsFocusSections {
 		t.Fatalf("focus = %v, want %v after sidebar wheel scroll", updated.focus, settingsFocusSections)
 	}
 	if updated.fieldCursor != 0 {
 		t.Fatalf("field cursor = %d, want 0 after scrolling while sections are focused", updated.fieldCursor)
 	}
+	_, afterMainWidth, afterBodyHeight, _ := updated.layoutMetrics()
+	afterMain := ansi.Strip(updated.renderMainPane(afterMainWidth, afterBodyHeight))
+	if beforeMain == afterMain {
+		t.Fatal("main pane render did not change after section-focused wheel navigation")
+	}
 	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_KeySectionNavigationRefreshesPersistedMainViewport(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "provider.github")
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.focus = settingsFocusSections
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	beforeViewport := page.mainViewport.View()
+	originalSection := page.sectionCursor
+
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+	if updated.sectionCursor == originalSection {
+		t.Fatalf("section cursor stayed at %d, want the focused section to advance with key navigation", updated.sectionCursor)
+	}
+	afterViewport := updated.mainViewport.View()
+	if beforeViewport == afterViewport {
+		t.Fatal("persisted main viewport did not change after section-focused key navigation")
+	}
+	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_KeyFieldNavigationRefreshesPersistedMainViewport(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "commit")
+	page.fieldCursor = 0
+	page.focus = settingsFocusFields
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	beforeViewport := page.mainViewport.View()
+	originalSection := page.sectionCursor
+	originalField := page.fieldCursor
+
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+	if updated.sectionCursor == originalSection && updated.fieldCursor == originalField {
+		t.Fatalf("selection stayed at section=%d field=%d, want key navigation to advance the focused field", updated.sectionCursor, updated.fieldCursor)
+	}
+	afterViewport := updated.mainViewport.View()
+	if beforeViewport == afterViewport {
+		t.Fatal("persisted main viewport did not change after field-focused key navigation")
+	}
+	assertSelectedFieldVisibleInViewport(t, updated)
 }
 
 func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForFields(t *testing.T) {
@@ -1014,71 +1072,62 @@ func TestSettingsPage_KeyboardScrollPastEndDoesNotJumpToTop(t *testing.T) {
 	_ = bottomField
 }
 
-func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForSections(t *testing.T) {
+func TestSettingsPage_MouseWheelUpAtFirstSectionKeepsSectionFocusStable(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
 	page.sectionCursor = findFirstVisibleSidebarSection(t, page)
-	page.focus = settingsFocusSections
-	page.navCursor = page.sections[page.sectionCursor].ID
-	page.SetSize(80, 12)
-	viewportWidth, viewportHeight, _ := page.mainViewportSize()
-	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
-	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
-	if maxOffset == 0 {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	page.mainViewport.YOffset = 0
-	overshot := page
-	for i := 0; i < 5; i++ {
-		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
-		overshot = next
-	}
-	if overshot.mainViewport.YOffset != 0 {
-		t.Fatalf("y offset after top overshoot = %d, want 0", overshot.mainViewport.YOffset)
-	}
-	if overshot.sectionCursor != page.sectionCursor {
-		t.Fatalf("section cursor changed during top overshoot: got %d, want %d", overshot.sectionCursor, page.sectionCursor)
-	}
-
-	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-	if updated.mainViewport.YOffset <= overshot.mainViewport.YOffset {
-		t.Fatalf("y offset = %d, want > %d after reversing from top overshoot", updated.mainViewport.YOffset, overshot.mainViewport.YOffset)
-	}
-	assertSelectedSectionVisibleInViewport(t, updated)
-}
-
-func TestSettingsPage_MouseWheelUpMovesViewportImmediatelyFromBottomBoundaryForSections(t *testing.T) {
-	t.Parallel()
-
-	page := newTestSettingsPage(&config.Config{})
-	page.sectionCursor = findLastVisibleSidebarSection(t, page)
+	page.fieldCursor = 0
 	page.focus = settingsFocusSections
 	page.navCursor = page.sections[page.sectionCursor].ID
 	page.SetSize(80, 12)
 	page.syncMainViewport()
-	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
-	if maxOffset == 0 {
-		t.Fatal("expected settings content to overflow the viewport")
-	}
-	page.mainViewport.YOffset = maxOffset
-	overshot := page
-	for i := 0; i < 5; i++ {
-		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
-		overshot = next
-	}
-	if overshot.mainViewport.YOffset != maxOffset {
-		t.Fatalf("y offset after bottom overshoot = %d, want %d", overshot.mainViewport.YOffset, maxOffset)
-	}
-	if overshot.sectionCursor != page.sectionCursor {
-		t.Fatalf("section cursor changed during bottom overshoot: got %d, want %d", overshot.sectionCursor, page.sectionCursor)
-	}
+	beforeOffset := page.mainViewport.YOffset
+	beforeSection := page.sectionCursor
+	beforeNav := page.navCursor
 
-	updated, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
-	if updated.mainViewport.YOffset >= maxOffset {
-		t.Fatalf("y offset = %d, want < %d after reversing from bottom overshoot", updated.mainViewport.YOffset, maxOffset)
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if updated.mainViewport.YOffset != beforeOffset {
+		t.Fatalf("y offset = %d, want %d at the first section boundary", updated.mainViewport.YOffset, beforeOffset)
 	}
-	assertSelectedSectionVisibleInViewport(t, updated)
+	if updated.sectionCursor != beforeSection {
+		t.Fatalf("section cursor = %d, want %d at the first section boundary", updated.sectionCursor, beforeSection)
+	}
+	if updated.navCursor != beforeNav {
+		t.Fatalf("nav cursor = %q, want %q at the first section boundary", updated.navCursor, beforeNav)
+	}
+	if updated.fieldCursor != 0 {
+		t.Fatalf("field cursor = %d, want 0 while sections stay focused", updated.fieldCursor)
+	}
+}
+
+func TestSettingsPage_MouseWheelDownAtLastSectionKeepsSectionFocusStable(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findLastVisibleSidebarSection(t, page)
+	page.fieldCursor = 0
+	page.focus = settingsFocusSections
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+	beforeOffset := page.mainViewport.YOffset
+	beforeSection := page.sectionCursor
+	beforeNav := page.navCursor
+
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if updated.mainViewport.YOffset != beforeOffset {
+		t.Fatalf("y offset = %d, want %d at the last section boundary", updated.mainViewport.YOffset, beforeOffset)
+	}
+	if updated.sectionCursor != beforeSection {
+		t.Fatalf("section cursor = %d, want %d at the last section boundary", updated.sectionCursor, beforeSection)
+	}
+	if updated.navCursor != beforeNav {
+		t.Fatalf("nav cursor = %q, want %q at the last section boundary", updated.navCursor, beforeNav)
+	}
+	if updated.fieldCursor != 0 {
+		t.Fatalf("field cursor = %d, want 0 while sections stay focused", updated.fieldCursor)
+	}
 }
 
 func TestSettingsPage_ScrollbarTracksSelectedFieldMovement(t *testing.T) {

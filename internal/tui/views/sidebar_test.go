@@ -42,7 +42,7 @@ func makeSessions(n int) []views.SidebarEntry {
 			WorkItemID: string(rune('A' + i)),
 			ExternalID: string(rune('A' + i)),
 			Title:      "Session " + string(rune('A'+i)),
-			State:      domain.WorkItemIngested,
+			State:      domain.SessionIngested,
 		}
 	}
 	return sessions
@@ -107,7 +107,7 @@ func TestSidebarUsesDisplayWidthForStyledWorkItemPrefix(t *testing.T) {
 		WorkItemID: "wi-1",
 		ExternalID: "SUB-123",
 		Title:      "Short title",
-		State:      domain.WorkItemImplementing,
+		State:      domain.SessionImplementing,
 	}})
 
 	lines := strings.Split(m.View(), "\n")

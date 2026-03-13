@@ -146,7 +146,7 @@ type phase9bFixture struct {
 	subPlanRepo  *mockSubPlanRepo
 	planRepo     *mockPlanRepo
 	instanceSvc  *service.InstanceService
-	sessionSvc   *service.SessionService
+	sessionSvc   *service.TaskService
 	planSvc      *service.PlanService
 	bus          *event.Bus
 	workspaceID  string
@@ -159,7 +159,7 @@ func newPhase9bFixture() *phase9bFixture {
 	planRepo := newMockPlanRepo()
 
 	// Seed a sub-plan so ResumeSession can look it up.
-	subPlanRepo.subPlans["sub-plan-1"] = domain.SubPlan{
+	subPlanRepo.subPlans["sub-plan-1"] = domain.TaskPlan{
 		ID:      "sub-plan-1",
 		PlanID:  "plan-1",
 		Content: "Implement the auth module",
@@ -175,7 +175,7 @@ func newPhase9bFixture() *phase9bFixture {
 		subPlanRepo:  subPlanRepo,
 		planRepo:     planRepo,
 		instanceSvc:  service.NewInstanceService(instanceRepo),
-		sessionSvc:   service.NewSessionService(sessionRepo),
+		sessionSvc:   service.NewTaskService(sessionRepo),
 		planSvc:      planSvc,
 		bus:          event.NewBus(event.BusConfig{}),
 		workspaceID:  "ws-test",
@@ -213,7 +213,7 @@ func (f *phase9bFixture) seedLiveInstance(id string) {
 // seedRunningSession inserts a running session owned by ownerInstanceID.
 func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 	owner := ownerInstanceID
-	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
+	f.sessionRepo.sessions[sessionID] = domain.Task{
 		ID:              sessionID,
 		WorkspaceID:     f.workspaceID,
 		SubPlanID:       "sub-plan-1",
@@ -227,7 +227,7 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 
 // seedInterruptedSession inserts an interrupted session.
 func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
-	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
+	f.sessionRepo.sessions[sessionID] = domain.Task{
 		ID:             sessionID,
 		WorkspaceID:    f.workspaceID,
 		SubPlanID:      "sub-plan-1",
@@ -238,7 +238,7 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 	}
 }
 
-func (f *phase9bFixture) getSessionStatus(id string) domain.AgentSessionStatus {
+func (f *phase9bFixture) getSessionStatus(id string) domain.TaskStatus {
 	f.sessionRepo.mu.Lock()
 	defer f.sessionRepo.mu.Unlock()
 	return f.sessionRepo.sessions[id].Status
@@ -597,7 +597,7 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	}()
 
 	fix.seedInterruptedSession("sess-int4")
-	fix.sessionRepo.updateHook = func(ctx context.Context, session domain.AgentSession) error {
+	fix.sessionRepo.updateHook = func(ctx context.Context, session domain.Task) error {
 		if session.Status == domain.AgentSessionRunning {
 			cancel()
 		}

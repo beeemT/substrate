@@ -82,7 +82,7 @@ func newConstraintViolationError(message string) error {
 }
 
 // WorkItem state transition helpers
-func workItemStateName(s domain.WorkItemState) string {
+func workItemStateName(s domain.SessionState) string {
 	return string(s)
 }
 
@@ -90,7 +90,7 @@ func planStatusName(s domain.PlanStatus) string {
 	return string(s)
 }
 
-func subPlanStatusName(s domain.SubPlanStatus) string {
+func subPlanStatusName(s domain.TaskPlanStatus) string {
 	return string(s)
 }
 
@@ -98,7 +98,7 @@ func workspaceStatusName(s domain.WorkspaceStatus) string {
 	return string(s)
 }
 
-func sessionStatusName(s domain.AgentSessionStatus) string {
+func sessionStatusName(s domain.TaskStatus) string {
 	return string(s)
 }
 
