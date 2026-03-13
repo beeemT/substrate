@@ -988,10 +988,13 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		top := m.mainViewport.YOffset
 		bottom := top + m.mainViewport.Height - 1
 		if m.fieldsFocused() {
-			m.syncFieldSelectionToScroll(m.mainFieldAnchors, top, bottom, direction)
-		} else {
+			if m.mainFieldAnchors != nil {
+				m.syncFieldSelectionToScroll(m.mainFieldAnchors, top, bottom, direction)
+			}
+		} else if m.mainSectionAnchors != nil {
 			m.syncSectionSelectionToScroll(m.mainSectionAnchors, top, bottom, direction)
 		}
+		m.mainViewport = m.preparedMainViewport(viewportWidth, viewportHeight, false)
 		return m, nil
 	}
 
@@ -1336,7 +1339,10 @@ func (m SettingsPage) renderMainPane(width int, height int) string {
 	if contentWidth > max(1, contentAreaWidth-2) {
 		contentWidth = max(1, contentAreaWidth-2)
 	}
-	vp := m.configuredMainViewport(contentWidth, contentHeight)
+	vp := m.mainViewport
+	if vp.Width != contentWidth || vp.Height != contentHeight || vp.TotalLineCount() == 0 {
+		vp = m.preparedMainViewport(contentWidth, contentHeight, false)
+	}
 	header := m.renderStickySectionHeader(contentAreaWidth)
 	bodyParts := []string{
 		header,

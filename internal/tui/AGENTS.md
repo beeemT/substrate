@@ -23,3 +23,9 @@
 - Edge ticks (viewport already at top or bottom) must be O(1). Detect the edge before any content work and return immediately.
 - Do **not** throttle wheel events. Apple trackpads generate many discrete events after a gesture ends; throttling makes scrolling feel sticky and laggy. Instead, make each `Update` call as cheap as possible.
 - After wheel-scrolling a `list.Model` with infinite scroll or pagination, check the load-more trigger (e.g. `maybeLoadMore`) on wheel-down, same as for keyboard navigation.
+
+### Update / View cache boundary
+- Bubble Tea `Update` returns the modified model by value; `View` receives a copy and returns only a string. Cache fields mutated by pointer-receiver methods during `View()` are **discarded** after the frame. Only cache writes in `Update` survive to the next cycle.
+- For views with expensive document builds: perform the rebuild **once** at the end of `Update` (where cache persists), and have `View` reuse the pre-built viewport directly. Use a dimension/content check (`vp.Width != expected || vp.Height != expected || vp.TotalLineCount() == 0`) as a fallback for first render or resize.
+- The `View` fallback rebuild must use `alignSelection=false`. Selection alignment is the responsibility of `Update` (keyboard path via `syncMainViewport`, wheel path via `preparedMainViewport`). If `View` realigns, it can jump the viewport to unexpected positions because it operates on a stale copy.
+- Content-key-based caching (e.g. `mainDocumentContentKey`) must include all state that affects rendered output: cursor positions, focus, editing mode, reveal-secrets, and a mutation revision counter. Invalidate the cache at every content mutation point.

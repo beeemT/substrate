@@ -841,6 +841,34 @@ func TestSettingsPage_MouseWheelAdvancesFocusedSectionSelection(t *testing.T) {
 	assertSelectedSectionVisibleInViewport(t, updated)
 }
 
+func TestSettingsPage_MouseWheelSectionFocusKeepsFieldCursorAtSectionStart(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "commit")
+	page.fieldCursor = findFieldIndex(t, page, "commit", "message_template")
+	page.navCursor = page.sections[page.sectionCursor].ID
+	page.focus = settingsFocusSections
+	page.SetSize(80, 12)
+
+	viewportWidth, viewportHeight, _ := page.mainViewportSize()
+	page.mainViewport = page.preparedMainViewport(viewportWidth, viewportHeight, false)
+	maxOffset := max(0, page.mainViewport.TotalLineCount()-page.mainViewport.Height)
+	if maxOffset == 0 {
+		t.Fatal("expected settings content to overflow the viewport")
+	}
+	page.mainViewport.YOffset = maxOffset
+
+	updated, _ := page.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
+	if updated.focus != settingsFocusSections {
+		t.Fatalf("focus = %v, want %v after sidebar wheel scroll", updated.focus, settingsFocusSections)
+	}
+	if updated.fieldCursor != 0 {
+		t.Fatalf("field cursor = %d, want 0 after scrolling while sections are focused", updated.fieldCursor)
+	}
+	assertSelectedSectionVisibleInViewport(t, updated)
+}
+
 func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForFields(t *testing.T) {
 	t.Parallel()
 
@@ -908,6 +936,82 @@ func TestSettingsPage_MouseWheelUpMovesViewportImmediatelyFromBottomBoundaryForF
 		t.Fatalf("y offset = %d, want < %d after reversing from bottom overshoot", updated.mainViewport.YOffset, maxOffset)
 	}
 	assertSelectedFieldVisibleInViewport(t, updated)
+}
+
+func TestSettingsPage_MouseWheelScrollPastEndDoesNotJumpToTop(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.focus = settingsFocusFields
+	page.sectionCursor = 0
+	page.fieldCursor = 0
+	page.navCursor = page.sections[0].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	// Scroll all the way down in many steps.
+	current := page
+	for i := 0; i < 200; i++ {
+		next, _ := current.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+		current = next
+	}
+
+	// Record the bottom state.
+	bottomOffset := current.mainViewport.YOffset
+	bottomSection := current.sectionCursor
+	bottomField := current.fieldCursor
+	maxOffset := max(0, current.mainViewport.TotalLineCount()-current.mainViewport.Height)
+	if bottomOffset < maxOffset-3 {
+		t.Fatalf("expected to reach near bottom: offset=%d, max=%d", bottomOffset, maxOffset)
+	}
+
+	// One more scroll down should not jump to top.
+	after, _ := current.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
+	if after.mainViewport.YOffset < bottomOffset {
+		t.Fatalf("scroll past end jumped: offset went from %d to %d", bottomOffset, after.mainViewport.YOffset)
+	}
+	if after.sectionCursor != bottomSection || after.fieldCursor != bottomField {
+		t.Fatalf("selection changed on scroll past end: section %d→%d, field %d→%d",
+			bottomSection, after.sectionCursor, bottomField, after.fieldCursor)
+	}
+}
+
+func TestSettingsPage_KeyboardScrollPastEndDoesNotJumpToTop(t *testing.T) {
+	t.Parallel()
+
+	page := newTestSettingsPage(&config.Config{})
+	page.focus = settingsFocusFields
+	page.sectionCursor = 0
+	page.fieldCursor = 0
+	page.navCursor = page.sections[0].ID
+	page.SetSize(80, 12)
+	page.syncMainViewport()
+
+	// Move down field by field to the bottom.
+	current := page
+	for i := 0; i < 200; i++ {
+		next, _ := current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, Services{})
+		if next.sectionCursor == current.sectionCursor && next.fieldCursor == current.fieldCursor {
+			current = next
+			break // Clamped at end.
+		}
+		current = next
+	}
+
+	// Record the bottom state.
+	bottomOffset := current.mainViewport.YOffset
+	bottomSection := current.sectionCursor
+	bottomField := current.fieldCursor
+
+	// One more down should not jump to top.
+	after, _ := current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, Services{})
+	if after.mainViewport.YOffset == 0 && bottomOffset > 0 {
+		t.Fatalf("keyboard scroll past end jumped to top: offset went from %d to 0", bottomOffset)
+	}
+	if after.sectionCursor < bottomSection {
+		t.Fatalf("section went backwards on scroll past end: %d\u2192%d", bottomSection, after.sectionCursor)
+	}
+	_ = bottomField
 }
 
 func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForSections(t *testing.T) {
