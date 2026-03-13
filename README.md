@@ -180,6 +180,47 @@ The TUI lets you:
 
 ---
 
+## How to Develop
+
+For local development you are usually running the source bridge (`bridge/omp-bridge.ts`), not the compiled bridge shipped in the Homebrew package. That means Bun and the bridge's Bun dependencies must be present locally.
+
+### Run from a source checkout
+
+```bash
+git clone https://github.com/beeemT/substrate.git
+cd substrate
+bun install --cwd bridge
+go build -o ./substrate ./cmd/substrate
+./substrate
+```
+
+Building the binary into the repo root lets Substrate auto-discover `./bridge/omp-bridge.ts`.
+
+### If you use `go run` or place the binary somewhere else
+
+`go run ./cmd/substrate` builds the executable in a temporary directory, so bridge auto-discovery cannot find the repository's `bridge/` folder. In that case, set an absolute bridge path in `~/.substrate/config.yaml`:
+
+```yaml
+adapters:
+  ohmypi:
+    bridge_path: /absolute/path/to/substrate/bridge/omp-bridge.ts
+    # bun_path: /opt/homebrew/bin/bun
+```
+
+Set `bun_path` only when `bun` is not already on your `PATH`.
+
+### Fixing `Oh My Pi bridge dependencies missing`
+
+That message means Substrate found the TypeScript bridge script, but the Bun packages next to it have not been installed. From the repository root, run:
+
+```bash
+bun install --cwd bridge
+```
+
+Then restart Substrate. Re-run that command after pulling changes to `bridge/package.json` or `bridge/bun.lock`.
+
+---
+
 ## Architecture
 
 ### Layered Design
