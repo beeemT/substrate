@@ -1,538 +1,194 @@
 # 04 - Adapter Implementations
-<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
+<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
 
-Concrete implementations of interfaces from `02-layered-architecture.md`. Each adapter lives under `internal/adapter/`.
-
----
-
-## 1. Linear Adapter (WorkItemAdapter)
-
-Package: `internal/adapter/linear`. Authentication via personal API key in config, sent as `Authorization: <api_key>`.
-
-### Capabilities
-
-Current implementation in `internal/adapter/linear/adapter.go` declares:
-
-```go
-func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
-    return adapter.AdapterCapabilities{
-        CanWatch:  true,
-        CanBrowse: true,
-        CanMutate: true,
-        BrowseScopes: []domain.SelectionScope{
-            domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
-        },
-        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
-            domain.ScopeIssues: {
-                Views:          []string{"assigned_to_me", "created_by_me", "subscribed", "all"},
-                States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
-                SupportsLabels: true,
-                SupportsSearch: true,
-                SupportsCursor: true,
-                SupportsTeam:   true,
-            },
-            domain.ScopeProjects: {
-                States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
-                SupportsSearch: true,
-                SupportsCursor: true,
-                SupportsTeam:   true,
-            },
-            domain.ScopeInitiatives: {
-                States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
-                SupportsSearch: true,
-                SupportsCursor: true,
-            },
-        },
-    }
-}
-```
-
-### Selection Model
-
-Three selection scopes for TUI session creation, each determining how work items are discovered and aggregated.
-
-**Issues** (`ScopeIssues`): Query issues from the configured team, optionally narrowed by assignee/creator view, normalized or provider-native state, labels, text search, and cursor pagination. On `Resolve`: if 1 issue, WorkItem mirrors it directly. If N issues, title = first issue title + `(+N-1 more)`, description concatenates all with `---` separators, labels merged.
-
-**Projects** (`ScopeProjects`): Query projects accessible to the team with search/state/cursor semantics. User selects 1+. `Resolve` fetches all relevant issues from selected projects, builds WorkItem with project context + all issue details in description.
-
-**Initiatives** (`ScopeInitiatives`): Query initiatives with search/state/cursor semantics; user selects exactly 1. `Resolve` fetches all projects + their issues, builds comprehensive WorkItem with initiative goals, project breakdown, and grouped issue details.
-### ListSelectable and Resolve
-
-```go
-func (a *LinearAdapter) ListSelectable(ctx context.Context, opts domain.ListOpts) (*domain.ListResult, error) {
-    switch opts.Scope {
-    case domain.ScopeIssues:      return a.listIssues(ctx, opts)
-    case domain.ScopeProjects:    return a.listProjects(ctx, opts)
-    case domain.ScopeInitiatives: return a.listInitiatives(ctx, opts)
-    default: return nil, fmt.Errorf("unsupported scope %q", opts.Scope)
-    }
-}
-
-func (a *LinearAdapter) Resolve(ctx context.Context, sel domain.Selection) (domain.WorkItem, error) {
-    switch sel.Scope {
-    case domain.ScopeIssues:
-        issues, err := a.fetchIssuesByIDs(ctx, sel.ItemIDs)
-        if err != nil { return domain.WorkItem{}, err }
-        if len(issues) == 1 { return issueToWorkItem(issues[0]), nil }
-        return aggregateIssues(issues), nil // title+count, joined descriptions, merged labels
-    case domain.ScopeProjects:
-        var sections []string
-        var allIssues []linearIssue
-        for _, id := range sel.ItemIDs {
-            proj, err := a.fetchProjectWithIssues(ctx, id)
-            if err != nil { return domain.WorkItem{}, err }
-            sections = append(sections, formatProjectSection(proj))
-            allIssues = append(allIssues, proj.Issues...)
-        }
-        return buildProjectWorkItem(sections, allIssues), nil
-    case domain.ScopeInitiatives:
-        if len(sel.ItemIDs) != 1 {
-            return domain.WorkItem{}, fmt.Errorf("initiatives scope requires exactly 1 selection")
-        }
-        init, err := a.fetchInitiativeDeep(ctx, sel.ItemIDs[0])
-        if err != nil { return domain.WorkItem{}, err }
-        return buildInitiativeWorkItem(init), nil
-    default: return domain.WorkItem{}, fmt.Errorf("unsupported scope %q", sel.Scope)
-    }
-}
-```
-
-### GraphQL Queries
-
-The current adapter uses GraphQL queries for:
-
-- issue browsing with team, assignee/creator, label, state, search, and cursor filters
-- project browsing with team, state, search, and cursor filters
-- initiative browsing with state, search, and cursor filters
-- viewer lookup to resolve `assigned_to_me` / `created_by_me`
-- point fetches for issue/project/initiative resolution
-- state updates and comments
-
-Notable implementation properties:
-
-- Issue browsing supports both normalized states (`open`, `closed`, `all`) and richer Linear-native workflow states.
-- Cursor pagination is adapter-backed and surfaced via `ListResult.HasMore` / `NextCursor`.
-- Team-aware browsing remains first-class, but the adapter no longer stops at a purely team-backlog model.
-
-### ExternalID Construction
-
-Linear work items use a prefixed external ID: `LIN-{teamKey}-{issueNumber}` (e.g. `LIN-FOO-123`).
-
-- `LIN` is the source prefix identifying this as a Linear issue
-- `{teamKey}` is the Linear team's key identifier, sourced from `issue.team.key` in the GraphQL response
-- `{issueNumber}` is the numeric suffix of the issue identifier (e.g. `identifier = "FOO-123"` → number = `"123"`)
-
-```go
-func linearExternalID(issue linearIssue) (string, error) {
-		// issue.Team.Key = "FOO", issue.Identifier = "FOO-123"
-		parts := strings.SplitN(issue.Identifier, "-", 2)
-		if len(parts) != 2 {
-				return "", fmt.Errorf("unexpected Linear identifier format %q: expected TEAM-N", issue.Identifier)
-		}
-		return "LIN-" + issue.Team.Key + "-" + parts[1], nil // "LIN-FOO-123"
-}
-```
-
-### Watch: Poll-Based
-
-Linear has webhooks but they require a server endpoint -- impractical for a local CLI. Polling is simpler.
-
-```go
-func (a *LinearAdapter) Watch(ctx context.Context, filter domain.WorkItemFilter) (<-chan domain.WorkItemEvent, error) {
-    ch := make(chan domain.WorkItemEvent, 16)
-    go func() {
-        defer close(ch)
-        ticker := time.NewTicker(a.pollInterval)
-        defer ticker.Stop()
-        known := make(map[string]string) // issue ID -> last state ID
-        for {
-            select {
-            case <-ctx.Done(): return
-            case <-ticker.C:
-                var issues []domain.WorkItem
-                var err error
-                if len(filter.ExternalIDs) > 0 {
-                // NOTE: filter.ExternalIDs are substrate-format ("LIN-FOO-123").
-                // fetchIssuesByIDs must strip the "LIN-{teamKey}-" prefix and query
-                // Linear by identifier ("FOO-123") or by internal UUID (stored at ingestion time),
-                // NOT by passing the substrate ExternalID directly to issue(id: $id).
-                    issues, err = a.fetchIssuesByIDs(ctx, filter.ExternalIDs)
-                } else {
-                    issues, err = a.fetchAssignedIssues(ctx)
-                }
-                if err != nil { ch <- domain.WorkItemEvent{Type: domain.WatchError, Err: err}; continue }
-                for _, issue := range issues {
-                    if len(filter.States) > 0 && !slices.Contains(filter.States, issue.State) { continue } // requires Go 1.21+ slices package
-                    prev, seen := known[issue.ID]
-                    known[issue.ID] = issue.StateID
-                    if !seen { ch <- domain.WorkItemEvent{Type: domain.WorkItemDiscovered, Item: issue} }
-                    if seen && prev != issue.StateID { ch <- domain.WorkItemEvent{Type: domain.WorkItemUpdated, Item: issue} }
-                }
-            }
-        }
-    }()
-    return ch, nil
-}
-```
-
-### State Mapping
-
-Linear workflow states are team-specific. Config maps substrate states to Linear workflow state UUIDs. Reverse mapping derived at startup by inverting the map.
-
-```toml
-[adapters.linear]
-api_key         = "lin_api_..."   # or "$LINEAR_API_KEY" for env ref
-team_id         = "uuid"
-assignee_filter = "me"            # resolves via viewer query, or explicit user ID
-poll_interval   = "30s"
-[adapters.linear.state_mappings]
-backlog = "uuid-1"
-todo = "uuid-2"
-in_progress = "uuid-3"
-in_review = "uuid-4"
-done = "uuid-5"
-canceled = "uuid-6"
-```
-
-### Event Handling
-
-| Substrate Event | Linear Action |
-|---|---|
-| `PlanApproved` | Move issue to `in_progress` |
-| `WorkItemCompleted` | Move issue to `done` |
-| `AgentSessionFailed` | Add comment with error summary |
-| `ReviewCritique` | Add comment with critique |
+Concrete adapter behavior as implemented under `internal/adapter/` and wired from `internal/app/`.
 
 ---
 
-## 2. Manual Adapter (WorkItemAdapter)
+## 1. Shared contracts
 
-Package: `internal/adapter/manual`. Creates work items without an external tracker. All items are entered directly by the human operator through the TUI form.
+`internal/adapter/interfaces.go` defines three adapter roles:
 
-```go
-type ManualAdapter struct {
-		store WorkspaceStore // *sqlx.Tx from the enclosing Transact call; COUNT and subsequent Create always share the same transaction
-}
+- `WorkItemAdapter`: tracker-style sources used by the new-session flow and by tracker synchronization hooks.
+- `RepoLifecycleAdapter`: repository event handlers used for MR/PR lifecycle work after a worktree exists.
+- `AgentHarness`: execution backends for planning / implementation / review / foreman sessions.
 
-func (a *ManualAdapter) Name() string { return "manual" }
+### Work item contract
 
-func (a *ManualAdapter) Capabilities() domain.AdapterCapabilities {
-    return domain.AdapterCapabilities{
-        CanWatch:  false,
-        CanBrowse: false,
-        CanMutate: false,
-    }
-}
+`WorkItemAdapter.Resolve(...)` and `Fetch(...)` now return `domain.Session`, not a separate work-item type. User-facing flows still talk about creating a session, while the adapter contract stores the selected source data on the resulting `domain.Session`.
 
-func (a *ManualAdapter) ListSelectable(_ context.Context, _ domain.ListOpts) (*domain.ListResult, error) {
-    return nil, ErrNotSupported
-}
+`internal/adapter/types.go` is the source of truth for browse and watch payloads:
 
-func (a *ManualAdapter) Resolve(ctx context.Context, sel domain.Selection) (domain.WorkItem, error) {
-		if sel.ManualInput == nil {
-				return domain.WorkItem{}, fmt.Errorf("manual adapter requires ManualInput in selection")
-		}
-		externalID, err := a.nextManualID(ctx)
-		if err != nil { return domain.WorkItem{}, fmt.Errorf("generate manual ID: %w", err) }
-		return domain.WorkItem{
-				ID:           ulid.Make().String(),
-				ExternalID:   externalID, // "MAN-1", "MAN-2", ...
-				Source:       "manual",
-				SourceScope:  domain.ScopeManual,
-				Title:        sel.ManualInput.Title,
-				Description:  sel.ManualInput.Description,
-				State:        domain.WorkItemIngested,
-				CreatedAt:    time.Now(),
-				UpdatedAt:    time.Now(),
-		}, nil
-}
+- `AdapterCapabilities` declares whether a provider can browse, watch, or mutate.
+- `BrowseScopes` and `BrowseFilters` describe the exact shared UI controls a provider/scope can honor.
+- `WorkItemEvent` carries a `domain.Session` plus a string `Type`.
 
-// nextManualID returns the next sequential MAN-N identifier for this workspace.
-// store is always a *sqlx.Tx supplied by ResourcesFactory, so this COUNT and
-// the caller's subsequent WorkItem.Create execute in the same transaction.
-func (a *ManualAdapter) nextManualID(ctx context.Context) (string, error) {
-		n, err := a.store.CountManualWorkItems(ctx)
-		if err != nil { return "", err }
-		return fmt.Sprintf("MAN-%d", n+1), nil
-}
+Current watch implementations use these event types in practice:
 
-func (a *ManualAdapter) Watch(_ context.Context, _ domain.WorkItemFilter) (<-chan domain.WorkItemEvent, error) {
-    ch := make(chan domain.WorkItemEvent)
-    close(ch) // manual adapter never auto-discovers
-    return ch, nil
-}
+- `"created"` when a newly observed item appears
+- `"updated"` when a tracked item changes state
+- `"error"` as a polling failure sentinel in the Linear, GitHub, and GitLab adapters
 
-func (a *ManualAdapter) Fetch(_ context.Context, id string) (domain.WorkItem, error) {
-    return domain.WorkItem{}, ErrNotSupported // state lives only in substrate DB
-}
-
-func (a *ManualAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error { return nil }
-func (a *ManualAdapter) AddComment(_ context.Context, _ string, _ string) error              { return nil }
-func (a *ManualAdapter) OnEvent(_ context.Context, _ domain.SystemEvent) error                { return nil }
-```
-
-No YAML configuration needed. The manual adapter is always available as a built-in option, registered unconditionally at startup in `internal/app/wire.go`.
-
-ExternalID format: `MAN-N` (incrementing sequence with no fixed width, e.g. `MAN-1`, `MAN-42`, `MAN-1000`). The counter is derived by counting existing manual work items in the DB for the current workspace — no separate counter column is required.
+The type comment still mentions `created` / `updated` / `deleted`, but the runtime behavior above is what the shipped adapters emit today.
 
 ---
 
-## 3. GitLab Adapter (WorkItemAdapter)
+## 2. Work item adapters
 
-### Unified Browsing Contract
+### Manual (`internal/adapter/manual`)
 
-GitLab and GitHub browsing now participate in the same unified work browser as Linear. This section owns the concrete provider semantics and the shared browse-filter vocabulary that the UI consumes. `06-tui-design.md` owns presentation and interaction; `07-implementation-plan.md` owns rollout and test gates.
+Manual is the only adapter that is always registered by `BuildWorkItemAdapters(...)`.
 
-The current shared browse request surface is intentionally broader than the original `ListOpts` shape and is capability-driven rather than provider-name-driven.
+Capabilities:
 
-```go
-type ListOpts struct {
-    Provider  string
-    Scope     domain.SelectionScope
-    Search    string
-    Limit     int
-    Offset    int
-    View      string
-    State     string
-    Owner     string
-    Repo      string
-    Group     string
-    Labels    []string
-    Cursor    string
-    Sort      string
-    Direction string
-    Metadata  map[string]string
-}
+- `CanBrowse=false`
+- `CanWatch=false`
+- `CanMutate=false`
 
-type BrowseFilterCapabilities struct {
-    Views          []string
-    States         []string
-    SupportsLabels bool
-    SupportsSearch bool
-    SupportsCursor bool
-    SupportsOffset bool
-    SupportsOwner  bool
-    SupportsRepo   bool
-    SupportsGroup  bool
-    SupportsTeam   bool
-}
+Behavior:
 
-type AdapterCapabilities struct {
-    CanWatch      bool
-    CanBrowse     bool
-    CanMutate     bool
-    BrowseScopes  []domain.SelectionScope
-    BrowseFilters map[domain.SelectionScope]BrowseFilterCapabilities
-}
-```
+- `Resolve(...)` requires `Selection.Manual` and creates a `domain.Session` with:
+  - `Source="manual"`
+  - `SourceScope=domain.ScopeManual`
+  - sequential external IDs `MAN-1`, `MAN-2`, ... scoped by workspace
+- `ListSelectable(...)` and `Fetch(...)` are unsupported
+- `Watch(...)` returns a closed channel
+- `UpdateState(...)`, `AddComment(...)`, and `OnEvent(...)` are no-ops
 
-Shared semantic rules:
-- `ScopeIssues` is the normalization baseline across providers.
-- `Provider = All` is honest only where shared semantics exist; in the current implementation that means issue browsing only.
-- Common controls are derived from the intersection of declared adapter capabilities for the active provider/scope set, not from provider-name special cases.
-- Unsupported controls should be hidden or disabled from declared capabilities, not silently ignored.
-- Multi-select resolves through exactly one provider at a time; mixed-provider selections are rejected even when the browser view is unified.
-- Provider-specific escape hatches stay in `Metadata` until they earn a stable shared field.
+### Linear (`internal/adapter/linear`)
 
-### Normalized Issue Filter Vocabulary
+Registered when `cfg.Adapters.Linear.APIKey` is populated.
 
-The browser converges around a documented shared issue vocabulary rather than pretending every provider is identical.
+Capabilities:
 
-**View values**
-- `assigned_to_me`
-- `created_by_me`
-- `mentioned`
-- `subscribed`
-- `all`
+- browse: issues, projects, initiatives
+- watch: yes
+- mutate: yes
+- issue filters: view, state, labels, search, cursor, team
+- project filters: state, search, cursor, team
+- initiative filters: state, search, cursor
 
-**Portable state values**
-- `open`
-- `closed`
-- `all`
+Current scope model:
 
-Adapters may also expose provider-native state values beyond the portable layer when they can back them honestly.
+- `ScopeIssues`: browse Linear issues, resolve one or many issues into a session
+- `ScopeProjects`: browse projects, then resolve selected projects into a session whose description contains per-project sections
+- `ScopeInitiatives`: browse initiatives, resolve exactly one initiative into a session with initiative/project detail
 
-### Filter Capability Model
+Current IDs and mutation behavior:
 
-Filter semantics are intentionally split into three tiers:
-- **Tier A — broadly common:** `Search`, `View`, `State`, `Labels`, pagination
-- **Tier B — provider/scope-qualified:** `Team`, `Owner`, `Repo`, `Group`, sort/direction
-- **Tier C — provider-specific:** additional knobs under `Metadata` such as GitHub repo-inbox refinements, GitLab author/assignee fields, or Linear workflow-state names
+- issue external IDs: `LIN-{TEAM}-{NUMBER}`
+- project external IDs: `LIN-PRJ-{prefix}`
+- initiative external IDs: `LIN-INIT-{prefix}`
+- `Fetch(...)` only rehydrates issue-backed IDs (`LIN-{TEAM}-{NUMBER}`)
+- `UpdateState(...)` maps `domain.TrackerState` through configured `state_mappings`
+- `AddComment(...)` resolves the Substrate external ID back to the Linear internal UUID before mutation
 
-### GitLab Configuration
+Watch behavior:
 
-> Global issue browsing no longer hard-requires `project_id`. `project_id` remains valuable for scoped fetch/mutate defaults and milestone/epic context, but it is not the conceptual prerequisite for issue browsing anymore.
+- polls assigned issues on `poll_interval` (default from config is `30s`)
+- resolves the viewer/assignee identity once up front
+- emits `created`, `updated`, and `error`
+- backs off exponentially on rate limiting and resets the interval after success
 
-```go
-type GitlabConfig struct {
-    Token         string            `toml:"token"`
-    BaseURL       string            `toml:"base_url"`
-    ProjectID     int64             `toml:"project_id"`
-    Assignee      string            `toml:"assignee"`
-    PollInterval  string            `toml:"poll_interval"`
-    StateMappings map[string]string `toml:"state_mappings"`
-}
-```
+Event handling:
 
-ExternalID format remains `GL-{projectID}-{issueIID}` for tracker mutation/fetch stability, even though issue browsing is now global-by-default.
+- `plan.approved` -> move the tracked issue to `in_progress`
+- `work_item.completed` -> move the tracked issue to `done`
 
-At startup, the adapter validates connectivity and, when possible, discovers group context from `GET /projects/{id}` so epic-backed initiatives can be exposed honestly when that backing context exists.
+### GitLab (`internal/adapter/gitlab`)
 
-### GitLab Capabilities
+Registered when `cfg.Adapters.GitLab.Token` is populated and adapter construction succeeds.
 
-Current implementation declares:
-```go
-func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
-    return adapter.AdapterCapabilities{
-        CanWatch:  true,
-        CanBrowse: true,
-        CanMutate: true,
-        BrowseScopes: []domain.SelectionScope{
-            domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
-        },
-        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
-            domain.ScopeIssues: {
-                Views:          []string{"assigned_to_me", "created_by_me", "all"},
-                States:         []string{"open", "closed", "all"},
-                SupportsLabels: true,
-                SupportsSearch: true,
-                SupportsOffset: true,
-                SupportsRepo:   true,
-                SupportsGroup:  true,
-            },
-            domain.ScopeProjects: {SupportsOffset: true, SupportsRepo: true},
-            domain.ScopeInitiatives: {SupportsOffset: true, SupportsGroup: true},
-        },
-    }
-}
-```
+This is a work-item adapter only. GitLab repository lifecycle automation lives in the separate `glab` adapter.
 
-### GitLab Browse, Watch, and Mutate
+Capabilities:
 
-**Issues** are global-by-default through `/api/v4/issues`. The adapter maps the shared vocabulary into GitLab semantics:
-- `View=assigned_to_me` -> `scope=assigned_to_me`
-- `View=created_by_me` -> `scope=created_by_me`
-- `View=all` -> `scope=all`
-- `State=open` -> `state=opened`
-- `State=closed` -> `state=closed`
-- `State=all` -> `state=all`
-- `Group` and repo/project-path narrowing remain optional filters, not prerequisites for issue browsing
-- labels, search, and offset pagination are adapter-backed
-- unsupported views like `mentioned` / `subscribed` are omitted from capabilities rather than faked by the adapter
+- browse: issues, projects, initiatives
+- watch: yes
+- mutate: yes
+- issue filters: view (`assigned_to_me`, `created_by_me`, `all`), state, labels, search, offset, repo, group
+- project filters: offset, repo
+- initiative filters: offset, group
 
-**Projects** remain milestone-backed and therefore container-qualified.
+Current scope mapping:
 
-**Initiatives** remain epic-backed and therefore group-qualified. The adapter should expose initiative browsing only when it has honest backing context; it must not infer a fake universal initiative inbox from a single project default.
+- `ScopeIssues` -> GitLab issues
+- `ScopeProjects` -> GitLab milestones
+- `ScopeInitiatives` -> GitLab epics
 
-Watch and mutate behavior stay tracker-focused: poll issue state changes, map substrate tracker states through `state_mappings`, and post comments through GitLab notes APIs.
+Resolve behavior:
 
-### GitLab Event Handling
+- issues: fetch each selected issue; multi-select aggregates them into one session
+- projects: requires `project_id` metadata so selected milestone IDs can be resolved correctly
+- initiatives: requires `group_id` metadata and exactly one epic selection
 
-| Substrate Event | GitLab tracker action |
-|---|---|
-| `PlanApproved` | `UpdateState("in_progress")` |
-| `WorkItemCompleted` | `UpdateState("done")` |
-| `AgentSessionFailed` | Deferred comment hook until the failure payload carries the needed external tracker context |
+IDs and mutation behavior:
 
-**Wire registration:** register the GitLab work item adapter when credentials are present. Global issue browsing should not be documented as dependent on `project_id`, even if some scoped fetch/mutate paths still use it.
+- issue external IDs: `gl:issue:{projectID}#{iid}`
+- milestone sessions use `gl:milestone:{projectID}`
+- epic sessions use `gl:epic:{iid}`
+- `Fetch(...)` only supports issue external IDs
+- `UpdateState(...)` maps tracker state to GitLab `state_event`
+- `AddComment(...)` posts issue notes
 
----
+Watch behavior:
 
-## 4. GitHub Adapter (WorkItemAdapter + RepoLifecycleAdapter)
+- polls assigned opened issues on the configured poll interval
+- emits `created`, `updated`, and `error`
 
-Package: `internal/adapter/github`. `GithubAdapter` remains the first dual-role adapter in the codebase: one struct implements both `WorkItemAdapter` and `RepoLifecycleAdapter` because both halves share the same config (`token`, `owner`, `repo`) and the same HTTP client.
+Event handling:
 
-### GitHub Configuration
+- `plan.approved` -> add the rendered plan comment to every referenced external ID, then move the primary `external_id` to `in_progress`
+- `work_item.completed` -> move the tracked issue to `done`
 
-```go
-type GithubConfig struct {
-    Token         string            `toml:"token"`
-    Owner         string            `toml:"owner"`
-    Repo          string            `toml:"repo"`
-    Assignee      string            `toml:"assignee"`
-    PollInterval  string            `toml:"poll_interval"`
-    Reviewers     []string          `toml:"reviewers"`
-    Labels        []string          `toml:"labels"`
-    StateMappings map[string]string `toml:"state_mappings"`
-}
-```
+### GitHub (`internal/adapter/github`)
 
-`Token` may still fall back to one-time `gh auth token` resolution at startup. `default_branch` is still discovered from `GET /repos/{owner}/{repo}` for PR lifecycle targeting. For browsing, `owner` and `repo` should be treated as optional narrowing filters rather than conceptual prerequisites for issue inbox access.
+Registered when `config.GitHubAuthConfigured(...)` is true and adapter construction succeeds. Auth may come from config or an authenticated `gh` CLI.
 
-ExternalID format remains `GH-{owner}-{repo}-{number}` for repo-scoped tracker mutation and lifecycle targeting.
+`GithubAdapter` is the only dual-role adapter in the tree: it implements both `WorkItemAdapter` and `RepoLifecycleAdapter`.
 
-### GitHub Capabilities
+Work-item capabilities:
 
-Current implementation declares:
-```go
-func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
-    return adapter.AdapterCapabilities{
-        CanWatch:  true,
-        CanBrowse: true,
-        CanMutate: true,
-        BrowseScopes: []domain.SelectionScope{
-            domain.ScopeIssues, domain.ScopeProjects,
-        },
-        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
-            domain.ScopeIssues: {
-                Views:          []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", "all"},
-                States:         []string{"open", "closed", "all"},
-                SupportsLabels: true,
-                SupportsSearch: true,
-                SupportsOffset: true,
-                SupportsOwner:  true,
-                SupportsRepo:   true,
-            },
-            domain.ScopeProjects: {
-                SupportsOffset: true,
-                SupportsRepo:   true,
-            },
-        },
-    }
-}
-```
+- browse: issues, projects
+- watch: yes
+- mutate: yes
+- issue filters: view (`assigned_to_me`, `created_by_me`, `mentioned`, `subscribed`, `all`), state, labels, search, offset, owner, repo
+- project filters: offset, repo
 
-### GitHub Browse, Watch, and Mutate
+Current scope mapping:
 
-**Issues** are global-by-default through `GET /issues`. The adapter maps the shared issue vocabulary into GitHub inbox semantics:
-- `assigned_to_me` -> `filter=assigned`
-- `created_by_me` -> `filter=created`
-- `mentioned` -> `filter=mentioned`
-- `subscribed` -> `filter=subscribed`
-- `all` -> `filter=all`
-- `State` maps directly to `open`, `closed`, `all`
-- `Owner` / `Repo` are narrowing filters, not prerequisites for issue browsing
-- labels, search, and offset pagination are adapter-backed
+- `ScopeIssues` -> GitHub issues
+- `ScopeProjects` -> repository milestones
+- `ScopeInitiatives` is not implemented; `ListSelectable(...)` returns `adapter.ErrBrowseNotSupported`
 
-**Projects** remain milestone-backed and repo-scoped. In provider-specific mode they require repo context or explicit narrowing. In `All` mode the UI must not present GitHub milestones as if they were part of a truly global project inbox.
+IDs and mutation behavior:
 
-`ScopeInitiatives` remains unsupported until a real GitHub Projects v2 model exists; the adapter must return `ErrBrowseNotSupported` honestly rather than inventing a substitute.
+- issue external IDs: `gh:issue:{owner}/{repo}#{number}`
+- milestone sessions use `gh:milestone:{owner}/{repo}`
+- `Fetch(...)` only supports issue external IDs
+- `UpdateState(...)` maps tracker state to the configured GitHub issue state string
+- `AddComment(...)` posts issue comments
 
-Watch and mutate behavior remain repo-targeted for tracker updates and PR lifecycle.
+Watch behavior:
 
-### PR Lifecycle via REST
+- polls assigned open issues on the configured/default poll interval
+- emits `created`, `updated`, and `error`
 
-GitHub PR lifecycle deliberately stays on direct REST rather than `gh`. The adapter already owns an authenticated REST client, and keeping PR creation/readiness on that path removes subprocess coupling and keeps the lifecycle code unit-testable.
+Event handling across its two roles:
 
-Repo lifecycle behavior:
-- `OnEvent(WorktreeCreated)` -> idempotency guard with `GET /repos/{owner}/{repo}/pulls?head={branch}&state=open`; if none exists, `POST /repos/{owner}/{repo}/pulls` with `{ draft: true, head: branch, base: default_branch, title: ... }`
-- `OnEvent(WorkItemCompleted)` -> find the PR with `GET /repos/{owner}/{repo}/pulls?head={branch}` and `PATCH /repos/{owner}/{repo}/pulls/{number}` with `{ draft: false }`
-- warn on failure; never block workflow completion
-- guard branch-to-PR state with `sync.RWMutex`
+- `plan.approved` -> add plan comments to referenced issues, then move the primary issue to `in_progress`
+- `worktree.created` -> repository-lifecycle path for PR discovery / creation on GitHub remotes
+- `work_item.completed` -> attempt to move the issue to `done` and run PR completion handling
 
-Lifecycle event coverage matches `glab`: `WorktreeCreated` and `WorkItemCompleted`.
+### Sentry (`internal/adapter/sentry`)
 
-**Wire registration:** register the GitHub adapter when credentials exist and repo-host lifecycle targeting can be configured. For issue browsing, do not document `owner` and `repo` as hard prerequisites when the provider can browse globally via the issue inbox.
+Sentry is a shipped, source-only work-item adapter. It supports issue browsing during session creation, resolving one or more selected issues into a `domain.Session`, fetching a Sentry-backed session again from its external ID, and exposing auth, login, and connectivity checks through Settings. It does not participate in repository lifecycle automation.
 
----
+#### Config and auth model
 
----
+Registered by `BuildWorkItemAdapters(...)` when `config.SentryAuthConfigured(...)` is true and `sentryadapter.New(...)` succeeds.
 
-## 5. Sentry Adapter (WorkItemAdapter)
-
-Package: `internal/adapter/sentry`. Sentry is implemented as a source-only work item adapter: it can browse issues, resolve one or more selected issues into a Substrate `domain.WorkItem`, and fetch a previously selected issue again by stable external ID. It does **not** participate in repository lifecycle automation.
-
-### Configuration
+`adapters.sentry` config fields are:
 
 ```yaml
 adapters:
@@ -545,334 +201,295 @@ adapters:
       - api
 ```
 
-`organization` is required for live requests. `projects` is optional and acts as a project allowlist for browsing. Authentication uses `Authorization: Bearer <token>` against the organization issues REST API.
-
-### Capabilities and Browse Contract
-
-Current implementation declares Sentry as issues-only, browse-and-resolve only:
+`internal/config/config.go` shape:
 
 ```go
-func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
-    return adapter.AdapterCapabilities{
-        CanWatch:   false,
-        CanBrowse:  true,
-        CanMutate:  false,
-        BrowseScopes: []domain.SelectionScope{domain.ScopeIssues},
-        BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
-            domain.ScopeIssues: {
-                Views:          []string{"assigned_to_me", "all"},
-                States:         []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"},
-                SupportsSearch: true,
-                SupportsCursor: true,
-                SupportsRepo:   true,
-            },
-        },
-    }
+type SentryConfig struct {
+    TokenRef        string   `yaml:"token_ref"`
+    Token           string   `yaml:"-"`
+    BaseURL         string   `yaml:"base_url"`
+    BaseURLExplicit bool     `yaml:"-"`
+    Organization    string   `yaml:"organization"`
+    Projects        []string `yaml:"projects"`
 }
 ```
 
-Browse requests use `GET /api/0/organizations/{organization}/issues/` plus cursor pagination from the response `Link` header. Shared browse controls are translated as follows:
+Base URL behavior:
 
-- `View=assigned_to_me` -> add `assigned:me` to the Sentry query
+- empty -> `https://sentry.io/api/0`
+- `https://sentry.io` -> `https://sentry.io/api/0`
+- self-hosted roots such as `https://sentry.example.com/self-hosted` -> `https://sentry.example.com/self-hosted/api/0`
+- if `base_url` was not explicitly set in YAML, `ResolveSentryContext(...)` may inherit `SENTRY_URL` from the environment
+- if the default SaaS host was explicitly configured, ambient `SENTRY_URL` must not override it
+
+Auth-source precedence:
+
+1. config token (`cfg.Adapters.Sentry.Token`)
+2. `SENTRY_AUTH_TOKEN`
+3. authenticated `sentry auth status`
+4. keychain-reference status (`token_ref`) when secrets have not yet been hydrated into `Token`
+
+`config.SentryAuthConfigured(...)` returns true for any source above except `unset`. Construction still requires a resolved organization plus usable runtime credentials:
+
+- with a token source, the adapter uses direct HTTP bearer auth
+- with no token but authenticated Sentry CLI, the adapter switches to a CLI-backed transport that shells out to `sentry api ... --include`
+- with neither, construction fails
+- with missing organization, construction fails even if auth exists
+
+#### Browse contract
+
+Capabilities:
+
+- browse: issues only
+- watch: no
+- mutate: no
+- issue filters: view (`assigned_to_me`, `all`), state (`unresolved`, `for_review`, `regressed`, `escalating`, `resolved`, `archived`), search, cursor, repo
+- no labels filter
+- no owner filter
+
+Filter mapping in `ListSelectable(...)`:
+
+- `View=assigned_to_me` -> `assigned:me`
 - `View=all` -> no assignment clause
-- `State` -> add `is:<state>`
-- free-text search -> append raw search text to the query expression
-- shared `Repo` filter -> mapped to Sentry project selection
-- configured `projects` -> enforced as an allowlist; an out-of-scope project filter returns no results instead of widening the request
+- `State=*` -> `is:<state>`
+- `Search` -> appended raw to the Sentry query string
+- `Repo` -> reused as the Sentry project selector
+- configured `projects` -> enforced as an allowlist
+- if the UI asks for a project outside the allowlist, the adapter returns an empty result instead of broadening scope
+- `Cursor` -> forwarded to Sentry and parsed back out of the `Link` header
 
-No provider-specific browse controls are added in the TUI. The shared repo field is reused with placeholder text `Repository / Project…`.
+Provider-specific UI implications:
 
-> There is no Sentry `RepoLifecycleAdapter`. Sentry is intentionally excluded from `BuildRepoLifecycleAdapters(...)` and remote-detection flows.
+- Sentry remains an issues-only provider
+- the shared repo field acts as project selection for Sentry
+- owner and label controls stay hidden
+- switching across the Sentry/non-Sentry boundary clears the repo/project filter to avoid leaking values between providers
+- layout stays stable when switching providers
 
-### Resolve, Fetch, and Unsupported Operations
+#### Resolve and fetch behavior
 
-Single-issue resolve produces a Sentry-backed `domain.WorkItem` with `Source="sentry"`, `SourceScope=domain.ScopeIssues`, `SourceItemIDs=[]string{issueID}`, and durable source facts in metadata / description rather than invented repo semantics. Multi-select resolve aggregates multiple issues into one work item with per-issue sections in the description.
+`Resolve(...)` only supports `domain.ScopeIssues`, and both resolve and fetch return `domain.Session`.
 
-Stable external IDs use the format `SEN-{organization}-{issueID}` (for example `SEN-acme-123456789`). `Fetch` reparses that ID and calls the Sentry issue-detail endpoint so a Sentry-backed work item can be rehydrated without relying on stale browse results.
+Single-issue resolution produces a session with:
 
-Unsupported operations stay explicitly source-only: `Watch` returns a closed channel, and `UpdateState`, `AddComment`, and `OnEvent` are no-ops that return `nil`.
+- `Source="sentry"`
+- `SourceScope=domain.ScopeIssues`
+- `SourceItemIDs=[]string{issueID}`
+- `State=domain.SessionIngested`
+- durable metadata for organization, identifiers, project slugs, permalinks, and `tracker_refs`
+
+Multi-select resolution:
+
+- fetches each selected issue individually
+- keeps the first issue as the canonical title base
+- formats `Title` as `first title (+N more)`
+- joins per-issue sections with `---`
+- preserves every selected issue ID in `SourceItemIDs`
+
+Stable Sentry external IDs use:
+
+```text
+SEN-{organization}-{issueID}
+```
+
+Example:
+
+```text
+SEN-acme-123456789
+```
+
+`Fetch(...)` reparses that ID, extracts organization and issue ID, and re-queries Sentry so a stored session can be rehydrated without depending on stale browse results.
+
+Per-issue formatting keeps Sentry-native facts instead of inventing repository semantics. Sessions include fields such as:
+
+- short identifier (`ShortID` when present)
+- project slug or name
+- status
+- culprit
+- event count
+- affected user count
+- level
+- permalink
+
+Tracker references are emitted as `domain.TrackerReference{Provider:"sentry", Kind:"issue", ...}`.
+
+#### Source-only constraints and role boundaries
+
+The adapter intentionally declines source-tracker side effects:
+
+- `Watch(...)` returns a closed channel
+- `UpdateState(...)` returns `nil`
+- `AddComment(...)` returns `nil`
+- `OnEvent(...)` returns `nil`
+- no tracker mutation back to Sentry state
+- no comment sync back to Sentry
+- no repository lifecycle registration
+- no remote-detection integration
+- no worktree, branch, PR, or MR automation
+
+Treat Sentry as a source adapter. Any documentation that describes it as a repository-lifecycle system is stale.
+
+#### Settings integration
+
+`internal/tui/views/settings_service.go` exposes a dedicated `provider.sentry` section with fields for:
+
+- token
+- base URL
+- organization
+- projects
+
+Provider status uses the same auth-source logic as the runtime adapter:
+
+- `config token`
+- `env token`
+- `sentry cli`
+- `keychain`
+- `unset`
+
+The description shown in Settings matches the implementation: Sentry can use keychain-backed config, environment variables, or an authenticated Sentry CLI session.
+
+Login flow:
+
+- `SettingsPage.loginProviderCmd(...)` special-cases `provider == "sentry"`
+- it runs `sentry auth login` directly
+- `config.SentryCLIEnvironment(...)` sets `SENTRY_URL` to the self-hosted root when needed and clears inherited values when the default host should be used
+- on success the page refreshes provider status without marking the config dirty
+- harness `RunAction(Action="login_provider", Provider="sentry")` is implemented in oh-my-pi, Claude Code, and Codex
+- the Settings service also knows how to package the correct root `base_url` input for those actions
+
+Connectivity testing via `SettingsService.TestProvider("sentry", ...)`:
+
+1. rebuilds config from Settings fields
+2. constructs `sentryadapter.New(...)`
+3. runs `ListSelectable(... ScopeIssues, Limit: 1)`
+4. marks the provider connected only on success
+
+That means Settings exercises the same constructor, auth-resolution path, and browse transport that the runtime uses.
+
+#### Verification coverage
+
+The shipped behavior is covered in multiple layers.
+
+Adapter tests (`internal/adapter/sentry/*_test.go`) cover:
+
+- constructor requires organization and credentials
+- capability declaration stays source-only and issues-only
+- issue-list query mapping honors views, states, search, cursor, and allowlist scoping
+- next-cursor parsing from Sentry `Link` headers
+- list-item mapping and pagination propagation
+- single-issue resolve
+- multi-issue aggregate resolve
+- fetch by `SEN-{organization}-{issueID}`
+- CLI-backed transport via `sentry api ... --include`
+- source-only methods remain no-ops
+
+Config tests (`internal/config/*sentry*_test.go`) cover:
+
+- default `base_url`
+- YAML loading for organization, projects, and `token_ref`
+- invalid `base_url` rejection
+- keychain secret hydration and persistence for `adapters.sentry.token`
+- auth-source precedence
+- `SENTRY_URL`, `SENTRY_ORG`, and `SENTRY_PROJECT` fallback behavior
+- self-hosted URL normalization and root-URL handling for CLI auth
+
+App wiring tests (`internal/app/wire*_test.go`) cover:
+
+- Sentry work-item adapter registration with config token
+- registration with `SENTRY_AUTH_TOKEN`
+- registration with authenticated Sentry CLI
+- skip behavior when organization is missing
+- repo-lifecycle registration continues to ignore Sentry
+
+TUI and settings tests (`internal/tui/views/*sentry*_test.go`, `app_browse_test.go`) cover:
+
+- Sentry provider section rendering
+- provider status auth-source reporting
+- direct settings login refresh behavior
+- provider test path for both token-backed HTTP and CLI-backed transport
+- stable new-session layout when switching to Sentry
+- clearing repo/project filter state across the Sentry boundary
 
 ---
 
+## 3. Repo lifecycle adapters
 
-## 6. glab Adapter (RepoLifecycleAdapter)
+### glab (`internal/adapter/glab`)
 
-Package: `internal/adapter/glab`. Requires `glab` CLI installed and authenticated. Validates at startup. Unlike `internal/adapter/gitlab`, this package owns GitLab merge request lifecycle only; tracker issue data lives in the GitLab work item adapter.
+`GlabAdapter` is the GitLab repo-lifecycle adapter. It is separate from the GitLab work-item adapter on purpose.
 
-```go
-type GlabAdapter struct {
-    defaultReviewers []string
-    defaultLabels    []string
-    draftByDefault   bool
-    autoPush         bool
-    runner           CmdRunner // abstracts exec for testability
-}
-```
+Behavior:
 
-### Event Handling
+- `worktree.created` -> `glab mr create --draft ...`
+- `work_item.completed` -> `glab mr update --draft=false ...`
+- configured reviewers and labels are forwarded to MR creation
+- failures are logged at WARN and do not block the workflow
 
-**WorktreeCreated** -- create draft MR from worktree directory:
-```sh
-glab mr create --source-branch <branch> --target-branch <default> \
-  --title "<WorkItemTitle; fallback: title-cased slug from branch name>" --draft --push --yes \
-  --reviewer @alice --reviewer @bob --label substrate
-```
+`BuildRepoLifecycleAdapters(...)` registers `glab` when remote detection says a workspace repo is GitLab.
 
-**WorkItemCompleted** -- mark MR ready: `glab mr update <id> --draft=false`.
+### GitHub repo lifecycle
 
+GitHub lifecycle handling is implemented by `GithubAdapter` itself rather than a second GitHub-specific repo adapter.
 
-```go
-func (a *GlabAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
-    switch e := event.(type) {
-    case WorktreeCreatedEvent:
-        // Prefer the plan title carried in the event; fall back to a human-readable
-        // title derived from the branch slug (e.g. "sub-LIN-FOO-123-fix-auth-flow" →
-        // "Fix auth flow [LIN-FOO-123]").
-        title := e.WorkItemTitle
-        if title == "" {
-            title = titleFromBranch(e.Branch) // strips prefix, capitalises slug
-        }
-        return a.createDraftMR(ctx, e.RepositoryName, e.Branch, title)
-    case WorkItemCompletedEvent:
-        // Mark all MRs for repos in this work item ready for review.
-        for _, repo := range e.WorkItem.Repos {
-            if err := a.markMRReady(ctx, repo.Branch); err != nil {
-                slog.Warn("failed to mark MR ready", "repo", repo.RepoName, "err", err)
-            }
-        }
-        return nil
-    default:
-        return nil
-    }
-}
-```
-
-`markMRReady` shells out to `glab mr update --source-branch <branch> --draft=false`. Failures are logged at WARN and do not block completion (matching the glab error policy).
-### Error Policy
-
-glab failures log at WARN and **never block** the workflow. Users can always manage MRs manually.
-
-```toml
-[adapters.glab]
-default_reviewers = ["@alice", "@bob"]
-default_labels    = ["substrate", "auto"]
-draft_by_default  = true
-auto_push         = true
-```
+`BuildRepoLifecycleAdapters(...)` wraps it in `routedRepoLifecycleAdapter`, which suppresses events that do not match the detected remote platform. That keeps GitHub PR automation from reacting to GitLab payloads and vice versa.
 
 ---
 
-## 7. Remote Detection for RepoLifecycleAdapter Registration
+## 4. Remote detection for repo lifecycle registration
 
-> Repo lifecycle adapters are not registered unconditionally. Startup inspects the workspace's git remotes and only enables the lifecycle adapter that matches the observed hosting platform.
+`internal/app/remotedetect` drives repo-lifecycle adapter registration.
 
-Package: `internal/app/remotedetect`. `BuildRepoLifecycleAdapters` receives `workspaceDir string` from startup rather than reading it from config. In `main.go`, `wsDir` is already resolved via `gitwork.FindWorkspace(cwd)`; the wire layer threads that runtime value into lifecycle registration.
+Current behavior:
 
-```go
-type Platform int
+- `DetectPlatform(...)` resolves `origin` first, otherwise the first sorted remote
+- GitHub is recognized from `github.com` plus hosts implied by `cfg.Adapters.GitHub.BaseURL`
+- GitLab is recognized from `gitlab.com`, hosts in `~/.config/glab-cli/config.yml`, and the host implied by `cfg.Adapters.GitLab.BaseURL`
+- unknown hosts return `PlatformUnknown`
 
-const (
-    PlatformUnknown Platform = iota
-    PlatformGitHub
-    PlatformGitLab
-)
+`BuildRepoLifecycleAdapters(...)` then:
 
-func DetectPlatform(ctx context.Context, dir string) (Platform, error)
-```
+1. discovers git repos inside the workspace
+2. detects each repo's platform
+3. registers one routed lifecycle adapter per detected platform
 
-Detection rules:
-1. Run `git remote get-url origin` in the workspace directory.
-2. If `origin` is absent, fall back to the first remote alphabetically and log a warning naming the chosen remote.
-3. Match the remote host:
-   - `github.com` -> GitHub lifecycle adapter, if GitHub lifecycle config is present.
-   - `gitlab.com` -> `glab` lifecycle adapter.
-   - Any host listed in `~/.config/glab-cli/config.yml` under `hosts` -> `glab` lifecycle adapter.
-   - No match -> no lifecycle adapter; log a startup warning.
+Current outcomes:
 
-If `workspaceDir == ""`, skip remote detection and register no lifecycle adapters, again with a warning. This keeps runtime-discovered environment state out of static config and prevents a GitLab repo from silently trying GitHub PR creation, or the inverse.
-
-`glab` still needs no `BaseURL` field for self-hosted GitLab lifecycle. The CLI infers the instance from the worktree remote; remote detection only answers whether the repository host is GitLab-like enough to route lifecycle hooks to `glab`.
+- GitLab remotes -> `glab`
+- GitHub remotes -> `github` if GitHub auth is configured
+- Sentry config is ignored for repo lifecycle registration
+- unknown remotes produce warnings and no lifecycle adapter
 
 ---
 
-## 8. Agent Harness Interface
+## 5. Harness notes
 
-Package: `internal/domain/harness`. The orchestrator is harness-agnostic, but harness selection is now multi-provider: oh-my-pi remains the default documented execution path because it is the only harness with proven interactive correction and Foreman messaging support. Claude Code and Codex are wired behind the same contract for startup, progress, completion, and fallback selection, but they are not yet considered interaction-complete substitutes for oh-my-pi.
+`AgentHarness` lives in `internal/adapter/interfaces.go`, not in a separate harness package.
 
-```go
-type AgentHarness interface {
-    Name() string
-    StartSession(ctx context.Context, opts SessionOpts) (HarnessSession, error)
-    Capabilities() HarnessCapabilities
-}
+Current shipped harnesses:
 
-type HarnessSession interface {
-    ID() string
-    Wait(ctx context.Context) (SessionResult, error)
-    Events() <-chan SessionEvent
-    SendMessage(ctx context.Context, msg string) error
-    Abort(ctx context.Context) error
-}
+- `internal/adapter/ohmypi` (`Name() == "omp"`)
+  - streaming: yes
+  - messaging / `SendMessage`: yes
+  - remains the default harness family in config defaults
+- `internal/adapter/claudecode` (`Name() == "claude-code"`)
+  - streaming: yes
+  - messaging: no
+- `internal/adapter/codex` (`Name() == "codex"`)
+  - streaming: yes
+  - messaging: no
 
-type SessionMode string
+Routing behavior from `internal/app/harness.go`:
 
-const (
-    SessionModeAgent   SessionMode = "agent"   // coding sub-agent; full tool set
-    SessionModeForeman SessionMode = "foreman" // question answering; read-only tools
-)
+- defaults are `ohmypi` for `planning`, `implementation`, `review`, and `foreman`
+- unavailable configured harnesses degrade to `nil` with diagnostics so the app can still reach Settings
+- `Resume` reuses the implementation harness
 
-type SessionOpts struct {
-    SessionID            string      // substrate-generated ULID; used for DB record and session directory
-    Mode                 SessionMode // defaults to Agent
-    WorktreePath         string      // empty for foreman sessions (uses workspace root)
-    DraftPath            string      // absolute path to plan-draft.md; set for planning/revision sessions only
-    SubPlan              SubPlan
-    CrossRepoPlan        string
-    SystemPrompt         string
-    AllowPush            bool
-    DocumentationContext string
-}
+Provider login notes:
 
-type SubPlan struct {
-    RepoName    string
-    Branch      string
-    Objectives  []string
-    FileTargets []string
-    RawMarkdown string
-}
+- GitHub login is routed through harness `RunAction(...)`
+- Sentry login has two current paths:
+  - the Settings page runs `sentry auth login` directly and refreshes provider status afterward
+  - all three harness implementations also support `RunAction(Action="login_provider", Provider="sentry")`
+- self-hosted Sentry login uses `config.SentryCLIEnvironment(...)` so `SENTRY_URL` points at the root host, not `/api/0`
 
-type SessionResult struct {
-    ExitCode int
-    Summary  string
-    Errors   []string
-}
-
-type SessionEventType int
-
-const (
-    SessionEventProgress        SessionEventType = iota
-    SessionEventQuestion        // sub-agent called ask_foreman
-    SessionEventForemanProposed // foreman session produced a proposed answer
-    SessionEventPush
-    SessionEventError
-    SessionEventComplete
-)
-
-type SessionEvent struct {
-    Type    SessionEventType
-    Payload any
-}
-
-type HarnessCapabilities struct {
-    SupportsStreaming bool
-    SupportsMessaging bool
-    SupportedTools    []string
-}
-```
-
-The current shared contract is intentionally small. Do not document richer shared modes or explicit answer-routing APIs as current state; those remain future candidates until the non-OMP harnesses prove they need them. Today, the key operational boundary is whether a harness has verified `SendMessage` parity for planning correction, review correction, and Foreman flows.
-
-### Harness Selection and Operational Policy
-
-Harness routing is config-driven. The repository supports a default harness and per-phase overrides (planning, implementation, review, foreman). The current operational policy is:
-- default to **oh-my-pi**
-- allow **Claude Code** and **Codex** as explicit opt-in harnesses
-- keep startup non-blocking when a configured harness is unavailable so the user can reach Settings and repair it
-- keep oh-my-pi as the documented safe path until Claude Code and Codex have real interactive messaging coverage
-
-Representative config shape:
-```toml
-[harness]
-default = "ohmypi"
-
-[harness.phase]
-planning = "ohmypi"
-implementation = "ohmypi"
-review = "ohmypi"
-foreman = "ohmypi"
-```
-
-### 8a. oh-my-pi Harness (default, fully interactive)
-
-Package: `internal/adapter/ohmypi`. Go spawns a Bun subprocess running a bridge script. This remains the default harness in generated config and runtime selection because its bidirectional protocol is the only one currently verified for planning correction loops, review correction loops, and Foreman question/answer flows.
-
-**Transport and protocol:** JSON lines over stdio.
-
-**Go -> Bun (stdin):**
-```json
-{"type":"prompt","text":"..."}
-{"type":"message","text":"..."}
-{"type":"answer","text":"..."}
-{"type":"abort"}
-```
-
-**Bun -> Go (stdout):**
-```json
-{"type":"event","event":{"type":"progress","text":"Reading src/main.go..."}}
-{"type":"event","event":{"type":"question","question":"...","context":"..."}}
-{"type":"event","event":{"type":"foreman_proposed","text":"...","uncertain":true}}
-{"type":"event","event":{"type":"complete","summary":"3 files, 2 commits"}}
-```
-
-The `answer` stdin message resolves a pending `ask_foreman` tool call in an agent session. The `foreman_proposed` event carries the Foreman LLM's proposed answer; the orchestrator renders it in the TUI and may loop with further `message` sends before approving. `uncertain` is `true` when the Foreman signalled `CONFIDENCE: uncertain`. The bridge strips the confidence marker line from `text` before emitting. `mapEvent` returns `null` for unhandled event types; the caller filters before emitting. Stderr is logged but not parsed as protocol.
-
-**Sandboxing and session modes:**
-- macOS uses `sandbox-exec` to restrict writes to the worktree and session temp directory.
-- Linux namespace-based isolation remains the intended equivalent.
-- Session modes remain `agent` and `foreman`; review reuses the read-only foreman-style tool restriction rather than introducing a separate shared mode in the current contract.
-
-### 8b. Claude Code Harness (wired, messaging parity not yet verified)
-
-Package: `internal/adapter/claudecode`. This adapter exists behind the shared `AgentHarness` contract and is a viable non-interactive/streaming harness, but it is not yet a fully equivalent replacement for oh-my-pi because real interactive `SendMessage` continuation behavior has not been validated against an installed `claude` binary.
-
-Current documented state:
-- supports startup, prompt injection, streaming/progress parsing, completion handling, and config-driven selection/fallback
-- should treat `stream-json` as the reference structured output mode
-- should restrict tools via Claude Code CLI flags when running read-only or limited modes
-- must not be considered production-equivalent for planning correction, review correction, or Foreman Q&A until real interactive session continuation is pinned and tested
-
-Representative config:
-```toml
-[adapters.claude_code]
-binary_path = "claude"
-model = "sonnet"
-permission_mode = "auto"
-max_turns = 50
-max_budget_usd = 10.00
-```
-
-**Integration notes:**
-- strongest long-term candidate for rich non-OMP integration because it offers structured output, session persistence, and tool restriction flags
-- still blocked on verifying the live CLI continuation protocol needed for correctness-critical `SendMessage` flows
-- should remain behind explicit selection/fallback rather than replacing the oh-my-pi default until that verification exists
-
-### 8c. Codex Harness (wired, messaging parity not yet verified)
-
-Package: `internal/adapter/codex`. This adapter also exists behind the shared contract and is intended to provide reliable headless execution with conservative progress extraction first, richer event fidelity second.
-
-Current documented state:
-- supports startup, prompt injection, progress/completion parsing, and config-driven selection/fallback
-- should prefer conservative CLI integration rather than assuming feature parity with Claude Code or oh-my-pi
-- must not be considered production-equivalent for planning correction, review correction, or Foreman Q&A until real `SendMessage`-compatible behavior is validated against an installed `codex` binary
-
-Representative config:
-```toml
-[adapters.codex]
-binary_path = "codex"
-model = "o4"
-approval_mode = "full-auto"
-full_auto = false
-quiet = false
-```
-
-**Integration notes:**
-- built-in sandboxing and headless execution are useful, but the observable event contract is not yet pinned enough to document richer behavior as stable
-- should be rolled out conservatively: startup/completion first, richer event mapping only after fixture-backed parser coverage exists
-
-### Packaging, Testing, and Risk Notes
-
-- Bun is a runtime dependency for the default harness path and should remain documented in packaging/install flows.
-- `gh` and `glab` stay optional CLIs: missing `gh` disables GitHub token fallback/login flows; missing `glab` disables GitLab MR lifecycle automation.
-- The correctness-critical risk is unverified interactive messaging in Claude Code and Codex. Planning correction, review correction, and Foreman orchestration all rely on `SendMessage`; without real binary verification, documenting parity would be guesswork rather than an engineered contract.
-- Unit tests for non-OMP harnesses should cover argument building, event parsing, config validation, and fallback behavior when expected event shapes are absent.
-- Integration and end-to-end tests for Claude Code and Codex remain blocked until the real binaries are available to pin continuation/message semantics. Until then, the correct operational position is to use oh-my-pi as the default harness.
+The practical boundary today is messaging support: oh-my-pi is the only harness with verified `SendMessage` capability, while Claude Code and Codex are wired and usable for non-messaging flows but do not yet provide the same interactive correction surface.

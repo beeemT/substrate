@@ -1,468 +1,474 @@
 # 03 - Event System
-<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
+<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
 
-The event system is Substrate's integration backbone. Every meaningful state transition emits an event. Work item adapters subscribe to mutate external trackers (Linear, GitLab, GitHub), repo lifecycle adapters subscribe to create or advance GitLab merge requests and GitHub pull requests, and harness-driven orchestration publishes session/review/question events. The bus is in-process, channel-based, and persisted to SQLite for audit and replay.
-See `02-layered-architecture.md` for where the event bus sits in the service layer. See `04-adapters.md` for the adapter and harness implementations that consume these events, and `06-tui-design.md` for how the TUI subscribes to events for reactive updates.
+Substrate's event model has two parts:
+
+1. persisted `domain.SystemEvent` rows in SQLite
+2. an in-process `event.Bus` that can persist, gate, and fan out selected events
+
+Older drafts described a typed interface-based bus API. The current code uses a single persisted struct payload with JSON-in-string payloads and topic-based channel subscriptions.
+
 ---
-## 1. System Events Catalog
 
-Every event embeds `BaseEvent` for tracing and persistence:
+## 1. Persisted Event Model
+
+`domain.SystemEvent` is the persisted event record.
+
 ```go
-type EventType string
-
-type BaseEvent struct {
-    ID        string    // ULID
-    Type      EventType
-    Timestamp time.Time
-    Workspace string    // workspace ID (ULID from .substrate-workspace), empty for global events; used as workspace_id FK in system_events
-}
-
-type SystemEvent interface {
-    Base() BaseEvent
+type SystemEvent struct {
+	ID          string
+	EventType   string
+	WorkspaceID string
+	Payload     string
+	CreatedAt   time.Time
 }
 ```
 
-| Event | Payload | Trigger |
-|---|---|---|
-| `WorkItemIngested` | `WorkItem` | Work item matches filter |
-| `WorkspaceCreated` | `Workspace` | Workspace initialized |
-| `PlanningStarted` | `WorkItem` | Workspace ready, planner invoked |
-| `PlanGenerated` | `Plan` | Planning agent produces plans |
-| `PlanSubmittedForReview` | `Plan` | Plan ready for human review |
-| `PlanApproved` | `Plan` | Human accepts plan |
-| `ImplementationStarted` | `WorkItem`, `Plan` | Plan approved, worktrees being created |
-| `PlanRejected` | `Plan`, `Reason string` | Human rejects with feedback |
-| `PlanRevised` | `Plan`, `Feedback string` | Human requests changes; agent produces revised plan |
-| `WorktreeCreating` | `Workspace`, `RepositoryName`, `Branch` | Pre-hook before git-work checkout |
-| `WorktreeCreated` | `Workspace`, `RepositoryName`, `Branch`, `WorktreePath`, `WorkItemTitle` | Post-hook after checkout |
-| `WorktreeRemoved` | `Workspace`, `RepositoryName`, `Branch` | Worktree removed via git-work rm |
-| `AgentSessionStarted` | `AgentSession` | Agent harness spawned |
-| `AgentSessionCompleted` | `AgentSession`, `Result` | Agent exits 0 |
-| `AgentSessionFailed` | `AgentSession`, `Error string` | Agent exits non-zero or timeout |
-| `AgentSessionInterrupted` | `AgentSession` | Startup reconciliation detects dead PID for running session |
-| `AgentSessionResumed` | `AgentSession` | Human chooses to resume an interrupted session |
-| `AgentQuestionRaised` | `Question` | Agent cannot resolve from context |
-| `AgentQuestionAnswered` | `Question` | Foreman or human answers |
-| `ReviewStarted` | `ReviewCycle` | Review agent begins |
-| `ReviewCompleted` | `ReviewCycle` | Review passes, no critiques |
-| `CritiquesFound` | `ReviewCycle`, `[]Critique` | Review produces critiques |
-| `ReimplementationStarted` | `AgentSession`, `[]Critique` | Re-impl session spawned |
-| `WorkItemCompleted` | `WorkItem` | All repos pass review |
-| `WorkItemFailed` | `WorkItem`, `Error string` | Unrecoverable error in any phase |
+`Payload` is stored as a raw JSON string. Event producers marshal whatever payload shape they need and write the serialized string into `Payload`.
 
-### Event Type Constants and Representative Structs
-
-```go
-const (
-    EventWorkItemIngested       EventType = "work_item.ingested"
-    EventWorkspaceCreated       EventType = "workspace.created"
-    EventPlanningStarted         EventType = "work_item.planning_started"
-    EventPlanGenerated          EventType = "plan.generated"
-    EventPlanSubmittedForReview  EventType = "plan.submitted_for_review"
-    EventPlanApproved           EventType = "plan.approved"
-    EventImplementationStarted   EventType = "work_item.implementation_started"
-    EventPlanRejected           EventType = "plan.rejected"
-    EventPlanRevised             EventType = "plan.revised"
-    EventWorktreeCreating       EventType = "worktree.creating"
-    EventWorktreeCreated        EventType = "worktree.created"
-    EventWorktreeRemoved        EventType = "worktree.removed"
-    EventAgentSessionStarted    EventType = "agent_session.started"
-    EventAgentSessionCompleted  EventType = "agent_session.completed"
-    EventAgentSessionFailed     EventType = "agent_session.failed"
-    EventAgentSessionInterrupted EventType = "agent_session.interrupted"
-    EventAgentSessionResumed     EventType = "agent_session.resumed"
-    EventAgentQuestionRaised    EventType = "agent_question.raised"
-    EventAgentQuestionAnswered  EventType = "agent_question.answered"
-    EventReviewStarted          EventType = "review.started"
-    EventReviewCompleted        EventType = "review.completed"
-    EventCritiquesFound         EventType = "review.critiques_found"
-    EventReimplementationStarted EventType = "reimplementation.started"
-    EventWorkItemCompleted      EventType = "work_item.completed"
-    EventWorkItemFailed          EventType = "work_item.failed"
-)
-
-// Representative struct. All events follow this pattern: embed BaseEvent,
-// carry payload fields from the catalog table, implement Base().
-
-type PlanApprovedEvent struct {
-    BaseEvent
-    Plan Plan
-}
-
-func (e PlanApprovedEvent) Base() BaseEvent { return e.BaseEvent }
-```
-
-## 2. Event Bus
-
-```go
-type EventHandler func(ctx context.Context, event SystemEvent) error
-
-type Subscription interface { Unsubscribe() }
-
-type EventBus interface {
-    // Pre-hook events: synchronous, error aborts. All others: async fan-out.
-    Publish(ctx context.Context, event SystemEvent) error
-    Subscribe(handler EventHandler) Subscription
-    SubscribeType(eventType EventType, handler EventHandler) Subscription
-    Close() error
-}
-```
-
-### Implementation
-
-The bus is in-process, no external broker. Each subscriber gets a buffered channel (cap 256). Pre-hook event types such as `WorktreeCreating` run synchronous pre-hooks before persistence so a rejection aborts the operation without writing the event. Regular events persist first, then run synchronous pre-hooks, dispatch to subscribers, and fan out post-hooks asynchronously.
-
-```go
-type subscriber struct {
-    id      string
-    types   map[EventType]bool // nil = all types
-    ch      chan SystemEvent
-    handler EventHandler
-    cancel  context.CancelFunc
-}
-
-func (s *subscriber) matches(e SystemEvent) bool {
-    return s.types == nil || s.types[e.Base().Type]
-}
-func (s *subscriber) Unsubscribe() { s.cancel() }
-type channelEventBus struct {
-    mu           sync.RWMutex
-    subscribers  map[string]*subscriber
-    preHookSubs  []*subscriber // ordered; used for deterministic pre-hook execution
-    repo         EventRepository
-    preHookTypes map[EventType]bool
-    wg           sync.WaitGroup
-    onDrop       func(subscriberID string, event SystemEvent) // nil = log only; set by TUI to enqueue a warning toast
-}
-
-type BusOption func(*channelEventBus)
-
-func WithDropHandler(fn func(subscriberID string, event SystemEvent)) BusOption {
-    return func(b *channelEventBus) { b.onDrop = fn }
-}
-
-func NewEventBus(repo EventRepository, opts ...BusOption) EventBus {
-    b := &channelEventBus{
-        subscribers:  make(map[string]*subscriber),
-        repo:         repo,
-        preHookTypes: map[EventType]bool{EventWorktreeCreating: true},
-    }
-    for _, o := range opts { o(b) }
-    return b
-}
-
-func (b *channelEventBus) Publish(ctx context.Context, event SystemEvent) error {
-    b.mu.RLock()
-    defer b.mu.RUnlock()
-    if b.preHookTypes[event.Base().Type] {
-        // Pre-hooks run BEFORE persistence. If a pre-hook rejects, nothing is written to SQLite.
-        // Pre-hooks MUST be idempotent: if the process crashes after a pre-hook passes but
-        // before the event is persisted, the operation will be retried on restart and the
-        // pre-hook will run again with the same inputs.
-        for _, sub := range b.preHookSubs {
-            if sub.matches(event) {
-                if err := sub.handler(ctx, event); err != nil {
-                    return fmt.Errorf("pre-hook %s rejected: %w", sub.id, err)
-                }
-            }
-        }
-        // All pre-hooks passed; persist now for audit and crash-recovery.
-        if err := b.repo.Save(ctx, event); err != nil {
-            return fmt.Errorf("persisting event: %w", err)
-        }
-        return nil
-    }
-
-    // Non-pre-hook: persist first, then async fan-out.
-    if err := b.repo.Save(ctx, event); err != nil {
-        return fmt.Errorf("persisting event: %w", err)
-    }
-    for _, sub := range b.subscribers {
-        if sub.matches(event) {
-            select {
-            case sub.ch <- event:
-            default:
-                slog.Warn("event dropped", "subscriber", sub.id, "event", event.Base().Type)
-                if b.onDrop != nil {
-                    b.onDrop(sub.id, event)
-                }
-            }
-        }
-    }
-    return nil
-}
-func (b *channelEventBus) subscribe(types map[EventType]bool, handler EventHandler) Subscription {
-    ctx, cancel := context.WithCancel(context.Background())
-    sub := &subscriber{
-        id: ulid.Make().String(), types: types,
-        ch: make(chan SystemEvent, 256), handler: handler, cancel: cancel,
-    }
-    b.mu.Lock()
-    b.subscribers[sub.id] = sub
-    if sub.types != nil {
-        for t := range sub.types {
-            if b.preHookTypes[t] {
-                b.preHookSubs = append(b.preHookSubs, sub)
-                break
-            }
-        }
-    }
-    b.mu.Unlock()
-    b.wg.Add(1)
-    go func() {
-        defer b.wg.Done()
-        defer func() {
-            b.mu.Lock()
-            delete(b.subscribers, sub.id)
-            b.mu.Unlock()
-        }()
-        for {
-            select {
-            case <-ctx.Done(): return
-            case evt := <-sub.ch:
-                func() {
-                    defer func() {
-                        if r := recover(); r != nil {
-                            slog.Error("handler panic recovered", "sub", sub.id, "panic", r)
-                        }
-                    }()
-                    hCtx, hCancel := context.WithTimeout(ctx, 30*time.Second)
-                    defer hCancel()
-                    if err := handler(hCtx, evt); err != nil {
-                        slog.Error("handler failed", "sub", sub.id, "err", err)
-                    }
-                }()
-            }
-        }
-    }()
-    return sub
-}
-func (b *channelEventBus) SubscribeType(t EventType, h EventHandler) Subscription {
-    return b.subscribe(map[EventType]bool{t: true}, h)
-}
-func (b *channelEventBus) Subscribe(h EventHandler) Subscription { return b.subscribe(nil, h) }
-func (b *channelEventBus) Close() error {
-    b.mu.Lock()
-    for _, sub := range b.subscribers { sub.cancel() }
-    b.mu.Unlock()
-    b.wg.Wait()
-    return nil
-}
-```
-
-### SQLite Persistence
-
-Events stored in `system_events` for audit and replay (see `02-layered-architecture.md`). JSON-serialized via type registry for replay deserialization.
+Persistence boundary:
 
 ```go
 type EventRepository interface {
-    Save(ctx context.Context, event SystemEvent) error
-    List(ctx context.Context, filter EventFilter) ([]PersistedEvent, error)
-    ListSince(ctx context.Context, after string) ([]PersistedEvent, error)
+	Create(ctx context.Context, e domain.SystemEvent) error
+	ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
 }
 ```
+
+SQLite storage is a thin mapping layer:
 
 ```sql
 CREATE TABLE system_events (
-    id TEXT PRIMARY KEY, type TEXT NOT NULL, workspace_id TEXT REFERENCES workspaces(id),
-    payload TEXT NOT NULL, created_at TEXT NOT NULL
+    id           TEXT PRIMARY KEY,
+    event_type   TEXT NOT NULL,
+    workspace_id TEXT REFERENCES workspaces(id),
+    payload      TEXT NOT NULL,
+    created_at   TEXT NOT NULL
 );
-CREATE INDEX idx_events_type ON system_events(type);
+CREATE INDEX idx_events_type ON system_events(event_type);
 CREATE INDEX idx_events_workspace ON system_events(workspace_id);
+CREATE INDEX idx_events_created ON system_events(created_at);
 ```
----
-## 3. Hook Mechanism
 
-Adapters register event interest at startup via `EventBus.SubscribeType`. The orchestration layer publishes events; the bus routes them to registered handlers. Work item adapters and repo lifecycle adapters are wired independently so tracker mutation and repository-host lifecycle automation can evolve without sharing a forced abstraction.
+### Core event-type constants
 
-**Pre-hooks** (e.g., `WorktreeCreating`): synchronous, block caller, error aborts operation, uses caller's context deadline. **Post-hooks** (all others): asynchronous, 30s timeout per handler, errors logged only. Panics recovered via `defer recover()`.
+`internal/domain/event.go` declares the current catalog of substrate-level event constants:
 
 ```go
-for _, adapter := range workItemAdapters {
-    bus.SubscribeType(EventPlanApproved, adapter.OnEvent)
-    bus.SubscribeType(EventWorkItemCompleted, adapter.OnEvent)
-}
-
-for _, adapter := range repoLifecycleAdapters {
-    bus.SubscribeType(EventWorktreeCreated, adapter.OnEvent)
-    bus.SubscribeType(EventWorkItemCompleted, adapter.OnEvent)
-}
-```
----
-## 4. Work Item Adapter Interface
-
-```go
-type TrackerState string
-
 const (
-    TrackerStateTodo       TrackerState = "todo"
-    TrackerStateInProgress TrackerState = "in_progress"
-    TrackerStateInReview   TrackerState = "in_review"
-    TrackerStateDone       TrackerState = "done"
+	EventWorktreeCreating EventType = "worktree.creating"
+	EventWorktreeCreated  EventType = "worktree.created"
+
+	EventWorkItemIngested     EventType = "work_item.ingested"
+	EventWorkItemPlanning     EventType = "work_item.planning"
+	EventWorkItemPlanReview   EventType = "work_item.plan_review"
+	EventWorkItemApproved     EventType = "work_item.approved"
+	EventWorkItemImplementing EventType = "work_item.implementing"
+	EventWorkItemReviewing    EventType = "work_item.reviewing"
+	EventWorkItemCompleted    EventType = "work_item.completed"
+	EventWorkItemFailed       EventType = "work_item.failed"
+
+	EventWorkspaceCreated        EventType = "workspace.created"
+	EventPlanGenerated           EventType = "plan.generated"
+	EventPlanSubmittedForReview  EventType = "plan.submitted_for_review"
+	EventPlanApproved            EventType = "plan.approved"
+	EventPlanRejected            EventType = "plan.rejected"
+	EventPlanRevised             EventType = "plan.revised"
+	EventPlanFailed              EventType = "plan.failed"
+	EventImplementationStarted   EventType = "work_item.implementation_started"
+	EventWorktreeRemoved         EventType = "worktree.removed"
+	EventAgentSessionStarted     EventType = "agent_session.started"
+	EventAgentSessionCompleted   EventType = "agent_session.completed"
+	EventAgentSessionFailed      EventType = "agent_session.failed"
+	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
+	EventAgentSessionResumed     EventType = "agent_session.resumed"
+	EventAgentQuestionRaised     EventType = "agent_question.raised"
+	EventAgentQuestionAnswered   EventType = "agent_question.answered"
+	EventReviewStarted           EventType = "review.started"
+	EventReviewCompleted         EventType = "review.completed"
+	EventCritiquesFound          EventType = "review.critiques_found"
+	EventReimplementationStarted EventType = "reimplementation.started"
 )
+```
 
-type WorkItemFilter struct {
-    ExternalIDs []string      // filter by specific external IDs (e.g. "LIN-FOO-123")
-    ProjectIDs  []string
-    States      []TrackerState
-    Labels      []string
-    AssigneeID  string
+Important nuance: the bus and repository are not limited to those constants. `ImplementationService.forwardEvents` also republishes raw harness event names such as `done`, `error`, `question`, or `foreman_proposed` as `SystemEvent.EventType` strings.
+
+---
+
+## 2. Where Events Come From Today
+
+The codebase currently persists events from several places. Not every declared constant is actively emitted.
+
+### Direct repository writes
+
+These call `eventRepo.Create(...)` directly and do **not** go through `event.Bus`:
+
+| Emitter | Event types |
+|---|---|
+| `PlanningService` | `work_item.planning`, `plan.generated`, `plan.failed` |
+| `ImplementationService` | `work_item.implementation_started`, `agent_session.started`, `agent_session.completed`, `agent_session.failed` |
+
+Representative payload shapes:
+
+```json
+{"work_item_id":"...","session_id":"..."}
+```
+
+```json
+{"plan_id":"...","work_item_id":"...","version":1}
+```
+
+```json
+{"session_id":"...","sub_plan_id":"...","repository":"repo-a","worktree_path":"/..."}
+```
+
+### Bus-published events
+
+These go through `event.Bus.Publish(...)`, so they use the bus's persistence and hook semantics:
+
+| Emitter | Event types |
+|---|---|
+| `ImplementationService.ensureWorktree` | `worktree.creating`, `worktree.created` |
+| `ImplementationService.forwardEvents` | raw harness event names from `adapter.AgentEvent.Type` |
+| `ReviewPipeline` | `review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started` |
+| `Resumption` | `agent_session.resumed` |
+| `InstanceManager` | `agent_session.interrupted` |
+| TUI command helpers (`internal/tui/views/cmds.go`) | `plan.approved`, `work_item.completed` |
+
+### Declared but not currently emitted in the assigned code paths
+
+The constants below still exist in `domain`, but the currently assigned sources do not actively publish them as part of the main orchestration path:
+
+- `workspace.created`
+- `plan.submitted_for_review`
+- `plan.rejected`
+- `plan.revised`
+- `agent_question.raised`
+- `agent_question.answered`
+- several intermediate `work_item.*` state constants besides the specific ones listed above
+
+That distinction matters: they are part of the event vocabulary, but they are not all current runtime facts.
+
+---
+
+## 3. `event.Bus` Model
+
+The actual bus implementation is `internal/event/bus.go`.
+
+### Public surface
+
+```go
+type PreHook func(ctx context.Context, event domain.SystemEvent) error
+type PostHook func(ctx context.Context, event domain.SystemEvent) error
+
+type HookConfig struct {
+	Name    string
+	Timeout time.Duration
 }
 
-type WorkItemAdapter interface {
-    Name() string
-    Capabilities() AdapterCapabilities
+type DropHandler func(subscriberID string, event domain.SystemEvent)
 
-    // Interactive: browse + select for new session creation
-    ListSelectable(ctx context.Context, opts ListOpts) (*ListResult, error)
-    Resolve(ctx context.Context, selection Selection) (WorkItem, error)
+type Subscriber struct {
+	ID     string
+	Topics map[string]bool
+	C      chan domain.SystemEvent
+}
 
-    // Reactive: auto-assignment watching
-    Watch(ctx context.Context, filter WorkItemFilter) (<-chan WorkItemEvent, error)
+type Bus struct { ... }
 
-    // External tracker mutations
-    Fetch(ctx context.Context, externalID string) (WorkItem, error)
-    UpdateState(ctx context.Context, externalID string, state TrackerState) error
-    AddComment(ctx context.Context, externalID string, body string) error
+func NewBus(cfg BusConfig, opts ...BusOption) *Bus
+func (b *Bus) Subscribe(id string, topics ...string) (*Subscriber, error)
+func (b *Bus) Unsubscribe(id string)
+func (b *Bus) RegisterPreHook(config HookConfig, hook PreHook)
+func (b *Bus) RegisterPostHook(config HookConfig, hook PostHook)
+func (b *Bus) RegisterPreHookType(eventType string)
+func (b *Bus) IsPreHookEvent(eventType string) bool
+func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error
+func (b *Bus) Close() error
+```
 
-    // System event hooks
-    OnEvent(ctx context.Context, event SystemEvent) error
+### Subscription semantics
+
+`Subscribe` is topic-based and returns a buffered channel subscriber.
+
+Current behavior:
+
+- subscriber buffer size is `100`
+- `topics == empty` means “receive all events”
+- subscribing with an existing subscriber ID replaces the old subscriber and closes its channel
+- `Subscribe` returns `ErrBusClosed` if the bus has already been closed
+- `Unsubscribe` closes the channel and removes the subscriber
+- `Close` closes all subscriber channels and prevents future subscriptions
+
+### Pre-hook event types
+
+The bus tracks a set of event types that should behave as pre-hook events.
+
+Current default set:
+
+```go
+var defaultPreHookTypes = map[string]bool{
+	string(domain.EventWorktreeCreating): true,
 }
 ```
 
-The adapter methods serve distinct roles:
+`RegisterPreHookType` can extend that set at runtime.
 
-- `Capabilities()` tells the TUI which session creation flow to present. Adapters with `CanBrowse: true` get the interactive search-and-select flow; those without (Manual) get a freeform input form.
-- `ListSelectable` + `Resolve` is the interactive selection path: the TUI calls `ListSelectable` to populate a searchable list, then `Resolve` to aggregate selections into a `WorkItem`.
-- `Watch` is the reactive auto-assignment path, independent of interactive selection.
-- Adapters that lack browsing return `ErrNotSupported` from `ListSelectable`.
-- `OnEvent` dispatches via type switch. Each adapter maps substrate events into provider-native tracker mutations — for example Linear state transitions, scoped GitLab issue updates, or GitHub issue state/comment calls.
-- The same shared interface intentionally covers adapters with different browse semantics. Concrete provider behavior and browse-filter semantics live in `04-adapters.md`.
-See `01-domain-model.md` for the full type definitions of `AdapterCapabilities`, `ListOpts`, `ListResult`, `Selection`, and `SelectableItem`.
+---
+
+## 4. Publish Semantics
+
+The key distinction is whether an event type is in the pre-hook set.
+
+### Pre-hook events
+
+For a pre-hook event such as `worktree.creating`:
+
+1. run registered pre-hooks synchronously, in registration order
+2. if any pre-hook errors or times out, return error and do **not** persist the event
+3. persist the event through `EventRepository.Create`
+4. dispatch to matching subscribers
+5. run post-hooks asynchronously
+
+This is the gating path used before `git-work checkout`.
+
+### Regular events
+
+For all other events:
+
+1. persist the event first
+2. run pre-hooks synchronously
+3. if a pre-hook errors, return error **after** persistence; dispatch is aborted, but the event stays recorded
+4. dispatch to matching subscribers
+5. run post-hooks asynchronously
+
+That means pre-hooks on regular events are advisory / abort-dispatch hooks, not fact-reversal hooks.
+
+### Timeout and panic behavior
+
+Pre-hooks:
+
+- default timeout is `30s` when `HookConfig.Timeout == 0`
+- execute in registration order
+- run inside a goroutine guarded by `context.WithTimeout`
+- timeout returns an error to the publisher
+- panic is recovered and converted into an error
+
+Post-hooks:
+
+- default timeout is `30s` when `HookConfig.Timeout == 0`
+- run after dispatch, asynchronously
+- errors are ignored
+- panic is recovered and logged with `slog.Error`
+
+Registering a nil hook is programmer error and panics immediately.
+
+---
+
+## 5. Drop / Retry Behavior
+
+Dispatch is intentionally non-blocking.
+
+When a subscriber's buffer is full:
+
+- if no drop handler is configured, `dispatch` returns `ErrRetryLater`
+- if a drop handler is configured through `WithDropHandler`, the handler is invoked asynchronously and publish continues
+
+This creates three observable modes:
+
+1. delivered normally
+2. dropped but tolerated via `onDrop`
+3. publisher told to retry later via `ErrRetryLater`
+
+Because dispatch happens subscriber-by-subscriber, `ErrRetryLater` can happen after some subscribers already received the event. Callers and consumers need idempotent handling.
+
+---
+
+## 6. Current Registration and Routing Semantics
+
+### Work item adapters
+
+Production wiring subscribes each work item adapter to **all** events:
 
 ```go
-func (a *LinearAdapter) Capabilities() AdapterCapabilities {
-    return AdapterCapabilities{
-        CanWatch:     true,
-        CanBrowse:    true,
-        CanMutate:    true,
-        BrowseScopes: []SelectionScope{ScopeIssues, ScopeProjects, ScopeInitiatives},
-    }
-}
+sub, _ := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+```
 
-func (a *LinearAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
-    switch e := event.(type) {
-    case PlanApprovedEvent:
-        if err := a.UpdateState(ctx, e.Plan.WorkItemID, TrackerStateInProgress); err != nil {
-            return err
-        }
-        return a.AddComment(ctx, e.Plan.WorkItemID,
-            fmt.Sprintf("Plan approved. Starting across %d repos.", len(e.Plan.SubPlans)))
-    case WorkItemCompletedEvent:
-        return a.UpdateState(ctx, e.WorkItem.ExternalID, TrackerStateDone)
-    default:
-        return nil
-    }
+So the bus does not filter work-item adapter traffic by topic. Each adapter's `OnEvent` implementation decides which events matter.
+
+In practice, current adapters mostly care about:
+
+- `plan.approved`
+- `work_item.completed`
+
+### Repo lifecycle adapters
+
+Production wiring subscribes lifecycle adapters only to:
+
+- `worktree.created`
+- `work_item.completed`
+
+```go
+sub, _ := bus.Subscribe(
+	"repo-lifecycle-adapter:"+lifecycleAdapter.Name(),
+	string(domain.EventWorktreeCreated),
+	string(domain.EventWorkItemCompleted),
+)
+```
+
+### Provider routing on top of topic routing
+
+`internal/app/wire.go` adds another layer for lifecycle adapters:
+
+- GitHub and GitLab lifecycle adapters are wrapped in `routedRepoLifecycleAdapter`
+- the wrapper parses `event.Payload`
+- it inspects `review` and `external_id` / `external_ids`
+- it only forwards the event to the adapter if the payload matches that adapter's provider
+
+So routing is:
+
+1. coarse topic filtering in the bus
+2. provider-specific payload filtering in `routedRepoLifecycleAdapter`
+
+### Pre-hooks and post-hooks in production wiring
+
+The `Bus` supports `RegisterPreHook` and `RegisterPostHook`, but the current production `main.go` wiring does not register any explicit hook functions. Current runtime behavior relies mainly on:
+
+- topic subscriptions
+- the built-in pre-hook type classification for `worktree.creating`
+- persistence through the configured `EventRepo`
+
+---
+
+## 7. Representative Payloads
+
+### `worktree.creating`
+
+Published before checkout:
+
+```json
+{
+  "workspace_id": "ws-123",
+  "repository": "repo-a",
+  "branch": "sub-abc-fix-bug",
+  "work_item_title": "Fix bug",
+  "sub_plan": "...markdown...",
+  "review": { ... }
+}
+```
+
+### `worktree.created`
+
+Published after checkout:
+
+```json
+{
+  "workspace_id": "ws-123",
+  "repository": "repo-a",
+  "branch": "sub-abc-fix-bug",
+  "worktree_path": "/path/to/repo-a/sub-abc-fix-bug",
+  "work_item_title": "Fix bug",
+  "sub_plan": "...markdown...",
+  "tracker_refs": [ ... ],
+  "review": { ... }
+}
+```
+
+### `plan.approved`
+
+Published by the TUI helper when a human approves a plan:
+
+```json
+{
+  "plan_id": "plan-1",
+  "work_item_id": "wi-1",
+  "external_id": "gh:issue:acme/rocket#42",
+  "comment_body": "Overall plan text",
+  "external_ids": ["gh:issue:acme/rocket#42"]
+}
+```
+
+### `work_item.completed`
+
+Published by the TUI helper when a work item is accepted:
+
+```json
+{
+  "work_item_id": "wi-1",
+  "external_id": "gh:issue:acme/rocket#42",
+  "branch": "sub-branch",
+  "review": { ... },
+  "external_ids": ["gh:issue:acme/rocket#42"]
+}
+```
+
+### `agent_session.resumed`
+
+Published by `Resumption`:
+
+```json
+{
+  "old_session_id": "sess-old",
+  "new_session_id": "sess-new",
+  "sub_plan_id": "sp-1"
 }
 ```
 
 ---
 
-## 5. Repo Lifecycle Adapter Interface
+## 8. Event Flow Snapshots
 
-```go
-type RepoLifecycleAdapter interface {
-    Name() string
-    OnEvent(ctx context.Context, event SystemEvent) error
-}
-```
-
-Deliberately narrow. Repo lifecycle actions are event reactions, not imperative calls.
-
-### Repo Lifecycle Adapter Event Handling
-
-`RepoLifecycleAdapter` remains deliberately narrow: repo-host automation is event-driven, not an imperative service API. Concrete implementations differ by platform and are selected at startup via remote detection.
-
-```go
-func (a *GlabAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
-    switch e := event.(type) {
-    case WorktreeCreatedEvent:
-        return a.createDraftMR(ctx, e.RepositoryName, e.Branch, e.WorkItemTitle)
-    case WorkItemCompletedEvent:
-        return a.markAllReady(ctx, e.WorkItem.Repos)
-    default:
-        return nil
-    }
-}
-
-func (a *GithubAdapter) OnEvent(ctx context.Context, event SystemEvent) error {
-    switch e := event.(type) {
-    case WorktreeCreatedEvent:
-        return a.ensureDraftPR(ctx, e.Branch, e.WorkItemTitle)
-    case WorkItemCompletedEvent:
-        return a.markReady(ctx, e.WorkItem.Repos)
-    default:
-        return nil
-    }
-}
-```
-
-GitLab lifecycle remains delegated to `glab`, which infers the instance from the worktree remote. GitHub lifecycle uses direct REST calls rather than `gh`. `internal/app/remotedetect` decides which lifecycle adapter(s) to register by inspecting workspace git remotes at startup, preventing GitLab repos from accidentally attempting GitHub PR automation and vice versa.
----
-
-## 6. Event Flow Diagrams
-
-### 6a. Plan Approval to Work Item State Change
+### Plan approval -> tracker adapters
 
 ```mermaid
 sequenceDiagram
     participant Human
     participant TUI
-    participant PlanService
-    participant EventBus
+    participant Bus
     participant SQLite
-    participant LinearAdapter
-    participant LinearAPI
-    Human->>TUI: Approve plan
-    TUI->>PlanService: ApprovePlan(planID)
-    PlanService->>PlanService: Mark plan approved
-    PlanService->>EventBus: Publish(PlanApprovedEvent)
-    EventBus->>SQLite: Persist event
-    EventBus-->>LinearAdapter: PlanApprovedEvent (async)
-    LinearAdapter->>LinearAPI: UpdateIssueState("In Progress")
-    LinearAdapter->>LinearAPI: CreateComment("Plan approved...")
-    Note over EventBus,LinearAdapter: Error in adapter logged,<br/>does not affect plan flow
+    participant WorkItemAdapter
+
+    Human->>TUI: approve plan
+    TUI->>Bus: Publish(plan.approved)
+    Bus->>SQLite: persist event
+    Bus-->>WorkItemAdapter: deliver on subscriber channel
+    WorkItemAdapter->>WorkItemAdapter: filter by EventType in OnEvent
 ```
-### 6b. Worktree Creation to Repo Host Lifecycle Automation
+
+### Worktree creation gate
 
 ```mermaid
 sequenceDiagram
-    participant Orchestrator
-    participant EventBus
+    participant Impl as ImplementationService
+    participant Bus
     participant SQLite
-    participant PreHookHandlers
     participant GitWork
-    participant LifecycleAdapter
-    participant RepoHost
-    Orchestrator->>EventBus: Publish(WorktreeCreatingEvent)
-    EventBus->>PreHookHandlers: Run synchronously
-    PreHookHandlers-->>EventBus: OK (no error)
-    EventBus->>SQLite: Persist event
-    EventBus-->>Orchestrator: nil (proceed)
-    Orchestrator->>GitWork: checkout -b <branch>
-    GitWork-->>Orchestrator: worktree path
-    Orchestrator->>EventBus: Publish(WorktreeCreatedEvent)
-    EventBus->>SQLite: Persist event
-    EventBus-->>LifecycleAdapter: WorktreeCreatedEvent (async)
-    LifecycleAdapter->>RepoHost: create draft MR/PR
-    Note over Orchestrator,GitWork: If pre-hook returns error,<br/>git-work checkout is skipped
+
+    Impl->>Bus: Publish(worktree.creating)
+    Bus->>Bus: run pre-hooks synchronously
+    alt hook rejects / times out
+        Bus-->>Impl: error, nothing persisted
+    else allowed
+        Bus->>SQLite: persist worktree.creating
+        Bus-->>Impl: success
+        Impl->>GitWork: checkout
+        Impl->>Bus: Publish(worktree.created)
+        Bus->>SQLite: persist worktree.created
+    end
 ```
-## Design Decisions
 
-**In-process, not external broker.** Single-user developer machine. Low event volume. Channel bus is zero-ops and trivially testable. `EventBus` interface allows NATS re-impl later.
+---
 
-**Persist events.** (1) Audit trail for debugging. (2) Crash recovery via replay from last checkpoint (see `01-domain-model.md`).
+## Design Summary
 
-**Single `OnEvent` dispatch.** Adapters register for specific types via `SubscribeType`. Adding event types never changes adapter interfaces.
+The current event system is:
 
-**Buffer size 256.** Conservative but generous. Dropped-event warnings (`slog.Warn`) signal pathologically slow handlers. When an `onDrop` handler is registered (the TUI does this), a warning toast is enqueued: e.g. `"GitHub PR update skipped — event queue full"` or `"Linear update skipped — event queue full"`. Preferable to unbounded memory growth.
+- a persisted `SystemEvent` row model
+- a topic-based in-process bus with subscriber channels
+- synchronous pre-hooks for gating
+- asynchronous post-hooks for side effects
+- best-effort fan-out with explicit `ErrRetryLater` / drop-handler behavior
+- partly centralized through `event.Bus`, partly still using direct `EventRepository.Create` writes in planning and implementation code
+
+That last point is intentional to document: “the event system” in HEAD is not a pure all-bus architecture. It is a mixed model, and the docs should describe it that way.

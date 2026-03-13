@@ -1,5 +1,5 @@
 # 05 - Orchestration
-<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
+<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
 
 Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
 

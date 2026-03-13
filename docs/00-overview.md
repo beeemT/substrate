@@ -1,5 +1,5 @@
 # 00 - Project Overview
-<!-- docs:last-integrated-commit 21fe37a831a565fe596ba9f2b6444475f238b474 -->
+<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
 
 ## Mission Statement
 
@@ -32,7 +32,7 @@ Substrate is organized around a few stable seams:
 
 - **Domain and persistence** — work items, plans, sessions, reviews, and workspace identity (`01-domain-model.md`, `02-layered-architecture.md`)
 - **Events and hooks** — workflow progression is published as system events; external effects subscribe to those events (`03-event-system.md`)
-- **Adapters and harnesses** — providers, repo hosts, and coding harnesses sit behind explicit interfaces (`04-adapters.md`)
+- **Adapters and harnesses** — providers, repo hosts, coding harnesses, and Sentry source-adapter behavior sit behind explicit interfaces (`04-adapters.md`)
 - **Runtime orchestration** — planning, execution waves, Foreman handling, review loops, and recovery are runtime workflows (`05-orchestration.md`)
 - **Operator interface** — the TUI exposes work-item overviews, per-work-item runs/tasks, session-history search, planning, implementation, settings, and recovery flows (`06-tui-design.md`)
 - **Delivery plan** — phased rollout, quality gates, validation strategy, and risk tracking live in one place (`07-implementation-plan.md`)
@@ -63,10 +63,11 @@ Substrate is organized around a few stable seams:
 **One source of truth per topic.**
 - Domain/state/schema: `01` / `02`
 - Events/hook semantics: `03`
-- Provider, lifecycle, and harness contracts: `04`
+- Provider, lifecycle, harness, and Sentry source-adapter contracts: `04`
 - Runtime control flow: `05`
 - TUI behavior: `06`
 - Phasing/tests/risks: `07`
+- TUI design-system contract and verification guidance: `08`
 
 ## Document Map
 
@@ -76,7 +77,8 @@ Substrate is organized around a few stable seams:
 | `01-domain-model.md` | Entities, enums, state machines, workspace layout | Service wiring, adapter behavior |
 | `02-layered-architecture.md` | Layer boundaries, dependency injection, persistence/schema | Runtime workflow details |
 | `03-event-system.md` | Event catalog, bus behavior, hook semantics | Concrete provider behavior |
-| `04-adapters.md` | Work item adapters, repo lifecycle adapters, harnesses, remote detection | End-to-end workflow sequencing |
+| `04-adapters.md` | Work item adapters, repo lifecycle adapters, harnesses, remote detection, and Sentry-specific auth/config, browse, settings, and verification details | End-to-end workflow sequencing, DB schema, or shared TUI interaction design |
 | `05-orchestration.md` | Planning/execution/review/Foreman handling/recovery runtime flow | Provider internals, schema, full UI design |
 | `06-tui-design.md` | Views, overlays, settings UX, operator interactions | Adapter implementations, DB schema |
 | `07-implementation-plan.md` | Phases, quality gates, test strategy, risks | Canonical runtime behavior |
+| `08-tui-design-system.md` | Design-system ownership boundaries, shared chrome semantics, layout guardrails, verification guidance | Broader TUI workflow behavior |
