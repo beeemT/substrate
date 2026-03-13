@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/beeemT/substrate/internal/config"
@@ -49,10 +50,10 @@ type SettingsProviderTestedMsg struct {
 	Status   ProviderStatus
 }
 
-type SettingsSectionPatchedMsg struct {
-	SectionID string
-	Section   SettingsSection
-	Message   string
+type SettingsLoginCompletedMsg struct {
+	Snapshot SettingsSnapshot
+	Message  string
+	Dirty    bool
 }
 
 type settingsNavNode struct {
@@ -1040,16 +1041,32 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		m.invalidateMainDocument()
 		m.statusText = msg.Provider + " connection verified"
 		m.errorText = ""
-	case SettingsSectionPatchedMsg:
-		for i := range m.sections {
-			if m.sections[i].ID == msg.SectionID {
-				m.sections[i] = msg.Section
-				break
+	case SettingsLoginCompletedMsg:
+		wasDirty := m.dirty
+		expanded := make(map[string]bool, len(m.expandedSections))
+		for key, value := range m.expandedSections {
+			expanded[key] = value
+		}
+		snapshot := msg.Snapshot
+		for name, status := range snapshot.Providers {
+			if prior, ok := m.providerStatus[name]; ok {
+				status.Connected = prior.Connected
+				status.LastError = prior.LastError
+				snapshot.Providers[name] = status
+			}
+		}
+		m.SetSnapshot(snapshot)
+		for key, value := range expanded {
+			if _, ok := m.expandedSections[key]; ok {
+				m.expandedSections[key] = value
 			}
 		}
 		m.invalidateMainDocument()
-		m.dirty = true
+		m.clampCursor()
+		m.syncMainViewport()
+		m.dirty = wasDirty || msg.Dirty
 		m.statusText = msg.Message
+		m.errorText = ""
 	case ErrMsg:
 		m.errorText = msg.Err.Error()
 	}
@@ -1102,13 +1119,33 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 	if !providerSupportsLogin(provider) {
 		return nil
 	}
+	if provider == "sentry" {
+		cfg, err := configFromSections(m.sections)
+		if err != nil {
+			return func() tea.Msg { return ErrMsg{Err: err} }
+		}
+		inputs := providerLoginInputs(cfg, provider)
+		cmd := exec.Command("sentry", "auth", "login")
+		cmd.Env = config.SentryCLIEnvironment(inputs["base_url"])
+		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("sentry auth login: %w", err)}
+			}
+			snapshotCfg, cfgErr := configFromSections(m.sections)
+			if cfgErr != nil {
+				return ErrMsg{Err: cfgErr}
+			}
+			snapshot := settingsSnapshotFromConfig(snapshotCfg)
+			return SettingsLoginCompletedMsg{Snapshot: snapshot, Message: "sentry login complete", Dirty: false}
+		})
+	}
 	harness := harnessForProvider(provider)
 	return func() tea.Msg {
-		section, err := m.service.LoginProvider(context.Background(), provider, harness, m.sections, svcs)
+		result, err := m.service.LoginProvider(context.Background(), provider, harness, m.sections, svcs)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return SettingsSectionPatchedMsg{SectionID: section.ID, Section: section, Message: fmt.Sprintf("%s login complete", strings.Title(provider))}
+		return SettingsLoginCompletedMsg{Snapshot: result.Snapshot, Message: result.Message, Dirty: result.Dirty}
 	}
 }
 
@@ -1610,6 +1647,8 @@ func harnessForProvider(provider string) string {
 	switch provider {
 	case "github":
 		return "gh-cli"
+	case "sentry":
+		return "sentry"
 	default:
 		return ""
 	}

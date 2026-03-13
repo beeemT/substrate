@@ -58,8 +58,8 @@ func BuildWorkItemAdapters(
 			adapters = append(adapters, githubAdapter)
 		}
 	}
-	if strings.TrimSpace(cfg.Adapters.Sentry.Token) != "" && strings.TrimSpace(cfg.Adapters.Sentry.Organization) != "" {
-		sentryAdapter, err := sentryadapter.New(cfg.Adapters.Sentry)
+	if config.SentryAuthConfigured(cfg.Adapters.Sentry) {
+		sentryAdapter, err := sentryadapter.New(context.Background(), cfg.Adapters.Sentry)
 		if err != nil {
 			slog.Warn("skipping sentry work item adapter", "err", err)
 		} else {

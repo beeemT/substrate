@@ -967,7 +967,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.toasts.AddToast(msg.Provider+" connection verified", components.ToastSuccess)
 		return a, tea.Batch(cmds...)
-	case SettingsSectionPatchedMsg:
+	case SettingsLoginCompletedMsg:
 		if a.activeOverlay == overlaySettings {
 			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 			cmds = append(cmds, cmd)

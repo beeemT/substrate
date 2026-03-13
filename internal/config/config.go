@@ -133,11 +133,12 @@ type GithubConfig struct {
 }
 
 type SentryConfig struct {
-	TokenRef     string   `yaml:"token_ref"`
-	Token        string   `yaml:"-"`
-	BaseURL      string   `yaml:"base_url"`
-	Organization string   `yaml:"organization"`
-	Projects     []string `yaml:"projects"`
+	TokenRef        string   `yaml:"token_ref"`
+	Token           string   `yaml:"-"`
+	BaseURL         string   `yaml:"base_url"`
+	BaseURLExplicit bool     `yaml:"-"`
+	Organization    string   `yaml:"organization"`
+	Projects        []string `yaml:"projects"`
 }
 
 // GlabConfig configures the glab CLI adapter.
@@ -316,7 +317,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Adapters.GitHub.PollInterval = "60s"
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
-		cfg.Adapters.Sentry.BaseURL = "https://sentry.io/api/0"
+		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
 	}
 }
 

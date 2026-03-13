@@ -3,9 +3,11 @@
 package omp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -406,18 +408,33 @@ func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessAction
 		}
 		return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bridgeRuntime.Path}, nil
 	case "login_provider":
-		if req.Provider != "github" {
+		switch req.Provider {
+		case "github":
+			out, err := exec.CommandContext(ctx, "gh", "auth", "token").CombinedOutput()
+			if err != nil {
+				return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token: %w: %s", err, strings.TrimSpace(string(out)))
+			}
+			token := strings.TrimSpace(string(out))
+			if token == "" {
+				return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+			}
+			return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
+		case "sentry":
+			cmd := exec.CommandContext(ctx, "sentry", "auth", "login")
+			cmd.Env = config.SentryCLIEnvironment(req.Inputs["base_url"])
+			cmd.Stdin = os.Stdin
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
+			cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+			if err := cmd.Run(); err != nil {
+				combined := strings.TrimSpace(strings.TrimSpace(stdout.String()) + " " + strings.TrimSpace(stderr.String()))
+				return adapter.HarnessActionResult{}, fmt.Errorf("sentry auth login: %w: %s", err, combined)
+			}
+			return adapter.HarnessActionResult{Success: true, Message: "sentry login succeeded"}, nil
+		default:
 			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)
 		}
-		out, err := exec.CommandContext(ctx, "gh", "auth", "token").CombinedOutput()
-		if err != nil {
-			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		token := strings.TrimSpace(string(out))
-		if token == "" {
-			return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
-		}
-		return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
 	default:
 		return adapter.HarnessActionResult{}, fmt.Errorf("unsupported ohmypi action %q", req.Action)
 	}

@@ -40,7 +40,7 @@ func jsonResponse(t *testing.T, status int, header http.Header, body any) *http.
 
 func testAdapter(t *testing.T, cfg config.SentryConfig, rt roundTripFunc) *SentryAdapter {
 	t.Helper()
-	a, err := newWithClient(cfg, rt)
+	a, err := newWithClient(context.Background(), cfg, rt)
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
@@ -97,16 +97,17 @@ func issuePayload(issue sentryIssue, userCount any) map[string]any {
 }
 
 func TestNewRequiresTokenAndOrganization(t *testing.T) {
-	t.Parallel()
+	t.Setenv("PATH", t.TempDir())
+	clearSentryTestEnv(t)
 
-	if _, err := New(config.SentryConfig{Organization: "acme"}); err == nil {
+	if _, err := New(context.Background(), config.SentryConfig{Organization: "acme"}); err == nil {
 		t.Fatal("New() error = nil, want missing token error")
 	}
-	if _, err := New(config.SentryConfig{Token: "token"}); err == nil {
+	if _, err := New(context.Background(), config.SentryConfig{Token: "token"}); err == nil {
 		t.Fatal("New() error = nil, want missing organization error")
 	}
 
-	a, err := newWithClient(config.SentryConfig{Token: " token ", Organization: " acme "}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithClient(context.Background(), config.SentryConfig{Token: " token ", Organization: " acme "}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s", req.URL.String())
 		return nil, nil
 	}))

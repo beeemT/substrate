@@ -84,6 +84,21 @@ type SettingsApplyResult struct {
 	Message  string
 }
 
+type SettingsLoginResult struct {
+	Snapshot SettingsSnapshot
+	Message  string
+	Dirty    bool
+}
+
+func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
+	diagnostics := app.DiagnoseHarnesses(cfg, "")
+	return SettingsSnapshot{
+		Sections:       buildSettingsSections(cfg),
+		Providers:      buildProviderStatuses(cfg),
+		HarnessWarning: diagnostics.WarningSummary(),
+	}
+}
+
 type SettingsService struct {
 	workItemRepo  repository.SessionRepository
 	planRepo      repository.PlanRepository
@@ -263,7 +278,7 @@ func (s *SettingsService) TestProvider(ctx context.Context, provider string, sec
 		return status, nil
 	case "sentry":
 		status := buildProviderStatuses(cfg)[provider]
-		client, err := sentryadapter.New(cfg.Adapters.Sentry)
+		client, err := sentryadapter.New(ctx, cfg.Adapters.Sentry)
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
@@ -300,31 +315,78 @@ func (s *SettingsService) TestProvider(ctx context.Context, provider string, sec
 	}
 }
 
-func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsSection, error) {
-	req := adapter.HarnessActionRequest{Action: "login_provider", Provider: provider, HarnessName: harness}
+func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsLoginResult, error) {
+	cfg, err := configFromSections(sections)
+	if err != nil {
+		return SettingsLoginResult{}, err
+	}
+	req := adapter.HarnessActionRequest{
+		Action:      "login_provider",
+		Provider:    provider,
+		HarnessName: harness,
+		Inputs:      providerLoginInputs(cfg, provider),
+	}
 	runner := harnessRunnerForProvider(harness, svcs)
 	if runner == nil {
-		return SettingsSection{}, fmt.Errorf("harness %q does not support login actions", harness)
+		return SettingsLoginResult{}, fmt.Errorf("harness %q does not support login actions", harness)
 	}
 	result, err := config.RunHarnessAction(ctx, runner, req)
 	if err != nil {
-		return SettingsSection{}, err
+		return SettingsLoginResult{}, err
 	}
 	if !result.Success {
-		return SettingsSection{}, fmt.Errorf("%s", result.Message)
+		return SettingsLoginResult{}, fmt.Errorf("%s", result.Message)
 	}
-	cfg, err := configFromSections(sections)
-	if err != nil {
-		return SettingsSection{}, err
-	}
+	dirty := false
+	message := strings.TrimSpace(result.Message)
 	switch provider {
 	case "github":
-		cfg.Adapters.GitHub.Token = result.Credentials["token"]
+		token := strings.TrimSpace(result.Credentials["token"])
+		if token == "" {
+			return SettingsLoginResult{}, fmt.Errorf("github login did not return a token")
+		}
+		cfg.Adapters.GitHub.Token = token
 		cfg.Adapters.GitHub.TokenRef = secretRef("github.token")
-		return findSection(buildSettingsSections(cfg), "provider.github"), nil
+		dirty = true
+		if message == "" {
+			message = "github login complete"
+		}
+	case "sentry":
+		if message == "" {
+			message = "sentry login complete"
+		}
 	default:
-		return SettingsSection{}, fmt.Errorf("login not implemented for provider %q", provider)
+		return SettingsLoginResult{}, fmt.Errorf("login not implemented for provider %q", provider)
 	}
+	return SettingsLoginResult{Snapshot: settingsSnapshotFromConfig(cfg), Message: message, Dirty: dirty}, nil
+}
+
+func providerLoginInputs(cfg *config.Config, provider string) map[string]string {
+	if cfg == nil {
+		return nil
+	}
+	switch provider {
+	case "sentry":
+		if rawBaseURL := strings.TrimSpace(cfg.Adapters.Sentry.BaseURL); rawBaseURL != "" {
+			return map[string]string{"base_url": strings.TrimSpace(config.SentryRootURL(rawBaseURL))}
+		}
+		resolved := config.ResolveSentryContext(cfg.Adapters.Sentry)
+		rootURL := strings.TrimSpace(config.SentryRootURL(resolved.BaseURL))
+		if rootURL == "" {
+			return nil
+		}
+		return map[string]string{"base_url": rootURL}
+	default:
+		return nil
+	}
+}
+
+func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if !cfg.BaseURLExplicit && config.NormalizeSentryBaseURL(baseURL) == config.DefaultSentryBaseURL {
+		return ""
+	}
+	return baseURL
 }
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
@@ -562,8 +624,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Provider · Sentry",
 			Description: "Sentry issue source configuration",
 			Fields: []SettingsField{
-				{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token), Sensitive: true, Status: secretStatus(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token)},
-				{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: cfg.Adapters.Sentry.BaseURL},
+				{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token), Sensitive: true, Status: config.SentryAuthSource(cfg.Adapters.Sentry)},
+				{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: sentryBaseURLFieldValue(cfg.Adapters.Sentry)},
 				{Section: "adapters.sentry", Key: "organization", Label: "Organization", Type: SettingsFieldString, Value: cfg.Adapters.Sentry.Organization},
 				{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Sentry.Projects, ",")},
 			},
@@ -677,10 +739,10 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 		},
 		"sentry": {
 			Title:       "Sentry",
-			Configured:  cfg.Adapters.Sentry.TokenRef != "" || strings.TrimSpace(cfg.Adapters.Sentry.Token) != "",
+			Configured:  config.SentryAuthConfigured(cfg.Adapters.Sentry),
 			Connected:   false,
-			AuthSource:  secretStatus(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token),
-			Description: "Uses OS keychain-backed token",
+			AuthSource:  config.SentryAuthSource(cfg.Adapters.Sentry),
+			Description: "Uses keychain, environment, or sentry CLI authentication",
 		},
 		"github": {
 			Title:       "GitHub",
@@ -807,6 +869,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.Sentry.Token, cfg.Adapters.Sentry.TokenRef = applySecretField(value, "sentry.token")
 	case "adapters.sentry.base_url":
 		cfg.Adapters.Sentry.BaseURL = value
+		cfg.Adapters.Sentry.BaseURLExplicit = value != ""
 	case "adapters.sentry.organization":
 		cfg.Adapters.Sentry.Organization = value
 	case "adapters.sentry.projects":
@@ -977,9 +1040,9 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.github.state_mappings":
 		return "Maps Substrate tracker states to GitHub issue states.", "empty"
 	case "adapters.sentry.token_ref":
-		return "Sentry token stored in config or the OS keychain for organization issue APIs.", "empty"
+		return "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.", "empty"
 	case "adapters.sentry.base_url":
-		return "Base URL for the Sentry API used by the adapter.", "https://sentry.io/api/0"
+		return "Base URL for the Sentry API used by the adapter and sentry CLI fallback.", config.DefaultSentryBaseURL
 	case "adapters.sentry.organization":
 		return "Sentry organization slug required for browsing and resolving issues.", "empty"
 	case "adapters.sentry.projects":

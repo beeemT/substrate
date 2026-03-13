@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,11 +18,13 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
-const defaultBaseURL = "https://sentry.io/api/0"
+const defaultBaseURL = config.DefaultSentryBaseURL
 
 type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
+
+type commandRunner func(context.Context, string, []string, []string) ([]byte, error)
 
 type SentryAdapter struct {
 	cfg          config.SentryConfig
@@ -31,30 +35,129 @@ type SentryAdapter struct {
 	projects     []string
 }
 
-func New(cfg config.SentryConfig) (*SentryAdapter, error) {
-	return newWithClient(cfg, &http.Client{Timeout: 30 * time.Second})
+type cliHTTPClient struct {
+	runner    commandRunner
+	rootURL   string
+	apiPrefix string
 }
 
-func newWithClient(cfg config.SentryConfig, client httpClient) (*SentryAdapter, error) {
-	token := strings.TrimSpace(cfg.Token)
-	if token == "" {
-		return nil, fmt.Errorf("sentry token is required")
+func New(ctx context.Context, cfg config.SentryConfig) (*SentryAdapter, error) {
+	return newWithDeps(ctx, cfg, &http.Client{Timeout: 30 * time.Second}, execCommandRunner)
+}
+
+func newWithClient(ctx context.Context, cfg config.SentryConfig, client httpClient) (*SentryAdapter, error) {
+	return newWithDeps(ctx, cfg, client, execCommandRunner)
+}
+
+func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient, runner commandRunner) (*SentryAdapter, error) {
+	resolved, err := config.ResolveSentryAuth(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sentry auth: %w", err)
 	}
-	organization := strings.TrimSpace(cfg.Organization)
+	organization := strings.TrimSpace(resolved.Organization)
 	if organization == "" {
 		return nil, fmt.Errorf("sentry organization is required")
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultBaseURL
+	transport := client
+	token := strings.TrimSpace(resolved.Token)
+	if token == "" {
+		if !resolved.UseCLI {
+			return nil, fmt.Errorf("sentry token is required")
+		}
+		transport = newCLIHTTPClient(resolved.BaseURL, runner)
 	}
 	return &SentryAdapter{
 		cfg:          cfg,
-		client:       client,
-		baseURL:      baseURL,
+		client:       transport,
+		baseURL:      strings.TrimRight(strings.TrimSpace(resolved.BaseURL), "/"),
 		token:        token,
 		organization: organization,
-		projects:     normalizeProjects(cfg.Projects),
+		projects:     normalizeProjects(resolved.Projects),
+	}, nil
+}
+
+func execCommandRunner(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append([]string(nil), env...)
+	return cmd.CombinedOutput()
+}
+
+func newCLIHTTPClient(baseURL string, runner commandRunner) httpClient {
+	parsed, _ := url.Parse(config.NormalizeSentryBaseURL(baseURL))
+	apiPrefix := "/api/0"
+	if parsed != nil && strings.TrimSpace(parsed.Path) != "" {
+		apiPrefix = strings.TrimRight(parsed.Path, "/")
+	}
+	return &cliHTTPClient{
+		runner:    runner,
+		rootURL:   config.SentryRootURL(baseURL),
+		apiPrefix: apiPrefix,
+	}
+}
+
+func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if c == nil || c.runner == nil {
+		return nil, fmt.Errorf("sentry cli runner is not configured")
+	}
+	endpointPath := req.URL.Path
+	if strings.HasPrefix(endpointPath, c.apiPrefix) {
+		endpointPath = strings.TrimPrefix(endpointPath, c.apiPrefix)
+	}
+	if endpointPath == "" {
+		endpointPath = "/"
+	}
+	endpoint := endpointPath
+	if req.URL.RawQuery != "" {
+		endpoint += "?" + req.URL.RawQuery
+	}
+	output, err := c.runner(req.Context(), "sentry", []string{"api", endpoint, "--include"}, config.SentryCLIEnvironment(c.rootURL))
+	if err != nil {
+		return nil, fmt.Errorf("sentry api %s: %w: %s", endpointPath, err, strings.TrimSpace(string(output)))
+	}
+	resp, parseErr := parseCLIResponse(req, output)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return resp, nil
+}
+
+func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) {
+	raw := strings.ReplaceAll(string(output), "\r\n", "\n")
+	headerPart, bodyPart, found := strings.Cut(raw, "\n\n")
+	if !found || !strings.HasPrefix(strings.TrimSpace(headerPart), "HTTP/") {
+		return nil, fmt.Errorf("parse sentry cli response: unexpected output %q", strings.TrimSpace(raw))
+	}
+	lines := strings.Split(headerPart, "\n")
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("parse sentry cli response: missing status line")
+	}
+	statusLine := strings.TrimSpace(lines[0])
+	fields := strings.Fields(statusLine)
+	if len(fields) < 2 {
+		return nil, fmt.Errorf("parse sentry cli response status %q", statusLine)
+	}
+	statusCode, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return nil, fmt.Errorf("parse sentry cli response status %q: %w", statusLine, err)
+	}
+	headers := http.Header{}
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		headers.Add(strings.TrimSpace(key), strings.TrimSpace(value))
+	}
+	return &http.Response{
+		Status:     statusLine,
+		StatusCode: statusCode,
+		Header:     headers,
+		Body:       io.NopCloser(strings.NewReader(bodyPart)),
+		Request:    req,
 	}, nil
 }
 
@@ -183,7 +286,9 @@ func (a *SentryAdapter) getJSON(ctx context.Context, organization, path string, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	if strings.TrimSpace(a.token) != "" {
+		req.Header.Set("Authorization", "Bearer "+a.token)
+	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {

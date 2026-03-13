@@ -594,7 +594,7 @@ func TestSettingsPage_SentrySectionRendersProviderStatusAndDetails(t *testing.T)
 	}
 
 	details := ansi.Strip(page.renderStickyFieldDetails(70, 10))
-	if !strings.Contains(details, "Sentry token stored in config or the OS keychain") {
+	if !strings.Contains(details, "Sentry token stored in config or the OS keychain") || !strings.Contains(details, "Status: config token") {
 		t.Fatalf("details = %q, want Sentry token description", details)
 	}
 	if !strings.Contains(details, "Default: empty") {
@@ -603,7 +603,7 @@ func TestSettingsPage_SentrySectionRendersProviderStatusAndDetails(t *testing.T)
 
 	doc, _, _ := page.buildMainDocument(80)
 	rendered := ansi.Strip(doc)
-	if !strings.Contains(rendered, "Provider auth: pending save") {
+	if !strings.Contains(rendered, "Provider auth: config token") {
 		t.Fatalf("document = %q, want Sentry provider status", rendered)
 	}
 	for _, want := range []string{"Organization", "Projects"} {
@@ -613,20 +613,20 @@ func TestSettingsPage_SentrySectionRendersProviderStatusAndDetails(t *testing.T)
 	}
 }
 
-func TestSettingsPage_SentryOmitsLoginAction(t *testing.T) {
+func TestSettingsPage_SentryShowsLoginAction(t *testing.T) {
 	t.Parallel()
 
 	page := newTestSettingsPage(&config.Config{})
 	page.sectionCursor = findSectionIndex(t, page, "provider.sentry")
-	if strings.Contains(page.footerText(), "[g] login") {
-		t.Fatalf("footer = %q, want Sentry login hint hidden", page.footerText())
+	if !strings.Contains(page.footerText(), "[g] login") {
+		t.Fatalf("footer = %q, want Sentry login hint", page.footerText())
 	}
 	page.focus = settingsFocusFields
-	if strings.Contains(page.footerText(), "[g] login") {
-		t.Fatalf("field footer = %q, want Sentry login hint hidden", page.footerText())
+	if !strings.Contains(page.footerText(), "[g] login") {
+		t.Fatalf("field footer = %q, want Sentry login hint", page.footerText())
 	}
-	if cmd := page.loginProviderCmd(Services{}); cmd != nil {
-		t.Fatal("expected Sentry login command to be suppressed")
+	if cmd := page.loginProviderCmd(Services{}); cmd == nil {
+		t.Fatal("expected Sentry login command to remain available")
 	}
 
 	githubPage := newTestSettingsPage(&config.Config{})

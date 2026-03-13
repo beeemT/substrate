@@ -328,11 +328,11 @@ func TestBuildSettingsSections_IncludesSentryProviderSection(t *testing.T) {
 	if section.Fields[0].Key != "token_ref" || section.Fields[1].Key != "base_url" || section.Fields[2].Key != "organization" || section.Fields[3].Key != "projects" {
 		t.Fatalf("unexpected field keys = %#v", []string{section.Fields[0].Key, section.Fields[1].Key, section.Fields[2].Key, section.Fields[3].Key})
 	}
-	if !strings.Contains(section.Fields[0].Description, "Sentry token stored in config or the OS keychain") {
+	if !strings.Contains(section.Fields[0].Description, "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.") {
 		t.Fatalf("token description = %q, want Sentry credential copy", section.Fields[0].Description)
 	}
-	if section.Fields[1].DefaultValue != "https://sentry.io/api/0" {
-		t.Fatalf("base_url default = %q, want %q", section.Fields[1].DefaultValue, "https://sentry.io/api/0")
+	if section.Fields[1].DefaultValue != config.DefaultSentryBaseURL {
+		t.Fatalf("base_url default = %q, want %q", section.Fields[1].DefaultValue, config.DefaultSentryBaseURL)
 	}
 }
 
@@ -350,8 +350,8 @@ func TestBuildProviderStatuses_TracksSentryTokenState(t *testing.T) {
 	if !got.Configured {
 		t.Fatalf("configured sentry status = %+v, want Configured=true", got)
 	}
-	if got.AuthSource != "pending save" {
-		t.Fatalf("sentry auth source = %q, want %q", got.AuthSource, "pending save")
+	if got.AuthSource != "config token" {
+		t.Fatalf("sentry auth source = %q, want %q", got.AuthSource, "config token")
 	}
 }
 
