@@ -1023,6 +1023,13 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 	if updated.content.Mode() != ContentModePlanning {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
 	}
+	view := stripBrowseANSI(updated.content.View())
+	if !strings.Contains(view, "Repository tasks appear after the plan is approved.") {
+		t.Fatalf("content view = %q, want updated repository tasks copy", view)
+	}
+	if strings.Contains(view, "Repository agent sessions appear after the plan is approved.") {
+		t.Fatalf("content view = %q, want stale repository agent sessions copy removed", view)
+	}
 	toastView := stripBrowseANSI(updated.toasts.View())
 	if !strings.Contains(toastView, "ℹ Starting planning with existing item SUB-1") {
 		t.Fatalf("toast view = %q", toastView)

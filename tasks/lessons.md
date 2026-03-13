@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-03-11 - Planning Copy Must Use Current Task Terminology
+
+**Mistake**: I reused the obsolete phrase "Repository agent sessions" in planning-state copy after the product renamed that surface to repository tasks.
+**Pattern**: I updated the flow behavior but did not re-check the exact user-facing terminology against the current product language before shipping the copy.
+**Rule**: When touching user-facing workflow copy, verify the current canonical product terms in the owning UI and tests; reject historical labels like "agent sessions" if the surface has already been renamed to tasks.
+**Applied**: Planning-state helper text, status messages, onboarding copy, and any UI strings that describe post-approval execution artifacts.
+
 ## 2026-03-11 - Verify Current CLI Surface Before Planning Integrations
 
 **Mistake**: I planned the Sentry CLI integration around stale `sentry-cli` assumptions (`sentry-cli login`, private file parsing) instead of first confirming the current binary, commands, and documented auth surfaces.

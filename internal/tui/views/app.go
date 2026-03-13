@@ -1352,7 +1352,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 		a.content.sessionLog.SetStaticContent([]string{
 			"Planning has started for this work item.",
 			"",
-			"Repository agent sessions appear after the plan is approved.",
+			"Repository tasks appear after the plan is approved.",
 		})
 	case domain.SessionPlanReview:
 		a.content.SetMode(ContentModePlanReview)
