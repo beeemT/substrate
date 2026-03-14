@@ -1405,6 +1405,102 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 	}
 }
 
+func TestPlanningTaskViewShowsPlanReviewNoticeWithoutAutoNavigating(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	app.plans["wi-plan"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-plan", Status: domain.PlanApproved}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected selecting the planning session row to start tailing the session log")
+	}
+
+	updated.workItems[0].State = domain.SessionPlanReview
+	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	updated.sessions[0].Status = domain.AgentSessionCompleted
+	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
+
+	cmd = updated.updateContentFromState()
+	if cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil while preserving selected planning task view", cmd)
+	}
+	if updated.content.Mode() != ContentModePlanning {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	}
+	if updated.content.sessionLog.sessionID != "plan-sess-1" {
+		t.Fatalf("session log session id = %q, want plan-sess-1", updated.content.sessionLog.sessionID)
+	}
+	notice := updated.content.sessionLog.notice
+	if notice == nil {
+		t.Fatal("expected planning task notice")
+	}
+	if notice.Title != "Plan review required" {
+		t.Fatalf("notice title = %q, want plan review notice", notice.Title)
+	}
+	if !strings.Contains(notice.Body, "approved, revised, or rejected") {
+		t.Fatalf("notice body = %q, want plan review guidance", notice.Body)
+	}
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Plan review required", "Press [Enter] to open the overview.", "No session output captured."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	foundEnter := false
+	for _, hint := range updated.currentHints() {
+		if hint.Key == "Enter" && hint.Label == "Open overview" {
+			foundEnter = true
+			break
+		}
+	}
+	if !foundEnter {
+		t.Fatalf("hints = %#v, want Enter/Open overview", updated.currentHints())
+	}
+}
+
+func TestPlanningTaskViewEnterOpensOverviewForPlanReviewNotice(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	app.plans["wi-plan"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-plan", Status: domain.PlanApproved}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	updated.workItems[0].State = domain.SessionPlanReview
+	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	updated.sessions[0].Status = domain.AgentSessionCompleted
+	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
+	if cmd := updated.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected Enter quick-jump to avoid starting a tail command, got %v", cmd)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v", updated.mainFocus, mainFocusContent)
+	}
+	if updated.selectedTaskSessionID() != "" {
+		t.Fatalf("selected task session = %q, want overview selection", updated.selectedTaskSessionID())
+	}
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
+	}
+	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Plan review required") {
+		t.Fatalf("content view = %q, want plan review action", view)
+	}
+}
+
 func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 	t.Parallel()
 
@@ -1659,7 +1755,7 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 	}
 }
 
-func TestSidebarSourceDetailsYieldsToEscalatedQuestion(t *testing.T) {
+func TestSidebarSourceDetailsShowsQuestionAlertWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated := model.(App)
@@ -1678,7 +1774,7 @@ func TestSidebarSourceDetailsYieldsToEscalatedQuestion(t *testing.T) {
 
 	cmd := updated.updateContentFromState()
 	if cmd != nil {
-		t.Fatal("expected escalated question refresh to avoid starting a tail command")
+		t.Fatal("expected question refresh to avoid starting a tail command")
 	}
 	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
 		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
@@ -1686,12 +1782,75 @@ func TestSidebarSourceDetailsYieldsToEscalatedQuestion(t *testing.T) {
 	if updated.content.Mode() != ContentModeSourceDetails {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
 	}
-	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Source details") {
-		t.Fatalf("content view = %q, want source-details surface to remain selected", view)
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Source details", "Question waiting for answer", "repo-a is paused until someone answers", "Press [Enter] to open the overview."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	notice := updated.content.sourceDetails.notice
+	if notice == nil {
+		t.Fatal("expected source-details notice")
+	}
+	if !strings.Contains(notice.Body, "Need approval before continuing") {
+		t.Fatalf("notice body = %q, want escalated question text", notice.Body)
+	}
+	hints := updated.currentHints()
+	foundEnter := false
+	for _, hint := range hints {
+		if hint.Key == "Enter" && hint.Label == "Open overview" {
+			foundEnter = true
+			break
+		}
+	}
+	if !foundEnter {
+		t.Fatalf("hints = %#v, want Enter/Open overview", hints)
 	}
 }
 
-func TestSidebarSourceDetailsYieldsToCompletedState(t *testing.T) {
+func TestSidebarSourceDetailsEnterOpensOverviewForAlert(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+
+	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
+	updated.questions["sess-1"] = []domain.Question{{
+		ID:             "q-1",
+		AgentSessionID: "sess-1",
+		Content:        "Need approval before continuing",
+		Status:         domain.QuestionEscalated,
+		CreatedAt:      time.Now(),
+	}}
+	if cmd := updated.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected Enter quick-jump to avoid starting a tail command, got %v", cmd)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v", updated.mainFocus, mainFocusContent)
+	}
+	if updated.selectedTaskSessionID() != "" {
+		t.Fatalf("selected task session = %q, want overview selection", updated.selectedTaskSessionID())
+	}
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.Kind != SidebarEntryTaskOverview || sel.SessionID != "" {
+		t.Fatalf("selected entry = %#v, want overview row", sel)
+	}
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
+	}
+	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Question waiting for answer") {
+		t.Fatalf("content view = %q, want overview question action", view)
+	}
+}
+
+func TestSidebarSourceDetailsShowsCompletedAlertWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated := model.(App)
@@ -1710,6 +1869,30 @@ func TestSidebarSourceDetailsYieldsToCompletedState(t *testing.T) {
 	}
 	if updated.content.Mode() != ContentModeSourceDetails {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
+	}
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Source details", "Work item completed", "This work item completed while you were focused on a task view.", "Press [Enter] to open the overview and inspect the final status"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	notice := updated.content.sourceDetails.notice
+	if notice == nil {
+		t.Fatal("expected source-details notice")
+	}
+	if notice.Hint != "Press [Enter] to open the overview and inspect the final status or review artifacts." {
+		t.Fatalf("notice hint = %q, want completed quick-jump hint", notice.Hint)
+	}
+	hints := updated.currentHints()
+	foundEnter := false
+	for _, hint := range hints {
+		if hint.Key == "Enter" && hint.Label == "Open overview" {
+			foundEnter = true
+			break
+		}
+	}
+	if !foundEnter {
+		t.Fatalf("hints = %#v, want Enter/Open overview", hints)
 	}
 }
 
@@ -1736,6 +1919,59 @@ func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected selecting a task to tail its log")
+	}
+}
+
+func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected selecting a task to tail its log")
+	}
+
+	updated.sessions[0].Status = domain.AgentSessionInterrupted
+	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
+
+	cmd = updated.updateContentFromState()
+	if cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil while preserving selected repo task view", cmd)
+	}
+	if updated.content.Mode() != ContentModeSessionInteraction {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSessionInteraction)
+	}
+	if updated.content.sessionLog.sessionID != "sess-1" {
+		t.Fatalf("session log session id = %q, want sess-1", updated.content.sessionLog.sessionID)
+	}
+	notice := updated.content.sessionLog.notice
+	if notice == nil {
+		t.Fatal("expected interrupted task notice")
+	}
+	if notice.Title != "Interrupted task needs recovery" {
+		t.Fatalf("notice title = %q, want interrupted task notice", notice.Title)
+	}
+	if !strings.Contains(notice.Body, "resumed or abandoned") {
+		t.Fatalf("notice body = %q, want interrupted recovery guidance", notice.Body)
+	}
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Interrupted task needs recovery", "Press [Enter] to open the overview.", "No session output captured."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	foundEnter := false
+	for _, hint := range updated.currentHints() {
+		if hint.Key == "Enter" && hint.Label == "Open overview" {
+			foundEnter = true
+			break
+		}
+	}
+	if !foundEnter {
+		t.Fatalf("hints = %#v, want Enter/Open overview", updated.currentHints())
 	}
 }
 

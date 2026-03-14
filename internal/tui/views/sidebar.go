@@ -33,6 +33,7 @@ type SidebarEntry struct {
 	WorkspaceID     string
 	WorkspaceName   string
 	ExternalID      string
+	Source          string
 	Title           string
 	SubtitleText    string
 	State           domain.SessionState
@@ -60,13 +61,55 @@ func (e SidebarEntry) titlePrefix() string {
 		}
 		return "Task"
 	default:
-		if e.ExternalID != "" {
-			return e.ExternalID
+		if label := e.displayExternalID(); label != "" {
+			return label
 		}
 		if e.WorkItemID != "" {
 			return e.WorkItemID
 		}
 		return e.SessionID
+	}
+}
+
+func (e SidebarEntry) displayExternalID() string {
+	raw := strings.TrimSpace(e.ExternalID)
+	switch {
+	case strings.HasPrefix(raw, "gh:issue:"):
+		return strings.TrimPrefix(raw, "gh:issue:")
+	case strings.HasPrefix(raw, "gl:issue:"):
+		return strings.TrimPrefix(raw, "gl:issue:")
+	default:
+		return raw
+	}
+}
+
+func (e SidebarEntry) displaySource() string {
+	if source := strings.TrimSpace(e.Source); source != "" {
+		return source
+	}
+	switch {
+	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gh:issue:"):
+		return "github"
+	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gl:issue:"):
+		return "gitlab"
+	default:
+		return ""
+	}
+}
+
+func (e SidebarEntry) sidebarPrefix() string {
+	prefix := e.titlePrefix()
+	if e.Kind != SidebarEntryWorkItem && e.Kind != SidebarEntryTaskOverview {
+		return prefix
+	}
+	provider := detailProviderLabel(e.displaySource())
+	switch {
+	case prefix == "":
+		return provider
+	case provider == "":
+		return prefix
+	default:
+		return prefix + " · " + provider
 	}
 }
 
@@ -326,7 +369,7 @@ func (m SidebarModel) View() string {
 		entry := m.entries[i]
 		selected := i == m.cursor
 		icon := entry.StatusIcon(m.styles)
-		line1 := truncate(icon+" "+entry.titlePrefix(), width)
+		line1 := truncate(icon+" "+entry.sidebarPrefix(), width)
 		titleLine := truncate("  "+entry.Title, width)
 		var line3 string
 		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {

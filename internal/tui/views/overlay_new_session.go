@@ -42,8 +42,8 @@ var scopeOptions = []domain.SelectionScope{
 var defaultViewOptions = []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", "all"}
 
 const (
-	browseWindowWidth       = 240
-	browseHeightNumerator   = 3
+	browseMaxOverlayWidth   = 0
+	browseHeightNumerator   = 4
 	browseHeightDenom       = 5
 	browseMinListHeight     = 6
 	browseMinPaneWidth      = 36
@@ -53,7 +53,7 @@ const (
 )
 
 var browseSizingSpec = components.SplitOverlaySizingSpec{
-	MaxOverlayWidth:   browseWindowWidth,
+	MaxOverlayWidth:   browseMaxOverlayWidth,
 	LeftMinWidth:      browseMinPaneWidth,
 	RightMinWidth:     detailMinPaneWidth,
 	LeftWeight:        2,
@@ -1477,10 +1477,9 @@ type issueListLoadedMsg struct {
 
 // Update handles incoming messages for the overlay.
 func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
-	defer m.syncDetailViewport(false)
-
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
+	forceDetailTop := false
 
 	switch msg := msg.(type) {
 	case issueListLoadedMsg:
@@ -1494,7 +1493,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		m.pruneSelectedIDs()
 		m.refreshBrowseListItems()
 		m.normalizeBrowseFocus()
-		m.syncDetailViewport(true)
+		forceDetailTop = true
 
 	case tea.MouseMsg:
 		if !m.showManual && msg.Action == tea.MouseActionPress {
@@ -1511,7 +1510,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					}
 				case browseFocusDetails:
 					m.detailViewport, cmd = m.detailViewport.Update(msg)
-					cmds = append(cmds, cmd)
+					return m, cmd
 				}
 			}
 		}
@@ -1598,8 +1597,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		case "up":
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
-				cmds = append(cmds, cmd)
-				break
+				return m, cmd
 			}
 			if m.moveBrowseFocus(-1) {
 				break
@@ -1609,8 +1607,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		case "down":
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
-				cmds = append(cmds, cmd)
-				break
+				return m, cmd
 			}
 			if m.moveBrowseFocus(1) {
 				break
@@ -1623,8 +1620,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		case "pgup":
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
-				cmds = append(cmds, cmd)
-				break
+				return m, cmd
 			}
 			if m.browseFocus == browseFocusList {
 				m.issueList, cmd = m.issueList.Update(msg)
@@ -1633,8 +1629,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		case "pgdown":
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
-				cmds = append(cmds, cmd)
-				break
+				return m, cmd
 			}
 			if m.browseFocus == browseFocusList {
 				m.issueList, cmd = m.issueList.Update(msg)
@@ -1751,13 +1746,14 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				}
 			case browseFocusDetails:
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
-				cmds = append(cmds, cmd)
+				return m, cmd
 			default:
 				cmds = append(cmds, m.updateFocusedBrowseInput(msg)...)
 			}
 		}
 	}
 
+	m.syncDetailViewport(forceDetailTop)
 	return m, tea.Batch(cmds...)
 }
 

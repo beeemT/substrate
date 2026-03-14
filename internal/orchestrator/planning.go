@@ -398,16 +398,16 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	attempt := 0
 
 	for attempt <= maxRetries {
-		// Wait for session to produce output or complete
-		if err := s.waitForDraftOrCompletion(sessionCtx, session, draftPath); err != nil {
-			return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("wait for draft: %w", err)}
+		// Wait for the current planning turn to finish before treating the draft as final.
+		if err := s.waitForPlanningTurn(sessionCtx, session); err != nil {
+			return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("wait for planner turn: %w", err)}
 		}
 
-		// Read the draft file
+		// Read the latest draft file after the planner signals that its turn is complete.
 		draftContent, err := os.ReadFile(draftPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Draft file doesn't exist - send correction
+				// Draft file doesn't exist - send correction.
 				if attempt < maxRetries {
 					correctionMsg := s.buildCorrectionMessage(domain.ParseErrors{MissingBlock: true}, discoveredRepoNames, draftPath)
 					if sendErr := session.SendMessage(sessionCtx, correctionMsg); sendErr != nil {
@@ -424,14 +424,13 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("read draft file: %w", err)}
 		}
 
-		// Parse and validate the draft
+		// Parse and validate the draft.
 		_, parseErrors := parser.ParseAndValidate(string(draftContent), planningCtx.Repos)
 		if !parseErrors.HasErrors() {
-			// Success!
 			return string(draftContent), attempt, warnings, nil
 		}
 
-		// Parse errors - send correction if we have retries left
+		// Parse errors - send correction if we have retries left.
 		if attempt < maxRetries {
 			warnings = append(warnings, domain.PlanningWarning{
 				Type:    "parse_error",
@@ -447,7 +446,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			continue
 		}
 
-		// Exhausted retries
+		// Exhausted retries.
 		return "", attempt, warnings, &PlanningError{
 			Err:         fmt.Errorf("plan parsing failed after %d attempts: %s", attempt, parseErrors.Error()),
 			ParseErrors: &parseErrors,
@@ -457,34 +456,28 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("max retries exceeded")}
 }
 
-// waitForDraftOrCompletion waits for the draft file to appear or the session to end.
-// It returns nil as soon as the draft file exists.
-// It returns an error if the context is cancelled or if the agent session terminates
-// without having produced the draft file.
-func (s *PlanningService) waitForDraftOrCompletion(ctx context.Context, session adapter.AgentSession, draftPath string) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
+// waitForPlanningTurn waits for the planner to signal that its current turn is complete.
+// It returns nil on a done event.
+// It returns an error if the context is cancelled, the session emits an error, or the
+// session closes before signaling completion.
+func (s *PlanningService) waitForPlanningTurn(ctx context.Context, session adapter.AgentSession) error {
 	events := session.Events()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case _, ok := <-events:
+		case evt, ok := <-events:
 			if !ok {
-				// Session has ended; do one final check for the draft.
-				if _, err := os.Stat(draftPath); err == nil {
-					return nil
+				return fmt.Errorf("agent session ended before planner signaled completion")
+			}
+			switch evt.Type {
+			case "done":
+				return nil
+			case "error":
+				if strings.TrimSpace(evt.Payload) == "" {
+					return fmt.Errorf("planner session failed")
 				}
-				return fmt.Errorf("agent session ended without producing a draft")
-			}
-			// Event received; opportunistically check for the draft.
-			if _, err := os.Stat(draftPath); err == nil {
-				return nil
-			}
-		case <-ticker.C:
-			if _, err := os.Stat(draftPath); err == nil {
-				return nil
+				return fmt.Errorf("planner session failed: %s", evt.Payload)
 			}
 		}
 	}

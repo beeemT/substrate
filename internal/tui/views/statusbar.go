@@ -35,11 +35,8 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 		innerWidth = width - 2
 	}
 
-	parts := components.RenderKeyHintFragments(s.styles, componentHints(hints))
 	preserveLeading := hasContextualLeadingHint(hints) && len(hints) > 0
-	if preserveLeading && len(parts) > 0 {
-		parts[0] = renderHintFragment(s.styles, hints[0], innerWidth)
-	}
+	parts := renderStatusBarHintParts(s.styles, hints, innerWidth, preserveLeading)
 
 	rightText = truncate(rightText, innerWidth)
 	right := s.styles.Muted.Render(rightText)
@@ -50,27 +47,16 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 		requiredGap = 1
 	}
 
-	leftRawParts := make([]string, 0, len(parts))
-	leftRenderedParts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part.Raw == "" {
-			continue
-		}
-		leftRawParts = append(leftRawParts, part.Raw)
-		leftRenderedParts = append(leftRenderedParts, part.Rendered)
-	}
-
 	minParts := 0
-	if preserveLeading && len(leftRawParts) > 0 {
+	if preserveLeading && len(parts) > 0 {
 		minParts = 1
 	}
-	leftRaw := strings.Join(leftRawParts, "  ")
-	for len(leftRawParts) > minParts && lipgloss.Width(leftRaw)+rightLen+requiredGap > innerWidth {
-		leftRawParts = leftRawParts[:len(leftRawParts)-1]
-		leftRenderedParts = leftRenderedParts[:len(leftRenderedParts)-1]
-		leftRaw = strings.Join(leftRawParts, "  ")
+	leftRaw := joinStatusBarHintRaw(parts)
+	for len(parts) > minParts && lipgloss.Width(leftRaw)+rightLen+requiredGap > innerWidth {
+		parts = parts[:len(parts)-1]
+		leftRaw = joinStatusBarHintRaw(parts)
 	}
-	if preserveLeading && len(leftRawParts) == 1 {
+	if preserveLeading && len(parts) == 1 {
 		leftLen := lipgloss.Width(leftRaw)
 		if leftLen+rightLen+requiredGap > innerWidth {
 			availableRight := innerWidth - leftLen
@@ -91,7 +77,9 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 		}
 	}
 
-	left := strings.Join(leftRenderedParts, "  ")
+	parts = reorderStatusBarHintParts(parts)
+	leftRaw = joinStatusBarHintRaw(parts)
+	left := joinStatusBarHintRendered(parts)
 	leftLen := lipgloss.Width(leftRaw)
 	gapLen := innerWidth - leftLen - rightLen
 	if gapLen < 0 {
@@ -101,6 +89,73 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	line := left + strings.Repeat(" ", gapLen) + right
 	lineStyle := s.styles.StatusBar.Copy().Padding(0, horizontalPadding)
 	return lineStyle.Render(line)
+}
+
+type statusBarHintPart struct {
+	hint KeybindHint
+	part components.RenderedKeyHint
+}
+
+func renderStatusBarHintParts(st styles.Styles, hints []KeybindHint, maxWidth int, preserveLeading bool) []statusBarHintPart {
+	rendered := components.RenderKeyHintFragments(st, componentHints(hints))
+	if preserveLeading && len(rendered) > 0 {
+		rendered[0] = renderHintFragment(st, hints[0], maxWidth)
+	}
+
+	parts := make([]statusBarHintPart, 0, len(rendered))
+	for i, part := range rendered {
+		if part.Raw == "" {
+			continue
+		}
+		parts = append(parts, statusBarHintPart{hint: hints[i], part: part})
+	}
+	return parts
+}
+
+func joinStatusBarHintRaw(parts []statusBarHintPart) string {
+	raw := make([]string, 0, len(parts))
+	for _, part := range parts {
+		raw = append(raw, part.part.Raw)
+	}
+	return strings.Join(raw, "  ")
+}
+
+func joinStatusBarHintRendered(parts []statusBarHintPart) string {
+	rendered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		rendered = append(rendered, part.part.Rendered)
+	}
+	return strings.Join(rendered, "  ")
+}
+
+func reorderStatusBarHintParts(parts []statusBarHintPart) []statusBarHintPart {
+	deleteIndex := indexStatusBarHint(parts, KeybindHint{Key: "d", Label: "Delete session"})
+	newIndex := indexStatusBarHint(parts, KeybindHint{Key: "n", Label: "New session"})
+	if deleteIndex < 0 || newIndex < 0 || deleteIndex == newIndex+1 {
+		return parts
+	}
+
+	deletePart := parts[deleteIndex]
+	reordered := make([]statusBarHintPart, 0, len(parts))
+	reordered = append(reordered, parts[:deleteIndex]...)
+	reordered = append(reordered, parts[deleteIndex+1:]...)
+	if deleteIndex < newIndex {
+		newIndex--
+	}
+	insertIndex := newIndex + 1
+	reordered = append(reordered, statusBarHintPart{})
+	copy(reordered[insertIndex+1:], reordered[insertIndex:])
+	reordered[insertIndex] = deletePart
+	return reordered
+}
+
+func indexStatusBarHint(parts []statusBarHintPart, want KeybindHint) int {
+	for i, part := range parts {
+		if part.hint == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func renderHintFragment(st styles.Styles, hint KeybindHint, maxWidth int) components.RenderedKeyHint {

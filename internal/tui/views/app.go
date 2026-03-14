@@ -74,7 +74,6 @@ func appContentBodyWidth(width int) int {
 }
 
 // App is the top-level bubbletea model.
-// App is the top-level bubbletea model.
 type App struct {
 	svcs Services
 
@@ -413,7 +412,11 @@ func (a App) currentHints() []KeybindHint {
 		return append(prependDelete(hints), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
-		return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}), global...)
+		hints := []KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}
+		if a.selectedTaskSessionID() != "" && a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
+			hints = append([]KeybindHint{{Key: "Enter", Label: "Open overview"}}, hints...)
+		}
+		return append(prependDelete(hints), global...)
 	}
 	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}), global...)
 }
@@ -1281,6 +1284,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.activeOverlay = overlayNone
 		return a, nil
 	}
+	if msg.String() == "enter" && a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() != "" {
+		if a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
+			return a, a.jumpFromSourceDetailsToOverview()
+		}
+	}
 
 	switch msg.String() {
 	case "q":
@@ -1404,9 +1412,12 @@ func (a *App) updateContentFromState() tea.Cmd {
 	}
 
 	a.content.SetWorkItem(wi)
+	a.content.sourceDetails.SetNotice(nil)
+	a.content.sessionLog.SetNotice(nil)
 	if a.sidebarMode == sidebarPaneTasks {
 		if taskSessionID := a.selectedTaskSessionID(); taskSessionID != "" {
 			if taskSessionID == taskSidebarSourceDetailsID {
+				a.content.sourceDetails.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 				a.content.SetMode(ContentModeSourceDetails)
 				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
@@ -1428,6 +1439,93 @@ func (a *App) updateContentFromState() tea.Cmd {
 	return nil
 }
 
+func (a *App) jumpFromSourceDetailsToOverview() tea.Cmd {
+	if a.currentWorkItemID == "" {
+		return nil
+	}
+	a.tailingSessionIDs = make(map[string]bool)
+	a.currentHistorySessionID = ""
+	a.currentHistoryEntry = SidebarEntry{}
+	a.setSelectedTaskSessionID("")
+	a.sidebar.SelectEntry(a.currentWorkItemID, "")
+	a.mainFocus = mainFocusContent
+	return a.updateContentFromState()
+}
+
+func (a *App) sourceDetailsNoticeForWorkItem(wi *domain.Session) *sourceDetailsNotice {
+	if wi == nil {
+		return nil
+	}
+	var plan *domain.Plan
+	var subPlans []domain.TaskPlan
+	if currentPlan := a.plans[wi.ID]; currentPlan != nil {
+		plan = currentPlan
+		subPlans = a.subPlans[currentPlan.ID]
+	}
+	if actions := a.buildOverviewActions(wi, plan, subPlans); len(actions) > 0 {
+		return sourceDetailsNoticeFromOverviewAction(actions[0])
+	}
+	switch wi.State {
+	case domain.SessionReviewing:
+		return &sourceDetailsNotice{
+			Title:   "Review in progress",
+			Body:    "This work item moved into review while you were focused on a task view.",
+			Hint:    "Press [Enter] to open the overview and inspect the current review status.",
+			Variant: components.CalloutCard,
+		}
+	case domain.SessionCompleted:
+		return &sourceDetailsNotice{
+			Title:   "Work item completed",
+			Body:    "This work item completed while you were focused on a task view.",
+			Hint:    "Press [Enter] to open the overview and inspect the final status or review artifacts.",
+			Variant: components.CalloutCard,
+		}
+	default:
+		return nil
+	}
+}
+
+func sourceDetailsNoticeFromOverviewAction(action OverviewActionCard) *sourceDetailsNotice {
+	notice := &sourceDetailsNotice{
+		Title:   firstNonEmptyString(strings.TrimSpace(action.Title), "Attention required"),
+		Hint:    "Press [Enter] to open the overview.",
+		Variant: components.CalloutWarning,
+	}
+	switch action.Kind {
+	case overviewActionPlanReview:
+		notice.Body = "Implementation is paused until the plan is approved, revised, or rejected."
+		if len(action.Affected) > 0 {
+			notice.Body = fmt.Sprintf("%s Affected repos: %d.", notice.Body, len(action.Affected))
+		}
+	case overviewActionQuestion:
+		target := firstNonEmptyString(strings.TrimSpace(action.QuestionRepo), firstSourceDetailsAffected(action.Affected), "A repo task")
+		notice.Body = target + " is paused until someone answers the escalated question."
+		if question := strings.TrimSpace(action.Blocked); question != "" {
+			notice.Body += " Question: " + question
+		}
+	case overviewActionInterrupted:
+		target := firstNonEmptyString(strings.TrimSpace(action.Blocked), firstSourceDetailsAffected(action.Affected), "A repo task")
+		notice.Body = target + " was interrupted and cannot continue until it is resumed or abandoned."
+	case overviewActionReviewing:
+		if len(action.Affected) > 0 {
+			notice.Body = fmt.Sprintf("Review critiques are waiting for a human decision in %s.", strings.Join(action.Affected, ", "))
+		} else {
+			notice.Body = "Review critiques are waiting for a human decision."
+		}
+		notice.Hint = "Press [Enter] to open the overview and inspect the review."
+	default:
+		notice.Body = firstNonEmptyString(strings.TrimSpace(action.Why), strings.TrimSpace(action.Blocked))
+	}
+	return notice
+}
+
+func firstSourceDetailsAffected(affected []string) string {
+	if len(affected) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(affected[0])
+}
+
 func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd {
 	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSessionDisplayName(session)
 	metaParts := []string{sessionStatusLabel(session.Status)}
@@ -1435,11 +1533,7 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 		metaParts = append(metaParts, session.HarnessName)
 	}
 	metaParts = append(metaParts, session.ID)
-	if session.Status == domain.AgentSessionInterrupted {
-		a.content.SetMode(ContentModeInterrupted)
-		a.content.interrupted.SetSession(session.ID, session.SubPlanID, session.RepositoryName, session.WorktreePath, a.canActOnSession(*session))
-		return nil
-	}
+	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 	if session.Phase == domain.TaskPhasePlanning {
 		a.content.SetMode(ContentModePlanning)
 	} else {
@@ -1514,6 +1608,7 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 		Kind:         SidebarEntryWorkItem,
 		WorkItemID:   wi.ID,
 		ExternalID:   wi.ExternalID,
+		Source:       wi.Source,
 		Title:        wi.Title,
 		State:        wi.State,
 		LastActivity: wi.UpdatedAt,

@@ -16,9 +16,17 @@ import (
 )
 
 // SourceDetailsModel renders source-system details for the selected session.
+type sourceDetailsNotice struct {
+	Title   string
+	Body    string
+	Hint    string
+	Variant components.CalloutVariant
+}
+
 type SourceDetailsModel struct {
 	viewport viewport.Model
 	session  *domain.Session
+	notice   *sourceDetailsNotice
 	styles   styles.Styles
 	width    int
 	height   int
@@ -40,8 +48,17 @@ func (m *SourceDetailsModel) SetSession(session *domain.Session) {
 	m.syncViewport(reset)
 }
 
+func (m *SourceDetailsModel) SetNotice(notice *sourceDetailsNotice) {
+	m.notice = notice
+	m.syncViewport(false)
+}
+
 func (m SourceDetailsModel) KeybindHints() []KeybindHint {
-	return []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+	hints := []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+	if m.notice != nil {
+		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
+	}
+	return hints
 }
 
 func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
@@ -85,11 +102,38 @@ func (m SourceDetailsModel) header() string {
 	if m.session == nil {
 		return ""
 	}
-	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
 		Title:   m.session.ExternalID + " · " + m.session.Title,
 		Meta:    "Source details",
 		Width:   m.width,
 		Divider: true,
+	})
+	if notice := m.noticeView(); notice != "" {
+		return header + "\n" + notice
+	}
+	return header
+}
+
+func (m SourceDetailsModel) noticeView() string {
+	return renderTaskViewNotice(m.styles, m.width, m.notice)
+}
+
+func renderTaskViewNotice(st styles.Styles, width int, notice *sourceDetailsNotice) string {
+	if notice == nil || width <= 0 {
+		return ""
+	}
+	innerWidth := components.CalloutInnerWidth(st, width)
+	lines := []string{ansi.Hardwrap(st.Title.Render(notice.Title), innerWidth, true)}
+	if body := strings.TrimSpace(notice.Body); body != "" {
+		lines = append(lines, "", ansi.Hardwrap(st.SettingsText.Render(body), innerWidth, true))
+	}
+	if hint := strings.TrimSpace(notice.Hint); hint != "" {
+		lines = append(lines, "", ansi.Hardwrap(st.Muted.Render(hint), innerWidth, true))
+	}
+	return components.RenderCallout(st, components.CalloutSpec{
+		Body:    strings.Join(filterEmptyStringsPreserveBlanks(lines), "\n"),
+		Width:   width,
+		Variant: notice.Variant,
 	})
 }
 

@@ -704,6 +704,43 @@ func TestNewSessionOverlayRightArrowMovesBetweenListAndDetails(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayFocusedDetailsPaneScrolls(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 24)
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{
+		ID:          "gh-1",
+		Provider:    "github",
+		Identifier:  "#42",
+		Title:       "Investigate detail scrolling",
+		Description: strings.Repeat("Detail line that should scroll.\n", 48),
+	}))
+	overlay.setBrowseListFocus()
+
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if overlay.browseFocus != browseFocusDetails {
+		t.Fatalf("browseFocus = %v, want browseFocusDetails", overlay.browseFocus)
+	}
+	if got, wantMin := overlay.detailViewport.TotalLineCount(), overlay.detailViewport.Height+1; got < wantMin {
+		t.Fatalf("detail lines = %d, want at least %d to prove overflow", got, wantMin)
+	}
+
+	before := overlay.detailViewport.YOffset
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if overlay.detailViewport.YOffset <= before {
+		t.Fatalf("detail viewport YOffset = %d, want > %d after down key", overlay.detailViewport.YOffset, before)
+	}
+
+	afterKey := overlay.detailViewport.YOffset
+	overlay, _ = overlay.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if overlay.detailViewport.YOffset <= afterKey {
+		t.Fatalf("detail viewport YOffset = %d, want > %d after wheel down", overlay.detailViewport.YOffset, afterKey)
+	}
+}
+
 func TestRenderDetailContentVisuallySeparatesMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -815,6 +852,29 @@ func TestNewSessionOverlayNoItemsBackgroundMatchesOverlay(t *testing.T) {
 	overlay := NewNewSessionOverlay(nil, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(styles.DefaultTheme.OverlayBg) {
 		t.Fatalf("no-items background = %v, want %q", got, styles.DefaultTheme.OverlayBg)
+	}
+}
+
+func TestNewSessionOverlayLargeScreensUseMoreAvailableSpace(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(360, 60)
+
+	layout := overlay.browserLayout()
+	if layout.FrameWidth <= 238 {
+		t.Fatalf("frame width = %d, want > 238 on large screens", layout.FrameWidth)
+	}
+	if layout.BodyHeight <= 36 {
+		t.Fatalf("body height = %d, want > 36 on large screens", layout.BodyHeight)
+	}
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 360, 60)
+	if got := overlay.detailViewport.Height; got != layout.ViewportHeight {
+		t.Fatalf("detail viewport height = %d, want %d", got, layout.ViewportHeight)
 	}
 }
 

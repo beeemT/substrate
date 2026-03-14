@@ -18,6 +18,7 @@ type SessionLogModel struct {
 	title     string
 	modeLabel string
 	meta      string
+	notice    *sourceDetailsNotice
 	logPath   string
 	sessionID string
 	offset    int64
@@ -40,11 +41,8 @@ func (m *SessionLogModel) SetSize(width, height int) {
 
 func (m *SessionLogModel) syncViewportSize() {
 	m.viewport.Width = m.width
-	reservedRows := 3 // header + divider + hints
-	if strings.TrimSpace(m.meta) != "" {
-		reservedRows++
-	}
-	m.viewport.Height = max(1, m.height-reservedRows)
+	headerLines := len(strings.Split(m.header(), "\n"))
+	m.viewport.Height = max(1, m.height-headerLines-1)
 }
 
 func (m *SessionLogModel) SetTitle(title string) { m.title = title }
@@ -53,6 +51,11 @@ func (m *SessionLogModel) SetModeLabel(label string) { m.modeLabel = label }
 
 func (m *SessionLogModel) SetMeta(meta string) {
 	m.meta = meta
+	m.syncViewportSize()
+}
+
+func (m *SessionLogModel) SetNotice(notice *sourceDetailsNotice) {
+	m.notice = notice
 	m.syncViewportSize()
 }
 
@@ -87,10 +90,14 @@ func (m *SessionLogModel) TailCmd() tea.Cmd {
 }
 
 func (m SessionLogModel) KeybindHints() []KeybindHint {
-	return []KeybindHint{
+	hints := []KeybindHint{
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
 	}
+	if m.notice != nil {
+		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
+	}
+	return hints
 }
 
 func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
@@ -122,11 +129,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m SessionLogModel) View() string {
-	if m.width <= 0 || m.height <= 0 {
-		return ""
-	}
-
+func (m SessionLogModel) header() string {
 	headerText := m.title
 	if m.modeLabel != "" {
 		headerText += " · " + m.modeLabel
@@ -142,7 +145,22 @@ func (m SessionLogModel) View() string {
 		headerLines[0] += m.styles.Warning.Render(" [PAUSED]")
 		header = strings.Join(headerLines, "\n")
 	}
+	if notice := m.noticeView(); notice != "" {
+		return header + "\n" + notice
+	}
+	return header
+}
 
+func (m SessionLogModel) noticeView() string {
+	return renderTaskViewNotice(m.styles, m.width, m.notice)
+}
+
+func (m SessionLogModel) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
+	header := m.header()
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
 		body = m.styles.Muted.Render("No session output captured.")

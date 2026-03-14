@@ -149,6 +149,29 @@ func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
 	}
 }
 
+func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 140, Height: 18})
+	updated := model.(App)
+
+	lines := assertAppViewFitsWindow(t, updated.View(), 140, 18)
+	footer := stripBrowseANSI(lines[len(lines)-1])
+
+	newIndex := strings.Index(footer, "New session")
+	deleteIndex := strings.Index(footer, "Delete session")
+	searchIndex := strings.Index(footer, "Search sessions")
+	if newIndex == -1 || deleteIndex == -1 || searchIndex == -1 {
+		t.Fatalf("footer = %q, want new, delete, and search hints visible", footer)
+	}
+	if !(newIndex < deleteIndex && deleteIndex < searchIndex) {
+		t.Fatalf("footer = %q, want delete hint between new and search", footer)
+	}
+}
+
 func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
 	t.Parallel()
 
@@ -414,6 +437,46 @@ func TestAppViewWithSessionInteractionFitsWindow(t *testing.T) {
 	assertBodyEndsAboveFooter(t, lines)
 }
 
+func TestAppViewAddsHorizontalInsetToMainContentPane(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 72, 16)
+	app.sidebar.SetEntries([]SidebarEntry{{
+		Kind:           SidebarEntryWorkItem,
+		WorkItemID:     "wi-1",
+		SessionID:      "sess-1",
+		ExternalID:     "SUB-1",
+		Title:          "Investigate overflow",
+		WorkspaceName:  "workspace",
+		RepositoryName: "repo-1",
+		State:          domain.SessionImplementing,
+		SessionStatus:  domain.AgentSessionRunning,
+	}})
+	app.content.SetSessionInteraction(
+		"SUB-1 · Investigate overflow",
+		"SUB-1 · workspace · repo-1 · sess-1",
+		[]string{"line 1", "line 2", "line 3", "line 4"},
+	)
+
+	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
+
+	found := false
+	for _, line := range lines {
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "line 1") {
+			continue
+		}
+		found = true
+		if !strings.Contains(plain, "│ line 1") {
+			t.Fatalf("line = %q, want a horizontal inset between the content border and session output", plain)
+		}
+		break
+	}
+	if !found {
+		t.Fatal("expected a rendered session output line in the content pane")
+	}
+}
+
 func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 	t.Parallel()
 
@@ -455,6 +518,31 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-6):], "\n"))
 	if !strings.Contains(footerRegion, "Press [Enter]") {
 		t.Fatalf("footer region = %q, want the CTA near the bottom of the content pane", footerRegion)
+	}
+}
+
+func TestAppSidebarShowsProviderWithoutExternalIDPrefix(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 72, 16)
+	app.workItems = []domain.Session{{
+		ID:          "wi-1",
+		WorkspaceID: "ws-1",
+		ExternalID:  "gh:issue:acme/rocket#42",
+		Source:      "github",
+		Title:       "Investigate overflow",
+		State:       domain.SessionIngested,
+	}}
+	app.rebuildSidebar()
+
+	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
+	assertBodyEndsAboveFooter(t, lines)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	if strings.Contains(plain, "gh:issue:") {
+		t.Fatalf("view = %q, want sidebar titles to omit the raw adapter prefix", plain)
+	}
+	if !strings.Contains(plain, "acme/rocket#42 · GitHub") {
+		t.Fatalf("view = %q, want sidebar node to keep the ref and surface the provider label", plain)
 	}
 }
 

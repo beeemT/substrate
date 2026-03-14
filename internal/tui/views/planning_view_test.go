@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -67,5 +70,42 @@ func TestSessionLogSetLogPathResetsForDifferentSession(t *testing.T) {
 	}
 	if view := m.View(); strings.Contains(view, "line 1") || !strings.Contains(view, "No session output captured.") {
 		t.Fatalf("view = %q, want cleared session content", view)
+	}
+}
+
+func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(48, 12)
+	m.SetTitle("SUB-1 · Investigate overflow")
+	m.SetMeta("workspace · repo-1 · sess-1")
+	m.SetStaticContent([]string{"line 1", "line 2", "line 3"})
+	m.SetNotice(&sourceDetailsNotice{
+		Title:   "Interrupted task needs recovery",
+		Body:    "repo-1 was interrupted and cannot continue until it is resumed or abandoned.",
+		Hint:    "Press [Enter] to open the overview.",
+		Variant: components.CalloutWarning,
+	})
+
+	rendered := m.View()
+	plain := stripBrowseANSI(rendered)
+	for _, want := range []string{"Interrupted task needs recovery", "Press [Enter] to open the overview.", "line 1"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q", plain, want)
+		}
+	}
+	hints := m.KeybindHints()
+	if len(hints) < 3 || hints[2].Label != "Open overview" {
+		t.Fatalf("keybind hints = %#v, want open-overview action", hints)
+	}
+	lines := strings.Split(rendered, "\n")
+	if got := len(lines); got != 12 {
+		t.Fatalf("line count = %d, want 12", got)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 48 {
+			t.Fatalf("line %d width = %d, want <= 48\nline: %q", i+1, got, line)
+		}
 	}
 }

@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-03-11 - Progressive Agent Writes Need An Explicit Done Boundary
+
+**Mistake**: I treated the first write to the planning draft as completion even though the planning prompt explicitly told the agent to keep updating that file as it worked.
+**Pattern**: I used artifact existence as a completion signal for an interactive agent flow, which let an intermediate valid draft short-circuit the run and abort the agent before it finished refining its output.
+**Rule**: When an agent is instructed to update a file progressively, finalize only on the agent turn's explicit completion signal and treat intermediate file writes as provisional state unless the protocol says otherwise.
+**Applied**: Planning-draft orchestration, live agent revisions, and any workflow where a file is incrementally rewritten during a still-running session.
+
 ## 2026-03-11 - Planning Copy Must Use Current Task Terminology
 
 **Mistake**: I reused the obsolete phrase "Repository agent sessions" in planning-state copy after the product renamed that surface to repository tasks.
@@ -182,3 +189,10 @@
 **Pattern**: I matched the words "session focused" to an internal state I already knew instead of reproducing the exact footer text and navigation state the user reported.
 **Rule**: When a TUI bug report includes observed footer text or pane hints, reproduce that exact rendered state first and map it back to the owning mode/focus variables before changing rendering logic or hint priority.
 **Applied**: Main-page footer hints, sidebar/content focus bugs, mode-specific keybind rows, and any TUI behavior where similar states render different controls.
+
+## 2026-03-12 - Sidebar Session Titles Must Lead With The Distinguishing Ref
+
+**Mistake**: I let provider-specific raw external ID prefixes like `gh:issue:` lead the visible session label in the sidebar, which made many adjacent nodes start with the same low-signal text and slowed scanning.
+**Pattern**: I preserved storage-oriented identifiers in a user-facing list instead of reordering the information around what operators need to distinguish first.
+**Rule**: In session/sidebar lists, strip transport or adapter prefixes from the primary visible ref and move provider context later in the node; the first visible token should be the part users differentiate on, not the shared adapter plumbing.
+**Applied**: Session sidebar nodes, task-sidebar overview rows, search/result list titles, and any TUI list that surfaces external work-item identifiers.
