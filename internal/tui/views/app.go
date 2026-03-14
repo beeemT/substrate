@@ -179,7 +179,7 @@ func NewApp(svcs Services) App {
 // RunTUI launches the bubbletea program.
 func RunTUI(svcs Services) error {
 	app := NewApp(svcs)
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
