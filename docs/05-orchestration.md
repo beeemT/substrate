@@ -37,12 +37,15 @@ The planning harness explores the workspace and writes its plan to the draft pat
 
 ### 1c. Parse and validate the draft
 
-The draft must begin with a fenced `substrate-plan` YAML block that defines `execution_groups`, followed by orchestration prose and one sub-plan section per declared repo.
+The draft must begin with a fenced `substrate-plan` YAML block that defines `execution_groups`, followed by a non-empty orchestration section and one implementation-ready sub-plan section per declared repo.
 
 Validation rules:
 1. every repo in `execution_groups` must exist in the discovered workspace repo set
 2. every declared repo must have a matching sub-plan section
 3. no sub-plan may exist for a repo absent from `execution_groups`
+4. the `## Orchestration` section must be present and non-empty
+5. every sub-plan must include `### Goal`, `### Scope`, `### Changes`, `### Validation`, and `### Risks`
+6. `### Scope`, `### Validation`, and `### Risks` each need at least one list item; `### Changes` needs at least three concrete steps
 
 If validation fails or the draft is missing, Substrate sends a correction message to the same planning session and retries up to `plan.max_parse_retries`.
 
@@ -77,7 +80,8 @@ stateDiagram-v2
 ### Review actions
 
 - **Approve** — mark the plan approved and emit `PlanApproved`
-- **Request changes** — start a new planning session with the current plan plus human feedback; replace the existing plan contents in place and increment version on success
+- **Request changes** — start a new planning session with the current full plan document plus human feedback; replace the existing orchestration/sub-plan contents in place and increment version on success
+- **Edit in review** — update the full reconstructed plan document in place; re-parse, re-validate, and persist both orchestrator and sub-plan sections before implementation can proceed
 - **Reject** — return the work item to the ingested state and retain the workspace/session audit trail
 
 The TUI interaction model for this loop belongs to `06-tui-design.md`; the runtime effect belongs here.

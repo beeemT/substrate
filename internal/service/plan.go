@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -173,6 +174,99 @@ func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content 
 	plan.UpdatedAt = time.Now()
 
 	return s.planRepo.Update(ctx, plan)
+}
+
+// ApplyReviewedPlanOutput updates the persisted orchestration plan and sub-plans from a fully parsed review document.
+func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, rawOutput domain.RawPlanOutput) (domain.Plan, []domain.TaskPlan, error) {
+	plan, err := s.planRepo.Get(ctx, id)
+	if err != nil {
+		return domain.Plan{}, nil, newNotFoundError("plan", id)
+	}
+	if plan.Status != domain.PlanPendingReview {
+		return domain.Plan{}, nil, newInvalidTransitionError(
+			planStatusName(plan.Status),
+			planStatusName(domain.PlanPendingReview),
+			"plan",
+		)
+	}
+	existingSubPlans, err := s.subPlanRepo.ListByPlanID(ctx, id)
+	if err != nil {
+		return domain.Plan{}, nil, err
+	}
+
+	now := time.Now()
+	existingByRepo := make(map[string]domain.TaskPlan, len(existingSubPlans))
+	for _, sp := range existingSubPlans {
+		existingByRepo[strings.ToLower(sp.RepositoryName)] = sp
+	}
+
+	changed := plan.OrchestratorPlan != rawOutput.Orchestration || len(existingSubPlans) != len(rawOutput.SubPlans)
+	seen := make(map[string]bool, len(rawOutput.SubPlans))
+	updatedSubPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
+	for _, rawSubPlan := range rawOutput.SubPlans {
+		key := strings.ToLower(rawSubPlan.RepoName)
+		seen[key] = true
+		order := findSubPlanOrder(rawSubPlan.RepoName, rawOutput.ExecutionGroups)
+		if existing, ok := existingByRepo[key]; ok {
+			if existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order {
+				changed = true
+			}
+			existing.RepositoryName = rawSubPlan.RepoName
+			existing.Content = rawSubPlan.Content
+			existing.Order = order
+			existing.UpdatedAt = now
+			if err := s.subPlanRepo.Update(ctx, existing); err != nil {
+				return domain.Plan{}, nil, err
+			}
+			updatedSubPlans = append(updatedSubPlans, existing)
+			continue
+		}
+		changed = true
+		created := domain.TaskPlan{
+			ID:             domain.NewID(),
+			PlanID:         id,
+			RepositoryName: rawSubPlan.RepoName,
+			Content:        rawSubPlan.Content,
+			Order:          order,
+			Status:         domain.SubPlanPending,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := s.subPlanRepo.Create(ctx, created); err != nil {
+			return domain.Plan{}, nil, err
+		}
+		updatedSubPlans = append(updatedSubPlans, created)
+	}
+	for _, existing := range existingSubPlans {
+		if seen[strings.ToLower(existing.RepositoryName)] {
+			continue
+		}
+		changed = true
+		if err := s.subPlanRepo.Delete(ctx, existing.ID); err != nil {
+			return domain.Plan{}, nil, err
+		}
+	}
+	if !changed {
+		return plan, updatedSubPlans, nil
+	}
+	plan.OrchestratorPlan = rawOutput.Orchestration
+	plan.Version++
+	plan.UpdatedAt = now
+	if err := s.planRepo.Update(ctx, plan); err != nil {
+		return domain.Plan{}, nil, err
+	}
+	return plan, updatedSubPlans, nil
+}
+
+func findSubPlanOrder(repoName string, groups [][]string) int {
+	for i, group := range groups {
+		for _, name := range group {
+			if strings.EqualFold(name, repoName) {
+				return i
+			}
+		}
+	}
+	return 0
 }
 
 // DeletePlan deletes a plan.

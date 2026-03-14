@@ -1922,6 +1922,32 @@ func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	}
 }
 
+func TestSidebarTaskContentUsesSidebarSessionTitle(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.sessions[0].ID = "implementation-session-123456789"
+	app.rebuildSidebar()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected selecting a task to tail its log")
+	}
+	if updated.content.sessionLog.sessionID != "implementation-session-123456789" {
+		t.Fatalf("session log session id = %q, want implementation-session-123456789", updated.content.sessionLog.sessionID)
+	}
+	view := stripBrowseANSI(updated.content.View())
+	if !strings.Contains(view, "SUB-1 · Session implemen") {
+		t.Fatalf("content view = %q, want sidebar-style task title", view)
+	}
+	if strings.Contains(view, "implementation-session-123456789") {
+		t.Fatalf("content view = %q, want full session id omitted from rendered title/meta", view)
+	}
+}
+
 func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})

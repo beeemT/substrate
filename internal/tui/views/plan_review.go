@@ -1,8 +1,10 @@
 package views
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -61,29 +63,192 @@ func (m *PlanReviewModel) syncViewportSize() {
 	}
 	m.viewport.Width = m.width
 	m.viewport.Height = max(1, m.height-reservedRows)
+	m.refreshViewportContent(false)
 }
 
 func (m *PlanReviewModel) SetTitle(title string) { m.title = title }
 
-func (m *PlanReviewModel) SetPlan(plan domain.Plan) {
-	reset := m.planID != plan.ID || m.planContent != plan.OrchestratorPlan
-	m.planID = plan.ID
-	m.planContent = plan.OrchestratorPlan
-	m.viewport.SetContent(plan.OrchestratorPlan)
+func (m *PlanReviewModel) SetPlanDocument(planID, content string) {
+	reset := m.planID != planID || m.planContent != content
+	m.planID = planID
+	m.planContent = content
+	m.refreshViewportContent(reset)
+}
+
+func (m *PlanReviewModel) refreshViewportContent(reset bool) {
+	previousOffset := m.viewport.YOffset
+	if m.viewport.Width <= 0 {
+		return
+	}
+	m.viewport.SetContent(renderPlanReviewContent(m.styles, m.planContent, m.viewport.Width))
 	if reset {
 		m.viewport.GotoTop()
+		return
 	}
+	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
+	if previousOffset > maxOffset {
+		previousOffset = maxOffset
+	}
+	if previousOffset < 0 {
+		previousOffset = 0
+	}
+	m.viewport.YOffset = previousOffset
+}
+
+func renderPlanReviewContent(st styles.Styles, content string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSuffix(content, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	rawLines := strings.Split(trimmed, "\n")
+	numberWidth := max(2, len(strconv.Itoa(len(rawLines))))
+	separator := " │ "
+	contentWidth := max(1, width-numberWidth-ansi.StringWidth(separator))
+	rendered := make([]string, 0, len(rawLines))
+	inCodeBlock := false
+	for index, rawLine := range rawLines {
+		trimmedLine := strings.TrimSpace(rawLine)
+		segments := []string{""}
+		renderMarkdown := false
+		style := st.SettingsText
+		switch {
+		case inCodeBlock || strings.HasPrefix(trimmedLine, "```"):
+			segments = wrapPlanReviewCodeLine(rawLine, contentWidth)
+			if strings.HasPrefix(trimmedLine, "```") {
+				style = st.Muted
+			}
+		case planReviewLineUsesMarkdown(trimmedLine):
+			segments = renderPlanReviewMarkdownLine(rawLine, contentWidth)
+			renderMarkdown = true
+		case trimmedLine == "":
+			segments = []string{""}
+		default:
+			segments = wrapPlanReviewPlainTextLine(rawLine, contentWidth)
+		}
+		for wrappedIndex, segment := range segments {
+			lineNumber := strings.Repeat(" ", numberWidth)
+			if wrappedIndex == 0 {
+				lineNumber = fmt.Sprintf("%*d", numberWidth, index+1)
+			}
+			renderedSegment := segment
+			if !renderMarkdown {
+				renderedSegment = style.Render(segment)
+			}
+			renderedSegment = lipgloss.NewStyle().Width(contentWidth).Render(renderedSegment)
+			rendered = append(rendered, st.Muted.Render(lineNumber+separator)+renderedSegment)
+		}
+		if strings.HasPrefix(trimmedLine, "```") {
+			inCodeBlock = !inCodeBlock
+		}
+	}
+	return strings.Join(rendered, "\n")
+}
+
+func planReviewLineUsesMarkdown(trimmedLine string) bool {
+	if trimmedLine == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmedLine, "#") || strings.HasPrefix(trimmedLine, "- ") || strings.HasPrefix(trimmedLine, "* ") || strings.HasPrefix(trimmedLine, "+ ") || strings.Contains(trimmedLine, "**") || strings.Contains(trimmedLine, "__") || strings.Contains(trimmedLine, "[") && strings.Contains(trimmedLine, "](") {
+		return true
+	}
+	for i, r := range trimmedLine {
+		if r < '0' || r > '9' {
+			return i > 0 && r == '.' && i+1 < len(trimmedLine) && trimmedLine[i+1] == ' '
+		}
+	}
+	return false
+}
+
+func renderPlanReviewMarkdownLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+	if strings.TrimSpace(line) == "" {
+		return []string{""}
+	}
+	rendered := strings.Trim(renderMarkdownDocument(line, width), "\n")
+	if rendered == "" {
+		return []string{""}
+	}
+	parts := strings.Split(rendered, "\n")
+	for len(parts) > 0 && strings.TrimSpace(ansi.Strip(parts[0])) == "" {
+		parts = parts[1:]
+	}
+	for len(parts) > 0 && strings.TrimSpace(ansi.Strip(parts[len(parts)-1])) == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
+func wrapPlanReviewPlainTextLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+	if strings.TrimSpace(line) == "" {
+		return []string{""}
+	}
+	indentWidth := len(line) - len(strings.TrimLeft(line, " \t"))
+	indent := line[:indentWidth]
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	lines := make([]string, 0, 1)
+	current := ""
+	currentWidth := 0
+	indentDisplayWidth := ansi.StringWidth(strings.ReplaceAll(indent, "\t", "    "))
+	for _, word := range words {
+		wordWidth := ansi.StringWidth(word)
+		if current == "" {
+			current = indent + word
+			currentWidth = indentDisplayWidth + wordWidth
+			continue
+		}
+		candidateWidth := currentWidth + 1 + wordWidth
+		if candidateWidth > width {
+			lines = append(lines, current)
+			current = indent + word
+			currentWidth = indentDisplayWidth + wordWidth
+			continue
+		}
+		current += " " + word
+		currentWidth = candidateWidth
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func wrapPlanReviewCodeLine(line string, width int) []string {
+	return wrapPlanReviewPlainTextLine(strings.ReplaceAll(line, "\t", "    "), width)
 }
 
 func (m *PlanReviewModel) SetWorkItemID(id string) { m.workItemID = id }
 
 func (m *PlanReviewModel) KeybindHints() []KeybindHint {
+	if m.inputMode != planReviewNormal {
+		return []KeybindHint{
+			{Key: "Enter", Label: "Submit"},
+			{Key: "Esc", Label: "Cancel"},
+		}
+	}
 	return []KeybindHint{
 		{Key: "a", Label: "Approve"},
 		{Key: "c", Label: "Request changes"},
 		{Key: "e", Label: "Edit in $EDITOR"},
 		{Key: "r", Label: "Reject"},
 		{Key: "↑↓", Label: "Scroll"},
+		{Key: "Esc", Label: "Close"},
 	}
 }
 
@@ -126,7 +291,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			}
 		case "c":
 			m.inputMode = planReviewChanges
-			m.feedbackInput.Placeholder = "Describe the changes needed…"
+			m.feedbackInput.Placeholder = "Describe the orchestration or sub-plan changes needed…"
 			m.feedbackInput.Focus()
 			m.syncViewportSize()
 		case "r":
@@ -135,7 +300,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.feedbackInput.Focus()
 			m.syncViewportSize()
 		case "e":
-			return m, editPlanInEditorCmd(m.planID, m.planContent)
+			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
 		case "up", "k", "down", "j", "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
@@ -156,6 +321,9 @@ func (m PlanReviewModel) View() string {
 	})
 
 	body := m.viewport.View()
+	if strings.TrimSpace(body) == "" {
+		body = m.styles.Muted.Render("No plan content available.")
+	}
 
 	var feedbackRow string
 	if m.inputMode != planReviewNormal {
@@ -166,23 +334,18 @@ func (m PlanReviewModel) View() string {
 		feedbackRow = m.styles.Warning.Render(label) + m.feedbackInput.View()
 	}
 
-	hints := components.RenderKeyHints(m.styles, []components.KeyHint{
-		{Key: "a", Label: "Approve"},
-		{Key: "c", Label: "Changes"},
-		{Key: "e", Label: "Editor"},
-		{Key: "r", Label: "Reject"},
-	}, "  ")
+	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
 
 	parts := append(strings.Split(header, "\n"), body)
 	if feedbackRow != "" {
 		parts = append(parts, feedbackRow)
 	}
 	parts = append(parts, components.RenderDivider(m.styles, m.width), hints)
-	return strings.Join(parts, "\n")
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }
 
-// editPlanInEditorCmd opens the plan content in $EDITOR.
-func editPlanInEditorCmd(planID, content string) tea.Cmd {
+// editPlanInEditorCmd opens the full plan document in $EDITOR.
+func editPlanInEditorCmd(planID, workItemID, content string) tea.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vi"
@@ -208,7 +371,7 @@ func editPlanInEditorCmd(planID, content string) tea.Cmd {
 		if readErr != nil {
 			return ErrMsg{Err: readErr}
 		}
-		return PlanEditedMsg{PlanID: planID, NewContent: string(data)}
+		return PlanEditedMsg{PlanID: planID, WorkItemID: workItemID, NewContent: string(data)}
 	})
 }
 

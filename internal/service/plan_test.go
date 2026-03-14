@@ -190,6 +190,103 @@ func TestPlanService_RevisePlan(t *testing.T) {
 	})
 }
 
+func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
+	ctx := context.Background()
+	planRepo := NewMockPlanRepository()
+	subPlanRepo := NewMockSubPlanRepository()
+	svc := NewPlanService(planRepo, subPlanRepo)
+
+	planRepo.plans["plan-1"] = domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: "Old orchestration",
+		Status:           domain.PlanPendingReview,
+		Version:          1,
+	}
+	for _, sp := range []domain.TaskPlan{
+		{ID: "sp-a", PlanID: "plan-1", RepositoryName: "repo-a", Content: "old repo a", Order: 0, Status: domain.SubPlanPending},
+		{ID: "sp-drop", PlanID: "plan-1", RepositoryName: "repo-drop", Content: "remove me", Order: 1, Status: domain.SubPlanPending},
+	} {
+		subPlanRepo.subPlans[sp.ID] = sp
+		subPlanRepo.byPlan[sp.PlanID] = append(subPlanRepo.byPlan[sp.PlanID], sp.ID)
+	}
+
+	raw := domain.RawPlanOutput{
+		ExecutionGroups: [][]string{{"repo-b"}, {"repo-a", "repo-c"}},
+		Orchestration:   "New orchestration",
+		SubPlans: []domain.RawSubPlan{
+			{RepoName: "repo-b", Content: "new repo b"},
+			{RepoName: "repo-a", Content: "new repo a"},
+			{RepoName: "repo-c", Content: "new repo c"},
+		},
+	}
+
+	updatedPlan, updatedSubPlans, err := svc.ApplyReviewedPlanOutput(ctx, "plan-1", raw)
+	if err != nil {
+		t.Fatalf("ApplyReviewedPlanOutput failed: %v", err)
+	}
+	if updatedPlan.OrchestratorPlan != "New orchestration" {
+		t.Fatalf("OrchestratorPlan = %q, want %q", updatedPlan.OrchestratorPlan, "New orchestration")
+	}
+	if updatedPlan.Version != 2 {
+		t.Fatalf("Version = %d, want 2", updatedPlan.Version)
+	}
+	if _, ok := subPlanRepo.subPlans["sp-drop"]; ok {
+		t.Fatal("expected repo-drop sub-plan to be deleted")
+	}
+	if len(updatedSubPlans) != 3 {
+		t.Fatalf("updated sub-plans = %d, want 3", len(updatedSubPlans))
+	}
+	byRepo := make(map[string]domain.TaskPlan, len(updatedSubPlans))
+	for _, sp := range updatedSubPlans {
+		byRepo[sp.RepositoryName] = sp
+	}
+	if got := byRepo["repo-b"]; got.Content != "new repo b" || got.Order != 0 {
+		t.Fatalf("repo-b = %#v, want content/order updated", got)
+	}
+	if got := byRepo["repo-a"]; got.ID != "sp-a" || got.Content != "new repo a" || got.Order != 1 {
+		t.Fatalf("repo-a = %#v, want existing ID/content/order updated", got)
+	}
+	if got := byRepo["repo-c"]; got.ID == "" || got.Content != "new repo c" || got.Order != 1 {
+		t.Fatalf("repo-c = %#v, want created sub-plan", got)
+	}
+}
+
+func TestPlanService_ApplyReviewedPlanOutput_NoOpDoesNotBumpVersion(t *testing.T) {
+	ctx := context.Background()
+	planRepo := NewMockPlanRepository()
+	subPlanRepo := NewMockSubPlanRepository()
+	svc := NewPlanService(planRepo, subPlanRepo)
+
+	planRepo.plans["plan-1"] = domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: "Same orchestration",
+		Status:           domain.PlanPendingReview,
+		Version:          4,
+	}
+	sp := domain.TaskPlan{ID: "sp-a", PlanID: "plan-1", RepositoryName: "repo-a", Content: "same repo a", Order: 0, Status: domain.SubPlanPending}
+	subPlanRepo.subPlans[sp.ID] = sp
+	subPlanRepo.byPlan[sp.PlanID] = []string{sp.ID}
+
+	raw := domain.RawPlanOutput{
+		ExecutionGroups: [][]string{{"repo-a"}},
+		Orchestration:   "Same orchestration",
+		SubPlans:        []domain.RawSubPlan{{RepoName: "repo-a", Content: "same repo a"}},
+	}
+
+	updatedPlan, updatedSubPlans, err := svc.ApplyReviewedPlanOutput(ctx, "plan-1", raw)
+	if err != nil {
+		t.Fatalf("ApplyReviewedPlanOutput failed: %v", err)
+	}
+	if updatedPlan.Version != 4 {
+		t.Fatalf("Version = %d, want 4", updatedPlan.Version)
+	}
+	if len(updatedSubPlans) != 1 || updatedSubPlans[0].ID != "sp-a" {
+		t.Fatalf("updated sub-plans = %#v, want original sub-plan preserved", updatedSubPlans)
+	}
+}
+
 func TestSubPlanService_ValidTransitions(t *testing.T) {
 	ctx := context.Background()
 

@@ -87,6 +87,10 @@ type ParseErrors struct {
 	UndeclaredSubPlans []string
 	// EmptyExecutionGroups is true if execution_groups is empty or missing.
 	EmptyExecutionGroups bool
+	// MissingOrchestration is true if the Orchestration section is absent or empty.
+	MissingOrchestration bool
+	// IncompleteSubPlans contains repo-scoped quality issues for thin or malformed sub-plans.
+	IncompleteSubPlans []string
 }
 
 // Error implements the error interface.
@@ -105,6 +109,9 @@ func (e ParseErrors) Error() string {
 	if e.EmptyExecutionGroups {
 		parts = append(parts, "execution_groups is empty or missing")
 	}
+	if e.MissingOrchestration {
+		parts = append(parts, "missing orchestration section")
+	}
 	if len(e.UnknownRepos) > 0 {
 		parts = append(parts, "unknown repos: "+joinQuoted(e.UnknownRepos))
 	}
@@ -113,6 +120,9 @@ func (e ParseErrors) Error() string {
 	}
 	if len(e.UndeclaredSubPlans) > 0 {
 		parts = append(parts, "undeclared sub-plan sections: "+joinQuoted(e.UndeclaredSubPlans))
+	}
+	if len(e.IncompleteSubPlans) > 0 {
+		parts = append(parts, "incomplete sub-plans: "+joinQuoted(e.IncompleteSubPlans))
 	}
 
 	result := "Plan parsing failed: "
@@ -130,9 +140,11 @@ func (e ParseErrors) HasErrors() bool {
 	return e.MissingBlock ||
 		e.InvalidYAML ||
 		e.EmptyExecutionGroups ||
+		e.MissingOrchestration ||
 		len(e.UnknownRepos) > 0 ||
 		len(e.MissingSubPlans) > 0 ||
-		len(e.UndeclaredSubPlans) > 0
+		len(e.UndeclaredSubPlans) > 0 ||
+		len(e.IncompleteSubPlans) > 0
 }
 
 // PlanningWarning represents a non-fatal issue discovered during planning.

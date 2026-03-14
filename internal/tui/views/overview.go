@@ -99,11 +99,13 @@ type OverviewPlan struct {
 	DraftUpdatedAt time.Time
 	DraftPath      string
 	Document       *domain.Plan
+	FullDocument   string
 }
 
 type OverviewTaskRow struct {
 	RepoName       string
 	TaskPlanStatus string
+	SessionTitle   string
 	SessionStatus  string
 	HarnessName    string
 	UpdatedAt      time.Time
@@ -378,12 +380,7 @@ func (m SessionOverviewModel) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
-	base := m.viewport.View()
-	if m.overlay == overviewOverlayNone {
-		return fitViewBox(base, m.width, m.height)
-	}
-	overlay := m.overlayView()
-	return fitViewBox(renderCenteredOverlay(base, overlay, m.width, m.height), m.width, m.height)
+	return fitViewBox(m.viewport.View(), m.width, m.height)
 }
 
 func (m *SessionOverviewModel) syncViewport(reset bool) {
@@ -419,7 +416,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 	m.reviewing.SetTitle(title)
 	m.reviewing.SetWorkItemID(m.data.WorkItemID)
 	if m.data.Plan.Document != nil {
-		m.planReview.SetPlan(*m.data.Plan.Document)
+		m.planReview.SetPlanDocument(m.data.Plan.Document.ID, m.data.Plan.FullDocument)
 		m.planReview.SetWorkItemID(m.data.WorkItemID)
 	}
 	action := m.selectedActionCard()
@@ -598,10 +595,14 @@ func (m SessionOverviewModel) renderActivitySection() string {
 	return renderOverviewSection(m.styles, "Recent activity", body)
 }
 
-func (m SessionOverviewModel) overlayView() string {
-	frameWidth := min(max(48, m.width-6), 112)
+func (m SessionOverviewModel) overlayView(width, height int) string {
+	frameWidth := min(max(48, width-6), 112)
+	innerHeight := max(10, min(height-4, 26))
+	if m.overlay == overviewOverlayPlan {
+		frameWidth = min(max(72, width-12), 220)
+		innerHeight = max(12, min(height-2, 36))
+	}
 	innerWidth := m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
-	innerHeight := max(10, min(m.height-4, 26))
 	var body string
 	switch m.overlay {
 	case overviewOverlayPlan:
@@ -708,6 +709,9 @@ func renderOverviewTaskRow(st styles.Styles, width int, row OverviewTaskRow) str
 	lines := []string{
 		renderKeyValueLine(st, innerWidth, "Repo", row.RepoName),
 		renderKeyValueLine(st, innerWidth, "Sub-plan", row.TaskPlanStatus),
+	}
+	if strings.TrimSpace(row.SessionTitle) != "" {
+		lines = append(lines, renderKeyValueLine(st, innerWidth, "Task", row.SessionTitle))
 	}
 	if strings.TrimSpace(row.SessionStatus) != "" {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "Session", row.SessionStatus))
@@ -974,7 +978,7 @@ func (a *App) buildOverviewPlan(wi *domain.Session, plan *domain.Plan, subPlans 
 		overview.ActionText = noPlanActionText(wi.State)
 		if wi.State == domain.SessionPlanning {
 			if planningSession := a.latestPlanningSession(wi.ID); planningSession != nil {
-				overview.DraftSession = planningSession.ID
+				overview.DraftSession = taskSidebarSessionTitle(planningSession)
 				overview.DraftPath = filepath.Join(a.sessionsDir, planningSession.ID, "plan-draft.md")
 				if info, excerpt := readPlanningDraftExcerpt(overview.DraftPath, a.widthForInnerContent()); !info.IsZero() || len(excerpt) > 0 {
 					overview.DraftUpdatedAt = info
@@ -986,6 +990,7 @@ func (a *App) buildOverviewPlan(wi *domain.Session, plan *domain.Plan, subPlans 
 	}
 	overview.Exists = true
 	overview.Document = plan
+	overview.FullDocument = domain.ComposePlanDocument(*plan, subPlans)
 	overview.Version = plan.Version
 	overview.UpdatedAt = plan.UpdatedAt
 	overview.RepoCount = len(subPlans)
@@ -1010,6 +1015,7 @@ func (a *App) buildOverviewTasks(wi *domain.Session, subPlans []domain.TaskPlan)
 		}
 		if latest != nil {
 			row.SessionID = latest.ID
+			row.SessionTitle = taskSidebarSessionTitle(latest)
 			row.SessionStatus = sessionStatusLabel(latest.Status)
 			row.HarnessName = latest.HarnessName
 			if latest.UpdatedAt.After(row.UpdatedAt) {
@@ -1263,7 +1269,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 					Title:          "Question waiting for answer",
 					Blocked:        summarizeText(question.Content, 120),
 					Why:            "This repo task is paused until a human answers the escalated question.",
-					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)), session.ID)},
+					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)), taskSidebarSessionTitle(&session))},
 					Context:        context,
 					Question:       ptrQuestion(question),
 					QuestionRepo:   session.RepositoryName,
@@ -1284,7 +1290,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				Context: []string{
 					"Last update: " + formatAbsoluteTime(session.UpdatedAt),
 					"Cause: previous substrate owner stopped heartbeating while the agent was running",
-					"Session: " + session.ID,
+					"Task: " + taskSidebarSessionTitle(&session),
 				},
 				Session: &session,
 				CanAct:  a.canActOnSession(session),

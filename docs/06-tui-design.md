@@ -153,22 +153,25 @@ Reads incremental output from `~/.substrate/sessions/<session-id>.log` (JSONL) a
 
 ### 3b. Plan Review Mode
 
-Full plan markdown rendered in a scrollable viewport. All sub-plans shown in sequence. The "Before marking complete" instruction appears in each sub-plan section.
+Full reconstructed plan document rendered in a scrollable viewport. The review surface shows the derived `substrate-plan` YAML block, the orchestrator section, and every repo sub-plan in order so the human can review and edit the entire implementation contract in one place.
 
 ```
 │ LIN-FOO-456 · Rate limiting · Plan Review                                        │
 │──────────────────────────────────────────────────────────────────────────────── │
+│ ```substrate-plan                                                                │
+│ execution_groups:                                                                │
+│   - [shared-lib]                                                                 │
+│   - [backend-api, frontend]                                                      │
+│ ```                                                                               │
+│                                                                                   │
 │ ## Orchestration                                                                  │
-│ Implement rate limiting across the stack. Execution:                              │
-│   1. shared-lib (rate limiter primitives)                                         │
-│   2. backend-api + frontend (parallel)                                            │
+│ Coordinate the shared contract and execution order.                               │
 │                                                                                   │
 │ ## SubPlan: shared-lib                                                            │
-│ Add RateLimiter interface and token-bucket impl in pkg/ratelimit/...              │
-│ Before marking complete: run formatters, compilation, and tests.                  │
-│                                                                                   │
-│ ## SubPlan: backend-api                                                           │
-│ Wire RateLimiter to API gateway middleware...                                     │
+│ ### Goal                                                                          │
+│ Ship rate limiter primitives.                                                     │
+│ ### Scope                                                                         │
+│ - pkg/ratelimit/...                                                               │
 │                                                                                   │
 │ ─────────────────────────────────────────────────────────────────────────────── │
 │ [a] Approve  [c] Request changes  [e] Edit in $EDITOR  [r] Reject  [↑↓] Scroll  │
@@ -177,8 +180,8 @@ Full plan markdown rendered in a scrollable viewport. All sub-plans shown in seq
 **Model**: `viewport.Model` for scrollable content, `textinput.Model` for feedback input — used for both `c` (request changes) and `r` (reject); appears at bottom on activation, `Enter` submits, `Esc` cancels.
 
 - `[a]` **Approve** — status → Approved; emits `PlanApproved`; triggers implementation pipeline.
-- `[c]` **Request changes** — opens inline feedback input (textinput at bottom). On `Enter`, spawns a new planning agent session with the current plan text and feedback embedded in the prompt. The plan version is incremented on the revision.
-- `[e]` **Edit in $EDITOR** — opens the plan markdown in `$EDITOR` via `tea.ExecProcess`. On editor exit, the modified file is read back and the plan is updated in the DB. Presents the revised plan for re-review.
+- `[c]` **Request changes** — opens inline feedback input (textinput at bottom). On `Enter`, spawns a new planning agent session with the current full plan document and feedback embedded in the prompt. The plan version is incremented on the revision.
+- `[e]` **Edit in $EDITOR** — opens the full reconstructed plan markdown in `$EDITOR` via `tea.ExecProcess`. On editor exit, the modified file is re-parsed, re-validated, and both orchestrator/sub-plan sections are updated in the DB before presenting the revised plan for re-review.
 - `[r]` **Reject** — opens inline rejection input. On `Enter`, work item returns to `Ingested` state; emits `PlanRejected`.
 
 **Keys**: `↑`/`↓` scroll, `a` approve, `c` request changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject.

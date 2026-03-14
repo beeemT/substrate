@@ -239,10 +239,19 @@ type WorkspaceServicesReloadedMsg struct {
 	Message string
 }
 
-// PlanEditedMsg is sent when the user edits a plan in $EDITOR and saves.
+// PlanEditedMsg is sent when the user edits a full plan document in $EDITOR and saves.
 type PlanEditedMsg struct {
 	PlanID     string
+	WorkItemID string
 	NewContent string
+}
+
+// PlanSavedMsg is sent after a reviewed plan document is parsed and persisted.
+type PlanSavedMsg struct {
+	WorkItemID string
+	Plan       domain.Plan
+	SubPlans   []domain.TaskPlan
+	Message    string
 }
 
 // ConfirmAbandonMsg requests a confirmation dialog before abandoning a session.

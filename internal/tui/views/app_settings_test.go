@@ -51,3 +51,34 @@ func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 		t.Fatal("expected settings page to be inactive after closing overlay")
 	}
 }
+
+func TestApp_SOpensSettingsOverlay(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Settings:      &SettingsService{},
+		SettingsData: SettingsSnapshot{
+			Sections:  buildSettingsSections(cfg),
+			Providers: buildProviderStatuses(cfg),
+		},
+	})
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil when opening settings", cmd)
+	}
+
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlaySettings {
+		t.Fatalf("activeOverlay = %v, want %v", updated.activeOverlay, overlaySettings)
+	}
+	if !updated.settingsPage.Active() {
+		t.Fatal("expected settings page to be active after pressing s")
+	}
+}

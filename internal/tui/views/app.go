@@ -126,6 +126,8 @@ type App struct {
 	currentHistoryEntry            SidebarEntry
 	sidebarMode                    sidebarPaneMode
 	mainFocus                      mainFocusArea
+	overviewOverlayPrevFocus       mainFocusArea
+	overviewOverlayFocusSaved      bool
 	taskSessionSelectionByWorkItem map[string]string
 
 	// Session log tailing
@@ -421,6 +423,34 @@ func (a App) currentHints() []KeybindHint {
 	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}), global...)
 }
 
+func (a App) overviewOverlayOpen() bool {
+	return a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone
+}
+
+func (a *App) syncOverviewOverlayFocus(wasOpen bool, previousFocus mainFocusArea) {
+	isOpen := a.overviewOverlayOpen()
+	switch {
+	case !wasOpen && isOpen:
+		a.overviewOverlayPrevFocus = previousFocus
+		a.overviewOverlayFocusSaved = true
+		a.mainFocus = mainFocusContent
+	case wasOpen && !isOpen:
+		if a.overviewOverlayFocusSaved {
+			a.mainFocus = a.overviewOverlayPrevFocus
+			a.overviewOverlayFocusSaved = false
+		}
+	case isOpen:
+		a.mainFocus = mainFocusContent
+	}
+}
+
+func (a *App) updateContentForKey(msg tea.KeyMsg, wasOverviewOverlayOpen bool, previousFocus mainFocusArea) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	a.content, cmd = a.content.Update(msg)
+	a.syncOverviewOverlayFocus(wasOverviewOverlayOpen, previousFocus)
+	return *a, cmd
+}
+
 func (a App) historyEntryTitle(entry SidebarEntry) string {
 	if entry.ExternalID != "" && entry.Title != "" {
 		return entry.ExternalID + " · " + entry.Title
@@ -614,6 +644,17 @@ func taskSessionModeLabel(session *domain.Task) string {
 		return "Review"
 	default:
 		return "Task"
+	}
+}
+
+func taskSidebarSessionTitle(session *domain.Task) string {
+	switch session.Phase {
+	case domain.TaskPhasePlanning:
+		return "Planning session " + shortSessionID(session.ID)
+	case domain.TaskPhaseReview:
+		return "Review session " + shortSessionID(session.ID)
+	default:
+		return "Session " + shortSessionID(session.ID)
 	}
 }
 
@@ -896,8 +937,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanEditedMsg:
-		cmds = append(cmds, SavePlanCmd(a.svcs.Plan, msg.PlanID, msg.NewContent))
-		a.toasts.AddToast("Plan saved — review changes", components.ToastInfo)
+		cmds = append(cmds, SaveReviewedPlanCmd(a.svcs.Planning, msg.PlanID, msg.NewContent))
+		return a, tea.Batch(cmds...)
+
+	case PlanSavedMsg:
+		plan := msg.Plan
+		a.plans[msg.WorkItemID] = &plan
+		a.subPlans[msg.Plan.ID] = msg.SubPlans
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
 		return a, tea.Batch(cmds...)
 
 	case LiveInstancesLoadedMsg:
@@ -1235,7 +1287,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
 	// Confirm dialog captures all key input when active.
@@ -1284,6 +1335,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.activeOverlay = overlayNone
 		return a, nil
 	}
+	previousFocus := a.mainFocus
+	wasOverviewOverlayOpen := a.overviewOverlayOpen()
+	if wasOverviewOverlayOpen {
+		return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
+	}
 	if msg.String() == "enter" && a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() != "" {
 		if a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			return a, a.jumpFromSourceDetailsToOverview()
@@ -1298,7 +1354,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 	case "n":
 		return a, a.openNewSession()
-	case "c":
+	case "s":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
 		return a, nil
@@ -1311,10 +1367,6 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left":
 		if a.mainFocus == mainFocusContent {
-			if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
-				a.content, cmd = a.content.Update(msg)
-				return a, cmd
-			}
 			a.mainFocus = mainFocusSidebar
 			return a, nil
 		}
@@ -1332,32 +1384,28 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case "up", "k":
 		if a.mainFocus == mainFocusContent {
-			a.content, cmd = a.content.Update(msg)
-			return a, cmd
+			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
 		a.sidebar.MoveUp()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "down", "j":
 		if a.mainFocus == mainFocusContent {
-			a.content, cmd = a.content.Update(msg)
-			return a, cmd
+			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
 		a.sidebar.MoveDown()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "g":
 		if a.mainFocus == mainFocusContent {
-			a.content, cmd = a.content.Update(msg)
-			return a, cmd
+			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
 		a.sidebar.GotoTop()
 		cmd = a.onSidebarMove()
 		return a, cmd
 	case "G":
 		if a.mainFocus == mainFocusContent {
-			a.content, cmd = a.content.Update(msg)
-			return a, cmd
+			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
 		a.sidebar.GotoBottom()
 		cmd = a.onSidebarMove()
@@ -1367,9 +1415,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	a.content, cmd = a.content.Update(msg)
-	cmds = append(cmds, cmd)
-	return a, tea.Batch(cmds...)
+	return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 }
 
 func (a *App) onSidebarMove() tea.Cmd {
@@ -1531,12 +1577,12 @@ func firstSourceDetailsAffected(affected []string) string {
 }
 
 func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd {
-	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSessionDisplayName(session)
+	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSidebarSessionTitle(session)
 	metaParts := []string{sessionStatusLabel(session.Status)}
 	if session.HarnessName != "" {
 		metaParts = append(metaParts, session.HarnessName)
 	}
-	metaParts = append(metaParts, session.ID)
+	metaParts = append(metaParts, taskSessionDisplayName(session))
 	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 	if session.Phase == domain.TaskPhasePlanning {
 		a.content.SetMode(ContentModePlanning)
@@ -1731,17 +1777,11 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		case domain.TaskPhaseReview:
 			entryRepo = firstNonEmptyString(entryRepo, "Review")
 		}
-		entryTitle := "Session " + shortSessionID(session.ID)
-		if session.Phase == domain.TaskPhasePlanning {
-			entryTitle = "Planning session " + shortSessionID(session.ID)
-		} else if session.Phase == domain.TaskPhaseReview {
-			entryTitle = "Review session " + shortSessionID(session.ID)
-		}
 		entries = append(entries, SidebarEntry{
 			Kind:           SidebarEntryTaskSession,
 			WorkItemID:     workItemID,
 			SessionID:      session.ID,
-			Title:          entryTitle,
+			Title:          taskSidebarSessionTitle(&session),
 			State:          wi.State,
 			SessionStatus:  session.Status,
 			RepositoryName: entryRepo,
@@ -1866,6 +1906,9 @@ func (a App) View() string {
 	}
 	if a.activeOverlay == overlayHelp {
 		return renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
+	}
+	if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
+		return renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
 	}
 
 	return base

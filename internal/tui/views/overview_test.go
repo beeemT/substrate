@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -412,7 +413,7 @@ func TestOverviewRefreshPreservesViewportPlanAndQuestionState(t *testing.T) {
 			Question:       &domain.Question{ID: "q-1", Content: "Question text"},
 			ProposedAnswer: "Proposed reply",
 		}},
-		Plan: OverviewPlan{Exists: true, Document: &plan},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
 	}
 
 	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
@@ -449,7 +450,7 @@ func TestOverviewPlanOverlayEscapeCancelsInputWithoutClosing(t *testing.T) {
 			Kind: overviewActionPlanReview,
 			Plan: &plan,
 		}},
-		Plan: OverviewPlan{Exists: true, Document: &plan},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
 	})
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
@@ -507,5 +508,222 @@ func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
 	}
 	if updated.content.Mode() != ContentModeOverview {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
+	}
+}
+
+func TestAppSidebarPlanOverlayTakesFocusAndEscRestoresSidebar(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.workItems[0].State = domain.SessionPlanReview
+	app.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	app.plans["wi-1"] = &domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: strings.Repeat("plan line\n", 4),
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated := model.(App)
+	if cmd != nil {
+		t.Fatalf("opening plan overlay returned cmd %v, want nil", cmd)
+	}
+	if updated.content.overview.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v when overlay opens from sidebar", updated.mainFocus, mainFocusContent)
+	}
+
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("closing plan overlay returned cmd %v, want nil", cmd)
+	}
+	if updated.content.overview.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayNone)
+	}
+	if updated.mainFocus != mainFocusSidebar {
+		t.Fatalf("mainFocus = %v, want %v restored after closing overlay opened from sidebar", updated.mainFocus, mainFocusSidebar)
+	}
+}
+
+func TestOverviewPlanSectionUsesSidebarSessionTitle(t *testing.T) {
+	t.Parallel()
+
+	app := newPlanningDrilldownTestApp()
+	app.sessions[0].ID = "planning-session-123456789"
+	app.updateContentFromState()
+
+	view := stripBrowseANSI(app.content.View())
+	if !strings.Contains(view, "Planning session planning") {
+		t.Fatalf("content view = %q, want sidebar-style planning session title", view)
+	}
+	if strings.Contains(view, "planning-session-123456789") {
+		t.Fatalf("content view = %q, want full planning session id omitted", view)
+	}
+}
+
+func TestOverviewTaskRowUsesSidebarSessionTitle(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.sessions[0].ID = "implementation-session-123456789"
+	app.updateContentFromState()
+
+	view := stripBrowseANSI(app.content.View())
+	if !strings.Contains(view, "Task: Session implemen") {
+		t.Fatalf("content view = %q, want sidebar-style task title in overview", view)
+	}
+	if strings.Contains(view, "implementation-session-123456789") {
+		t.Fatalf("content view = %q, want full implementation session id omitted", view)
+	}
+}
+
+func TestAppSidebarPlanOverlayLeftRestoresSidebar(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.workItems[0].State = domain.SessionPlanReview
+	app.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	app.plans["wi-1"] = &domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: strings.Repeat("plan line\n", 4),
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated := model.(App)
+	if updated.content.overview.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v when overlay opens from sidebar", updated.mainFocus, mainFocusContent)
+	}
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("closing plan overlay with left returned cmd %v, want nil", cmd)
+	}
+	if updated.content.overview.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayNone)
+	}
+	if updated.mainFocus != mainFocusSidebar {
+		t.Fatalf("mainFocus = %v, want %v restored after left closes overlay", updated.mainFocus, mainFocusSidebar)
+	}
+}
+
+func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.workItems[0].State = domain.SessionPlanReview
+	app.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	app.plans["wi-1"] = &domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: strings.Repeat("plan line\n", 4),
+	}
+	app.mainFocus = mainFocusContent
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated := model.(App)
+	if updated.content.overview.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
+	}
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil when requesting plan changes", cmd)
+	}
+	if updated.activeOverlay == overlaySettings {
+		t.Fatal("expected c to stay within the plan review flow instead of opening settings")
+	}
+	if updated.content.overview.planReview.inputMode != planReviewChanges {
+		t.Fatalf("input mode = %v, want %v", updated.content.overview.planReview.inputMode, planReviewChanges)
+	}
+	if updated.content.overview.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
+	}
+}
+
+func TestOverviewPlanOverlayUsesExpandedFrame(t *testing.T) {
+	t.Parallel()
+
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 12)}
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(220, 30)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionPlanReview,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Plan review", StatusLabel: "Plan review needed", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind: overviewActionPlanReview,
+			Plan: &plan,
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
+	})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if updated.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.overlay, overviewOverlayPlan)
+	}
+	overlay := stripBrowseANSI(updated.overlayView(220, 30))
+	maxWidth := 0
+	for _, line := range strings.Split(overlay, "\n") {
+		maxWidth = max(maxWidth, ansi.StringWidth(line))
+	}
+	if maxWidth > 220 {
+		t.Fatalf("overlay width = %d, want plan frame capped at 220 columns", maxWidth)
+	}
+	if maxWidth < 210 {
+		t.Fatalf("overlay width = %d, want wide plan frame on large terminals", maxWidth)
+	}
+	if got := len(strings.Split(overlay, "\n")); got < 28 {
+		t.Fatalf("overlay height = %d, want taller plan frame with at least 28 lines", got)
+	}
+}
+
+func TestAppOverviewOverlayCentersOnFullWindow(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.workItems[0].State = domain.SessionPlanReview
+	app.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	app.plans["wi-1"] = &domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: "## Orchestration\n\nShip it.",
+	}
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	updated := model.(App)
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated = model.(App)
+
+	plain := stripBrowseANSI(updated.View())
+	lines := strings.Split(plain, "\n")
+	titleLineIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "· Plan Review") {
+			titleLineIndex = i
+			break
+		}
+	}
+	if titleLineIndex < 1 {
+		t.Fatalf("view = %q, want overlay title line", plain)
+	}
+	borderLine := lines[titleLineIndex-1]
+	startByte := strings.LastIndex(borderLine, "╭")
+	endByte := strings.LastIndex(borderLine, "╮")
+	if startByte < 0 || endByte <= startByte {
+		t.Fatalf("border line = %q, want overlay frame borders", borderLine)
+	}
+	start := ansi.StringWidth(borderLine[:startByte])
+	overlayWidth := ansi.StringWidth(borderLine[startByte : endByte+len("╮")])
+	expectedStart := (160 - overlayWidth) / 2
+	if diff := start - expectedStart; diff < -1 || diff > 1 {
+		t.Fatalf("overlay start col = %d, want centered around %d (width %d)\nline: %q", start, expectedStart, overlayWidth, borderLine)
 	}
 }

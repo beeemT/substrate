@@ -147,3 +147,20 @@ func TestStatusBarPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 		t.Fatalf("content = %q, want delete hint between new and search", lines[0])
 	}
 }
+
+func TestDefaultHintsExposeSettingsOnS(t *testing.T) {
+	t.Parallel()
+
+	hints := views.DefaultHints()
+	for _, hint := range hints {
+		if hint.Label != "Settings" {
+			continue
+		}
+		if hint.Key != "s" {
+			t.Fatalf("settings hint key = %q, want %q", hint.Key, "s")
+		}
+		return
+	}
+
+	t.Fatalf("DefaultHints() = %#v, want a Settings hint", hints)
+}

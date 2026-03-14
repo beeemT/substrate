@@ -48,12 +48,12 @@ func (p *PlanParser) Parse(content string) (domain.RawPlanOutput, domain.ParseEr
 	}
 
 	output.ExecutionGroups = planYAML.ExecutionGroups
-
-	// Extract orchestration section
 	output.Orchestration = extractSection(content, "Orchestration")
-
-	// Extract sub-plan sections
+	if strings.TrimSpace(output.Orchestration) == "" {
+		errors.MissingOrchestration = true
+	}
 	output.SubPlans = extractSubPlans(content)
+	errors.IncompleteSubPlans = validateSubPlanCompleteness(output.SubPlans)
 
 	return output, errors
 }
@@ -205,6 +205,69 @@ func extractSubPlans(content string) []domain.RawSubPlan {
 	}
 
 	return subPlans
+}
+
+type subPlanSectionRequirement struct {
+	heading      string
+	minListItems int
+	requireList  bool
+	requireBody  bool
+}
+
+var requiredSubPlanSections = []subPlanSectionRequirement{
+	{heading: "Goal", requireBody: true},
+	{heading: "Scope", minListItems: 1, requireList: true, requireBody: true},
+	{heading: "Changes", minListItems: 3, requireList: true, requireBody: true},
+	{heading: "Validation", minListItems: 1, requireList: true, requireBody: true},
+	{heading: "Risks", minListItems: 1, requireList: true, requireBody: true},
+}
+
+func validateSubPlanCompleteness(subPlans []domain.RawSubPlan) []string {
+	issues := make([]string, 0)
+	for _, subPlan := range subPlans {
+		for _, req := range requiredSubPlanSections {
+			body := extractSubSection(subPlan.Content, req.heading)
+			if req.requireBody && strings.TrimSpace(body) == "" {
+				issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, fmt.Sprintf("missing ### %s", req.heading)))
+				continue
+			}
+			if req.requireList {
+				itemCount := countMarkdownListItems(body)
+				if itemCount < req.minListItems {
+					issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, fmt.Sprintf("### %s must include at least %d list item(s)", req.heading, req.minListItems)))
+				}
+			}
+		}
+	}
+	return issues
+}
+
+func extractSubSection(content, heading string) string {
+	headingPattern := fmt.Sprintf(`(?m)^###\s+%s\s*:?[ \t]*$`, regexp.QuoteMeta(heading))
+	headingRe := regexp.MustCompile(headingPattern)
+	headingMatch := headingRe.FindStringIndex(content)
+	if headingMatch == nil {
+		return ""
+	}
+	headingLine := headingRe.FindString(content)
+	contentStart := headingMatch[0] + len(headingLine)
+	if contentStart >= len(content) {
+		return ""
+	}
+	nextHeadingRe := regexp.MustCompile(`(?m)^###\s`)
+	nextMatch := nextHeadingRe.FindStringIndex(content[contentStart:])
+	if nextMatch == nil {
+		return strings.TrimSpace(content[contentStart:])
+	}
+	return strings.TrimSpace(content[contentStart : contentStart+nextMatch[0]])
+}
+
+func countMarkdownListItems(content string) int {
+	if strings.TrimSpace(content) == "" {
+		return 0
+	}
+	itemRe := regexp.MustCompile(`(?m)^\s*(?:[-*+] |\d+\. )\S`)
+	return len(itemRe.FindAllString(content, -1))
 }
 
 // flattenExecutionGroups flattens execution groups into a deduplicated list.

@@ -11,20 +11,16 @@ import (
 	"github.com/beeemT/substrate/internal/tui/views"
 )
 
-func TestPlanReviewModel_SetPlan(t *testing.T) {
+func TestPlanReviewModel_SetPlanDocument(t *testing.T) {
 	st := newTestStyles(t)
 	m := views.NewPlanReviewModel(st)
 	m.SetSize(80, 30)
-	m.SetPlan(domain.Plan{
-		ID:               "p1",
-		WorkItemID:       "wi1",
-		OrchestratorPlan: "# My Plan\n\nStep one.",
-	})
+	m.SetPlanDocument("p1", "## Orchestration\n\nStep one.\n\n## SubPlan: repo-a\n### Goal\nShip it.")
 	m.SetWorkItemID("wi1")
 
 	v := m.View()
 	if v == "" {
-		t.Fatal("expected non-empty View() after SetPlan")
+		t.Fatal("expected non-empty View() after SetPlanDocument")
 	}
 }
 
@@ -32,11 +28,7 @@ func TestPlanReviewModel_Update_Approve(t *testing.T) {
 	st := newTestStyles(t)
 	m := views.NewPlanReviewModel(st)
 	m.SetSize(80, 30)
-	m.SetPlan(domain.Plan{
-		ID:               "p1",
-		WorkItemID:       "wi1",
-		OrchestratorPlan: "# My Plan",
-	})
+	m.SetPlanDocument("p1", "## Orchestration\n\n# My Plan")
 	m.SetWorkItemID("wi1")
 
 	updated, cmd := m.Update(tea.KeyMsg{
@@ -58,6 +50,76 @@ func TestPlanReviewModel_Update_Approve(t *testing.T) {
 	}
 	if msg.WorkItemID != "wi1" {
 		t.Errorf("expected WorkItemID wi1, got %q", msg.WorkItemID)
+	}
+}
+
+func TestPlanReviewModel_WrapsAndNumbersPlanLines(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(28, 12)
+	m.SetTitle("SUB-1")
+	m.SetPlanDocument("p1", "alpha beta gamma delta epsilon\nSecond short line.")
+
+	rendered := m.View()
+	plain := ansi.Strip(rendered)
+	if strings.Count(plain, " 1 │") != 1 {
+		t.Fatalf("view = %q, want exactly one numbered row for line 1", plain)
+	}
+	if !strings.Contains(plain, " 2 │ Second short line.") {
+		t.Fatalf("view = %q, want numbered second line", plain)
+	}
+	if strings.Contains(plain, "alp\n") || strings.Contains(plain, "bet\n") || strings.Contains(plain, "gamm\n") {
+		t.Fatalf("view = %q, want wrapping only at word boundaries", plain)
+	}
+	for _, want := range []string{" 1 │ alpha beta gamma delta", "   │ epsilon"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q", plain, want)
+		}
+	}
+	continuationFound := false
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.HasPrefix(line, "   │ ") {
+			continuationFound = true
+			break
+		}
+	}
+	if !continuationFound {
+		t.Fatalf("view = %q, want wrapped continuation row with empty line-number gutter", plain)
+	}
+	hints := m.KeybindHints()
+	labels := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		labels = append(labels, hint.Label)
+	}
+	if !strings.Contains(strings.Join(labels, " | "), "Close") {
+		t.Fatalf("keybind hints = %#v, want close hint", hints)
+	}
+	for i, line := range strings.Split(rendered, "\n") {
+		if got := ansi.StringWidth(line); got > 28 {
+			t.Fatalf("line %d width = %d, want <= 28\nline: %q", i+1, got, line)
+		}
+	}
+}
+
+func TestPlanReviewModel_ShowsFullPlanSectionsAndPreservesYamlIndentation(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(72, 32)
+	m.SetTitle("SUB-2")
+	m.SetPlanDocument("p2", "```substrate-plan\nexecution_groups:\n  - [repo-a, repo-b]\n```\n\n## Orchestration\nCoordinate contract changes.\n\n## SubPlan: repo-a\n### Goal\nShip repo a.\n\n### Scope\n- internal/a.go\n\n### Changes\n1. Update parser.\n2. Add tests.\n3. Wire callers.\n\n### Validation\n- go test ./...\n\n### Risks\n- Preserve backwards compatibility assumptions.\n")
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"execution_groups:", "  - [repo-a, repo-b]", "Orchestration", "Coordinate contract changes.", "SubPlan: repo-a", "Goal", "Ship repo a.", "internal/a.go", "go test ./...", "Preserve backwards compatibility assumptions."} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q", plain, want)
+		}
+	}
+	for _, raw := range []string{"## Orchestration", "## SubPlan: repo-a", "### Goal", "### Scope", "### Changes"} {
+		if strings.Contains(plain, raw) {
+			t.Fatalf("view = %q, want markdown heading %q rendered without raw markers", plain, raw)
+		}
 	}
 }
 

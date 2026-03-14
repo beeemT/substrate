@@ -149,7 +149,7 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	return s.planRun(ctx, workItemID, feedback, currentPlanText)
 }
 
-// buildPlanText reconstructs the plan text from DB for use in the revision prompt.
+// buildPlanText reconstructs the full persisted plan document for review revisions.
 // Returns empty string on any error (best-effort; revision can proceed without prior context).
 func (s *PlanningService) buildPlanText(ctx context.Context, planID string) string {
 	plan, err := s.planSvc.GetPlan(ctx, planID)
@@ -158,17 +158,43 @@ func (s *PlanningService) buildPlanText(ctx context.Context, planID string) stri
 	}
 	subPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID)
 	if err != nil {
-		return plan.OrchestratorPlan
+		return domain.ComposePlanDocument(plan, nil)
 	}
-	var sb strings.Builder
-	sb.WriteString(plan.OrchestratorPlan)
-	for _, sp := range subPlans {
-		sb.WriteString("\n\n## SubPlan: ")
-		sb.WriteString(sp.RepositoryName)
-		sb.WriteString("\n")
-		sb.WriteString(sp.Content)
+	return domain.ComposePlanDocument(plan, subPlans)
+}
+
+// UpdateReviewedPlan validates and persists a full reviewed plan document in place.
+func (s *PlanningService) UpdateReviewedPlan(ctx context.Context, planID, rawContent string) (domain.Plan, []domain.TaskPlan, error) {
+	plan, err := s.planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("get plan: %w", err)
 	}
-	return sb.String()
+	workItem, err := s.workItemSvc.Get(ctx, plan.WorkItemID)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("get work item: %w", err)
+	}
+	workspace, err := s.workspaceSvc.Get(ctx, workItem.WorkspaceID)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("get workspace: %w", err)
+	}
+	healthCheck, err := s.discoverer.PreflightCheck(ctx, workspace.RootPath)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("preflight check: %w", err)
+	}
+	repos, err := s.discoverer.DiscoverRepos(ctx, workspace.RootPath, healthCheck.GitWorkRepos)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("discover repos: %w", err)
+	}
+	parser := NewPlanParser()
+	rawOutput, parseErrors := parser.ParseAndValidate(rawContent, repos)
+	if parseErrors.HasErrors() {
+		return domain.Plan{}, nil, fmt.Errorf("plan parsing failed: %w", &parseErrors)
+	}
+	updatedPlan, updatedSubPlans, err := s.planSvc.ApplyReviewedPlanOutput(ctx, planID, rawOutput)
+	if err != nil {
+		return domain.Plan{}, nil, fmt.Errorf("apply reviewed plan: %w", err)
+	}
+	return updatedPlan, updatedSubPlans, nil
 }
 
 // planRun executes the planning pipeline for a work item already in the planning state.
@@ -648,8 +674,7 @@ Description:
 {{range .Repos}}- {{.Name}} ({{.Language}}{{if .Framework}}/{{.Framework}}{{end}}) — {{.MainDir}}{{if .AgentsMdPath}}
   guidance: {{.AgentsMdPath}}{{end}}{{if .DocPaths}}
   docs: {{range .DocPaths}}{{.}} {{end}}{{end}}
-{{end}}
-## Instructions
+{{end}}## Instructions
 If {{.SessionDraftPath}} already exists, read it first to orient yourself before exploring.
 Write every draft update to {{.SessionDraftPath}}.
 Explore the workspace before finalising your plan. After each significant decision or
@@ -666,15 +691,34 @@ execution_groups:
   # add further groups as needed; list only repos that require changes
 ` + "```" + `
 
-Then write:
+Then write exactly this structure:
 
 ## Orchestration
-<cross-repo coordination, shared contracts, data flow, rationale for execution order>
+<cross-repo coordination, shared contracts, execution order rationale, and shared risks only>
 
 ## SubPlan: <repo-name>
-<files to change, approach, tests, edge cases>
+### Goal
+<repo-specific end state>
+
+### Scope
+- concrete files, modules, interfaces, migrations, or commands expected to change
+
+### Changes
+1. concrete implementation step
+2. concrete implementation step
+3. concrete implementation step
+
+### Validation
+- exact tests, checks, or commands to run
+
+### Risks
+- edge cases, sequencing constraints, invariants, or failure modes to watch
 
 One ## SubPlan section per repo listed in execution_groups. Omit repos requiring no changes.
+Every sub-plan must be implementation-ready for a later coding session.
+### Scope, ### Validation, and ### Risks must each contain at least one list item.
+### Changes must contain at least three concrete list items.
+The Orchestration section must stay separate from repo-specific implementation details.
 
 ## Validation
 Before marking complete: run all relevant formatters, compilation checks, and unit tests.
@@ -692,4 +736,6 @@ Valid repos in this workspace:
 Re-read {{.SessionDraftPath}} to see your current plan, then address the errors above.
 Rewrite {{.SessionDraftPath}} with your complete revised plan. The substrate-plan YAML
 block must appear first, before any prose.
+Each repo sub-plan must include ### Goal, ### Scope, ### Changes, ### Validation, and ### Risks.
+### Scope, ### Validation, and ### Risks need list items; ### Changes needs at least three concrete steps.
 `

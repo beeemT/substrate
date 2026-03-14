@@ -362,13 +362,22 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 	}
 }
 
-// SavePlanCmd persists updated plan content to the DB after $EDITOR edit.
-func SavePlanCmd(planSvc *service.PlanService, planID, content string) tea.Cmd {
+// SaveReviewedPlanCmd validates and persists a full reviewed plan document after $EDITOR edits.
+func SaveReviewedPlanCmd(planningSvc *orchestrator.PlanningService, planID, content string) tea.Cmd {
 	return func() tea.Msg {
-		if err := planSvc.UpdatePlanContent(context.Background(), planID, content); err != nil {
+		if planningSvc == nil {
+			return ErrMsg{Err: fmt.Errorf("planning service not configured")}
+		}
+		plan, subPlans, err := planningSvc.UpdateReviewedPlan(context.Background(), planID, content)
+		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return ActionDoneMsg{Message: "Plan updated"}
+		return PlanSavedMsg{
+			WorkItemID: plan.WorkItemID,
+			Plan:       plan,
+			SubPlans:   subPlans,
+			Message:    "Plan updated",
+		}
 	}
 }
 

@@ -94,6 +94,22 @@ func TestPlanParser_Parse(t *testing.T) {
 			t.Error("expected EmptyExecutionGroups error")
 		}
 	})
+
+	t.Run("fails when orchestration missing", func(t *testing.T) {
+		input := "```substrate-plan\nexecution_groups:\n  - [backend-api]\n```\n\n## SubPlan: backend-api\n" + validSubPlanBody("backend-api goal")
+		_, errors := parser.Parse(input)
+		if !errors.MissingOrchestration {
+			t.Error("expected MissingOrchestration error")
+		}
+	})
+
+	t.Run("fails when sub-plan is not implementation ready", func(t *testing.T) {
+		input := "```substrate-plan\nexecution_groups:\n  - [backend-api]\n```\n\n## Orchestration\nCoordinate backend changes.\n\n## SubPlan: backend-api\n### Goal\nShip it.\n"
+		_, errors := parser.Parse(input)
+		if len(errors.IncompleteSubPlans) == 0 {
+			t.Fatal("expected incomplete sub-plan errors")
+		}
+	})
 }
 
 func TestPlanParser_Validate(t *testing.T) {
@@ -196,8 +212,9 @@ func TestPlanParser_Validate(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	t.Run("Error method formats all errors", func(t *testing.T) {
 		err := domain.ParseErrors{
-			UnknownRepos:    []string{"unknown-1", "unknown-2"},
-			MissingSubPlans: []string{"missing-1"},
+			UnknownRepos:       []string{"unknown-1", "unknown-2"},
+			MissingSubPlans:    []string{"missing-1"},
+			IncompleteSubPlans: []string{"repo-a: missing ### Validation"},
 		}
 
 		errStr := err.Error()
@@ -206,6 +223,9 @@ func TestParseErrors(t *testing.T) {
 		}
 		if !strings.Contains(errStr, "missing sub-plan sections") {
 			t.Errorf("expected error to contain 'missing sub-plan sections', got %q", errStr)
+		}
+		if !strings.Contains(errStr, "incomplete sub-plans") {
+			t.Errorf("expected error to contain 'incomplete sub-plans', got %q", errStr)
 		}
 	})
 
@@ -262,26 +282,48 @@ func TestFlattenExecutionGroups(t *testing.T) {
 
 // buildTestPlan creates a valid test plan string.
 func buildTestPlan() string {
-	return `# Planning Output
+	return strings.Join([]string{
+		"# Planning Output",
+		"",
+		"```substrate-plan",
+		"execution_groups:",
+		"  - [backend-api, shared-lib]",
+		"  - [frontend-app]",
+		"```",
+		"",
+		"## Orchestration",
+		"",
+		"The backend-api and frontend-app share a REST API contract.",
+		"The shared-lib provides utility functions.",
+		"",
+		"## SubPlan: backend-api",
+		validSubPlanBody("Update the user model to support email validation."),
+		"",
+		"## SubPlan: frontend-app",
+		validSubPlanBody("Update the React components to use the new API hooks."),
+		"",
+		"## SubPlan: shared-lib",
+		validSubPlanBody("Update the date formatting utilities."),
+	}, "\n")
+}
 
-` + "```substrate-plan" + `
-execution_groups:
-  - [backend-api, shared-lib]
-  - [frontend-app]
-` + "```" + `
-
-## Orchestration
-
-The backend-api and frontend-app share a REST API contract.
-The shared-lib provides utility functions.
-
-## SubPlan: backend-api
-Update the user model to support email validation.
-
-## SubPlan: frontend-app
-Update the React components to use the new API hooks.
-
-## SubPlan: shared-lib
-Update the date formatting utilities.
-`
+func validSubPlanBody(goal string) string {
+	return strings.Join([]string{
+		"### Goal",
+		goal,
+		"",
+		"### Scope",
+		"- pkg/service.go",
+		"",
+		"### Changes",
+		"1. Update the implementation.",
+		"2. Add coverage for the change.",
+		"3. Wire all affected callers.",
+		"",
+		"### Validation",
+		"- go test ./...",
+		"",
+		"### Risks",
+		"- Preserve existing behavior at the integration boundary.",
+	}, "\n")
 }

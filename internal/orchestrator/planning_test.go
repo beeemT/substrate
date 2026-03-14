@@ -84,7 +84,7 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 
 	tmpDir := t.TempDir()
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-123", "plan-draft.md")
-	harness := &planningHarnessSpy{planText: "```substrate-plan\nexecution_groups:\n  - [repo-a]\n```\n\n## Orchestration\nKeep repo-a isolated.\n\n## SubPlan: repo-a\nUpdate the planner.\n"}
+	harness := &planningHarnessSpy{planText: validPlanningPlan("Keep repo-a isolated.", "Update the planner.")}
 	svc := &PlanningService{
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
@@ -157,8 +157,8 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 
 	tmpDir := t.TempDir()
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-123", "plan-draft.md")
-	intermediatePlan := "```substrate-plan\nexecution_groups:\n  - [repo-a]\n```\n\n## Orchestration\nStop after the first draft.\n\n## SubPlan: repo-a\nInitial sketch.\n"
-	finalPlan := "```substrate-plan\nexecution_groups:\n  - [repo-a]\n```\n\n## Orchestration\nFinish the full orchestration after reviewing the workspace.\n\n## SubPlan: repo-a\nFinal implementation details.\n"
+	intermediatePlan := validPlanningPlan("Stop after the first draft.", "Initial sketch.")
+	finalPlan := validPlanningPlan("Finish the full orchestration after reviewing the workspace.", "Final implementation details.")
 	writeErrCh := make(chan error, 1)
 	harness := &scriptedPlanningHarness{
 		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
@@ -225,7 +225,7 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 
 	tmpDir := t.TempDir()
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-456", "plan-draft.md")
-	finalPlan := "```substrate-plan\nexecution_groups:\n  - [repo-a]\n```\n\n## Orchestration\nRecovered after the planner was asked to rewrite the missing draft.\n\n## SubPlan: repo-a\nProduce the final repo plan.\n"
+	finalPlan := validPlanningPlan("Recovered after the planner was asked to rewrite the missing draft.", "Produce the final repo plan.")
 	correctionMessages := make([]string, 0, 1)
 	harness := &scriptedPlanningHarness{
 		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
@@ -287,4 +287,12 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 	if rawContent != finalPlan {
 		t.Fatalf("runPlanningWithCorrectionLoop() returned %q, want final rewritten plan", rawContent)
 	}
+}
+
+func validPlanningPlan(orchestration, goal string) string {
+	return "```substrate-plan\nexecution_groups:\n  - [repo-a]\n```\n\n## Orchestration\n" + orchestration + "\n\n## SubPlan: repo-a\n" + validPlanningSubPlan(goal) + "\n"
+}
+
+func validPlanningSubPlan(goal string) string {
+	return "### Goal\n" + goal + "\n\n### Scope\n- internal/repo_a.go\n\n### Changes\n1. Update implementation details.\n2. Add or refresh tests.\n3. Wire the affected callers.\n\n### Validation\n- go test ./...\n\n### Risks\n- Preserve current repo behavior.\n"
 }
