@@ -197,7 +197,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	// Pre-create all worktrees sequentially before fan-out to eliminate the
 	// TOCTOU race where two sub-plans in the same wave could race to create
 	// a worktree for the same repository.
-	worktreePaths, err := s.prepareWorktrees(ctx, &workspace, workItem.Title, trackerRefsFromMetadata(workItem.Metadata), subPlans, branch, repoPaths)
+	worktreePaths, err := s.prepareWorktrees(ctx, &workspace, workItem.ID, workItem.Title, trackerRefsFromMetadata(workItem.Metadata), subPlans, branch, repoPaths)
 	if err != nil {
 		return nil, fmt.Errorf("prepare worktrees: %w", err)
 	}
@@ -476,7 +476,7 @@ func (s *ImplementationService) executeSubPlan(
 func (s *ImplementationService) ensureWorktree(
 	ctx context.Context,
 	workspace *domain.Workspace,
-	repoName, repoPath, branch, workItemTitle string, trackerRefs []domain.TrackerReference, subPlan string,
+	workItemID, repoName, repoPath, branch, workItemTitle string, trackerRefs []domain.TrackerReference, subPlan string,
 ) (string, error) {
 	// Check if worktree already exists (idempotency guard)
 	worktrees, err := s.gitClient.List(ctx, repoPath)
@@ -502,6 +502,7 @@ func (s *ImplementationService) ensureWorktree(
 	// Emit WorktreeCreating pre-hook event
 	creatingPayload := WorktreeCreatingPayload{
 		WorkspaceID:   workspace.ID,
+		WorkItemID:    workItemID,
 		Repository:    repoName,
 		Branch:        branch,
 		WorkItemTitle: workItemTitle,
@@ -528,6 +529,7 @@ func (s *ImplementationService) ensureWorktree(
 	// Emit WorktreeCreated post-hook event
 	createdPayload := WorktreeCreatedPayload{
 		WorkspaceID:   workspace.ID,
+		WorkItemID:    workItemID,
 		Repository:    repoName,
 		Branch:        branch,
 		WorktreePath:  worktreePath,
@@ -557,6 +559,7 @@ func (s *ImplementationService) ensureWorktree(
 func (s *ImplementationService) prepareWorktrees(
 	ctx context.Context,
 	workspace *domain.Workspace,
+	workItemID string,
 	workItemTitle string,
 	trackerRefs []domain.TrackerReference,
 	subPlans []domain.TaskPlan,
@@ -574,7 +577,7 @@ func (s *ImplementationService) prepareWorktrees(
 		if !ok {
 			return nil, fmt.Errorf("repository %s not found in workspace", sp.RepositoryName)
 		}
-		wt, err := s.ensureWorktree(ctx, workspace, sp.RepositoryName, repoPath, branch, workItemTitle, trackerRefs, sp.Content)
+		wt, err := s.ensureWorktree(ctx, workspace, workItemID, sp.RepositoryName, repoPath, branch, workItemTitle, trackerRefs, sp.Content)
 		if err != nil {
 			return nil, fmt.Errorf("prepare worktree for %s: %w", sp.RepositoryName, err)
 		}
@@ -717,6 +720,7 @@ func (s *ImplementationService) discoverRepoPaths(ctx context.Context, workspace
 
 type WorktreeCreatingPayload struct {
 	WorkspaceID   string           `json:"workspace_id"`
+	WorkItemID    string           `json:"work_item_id"`
 	Repository    string           `json:"repository"`
 	Branch        string           `json:"branch"`
 	WorkItemTitle string           `json:"work_item_title"`
@@ -726,6 +730,7 @@ type WorktreeCreatingPayload struct {
 
 type WorktreeCreatedPayload struct {
 	WorkspaceID   string                    `json:"workspace_id"`
+	WorkItemID    string                    `json:"work_item_id"`
 	Repository    string                    `json:"repository"`
 	Branch        string                    `json:"branch"`
 	WorktreePath  string                    `json:"worktree_path"`

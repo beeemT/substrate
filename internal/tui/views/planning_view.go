@@ -57,12 +57,16 @@ func (m *SessionLogModel) SetMeta(meta string) {
 }
 
 func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
+	if m.live && m.sessionID == sessionID && m.logPath == logPath {
+		return
+	}
 	m.sessionID = sessionID
 	m.logPath = logPath
 	m.live = true
 	m.offset = 0
 	m.lines = nil
 	m.viewport.SetContent("")
+	m.viewport.GotoTop()
 }
 
 func (m *SessionLogModel) SetStaticContent(lines []string) {

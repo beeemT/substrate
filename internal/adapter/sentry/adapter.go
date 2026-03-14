@@ -502,6 +502,7 @@ func issueMetadata(organization string, issues []sentryIssue) map[string]any {
 		"sentry_issue_ids":    issueIDs,
 		"sentry_identifiers":  identifiers,
 		"tracker_refs":        sentryTrackerRefs(issues),
+		"source_summaries":    sentrySourceSummaries(issues),
 	}
 	if len(projectSlugs) > 0 {
 		metadata["sentry_project_slugs"] = projectSlugs

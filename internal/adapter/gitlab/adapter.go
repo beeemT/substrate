@@ -185,6 +185,7 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
+		milestones := make([]milestone, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			id, err := strconv.ParseInt(itemID, 10, 64)
 			if err != nil {
@@ -194,10 +195,11 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			if err != nil {
 				return domain.Session{}, err
 			}
+			milestones = append(milestones, ms)
 			titles = append(titles, ms.Title)
 			parts = append(parts, formatMilestone(ms))
 		}
-		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:milestone:%d", projectID), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"project_id": projectID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:milestone:%d", projectID), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"project_id": projectID, "source_summaries": gitlabMilestoneSourceSummaries(projectID, milestones)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
 	case domain.ScopeInitiatives:
 		groupID := parseGroupIDFromMetadata(sel.Metadata)
 		if groupID == 0 {
@@ -560,7 +562,7 @@ func aggregateIssues(issues []issue) domain.Session {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	projectID := gitlabIssueProjectID(issues[0])
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues), "source_summaries": gitlabIssueSourceSummaries(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
 }
 
 func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {

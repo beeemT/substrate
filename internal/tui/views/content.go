@@ -13,18 +13,19 @@ type ContentMode int
 
 const (
 	ContentModeEmpty              ContentMode = iota // no session selected
-	ContentModeReadyToPlan                           // ingested: work item ready for planning
+	ContentModeOverview                              // canonical root-session overview/control surface
+	ContentModeReadyToPlan                           // legacy ingested summary surface
 	ContentModeSourceDetails                         // task-pane source metadata for the selected work item
-	ContentModePlanning                              // planning: agent running, log tailing
-	ContentModeSessionInteraction                    // historical session interaction view
-	ContentModePlanReview                            // plan_review: awaiting human review
-	ContentModeAwaitingImpl                          // approved: plan approved, awaiting impl start
-	ContentModeImplementing                          // implementing: agents running
-	ContentModeReviewing                             // reviewing: review agent running
-	ContentModeCompleted                             // completed: all repos passed review
-	ContentModeFailed                                // failed: unrecoverable error
-	ContentModeInterrupted                           // sub-mode: session interrupted
-	ContentModeQuestion                              // sub-mode: waiting for human answer
+	ContentModePlanning                              // planning/task session log tailing
+	ContentModeSessionInteraction                    // historical or task session interaction view
+	ContentModePlanReview                            // legacy full-page plan review surface
+	ContentModeAwaitingImpl                          // legacy approved summary surface
+	ContentModeImplementing                          // legacy implementing surface
+	ContentModeReviewing                             // legacy reviewing surface
+	ContentModeCompleted                             // legacy completed surface
+	ContentModeFailed                                // legacy failed surface
+	ContentModeInterrupted                           // legacy interrupted surface
+	ContentModeQuestion                              // legacy question surface
 )
 
 // KeybindHint is a label/key pair rendered by the status bar.
@@ -41,6 +42,7 @@ type ContentModel struct {
 	height int
 
 	// Per-mode sub-models
+	overview      SessionOverviewModel
 	readyToPlan   ReadyToPlanModel
 	sourceDetails SourceDetailsModel
 	sessionLog    SessionLogModel
@@ -61,6 +63,7 @@ func NewContentModel(st styles.Styles) ContentModel {
 	return ContentModel{
 		mode:          ContentModeEmpty,
 		styles:        st,
+		overview:      NewSessionOverviewModel(st),
 		readyToPlan:   NewReadyToPlanModel(st),
 		sourceDetails: NewSourceDetailsModel(st),
 		sessionLog:    NewSessionLogModel(st),
@@ -78,6 +81,7 @@ func NewContentModel(st styles.Styles) ContentModel {
 func (m *ContentModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+	m.overview.SetSize(width, height)
 	m.readyToPlan.SetSize(width, height)
 	m.sourceDetails.SetSize(width, height)
 	m.sessionLog.SetSize(width, height)
@@ -112,6 +116,10 @@ func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 	}
 }
 
+func (m *ContentModel) SetOverviewData(data SessionOverviewData) {
+	m.overview.SetData(data)
+}
+
 func (m *ContentModel) SetSessionInteraction(title, meta string, lines []string) {
 	m.currentWorkItem = nil
 	m.sessionLog.SetTitle(title)
@@ -126,6 +134,9 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch m.mode {
+	case ContentModeOverview:
+		m.overview, cmd = m.overview.Update(msg)
+		cmds = append(cmds, cmd)
 	case ContentModeReadyToPlan:
 		m.readyToPlan, cmd = m.readyToPlan.Update(msg)
 		cmds = append(cmds, cmd)
@@ -165,6 +176,8 @@ func (m ContentModel) View() string {
 	switch m.mode {
 	case ContentModeEmpty:
 		return m.emptyStateView()
+	case ContentModeOverview:
+		return m.overview.View()
 	case ContentModeReadyToPlan:
 		return m.readyToPlan.View()
 	case ContentModeSourceDetails:
@@ -223,6 +236,8 @@ func (m ContentModel) emptyStateView() string {
 // KeybindHints returns keybind hints for the active mode (passed to the status bar).
 func (m ContentModel) KeybindHints() []KeybindHint {
 	switch m.mode {
+	case ContentModeOverview:
+		return m.overview.KeybindHints()
 	case ContentModeSourceDetails:
 		return m.sourceDetails.KeybindHints()
 	case ContentModePlanning, ContentModeSessionInteraction:

@@ -21,6 +21,7 @@ type Services struct {
 	Instance  *service.InstanceService
 	Workspace *service.WorkspaceService
 	Review    *service.ReviewService
+	Events    repository.EventRepository
 	// Orchestration pipelines backed by the configured agent harnesses.
 	Planning       *orchestrator.PlanningService
 	Implementation *orchestrator.ImplementationService

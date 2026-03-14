@@ -556,13 +556,7 @@ func (a App) workItemTaskSession(workItemID, sessionID string) *domain.Task {
 }
 
 func (a App) defaultTaskSessionID(workItemID string) string {
-	wi := a.workItemByID(workItemID)
-	if wi == nil || wi.State != domain.SessionPlanning {
-		return ""
-	}
-	if session := a.latestPlanningSession(workItemID); session != nil {
-		return session.ID
-	}
+	_ = workItemID
 	return ""
 }
 
@@ -1397,151 +1391,26 @@ func (a *App) updateContentFromState() tea.Cmd {
 	}
 
 	a.content.SetWorkItem(wi)
-	showSourceDetails := false
 	if a.sidebarMode == sidebarPaneTasks {
 		if taskSessionID := a.selectedTaskSessionID(); taskSessionID != "" {
 			if taskSessionID == taskSidebarSourceDetailsID {
-				showSourceDetails = true
-			} else if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
-				return a.showTaskContent(wi, session)
-			} else {
-				a.setSelectedTaskSessionID("")
-			}
-		}
-	}
-
-	switch wi.State {
-	case domain.SessionIngested:
-		a.content.SetMode(ContentModeReadyToPlan)
-
-	case domain.SessionPlanning:
-		if planningSession := a.latestPlanningSession(wi.ID); planningSession != nil {
-			if a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() == "" {
-				a.setSelectedTaskSessionID(planningSession.ID)
-			}
-			return a.showTaskContent(wi, planningSession)
-		}
-		a.content.SetMode(ContentModePlanning)
-		a.content.sessionLog.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Planning")
-		a.content.sessionLog.SetModeLabel("Planning")
-		a.content.sessionLog.SetMeta("")
-		a.content.sessionLog.SetStaticContent([]string{"Waiting for live planning transcript..."})
-	case domain.SessionPlanReview:
-		a.content.SetMode(ContentModePlanReview)
-		if plan := a.plans[wi.ID]; plan != nil {
-			a.content.planReview.SetPlan(*plan)
-			a.content.planReview.SetWorkItemID(wi.ID)
-		}
-
-	case domain.SessionApproved:
-		a.content.SetMode(ContentModeAwaitingImpl)
-
-	case domain.SessionImplementing:
-		plan := a.plans[wi.ID]
-		var activeSessions []domain.Task
-		if plan != nil {
-			for _, sp := range a.subPlans[plan.ID] {
-				for _, s := range a.sessions {
-					if s.SubPlanID == sp.ID {
-						activeSessions = append(activeSessions, s)
-					}
+				a.content.SetMode(ContentModeSourceDetails)
+				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction) {
+					a.tailingSessionIDs = make(map[string]bool)
 				}
-			}
-		}
-		for _, s := range activeSessions {
-			if s.Status == domain.AgentSessionWaitingForAnswer {
-				for _, q := range a.questions[s.ID] {
-					if q.Status == domain.QuestionEscalated {
-						a.content.SetMode(ContentModeQuestion)
-						a.content.question.SetQuestion(q, q.ProposedAnswer, q.ProposedAnswer == "")
-						return nil
-					}
-				}
-			}
-		}
-		for _, s := range activeSessions {
-			if s.Status == domain.AgentSessionInterrupted {
-				a.content.SetMode(ContentModeInterrupted)
-				a.content.interrupted.SetSession(s.ID, s.SubPlanID, s.RepositoryName, s.WorktreePath, a.canActOnSession(s))
 				return nil
 			}
-		}
-		if showSourceDetails {
-			a.content.SetMode(ContentModeSourceDetails)
-			return nil
-		}
-		a.content.SetMode(ContentModeImplementing)
-		if plan != nil {
-			repos := a.buildRepoProgress(plan)
-			a.content.implementing.SetRepos(repos)
-			var tailCmds []tea.Cmd
-			for _, r := range repos {
-				if r.LogPath != "" && r.SessionID != "" && !a.tailingSessionIDs[r.SessionID] {
-					a.tailingSessionIDs[r.SessionID] = true
-					tailCmds = append(tailCmds, TailSessionLogCmd(r.LogPath, r.SessionID, 0))
-				}
+			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
+				return a.showTaskContent(wi, session)
 			}
-			if len(tailCmds) > 0 {
-				return tea.Batch(tailCmds...)
-			}
+			a.setSelectedTaskSessionID("")
 		}
-
-	case domain.SessionReviewing:
-		a.content.SetMode(ContentModeReviewing)
-		var repoResults []RepoReviewResult
-		if plan := a.plans[wi.ID]; plan != nil {
-			for _, sp := range a.subPlans[plan.ID] {
-				implSession := a.latestImplementationSession(wi.ID, sp.ID)
-				if implSession == nil {
-					continue
-				}
-				rev := a.reviews[implSession.ID]
-				var crits []domain.Critique
-				for _, cs := range rev.Critiques {
-					crits = append(crits, cs...)
-				}
-				repoResults = append(repoResults, RepoReviewResult{
-					RepoName:  sp.RepositoryName,
-					Cycles:    rev.Cycles,
-					Critiques: crits,
-				})
-			}
-		}
-		a.content.reviewing.SetRepos(repoResults)
-		a.content.reviewing.SetWorkItemID(wi.ID)
-		var tailCmds []tea.Cmd
-		if plan := a.plans[wi.ID]; plan != nil {
-			for _, sp := range a.subPlans[plan.ID] {
-				implSession := a.latestImplementationSession(wi.ID, sp.ID)
-				if implSession == nil {
-					continue
-				}
-				if logPath, ok := a.reviewSessionLogs[implSession.ID]; ok {
-					reviewTailID := "review-" + implSession.ID
-					if !a.tailingSessionIDs[reviewTailID] {
-						a.tailingSessionIDs[reviewTailID] = true
-						tailCmds = append(tailCmds, TailSessionLogCmd(logPath, reviewTailID, 0))
-					}
-				}
-			}
-		}
-		if len(tailCmds) > 0 {
-			return tea.Batch(tailCmds...)
-		}
-
-	case domain.SessionCompleted:
-		a.content.SetMode(ContentModeCompleted)
-		a.content.completed.SetData(wi.UpdatedAt, nil, nil)
-
-	case domain.SessionFailed:
-		a.content.SetMode(ContentModeFailed)
-		a.content.failed.SetFailure("Work item failed", "")
 	}
 
-	if prevMode != a.content.mode {
-		if prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction {
-			a.tailingSessionIDs = make(map[string]bool)
-		}
+	a.content.SetMode(ContentModeOverview)
+	a.content.SetOverviewData(a.buildOverviewData(wi))
+	if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction) {
+		a.tailingSessionIDs = make(map[string]bool)
 	}
 	return nil
 }

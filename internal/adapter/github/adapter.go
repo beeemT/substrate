@@ -251,6 +251,7 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
+		milestones := make([]githubMilestone, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
 			num, err := strconv.ParseInt(itemID, 10, 64)
 			if err != nil {
@@ -260,10 +261,11 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			if err != nil {
 				return domain.Session{}, err
 			}
+			milestones = append(milestones, ms)
 			titles = append(titles, ms.Title)
 			parts = append(parts, strings.TrimSpace(ms.Title+"\n"+ms.Description))
 		}
-		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gh:milestone:%s/%s", owner, repo), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gh:milestone:%s/%s", owner, repo), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"source_summaries": githubMilestoneSourceSummaries(owner, repo, milestones)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
 	default:
 		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
@@ -834,7 +836,7 @@ func aggregateIssues(issues []githubIssue) domain.Session {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	owner, repo := issueOwnerRepo(issues[0])
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(issues), "source_summaries": githubIssueSourceSummaries(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
 }
 
 func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {

@@ -160,17 +160,31 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 }
 
 func renderSourceReferencesBody(st styles.Styles, session *domain.Session, width int) string {
-	refs := sessionTrackerRefs(session.Metadata)
-	rows := make([]string, 0, max(len(refs), len(session.SourceItemIDs)))
-	for _, ref := range refs {
-		rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
-	}
-	if len(rows) == 0 {
-		for _, id := range session.SourceItemIDs {
-			if strings.TrimSpace(id) == "" {
-				continue
+	summaries := sessionSourceSummaries(session.Metadata)
+	rows := make([]string, 0, max(len(summaries), max(len(sessionTrackerRefs(session.Metadata)), len(session.SourceItemIDs))))
+	if len(summaries) > 0 {
+		for _, summary := range summaries {
+			block := []string{ansi.Hardwrap(st.SettingsText.Render("• "+firstNonEmptyString(summary.Ref, "unknown")), width, true)}
+			if strings.TrimSpace(summary.Title) != "" {
+				block = append(block, ansi.Hardwrap(st.Muted.Render("  "+summary.Title), width, true))
 			}
-			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), width, true))
+			if strings.TrimSpace(summary.Excerpt) != "" {
+				block = append(block, ansi.Hardwrap(st.Muted.Render("  "+summarizeText(summary.Excerpt, 120)), width, true))
+			}
+			rows = append(rows, strings.Join(block, "\n"))
+		}
+	} else {
+		refs := sessionTrackerRefs(session.Metadata)
+		for _, ref := range refs {
+			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
+		}
+		if len(rows) == 0 {
+			for _, id := range session.SourceItemIDs {
+				if strings.TrimSpace(id) == "" {
+					continue
+				}
+				rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), width, true))
+			}
 		}
 	}
 	if len(rows) == 0 {

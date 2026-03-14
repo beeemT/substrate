@@ -52,3 +52,38 @@ func TestSourceDetailsModelViewShowsSourceDetailsAndFitsSize(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceDetailsUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(60, 20)
+	m.SetSession(&domain.Session{
+		ID:            "wi-1",
+		ExternalID:    "SUB-1",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"},
+		Title:         "Investigate overflow",
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{{
+				Provider: "github",
+				Ref:      "acme/rocket#42",
+				Title:    "Fix auth",
+				Excerpt:  "Investigate auth timeouts",
+			}, {
+				Provider: "github",
+				Ref:      "acme/rocket#43",
+				Title:    "Repair billing",
+				Excerpt:  "Stabilize billing retries",
+			}},
+		},
+	})
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"Fix auth", "Repair billing", "Investigate auth timeouts", "Stabilize billing retries"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view = %q, want %q", plain, want)
+		}
+	}
+}

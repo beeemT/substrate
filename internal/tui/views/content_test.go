@@ -22,6 +22,7 @@ func TestContentDefaultMode(t *testing.T) {
 func TestContentSetMode(t *testing.T) {
 	modes := []views.ContentMode{
 		views.ContentModeEmpty,
+		views.ContentModeOverview,
 		views.ContentModeReadyToPlan,
 		views.ContentModeSourceDetails,
 		views.ContentModePlanning,
@@ -86,6 +87,46 @@ func TestContentKeybindHintsHaveKeyAndLabel(t *testing.T) {
 		}
 		if h.Label == "" {
 			t.Errorf("hint[%d].Label is empty", i)
+		}
+	}
+}
+
+func TestContentOverviewKeybindHintsExposeOverviewActions(t *testing.T) {
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 24)
+	m.SetOverviewData(views.SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      "plan_review",
+		Header: views.OverviewHeader{
+			ExternalID:  "SUB-1",
+			Title:       "Review plan",
+			StatusLabel: "Plan review needed",
+		},
+		Actions: []views.OverviewActionCard{{
+			Kind:     "plan_review",
+			Title:    "Plan review required",
+			Blocked:  "Implementation is waiting for plan approval",
+			Why:      "A human decision is required before execution can continue.",
+			Affected: []string{"repo-a"},
+		}},
+	})
+	m.SetMode(views.ContentModeOverview)
+
+	hints := m.KeybindHints()
+	labels := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		labels = append(labels, hint.Label)
+	}
+	for _, want := range []string{"Scroll", "Approve", "Changes", "Reject", "Inspect"} {
+		found := false
+		for _, label := range labels {
+			if label == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("overview keybind hints = %#v, want label %q", hints, want)
 		}
 	}
 }

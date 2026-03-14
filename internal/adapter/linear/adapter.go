@@ -272,6 +272,12 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(firstID) > 8 {
 			extSuffix = firstID[:8]
 		}
+		metadata := linearProjectMetadata(projects, domain.TrackerReference{
+			Provider: "linear",
+			Kind:     "project",
+			ID:       projects[0].ID,
+		})
+		metadata["source_summaries"] = linearProjectSourceSummaries(projects)
 		return domain.Session{
 			ID:            domain.NewID(),
 			ExternalID:    "LIN-PRJ-" + extSuffix,
@@ -281,13 +287,9 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			Title:         strings.Join(names, ", "),
 			Description:   strings.Join(sections, "\n\n"),
 			State:         domain.SessionIngested,
-			Metadata: linearProjectMetadata(projects, domain.TrackerReference{
-				Provider: "linear",
-				Kind:     "project",
-				ID:       projects[0].ID,
-			}),
-			CreatedAt: domain.Now(),
-			UpdatedAt: domain.Now(),
+			Metadata:      metadata,
+			CreatedAt:     domain.Now(),
+			UpdatedAt:     domain.Now(),
 		}, nil
 
 	case domain.ScopeInitiatives:
@@ -733,6 +735,8 @@ func aggregateIssues(issues []linearIssue) domain.Session {
 		sourceIDs[i] = issue.ID
 	}
 
+	metadata := linearIssueMetadata(issues[0], linearTrackerRefs(issues))
+	metadata["source_summaries"] = linearIssueSourceSummaries(issues)
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    linearExternalID(issues[0]),
@@ -743,7 +747,7 @@ func aggregateIssues(issues []linearIssue) domain.Session {
 		Description:   strings.Join(descs, "\n\n---\n\n"),
 		Labels:        labels,
 		State:         domain.SessionIngested,
-		Metadata:      linearIssueMetadata(issues[0], linearTrackerRefs(issues)),
+		Metadata:      metadata,
 		CreatedAt:     derefTime(issues[0].CreatedAt),
 		UpdatedAt:     derefTime(issues[0].UpdatedAt),
 	}

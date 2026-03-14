@@ -483,6 +483,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			Instance:       instanceSvc,
 			Workspace:      workspaceSvc,
 			Review:         reviewSvc,
+			Events:         s.eventRepo,
 			Planning:       planningSvc,
 			Implementation: implSvc,
 			ReviewPipeline: reviewPipeline,

@@ -24,3 +24,26 @@ func TestSessionLogViewRespectsRequestedHeightWithMeta(t *testing.T) {
 		t.Fatalf("last line = %q, want session log hints", lines[len(lines)-1])
 	}
 }
+
+func TestSessionLogSetLogPathKeepsExistingLiveContentForSameSession(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(48, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+
+	updated, _ := m.Update(SessionLogLinesMsg{SessionID: "sess-1", Lines: []string{"line 1", "line 2"}, NextOffset: 12})
+	m = updated
+
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+
+	if got := len(m.lines); got != 2 {
+		t.Fatalf("line count = %d, want 2", got)
+	}
+	if got := m.offset; got != 12 {
+		t.Fatalf("offset = %d, want 12", got)
+	}
+	if view := m.View(); !strings.Contains(view, "line 1") || strings.Contains(view, "No session output captured.") {
+		t.Fatalf("view = %q, want preserved live session content", view)
+	}
+}

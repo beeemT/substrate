@@ -562,19 +562,14 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 	if app.currentHistorySessionID != "" {
 		t.Fatalf("currentHistorySessionID = %q, want empty", app.currentHistorySessionID)
 	}
-	if app.content.Mode() != ContentModeReadyToPlan {
-		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeReadyToPlan)
+	if app.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"SUB-1 · Local item", "Details", "Summary", "This is important.", "Press [Enter]"} {
+	for _, want := range []string{"SUB-1 · Local item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
-		}
-	}
-	for _, hidden := range []string{"GitHub", "acme/rocket", "Labels: bug, backend"} {
-		if strings.Contains(view, hidden) {
-			t.Fatalf("content view = %q, want overview to omit source detail %q", view, hidden)
 		}
 	}
 	for _, raw := range []string{"## Summary", "**important**"} {
@@ -748,8 +743,8 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	if updated.currentWorkItemID != "wi-new" {
 		t.Fatalf("currentWorkItemID after first MoveDown = %q, want wi-new", updated.currentWorkItemID)
 	}
-	if updated.content.Mode() != ContentModeReadyToPlan {
-		t.Fatalf("content mode after first MoveDown = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode after first MoveDown = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -798,8 +793,8 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 	if updated.currentWorkItemID != "wi-new" {
 		t.Fatalf("currentWorkItemID = %q, want wi-new", updated.currentWorkItemID)
 	}
-	if updated.content.Mode() != ContentModeReadyToPlan {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.WorkItemID != "wi-new" {
@@ -983,8 +978,8 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 	if updated.currentWorkItemID != existing.ID {
 		t.Fatalf("currentWorkItemID = %q, want %q", updated.currentWorkItemID, existing.ID)
 	}
-	if updated.content.Mode() != ContentModeReadyToPlan {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeReadyToPlan)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.WorkItemID != existing.ID {
@@ -995,7 +990,7 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 		t.Fatalf("toast view = %q", toastView)
 	}
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"SUB-1 · Existing item", "Details", "Summary", "This is important.", "Press [Enter]"} {
+	for _, want := range []string{"SUB-1 · Existing item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1030,15 +1025,17 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 	} else if got.State != domain.SessionPlanning {
 		t.Fatalf("session state = %v, want %v", got.State, domain.SessionPlanning)
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(updated.content.View())
-	if !strings.Contains(view, "Waiting for live planning transcript...") {
-		t.Fatalf("content view = %q, want waiting planning transcript copy", view)
+	for _, want := range []string{"Planning...", "Summary", "Source"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
 	}
-	if strings.Contains(view, "Repository tasks appear after the plan is approved.") {
-		t.Fatalf("content view = %q, want placeholder task copy removed", view)
+	if strings.Contains(view, "Waiting for live planning transcript...") {
+		t.Fatalf("content view = %q, want overview planning snapshot instead of transcript placeholder", view)
 	}
 	toastView := stripBrowseANSI(updated.toasts.View())
 	if !strings.Contains(toastView, "ℹ Starting planning with existing item SUB-1") {
@@ -1103,8 +1100,8 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 	if len(updated.workItems) != 1 || updated.workItems[0].State != domain.SessionPlanning {
 		t.Fatalf("work items = %#v, want one planning work item", updated.workItems)
@@ -1207,7 +1204,7 @@ func newPlanningDrilldownTestApp() App {
 	return app
 }
 
-func TestPlanningSidebarRightDefaultsToPlanningSession(t *testing.T) {
+func TestPlanningSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	app := newPlanningDrilldownTestApp()
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated, ok := model.(App)
@@ -1218,23 +1215,100 @@ func TestPlanningSidebarRightDefaultsToPlanningSession(t *testing.T) {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneTasks", updated.sidebarMode)
 	}
 	sel := updated.sidebar.Selected()
-	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "plan-sess-1" {
-		t.Fatalf("selected entry = %#v, want planning session row", sel)
+	if sel == nil || sel.Kind != SidebarEntryTaskOverview || sel.SessionID != "" {
+		t.Fatalf("selected entry = %#v, want overview row", sel)
 	}
-	if updated.selectedTaskSessionID() != "plan-sess-1" {
-		t.Fatalf("selected task session = %q, want plan-sess-1", updated.selectedTaskSessionID())
+	if updated.selectedTaskSessionID() != "" {
+		t.Fatalf("selected task session = %q, want empty while overview is selected", updated.selectedTaskSessionID())
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
-	}
-	if updated.content.sessionLog.sessionID != "plan-sess-1" {
-		t.Fatalf("session log session id = %q, want plan-sess-1", updated.content.sessionLog.sessionID)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 	if got := len(updated.sidebar.entries); got != 3 {
 		t.Fatalf("task sidebar entries = %d, want overview + source details + planning session", got)
 	}
+	if cmd != nil {
+		t.Fatal("expected planning drilldown overview to avoid starting a session tail")
+	}
+}
+
+func TestPlanningSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+
+	sel := updated.sidebar.Selected()
+	if sel == nil || sel.Kind != SidebarEntryTaskSourceDetails {
+		t.Fatalf("selected entry = %#v, want source-details row", sel)
+	}
+	if updated.content.Mode() != ContentModeSourceDetails {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
+	}
+	if cmd != nil {
+		t.Fatal("expected planning source-details selection to avoid starting a session tail")
+	}
+	view := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Source details", "Provider: GitHub", "Selected: 1 issue", "acme/rocket#99"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	if updated.content.sessionLog.sessionID != "" {
+		t.Fatalf("session log session id = %q, want empty while showing planning source details", updated.content.sessionLog.sessionID)
+	}
+}
+
+func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatal("expected planning source-details selection to avoid starting a session tail")
+	}
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
 	if cmd == nil {
-		t.Fatal("expected planning drilldown to tail the planning session log")
+		t.Fatal("expected selecting the planning session row to start tailing the session log")
+	}
+	if updated.content.Mode() != ContentModePlanning {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	}
+
+	model, cmd = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Lines: []string{"Prompt: Begin planning", "Tool: read — Reading guidance"}, NextOffset: 42})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected live planning update to continue tailing the session log")
+	}
+
+	before := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Prompt: Begin planning", "Tool: read — Reading guidance"} {
+		if !strings.Contains(before, want) {
+			t.Fatalf("content view before refresh = %q, want %q", before, want)
+		}
+	}
+	if strings.Contains(before, "No session output captured.") {
+		t.Fatalf("content view before refresh = %q, want live planning output", before)
+	}
+
+	cmd = updated.updateContentFromState()
+	if cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil while already tailing the selected planning session", cmd)
+	}
+	after := stripBrowseANSI(updated.content.View())
+	for _, want := range []string{"Prompt: Begin planning", "Tool: read — Reading guidance"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("content view after refresh = %q, want %q", after, want)
+		}
+	}
+	if strings.Contains(after, "No session output captured.") {
+		t.Fatalf("content view after refresh = %q, want preserved live planning output", after)
+	}
+	if updated.content.sessionLog.offset != 42 {
+		t.Fatalf("session log offset = %d, want 42", updated.content.sessionLog.offset)
 	}
 }
 
@@ -1248,17 +1322,18 @@ func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil for interrupted planning session", cmd)
 	}
-	if app.content.Mode() != ContentModeInterrupted {
-		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeInterrupted)
-	}
-	if app.content.interrupted.sessionID != "plan-sess-1" {
-		t.Fatalf("interrupted session id = %q, want %q", app.content.interrupted.sessionID, "plan-sess-1")
+	if app.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"Session interrupted", "Resume", "Abandon"} {
+	for _, want := range []string{"Action required", "Interrupted task needs recovery"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
+	}
+	hints := app.content.KeybindHints()
+	if len(hints) < 4 || hints[1].Label != "Resume" || hints[2].Label != "Abandon" {
+		t.Fatalf("keybind hints = %#v, want resume/abandon actions", hints)
 	}
 }
 
@@ -1306,28 +1381,20 @@ func TestReviewingContentUsesImplementationSessionReviewData(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil without review log tail", cmd)
 	}
-	if app.content.Mode() != ContentModeReviewing {
-		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeReviewing)
-	}
-	if got := len(app.content.reviewing.repos); got != 1 {
-		t.Fatalf("review repo count = %d, want 1", got)
-	}
-	repo := app.content.reviewing.repos[0]
-	if got := len(repo.Cycles); got != 1 {
-		t.Fatalf("cycle count = %d, want 1", got)
-	}
-	if repo.Cycles[0].AgentSessionID != "sess-1" {
-		t.Fatalf("cycle agent session id = %q, want %q", repo.Cycles[0].AgentSessionID, "sess-1")
-	}
-	if got := len(repo.Critiques); got != 1 {
-		t.Fatalf("critique count = %d, want 1", got)
-	}
-	if repo.Critiques[0].Description != "Missing nil check before rendering review details" {
-		t.Fatalf("critique description = %q", repo.Critiques[0].Description)
+	if app.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(app.content.View())
-	if !strings.Contains(view, "Missing nil check before rendering review details") {
-		t.Fatalf("content view = %q, want critique text from implementation session review", view)
+	for _, want := range []string{"Under review", "Summary", "Source"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+	if got := len(app.content.overview.data.Tasks); got != 1 {
+		t.Fatalf("overview task count = %d, want 1", got)
+	}
+	if note := app.content.overview.data.Tasks[0].Note; note != "1 critique(s)" {
+		t.Fatalf("overview task note = %q, want %q", note, "1 critique(s)")
 	}
 }
 
@@ -1457,11 +1524,11 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	if updated.sidebar.entries[1].Kind != SidebarEntryTaskSourceDetails {
 		t.Fatalf("task sidebar second row = %#v, want source-details row", updated.sidebar.entries[1])
 	}
-	if updated.content.Mode() != ContentModeImplementing {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeImplementing)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
-	if cmd == nil {
-		t.Fatal("expected overview drilldown to preserve implementing tail command")
+	if cmd != nil {
+		t.Fatal("expected overview drilldown to avoid starting a session tail")
 	}
 }
 
@@ -1526,11 +1593,11 @@ func TestSidebarSourceDetailsYieldsToEscalatedQuestion(t *testing.T) {
 	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
 		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
 	}
-	if updated.content.Mode() != ContentModeQuestion {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeQuestion)
+	if updated.content.Mode() != ContentModeSourceDetails {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
 	}
-	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Need approval before continuing") {
-		t.Fatalf("content view = %q, want escalated question text", view)
+	if view := stripBrowseANSI(updated.content.View()); !strings.Contains(view, "Source details") {
+		t.Fatalf("content view = %q, want source-details surface to remain selected", view)
 	}
 }
 
@@ -1551,8 +1618,8 @@ func TestSidebarSourceDetailsYieldsToCompletedState(t *testing.T) {
 	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
 		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
 	}
-	if updated.content.Mode() != ContentModeCompleted {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeCompleted)
+	if updated.content.Mode() != ContentModeSourceDetails {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
 	}
 }
 
@@ -1609,8 +1676,8 @@ func TestSidebarLeftBacksOutFromTaskContentToSessions(t *testing.T) {
 	if sel == nil || sel.Kind != SidebarEntryWorkItem || sel.WorkItemID != "wi-1" {
 		t.Fatalf("selected entry = %#v, want parent work item row", sel)
 	}
-	if updated.content.Mode() != ContentModeImplementing {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeImplementing)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 }
 
@@ -1653,7 +1720,7 @@ func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
 	if sel == nil || sel.Kind != SidebarEntryWorkItem || sel.WorkItemID != "wi-1" {
 		t.Fatalf("selected entry = %#v, want parent work item row", sel)
 	}
-	if updated.content.Mode() != ContentModeImplementing {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeImplementing)
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
 }
