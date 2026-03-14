@@ -10,6 +10,29 @@
 - When composing body panes with a footer or status bar, reserve the footer rows in layout math first, then ensure the body panes render to exactly the remaining height so the bottom pane border lands directly above the footer.
 
 - Empty, loading, and populated states for the same pane must keep identical outer dimensions. When async data changes the body later, recompute inner list/viewport sizing as needed, but keep overflow clipped or scrollable inside the pane instead of letting the parent box grow and reshuffle sibling panes.
+## Overlay and Modal Styling
+- Overlays and modals use **transparent backgrounds**. Do not add `Background()` or `BorderBackground()` to
+  `OverlayFrame`, `OverlayFrameFocused`, `OverlayPane`, or `OverlayPaneFocused` styles, nor to any
+  per-component styles inside an overlay. The terminal's own background shows through everywhere.
+- **Why**: lipgloss renders a `Width()`-constrained style by padding every line to the full width with the
+  background colour. This paints entire terminal lines — not just the modal area — with the overlay colour.
+  When the overlay closes, those cells are not immediately repainted, so the background bleeds into the
+  underlying view until the next full repaint.
+- **`Background()` vs `BorderBackground()`**: in lipgloss v1, `Background(color)` applies to the content
+  area and padding only. Border characters (`╭─╮╰╯│`) require `BorderBackground(color)`. Both must be set
+  if a style ever needs to colour behind its border characters. This distinction is moot for transparent
+  overlays but matters if a future design requires a coloured background on a bordered component.
+- **ANSI-reset propagation**: `Background()` set on an outer style is cleared by any inner `\x1b[0m]` emitted
+  by a nested component (`list.Model`, `viewport.Model`, nested lipgloss renders). Every segment that must
+  carry a colour must have that colour set on its own style — inheritance across a reset does not work.
+  This applies to separator columns, hints rows, and any other multi-segment join.
+- **Inter-pane separators**: the separator column in `RenderSplitOverlayBody` is a plain repeated space:
+  `strings.TrimSuffix(strings.Repeat(" \n", h), "\n")`. Do not switch it to a lipgloss-styled cell
+  unless the whole split body also moves to an explicit background.
+- **Hints rows**: use `renderOverlayHintsRow` in `views/component_helpers.go`; it handles width and
+  truncation without any background styling.
+
+
 ## TUI Layout Tests
 - For every non-trivial TUI layout change, add tests that assert rendered line width stays within the requested terminal width and rendered line count stays within the requested terminal height, including narrow-size cases.
 - Add coverage for session-present states, not only empty states, so dynamic headers, metadata rows, logs, and status hints cannot silently push layouts past the terminal bounds.
