@@ -1311,6 +1311,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left":
 		if a.mainFocus == mainFocusContent {
+			if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
+				a.content, cmd = a.content.Update(msg)
+				return a, cmd
+			}
 			a.mainFocus = mainFocusSidebar
 			return a, nil
 		}

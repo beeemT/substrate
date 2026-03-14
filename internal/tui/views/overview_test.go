@@ -468,3 +468,44 @@ func TestOverviewPlanOverlayEscapeCancelsInputWithoutClosing(t *testing.T) {
 		t.Fatalf("feedback input = %q, want cleared after esc", got)
 	}
 }
+
+func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	app.workItems[0].State = domain.SessionPlanReview
+	app.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
+	app.plans["wi-1"] = &domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: strings.Repeat("plan line\n", 4),
+	}
+	app.mainFocus = mainFocusContent
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated := model.(App)
+	if cmd != nil {
+		t.Fatalf("opening plan overlay returned cmd %v, want nil", cmd)
+	}
+	if updated.content.overview.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v", updated.mainFocus, mainFocusContent)
+	}
+
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("closing plan overlay returned cmd %v, want nil", cmd)
+	}
+	if updated.content.overview.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayNone)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want %v", updated.mainFocus, mainFocusContent)
+	}
+	if updated.content.Mode() != ContentModeOverview {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
+	}
+}
