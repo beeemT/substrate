@@ -1840,6 +1840,7 @@ func (a App) View() string {
 	}
 
 	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
+	overlayActive := a.overviewOverlayOpen()
 
 	sidebarContent := lipgloss.NewStyle().
 		Width(layout.SidebarInnerWidth).
@@ -1849,7 +1850,7 @@ func (a App) View() string {
 		Content: sidebarContent,
 		Width:   layout.SidebarPaneWidth,
 		Height:  layout.BodyHeight,
-		Focused: a.mainFocus == mainFocusSidebar,
+		Focused: !overlayActive && a.mainFocus == mainFocusSidebar,
 	})
 
 	contentWidth := appContentBodyWidth(layout.ContentInnerWidth)
@@ -1864,7 +1865,7 @@ func (a App) View() string {
 		Content: contentContent,
 		Width:   layout.ContentPaneWidth,
 		Height:  layout.BodyHeight,
-		Focused: a.mainFocus == mainFocusContent,
+		Focused: !overlayActive && a.mainFocus == mainFocusContent,
 	})
 
 	bodyParts := make([]string, 0, 3)
