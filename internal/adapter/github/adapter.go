@@ -20,6 +20,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 type httpClient interface {
@@ -35,9 +36,10 @@ type GithubAdapter struct {
 	defaultBranch string
 	assignee      string
 	viewer        string
+	eventRepo     repository.EventRepository
 
 	mu      sync.RWMutex
-	tracked map[string]int
+	tracked map[string]githubPull
 }
 
 type repoInfo struct {
@@ -78,6 +80,7 @@ type githubMilestone struct {
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	State       string     `json:"state"`
+	HTMLURL     string     `json:"html_url"`
 	CreatedAt   *time.Time `json:"created_at"`
 	UpdatedAt   *time.Time `json:"updated_at"`
 }
@@ -92,6 +95,7 @@ type githubPull struct {
 
 type worktreePayload struct {
 	WorkspaceID   string                    `json:"workspace_id"`
+	WorkItemID    string                    `json:"work_item_id"`
 	Repository    string                    `json:"repository"`
 	Branch        string                    `json:"branch"`
 	WorktreePath  string                    `json:"worktree_path"`
@@ -100,16 +104,24 @@ type worktreePayload struct {
 	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
 	Review        domain.ReviewRef          `json:"review"`
 }
+
 type completedPayload struct {
-	Branch     string `json:"branch"`
-	ExternalID string `json:"external_id"`
+	WorkspaceID string           `json:"workspace_id"`
+	WorkItemID  string           `json:"work_item_id"`
+	Branch      string           `json:"branch"`
+	ExternalID  string           `json:"external_id"`
+	Review      domain.ReviewRef `json:"review"`
 }
 
 func New(ctx context.Context, cfg config.GithubConfig) (*GithubAdapter, error) {
-	return newWithDeps(ctx, cfg, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
+	return newWithDeps(ctx, cfg, nil, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
 
-func newWithDeps(ctx context.Context, cfg config.GithubConfig, client httpClient, resolver tokenResolver) (*GithubAdapter, error) {
+func NewRepoLifecycle(ctx context.Context, cfg config.GithubConfig, eventRepo repository.EventRepository) (*GithubAdapter, error) {
+	return newWithDeps(ctx, cfg, eventRepo, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
+}
+
+func newWithDeps(ctx context.Context, cfg config.GithubConfig, eventRepo repository.EventRepository, client httpClient, resolver tokenResolver) (*GithubAdapter, error) {
 	token := strings.TrimSpace(cfg.Token)
 	if token == "" {
 		var err error
@@ -118,11 +130,11 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, client httpClient
 			return nil, fmt.Errorf("resolve github token: %w", err)
 		}
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}
-	a := &GithubAdapter{cfg: cfg, client: client, baseURL: baseURL, token: token, tracked: make(map[string]int), defaultBranch: "main"}
+	a := &GithubAdapter{cfg: cfg, client: client, baseURL: baseURL, token: token, tracked: make(map[string]githubPull), defaultBranch: "main", eventRepo: eventRepo}
 	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
 		if viewer != "" {
@@ -390,14 +402,25 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
-	exists, prNumber, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, headOwner, p.Branch)
+	pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, baseBranch, headOwner, p.Branch)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if pull != nil {
 		a.mu.Lock()
-		a.tracked[p.Branch] = prNumber
+		a.tracked[p.Branch] = *pull
 		a.mu.Unlock()
+		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  baseOwner + "/" + baseRepo,
+			Ref:       fmt.Sprintf("#%d", pull.Number),
+			URL:       strings.TrimSpace(pull.HTMLURL),
+			State:     githubArtifactState(*pull),
+			Branch:    p.Branch,
+			Draft:     pull.Draft,
+			UpdatedAt: time.Now(),
+		})
 		return nil
 	}
 	title := p.WorkItemTitle
@@ -409,10 +432,20 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	if err := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), map[string]any{"title": title, "head": headOwner + ":" + p.Branch, "base": baseBranch, "draft": true, "body": body}, &created); err != nil {
 		return err
 	}
-
 	a.mu.Lock()
-	a.tracked[p.Branch] = created.Number
+	a.tracked[p.Branch] = created
 	a.mu.Unlock()
+	a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+		Provider:  "github",
+		Kind:      "PR",
+		RepoName:  baseOwner + "/" + baseRepo,
+		Ref:       fmt.Sprintf("#%d", created.Number),
+		URL:       strings.TrimSpace(created.HTMLURL),
+		State:     githubArtifactState(created),
+		Branch:    p.Branch,
+		Draft:     created.Draft,
+		UpdatedAt: time.Now(),
+	})
 	return nil
 }
 
@@ -430,10 +463,7 @@ func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) erro
 }
 
 func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string) error {
-	var p struct {
-		Branch string           `json:"branch"`
-		Review domain.ReviewRef `json:"review"`
-	}
+	var p completedPayload
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		return fmt.Errorf("unmarshal completed payload: %w", err)
 	}
@@ -441,25 +471,50 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		slog.Warn("github: work_item.completed payload has no branch; skipping pr update")
 		return nil
 	}
-	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
-	headOwner := p.Review.HeadRepo.Owner
-	if baseOwner == "" || baseRepo == "" || headOwner == "" {
-		return fmt.Errorf("work item completion payload missing review coordinates")
-	}
-	a.mu.RLock()
-	prNumber, ok := a.tracked[p.Branch]
-	a.mu.RUnlock()
-	if !ok {
-		_, foundNumber, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, headOwner, p.Branch)
+	artifacts := a.artifactsForCompletion(ctx, p)
+	if len(artifacts) == 0 {
+		baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
+		headOwner := p.Review.HeadRepo.Owner
+		if baseOwner == "" || baseRepo == "" || headOwner == "" {
+			return fmt.Errorf("work item completion payload missing review coordinates")
+		}
+		pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, strings.TrimSpace(p.Review.BaseBranch), headOwner, p.Branch)
 		if err != nil {
 			return err
 		}
-		prNumber = foundNumber
-		if prNumber == 0 {
+		if pull == nil {
 			return nil
 		}
+		artifacts = []domain.ReviewArtifact{{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  baseOwner + "/" + baseRepo,
+			Ref:       fmt.Sprintf("#%d", pull.Number),
+			URL:       strings.TrimSpace(pull.HTMLURL),
+			State:     githubArtifactState(*pull),
+			Branch:    p.Branch,
+			Draft:     pull.Draft,
+			UpdatedAt: time.Now(),
+		}}
 	}
-	return a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", baseOwner, baseRepo, prNumber), map[string]any{"draft": false}, nil)
+	for _, artifact := range artifacts {
+		owner, repo, ok := splitGitHubRepoName(artifact.RepoName)
+		if !ok {
+			continue
+		}
+		prNumber, err := parseGitHubPullRef(artifact.Ref)
+		if err != nil {
+			return err
+		}
+		if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber), map[string]any{"draft": false}, nil); err != nil {
+			return err
+		}
+		artifact.Draft = false
+		artifact.State = "ready"
+		artifact.UpdatedAt = time.Now()
+		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, artifact)
+	}
+	return nil
 }
 
 func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
@@ -724,16 +779,92 @@ func (a *GithubAdapter) fetchAssignedOpenIssues(ctx context.Context) ([]githubIs
 	return filtered, nil
 }
 
-func (a *GithubAdapter) findOpenPullByBranch(ctx context.Context, baseOwner, baseRepo, headOwner, branch string) (bool, int, error) {
+func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedPayload) []domain.ReviewArtifact {
+	if a.eventRepo == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
+		return nil
+	}
+	events, err := a.eventRepo.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
+	if err != nil {
+		return nil
+	}
+	latest := make(map[string]domain.ReviewArtifact)
+	for _, event := range events {
+		if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
+			continue
+		}
+		var payload domain.ReviewArtifactEventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			continue
+		}
+		artifact := payload.Artifact
+		if payload.WorkItemID != p.WorkItemID || artifact.Provider != "github" || strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) || strings.TrimSpace(artifact.Ref) == "" || strings.TrimSpace(artifact.RepoName) == "" {
+			continue
+		}
+		key := artifact.RepoName + "|" + artifact.Branch
+		if current, ok := latest[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
+			continue
+		}
+		latest[key] = artifact
+	}
+	artifacts := make([]domain.ReviewArtifact, 0, len(latest))
+	for _, artifact := range latest {
+		artifacts = append(artifacts, artifact)
+	}
+	sort.SliceStable(artifacts, func(i, j int) bool {
+		if artifacts[i].RepoName != artifacts[j].RepoName {
+			return artifacts[i].RepoName < artifacts[j].RepoName
+		}
+		return artifacts[i].Ref < artifacts[j].Ref
+	})
+	return artifacts
+}
+
+func splitGitHubRepoName(raw string) (string, string, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func parseGitHubPullRef(ref string) (int, error) {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "#")
+	if trimmed == "" {
+		return 0, fmt.Errorf("github pull ref is required")
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("parse github pull ref %q: %w", ref, err)
+	}
+	return value, nil
+}
+
+func (a *GithubAdapter) recordReviewArtifact(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact) {
+	if err := adapter.PersistReviewArtifact(ctx, a.eventRepo, workspaceID, workItemID, artifact); err != nil {
+		slog.Warn("github: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
+	}
+}
+
+func githubArtifactState(pull githubPull) string {
+	if pull.Draft {
+		return "draft"
+	}
+	return "ready"
+}
+
+func (a *GithubAdapter) findOpenPullByBranch(ctx context.Context, baseOwner, baseRepo, baseBranch, headOwner, branch string) (*githubPull, error) {
 	query := url.Values{"state": []string{"open"}, "head": []string{headOwner + ":" + branch}}
+	if trimmedBase := strings.TrimSpace(baseBranch); trimmedBase != "" {
+		query.Set("base", trimmedBase)
+	}
 	var pulls []githubPull
 	if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), query, &pulls); err != nil {
-		return false, 0, err
+		return nil, err
 	}
 	if len(pulls) == 0 {
-		return false, 0, nil
+		return nil, nil
 	}
-	return true, pulls[0].Number, nil
+	return &pulls[0], nil
 }
 
 func (a *GithubAdapter) getJSON(ctx context.Context, endpoint string, query url.Values, dst any) error {

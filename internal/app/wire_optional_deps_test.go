@@ -12,7 +12,7 @@ func TestBuildRepoLifecycleAdapters_SkipsGithubWhenTokenResolutionFails(t *testi
 	t.Parallel()
 	cfg := &config.Config{}
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "")
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", nil)
 	if adapters != nil {
 		t.Fatalf("expected nil adapters for empty workspace dir, got %d", len(adapters))
 	}
@@ -42,7 +42,7 @@ func TestBuildRepoLifecycleAdapters_IgnoresSentryConfig(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "token"
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, nil)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want 1", len(adapters))
 	}

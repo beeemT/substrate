@@ -461,57 +461,74 @@ func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
 func TestAppViewWithOverviewActionRequiredFitsWindow(t *testing.T) {
 	t.Parallel()
 
-	app := sizedLayoutTestApp(t, 72, 24)
-	app.sidebar.SetEntries([]SidebarEntry{{
-		Kind:       SidebarEntryWorkItem,
-		WorkItemID: "wi-1",
-		ExternalID: "SUB-1",
-		Title:      "Review plan",
-		State:      domain.SessionPlanReview,
-	}})
-	app.content.SetWorkItem(&domain.Session{
-		ID:         "wi-1",
-		ExternalID: "SUB-1",
-		Title:      "Review plan",
-		State:      domain.SessionPlanReview,
-	})
-	app.content.SetOverviewData(SessionOverviewData{
-		WorkItemID: "wi-1",
-		State:      domain.SessionPlanReview,
-		Header: OverviewHeader{
-			ExternalID:   "SUB-1",
-			Title:        "Review plan",
-			StatusLabel:  "Plan review needed",
-			ProgressText: "0/2 repos complete",
-			Badges:       []string{"waiting for approval"},
-		},
-		Actions: []OverviewActionCard{{
-			Kind:     overviewActionPlanReview,
-			Title:    "Plan review required",
-			Blocked:  "Implementation is waiting for plan approval",
-			Why:      "The plan must be approved, revised, or rejected before implementation can continue.",
-			Affected: []string{"repo-a", "repo-b"},
-			Context:  []string{"Version: v2", "Affected repos: 2", "Ship it safely."},
-		}},
-		Sources: []OverviewSourceItem{{Provider: "GitHub", Ref: "acme/rocket#42"}},
-		Plan: OverviewPlan{
-			StateLabel: "Plan review needed",
-			Exists:     true,
-			Version:    2,
-			RepoCount:  2,
-			Excerpt:    []string{"Ship it safely.", "Repo-a first, repo-b second."},
-		},
-		Tasks: []OverviewTaskRow{{RepoName: "repo-a", TaskPlanStatus: "Pending"}, {RepoName: "repo-b", TaskPlanStatus: "Pending"}},
-	})
-	app.content.SetMode(ContentModeOverview)
+	tests := []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "regular", width: 72, height: 24},
+		{name: "narrow", width: 48, height: 18},
+	}
 
-	lines := assertAppViewFitsWindow(t, app.View(), 72, 24)
-	assertBodyEndsAboveFooter(t, lines)
-	plain := ansi.Strip(strings.Join(lines, "\n"))
-	for _, want := range []string{"Summary", "Action required"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("view = %q, want %q in overview layout", plain, want)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			app := sizedLayoutTestApp(t, tc.width, tc.height)
+			app.sidebar.SetEntries([]SidebarEntry{{
+				Kind:       SidebarEntryWorkItem,
+				WorkItemID: "wi-1",
+				ExternalID: "SUB-1",
+				Title:      "Review plan",
+				State:      domain.SessionPlanReview,
+			}})
+			app.content.SetWorkItem(&domain.Session{
+				ID:         "wi-1",
+				ExternalID: "SUB-1",
+				Title:      "Review plan",
+				State:      domain.SessionPlanReview,
+			})
+			app.content.SetOverviewData(SessionOverviewData{
+				WorkItemID: "wi-1",
+				State:      domain.SessionPlanReview,
+				Header: OverviewHeader{
+					ExternalID:   "SUB-1",
+					Title:        "Review plan",
+					StatusLabel:  "Plan review needed",
+					ProgressText: "0/2 repos complete",
+					Badges:       []string{"waiting for approval"},
+				},
+				Actions: []OverviewActionCard{{
+					Kind:     overviewActionPlanReview,
+					Title:    "Plan review required",
+					Blocked:  "Implementation is waiting for plan approval",
+					Why:      "The plan must be approved, revised, or rejected before implementation can continue.",
+					Affected: []string{"repo-a", "repo-b"},
+					Context:  []string{"Version: v2", "Affected repos: 2", "Ship it safely."},
+				}},
+				Sources: []OverviewSourceItem{{Provider: "GitHub", Ref: "acme/rocket#42"}},
+				Plan: OverviewPlan{
+					StateLabel: "Plan review needed",
+					Exists:     true,
+					Version:    2,
+					RepoCount:  2,
+					Excerpt:    []string{"Ship it safely.", "Repo-a first, repo-b second."},
+				},
+				Tasks: []OverviewTaskRow{{RepoName: "repo-a", TaskPlanStatus: "Pending"}, {RepoName: "repo-b", TaskPlanStatus: "Pending"}},
+			})
+			app.content.SetMode(ContentModeOverview)
+
+			lines := assertAppViewFitsWindow(t, app.View(), tc.width, tc.height)
+			assertBodyEndsAboveFooter(t, lines)
+			plain := ansi.Strip(strings.Join(lines, "\n"))
+			wants := []string{"Summary"}
+			if tc.name == "regular" {
+				wants = append(wants, "Action required")
+			}
+			for _, want := range wants {
+				if !strings.Contains(plain, want) {
+					t.Fatalf("view = %q, want %q in overview layout", plain, want)
+				}
+			}
+		})
 	}
 }
 

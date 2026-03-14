@@ -533,6 +533,7 @@ func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service
 		return err
 	}
 	payload := map[string]any{
+		"workspace_id": workItem.WorkspaceID,
 		"work_item_id": workItemID,
 		"external_id":  workItem.ExternalID,
 	}

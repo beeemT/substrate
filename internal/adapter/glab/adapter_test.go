@@ -107,7 +107,7 @@ func TestParseMRURL_NotFound(t *testing.T) {
 
 func TestOnEvent_UnknownEvent_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 	err := a.OnEvent(context.Background(), domain.SystemEvent{
 		EventType: "workspace.created",
 		Payload:   "{}",
@@ -126,7 +126,7 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 	stub := &stubRunner{
 		output: []byte("https://gitlab.com/org/repo/-/merge_requests/1\n"),
 	}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	payload := mustJSON(worktreePayload{
 		WorkspaceID:   "ws-1",
@@ -166,7 +166,7 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_DraftTitleFromSlug(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/2\n")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-MAN-7-refactor-auth",
@@ -189,7 +189,7 @@ func TestOnEvent_WorktreeCreated_ReviewersAndLabels(t *testing.T) {
 	a := newWithRunner(config.GlabConfig{
 		Reviewers: []string{"alice", "bob"},
 		Labels:    []string{"backend"},
-	}, stub.run)
+	}, nil, stub.run)
 
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-X-1-thing",
@@ -210,7 +210,7 @@ func TestOnEvent_WorktreeCreated_ReviewersAndLabels(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_GlabFailure_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{err: errors.New("glab: authentication required")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-FOO-2-fail",
@@ -235,7 +235,7 @@ func TestOnEvent_WorktreeCreated_GlabFailure_ReturnsNil(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_MalformedPayload_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	err := a.OnEvent(context.Background(), domain.SystemEvent{
 		EventType: string(domain.EventWorktreeCreated),
@@ -253,7 +253,7 @@ func TestOnEvent_WorktreeCreated_MalformedPayload_ReturnsNil(t *testing.T) {
 
 func TestOnEvent_WorkItemCompleted_UnDraftsMRs(t *testing.T) {
 	stub := &stubRunner{}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	// Pre-populate tracking
 	branch := "sub-LIN-FOO-99-complete-me"
@@ -272,26 +272,30 @@ func TestOnEvent_WorkItemCompleted_UnDraftsMRs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(stub.calls) != 2 {
-		t.Fatalf("expected 2 glab calls (one per repo), got %d", len(stub.calls))
+	if len(stub.calls) != 4 {
+		t.Fatalf("expected 4 glab calls (update + view per repo), got %d", len(stub.calls))
 	}
+	updateCalls := 0
 	for i, call := range stub.calls {
 		joined := strings.Join(call.args, " ")
-		if !strings.Contains(joined, "mr update") {
-			t.Errorf("call[%d] not mr update: %q", i, joined)
+		if strings.Contains(joined, "mr update") {
+			updateCalls++
+			if !strings.Contains(joined, "--draft=false") {
+				t.Errorf("call[%d] missing --draft=false: %q", i, joined)
+			}
+			if !strings.Contains(joined, "--source-branch "+branch) {
+				t.Errorf("call[%d] missing --source-branch: %q", i, joined)
+			}
 		}
-		if !strings.Contains(joined, "--draft=false") {
-			t.Errorf("call[%d] missing --draft=false: %q", i, joined)
-		}
-		if !strings.Contains(joined, "--source-branch "+branch) {
-			t.Errorf("call[%d] missing --source-branch: %q", i, joined)
-		}
+	}
+	if updateCalls != 2 {
+		t.Fatalf("updateCalls = %d, want 2", updateCalls)
 	}
 }
 
 func TestOnEvent_WorkItemCompleted_NoBranch_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	payload := mustJSON(map[string]string{"external_id": "LIN-FOO-1"}) // no branch
 	err := a.OnEvent(context.Background(), domain.SystemEvent{
@@ -308,7 +312,7 @@ func TestOnEvent_WorkItemCompleted_NoBranch_ReturnsNil(t *testing.T) {
 
 func TestOnEvent_WorkItemCompleted_NoTrackedRepos_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	payload := mustJSON(completedPayload{Branch: "sub-LIN-X-1-unknown"})
 	err := a.OnEvent(context.Background(), domain.SystemEvent{
@@ -325,7 +329,7 @@ func TestOnEvent_WorkItemCompleted_NoTrackedRepos_ReturnsNil(t *testing.T) {
 
 func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{err: errors.New("glab: MR not found")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	branch := "sub-LIN-FOO-5-fail"
 	a.mu.Lock()
@@ -347,7 +351,7 @@ func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 func TestMRExists_MRPresent_ReturnsTrue(t *testing.T) {
 	mrJSON := `{"iid":3,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/3"}`
 	stub := &stubRunner{output: []byte(mrJSON)}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	if !a.mrExists(context.Background(), "/wt", "sub-LIN-FOO-1-test") {
 		t.Error("expected mrExists to return true for valid JSON response")
@@ -364,7 +368,7 @@ func TestMRExists_MRPresent_ReturnsTrue(t *testing.T) {
 
 func TestMRExists_GlabError_ReturnsFalse(t *testing.T) {
 	stub := &stubRunner{err: errors.New("FAILED: 404 Not Found")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	if a.mrExists(context.Background(), "/wt", "no-such-branch") {
 		t.Error("expected mrExists to return false on glab error")
@@ -373,7 +377,7 @@ func TestMRExists_GlabError_ReturnsFalse(t *testing.T) {
 
 func TestMRExists_InvalidJSON_ReturnsFalse(t *testing.T) {
 	stub := &stubRunner{output: []byte("not json")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	if a.mrExists(context.Background(), "/wt", "branch") {
 		t.Error("expected mrExists to return false on invalid JSON")
@@ -383,7 +387,7 @@ func TestMRExists_InvalidJSON_ReturnsFalse(t *testing.T) {
 func TestMRExists_ZeroIID_ReturnsFalse(t *testing.T) {
 	// Some glab versions return empty JSON on not-found instead of non-zero exit
 	stub := &stubRunner{output: []byte(`{"iid":0,"state":"","web_url":""}`)}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 
 	if a.mrExists(context.Background(), "/wt", "branch") {
 		t.Error("expected mrExists to return false when iid == 0")
@@ -404,7 +408,7 @@ func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 		t.Errorf("unexpected call %d: %q %v", callCount, name, args)
 		return nil, errors.New("unexpected")
 	}
-	a := newWithRunner(config.GlabConfig{}, runner)
+	a := newWithRunner(config.GlabConfig{}, nil, runner)
 
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-FOO-7-existing-mr",
@@ -424,7 +428,7 @@ func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/4\n")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 	payload := mustJSON(worktreePayload{Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Number: 40}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)
@@ -437,7 +441,7 @@ func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsLinearResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 	payload := mustJSON(worktreePayload{Branch: "sub-LIN-FOO-123-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "linear", Kind: "issue", ID: "FOO-123", URL: "https://linear.app/acme/issue/FOO-123"}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)
@@ -450,7 +454,7 @@ func TestOnEvent_WorktreeCreated_AddsLinearResolvesFooter(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsCrossProjectGitLabResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/6\n")}
-	a := newWithRunner(config.GlabConfig{}, stub.run)
+	a := newWithRunner(config.GlabConfig{}, nil, stub.run)
 	payload := mustJSON(worktreePayload{Branch: "sub-GL-9999-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Repo: "other-group/other-project", URL: "https://gitlab.example.com/other-group/other-project/-/issues/40", Number: 40}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)

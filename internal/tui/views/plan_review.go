@@ -66,10 +66,13 @@ func (m *PlanReviewModel) syncViewportSize() {
 func (m *PlanReviewModel) SetTitle(title string) { m.title = title }
 
 func (m *PlanReviewModel) SetPlan(plan domain.Plan) {
+	reset := m.planID != plan.ID || m.planContent != plan.OrchestratorPlan
 	m.planID = plan.ID
 	m.planContent = plan.OrchestratorPlan
 	m.viewport.SetContent(plan.OrchestratorPlan)
-	m.viewport.GotoTop()
+	if reset {
+		m.viewport.GotoTop()
+	}
 }
 
 func (m *PlanReviewModel) SetWorkItemID(id string) { m.workItemID = id }

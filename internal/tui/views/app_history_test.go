@@ -566,8 +566,9 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 
+	app.content.SetSize(100, 40)
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"SUB-1 · Local item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42"} {
+	for _, want := range []string{"SUB-1 · Local item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -989,8 +990,9 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 	if !strings.Contains(toastView, "ℹ Opened existing item SUB-1") {
 		t.Fatalf("toast view = %q", toastView)
 	}
+	updated.content.SetSize(100, 40)
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"SUB-1 · Existing item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42"} {
+	for _, want := range []string{"SUB-1 · Existing item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1123,12 +1125,36 @@ func newSidebarDrilldownTestApp() App {
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"},
 		Title:         "Work item",
+		Description:   "## Work item plan\n\nCombine auth and billing fixes into one coordinated rollout.",
 		Labels:        []string{"bug", "backend"},
 		Metadata: map[string]any{
 			"tracker_refs": []domain.TrackerReference{
 				{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42},
 				{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 43},
 			},
+			"source_summaries": []domain.SourceSummary{{
+				Provider:    "github",
+				Kind:        "issue",
+				Ref:         "acme/rocket#42",
+				Title:       "Fix auth",
+				Description: "Investigate auth timeouts in the login flow.",
+				Excerpt:     "Investigate auth timeouts in the login flow.",
+				State:       "open",
+				Labels:      []string{"bug", "backend"},
+				Container:   "acme/rocket",
+				URL:         "https://github.com/acme/rocket/issues/42",
+			}, {
+				Provider:    "github",
+				Kind:        "issue",
+				Ref:         "acme/rocket#43",
+				Title:       "Repair billing",
+				Description: "Stabilize billing retries and duplicate charge handling.",
+				Excerpt:     "Stabilize billing retries and duplicate charge handling.",
+				State:       "open",
+				Labels:      []string{"payments"},
+				Container:   "acme/rocket",
+				URL:         "https://github.com/acme/rocket/issues/43",
+			}},
 		},
 		State:     domain.SessionImplementing,
 		CreatedAt: now,
@@ -1157,7 +1183,7 @@ func newSidebarDrilldownTestApp() App {
 	app.plans[workItem.ID] = plan
 	app.subPlans[plan.ID] = []domain.TaskPlan{subPlan}
 	app.sessions = []domain.Task{session}
-	app.content.SetSize(80, 20)
+	app.content.SetSize(80, 60)
 	app.rebuildSidebar()
 	app.currentWorkItemID = workItem.ID
 	app.sidebar.SelectWorkItem(workItem.ID)
@@ -1180,9 +1206,23 @@ func newPlanningDrilldownTestApp() App {
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{"acme/rocket#99"},
 		Title:         "Plan this work",
-		State:         domain.SessionPlanning,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{{
+				Provider:    "github",
+				Kind:        "issue",
+				Ref:         "acme/rocket#99",
+				Title:       "Planning issue",
+				Description: "## Goal\n\nPlan the migration carefully before coding.",
+				Excerpt:     "Plan the migration carefully before coding.",
+				State:       "open",
+				Labels:      []string{"planning"},
+				Container:   "acme/rocket",
+				URL:         "https://github.com/acme/rocket/issues/99",
+			}},
+		},
+		State:     domain.SessionPlanning,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	planningSession := domain.Task{
 		ID:          "plan-sess-1",
@@ -1196,7 +1236,7 @@ func newPlanningDrilldownTestApp() App {
 	}
 	app.workItems = []domain.Session{workItem}
 	app.sessions = []domain.Task{planningSession}
-	app.content.SetSize(80, 20)
+	app.content.SetSize(80, 60)
 	app.rebuildSidebar()
 	app.currentWorkItemID = workItem.ID
 	app.sidebar.SelectWorkItem(workItem.ID)
@@ -1250,7 +1290,7 @@ func TestPlanningSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 		t.Fatal("expected planning source-details selection to avoid starting a session tail")
 	}
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Source details", "Provider: GitHub", "Selected: 1 issue", "acme/rocket#99"} {
+	for _, want := range []string{"Source details", "Provider: GitHub", "Selected: 1 issue", "acme/rocket#99 · Planning issue", "Labels: planning", "Plan the migration carefully before coding."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1312,6 +1352,59 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 	}
 }
 
+func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
+	app := newPlanningDrilldownTestApp()
+	app.sessionsDir = t.TempDir()
+	content := "Prompt: Begin planning\nTool: read — Reading guidance\n"
+	logPath := filepath.Join(app.sessionsDir, "plan-sess-1.log")
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	offset := int64(len(content))
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated := model.(App)
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatal("expected source-details selection to avoid starting a tail command")
+	}
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected selecting the planning session row to start tailing the session log")
+	}
+	model, _ = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Lines: []string{"Prompt: Begin planning", "Tool: read — Reading guidance"}, NextOffset: offset})
+	updated = model.(App)
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated = model.(App)
+	if cmd != nil {
+		t.Fatalf("moving back to source details returned cmd %v, want nil", cmd)
+	}
+	if updated.content.Mode() != ContentModeSourceDetails {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
+	}
+	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected reopening the planning session row to resume the tail command")
+	}
+	msg := cmd()
+	linesMsg, ok := msg.(SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("cmd() message = %T, want SessionLogLinesMsg", msg)
+	}
+	if len(linesMsg.Lines) != 0 {
+		t.Fatalf("resumed lines = %v, want no duplicate replay at saved offset", linesMsg.Lines)
+	}
+	if linesMsg.NextOffset != offset {
+		t.Fatalf("next offset = %d, want %d", linesMsg.NextOffset, offset)
+	}
+	if updated.content.sessionLog.offset != offset {
+		t.Fatalf("session log offset = %d, want %d", updated.content.sessionLog.offset, offset)
+	}
+}
+
 func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 	t.Parallel()
 
@@ -1326,7 +1419,7 @@ func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"Action required", "Interrupted task needs recovery"} {
+	for _, want := range []string{"Action required", "Interrupted task needs recovery", "previous substrate owner stopped heartbeating"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1549,13 +1642,10 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 		t.Fatal("expected source-details selection to avoid starting a session tail")
 	}
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Source details", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42", "acme/rocket#43"} {
+	for _, want := range []string{"Source details", "Work item", "Combine auth and billing fixes into one coordinated rollout.", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42 · Fix auth", "Investigate auth timeouts in the login flow.", "Labels: bug, backend", "acme/rocket#43 · Repair billing", "Stabilize billing retries and duplicate charge handling."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
-	}
-	if !strings.Contains(view, "Labels are omitted here because") || !strings.Contains(view, "multiple source") {
-		t.Fatalf("content view = %q, want multi-source labels note", view)
 	}
 	if updated.selectedTaskSessionID() != taskSidebarSourceDetailsID {
 		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)

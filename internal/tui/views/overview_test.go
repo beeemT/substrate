@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 func TestTaskOverviewMatchesRootOverviewContent(t *testing.T) {
@@ -135,6 +138,333 @@ func TestOverviewUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
 	}
 }
 
+type overviewEventRepo struct {
+	events []domain.SystemEvent
+}
+
+func (r *overviewEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
+	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *overviewEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
+	filtered := make([]domain.SystemEvent, 0, len(r.events))
+	for _, event := range r.events {
+		if event.EventType == eventType {
+			filtered = append(filtered, event)
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+
+func (r *overviewEventRepo) ListByWorkspaceID(_ context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
+	filtered := make([]domain.SystemEvent, 0, len(r.events))
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID {
+			filtered = append(filtered, event)
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+
+func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	payload, err := json.Marshal(domain.ReviewArtifactEventPayload{
+		WorkItemID: "wi-1",
+		Artifact: domain.ReviewArtifact{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  "acme/rocket",
+			Ref:       "#7",
+			URL:       "https://github.com/acme/rocket/pull/7",
+			State:     "ready",
+			Branch:    "sub-branch",
+			UpdatedAt: now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	noise := make([]domain.SystemEvent, 0, 251)
+	for i := 0; i < 250; i++ {
+		noise = append(noise, domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventWorkItemCompleted), WorkspaceID: "ws-local", Payload: `{}`, CreatedAt: now.Add(time.Duration(i+1) * time.Minute)})
+	}
+	noise = append(noise, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventReviewArtifactRecorded),
+		WorkspaceID: "ws-local",
+		Payload:     string(payload),
+		CreatedAt:   now,
+	})
+	repo := &overviewEventRepo{events: noise}
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}, Events: repo})
+	app.content.SetSize(100, 40)
+	app.workItems = []domain.Session{{
+		ID:          "wi-1",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-1",
+		Title:       "Completed work",
+		State:       domain.SessionCompleted,
+		Metadata:    map[string]any{"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}}},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}}
+	app.currentWorkItemID = "wi-1"
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-1")
+	if cmd := app.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
+	if got := len(app.content.overview.data.External.Reviews); got != 1 {
+		t.Fatalf("external review rows = %d, want 1", got)
+	}
+	row := app.content.overview.data.External.Reviews[0]
+	if row.Ref != "#7" || row.URL == "" || row.State != "ready" {
+		t.Fatalf("review row = %+v", row)
+	}
+	view := stripBrowseANSI(app.content.View())
+	for _, want := range []string{"External lifecycle", "Review artifacts", "#7"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app.content.SetSize(90, 24)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-local", ExternalID: "SUB-1", Title: "Review plan", State: domain.SessionReviewing, CreatedAt: now, UpdatedAt: now}}
+	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved, Version: 1, UpdatedAt: now}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted, UpdatedAt: now}}
+	app.sessions = []domain.Task{{ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-local", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now}}
+	app.reviews["sess-1"] = ReviewsLoadedMsg{
+		SessionID: "sess-1",
+		Cycles:    []domain.ReviewCycle{{ID: "cycle-1", AgentSessionID: "sess-1", CycleNumber: 1, Status: domain.ReviewCycleCritiquesFound}},
+		Critiques: map[string][]domain.Critique{"cycle-1": {{ID: "crit-1", ReviewCycleID: "cycle-1", Severity: domain.CritiqueMajor, Description: "Missing nil check before rendering review details"}}},
+	}
+	app.currentWorkItemID = "wi-1"
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-1")
+	if cmd := app.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
+	if got := len(app.content.overview.data.Actions); got != 1 {
+		t.Fatalf("overview actions = %d, want 1", got)
+	}
+	if app.content.overview.data.Actions[0].Kind != overviewActionReviewing {
+		t.Fatalf("overview action kind = %q, want %q", app.content.overview.data.Actions[0].Kind, overviewActionReviewing)
+	}
+	hints := app.content.KeybindHints()
+	for _, want := range []string{"Re-implement", "Override accept", "Inspect review"} {
+		found := false
+		for _, hint := range hints {
+			if hint.Label == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("keybind hints = %#v, want %q", hints, want)
+		}
+	}
+	view := stripBrowseANSI(app.content.View())
+	for _, want := range []string{"Action required", "Review requires decision", "repo-a"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestReviewingOverviewExposesReviewArtifactAction(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionReviewing,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Reviewing work", StatusLabel: "Under review", UpdatedAt: time.Now()},
+		External: OverviewExternalLifecycle{
+			Reviews: []OverviewReviewRow{{RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "ready"}},
+		},
+	})
+	foundHint := false
+	for _, hint := range m.KeybindHints() {
+		if hint.Label == "Review artifacts" {
+			foundHint = true
+			break
+		}
+	}
+	if !foundHint {
+		t.Fatalf("keybind hints = %#v, want review-artifacts hint", m.KeybindHints())
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	view := stripBrowseANSI(updated.View())
+	for _, want := range []string{"Review artifacts", "#7", "acme/rocket"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overlay view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header: OverviewHeader{
+			ExternalID:  "SUB-1",
+			Title:       "Completed work",
+			StatusLabel: "Completed",
+			UpdatedAt:   time.Now(),
+		},
+		External: OverviewExternalLifecycle{
+			Reviews: []OverviewReviewRow{{RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "ready"}},
+		},
+	})
+	foundHint := false
+	for _, hint := range m.KeybindHints() {
+		if hint.Label == "Review artifacts" {
+			foundHint = true
+			break
+		}
+	}
+	if !foundHint {
+		t.Fatalf("keybind hints = %#v, want review-artifacts hint", m.KeybindHints())
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	view := stripBrowseANSI(updated.View())
+	for _, want := range []string{"Completed", "#7", "acme/rocket"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overlay view = %q, want %q", view, want)
+		}
+	}
+	opened, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected completion overlay enter to emit open-url command")
+	}
+	msg := cmd()
+	openMsg, ok := msg.(OpenExternalURLMsg)
+	if !ok {
+		t.Fatalf("cmd() message = %T, want OpenExternalURLMsg", msg)
+	}
+	if openMsg.URL != "https://github.com/acme/rocket/pull/7" {
+		t.Fatalf("open url = %q, want review artifact url", openMsg.URL)
+	}
+	if opened.completed.selectedLink != 0 {
+		t.Fatalf("selected link = %d, want 0", opened.completed.selectedLink)
+	}
+}
+
 func teaKeyRight() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRight}
+}
+
+func TestOverviewTabRebindsQuestionToSelectedAction(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionImplementing,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Question routing", StatusLabel: "Implementing", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{
+			{Kind: overviewActionQuestion, Title: "Question 1", Question: &domain.Question{ID: "q-1", Content: "First question?"}, ProposedAnswer: "first"},
+			{Kind: overviewActionQuestion, Title: "Question 2", Question: &domain.Question{ID: "q-2", Content: "Second question?"}, ProposedAnswer: "second"},
+		},
+	})
+
+	if m.question.question.ID != "q-1" {
+		t.Fatalf("initial question id = %q, want q-1", m.question.question.ID)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if updated.question.question.ID != "q-2" {
+		t.Fatalf("question after tab = %q, want q-2", updated.question.question.ID)
+	}
+}
+
+func TestOverviewRefreshPreservesViewportPlanAndQuestionState(t *testing.T) {
+	t.Parallel()
+
+	plan := domain.Plan{ID: "plan-1", OrchestratorPlan: strings.Repeat("plan line\n", 20)}
+	data := SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionPlanReview,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Refresh state", StatusLabel: "Plan review needed", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind:           overviewActionQuestion,
+			Title:          "Need clarification",
+			Question:       &domain.Question{ID: "q-1", Content: "Question text"},
+			ProposedAnswer: "Proposed reply",
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan},
+	}
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(90, 24)
+	m.SetData(data)
+	m.viewport.YOffset = 5
+	m.planReview.viewport.YOffset = 7
+	m.question.input.SetValue("draft reply")
+
+	m.SetData(data)
+
+	if m.viewport.YOffset != 5 {
+		t.Fatalf("overview offset = %d, want 5", m.viewport.YOffset)
+	}
+	if m.planReview.viewport.YOffset != 7 {
+		t.Fatalf("plan review offset = %d, want 7", m.planReview.viewport.YOffset)
+	}
+	if got := m.question.input.Value(); got != "draft reply" {
+		t.Fatalf("draft reply = %q, want preserved input", got)
+	}
+}
+
+func TestOverviewPlanOverlayEscapeCancelsInputWithoutClosing(t *testing.T) {
+	t.Parallel()
+
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 10)}
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionPlanReview,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Plan review", StatusLabel: "Plan review needed", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind: overviewActionPlanReview,
+			Plan: &plan,
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan},
+	})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated.planReview.feedbackInput.SetValue("needs changes")
+	if updated.overlay != overviewOverlayPlan || updated.planReview.inputMode != planReviewChanges {
+		t.Fatalf("overlay/input mode = %v/%v, want plan overlay in changes mode", updated.overlay, updated.planReview.inputMode)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want plan overlay to remain open after esc", updated.overlay)
+	}
+	if updated.planReview.inputMode != planReviewNormal {
+		t.Fatalf("input mode = %v, want normal after esc", updated.planReview.inputMode)
+	}
+	if got := updated.planReview.feedbackInput.Value(); got != "" {
+		t.Fatalf("feedback input = %q, want cleared after esc", got)
+	}
 }

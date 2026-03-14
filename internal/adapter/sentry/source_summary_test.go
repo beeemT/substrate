@@ -35,10 +35,35 @@ func TestResolveMultipleIssuesPersistsSourceSummaries(t *testing.T) {
 	if !ok || len(summaries) != 2 {
 		t.Fatalf("source_summaries = %#v, want 2 typed summaries", item.Metadata["source_summaries"])
 	}
-	if summaries[0].Ref != "SEN-101" || summaries[0].Title != "Crash in checkout" || summaries[0].URL == "" {
+	if summaries[0].Ref != "SEN-101" || summaries[0].Title != "Crash in checkout" || summaries[0].Description != "svc.handler" || summaries[0].State != "unresolved" || summaries[0].Container != "web" || len(summaries[0].Metadata) < 4 || summaries[0].URL == "" {
 		t.Fatalf("summary[0] = %+v", summaries[0])
 	}
-	if summaries[1].Ref != "SEN-202" || summaries[1].Title != "Panic in billing" || summaries[1].URL == "" {
+	if summaries[1].Ref != "SEN-202" || summaries[1].Title != "Panic in billing" || summaries[1].Description != "svc.handler" || summaries[1].State != "unresolved" || summaries[1].Container != "api" || len(summaries[1].Metadata) < 4 || summaries[1].URL == "" {
 		t.Fatalf("summary[1] = %+v", summaries[1])
+	}
+}
+
+func TestResolveRepeatedIssuesDedupesSourceSummaries(t *testing.T) {
+	t.Parallel()
+
+	issue := testIssue("101", "SEN-101", "Crash in checkout", "web")
+	a := testAdapter(t, config.SentryConfig{Token: "token", Organization: "acme", BaseURL: "https://sentry.example/api/0"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		issueID := strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/api/0/organizations/acme/issues/"), "/")
+		if issueID != "101" {
+			t.Fatalf("unexpected request path: %s", req.URL.Path)
+		}
+		return jsonResponse(t, http.StatusOK, nil, issue), nil
+	}))
+
+	item, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"101", "101"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	summaries, ok := item.Metadata["source_summaries"].([]domain.SourceSummary)
+	if !ok || len(summaries) != 1 {
+		t.Fatalf("source_summaries = %#v, want 1 deduped summary", item.Metadata["source_summaries"])
+	}
+	if summaries[0].Ref != "SEN-101" {
+		t.Fatalf("summary[0] = %+v", summaries[0])
 	}
 }

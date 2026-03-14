@@ -35,8 +35,9 @@ func (m *SourceDetailsModel) SetSize(w, h int) {
 }
 
 func (m *SourceDetailsModel) SetSession(session *domain.Session) {
+	reset := m.session == nil || session == nil || m.session.ID != session.ID
 	m.session = session
-	m.syncViewport(true)
+	m.syncViewport(reset)
 }
 
 func (m SourceDetailsModel) KeybindHints() []KeybindHint {
@@ -116,10 +117,16 @@ func renderSourceDetailsDocument(st styles.Styles, session *domain.Session, widt
 			Width: width,
 		}),
 	}
-	if references := renderSourceReferencesBody(st, session, components.CalloutInnerWidth(st, width)); references != "" {
+	if workItem := renderAggregateWorkItemBody(session, width); workItem != "" {
+		sections = append(sections,
+			st.SectionLabel.Render("Work item"),
+			workItem,
+		)
+	}
+	if items := renderSourceItemsBody(st, session, width); items != "" {
 		sections = append(sections,
 			st.SectionLabel.Render("Selected items"),
-			components.RenderCallout(st, components.CalloutSpec{Body: references, Width: width, Variant: components.CalloutCard}),
+			items,
 		)
 	}
 	return strings.Join(sections, "\n\n")
@@ -128,7 +135,7 @@ func renderSourceDetailsDocument(st styles.Styles, session *domain.Session, widt
 func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width int) string {
 	labelStyle := st.SectionLabel
 	valueStyle := st.SettingsText
-	rows := make([]string, 0, 6)
+	rows := make([]string, 0, 5)
 	add := func(label, value string) {
 		if strings.TrimSpace(value) == "" {
 			return
@@ -150,8 +157,6 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 		if len(session.Labels) > 0 {
 			add("Labels", strings.Join(session.Labels, ", "))
 		}
-	} else if len(session.Labels) > 0 {
-		rows = append(rows, ansi.Hardwrap(st.Muted.Render("Labels are omitted here because this session aggregates multiple source items."), width, true))
 	}
 	if len(rows) == 0 {
 		return st.Muted.Render("No source summary available.")
@@ -159,38 +164,210 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 	return strings.Join(rows, "\n")
 }
 
-func renderSourceReferencesBody(st styles.Styles, session *domain.Session, width int) string {
-	summaries := sessionSourceSummaries(session.Metadata)
-	rows := make([]string, 0, max(len(summaries), max(len(sessionTrackerRefs(session.Metadata)), len(session.SourceItemIDs))))
-	if len(summaries) > 0 {
-		for _, summary := range summaries {
-			block := []string{ansi.Hardwrap(st.SettingsText.Render("• "+firstNonEmptyString(summary.Ref, "unknown")), width, true)}
-			if strings.TrimSpace(summary.Title) != "" {
-				block = append(block, ansi.Hardwrap(st.Muted.Render("  "+summary.Title), width, true))
-			}
-			if strings.TrimSpace(summary.Excerpt) != "" {
-				block = append(block, ansi.Hardwrap(st.Muted.Render("  "+summarizeText(summary.Excerpt, 120)), width, true))
-			}
-			rows = append(rows, strings.Join(block, "\n"))
+func renderAggregateWorkItemBody(session *domain.Session, width int) string {
+	if session == nil || sessionSourceCount(session) <= 1 {
+		return ""
+	}
+	return renderMarkdownDocument(strings.TrimSpace(session.Description), width)
+}
+
+func renderSourceItemsBody(st styles.Styles, session *domain.Session, width int) string {
+	items := sessionSourceItems(session)
+	if len(items) > 0 {
+		blocks := make([]string, 0, len(items))
+		for i, item := range items {
+			blocks = append(blocks, renderSourceItemBlock(st, item, i, width))
 		}
-	} else {
-		refs := sessionTrackerRefs(session.Metadata)
-		for _, ref := range refs {
-			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
-		}
-		if len(rows) == 0 {
-			for _, id := range session.SourceItemIDs {
-				if strings.TrimSpace(id) == "" {
-					continue
-				}
-				rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), width, true))
+		return strings.Join(blocks, "\n\n")
+	}
+
+	refs := sessionTrackerRefs(session.Metadata)
+	rows := make([]string, 0, max(len(refs), len(session.SourceItemIDs)))
+	for _, ref := range refs {
+		rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
+	}
+	if len(rows) == 0 {
+		for _, id := range session.SourceItemIDs {
+			if strings.TrimSpace(id) == "" {
+				continue
 			}
+			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), width, true))
 		}
 	}
 	if len(rows) == 0 {
 		return ""
 	}
 	return strings.Join(rows, "\n")
+}
+
+func renderSourceItemBlock(st styles.Styles, item domain.SourceSummary, index, width int) string {
+	sections := []string{st.SectionLabel.Render(renderSourceItemHeading(item, index))}
+	if metadata := renderSourceItemMetadata(st, item, components.CalloutInnerWidth(st, width)); metadata != "" {
+		sections = append(sections, components.RenderCallout(st, components.CalloutSpec{Body: metadata, Width: width, Variant: components.CalloutCard}))
+	}
+	if markdown := sourceItemMarkdown(item); markdown != "" {
+		sections = append(sections, st.SectionLabel.Render("Description"), renderMarkdownDocument(markdown, width))
+	} else {
+		sections = append(sections, st.Muted.Render("No description captured."))
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func renderSourceItemHeading(item domain.SourceSummary, index int) string {
+	ref := strings.TrimSpace(item.Ref)
+	title := strings.TrimSpace(item.Title)
+	switch {
+	case ref != "" && title != "":
+		return ref + " · " + title
+	case title != "":
+		return title
+	case ref != "":
+		return ref
+	default:
+		return fmt.Sprintf("Source item %d", index+1)
+	}
+}
+
+func renderSourceItemMetadata(st styles.Styles, item domain.SourceSummary, width int) string {
+	labelStyle := st.SectionLabel
+	valueStyle := st.SettingsText
+	linkStyle := st.Link
+	rows := make([]string, 0, 8+len(item.Metadata))
+	add := func(label, value string, link bool) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		style := valueStyle
+		if link {
+			style = linkStyle
+		}
+		rows = append(rows, ansi.Hardwrap(labelStyle.Render(label+": ")+style.Render(value), width, true))
+	}
+
+	add("Provider", detailProviderLabel(item.Provider), false)
+	if strings.TrimSpace(item.Kind) != "" {
+		add("Type", trackerRefKindLabel(item.Kind), false)
+	}
+	add("Ref", item.Ref, false)
+	add("State", item.State, false)
+	add("Container", item.Container, false)
+	if len(item.Labels) > 0 {
+		add("Labels", strings.Join(item.Labels, ", "), false)
+	}
+	if item.CreatedAt != nil && !item.CreatedAt.IsZero() {
+		add("Created", item.CreatedAt.Local().Format("2006-01-02 15:04"), false)
+	}
+	if item.UpdatedAt != nil && !item.UpdatedAt.IsZero() {
+		add("Updated", item.UpdatedAt.Local().Format("2006-01-02 15:04"), false)
+	}
+	add("URL", item.URL, true)
+	for _, field := range item.Metadata {
+		value := strings.TrimSpace(field.Value)
+		add(field.Label, value, strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://"))
+	}
+	if len(rows) == 0 {
+		return st.Muted.Render("No metadata available.")
+	}
+	return strings.Join(rows, "\n")
+}
+
+func sourceItemMarkdown(item domain.SourceSummary) string {
+	if strings.TrimSpace(item.Description) != "" {
+		return item.Description
+	}
+	return strings.TrimSpace(item.Excerpt)
+}
+
+func sessionSourceItems(session *domain.Session) []domain.SourceSummary {
+	if session == nil {
+		return nil
+	}
+	summaries := sessionSourceSummaries(session.Metadata)
+	if len(summaries) > 0 {
+		items := make([]domain.SourceSummary, len(summaries))
+		for i, summary := range summaries {
+			items[i] = hydrateSourceSummary(session, summary, i, len(summaries))
+		}
+		return items
+	}
+	if sessionSourceCount(session) != 1 {
+		return nil
+	}
+	return []domain.SourceSummary{hydrateSourceSummary(session, domain.SourceSummary{
+		Provider:    session.Source,
+		Kind:        sourceScopeKind(session.SourceScope),
+		Ref:         sessionSourceRef(session, 0),
+		Title:       strings.TrimSpace(session.Title),
+		Description: strings.TrimSpace(session.Description),
+		Excerpt:     summarizeText(session.Description, 240),
+	}, 0, 1)}
+}
+
+func hydrateSourceSummary(session *domain.Session, summary domain.SourceSummary, index, total int) domain.SourceSummary {
+	if session == nil {
+		return summary
+	}
+	hydrated := summary
+	if strings.TrimSpace(hydrated.Provider) == "" {
+		hydrated.Provider = session.Source
+	}
+	if strings.TrimSpace(hydrated.Kind) == "" {
+		hydrated.Kind = sourceScopeKind(session.SourceScope)
+	}
+	if strings.TrimSpace(hydrated.Ref) == "" {
+		hydrated.Ref = sessionSourceRef(session, index)
+	}
+	if total != 1 {
+		return hydrated
+	}
+	if strings.TrimSpace(hydrated.Title) == "" {
+		hydrated.Title = strings.TrimSpace(session.Title)
+	}
+	if strings.TrimSpace(hydrated.Description) == "" {
+		hydrated.Description = strings.TrimSpace(session.Description)
+	}
+	if strings.TrimSpace(hydrated.State) == "" {
+		hydrated.State = sessionExternalState(session)
+	}
+	if len(hydrated.Labels) == 0 && len(session.Labels) > 0 {
+		hydrated.Labels = append([]string(nil), session.Labels...)
+	}
+	if strings.TrimSpace(hydrated.Container) == "" {
+		hydrated.Container = strings.Join(sessionContainers(session), ", ")
+	}
+	if strings.TrimSpace(hydrated.URL) == "" {
+		hydrated.URL = sessionURL(session.Metadata)
+	}
+	return hydrated
+}
+
+func sessionSourceRef(session *domain.Session, index int) string {
+	if session == nil {
+		return ""
+	}
+	if refs := sessionTrackerRefs(session.Metadata); index >= 0 && index < len(refs) {
+		return formatTrackerRef(refs[index])
+	}
+	if index >= 0 && index < len(session.SourceItemIDs) {
+		return strings.TrimSpace(session.SourceItemIDs[index])
+	}
+	if index == 0 {
+		return strings.TrimSpace(session.ExternalID)
+	}
+	return ""
+}
+
+func sourceScopeKind(scope domain.SelectionScope) string {
+	switch scope {
+	case domain.ScopeIssues:
+		return "issue"
+	case domain.ScopeProjects:
+		return "project"
+	case domain.ScopeInitiatives:
+		return "initiative"
+	default:
+		return ""
+	}
 }
 
 func sessionHasSourceDetails(session *domain.Session) bool {

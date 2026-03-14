@@ -70,7 +70,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 
 func TestBuildRepoLifecycleAdapters_EmptyWorkspace(t *testing.T) {
 	cfg := &config.Config{}
-	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, ""); len(adapters) != 0 {
+	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", nil); len(adapters) != 0 {
 		t.Fatalf("adapters len = %d, want 0", len(adapters))
 	}
 }
@@ -82,7 +82,7 @@ func TestBuildRepoLifecycleAdapters_UsesWorkspaceRepoPlatforms(t *testing.T) {
 	repoDir := filepath.Join(workspaceDir, "repo-one")
 	createWorkspaceRepo(t, repoDir, "git@gitlab.com:group/repo.git")
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir, nil)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want 1", len(adapters))
 	}
@@ -119,7 +119,7 @@ func TestBuildRepoLifecycleAdapters_PreservesSupportedPlatformsInMixedWorkspace(
 	cfg.Adapters.GitHub.Token = "token"
 	cfg.Adapters.GitHub.BaseURL = server.URL
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, nil)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}

@@ -195,7 +195,7 @@ func run() error {
 	if workspaceID != "" {
 		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemRepo)
 	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir)
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, eventRepo)
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {
@@ -284,6 +284,7 @@ func run() error {
 		Instance:       instanceSvc,
 		Workspace:      workspaceSvc,
 		Review:         reviewSvc,
+		Events:         eventRepo,
 		Cfg:            cfg,
 		Adapters:       adapters,
 		Harnesses:      harnesses,

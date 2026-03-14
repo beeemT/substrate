@@ -64,6 +64,16 @@ const (
 	mainFocusContent
 )
 
+const appContentHorizontalPadding = 1
+
+func appContentBodyWidth(width int) int {
+	if width > appContentHorizontalPadding*2 {
+		return width - (appContentHorizontalPadding * 2)
+	}
+	return width
+}
+
+// App is the top-level bubbletea model.
 // App is the top-level bubbletea model.
 type App struct {
 	svcs Services
@@ -726,7 +736,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome)
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
 		a.sidebar.SetHeight(layout.PaneInnerHeight)
-		a.content.SetSize(layout.ContentInnerWidth, layout.PaneInnerHeight)
+		a.content.SetSize(appContentBodyWidth(layout.ContentInnerWidth), layout.PaneInnerHeight)
 		a.workspaceModal.SetSize(msg.Width, msg.Height)
 		a.newSession.SetSize(msg.Width, msg.Height)
 		a.sessionSearch.SetSize(msg.Width, msg.Height)
@@ -1103,6 +1113,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, nil
 
+	case OpenExternalURLMsg:
+		return a, OpenBrowserCmd(msg.URL)
+
 	case ImplementationCompleteMsg:
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
 		if a.svcs.ReviewPipeline != nil {
@@ -1436,10 +1449,14 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	a.content.sessionLog.SetModeLabel(taskSessionModeLabel(session))
 	a.content.sessionLog.SetMeta(strings.Join(metaParts, " · "))
 	logPath := filepath.Join(a.sessionsDir, session.ID+".log")
+	resumeOffset := int64(0)
+	if a.content.sessionLog.live && a.content.sessionLog.sessionID == session.ID && a.content.sessionLog.logPath == logPath {
+		resumeOffset = a.content.sessionLog.offset
+	}
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
 	if !a.tailingSessionIDs[session.ID] {
 		a.tailingSessionIDs[session.ID] = true
-		return TailSessionLogCmd(logPath, session.ID, 0)
+		return TailSessionLogCmd(logPath, session.ID, resumeOffset)
 	}
 	return nil
 }
@@ -1696,10 +1713,14 @@ func (a App) View() string {
 		Focused: a.mainFocus == mainFocusSidebar,
 	})
 
-	contentContent := lipgloss.NewStyle().
+	contentWidth := appContentBodyWidth(layout.ContentInnerWidth)
+	contentStyle := lipgloss.NewStyle().
 		Width(layout.ContentInnerWidth).
-		Height(layout.PaneInnerHeight).
-		Render(fitViewBox(a.content.View(), layout.ContentInnerWidth, layout.PaneInnerHeight))
+		Height(layout.PaneInnerHeight)
+	if contentWidth < layout.ContentInnerWidth {
+		contentStyle = contentStyle.Padding(0, appContentHorizontalPadding)
+	}
+	contentContent := contentStyle.Render(fitViewBox(a.content.View(), contentWidth, layout.PaneInnerHeight))
 	contentPane := components.RenderPane(a.statusBar.styles, components.PaneSpec{
 		Content: contentContent,
 		Width:   layout.ContentPaneWidth,

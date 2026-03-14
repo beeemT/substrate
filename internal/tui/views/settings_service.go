@@ -406,7 +406,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	if current.WorkspaceID != "" {
 		adapters = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, s.workItemRepo)
 	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir)
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, s.eventRepo)
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {

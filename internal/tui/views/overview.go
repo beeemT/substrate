@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -26,6 +25,7 @@ const (
 	overviewActionPlanReview  OverviewActionKind = "plan_review"
 	overviewActionQuestion    OverviewActionKind = "question"
 	overviewActionInterrupted OverviewActionKind = "interrupted"
+	overviewActionReviewing   OverviewActionKind = "reviewing"
 )
 
 type overviewOverlayKind int
@@ -35,6 +35,8 @@ const (
 	overviewOverlayPlan
 	overviewOverlayQuestion
 	overviewOverlayInterrupted
+	overviewOverlayCompleted
+	overviewOverlayReviewing
 )
 
 type SessionOverviewData struct {
@@ -72,6 +74,7 @@ type OverviewActionCard struct {
 	QuestionAsked  time.Time
 	ProposedAnswer string
 	Session        *domain.Task
+	ReviewRepos    []RepoReviewResult
 	CanAct         bool
 }
 
@@ -138,6 +141,8 @@ type SessionOverviewModel struct {
 	planReview     PlanReviewModel
 	question       QuestionModel
 	interrupted    InterruptedModel
+	completed      CompletedModel
+	reviewing      ReviewModel
 }
 
 func NewSessionOverviewModel(st styles.Styles) SessionOverviewModel {
@@ -147,6 +152,8 @@ func NewSessionOverviewModel(st styles.Styles) SessionOverviewModel {
 		planReview:  NewPlanReviewModel(st),
 		question:    NewQuestionModel(st),
 		interrupted: NewInterruptedModel(st),
+		completed:   NewCompletedModel(st),
+		reviewing:   NewReviewModel(st),
 	}
 }
 
@@ -157,6 +164,10 @@ func (m *SessionOverviewModel) SetSize(width, height int) {
 }
 
 func (m *SessionOverviewModel) SetData(data SessionOverviewData) {
+	resetViewport := m.data.WorkItemID != data.WorkItemID
+	if resetViewport {
+		m.selectedAction = 0
+	}
 	m.data = data
 	if len(m.data.Actions) == 0 {
 		m.selectedAction = 0
@@ -164,7 +175,7 @@ func (m *SessionOverviewModel) SetData(data SessionOverviewData) {
 		m.selectedAction = len(m.data.Actions) - 1
 	}
 	m.syncActionModels()
-	m.syncViewport(true)
+	m.syncViewport(resetViewport)
 }
 
 func (m SessionOverviewModel) KeybindHints() []KeybindHint {
@@ -176,6 +187,8 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 			return m.question.KeybindHints()
 		case overviewOverlayInterrupted:
 			return m.interrupted.KeybindHints()
+		case overviewOverlayCompleted:
+			return m.completed.KeybindHints()
 		}
 	}
 	hints := []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
@@ -184,6 +197,8 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 	}
 	if action := m.selectedActionCard(); action != nil {
 		hints = append(hints, actionKeybindHints(*action)...)
+	} else if len(m.data.External.Reviews) > 0 {
+		hints = append(hints, KeybindHint{Key: "o", Label: "Review artifacts"})
 	} else if m.data.State == domain.SessionIngested {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Start planning"})
 	} else if m.data.Plan.Exists {
@@ -195,10 +210,19 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd) {
 	if m.overlay != overviewOverlayNone {
 		if key, ok := msg.(tea.KeyMsg); ok && (key.String() == "left" || key.String() == "esc") {
-			if m.overlay == overviewOverlayQuestion && key.String() == "esc" {
-				var cmd tea.Cmd
-				m.question, cmd = m.question.Update(msg)
-				return m, cmd
+			if key.String() == "esc" {
+				switch m.overlay {
+				case overviewOverlayQuestion:
+					var cmd tea.Cmd
+					m.question, cmd = m.question.Update(msg)
+					return m, cmd
+				case overviewOverlayPlan:
+					if m.planReview.inputMode != planReviewNormal {
+						var cmd tea.Cmd
+						m.planReview, cmd = m.planReview.Update(msg)
+						return m, cmd
+					}
+				}
 			}
 			m.overlay = overviewOverlayNone
 			m.syncViewport(false)
@@ -217,6 +241,14 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			var cmd tea.Cmd
 			m.interrupted, cmd = m.interrupted.Update(msg)
 			return m, cmd
+		case overviewOverlayCompleted:
+			var cmd tea.Cmd
+			m.completed, cmd = m.completed.Update(msg)
+			return m, cmd
+		case overviewOverlayReviewing:
+			var cmd tea.Cmd
+			m.reviewing, cmd = m.reviewing.Update(msg)
+			return m, cmd
 		}
 	}
 
@@ -227,6 +259,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 		case "tab":
 			if len(m.data.Actions) > 1 {
 				m.selectedAction = (m.selectedAction + 1) % len(m.data.Actions)
+				m.syncActionModels()
 				m.syncViewport(false)
 			}
 			return m, nil
@@ -251,9 +284,20 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				case overviewActionInterrupted:
 					m.overlay = overviewOverlayInterrupted
 					return m, nil
+				case overviewActionReviewing:
+					m.overlay = overviewOverlayReviewing
+					return m, nil
 				}
 			} else if m.data.Plan.Exists && m.data.Plan.Document != nil {
 				m.overlay = overviewOverlayPlan
+				return m, nil
+			}
+		case "o":
+			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionReviewing {
+				return m, func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: m.data.WorkItemID} }
+			}
+			if len(m.data.External.Reviews) > 0 {
+				m.overlay = overviewOverlayCompleted
 				return m, nil
 			}
 		case "a":
@@ -307,6 +351,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 						subPlanID := action.Session.SubPlanID
 						return m, func() tea.Msg { return ResumeSessionMsg{OldSessionID: oldSessionID, SubPlanID: subPlanID} }
 					}
+				case overviewActionReviewing:
+					return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.data.WorkItemID} }
 				}
 			}
 		case "up", "down", "j", "k", "pgup", "pgdown", "home", "end":
@@ -363,21 +409,34 @@ func (m *SessionOverviewModel) syncActionModels() {
 	m.planReview.SetTitle(title)
 	m.question.SetTitle(title)
 	m.interrupted.SetTitle(title)
+	m.completed.SetTitle(title)
+	m.completed.SetStatusLabel(reviewArtifactOverlayLabel(m.data.State))
+	completedAt := time.Time{}
+	if m.data.State == domain.SessionCompleted {
+		completedAt = m.data.Header.UpdatedAt
+	}
+	m.completed.SetData(completedAt, overviewReviewRowsToMRInfo(m.data.External.Reviews), nil)
+	m.reviewing.SetTitle(title)
+	m.reviewing.SetWorkItemID(m.data.WorkItemID)
 	if m.data.Plan.Document != nil {
 		m.planReview.SetPlan(*m.data.Plan.Document)
 		m.planReview.SetWorkItemID(m.data.WorkItemID)
 	}
-	for _, action := range m.data.Actions {
-		switch action.Kind {
-		case overviewActionQuestion:
-			if action.Question != nil {
-				m.question.SetQuestion(*action.Question, action.ProposedAnswer, action.ProposedAnswer == "")
-			}
-		case overviewActionInterrupted:
-			if action.Session != nil {
-				m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.CanAct)
-			}
+	action := m.selectedActionCard()
+	if action == nil {
+		return
+	}
+	switch action.Kind {
+	case overviewActionQuestion:
+		if action.Question != nil {
+			m.question.SetQuestion(*action.Question, action.ProposedAnswer, action.ProposedAnswer == "")
 		}
+	case overviewActionInterrupted:
+		if action.Session != nil {
+			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.CanAct)
+		}
+	case overviewActionReviewing:
+		m.reviewing.SetRepos(action.ReviewRepos)
 	}
 }
 
@@ -554,6 +613,12 @@ func (m SessionOverviewModel) overlayView() string {
 	case overviewOverlayInterrupted:
 		m.interrupted.SetSize(innerWidth, innerHeight)
 		body = m.interrupted.View()
+	case overviewOverlayCompleted:
+		m.completed.SetSize(innerWidth, innerHeight)
+		body = m.completed.View()
+	case overviewOverlayReviewing:
+		m.reviewing.SetSize(innerWidth, innerHeight)
+		body = m.reviewing.View()
 	default:
 		return ""
 	}
@@ -572,6 +637,8 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 			hints = append([]KeybindHint{{Key: "r", Label: "Resume"}, {Key: "a", Label: "Abandon"}}, hints...)
 		}
 		return hints
+	case overviewActionReviewing:
+		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
 	default:
 		return nil
 	}
@@ -825,14 +892,16 @@ func (a *App) buildOverviewData(wi *domain.Session) SessionOverviewData {
 
 func buildOverviewHeader(wi domain.Session, entry SidebarEntry) OverviewHeader {
 	badges := make([]string, 0, 4)
-	switch {
-	case wi.State == domain.SessionPlanReview:
+	if wi.State == domain.SessionPlanReview {
 		badges = append(badges, "waiting for approval")
-	case entry.HasOpenQuestion:
+	}
+	if entry.HasOpenQuestion {
 		badges = append(badges, "waiting for answer")
-	case entry.HasInterrupted:
+	}
+	if entry.HasInterrupted {
 		badges = append(badges, "interrupted")
-	case wi.State == domain.SessionFailed:
+	}
+	if wi.State == domain.SessionFailed {
 		badges = append(badges, "failed")
 	}
 	progressText := ""
@@ -995,21 +1064,31 @@ func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waitin
 	return latest, waiting, interrupted
 }
 
+func latestOverviewReviewCycle(review ReviewsLoadedMsg) (*domain.ReviewCycle, []domain.Critique) {
+	if len(review.Cycles) == 0 {
+		return nil, nil
+	}
+	latest := review.Cycles[0]
+	for _, cycle := range review.Cycles[1:] {
+		if cycle.CycleNumber > latest.CycleNumber || (cycle.CycleNumber == latest.CycleNumber && cycle.UpdatedAt.After(latest.UpdatedAt)) {
+			latest = cycle
+		}
+	}
+	critiques := append([]domain.Critique(nil), review.Critiques[latest.ID]...)
+	return &latest, critiques
+}
+
 func (a *App) buildOverviewReviewNote(workItemID, subPlanID string) string {
 	implSession := a.latestImplementationSession(workItemID, subPlanID)
 	if implSession == nil {
 		return "Under review"
 	}
-	review := a.reviews[implSession.ID]
-	critiqueCount := 0
-	for _, critiques := range review.Critiques {
-		critiqueCount += len(critiques)
+	cycle, critiques := latestOverviewReviewCycle(a.reviews[implSession.ID])
+	if len(critiques) > 0 {
+		return fmt.Sprintf("%d critique(s)", len(critiques))
 	}
-	if critiqueCount > 0 {
-		return fmt.Sprintf("%d critique(s)", critiqueCount)
-	}
-	if len(review.Cycles) > 0 {
-		return humanReviewCycleStatus(review.Cycles[0].Status)
+	if cycle != nil {
+		return humanReviewCycleStatus(cycle.Status)
 	}
 	return "Under review"
 }
@@ -1163,13 +1242,19 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			Plan:     plan,
 		})
 	}
+	if reviewAction := a.buildReviewActionCard(wi, subPlans); reviewAction != nil {
+		actions = append(actions, *reviewAction)
+	}
 	for _, session := range a.sessionsForWorkItem(wi.ID) {
 		if session.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[session.ID] {
 				if question.Status != domain.QuestionEscalated {
 					continue
 				}
-				context := []string{summarizeText(question.Content, 160)}
+				context := []string{
+					"Asked: " + formatAbsoluteTime(question.CreatedAt),
+					summarizeText(question.Content, 160),
+				}
 				if strings.TrimSpace(question.Context) != "" {
 					context = append(context, summarizeText(question.Context, 160))
 				}
@@ -1178,7 +1263,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 					Title:          "Question waiting for answer",
 					Blocked:        summarizeText(question.Content, 120),
 					Why:            "This repo task is paused until a human answers the escalated question.",
-					Affected:       []string{firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))},
+					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)), session.ID)},
 					Context:        context,
 					Question:       ptrQuestion(question),
 					QuestionRepo:   session.RepositoryName,
@@ -1198,6 +1283,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				Affected: []string{firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))},
 				Context: []string{
 					"Last update: " + formatAbsoluteTime(session.UpdatedAt),
+					"Cause: previous substrate owner stopped heartbeating while the agent was running",
 					"Session: " + session.ID,
 				},
 				Session: &session,
@@ -1206,6 +1292,60 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 		}
 	}
 	return actions
+}
+
+func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {
+	if wi.State != domain.SessionReviewing {
+		return nil
+	}
+	reviewRepos := a.reviewResultsForOverview(wi.ID, subPlans)
+	affected := make([]string, 0, len(reviewRepos))
+	critiqueCount := 0
+	firstCritique := ""
+	for _, repo := range reviewRepos {
+		if len(repo.Critiques) == 0 {
+			continue
+		}
+		affected = append(affected, repo.RepoName)
+		critiqueCount += len(repo.Critiques)
+		if firstCritique == "" {
+			firstCritique = summarizeText(repo.Critiques[0].Description, 160)
+		}
+	}
+	if critiqueCount == 0 {
+		return nil
+	}
+	context := []string{fmt.Sprintf("Affected repos: %d", len(affected)), fmt.Sprintf("Open critiques: %d", critiqueCount)}
+	if firstCritique != "" {
+		context = append(context, "First critique: "+firstCritique)
+	}
+	return &OverviewActionCard{
+		Kind:        overviewActionReviewing,
+		Title:       "Review requires decision",
+		Blocked:     "Critiques are waiting for a human decision",
+		Why:         "You can re-implement the reviewed work or override accept from the overview.",
+		Affected:    affected,
+		Context:     context,
+		ReviewRepos: reviewRepos,
+	}
+}
+
+func (a *App) reviewResultsForOverview(workItemID string, subPlans []domain.TaskPlan) []RepoReviewResult {
+	results := make([]RepoReviewResult, 0, len(subPlans))
+	for _, subPlan := range subPlans {
+		implSession := a.latestImplementationSession(workItemID, subPlan.ID)
+		if implSession == nil {
+			continue
+		}
+		review := a.reviews[implSession.ID]
+		latestCycle, critiques := latestOverviewReviewCycle(review)
+		repoResult := RepoReviewResult{RepoName: subPlan.RepositoryName, Critiques: critiques}
+		if latestCycle != nil {
+			repoResult.Cycles = []domain.ReviewCycle{*latestCycle}
+		}
+		results = append(results, repoResult)
+	}
+	return results
 }
 
 func ptrQuestion(question domain.Question) *domain.Question {
@@ -1232,52 +1372,50 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	if a.svcs.Events == nil || wi.WorkspaceID == "" {
 		return external
 	}
-	events, err := a.svcs.Events.ListByWorkspaceID(context.Background(), wi.WorkspaceID, 200)
+	events, err := a.svcs.Events.ListByWorkspaceID(context.Background(), wi.WorkspaceID, 0)
 	if err != nil {
 		return external
 	}
-	type worktreeEvent struct {
-		WorkItemID string           `json:"work_item_id"`
-		Repository string           `json:"repository"`
-		Branch     string           `json:"branch"`
-		Review     domain.ReviewRef `json:"review"`
-	}
-	seen := make(map[string]struct{})
+	latestByKey := make(map[string]domain.ReviewArtifact)
 	for _, event := range events {
-		if domain.EventType(event.EventType) != domain.EventWorktreeCreated {
+		if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
 			continue
 		}
-		var payload worktreeEvent
+		var payload domain.ReviewArtifactEventPayload
 		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
 			continue
 		}
-		if payload.WorkItemID != wi.ID || strings.TrimSpace(payload.Branch) == "" {
+		if payload.WorkItemID != wi.ID {
 			continue
 		}
-		provider := firstNonEmptyString(payload.Review.BaseRepo.Provider, payload.Review.HeadRepo.Provider)
-		key := provider + ":" + payload.Repository + ":" + payload.Branch
-		if _, ok := seen[key]; ok {
+		artifact := payload.Artifact
+		if artifact.UpdatedAt.IsZero() {
+			artifact.UpdatedAt = event.CreatedAt
+		}
+		key := strings.Join([]string{strings.TrimSpace(artifact.Provider), strings.TrimSpace(artifact.RepoName), strings.TrimSpace(artifact.Branch)}, ":")
+		if current, ok := latestByKey[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
 			continue
 		}
-		seen[key] = struct{}{}
-		row := OverviewReviewRow{RepoName: payload.Repository, Branch: payload.Branch}
-		if artifact := a.resolveReviewArtifact(provider, payload.Review, payload.Branch); artifact != nil {
-			row.Kind = artifact.Kind
-			row.RepoName = firstNonEmptyString(artifact.RepoName, payload.Repository)
-			row.Ref = artifact.Ref
-			row.URL = artifact.URL
-			row.State = artifact.State
-		} else {
-			row.Kind = reviewKindForProvider(provider)
-			row.State = "lookup unavailable"
-		}
-		external.Reviews = append(external.Reviews, row)
+		latestByKey[key] = artifact
+	}
+	for _, artifact := range latestByKey {
+		external.Reviews = append(external.Reviews, OverviewReviewRow{
+			Kind:     firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
+			RepoName: artifact.RepoName,
+			Ref:      artifact.Ref,
+			URL:      artifact.URL,
+			State:    artifact.State,
+			Branch:   artifact.Branch,
+		})
 	}
 	sort.SliceStable(external.Reviews, func(i, j int) bool {
 		if external.Reviews[i].RepoName != external.Reviews[j].RepoName {
 			return external.Reviews[i].RepoName < external.Reviews[j].RepoName
 		}
-		return external.Reviews[i].Branch < external.Reviews[j].Branch
+		if external.Reviews[i].Branch != external.Reviews[j].Branch {
+			return external.Reviews[i].Branch < external.Reviews[j].Branch
+		}
+		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
 	return external
 }
@@ -1291,22 +1429,25 @@ func reviewKindForProvider(provider string) string {
 	}
 }
 
-func (a *App) resolveReviewArtifact(provider string, review domain.ReviewRef, branch string) *adapter.ReviewArtifact {
-	for _, candidate := range a.svcs.Adapters {
-		if candidate == nil || candidate.Name() != provider {
-			continue
-		}
-		resolver, ok := candidate.(adapter.ReviewArtifactResolver)
-		if !ok {
-			continue
-		}
-		artifact, err := resolver.ResolveReviewArtifact(context.Background(), review, branch)
-		if err != nil || artifact == nil {
-			return nil
-		}
-		return artifact
+func reviewArtifactOverlayLabel(state domain.SessionState) string {
+	if state == domain.SessionCompleted {
+		return "✓ Completed"
 	}
-	return nil
+	return "Review artifacts"
+}
+
+func overviewReviewRowsToMRInfo(rows []OverviewReviewRow) []MRInfo {
+	links := make([]MRInfo, 0, len(rows))
+	for _, row := range rows {
+		links = append(links, MRInfo{
+			RepoName: row.RepoName,
+			MRURL:    row.URL,
+			MRRef:    row.Ref,
+			State:    row.State,
+			IsOpen:   row.State != "merged" && row.State != "closed" && row.State != "done",
+		})
+	}
+	return links
 }
 
 func (a *App) buildOverviewActivity(wi *domain.Session, plan *domain.Plan) []OverviewActivityItem {

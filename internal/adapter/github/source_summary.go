@@ -13,11 +13,18 @@ func githubIssueSourceSummaries(issues []githubIssue) []domain.SourceSummary {
 		owner, repo := issueOwnerRepo(issue)
 		ref := formatIssueSelectionID(owner, repo, issue.Number)
 		summaries = append(summaries, domain.SourceSummary{
-			Provider: "github",
-			Ref:      ref,
-			Title:    strings.TrimSpace(issue.Title),
-			Excerpt:  summaryExcerpt(issue.Body),
-			URL:      strings.TrimSpace(issue.HTMLURL),
+			Provider:    "github",
+			Kind:        "issue",
+			Ref:         ref,
+			Title:       strings.TrimSpace(issue.Title),
+			Description: strings.TrimSpace(issue.Body),
+			Excerpt:     summaryExcerpt(issue.Body),
+			State:       strings.TrimSpace(issue.State),
+			Labels:      issueLabels(issue),
+			Container:   githubSourceContainer(owner, repo),
+			URL:         strings.TrimSpace(issue.HTMLURL),
+			CreatedAt:   issue.CreatedAt,
+			UpdatedAt:   issue.UpdatedAt,
 		})
 	}
 	return summaries
@@ -28,10 +35,17 @@ func githubMilestoneSourceSummaries(owner, repo string, milestones []githubMiles
 	for _, milestone := range milestones {
 		ref := fmt.Sprintf("%s/%s milestone #%d", owner, repo, milestone.Number)
 		summaries = append(summaries, domain.SourceSummary{
-			Provider: "github",
-			Ref:      ref,
-			Title:    strings.TrimSpace(milestone.Title),
-			Excerpt:  summaryExcerpt(milestone.Description),
+			Provider:    "github",
+			Kind:        "milestone",
+			Ref:         ref,
+			Title:       strings.TrimSpace(milestone.Title),
+			Description: strings.TrimSpace(milestone.Description),
+			Excerpt:     summaryExcerpt(milestone.Description),
+			State:       strings.TrimSpace(milestone.State),
+			Container:   githubSourceContainer(owner, repo),
+			URL:         strings.TrimSpace(milestone.HTMLURL),
+			CreatedAt:   milestone.CreatedAt,
+			UpdatedAt:   milestone.UpdatedAt,
 		})
 	}
 	return summaries
@@ -43,4 +57,16 @@ func summaryExcerpt(text string) string {
 		return trimmed
 	}
 	return strings.TrimSpace(trimmed[:237]) + "..."
+}
+
+func githubSourceContainer(owner, repo string) string {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	if owner != "" && repo != "" {
+		return owner + "/" + repo
+	}
+	if repo != "" {
+		return repo
+	}
+	return owner
 }

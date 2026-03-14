@@ -71,7 +71,7 @@ func BuildWorkItemAdapters(
 }
 
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
-func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspaceDir string) []adapter.RepoLifecycleAdapter {
+func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspaceDir string, eventRepo repository.EventRepository) []adapter.RepoLifecycleAdapter {
 	if workspaceDir == "" {
 		return nil
 	}
@@ -86,13 +86,13 @@ func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspa
 	for _, platform := range platforms {
 		switch platform {
 		case remotedetect.PlatformGitLab:
-			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.New(cfg.Adapters.Glab)})
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, eventRepo)})
 		case remotedetect.PlatformGitHub:
 			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 				slog.Warn("skipping github lifecycle adapter: no github auth configured")
 				continue
 			}
-			githubAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
+			githubAdapter, err := githubadapter.NewRepoLifecycle(ctx, cfg.Adapters.GitHub, eventRepo)
 			if err != nil {
 				slog.Warn("skipping github lifecycle adapter", "err", err)
 				continue

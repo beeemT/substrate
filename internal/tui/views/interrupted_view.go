@@ -80,7 +80,7 @@ func (m InterruptedModel) View() string {
 	})
 
 	lines := append(strings.Split(header, "\n"), "")
-	lines = append(lines, m.styles.Interrupted.Render("⊘ Session interrupted (substrate closed while agent was running)"), "")
+	lines = append(lines, m.styles.Interrupted.Render("⊘ Session interrupted (previous substrate owner stopped heartbeating while the agent was running)"), "")
 
 	if m.repoName != "" {
 		lines = append(lines,

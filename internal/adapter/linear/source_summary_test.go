@@ -29,10 +29,10 @@ func TestResolveMultipleIssuesPersistsSourceSummaries(t *testing.T) {
 	if !ok || len(summaries) != 2 {
 		t.Fatalf("source_summaries = %#v, want 2 typed summaries", wi.Metadata["source_summaries"])
 	}
-	if summaries[0].Ref != "FOO-123" || summaries[0].Title != "Fix bug" || summaries[0].URL == "" {
+	if summaries[0].Ref != "FOO-123" || summaries[0].Title != "Fix bug" || summaries[0].Description != "Details for Fix bug" || summaries[0].State != "In Progress" || summaries[0].Container != "FOO" || len(summaries[0].Metadata) < 3 || summaries[0].URL == "" {
 		t.Fatalf("summary[0] = %+v", summaries[0])
 	}
-	if summaries[1].Ref != "FOO-456" || summaries[1].Title != "Add feature" || summaries[1].URL == "" {
+	if summaries[1].Ref != "FOO-456" || summaries[1].Title != "Add feature" || summaries[1].Description != "Details for Add feature" || summaries[1].State != "In Progress" || summaries[1].Container != "FOO" || len(summaries[1].Metadata) < 3 || summaries[1].URL == "" {
 		t.Fatalf("summary[1] = %+v", summaries[1])
 	}
 }
@@ -55,7 +55,7 @@ func TestResolveProjectPersistsSourceSummary(t *testing.T) {
 	if !ok || len(summaries) != 1 {
 		t.Fatalf("source_summaries = %#v, want 1 typed summary", wi.Metadata["source_summaries"])
 	}
-	if summaries[0].Ref != "proj1" || summaries[0].Title != "Project Alpha" {
+	if summaries[0].Ref != "proj1" || summaries[0].Title != "Project Alpha" || summaries[0].Description != "Desc" || summaries[0].State != "in_progress" {
 		t.Fatalf("summary[0] = %+v", summaries[0])
 	}
 }

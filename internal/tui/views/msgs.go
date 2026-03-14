@@ -169,6 +169,9 @@ type ErrMsg struct{ Err error }
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 
+// OpenExternalURLMsg requests opening a durable external artifact URL in the system browser.
+type OpenExternalURLMsg struct{ URL string }
+
 // DeleteSessionMsg fires when the user confirms session deletion.
 type DeleteSessionMsg struct{ SessionID string }
 

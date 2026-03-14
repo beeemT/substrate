@@ -17,11 +17,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	coreadapter "github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 // commandRunner executes an external command in dir and returns its combined output.
@@ -35,16 +39,19 @@ func execRunner(ctx context.Context, dir string, name string, args ...string) ([
 	return cmd.CombinedOutput()
 }
 
-// branchEntry records a repo tracked from a WorktreeCreated event.
+// branchEntry records durable repo/MR context for one branch.
 type branchEntry struct {
 	repo         string
 	worktreePath string
+	ref          string
+	url          string
 }
 
 // GlabAdapter implements adapter.RepoLifecycleAdapter using the glab CLI.
 type GlabAdapter struct {
-	cfg    config.GlabConfig
-	runner commandRunner
+	cfg       config.GlabConfig
+	runner    commandRunner
+	eventRepo repository.EventRepository
 
 	mu      sync.RWMutex
 	tracked map[string][]branchEntry // branch → []branchEntry
@@ -52,15 +59,21 @@ type GlabAdapter struct {
 
 // New creates a GlabAdapter with the given configuration.
 func New(cfg config.GlabConfig) *GlabAdapter {
-	return newWithRunner(cfg, execRunner)
+	return newWithRunner(cfg, nil, execRunner)
+}
+
+// NewWithEventRepo creates a GlabAdapter that persists durable MR metadata.
+func NewWithEventRepo(cfg config.GlabConfig, eventRepo repository.EventRepository) *GlabAdapter {
+	return newWithRunner(cfg, eventRepo, execRunner)
 }
 
 // newWithRunner creates a GlabAdapter with an injectable commandRunner (for tests).
-func newWithRunner(cfg config.GlabConfig, runner commandRunner) *GlabAdapter {
+func newWithRunner(cfg config.GlabConfig, eventRepo repository.EventRepository, runner commandRunner) *GlabAdapter {
 	return &GlabAdapter{
-		cfg:     cfg,
-		runner:  runner,
-		tracked: make(map[string][]branchEntry),
+		cfg:       cfg,
+		runner:    runner,
+		eventRepo: eventRepo,
+		tracked:   make(map[string][]branchEntry),
 	}
 }
 
@@ -88,6 +101,7 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 // Defined locally to avoid cross-package dependency.
 type worktreePayload struct {
 	WorkspaceID   string                    `json:"workspace_id"`
+	WorkItemID    string                    `json:"work_item_id"`
 	Repository    string                    `json:"repository"`
 	Branch        string                    `json:"branch"`
 	WorktreePath  string                    `json:"worktree_path"`
@@ -100,8 +114,10 @@ type worktreePayload struct {
 // Emitters must populate Branch so the glab adapter can locate the MRs.
 // external_id is included for symmetry with the linear adapter's OnEvent.
 type completedPayload struct {
-	Branch     string `json:"branch"`
-	ExternalID string `json:"external_id"`
+	WorkspaceID string `json:"workspace_id"`
+	WorkItemID  string `json:"work_item_id"`
+	Branch      string `json:"branch"`
+	ExternalID  string `json:"external_id"`
 }
 
 func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) error {
@@ -115,20 +131,54 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 
 	title := mrTitle(p.WorkItemTitle, p.Branch)
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
-	if a.mrExists(ctx, p.WorktreePath, p.Branch) {
+	var artifact *domain.ReviewArtifact
+	if mr, ok := a.mrView(ctx, p.WorktreePath, p.Branch); ok {
 		slog.Info("glab: MR already exists, skipping create", "branch", p.Branch)
-	} else if err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
-		// glab failure — warn but track anyway so un-draft can still be attempted later
+		artifact = &domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     p.Repository,
+			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+			URL:          strings.TrimSpace(mr.WebURL),
+			State:        glabArtifactState(mr),
+			Branch:       p.Branch,
+			WorktreePath: p.WorktreePath,
+			UpdatedAt:    time.Now(),
+		}
+	} else if url, err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
 		slog.Warn("glab: mr create failed", "repo", p.Repository, "branch", p.Branch, "error", err)
+	} else {
+		artifact = &domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     p.Repository,
+			Ref:          glabArtifactRef(url, 0),
+			URL:          url,
+			State:        "draft",
+			Branch:       p.Branch,
+			WorktreePath: p.WorktreePath,
+			Draft:        true,
+			UpdatedAt:    time.Now(),
+		}
 	}
 
+	trackedRef := ""
+	trackedURL := ""
+	if artifact != nil {
+		trackedRef = artifact.Ref
+		trackedURL = artifact.URL
+	}
 	a.mu.Lock()
 	a.tracked[p.Branch] = append(a.tracked[p.Branch], branchEntry{
 		repo:         p.Repository,
 		worktreePath: p.WorktreePath,
+		ref:          trackedRef,
+		url:          trackedURL,
 	})
 	a.mu.Unlock()
-
+	if artifact != nil {
+		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, *artifact)
+	}
 	return nil
 }
 
@@ -138,26 +188,48 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 		return fmt.Errorf("unmarshal completed payload: %w", err)
 	}
 	if p.Branch == "" {
-		// Branch not present in payload — cannot determine which MRs to update.
 		slog.Warn("glab: work_item.completed payload has no branch; skipping mr update")
 		return nil
 	}
 
-	a.mu.RLock()
-	entries := append([]branchEntry(nil), a.tracked[p.Branch]...)
-	a.mu.RUnlock()
+	entries := a.entriesForCompletion(ctx, p)
 
 	for _, entry := range entries {
 		if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
-			slog.Warn("glab: mr update --draft=false failed",
-				"repo", entry.repo, "branch", p.Branch, "error", err)
+			slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+			continue
 		}
+		if mr, ok := a.mrView(ctx, entry.worktreePath, p.Branch); ok {
+			a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+				Provider:     "gitlab",
+				Kind:         "MR",
+				RepoName:     entry.repo,
+				Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+				URL:          strings.TrimSpace(mr.WebURL),
+				State:        glabArtifactState(mr),
+				Branch:       p.Branch,
+				WorktreePath: entry.worktreePath,
+				UpdatedAt:    time.Now(),
+			})
+			continue
+		}
+		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     entry.repo,
+			Ref:          entry.ref,
+			URL:          entry.url,
+			State:        "ready",
+			Branch:       p.Branch,
+			WorktreePath: entry.worktreePath,
+			UpdatedAt:    time.Now(),
+		})
 	}
 	return nil
 }
 
-// createMR runs `glab mr create --draft --source-branch <branch> --title <title> [--description ...] [--reviewer ...] [--label ...] --yes`.
-func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, description string) error {
+// createMR runs `glab mr create --draft --source-branch <branch> --title <title> [--description ...] [--label ...] --yes`.
+func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, description string) (string, error) {
 	args := []string{
 		"mr", "create",
 		"--draft",
@@ -177,42 +249,47 @@ func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, descript
 
 	out, err := a.runner(ctx, dir, "glab", args...)
 	if err != nil {
-		return fmt.Errorf("glab mr create: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("glab mr create: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 	url := parseMRURL(out)
 	if url != "" {
 		slog.Info("glab: MR created", "branch", branch, "url", url)
 	}
-	return nil
+	return url, nil
 }
 
 // glabMRView is the minimal subset of `glab mr view --output json` we need.
 type glabMRView struct {
-	IID    int    `json:"iid"`
-	State  string `json:"state"`
-	WebURL string `json:"web_url"`
+	IID            int    `json:"iid"`
+	State          string `json:"state"`
+	WebURL         string `json:"web_url"`
+	Draft          bool   `json:"draft"`
+	WorkInProgress bool   `json:"work_in_progress"`
 }
 
-// mrExists returns true when an open or merged MR for the given source branch
-// already exists in the repo at dir. It calls `glab mr view --source-branch <branch>
-// --output json` and parses the JSON response; a non-zero exit code means no MR.
-// Errors (including glab not-found) are treated as "no MR" — we always prefer to
-// attempt creation over silently skipping.
-func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
+// mrView returns the current MR metadata for the branch when one exists.
+func (a *GlabAdapter) mrView(ctx context.Context, dir, branch string) (glabMRView, bool) {
 	out, err := a.runner(ctx, dir, "glab",
 		"mr", "view",
 		"--source-branch", branch,
 		"--output", "json",
 	)
 	if err != nil {
-		// Non-zero exit = MR not found or glab error; treat as absent.
-		return false
+		return glabMRView{}, false
 	}
 	var mr glabMRView
 	if err := json.Unmarshal(out, &mr); err != nil {
-		return false
+		return glabMRView{}, false
 	}
-	return mr.IID > 0
+	if mr.IID <= 0 {
+		return glabMRView{}, false
+	}
+	return mr, true
+}
+
+func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
+	_, ok := a.mrView(ctx, dir, branch)
+	return ok
 }
 
 // markMRReady runs `glab mr update --source-branch <branch> --draft=false --yes`.
@@ -238,6 +315,80 @@ func parseMRURL(output []byte) string {
 		}
 	}
 	return ""
+}
+
+func glabArtifactRef(rawURL string, iid int) string {
+	if iid > 0 {
+		return fmt.Sprintf("!%d", iid)
+	}
+	marker := "/-/merge_requests/"
+	idx := strings.LastIndex(strings.TrimSpace(rawURL), marker)
+	if idx == -1 {
+		return ""
+	}
+	return "!" + strings.TrimSpace(rawURL[idx+len(marker):])
+}
+
+func glabArtifactState(mr glabMRView) string {
+	switch strings.TrimSpace(mr.State) {
+	case "opened":
+		if mr.Draft || mr.WorkInProgress {
+			return "draft"
+		}
+		return "ready"
+	case "merged":
+		return "merged"
+	default:
+		return strings.TrimSpace(mr.State)
+	}
+}
+
+func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPayload) []branchEntry {
+	a.mu.RLock()
+	tracked := append([]branchEntry(nil), a.tracked[p.Branch]...)
+	a.mu.RUnlock()
+	if a.eventRepo == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
+		return tracked
+	}
+	events, err := a.eventRepo.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
+	if err != nil {
+		return tracked
+	}
+	seen := make(map[string]branchEntry)
+	for _, event := range events {
+		if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
+			continue
+		}
+		var payload domain.ReviewArtifactEventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			continue
+		}
+		artifact := payload.Artifact
+		if payload.WorkItemID != p.WorkItemID || artifact.Provider != "gitlab" || strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) || strings.TrimSpace(artifact.WorktreePath) == "" {
+			continue
+		}
+		seen[artifact.RepoName+"|"+artifact.WorktreePath] = branchEntry{repo: artifact.RepoName, worktreePath: artifact.WorktreePath, ref: artifact.Ref, url: artifact.URL}
+	}
+	if len(seen) == 0 {
+		return tracked
+	}
+	entries := make([]branchEntry, 0, len(seen))
+	for _, entry := range seen {
+		entries = append(entries, entry)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].repo != entries[j].repo {
+			return entries[i].repo < entries[j].repo
+		}
+		return entries[i].worktreePath < entries[j].worktreePath
+	})
+	return entries
+}
+
+func (a *GlabAdapter) recordReviewArtifact(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact) {
+	if err := coreadapter.PersistReviewArtifact(ctx, a.eventRepo, workspaceID, workItemID, artifact); err != nil {
+		slog.Warn("glab: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
+	}
 }
 
 // mrTitle derives the MR title using the following priority:

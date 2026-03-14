@@ -379,7 +379,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		WorkspaceID:  workspaceID,
 		DraftPath:    draftPath,
 		SystemPrompt: systemPrompt,
-		UserPrompt:   "Begin planning. Write the plan progressively to the draft path. Explore the workspace and determine which repos need changes.",
+		UserPrompt:   fmt.Sprintf("Begin planning. Write the plan progressively to %s. Explore the workspace and determine which repos need changes.", draftPath),
 		WorktreePath: "", // Planning uses workspace root
 	}
 
@@ -657,11 +657,12 @@ Description:
   docs: {{range .DocPaths}}{{.}} {{end}}{{end}}
 {{end}}
 ## Instructions
-If the draft path already exists, read it first to orient yourself before exploring.
+If {{.SessionDraftPath}} already exists, read it first to orient yourself before exploring.
+Write every draft update to {{.SessionDraftPath}}.
 Explore the workspace before finalising your plan. After each significant decision or
-exploration finding, update the draft file. Substrate reads this file as your
-plan output — your final message is not used. The last complete version in the file
-when the session ends is what gets executed.
+exploration finding, update that file. Substrate reads it as your plan output —
+your final message is not used. The last complete version present when the session
+ends is what gets executed.
 
 Begin the file with a fenced code block tagged substrate-plan containing YAML:
 

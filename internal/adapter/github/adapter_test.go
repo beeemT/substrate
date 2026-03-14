@@ -29,7 +29,7 @@ func jsonResp(t *testing.T, status int, v any) *http.Response {
 
 func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	t.Helper()
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "done": "closed"}}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "done": "closed"}}, nil, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
@@ -38,7 +38,7 @@ func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 
 func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
 	var seenHost, seenPath string
-	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		seenHost = req.URL.Host
 		seenPath = req.URL.Path
 		return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
@@ -56,7 +56,7 @@ func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
 
 func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 	resolved := false
-	a, err := newWithDeps(context.Background(), config.GithubConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/repos/acme/rocket":
 			return jsonResp(t, http.StatusUnauthorized, map[string]any{"message": "nope"}), nil
@@ -83,7 +83,7 @@ func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 func TestCreatedByMeUsesViewerLoginWhenAssigneeConfigured(t *testing.T) {
 	userCalls := 0
 	var issueQuery string
-	a, err := newWithDeps(context.Background(), config.GithubConfig{Assignee: "bob"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{Assignee: "bob"}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/user":
 			userCalls++
@@ -169,16 +169,21 @@ func TestScopeInitiativesUnsupported(t *testing.T) {
 }
 
 func TestLifecycleCreateAndReady(t *testing.T) {
-	var requests []string
+	requests := make([]string, 0, 6)
+	pullLookups := 0
 	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		requests = append(requests, req.Method+" "+req.URL.Path+"?"+req.URL.RawQuery)
 		switch {
 		case req.URL.Path == "/user":
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
-		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet && strings.Contains(req.URL.RawQuery, "head=acme%3Asub-branch"):
-			return jsonResp(t, http.StatusOK, []any{}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet && strings.Contains(req.URL.RawQuery, "head=acme%3Asub-branch") && strings.Contains(req.URL.RawQuery, "base=develop"):
+			pullLookups++
+			if pullLookups == 1 {
+				return jsonResp(t, http.StatusOK, []any{}), nil
+			}
+			return jsonResp(t, http.StatusOK, []any{map[string]any{"number": 7, "draft": true, "html_url": "https://github.com/acme/rocket/pull/7"}}), nil
 		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
-			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true}), nil
+			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true, "html_url": "https://github.com/acme/rocket/pull/7"}), nil
 		case req.URL.Path == "/repos/acme/rocket/pulls/7" && req.Method == http.MethodPatch:
 			return jsonResp(t, http.StatusOK, map[string]any{"number": 7, "draft": false}), nil
 		case req.URL.Path == "/repos/acme/rocket/issues/42" && req.Method == http.MethodPatch:

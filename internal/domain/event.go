@@ -73,4 +73,5 @@ const (
 	EventReviewCompleted         EventType = "review.completed"
 	EventCritiquesFound          EventType = "review.critiques_found"
 	EventReimplementationStarted EventType = "reimplementation.started"
+	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
 )

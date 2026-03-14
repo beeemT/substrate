@@ -40,9 +40,17 @@ func (m *QuestionModel) SetTitle(t string) { m.title = t }
 
 // SetQuestion loads a question into the model and activates the input.
 func (m *QuestionModel) SetQuestion(q domain.Question, proposed string, uncertain bool) {
+	sameQuestion := m.question.ID != "" && m.question.ID == q.ID
 	m.question = q
 	m.foremanProposed = proposed
 	m.foremanUncertain = uncertain
+	if sameQuestion {
+		if !m.inputActive {
+			m.inputActive = true
+			m.input.Focus()
+		}
+		return
+	}
 	m.input.SetValue("")
 	m.inputActive = true
 	m.input.Focus()
