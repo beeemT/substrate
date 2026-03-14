@@ -781,6 +781,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
 		a.sidebar.SetHeight(layout.PaneInnerHeight)
 		a.content.SetSize(appContentBodyWidth(layout.ContentInnerWidth), layout.PaneInnerHeight)
+		a.content.SetTerminalSize(msg.Width, msg.Height)
 		a.workspaceModal.SetSize(msg.Width, msg.Height)
 		a.newSession.SetSize(msg.Width, msg.Height)
 		a.sessionSearch.SetSize(msg.Width, msg.Height)

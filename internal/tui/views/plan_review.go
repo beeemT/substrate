@@ -61,7 +61,7 @@ func (m *PlanReviewModel) syncViewportSize() {
 	if m.inputMode != planReviewNormal {
 		reservedRows++
 	}
-	m.viewport.Width = m.width
+	m.viewport.Width = max(1, m.width-1)
 	m.viewport.Height = max(1, m.height-reservedRows)
 	m.refreshViewportContent(false)
 }
@@ -323,6 +323,10 @@ func (m PlanReviewModel) View() string {
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
 		body = m.styles.Muted.Render("No plan content available.")
+	} else {
+		if sb := m.renderScrollbar(m.viewport, m.viewport.Height); sb != "" {
+			body = lipgloss.JoinHorizontal(lipgloss.Top, body, sb)
+		}
 	}
 
 	var feedbackRow string
@@ -342,6 +346,34 @@ func (m PlanReviewModel) View() string {
 	}
 	parts = append(parts, components.RenderDivider(m.styles, m.width), hints)
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
+}
+
+func (m PlanReviewModel) renderScrollbar(vp viewport.Model, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	total := vp.TotalLineCount()
+	if total <= height {
+		return ""
+	}
+	lines := make([]string, height)
+	thumbHeight := max(1, (height*height)/max(1, total))
+	if thumbHeight > height {
+		thumbHeight = height
+	}
+	thumbRange := max(0, height-thumbHeight)
+	scrollRange := max(1, total-height)
+	thumbTop := 0
+	if thumbRange > 0 {
+		thumbTop = (vp.YOffset*thumbRange + scrollRange/2) / scrollRange
+	}
+	for i := range lines {
+		lines[i] = m.styles.ScrollbarTrack.Render("▏")
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			lines[i] = m.styles.ScrollbarThumbFocused.Render("▐")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // editPlanInEditorCmd opens the full plan document in $EDITOR.

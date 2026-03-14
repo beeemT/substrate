@@ -36,14 +36,22 @@
   any child emits a full ANSI reset (`\x1b[0m`). Bubbles `list.Model`, `viewport.Model`, and
   nested lipgloss renders all produce resets. **Never rely on an outer `Background()` to cover
   content rendered by those components.** The background vanishes after the first `\x1b[0m`.
+- **`Background()` vs `BorderBackground()`**: in lipgloss v1, `Background(color)` applies to the
+  content area and padding only. Border characters (╭ ─ ╮ │ ╰ ╯) require `BorderBackground(color)`
+  to carry the background. Set both on any pane style that must show the overlay colour behind its
+  borders (e.g. `OverlayPane` and `OverlayPaneFocused` in `styles/theme.go`).
+- **Pane styles must be self-contained**: each pane rendered by `renderOverlayPane` must carry its
+  own `Background()` and `BorderBackground()` so the pane is correct regardless of what ANSI state
+  preceded it. Do not rely on the outer frame's background injection for pane content.
 - **Hints / keybind rows inside overlays**: use `renderOverlayHintsRow` in `views/component_helpers.go`.
   It applies `Background(overlayBg)` to every individual accent/hint segment and to the separators,
   then wraps with `Padding(0,1)` and `Width(width)`. Never pass keybind hint rows through
   `components.RenderKeyHints` with only an outer background; the resets in each piece will break it.
-- **Inter-pane separators in split overlays**: pass a lipgloss-rendered column rather than a plain
-  string to `lipgloss.JoinHorizontal`. Example:
+- **Inter-pane separators in split overlays**: use a per-row repeat of a single styled space, not
+  `Width(1).Height(N).Render("")` (which emits a spurious `bg\x1b[0m` on the first row). Example:
   ```go
-  sep := lipgloss.NewStyle().Background(overlayBg).Width(1).Height(bodyHeight).Render("")
+  sepLine := lipgloss.NewStyle().Background(overlayBg).Render(" ")
+  sep := strings.TrimSuffix(strings.Repeat(sepLine+"\n", bodyHeight), "\n")
   lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
   ```
   A plain `" "` loses the background after the left pane's terminating reset, creating an

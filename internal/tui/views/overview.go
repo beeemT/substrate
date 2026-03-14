@@ -136,6 +136,8 @@ type SessionOverviewModel struct {
 	styles         styles.Styles
 	width          int
 	height         int
+	termWidth      int
+	termHeight     int
 	viewport       viewport.Model
 	data           SessionOverviewData
 	selectedAction int
@@ -157,6 +159,32 @@ func NewSessionOverviewModel(st styles.Styles) SessionOverviewModel {
 		completed:   NewCompletedModel(st),
 		reviewing:   NewReviewModel(st),
 	}
+}
+
+func (m *SessionOverviewModel) planOverlayInnerSize() (innerWidth, innerHeight int) {
+	frameWidth := min(max(72, m.termWidth-12), 220)
+	innerHeight = max(12, min(m.termHeight-2, 36))
+	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
+	return
+}
+
+func (m *SessionOverviewModel) defaultOverlayInnerSize() (innerWidth, innerHeight int) {
+	frameWidth := min(max(48, m.termWidth-6), 112)
+	innerHeight = max(10, min(m.termHeight-4, 26))
+	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
+	return
+}
+
+func (m *SessionOverviewModel) SetTerminalSize(w, h int) {
+	m.termWidth = w
+	m.termHeight = h
+	pw, ph := m.planOverlayInnerSize()
+	m.planReview.SetSize(pw, ph)
+	dw, dh := m.defaultOverlayInnerSize()
+	m.question.SetSize(dw, dh)
+	m.interrupted.SetSize(dw, dh)
+	m.completed.SetSize(dw, dh)
+	m.reviewing.SetSize(dw, dh)
 }
 
 func (m *SessionOverviewModel) SetSize(width, height int) {
@@ -606,19 +634,14 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	var body string
 	switch m.overlay {
 	case overviewOverlayPlan:
-		m.planReview.SetSize(innerWidth, innerHeight)
 		body = m.planReview.View()
 	case overviewOverlayQuestion:
-		m.question.SetSize(innerWidth, innerHeight)
 		body = m.question.View()
 	case overviewOverlayInterrupted:
-		m.interrupted.SetSize(innerWidth, innerHeight)
 		body = m.interrupted.View()
 	case overviewOverlayCompleted:
-		m.completed.SetSize(innerWidth, innerHeight)
 		body = m.completed.View()
 	case overviewOverlayReviewing:
-		m.reviewing.SetSize(innerWidth, innerHeight)
 		body = m.reviewing.View()
 	default:
 		return ""

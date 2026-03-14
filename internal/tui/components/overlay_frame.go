@@ -123,10 +123,13 @@ func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec Sp
 	bg := lipgloss.Color(st.Theme.OverlayBg)
 	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
 	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
-	// The separator must carry the overlay background explicitly; a plain space string
-	// loses the background after the preceding pane's ANSI reset and leaves a
-	// visible uncoloured gap between the two pane borders at every row.
-	sep := lipgloss.NewStyle().Background(bg).Width(1).Height(layout.BodyHeight).Render("")
+	// The separator must carry the overlay background explicitly. A plain space loses the
+	// background after the preceding pane's ANSI reset. Using Width(1).Height(N).Render("")
+	// produces a spurious bg+reset on line 0; instead repeat one individually styled space
+	// per row so every line has a single clean `[48;...m [0m` code.
+	sepLine := lipgloss.NewStyle().Background(bg).Render(" ")
+	sep := strings.Repeat(sepLine+"\n", layout.BodyHeight)
+	sep = strings.TrimSuffix(sep, "\n")
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 }
 

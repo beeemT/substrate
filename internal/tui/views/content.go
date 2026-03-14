@@ -95,6 +95,10 @@ func (m *ContentModel) SetSize(width, height int) {
 	m.question.SetSize(width, height)
 }
 
+func (m *ContentModel) SetTerminalSize(w, h int) {
+	m.overview.SetTerminalSize(w, h)
+}
+
 func (m *ContentModel) SetMode(mode ContentMode) { m.mode = mode }
 func (m ContentModel) Mode() ContentMode         { return m.mode }
 

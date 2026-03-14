@@ -181,10 +181,14 @@ func NewStyles(t Theme) Styles {
 		OverlayPane: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorder)).
+			BorderBackground(lipgloss.Color(t.OverlayBg)).
+			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayPane.PaddingTop, chrome.OverlayPane.PaddingRight, chrome.OverlayPane.PaddingBottom, chrome.OverlayPane.PaddingLeft),
 		OverlayPaneFocused: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorderFocused)).
+			BorderBackground(lipgloss.Color(t.OverlayBg)).
+			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayPane.PaddingTop, chrome.OverlayPane.PaddingRight, chrome.OverlayPane.PaddingBottom, chrome.OverlayPane.PaddingLeft),
 		SectionLabel: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Label)).Bold(true),
 		TabActive:    lipgloss.NewStyle().Foreground(lipgloss.Color(t.Title)).Underline(true),
