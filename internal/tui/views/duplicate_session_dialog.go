@@ -99,19 +99,19 @@ func (a App) duplicateSessionDialogView() string {
 	if a.windowWidth > 0 {
 		finalWidth = min(finalWidth, a.windowWidth)
 	}
-	overlayBG := lipgloss.Color(styles.Theme.OverlayBg)
-	frame := styles.OverlayFrame.Copy().Width(finalWidth).Background(overlayBG)
+	
+	frame := styles.OverlayFrame.Copy().Width(finalWidth)
 	innerWidth := finalWidth - frame.GetHorizontalFrameSize()
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
-	content := lipgloss.NewStyle().Width(innerWidth).Background(overlayBG)
-	titleStyle := styles.Title.Copy().Background(overlayBG)
-	subtitleStyle := styles.Subtitle.Copy().Background(overlayBG)
-	labelStyle := styles.Label.Copy().Background(overlayBG)
-	accentStyle := styles.Accent.Copy().Background(overlayBG)
-	hintStyle := styles.Hint.Copy().Background(overlayBG)
-	keybindStyle := styles.KeybindAccent.Copy().Background(overlayBG)
+	content := lipgloss.NewStyle().Width(innerWidth)
+	titleStyle := styles.Title
+	subtitleStyle := styles.Subtitle
+	labelStyle := styles.Label
+	accentStyle := styles.Accent
+	hintStyle := styles.Hint
+	keybindStyle := styles.KeybindAccent
 	compact := innerWidth < 40 || (a.windowHeight > 0 && a.windowHeight <= 14)
 
 	requested := sessionSummaryLabel(a.duplicateSession.RequestedSession)

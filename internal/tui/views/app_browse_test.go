@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -844,15 +843,6 @@ func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 			t.Fatalf("view = %q, want empty description placeholder", view)
 		}
 	})
-}
-
-func TestNewSessionOverlayNoItemsBackgroundMatchesOverlay(t *testing.T) {
-	t.Parallel()
-
-	overlay := NewNewSessionOverlay(nil, "ws-1", styles.NewStyles(styles.DefaultTheme))
-	if got := overlay.issueList.Styles.NoItems.GetBackground(); got != lipgloss.Color(styles.DefaultTheme.OverlayBg) {
-		t.Fatalf("no-items background = %v, want %q", got, styles.DefaultTheme.OverlayBg)
-	}
 }
 
 func TestNewSessionOverlayLargeScreensUseMoreAvailableSpace(t *testing.T) {

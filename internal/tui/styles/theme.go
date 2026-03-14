@@ -14,7 +14,7 @@ type Theme struct {
 	// Shared text + chrome roles
 	Title, Subtitle, Muted, Hint, Label, Accent, Link, Divider string
 	Border, PaneBorder, PaneBorderFocused                      string
-	OverlayBg, OverlayBorder, OverlayBorderFocused             string
+	OverlayBorder, OverlayBorderFocused             string
 	SelectedBg, SelectionActive, SelectionInactive             string
 
 	// Settings subtheme
@@ -50,7 +50,6 @@ var DefaultTheme = Theme{
 	Border:               "#2d2d44",
 	PaneBorder:           "#334155",
 	PaneBorderFocused:    "#60a5fa",
-	OverlayBg:            "#1a1a2e",
 	OverlayBorder:        "#2d2d44",
 	OverlayBorderFocused: "#60a5fa",
 	SelectedBg:           "#1e293b",
@@ -171,24 +170,18 @@ func NewStyles(t Theme) Styles {
 		OverlayFrame: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorder)).
-			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayFrame.PaddingTop, chrome.OverlayFrame.PaddingRight, chrome.OverlayFrame.PaddingBottom, chrome.OverlayFrame.PaddingLeft),
 		OverlayFrameFocused: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorderFocused)).
-			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayFrame.PaddingTop, chrome.OverlayFrame.PaddingRight, chrome.OverlayFrame.PaddingBottom, chrome.OverlayFrame.PaddingLeft),
 		OverlayPane: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorder)).
-			BorderBackground(lipgloss.Color(t.OverlayBg)).
-			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayPane.PaddingTop, chrome.OverlayPane.PaddingRight, chrome.OverlayPane.PaddingBottom, chrome.OverlayPane.PaddingLeft),
 		OverlayPaneFocused: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorderFocused)).
-			BorderBackground(lipgloss.Color(t.OverlayBg)).
-			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayPane.PaddingTop, chrome.OverlayPane.PaddingRight, chrome.OverlayPane.PaddingBottom, chrome.OverlayPane.PaddingLeft),
 		SectionLabel: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Label)).Bold(true),
 		TabActive:    lipgloss.NewStyle().Foreground(lipgloss.Color(t.Title)).Underline(true),

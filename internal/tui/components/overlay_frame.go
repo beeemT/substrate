@@ -61,12 +61,11 @@ type SplitOverlaySpec struct {
 	RightPane OverlayPaneSpec
 }
 
-// ApplyOverlayListStyles applies shared overlay background styling to list empty states.
+// ApplyOverlayListStyles applies shared overlay foreground styling to list empty states.
 func ApplyOverlayListStyles(m list.Model, st styles.Styles) list.Model {
-	bg := lipgloss.Color(st.Theme.OverlayBg)
 	muted := lipgloss.Color(st.Theme.Muted)
-	m.Styles.NoItems = m.Styles.NoItems.Background(bg).Foreground(muted)
-	m.Styles.StatusEmpty = m.Styles.StatusEmpty.Background(bg).Foreground(muted)
+	m.Styles.NoItems = m.Styles.NoItems.Foreground(muted)
+	m.Styles.StatusEmpty = m.Styles.StatusEmpty.Foreground(muted)
 	return m
 }
 
@@ -120,16 +119,9 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 
 // RenderSplitOverlayBody renders a split left/right pane body using a computed layout.
 func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec SplitOverlaySpec) string {
-	bg := lipgloss.Color(st.Theme.OverlayBg)
 	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
 	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
-	// The separator must carry the overlay background explicitly. A plain space loses the
-	// background after the preceding pane's ANSI reset. Using Width(1).Height(N).Render("")
-	// produces a spurious bg+reset on line 0; instead repeat one individually styled space
-	// per row so every line has a single clean `[48;...m [0m` code.
-	sepLine := lipgloss.NewStyle().Background(bg).Render(" ")
-	sep := strings.Repeat(sepLine+"\n", layout.BodyHeight)
-	sep = strings.TrimSuffix(sep, "\n")
+	sep := strings.TrimSuffix(strings.Repeat(" \n", layout.BodyHeight), "\n")
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 }
 

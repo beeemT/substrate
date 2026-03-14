@@ -131,9 +131,9 @@ func renderToastAtWidth(st styles.Styles, t Toast, width int) string {
 		textWidth = 0
 	}
 	padding := strings.Repeat(" ", max(0, textWidth-contentWidth))
-	bg := lipgloss.Color(st.Theme.OverlayBg)
-	borderStyle := lipgloss.NewStyle().Foreground(borderColorForLevel(st, t.Level)).Background(bg)
-	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Background(bg).Bold(true)
+	
+	borderStyle := lipgloss.NewStyle().Foreground(borderColorForLevel(st, t.Level))
+	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Bold(true)
 	top := borderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
 	middle := borderStyle.Render("│") + contentStyle.Render(" "+contentText+padding+" ") + borderStyle.Render("│")
 	bottom := borderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
