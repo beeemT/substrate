@@ -1847,6 +1847,7 @@ func (m *NewSessionOverlay) View() string {
 		HeaderLines: header,
 		Body:        body,
 		Footer:      footer,
+		Focused:     true,
 	})
 }
 

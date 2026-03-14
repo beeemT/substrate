@@ -123,6 +123,21 @@ func TestApplyOverlayListStylesReturnsUpdatedModel(t *testing.T) {
 	}
 }
 
+func TestOverlayFrameChangesWhenFocused(t *testing.T) {
+	st := testOverlayStyles()
+	if reflect.DeepEqual(st.OverlayFrame, st.OverlayFrameFocused) {
+		t.Fatal("expected focused overlay frame style to differ from unfocused style")
+	}
+}
+
+func TestRenderOverlayFrameChangesWhenFocused(t *testing.T) {
+	st := testOverlayStyles()
+	base := RenderOverlayFrame(st, 48, OverlayFrameSpec{Body: "body"})
+	focused := RenderOverlayFrame(st, 48, OverlayFrameSpec{Body: "body", Focused: true})
+	assertFits(t, base, 50, 3)
+	assertFits(t, focused, 50, 3)
+}
+
 func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)

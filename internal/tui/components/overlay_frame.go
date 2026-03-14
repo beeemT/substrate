@@ -44,6 +44,7 @@ type OverlayFrameSpec struct {
 	HeaderLines []string
 	Body        string
 	Footer      string
+	Focused     bool
 }
 
 // OverlayPaneSpec describes a bordered pane inside a split overlay body.
@@ -108,7 +109,11 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 		parts = append(parts, spec.Footer)
 	}
 	content := strings.Join(parts, "\n")
-	return st.OverlayFrame.Copy().
+	frameStyle := st.OverlayFrame
+	if spec.Focused {
+		frameStyle = st.OverlayFrameFocused
+	}
+	return frameStyle.Copy().
 		Width(maxInt(1, frameWidth)).
 		Render(content)
 }

@@ -1179,6 +1179,7 @@ func (m SettingsPage) renderEditModal() string {
 		HeaderLines: header,
 		Body:        body,
 		Footer:      footer,
+		Focused:     true,
 	})
 }
 

@@ -497,6 +497,7 @@ func (m SessionSearchOverlay) View() string {
 		HeaderLines: header,
 		Body:        body,
 		Footer:      hints,
+		Focused:     true,
 	})
 }
 

@@ -623,7 +623,7 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	default:
 		return ""
 	}
-	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewBox(body, innerWidth, innerHeight)})
+	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewBox(body, innerWidth, innerHeight), Focused: true})
 }
 
 func actionKeybindHints(action OverviewActionCard) []KeybindHint {

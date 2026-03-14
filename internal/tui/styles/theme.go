@@ -101,14 +101,15 @@ type Styles struct {
 	Pane        lipgloss.Style
 	PaneFocused lipgloss.Style
 
-	OverlayFrame       lipgloss.Style
-	OverlayPane        lipgloss.Style
-	OverlayPaneFocused lipgloss.Style
-	SectionLabel       lipgloss.Style
-	TabActive          lipgloss.Style
-	TabInactive        lipgloss.Style
-	Callout            lipgloss.Style
-	CalloutWarning     lipgloss.Style
+	OverlayFrame        lipgloss.Style
+	OverlayFrameFocused lipgloss.Style
+	OverlayPane         lipgloss.Style
+	OverlayPaneFocused  lipgloss.Style
+	SectionLabel        lipgloss.Style
+	TabActive           lipgloss.Style
+	TabInactive         lipgloss.Style
+	Callout             lipgloss.Style
+	CalloutWarning      lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -170,6 +171,11 @@ func NewStyles(t Theme) Styles {
 		OverlayFrame: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.OverlayBorder)).
+			Background(lipgloss.Color(t.OverlayBg)).
+			Padding(chrome.OverlayFrame.PaddingTop, chrome.OverlayFrame.PaddingRight, chrome.OverlayFrame.PaddingBottom, chrome.OverlayFrame.PaddingLeft),
+		OverlayFrameFocused: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.OverlayBorderFocused)).
 			Background(lipgloss.Color(t.OverlayBg)).
 			Padding(chrome.OverlayFrame.PaddingTop, chrome.OverlayFrame.PaddingRight, chrome.OverlayFrame.PaddingBottom, chrome.OverlayFrame.PaddingLeft),
 		OverlayPane: lipgloss.NewStyle().
