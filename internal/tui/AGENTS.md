@@ -29,3 +29,26 @@
 - For views with expensive document builds: perform the rebuild **once** at the end of `Update` (where cache persists), and have `View` reuse the pre-built viewport directly. Use a dimension/content check (`vp.Width != expected || vp.Height != expected || vp.TotalLineCount() == 0`) as a fallback for first render or resize.
 - The `View` fallback rebuild must use `alignSelection=false`. Selection alignment is the responsibility of `Update` (keyboard path via `syncMainViewport`, wheel path via `preparedMainViewport`). If `View` realigns, it can jump the viewport to unexpected positions because it operates on a stale copy.
 - Content-key-based caching (e.g. `mainDocumentContentKey`) must include all state that affects rendered output: cursor positions, focus, editing mode, reveal-secrets, and a mutation revision counter. Invalidate the cache at every content mutation point.
+
+
+## Overlay Background and ANSI Reset Hygiene
+- Lipgloss background set on an outer style (`Background(overlayBg)`) is cleared the first time
+  any child emits a full ANSI reset (`\x1b[0m`). Bubbles `list.Model`, `viewport.Model`, and
+  nested lipgloss renders all produce resets. **Never rely on an outer `Background()` to cover
+  content rendered by those components.** The background vanishes after the first `\x1b[0m`.
+- **Hints / keybind rows inside overlays**: use `renderOverlayHintsRow` in `views/component_helpers.go`.
+  It applies `Background(overlayBg)` to every individual accent/hint segment and to the separators,
+  then wraps with `Padding(0,1)` and `Width(width)`. Never pass keybind hint rows through
+  `components.RenderKeyHints` with only an outer background; the resets in each piece will break it.
+- **Inter-pane separators in split overlays**: pass a lipgloss-rendered column rather than a plain
+  string to `lipgloss.JoinHorizontal`. Example:
+  ```go
+  sep := lipgloss.NewStyle().Background(overlayBg).Width(1).Height(bodyHeight).Render("")
+  lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
+  ```
+  A plain `" "` loses the background after the left pane's terminating reset, creating an
+  uncoloured gap that is most visible at the bottom border row.
+- **General rule**: every gap, spacer, or separator that must appear with the overlay background
+  **must** have `Background(overlayBg)` applied to its own style. Inheritance from an outer render
+  does not survive a reset. When in doubt, use `lipgloss.NewStyle().Background(bg).Render(s)` on
+  each piece rather than wrapping the joined result.

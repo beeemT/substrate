@@ -188,3 +188,37 @@ func assertFits(t *testing.T, view string, width, height int) {
 		}
 	}
 }
+
+func TestRenderSplitOverlayBodySeparatorWidth(t *testing.T) {
+	// In lipgloss v1, Width(w) sets the inner area including padding; visual width = w + border(2).
+	// renderOverlayPane passes Width(InnerWidth(paneWidth)) where InnerWidth removes border+padding.
+	// So each pane renders at visual = InnerWidth(paneWidth) + border(2) = paneWidth - paddingH.
+	// With paddingH=2, each pane is paneWidth-2 visually. The separator must be exactly 1 char.
+	st := testOverlayStyles()
+	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
+	body := RenderSplitOverlayBody(st, layout, SplitOverlaySpec{
+		LeftPane: OverlayPaneSpec{
+			Title:   "Work Items",
+			Body:    strings.Repeat("item\n", layout.ListHeight),
+			Focused: true,
+		},
+		RightPane: OverlayPaneSpec{
+			Title: "Details",
+			Body:  "detail content",
+		},
+	})
+
+	// Each pane renders 2 chars narrower than its allocated width (border adds 2 outside Width).
+	panePaddingH := styles.DefaultChromeMetrics.OverlayPane.PaddingLeft + styles.DefaultChromeMetrics.OverlayPane.PaddingRight
+	wantWidth := (layout.LeftPaneWidth - panePaddingH) + 1 + (layout.RightPaneWidth - panePaddingH)
+	lines := strings.Split(body, "\n")
+	if len(lines) != layout.BodyHeight {
+		t.Fatalf("split body line count = %d, want %d", len(lines), layout.BodyHeight)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got != wantWidth {
+			t.Fatalf("line %d width = %d, want %d (leftPane=%d + sep=1 + rightPane=%d)\nline: %q",
+				i+1, got, wantWidth, layout.LeftPaneWidth-panePaddingH, layout.RightPaneWidth-panePaddingH, line)
+		}
+	}
+}

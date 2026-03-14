@@ -120,9 +120,14 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 
 // RenderSplitOverlayBody renders a split left/right pane body using a computed layout.
 func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec SplitOverlaySpec) string {
+	bg := lipgloss.Color(st.Theme.OverlayBg)
 	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
 	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
+	// The separator must carry the overlay background explicitly; a plain space string
+	// loses the background after the preceding pane's ANSI reset and leaves a
+	// visible uncoloured gap between the two pane borders at every row.
+	sep := lipgloss.NewStyle().Background(bg).Width(1).Height(layout.BodyHeight).Render("")
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 }
 
 // RenderOverlayDivider renders a semantic divider line for overlay content.
