@@ -144,7 +144,7 @@ func (m QuestionModel) View() string {
 	replyLabel := m.styles.Subtitle.Render("Your reply (or press ") +
 		m.styles.KeybindAccent.Render("[A]") +
 		m.styles.Subtitle.Render(" to approve):")
-	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
+	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
 
 	headerLines := strings.Split(header, "\n")
 	middleBlocks := []string{questionLabel, questionBox}

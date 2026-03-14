@@ -99,6 +99,6 @@ func (m InterruptedModel) View() string {
 	if !m.canAct {
 		lines = append(lines, m.styles.Muted.Render("(Owned by another instance — take over not yet available)"))
 	}
-	lines = append(lines, components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  "))
+	lines = append(lines, renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width))
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

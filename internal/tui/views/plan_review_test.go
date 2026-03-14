@@ -203,3 +203,40 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 		t.Fatalf("footer region = %q, want next-step CTA near the bottom", footerRegion)
 	}
 }
+
+func TestPlanReviewHintsRowHasSymmetricLeadingSpace(t *testing.T) {
+	t.Parallel()
+
+	// Use a wide enough view so none of the hint labels are truncated.
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(120, 20)
+	m.SetTitle("SUB-1")
+	m.SetPlanDocument("p1", "## Plan\n\nSome content.")
+
+	rendered := m.View()
+	plain := ansi.Strip(rendered)
+	lines := strings.Split(plain, "\n")
+
+	// The last line is the hints row. It should be exactly width chars.
+	hintsLine := lines[len(lines)-1]
+	if got := len([]rune(hintsLine)); got != 120 {
+		t.Fatalf("hints line width = %d, want 120; line=%q", got, hintsLine)
+	}
+
+	// Must have at least 1 leading space before [a] (Padding(0,1) applied).
+	if !strings.HasPrefix(hintsLine, " ") {
+		t.Fatalf("hints line = %q, want at least one leading space before first hint", hintsLine)
+	}
+	firstTextIdx := len(hintsLine) - len(strings.TrimLeft(hintsLine, " "))
+	if firstTextIdx < 1 {
+		t.Fatalf("hints line = %q, want firstTextIdx >= 1, got %d", hintsLine, firstTextIdx)
+	}
+	if !strings.HasPrefix(hintsLine[firstTextIdx:], "[a]") {
+		t.Fatalf("hints line = %q, want [a] as first hint text (after leading spaces), got prefix %q", hintsLine, hintsLine[firstTextIdx:])
+	}
+
+	// Must have at least 1 trailing space after the last hint text (Padding(0,1)).
+	if !strings.HasSuffix(hintsLine, " ") {
+		t.Fatalf("hints line = %q, want at least one trailing space after last hint", hintsLine)
+	}
+}

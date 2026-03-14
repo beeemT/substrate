@@ -334,7 +334,7 @@ func (m PlanReviewModel) View() string {
 		feedbackRow = m.styles.Warning.Render(label) + m.feedbackInput.View()
 	}
 
-	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
+	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
 
 	parts := append(strings.Split(header, "\n"), body)
 	if feedbackRow != "" {

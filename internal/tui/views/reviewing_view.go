@@ -140,7 +140,7 @@ func (m ReviewModel) View() string {
 		}
 	}
 
-	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
+	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
 	headerLines := strings.Split(header, "\n")
 	bodyHeight := max(1, m.height-len(headerLines)-1-1-1)
 	bodyBlock := fitViewBox(body.String(), m.width, bodyHeight)

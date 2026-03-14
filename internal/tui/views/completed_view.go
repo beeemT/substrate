@@ -122,14 +122,7 @@ func (m CompletedModel) View() string {
 		lines = append(lines, m.styles.Warning.Render("⚠ "+w))
 	}
 
-	lines = append(lines, "", components.RenderKeyHints(m.styles, keyHintsForCompletedModel(m), "  "))
+	lines = append(lines, "", renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width))
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }
 
-func keyHintsForCompletedModel(m CompletedModel) []components.KeyHint {
-	hints := []components.KeyHint{{Key: "Esc", Label: "Close"}}
-	if len(m.mrLinks) > 0 {
-		hints = append([]components.KeyHint{{Key: "↑↓", Label: "Select"}, {Key: "Enter", Label: "Open"}}, hints...)
-	}
-	return hints
-}
