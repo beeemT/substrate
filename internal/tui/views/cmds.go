@@ -239,28 +239,21 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 	}
 }
 
-// normalizeSessionLogLine converts a raw session log line into transcript text.
-func normalizeSessionLogLine(line string) (string, bool) {
-	entry, ok := sessionlog.ParseLine(line)
-	if !ok {
-		return "", false
-	}
-	return sessionlog.FormatForTranscript(entry)
-}
 
-func scanSessionInteraction(r io.Reader) ([]string, error) {
-	var lines []string
+
+func scanSessionInteraction(r io.Reader) ([]sessionlog.Entry, error) {
+	var entries []sessionlog.Entry
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 	for scanner.Scan() {
-		if line, ok := normalizeSessionLogLine(scanner.Text()); ok {
-			lines = append(lines, line)
+		if entry, ok := sessionlog.ParseLine(scanner.Text()); ok {
+			entries = append(entries, entry)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return lines, nil
+	return entries, nil
 }
 
 func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
@@ -280,7 +273,7 @@ func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 	return paths, nil
 }
 
-func readSessionInteractionFile(path string) ([]string, error) {
+func readSessionInteractionFile(path string) ([]sessionlog.Entry, error) {
 	if strings.HasSuffix(path, ".gz") {
 		file, err := os.Open(path)
 		if err != nil {
@@ -302,27 +295,24 @@ func readSessionInteractionFile(path string) ([]string, error) {
 	return scanSessionInteraction(file)
 }
 
-// LoadSessionInteractionCmd reads the parsed interaction history for a session, including compressed segments.
 func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		paths, err := sessionInteractionPaths(sessionsDir, sessionID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		var lines []string
+		var entries []sessionlog.Entry
 		for _, path := range paths {
 			chunk, err := readSessionInteractionFile(path)
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			lines = append(lines, chunk...)
+			entries = append(entries, chunk...)
 		}
-		return SessionInteractionLoadedMsg{SessionID: sessionID, Lines: lines}
+		return SessionInteractionLoadedMsg{SessionID: sessionID, Entries: entries}
 	}
 }
 
-// TailSessionLogCmd reads new lines from a session log file since the given byte offset.
-// It handles log rotation by detecting size regression.
 func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 	return func() tea.Msg {
 		stat, err := os.Stat(logPath)
@@ -344,12 +334,12 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		if _, err := f.Seek(offset, 0); err != nil {
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
 		}
-		var lines []string
+		var entries []sessionlog.Entry
 		scanner := bufio.NewScanner(f)
 		scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 		for scanner.Scan() {
-			if line, ok := normalizeSessionLogLine(scanner.Text()); ok {
-				lines = append(lines, line)
+			if entry, ok := sessionlog.ParseLine(scanner.Text()); ok {
+				entries = append(entries, entry)
 			}
 		}
 		pos, seekErr := f.Seek(0, io.SeekCurrent)
@@ -358,7 +348,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 			newOffset = pos
 		}
 		_ = scanner.Err()
-		return SessionLogLinesMsg{SessionID: sessionID, Lines: lines, NextOffset: newOffset}
+		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
 	}
 }
 

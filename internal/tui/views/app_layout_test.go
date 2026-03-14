@@ -10,6 +10,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -430,7 +431,7 @@ func TestAppViewWithSessionInteractionFitsWindow(t *testing.T) {
 	app.content.SetSessionInteraction(
 		"SUB-1 · Investigate overflow",
 		"SUB-1 · workspace · repo-1 · sess-1",
-		[]string{"line 1", "line 2", "line 3", "line 4"},
+		[]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}, {Kind: sessionlog.KindPlain, Text: "line 3"}, {Kind: sessionlog.KindPlain, Text: "line 4"}},
 	)
 
 	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
@@ -455,7 +456,7 @@ func TestAppViewAddsHorizontalInsetToMainContentPane(t *testing.T) {
 	app.content.SetSessionInteraction(
 		"SUB-1 · Investigate overflow",
 		"SUB-1 · workspace · repo-1 · sess-1",
-		[]string{"line 1", "line 2", "line 3", "line 4"},
+		[]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}, {Kind: sessionlog.KindPlain, Text: "line 3"}, {Kind: sessionlog.KindPlain, Text: "line 4"}},
 	)
 
 	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)

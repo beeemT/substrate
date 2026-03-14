@@ -5,6 +5,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 // --- DB polling / data loading ---
@@ -58,14 +59,14 @@ type HeartbeatTickMsg time.Time
 // SessionLogLinesMsg delivers new log lines from a tailed session log.
 type SessionLogLinesMsg struct {
 	SessionID  string
-	Lines      []string
+	Entries    []sessionlog.Entry
 	NextOffset int64
 }
 
 // SessionInteractionLoadedMsg delivers the parsed interaction log for one session.
 type SessionInteractionLoadedMsg struct {
 	SessionID string
-	Lines     []string
+	Entries   []sessionlog.Entry
 }
 
 // --- User actions ---

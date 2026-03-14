@@ -109,6 +109,8 @@ type Styles struct {
 	TabInactive         lipgloss.Style
 	Callout             lipgloss.Style
 	CalloutWarning      lipgloss.Style
+	CalloutRunning      lipgloss.Style
+	CalloutError        lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -193,7 +195,15 @@ func NewStyles(t Theme) Styles {
 		CalloutWarning: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Warning)).
-			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+		CalloutRunning: lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color(t.Active)).
+				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+		CalloutError: lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color(t.Error)).
+				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		SettingsText:              lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
 		SettingsTextStrong:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
 		SettingsBreadcrumb:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)),

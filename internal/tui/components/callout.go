@@ -13,6 +13,8 @@ const (
 	CalloutDefault CalloutVariant = iota
 	CalloutCard
 	CalloutWarning
+	CalloutRunning // active/accent border color for in-progress tool cards
+	CalloutError   // error border color for failed tool cards
 )
 
 // CalloutSpec describes a bordered content box.
@@ -35,6 +37,10 @@ func RenderCallout(st styles.Styles, spec CalloutSpec) string {
 		calloutStyle = st.Callout.Copy().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(st.Theme.Divider))
 	case CalloutWarning:
 		calloutStyle = st.CalloutWarning
+	case CalloutRunning:
+		calloutStyle = st.CalloutRunning
+	case CalloutError:
+		calloutStyle = st.CalloutError
 	}
 	if spec.Width > 0 {
 		horizontalBorder := st.Chrome.Callout.BorderLeft + st.Chrome.Callout.BorderRight

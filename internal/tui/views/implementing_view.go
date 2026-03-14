@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -39,7 +40,8 @@ func repoStatusIcon(status domain.TaskPlanStatus, st styles.Styles) string {
 type ImplementingModel struct {
 	repos        []RepoProgress
 	selectedRepo int
-	lineBuffers  map[string][]string
+	entryBuffers map[string][]sessionlog.Entry
+	verbose      bool
 	viewports    map[string]viewport.Model
 	offsets      map[string]int64
 	paused       bool
@@ -52,10 +54,10 @@ type ImplementingModel struct {
 // NewImplementingModel constructs an ImplementingModel with the given styles.
 func NewImplementingModel(st styles.Styles) ImplementingModel {
 	return ImplementingModel{
-		lineBuffers: make(map[string][]string),
-		viewports:   make(map[string]viewport.Model),
-		offsets:     make(map[string]int64),
-		styles:      st,
+		entryBuffers: make(map[string][]sessionlog.Entry),
+		viewports:    make(map[string]viewport.Model),
+		offsets:      make(map[string]int64),
+		styles:       st,
 	}
 }
 
@@ -67,6 +69,9 @@ func (m *ImplementingModel) SetSize(width, height int) {
 	for k, vp := range m.viewports {
 		vp.Width = width
 		vp.Height = vpH
+		if entries, ok := m.entryBuffers[k]; ok && len(entries) > 0 {
+			vp.SetContent(RenderTranscript(m.styles, entries, width, m.verbose))
+		}
 		m.viewports[k] = vp
 	}
 }
@@ -85,7 +90,7 @@ func (m *ImplementingModel) SetRepos(repos []RepoProgress) {
 	for _, r := range repos {
 		if _, ok := m.viewports[r.Name]; !ok {
 			m.viewports[r.Name] = viewport.New(m.width, vpH)
-			m.lineBuffers[r.Name] = nil
+			m.entryBuffers[r.Name] = nil
 			m.offsets[r.Name] = 0
 		}
 	}
@@ -109,6 +114,7 @@ func (m ImplementingModel) KeybindHints() []KeybindHint {
 		{Key: "Tab", Label: "Cycle repos"},
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
+		{Key: "v", Label: "Verbose logs"},
 	}
 }
 
@@ -122,9 +128,9 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 				continue
 			}
 			m.offsets[r.Name] = msg.NextOffset
-			m.lineBuffers[r.Name] = append(m.lineBuffers[r.Name], msg.Lines...)
+			m.entryBuffers[r.Name] = append(m.entryBuffers[r.Name], msg.Entries...)
 			vp := m.viewports[r.Name]
-			vp.SetContent(strings.Join(m.lineBuffers[r.Name], "\n"))
+			vp.SetContent(RenderTranscript(m.styles, m.entryBuffers[r.Name], m.width, m.verbose))
 			if !m.paused || r.Name == m.selectedRepoName() {
 				vp.GotoBottom()
 			}
@@ -143,6 +149,15 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			}
 		case "p":
 			m.paused = !m.paused
+		case "v":
+			m.verbose = !m.verbose
+			for name, entries := range m.entryBuffers {
+				if len(entries) > 0 {
+					vp := m.viewports[name]
+					vp.SetContent(RenderTranscript(m.styles, entries, m.width, m.verbose))
+					m.viewports[name] = vp
+				}
+			}
 		case "up", "k", "down", "j", "pgup", "pgdown":
 			name := m.selectedRepoName()
 			if name != "" {

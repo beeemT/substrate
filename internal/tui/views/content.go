@@ -4,6 +4,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -124,12 +125,12 @@ func (m *ContentModel) SetOverviewData(data SessionOverviewData) {
 	m.overview.SetData(data)
 }
 
-func (m *ContentModel) SetSessionInteraction(title, meta string, lines []string) {
+func (m *ContentModel) SetSessionInteraction(title, meta string, entries []sessionlog.Entry) {
 	m.currentWorkItem = nil
 	m.sessionLog.SetTitle(title)
 	m.sessionLog.SetModeLabel("Session interaction")
 	m.sessionLog.SetMeta(meta)
-	m.sessionLog.SetStaticContent(lines)
+	m.sessionLog.SetStaticContent(entries)
 	m.mode = ContentModeSessionInteraction
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -17,7 +18,7 @@ func TestSessionLogViewRespectsRequestedHeightWithMeta(t *testing.T) {
 	m.SetSize(48, 10)
 	m.SetTitle("SUB-1 · Investigate overflow")
 	m.SetMeta("workspace · repo-1 · sess-1")
-	m.SetStaticContent([]string{"line 1", "line 2", "line 3"})
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}, {Kind: sessionlog.KindPlain, Text: "line 3"}})
 
 	lines := strings.Split(m.View(), "\n")
 	if got := len(lines); got != 10 {
@@ -35,12 +36,12 @@ func TestSessionLogSetLogPathKeepsExistingLiveContentForSameSession(t *testing.T
 	m.SetSize(48, 10)
 	m.SetLogPath("sess-1", "/tmp/sess-1.log")
 
-	updated, _ := m.Update(SessionLogLinesMsg{SessionID: "sess-1", Lines: []string{"line 1", "line 2"}, NextOffset: 12})
+	updated, _ := m.Update(SessionLogLinesMsg{SessionID: "sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}}, NextOffset: 12})
 	m = updated
 
 	m.SetLogPath("sess-1", "/tmp/sess-1.log")
 
-	if got := len(m.lines); got != 2 {
+	if got := len(m.entries); got != 2 {
 		t.Fatalf("line count = %d, want 2", got)
 	}
 	if got := m.offset; got != 12 {
@@ -57,12 +58,12 @@ func TestSessionLogSetLogPathResetsForDifferentSession(t *testing.T) {
 	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
 	m.SetSize(48, 10)
 	m.SetLogPath("sess-1", "/tmp/sess-1.log")
-	updated, _ := m.Update(SessionLogLinesMsg{SessionID: "sess-1", Lines: []string{"line 1", "line 2"}, NextOffset: 12})
+	updated, _ := m.Update(SessionLogLinesMsg{SessionID: "sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}}, NextOffset: 12})
 	m = updated
 
 	m.SetLogPath("sess-2", "/tmp/sess-2.log")
 
-	if got := len(m.lines); got != 0 {
+	if got := len(m.entries); got != 0 {
 		t.Fatalf("line count = %d, want reset to 0", got)
 	}
 	if got := m.offset; got != 0 {
@@ -80,7 +81,7 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 	m.SetSize(48, 12)
 	m.SetTitle("SUB-1 · Investigate overflow")
 	m.SetMeta("workspace · repo-1 · sess-1")
-	m.SetStaticContent([]string{"line 1", "line 2", "line 3"})
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}, {Kind: sessionlog.KindPlain, Text: "line 3"}})
 	m.SetNotice(&sourceDetailsNotice{
 		Title:   "Interrupted task needs recovery",
 		Body:    "repo-1 was interrupted and cannot continue until it is resumed or abandoned.",
@@ -96,7 +97,7 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 		}
 	}
 	hints := m.KeybindHints()
-	if len(hints) < 3 || hints[2].Label != "Open overview" {
+	if len(hints) < 4 || hints[3].Label != "Open overview" {
 		t.Fatalf("keybind hints = %#v, want open-overview action", hints)
 	}
 	lines := strings.Split(rendered, "\n")

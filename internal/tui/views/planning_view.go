@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -13,7 +14,8 @@ import (
 // SessionLogModel renders either a live-tailing session log or a static interaction transcript.
 type SessionLogModel struct {
 	viewport  viewport.Model
-	lines     []string
+	entries  []sessionlog.Entry
+	verbose  bool
 	paused    bool
 	title     string
 	modeLabel string
@@ -43,6 +45,9 @@ func (m *SessionLogModel) syncViewportSize() {
 	m.viewport.Width = m.width
 	headerLines := len(strings.Split(m.header(), "\n"))
 	m.viewport.Height = max(1, m.height-headerLines-1)
+	if len(m.entries) > 0 {
+		m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
+	}
 }
 
 func (m *SessionLogModel) SetTitle(title string) { m.title = title }
@@ -67,18 +72,18 @@ func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.logPath = logPath
 	m.live = true
 	m.offset = 0
-	m.lines = nil
+	m.entries = nil
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 }
 
-func (m *SessionLogModel) SetStaticContent(lines []string) {
+func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.live = false
 	m.logPath = ""
 	m.sessionID = ""
 	m.offset = 0
-	m.lines = append([]string(nil), lines...)
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.entries = append([]sessionlog.Entry(nil), entries...)
+	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
 	m.viewport.GotoTop()
 }
 
@@ -93,6 +98,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	hints := []KeybindHint{
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
+		{Key: "v", Label: "Verbose logs"},
 	}
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
@@ -108,9 +114,9 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			return m, nil
 		}
 		m.offset = msg.NextOffset
-		if len(msg.Lines) > 0 {
-			m.lines = append(m.lines, msg.Lines...)
-			m.viewport.SetContent(strings.Join(m.lines, "\n"))
+		if len(msg.Entries) > 0 {
+			m.entries = append(m.entries, msg.Entries...)
+			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
 			if !m.paused {
 				m.viewport.GotoBottom()
 			}
@@ -120,6 +126,9 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		switch msg.String() {
 		case "p":
 			m.paused = !m.paused
+		case "v":
+			m.verbose = !m.verbose
+			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
 		default:
 			m.viewport, cmd = m.viewport.Update(msg)
 		}

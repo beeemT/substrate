@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
 
@@ -33,12 +34,12 @@ func TestTailSessionLogCmd_Basic(t *testing.T) {
 		t.Errorf("SessionID: want %q, got %q", "sess1", got.SessionID)
 	}
 	want := []string{"alpha", "beta", "gamma"}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	if len(got.Entries) != len(want) {
+		t.Fatalf("Entries: want %v, got %v", want, got.Entries)
 	}
 	for i, w := range want {
-		if got.Lines[i] != w {
-			t.Errorf("Lines[%d]: want %q, got %q", i, w, got.Lines[i])
+		if got.Entries[i].Text != w {
+			t.Errorf("Entries[%d]: want %q, got %q", i, w, got.Entries[i].Text)
 		}
 	}
 	if got.NextOffset != int64(len(content)) {
@@ -73,8 +74,8 @@ func TestTailSessionLogCmd_OffsetContinuation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	if len(got.Lines) != 1 || got.Lines[0] != "second" {
-		t.Errorf("Lines: want [\"second\"], got %v", got.Lines)
+	if len(got.Entries) != 1 || got.Entries[0].Text != "second" {
+		t.Errorf("Entries: want [\"second\"], got %v", got.Entries)
 	}
 	wantOff := offset + int64(len(secondLine))
 	if got.NextOffset != wantOff {
@@ -103,8 +104,8 @@ func TestTailSessionLogCmd_RotationDetected(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	if len(got.Lines) != 1 || got.Lines[0] != "fresh line after rotation" {
-		t.Errorf("Lines: want rotation-fresh line, got %v", got.Lines)
+	if len(got.Entries) != 1 || got.Entries[0].Text != "fresh line after rotation" {
+		t.Errorf("Entries: want rotation-fresh line, got %v", got.Entries)
 	}
 	if got.NextOffset != int64(len(newContent)) {
 		t.Errorf("NextOffset after rotation: want %d, got %d", len(newContent), got.NextOffset)
@@ -132,11 +133,11 @@ func TestTailSessionLogCmd_LargeLine(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	if len(got.Lines) != 1 {
-		t.Fatalf("Lines: want 1 line, got %d", len(got.Lines))
+	if len(got.Entries) != 1 {
+		t.Fatalf("Entries: want 1 entry, got %d", len(got.Entries))
 	}
-	if got.Lines[0] != bigPayload {
-		t.Errorf("Lines[0]: length %d, want %d", len(got.Lines[0]), len(bigPayload))
+	if got.Entries[0].Text != bigPayload {
+		t.Errorf("Entries[0]: length %d, want %d", len(got.Entries[0].Text), len(bigPayload))
 	}
 	if got.NextOffset != int64(len(content)) {
 		t.Errorf("NextOffset: want %d, got %d", len(content), got.NextOffset)
@@ -152,8 +153,8 @@ func TestTailSessionLogCmd_MissingFile(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg on missing file, got %T", msg)
 	}
-	if len(got.Lines) != 0 {
-		t.Errorf("Lines: want empty slice, got %v", got.Lines)
+	if len(got.Entries) != 0 {
+		t.Errorf("Entries: want empty slice, got %v", got.Entries)
 	}
 }
 
@@ -185,21 +186,49 @@ func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	want := []string{
-		"Prompt: Begin planning",
-		"planning step",
-		"Tool: read — Reading guidance\n  Args: {\"path\":\"AGENTS.md\"}",
-		"Tool output [read]: AGENTS contents",
-		"Tool result [read]: done",
-		"Question: Need input — missing token",
-		"plain fallback line",
+	type wantEntry struct {
+		kind      sessionlog.EntryKind
+		inputKind string
+		text      string
+		tool      string
+		intent    string
+		question  string
+		ctx       string
 	}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	want := []wantEntry{
+		{kind: sessionlog.KindInput, inputKind: "prompt", text: "Begin planning"},
+		{kind: sessionlog.KindAssistant, text: "planning step"},
+		{kind: sessionlog.KindToolStart, tool: "read", text: `{"path":"AGENTS.md"}`, intent: "Reading guidance"},
+		{kind: sessionlog.KindToolOutput, tool: "read", text: "AGENTS contents"},
+		{kind: sessionlog.KindToolResult, tool: "read", text: "done"},
+		{kind: sessionlog.KindQuestion, question: "Need input", ctx: "missing token"},
+		{kind: sessionlog.KindPlain, text: "plain fallback line"},
 	}
-	for i, line := range want {
-		if got.Lines[i] != line {
-			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
+	if len(got.Entries) != len(want) {
+		t.Fatalf("Entries: want %d, got %d", len(want), len(got.Entries))
+	}
+	for i, w := range want {
+		e := got.Entries[i]
+		if e.Kind != w.kind {
+			t.Errorf("Entries[%d].Kind: want %q, got %q", i, w.kind, e.Kind)
+		}
+		if e.Text != w.text {
+			t.Errorf("Entries[%d].Text: want %q, got %q", i, w.text, e.Text)
+		}
+		if w.inputKind != "" && e.InputKind != w.inputKind {
+			t.Errorf("Entries[%d].InputKind: want %q, got %q", i, w.inputKind, e.InputKind)
+		}
+		if w.tool != "" && e.Tool != w.tool {
+			t.Errorf("Entries[%d].Tool: want %q, got %q", i, w.tool, e.Tool)
+		}
+		if w.intent != "" && e.Intent != w.intent {
+			t.Errorf("Entries[%d].Intent: want %q, got %q", i, w.intent, e.Intent)
+		}
+		if w.question != "" && e.Question != w.question {
+			t.Errorf("Entries[%d].Question: want %q, got %q", i, w.question, e.Question)
+		}
+		if w.ctx != "" && e.Context != w.ctx {
+			t.Errorf("Entries[%d].Context: want %q, got %q", i, w.ctx, e.Context)
 		}
 	}
 }
@@ -229,14 +258,26 @@ func TestTailSessionLogCmd_PreservesLegacyErrorAndCompleteEvents(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
 	}
-	want := []string{"Error: bridge crashed", "Legacy completion summary", "Session complete"}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	if len(got.Entries) != 3 {
+		t.Fatalf("Entries: want 3, got %d", len(got.Entries))
 	}
-	for i, line := range want {
-		if got.Lines[i] != line {
-			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
-		}
+	// "error" kind — legacy event
+	if got.Entries[0].Kind != sessionlog.EntryKind("error") {
+		t.Errorf("Entries[0].Kind: want %q, got %q", "error", got.Entries[0].Kind)
+	}
+	if got.Entries[0].Message != "bridge crashed" {
+		t.Errorf("Entries[0].Message: want %q, got %q", "bridge crashed", got.Entries[0].Message)
+	}
+	// "complete" kind with summary — legacy event
+	if got.Entries[1].Kind != sessionlog.EntryKind("complete") {
+		t.Errorf("Entries[1].Kind: want %q, got %q", "complete", got.Entries[1].Kind)
+	}
+	if got.Entries[1].Summary != "Legacy completion summary" {
+		t.Errorf("Entries[1].Summary: want %q, got %q", "Legacy completion summary", got.Entries[1].Summary)
+	}
+	// "complete" kind, empty summary — legacy event
+	if got.Entries[2].Kind != sessionlog.EntryKind("complete") {
+		t.Errorf("Entries[2].Kind: want %q, got %q", "complete", got.Entries[2].Kind)
 	}
 }
 
@@ -274,25 +315,17 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SessionInteractionLoadedMsg, got %T", msg)
 	}
-	want := []string{"first chunk", "done", "live tail line"}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
+	if len(got.Entries) != 3 {
+		t.Fatalf("Entries: want 3, got %d (%v)", 3, got.Entries)
 	}
-	for i, line := range want {
-		if got.Lines[i] != line {
-			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
-		}
+	if got.Entries[0].Kind != sessionlog.KindAssistant || got.Entries[0].Text != "first chunk" {
+		t.Errorf("Entries[0]: want {KindAssistant, \"first chunk\"}, got %+v", got.Entries[0])
 	}
-	if got.SessionID != sessionID {
-		t.Fatalf("SessionID: want %q, got %q", sessionID, got.SessionID)
+	if got.Entries[1].Kind != sessionlog.KindLifecycle || got.Entries[1].Stage != "completed" || got.Entries[1].Summary != "done" {
+		t.Errorf("Entries[1]: want {KindLifecycle, stage=completed, summary=done}, got %+v", got.Entries[1])
 	}
-	if len(got.Lines) != len(want) {
-		t.Fatalf("Lines: want %v, got %v", want, got.Lines)
-	}
-	for i, line := range want {
-		if got.Lines[i] != line {
-			t.Fatalf("Lines[%d]: want %q, got %q", i, line, got.Lines[i])
-		}
+	if got.Entries[2].Kind != sessionlog.KindPlain || got.Entries[2].Text != "live tail line" {
+		t.Errorf("Entries[2]: want {KindPlain, \"live tail line\"}, got %+v", got.Entries[2])
 	}
 	if got.SessionID != sessionID {
 		t.Fatalf("SessionID: want %q, got %q", sessionID, got.SessionID)

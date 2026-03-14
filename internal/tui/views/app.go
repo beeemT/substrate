@@ -18,6 +18,7 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -669,19 +670,18 @@ func taskSessionDisplayName(session *domain.Task) string {
 	}
 }
 
-func (a App) historyEntrySummaryLines(entry SidebarEntry) []string {
-	lines := []string{
-		"No agent-session log is available for this work item yet.",
-		"",
-		"State: " + entry.Subtitle(),
+func (a App) historyEntrySummaryLines(entry SidebarEntry) []sessionlog.Entry {
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindPlain, Text: "No agent-session log is available for this work item yet."},
+		{Kind: sessionlog.KindPlain, Text: "State: " + entry.Subtitle()},
 	}
 	if entry.WorkspaceName != "" {
-		lines = append(lines, "Workspace: "+entry.WorkspaceName)
+		entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindPlain, Text: "Workspace: " + entry.WorkspaceName})
 	}
 	if entry.RepositoryName != "" {
-		lines = append(lines, "Latest repo: "+entry.RepositoryName)
+		entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindPlain, Text: "Latest repo: " + entry.RepositoryName})
 	}
-	return lines
+	return entries
 }
 
 func (a App) sidebarEntryFromHistory(entry domain.SessionHistoryEntry) SidebarEntry {
@@ -907,7 +907,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.SessionID != a.currentHistorySessionID || a.currentHistoryEntry.SessionID != msg.SessionID {
 			return a, nil
 		}
-		a.content.SetSessionInteraction(a.historyEntryTitle(a.currentHistoryEntry), a.historyEntryMeta(a.currentHistoryEntry), msg.Lines)
+		a.content.SetSessionInteraction(a.historyEntryTitle(a.currentHistoryEntry), a.historyEntryMeta(a.currentHistoryEntry), msg.Entries)
 		return a, nil
 
 	case PlanLoadedMsg:

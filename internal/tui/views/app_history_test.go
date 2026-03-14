@@ -14,6 +14,7 @@ import (
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 type duplicateCreateWorkItemRepo struct {
@@ -1318,14 +1319,14 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
 	}
 
-	model, cmd = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Lines: []string{"Prompt: Begin planning", "Tool: read — Reading guidance"}, NextOffset: 42})
+	model, cmd = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"}, {Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading guidance"}}, NextOffset: 42})
 	updated = model.(App)
 	if cmd == nil {
 		t.Fatal("expected live planning update to continue tailing the session log")
 	}
 
 	before := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Prompt: Begin planning", "Tool: read — Reading guidance"} {
+	for _, want := range []string{"Prompt: Begin planning", "read — Reading guidance"} {
 		if !strings.Contains(before, want) {
 			t.Fatalf("content view before refresh = %q, want %q", before, want)
 		}
@@ -1339,7 +1340,7 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil while already tailing the selected planning session", cmd)
 	}
 	after := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Prompt: Begin planning", "Tool: read — Reading guidance"} {
+	for _, want := range []string{"Prompt: Begin planning", "read — Reading guidance"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("content view after refresh = %q, want %q", after, want)
 		}
@@ -1374,7 +1375,7 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected selecting the planning session row to start tailing the session log")
 	}
-	model, _ = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Lines: []string{"Prompt: Begin planning", "Tool: read — Reading guidance"}, NextOffset: offset})
+	model, _ = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"}, {Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading guidance"}}, NextOffset: offset})
 	updated = model.(App)
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
 	updated = model.(App)
@@ -1394,8 +1395,8 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd() message = %T, want SessionLogLinesMsg", msg)
 	}
-	if len(linesMsg.Lines) != 0 {
-		t.Fatalf("resumed lines = %v, want no duplicate replay at saved offset", linesMsg.Lines)
+	if len(linesMsg.Entries) != 0 {
+		t.Fatalf("resumed entries = %v, want no duplicate replay at saved offset", linesMsg.Entries)
 	}
 	if linesMsg.NextOffset != offset {
 		t.Fatalf("next offset = %d, want %d", linesMsg.NextOffset, offset)
