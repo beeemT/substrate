@@ -29,6 +29,15 @@ type SessionLogModel struct {
 	styles           styles.Styles
 	width            int
 	height           int
+
+	// Rebuild guard: track the parameters used in the last RenderTranscript call so
+	// that syncViewportSize (called on every SetMeta / SetNotice / SetSize) can skip
+	// the expensive rebuild when only the viewport height changed (header line count
+	// differs) but the transcript content itself is unchanged.
+	renderedEntryCount int
+	renderedWidth      int
+	renderedVerbose    bool
+	renderedCollapse   bool
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -46,9 +55,29 @@ func (m *SessionLogModel) syncViewportSize() {
 	m.viewport.Width = m.width
 	headerLines := len(strings.Split(m.header(), "\n"))
 	m.viewport.Height = max(1, m.height-headerLines-1)
-	if len(m.entries) > 0 {
-		m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+	if len(m.entries) > 0 && m.transcriptNeedsRebuild() {
+		m.doRebuildTranscript()
 	}
+}
+
+// transcriptNeedsRebuild reports whether the rendered transcript is stale.
+func (m *SessionLogModel) transcriptNeedsRebuild() bool {
+	return len(m.entries) != m.renderedEntryCount ||
+		m.width != m.renderedWidth ||
+		m.verbose != m.renderedVerbose ||
+		m.collapseThinking != m.renderedCollapse
+}
+
+// doRebuildTranscript unconditionally re-renders the full transcript and
+// updates the rebuild-guard fields. Call this when content has definitely
+// changed (new entries, flag toggle, width change); prefer syncViewportSize
+// when only layout dimensions may have changed.
+func (m *SessionLogModel) doRebuildTranscript() {
+	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+	m.renderedEntryCount = len(m.entries)
+	m.renderedWidth = m.width
+	m.renderedVerbose = m.verbose
+	m.renderedCollapse = m.collapseThinking
 }
 
 func (m *SessionLogModel) SetTitle(title string) { m.title = title }
@@ -74,6 +103,7 @@ func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.live = true
 	m.offset = 0
 	m.entries = nil
+	m.renderedEntryCount = 0
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 }
@@ -84,7 +114,7 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.sessionID = ""
 	m.offset = 0
 	m.entries = append([]sessionlog.Entry(nil), entries...)
-	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+	m.doRebuildTranscript()
 	m.viewport.GotoTop()
 }
 
@@ -120,7 +150,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		m.offset = msg.NextOffset
 		if len(msg.Entries) > 0 {
 			m.entries = append(m.entries, msg.Entries...)
-			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+			m.doRebuildTranscript()
 			if !m.paused {
 				m.viewport.GotoBottom()
 			}
@@ -132,10 +162,10 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			m.paused = !m.paused
 		case "v":
 			m.verbose = !m.verbose
-			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+			m.doRebuildTranscript()
 		case "t":
 			m.collapseThinking = !m.collapseThinking
-			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+			m.doRebuildTranscript()
 		default:
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
