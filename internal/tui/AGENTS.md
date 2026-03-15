@@ -15,9 +15,11 @@
   `OverlayFrame`, `OverlayFrameFocused`, `OverlayPane`, or `OverlayPaneFocused` styles, nor to any
   per-component styles inside an overlay. The terminal's own background shows through everywhere.
 - **Why**: lipgloss renders a `Width()`-constrained style by padding every line to the full width with the
-  background colour. This paints entire terminal lines — not just the modal area — with the overlay colour.
-  When the overlay closes, those cells are not immediately repainted, so the background bleeds into the
-  underlying view until the next full repaint.
+  background colour. This paints entire terminal lines with the background colour — not just the styled
+  content. When the cursor advances, Bubble Tea may issue `\x1b[K]` (erase-to-EOL) with the background
+  colour still active, painting the cleared cells with that colour. **This applies everywhere in the TUI,
+  not only to overlays**: any `Background()` or `BorderBackground()` set on a `Width()`-constrained style
+  inside a viewport will cause the same bleed on scroll. Keep all viewport content background-free.
 - **`Background()` vs `BorderBackground()`**: in lipgloss v1, `Background(color)` applies to the content
   area and padding only. Border characters (`╭─╮╰╯│`) require `BorderBackground(color)`. Both must be set
   if a style ever needs to colour behind its border characters. This distinction is moot for transparent

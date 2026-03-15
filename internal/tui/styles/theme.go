@@ -13,7 +13,7 @@ type Theme struct {
 
 	// Shared text + chrome roles
 	Title, Subtitle, Muted, Hint, Label, Accent, Link, Divider string
-	Border, PaneBorder, PaneBorderFocused                      string
+	Border, PaneBorder, PaneBorderFocused, ToolBorder string
 	OverlayBorder, OverlayBorderFocused                        string
 	SelectedBg, SelectionActive, SelectionInactive             string
 
@@ -50,6 +50,7 @@ var DefaultTheme = Theme{
 	Border:               "#2d2d44",
 	PaneBorder:           "#334155",
 	PaneBorderFocused:    "#60a5fa",
+	ToolBorder:           "#475569",
 	OverlayBorder:        "#2d2d44",
 	OverlayBorderFocused: "#60a5fa",
 	SelectedBg:           "#1e293b",
@@ -112,6 +113,7 @@ type Styles struct {
 	CalloutWarning      lipgloss.Style
 	CalloutRunning      lipgloss.Style
 	CalloutError        lipgloss.Style
+	CalloutTool lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -204,6 +206,10 @@ func NewStyles(t Theme) Styles {
 		CalloutError: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Error)).
+			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+		CalloutTool: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.ToolBorder)).
 			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		SettingsText:              lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
 		SettingsTextStrong:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -312,7 +311,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	case block.toolError:
 		variant = components.CalloutError
 	default:
-		variant = components.CalloutDefault
+		variant = components.CalloutTool
 	}
 
 	innerW := components.CalloutInnerWidth(st, width)
@@ -401,11 +400,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 
 	body := strings.Join(bodyLines, "\n")
 
-	// Apply the dark tool-call background to border and content area.
-	// This is inline viewport content (not an overlay), so Background/BorderBackground
-	// are safe to use here without the overlay bleed issue described in AGENTS.md.
-	toolBg := lipgloss.Color(st.Theme.ToolCallBg)
-	return components.RenderCalloutWithBg(st, components.CalloutSpec{Body: body, Width: width, Variant: variant}, toolBg)
+	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
 }
 
 // toolArgsSummary returns a concise, human-readable summary line for the most
