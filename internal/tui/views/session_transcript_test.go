@@ -64,29 +64,78 @@ func TestGroupEntriesRunningToolHasNoResult(t *testing.T) {
 	}
 }
 
-func TestGroupEntriesDoesNotCrossNonToolEntry(t *testing.T) {
+func TestGroupEntriesToolResultMatchesAcrossNonToolEntry(t *testing.T) {
 	t.Parallel()
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindToolStart, Tool: "grep"},
 		{Kind: sessionlog.KindAssistant, Text: "reply"},
-		{Kind: sessionlog.KindToolResult, Text: "r"},
+		{Kind: sessionlog.KindToolResult, Tool: "grep", Text: "r"},
 	}
 	blocks := groupEntries(entries)
-	// Expect: tool block (running=true), assistant block, orphaned result → plain block
-	if len(blocks) != 3 {
-		t.Fatalf("expected 3 blocks, got %d: %+v", len(blocks), blocks)
+	// The queue matches the tool_result to its tool_start even though an
+	// assistant entry appears in between. Result: tool block (completed) + assistant.
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d: %+v", len(blocks), blocks)
 	}
 	if blocks[0].kind != blockKindTool {
 		t.Errorf("block[0]: expected tool, got %v", blocks[0].kind)
 	}
-	if !blocks[0].toolRunning {
-		t.Error("block[0]: expected toolRunning=true")
+	if blocks[0].toolRunning {
+		t.Error("block[0]: expected toolRunning=false (result arrived)")
+	}
+	if blocks[0].toolResult != "r" {
+		t.Errorf("block[0]: expected toolResult=\"r\", got %q", blocks[0].toolResult)
 	}
 	if blocks[1].kind != blockKindAssistant {
 		t.Errorf("block[1]: expected assistant, got %v", blocks[1].kind)
 	}
-	if blocks[2].kind != blockKindPlain {
-		t.Errorf("block[2]: expected plain (orphaned result), got %v", blocks[2].kind)
+}
+
+func TestGroupEntriesConcurrentToolCallsAreGrouped(t *testing.T) {
+	t.Parallel()
+	// Simulates the common pattern where the agent fans out multiple read/grep calls
+	// in parallel: all tool_starts arrive first, then results come back.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "reading A"},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "reading B"},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "reading C"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "content A"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "content B"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "content C"},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d: %+v", len(blocks), blocks)
+	}
+	for i, want := range []string{"content A", "content B", "content C"} {
+		if blocks[i].kind != blockKindTool {
+			t.Errorf("block[%d]: expected tool, got %v", i, blocks[i].kind)
+		}
+		if blocks[i].toolRunning {
+			t.Errorf("block[%d]: expected toolRunning=false", i)
+		}
+		if blocks[i].toolResult != want {
+			t.Errorf("block[%d]: expected toolResult=%q, got %q", i, want, blocks[i].toolResult)
+		}
+	}
+}
+
+func TestGroupEntriesOrphanedToolResultRendersAsTool(t *testing.T) {
+	t.Parallel()
+	// A tool_result with no preceding tool_start (e.g. log truncation) must
+	// render as a collapsed tool block, not as a wall of raw plain-text lines.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "1#AA:line one\n2#BB:line two"},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].kind != blockKindTool {
+		t.Errorf("expected blockKindTool, got %v", blocks[0].kind)
+	}
+	if blocks[0].toolRunning {
+		t.Error("expected toolRunning=false")
 	}
 }
 

@@ -52,54 +52,59 @@ type transcriptBlock struct {
 }
 
 // groupEntries converts a flat entry slice into grouped transcript blocks.
-// Adjacent tool_start / tool_output / tool_result entries are collapsed
-// into a single ToolBlock. All other entries map 1:1 to a block.
+// tool_start / tool_output / tool_result entries are matched by tool name using a
+// per-tool FIFO queue, so concurrent tool calls (multiple tool_starts before their
+// results arrive) are each collapsed into their own tool block instead of leaving
+// orphaned result entries that render as raw plain-text. Non-tool entries between
+// a tool_start and its tool_result are processed normally and do not break pairing.
 func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 	var blocks []transcriptBlock
-	i := 0
-	for i < len(entries) {
-		e := entries[i]
+	// toolQueue maps tool name → ordered list of block indices awaiting their result.
+	toolQueue := make(map[string][]int)
+
+	for _, e := range entries {
 		switch e.Kind {
 		case sessionlog.KindToolStart:
-			block := transcriptBlock{
+			idx := len(blocks)
+			blocks = append(blocks, transcriptBlock{
 				kind:        blockKindTool,
 				toolName:    e.Tool,
 				toolIntent:  e.Intent,
 				toolArgs:    e.Text,
 				toolRunning: true,
-			}
-			i++
-			for i < len(entries) && entries[i].Kind == sessionlog.KindToolOutput {
-				if entries[i].Text != "" {
-					block.toolOutput = append(block.toolOutput, entries[i].Text)
-				}
-				i++
-			}
-			if i < len(entries) && entries[i].Kind == sessionlog.KindToolResult {
-				block.toolResult = entries[i].Text
-				block.toolError = entries[i].IsError
-				block.toolRunning = false
-				i++
-			}
-			blocks = append(blocks, block)
+			})
+			toolQueue[e.Tool] = append(toolQueue[e.Tool], idx)
 
 		case sessionlog.KindToolOutput:
-			// Orphaned — no preceding KindToolStart in current group
-			if e.Text != "" {
+			if e.Text == "" {
+				continue
+			}
+			if idx := toolOutputTarget(blocks, toolQueue, e.Tool); idx >= 0 {
+				blocks[idx].toolOutput = append(blocks[idx].toolOutput, e.Text)
+			} else {
+				// Orphaned output with no pending tool block.
 				blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: e.Text})
 			}
-			i++
 
 		case sessionlog.KindToolResult:
-			// Orphaned — no preceding KindToolStart in current group
-			if e.Text != "" {
-				blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: e.Text})
+			if idx := dequeueToolResult(blocks, toolQueue, e.Tool); idx >= 0 {
+				blocks[idx].toolResult = e.Text
+				blocks[idx].toolError = e.IsError
+				blocks[idx].toolRunning = false
+			} else if e.Text != "" {
+				// Truly orphaned — no matching tool_start. Render as a finished tool
+				// block so that file-content output (LINE#ID:content format) does not
+				// spill as a wall of raw plain-text lines.
+				blocks = append(blocks, transcriptBlock{
+					kind:       blockKindTool,
+					toolName:   e.Tool,
+					toolError:  e.IsError,
+					toolResult: e.Text,
+				})
 			}
-			i++
 
 		case sessionlog.KindInput:
 			if strings.TrimSpace(e.Text) == "" {
-				i++
 				continue
 			}
 			label := "Input"
@@ -112,19 +117,15 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 				label = "Answer"
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindPrompt, text: e.Text, label: label})
-			i++
 
 		case sessionlog.KindAssistant:
 			if strings.TrimSpace(e.Text) == "" {
-				i++
 				continue
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindAssistant, text: e.Text})
-			i++
 
 		case sessionlog.KindQuestion:
 			if strings.TrimSpace(e.Question) == "" {
-				i++
 				continue
 			}
 			blocks = append(blocks, transcriptBlock{
@@ -133,15 +134,12 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 				ctx:       e.Context,
 				uncertain: e.Uncertain,
 			})
-			i++
 
 		case sessionlog.KindForeman:
 			if strings.TrimSpace(e.Text) == "" {
-				i++
 				continue
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindForeman, text: e.Text, label: "Foreman"})
-			i++
 
 		case sessionlog.KindLifecycle:
 			blocks = append(blocks, transcriptBlock{
@@ -151,25 +149,87 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 				summary: e.Summary,
 				text:    e.Text,
 			})
-			i++
 
 		case sessionlog.KindPlain:
 			if strings.TrimSpace(e.Text) == "" {
-				i++
 				continue
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: e.Text})
-			i++
 
 		default:
 			text := firstNonEmptyTranscript(e.Text, e.Message, e.Summary)
 			if text != "" {
 				blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: text, isError: e.Kind == "error"})
 			}
-			i++
 		}
 	}
 	return blocks
+}
+
+// toolOutputTarget returns the index of the running tool block that should
+// receive a tool_output entry. It does NOT dequeue because multiple output
+// events stream into the same block. When toolName is non-empty the oldest
+// pending block for that name is used (FIFO). When toolName is empty a
+// legacy LIFO fallback scans for the most-recently-added running block.
+func toolOutputTarget(blocks []transcriptBlock, toolQueue map[string][]int, toolName string) int {
+	if toolName != "" {
+		if q := toolQueue[toolName]; len(q) > 0 {
+			return q[0]
+		}
+		return -1
+	}
+	// Legacy fallback: entries emitted without a tool name.
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].kind == blockKindTool && blocks[i].toolRunning {
+			return i
+		}
+	}
+	return -1
+}
+
+// dequeueToolResult finds and removes the oldest pending tool block for the
+// given tool name (FIFO). When toolName is empty a legacy LIFO fallback
+// scans for the most-recently-added running block and removes it from
+// whichever queue owns it.
+func dequeueToolResult(blocks []transcriptBlock, toolQueue map[string][]int, toolName string) int {
+	if toolName != "" {
+		q := toolQueue[toolName]
+		if len(q) == 0 {
+			return -1
+		}
+		idx := q[0]
+		if len(q) == 1 {
+			delete(toolQueue, toolName)
+		} else {
+			toolQueue[toolName] = q[1:]
+		}
+		return idx
+	}
+	// Legacy fallback: entries emitted without a tool name.
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].kind != blockKindTool || !blocks[i].toolRunning {
+			continue
+		}
+		// Remove this block from whichever queue owns it.
+		for name, q := range toolQueue {
+			for j, qIdx := range q {
+				if qIdx != i {
+					continue
+				}
+				if len(q) == 1 {
+					delete(toolQueue, name)
+				} else {
+					newQ := make([]int, len(q)-1)
+					copy(newQ, q[:j])
+					copy(newQ[j:], q[j+1:])
+					toolQueue[name] = newQ
+				}
+				return i
+			}
+		}
+		return i // Running block not in queue; complete it anyway.
+	}
+	return -1
 }
 
 func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
