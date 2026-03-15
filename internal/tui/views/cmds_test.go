@@ -15,17 +15,14 @@ import (
 // offset 0 returns all lines and advances NextOffset to the file size.
 func TestTailSessionLogCmd_Basic(t *testing.T) {
 	t.Parallel()
-	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sess1.log")
 	content := "alpha\nbeta\ngamma\n"
-	if _, err := f.WriteString(content); err != nil {
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
 
-	msg := views.TailSessionLogCmd(f.Name(), "sess1", 0)()
+	msg := views.TailSessionLogCmd(logPath, "sess1", 0)()
 	got, ok := msg.(views.SessionLogLinesMsg)
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
@@ -116,19 +113,16 @@ func TestTailSessionLogCmd_RotationDetected(t *testing.T) {
 // 64 KiB scanner default (now 1 MiB) are returned correctly.
 func TestTailSessionLogCmd_LargeLine(t *testing.T) {
 	t.Parallel()
-	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "big.log")
 	// 100 KiB line — would have failed with the default bufio.Scanner buffer.
 	bigPayload := strings.Repeat("x", 100*1024)
 	content := bigPayload + "\n"
-	if _, err := f.WriteString(content); err != nil {
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
 
-	msg := views.TailSessionLogCmd(f.Name(), "big", 0)()
+	msg := views.TailSessionLogCmd(logPath, "big", 0)()
 	got, ok := msg.(views.SessionLogLinesMsg)
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
@@ -160,10 +154,8 @@ func TestTailSessionLogCmd_MissingFile(t *testing.T) {
 
 func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 	t.Parallel()
-	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "json.log")
 	content := strings.Join([]string{
 		`{"type":"event","event":{"type":"input","input_kind":"prompt","text":"Begin planning"}}`,
 		`{"type":"event","event":{"type":"assistant_output","text":"planning step"}}`,
@@ -174,14 +166,11 @@ func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 		"plain fallback line",
 		"",
 	}, "\n")
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	msg := views.TailSessionLogCmd(f.Name(), "json", 0)()
+	msg := views.TailSessionLogCmd(logPath, "json", 0)()
 	got, ok := msg.(views.SessionLogLinesMsg)
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
@@ -236,24 +225,19 @@ func TestTailSessionLogCmd_NormalizesEventJSON(t *testing.T) {
 func TestTailSessionLogCmd_PreservesLegacyErrorAndCompleteEvents(t *testing.T) {
 	t.Parallel()
 
-	f, err := os.CreateTemp(t.TempDir(), "session-*.log")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "legacy.log")
 	content := strings.Join([]string{
 		`{"type":"event","event":{"type":"error","message":"bridge crashed"}}`,
 		`{"type":"event","event":{"type":"complete","summary":"Legacy completion summary"}}`,
 		`{"type":"event","event":{"type":"complete"}}`,
 		"",
 	}, "\n")
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	msg := views.TailSessionLogCmd(f.Name(), "legacy", 0)()
+	msg := views.TailSessionLogCmd(logPath, "legacy", 0)()
 	got, ok := msg.(views.SessionLogLinesMsg)
 	if !ok {
 		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
@@ -278,6 +262,67 @@ func TestTailSessionLogCmd_PreservesLegacyErrorAndCompleteEvents(t *testing.T) {
 	// "complete" kind, empty summary — legacy event
 	if got.Entries[2].Kind != sessionlog.EntryKind("complete") {
 		t.Errorf("Entries[2].Kind: want %q, got %q", "complete", got.Entries[2].Kind)
+	}
+}
+
+// TestTailSessionLogCmd_LoadsArchivedContentOnFirstCall verifies that when
+// since==0, TailSessionLogCmd reads gzipped archives in addition to the active
+// log so that sessions whose log has been rotated show their full history.
+func TestTailSessionLogCmd_LoadsArchivedContentOnFirstCall(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const sessionID = "tail-archive"
+
+	// Write two gzipped archive segments (sorted by name so older comes first).
+	writeGZ := func(name, line string) {
+		t.Helper()
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gw := gzip.NewWriter(f)
+		if _, err := gw.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeGZ(sessionID+".log.1000000000.gz", "archived line 1")
+	writeGZ(sessionID+".log.2000000000.gz", "archived line 2")
+
+	// Active log file with recent content.
+	activePath := filepath.Join(dir, sessionID+".log")
+	if err := os.WriteFile(activePath, []byte("live line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(activePath, sessionID, 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if got.SessionID != sessionID {
+		t.Errorf("SessionID: want %q, got %q", sessionID, got.SessionID)
+	}
+	// All three lines (two archived + one live) must be present.
+	if len(got.Entries) != 3 {
+		t.Fatalf("Entries: want 3, got %d (%v)", len(got.Entries), got.Entries)
+	}
+	wantTexts := []string{"archived line 1", "archived line 2", "live line"}
+	for i, want := range wantTexts {
+		if got.Entries[i].Text != want {
+			t.Errorf("Entries[%d].Text: want %q, got %q", i, want, got.Entries[i].Text)
+		}
+	}
+	// NextOffset must equal the current active file size so the first
+	// continuation poll reads only bytes written after this initial load.
+	wantOffset := int64(len("live line\n"))
+	if got.NextOffset != wantOffset {
+		t.Errorf("NextOffset: want %d, got %d", wantOffset, got.NextOffset)
 	}
 }
 

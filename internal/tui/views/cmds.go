@@ -239,8 +239,6 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 	}
 }
 
-
-
 func scanSessionInteraction(r io.Reader) ([]sessionlog.Entry, error) {
 	var entries []sessionlog.Entry
 	scanner := bufio.NewScanner(r)
@@ -315,8 +313,37 @@ func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
 
 func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 	return func() tea.Msg {
+		if since == 0 {
+			// Initial call: load all archived content (gzipped rotations) plus the
+			// active log file so the viewport starts with the full session history.
+			// Subsequent polls use the continuation path below (since > 0).
+			sessionsDir := filepath.Dir(logPath)
+			paths, err := sessionInteractionPaths(sessionsDir, sessionID)
+			if err == nil {
+				var entries []sessionlog.Entry
+				for _, path := range paths {
+					chunk, readErr := readSessionInteractionFile(path)
+					if readErr == nil {
+						entries = append(entries, chunk...)
+					}
+				}
+				// nextOffset = current size of the active file so the first
+				// continuation poll reads only bytes written after this load.
+				nextOffset := int64(0)
+				if stat, statErr := os.Stat(logPath); statErr == nil {
+					nextOffset = stat.Size()
+				}
+				return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: nextOffset}
+			}
+			// Path discovery failed (should be rare); fall through to single-file read.
+		}
+		// Continuation poll: read only new bytes from the active log file.
+		// Sleep on the no-new-data and error paths to avoid a tight spin loop that
+		// would flood the Bubble Tea message queue and starve scroll event processing.
+		const tailPollInterval = 250 * time.Millisecond
 		stat, err := os.Stat(logPath)
 		if err != nil {
+			time.Sleep(tailPollInterval)
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
 		}
 		offset := since
@@ -324,6 +351,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 			offset = 0 // rotation detected
 		}
 		if stat.Size() == offset {
+			time.Sleep(tailPollInterval)
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
 		}
 		f, err := os.Open(logPath)
