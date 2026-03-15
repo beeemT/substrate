@@ -100,7 +100,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
 		{Key: "v", Label: "Verbose logs"},
-		{Key: "t", Label: "Toggle thinking"},
+	}
+	if hasThinkingBlocks(m.entries) {
+		hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})
 	}
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})

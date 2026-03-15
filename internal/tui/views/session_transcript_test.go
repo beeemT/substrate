@@ -553,3 +553,86 @@ func TestRenderTranscriptToolCardWidthBounded(t *testing.T) {
 		}
 	}
 }
+
+// ---- Tests for callout prompt, markdown assistant, hasThinkingBlocks ----
+
+func TestRenderTranscriptPromptRendersAsCallout(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Implement the feature"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	// Label and body must both be present.
+	if !strings.Contains(plain, "Prompt") {
+		t.Errorf("prompt callout: expected label 'Prompt', got: %q", plain)
+	}
+	if !strings.Contains(plain, "Implement the feature") {
+		t.Errorf("prompt callout: expected body text, got: %q", plain)
+	}
+	// Callout renders as multiple lines (border + content).
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Errorf("prompt callout: expected multiple lines for card, got %d: %v", len(lines), lines)
+	}
+	// All lines must be within width bounds.
+	for _, line := range lines {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("prompt callout: line width %d > 80: %q", w, line)
+		}
+	}
+}
+
+func TestRenderTranscriptPromptWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 40
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindInput, InputKind: "message", Text: "Please also update all the tests and make sure nothing is broken."},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for _, line := range strings.Split(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestRenderTranscriptAssistantMarkdown(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// Markdown bold markers must be consumed by the renderer, not rendered literally.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "I will **read** the file first."},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, "**") {
+		t.Errorf("assistant markdown: raw ** markers should not appear in output, got: %q", plain)
+	}
+	if !strings.Contains(plain, "read") {
+		t.Errorf("assistant markdown: expected content word 'read', got: %q", plain)
+	}
+}
+
+func TestHasThinkingBlocks(t *testing.T) {
+	t.Parallel()
+	if hasThinkingBlocks(nil) {
+		t.Error("nil entries: expected false")
+	}
+	noThinking := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "hi"},
+		{Kind: sessionlog.KindToolStart, Tool: "read"},
+	}
+	if hasThinkingBlocks(noThinking) {
+		t.Error("entries with no thinking: expected false")
+	}
+	withThinking := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "hi"},
+		{Kind: sessionlog.KindThinking, Text: "reasoning..."},
+	}
+	if !hasThinkingBlocks(withThinking) {
+		t.Error("entries with thinking: expected true")
+	}
+}

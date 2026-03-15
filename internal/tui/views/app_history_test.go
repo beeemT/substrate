@@ -1326,7 +1326,7 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 	}
 
 	before := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Prompt: Begin planning", "read — Reading guidance"} {
+	for _, want := range []string{"Begin planning", "read — Reading guidance"} {
 		if !strings.Contains(before, want) {
 			t.Fatalf("content view before refresh = %q, want %q", before, want)
 		}
@@ -1340,7 +1340,7 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil while already tailing the selected planning session", cmd)
 	}
 	after := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Prompt: Begin planning", "read — Reading guidance"} {
+	for _, want := range []string{"Begin planning", "read — Reading guidance"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("content view after refresh = %q, want %q", after, want)
 		}

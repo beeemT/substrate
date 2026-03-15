@@ -112,13 +112,19 @@ func (m ImplementingModel) selectedRepoName() string {
 
 // KeybindHints returns the keybind hints for the status bar.
 func (m ImplementingModel) KeybindHints() []KeybindHint {
-	return []KeybindHint{
+	hints := []KeybindHint{
 		{Key: "Tab", Label: "Cycle repos"},
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
 		{Key: "v", Label: "Verbose logs"},
-		{Key: "t", Label: "Toggle thinking"},
 	}
+	for _, entries := range m.entryBuffers {
+		if hasThinkingBlocks(entries) {
+			hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})
+			break
+		}
+	}
+	return hints
 }
 
 // Update handles messages and input for ImplementingModel.

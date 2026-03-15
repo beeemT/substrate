@@ -251,7 +251,7 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		}
 		return ansi.Hardwrap(block.text, width, true)
 	case blockKindAssistant:
-		return ansi.Hardwrap(block.text, width, true)
+		return strings.Trim(renderMarkdownDocument(block.text, width), "\n")
 
 	case blockKindThinking:
 		return renderThinkingBlock(st, block, width, collapseThinking)
@@ -265,9 +265,14 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 				label = "Input"
 			}
 		}
-		bodyWidth := max(1, width-ansi.StringWidth(label)-2)
-		body := ansi.Hardwrap(block.text, bodyWidth, true)
-		return st.SectionLabel.Render(label+":") + " " + body
+		innerW := components.CalloutInnerWidth(st, width)
+		header := st.SectionLabel.Render(label)
+		body := ansi.Hardwrap(block.text, max(1, innerW), true)
+		return components.RenderCallout(st, components.CalloutSpec{
+			Body:    header + "\n" + body,
+			Width:   width,
+			Variant: components.CalloutCard,
+		})
 
 	case blockKindLifecycle:
 		var text string
@@ -612,9 +617,19 @@ func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, col
 	// that this is internal reasoning, not the agent's final output.
 	var lines []string
 	lines = append(lines, labelRendered)
-	wrapped := ansi.Hardwrap(block.text, max(1, width-2), true)
-	for _, line := range strings.Split(wrapped, "\n") {
+	rendered := strings.Trim(renderMarkdownDocument(block.text, max(1, width-2)), "\n")
+	for _, line := range strings.Split(rendered, "\n") {
 		lines = append(lines, "  "+st.Subtitle.Render(line))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// hasThinkingBlocks reports whether any entry in the slice is a thinking block.
+func hasThinkingBlocks(entries []sessionlog.Entry) bool {
+	for _, e := range entries {
+		if e.Kind == sessionlog.KindThinking {
+			return true
+		}
+	}
+	return false
 }
