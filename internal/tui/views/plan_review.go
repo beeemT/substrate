@@ -101,6 +101,12 @@ func (m *PlanReviewModel) syncFeedbackHeight() {
 	}
 	m.feedbackHeight = h
 	m.feedbackInput.SetHeight(h)
+	// SetHeight only changes viewport.Height; it leaves viewport.YOffset
+	// where repositionView() put it (scrolled down to track the cursor).
+	// SetValue calls Reset() → GotoTop() (zeroes YOffset) then re-inserts
+	// the content, placing the cursor back at the end. This makes all typed
+	// content visible from row 0 as the textarea grows.
+	m.feedbackInput.SetValue(value)
 	m.syncViewportSize()
 }
 
