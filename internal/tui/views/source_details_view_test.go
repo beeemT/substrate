@@ -36,7 +36,7 @@ func TestSourceDetailsModelViewShowsSourceDetailsAndFitsSize(t *testing.T) {
 
 	rendered := m.View()
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"SUB-1 · Investigate overflow", "Source details", "Summary", "Selected items", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42"} {
+	for _, want := range []string{"Investigate overflow", "Source details", "Summary", "Selected items", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
 		}

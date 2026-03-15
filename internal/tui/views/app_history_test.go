@@ -241,7 +241,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	}
 	view := stripBrowseANSI(updated.sessionSearch.View())
 	assertOverlayFits(t, view, 80, 20)
-	for _, want := range []string{"SUB-0", "Ready to plan · local", "Search Sessions"} {
+	for _, want := range []string{"SUB-0 \u00b7 Ready to plan", "Search Sessions"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("session search view = %q, want %q", view, want)
 		}
@@ -278,7 +278,7 @@ func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 	}
 	view := stripBrowseANSI(updated.sessionSearch.View())
 	assertOverlayFits(t, view, 80, 20)
-	for _, want := range []string{"SUB-1", "Implementing · local", "Search Sessions"} {
+	for _, want := range []string{"SUB-1 \u00b7 Implementing", "Search Sessions"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("session search view = %q, want %q", view, want)
 		}
@@ -569,7 +569,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 
 	app.content.SetSize(100, 40)
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"SUB-1 · Local item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
+	for _, want := range []string{"Local item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -993,7 +993,7 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 	}
 	updated.content.SetSize(100, 40)
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"SUB-1 · Existing item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
+	for _, want := range []string{"Existing item", "Summary", "Source", "Provider: GitHub", "Ref: acme/rocket#42", "This is important."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1701,8 +1701,8 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	if !foundBackHint {
 		t.Fatal("missing back hint in tasks sidebar state")
 	}
-	if updated.sidebar.title != "SUB-1 · Tasks" {
-		t.Fatalf("sidebar title = %q, want %q", updated.sidebar.title, "SUB-1 · Tasks")
+	if updated.sidebar.title != "Work item \u00b7 Tasks" {
+		t.Fatalf("sidebar title = %q, want %q", updated.sidebar.title, "Work item \u00b7 Tasks")
 	}
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.Kind != SidebarEntryTaskOverview || sel.SessionID != "" {

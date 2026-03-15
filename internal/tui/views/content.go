@@ -106,7 +106,7 @@ func (m ContentModel) Mode() ContentMode         { return m.mode }
 func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 	m.currentWorkItem = wi
 	if wi != nil {
-		title := wi.ExternalID + " · " + wi.Title
+		title := wi.Title
 		m.planReview.SetTitle(title)
 		m.implementing.SetTitle(title)
 		m.reviewing.SetTitle(title)

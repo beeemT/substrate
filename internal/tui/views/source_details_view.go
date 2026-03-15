@@ -103,7 +103,7 @@ func (m SourceDetailsModel) header() string {
 		return ""
 	}
 	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   m.session.ExternalID + " · " + m.session.Title,
+		Title:   m.session.Title,
 		Meta:    "Source details",
 		Width:   m.width,
 		Divider: true,

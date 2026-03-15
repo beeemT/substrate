@@ -104,8 +104,19 @@ function mapEvent(e: unknown): object[] {
 	const event = e as Record<string, unknown>;
 	if (event.type === "message_update") {
 		const assistantEvent = (event as Record<string, any>).assistantMessageEvent;
-		if (assistantEvent?.type === "text_delta") {
-			return [{ type: "assistant_output", text: assistantEvent.delta }];
+		// Emit one entry per complete block using the *_end events, which carry the
+		// full content string. Individual *_delta events are ignored to avoid
+		// flooding the session log with per-token entries.
+		if (assistantEvent?.type === "text_end") {
+			const content = String(assistantEvent.content ?? "");
+			if (content.trim()) {
+				return [{ type: "assistant_output", text: content }];
+			}
+		} else if (assistantEvent?.type === "thinking_end") {
+			const content = String(assistantEvent.content ?? "");
+			if (content.trim()) {
+				return [{ type: "thinking_output", text: content }];
+			}
 		}
 		return [];
 	}

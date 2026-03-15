@@ -11,6 +11,7 @@ const (
 	KindPlain      EntryKind = "plain"
 	KindInput      EntryKind = "input"
 	KindAssistant  EntryKind = "assistant_output"
+	KindThinking   EntryKind = "thinking_output"
 	KindToolStart  EntryKind = "tool_start"
 	KindToolOutput EntryKind = "tool_output"
 	KindToolResult EntryKind = "tool_result"

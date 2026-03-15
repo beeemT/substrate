@@ -159,6 +159,62 @@ func TestRenderTranscriptWidthBounded(t *testing.T) {
 	}
 }
 
+func TestGroupEntriesThinkingBlock(t *testing.T) {
+	t.Parallel()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindThinking, Text: "Let me reason through this step by step."},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].kind != blockKindThinking {
+		t.Errorf("expected blockKindThinking, got %v", blocks[0].kind)
+	}
+	if blocks[0].text != "Let me reason through this step by step." {
+		t.Errorf("unexpected text: %q", blocks[0].text)
+	}
+}
+
+func TestRenderTranscriptThinkingCollapsed(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindThinking, Text: "I need to analyze the code carefully."},
+	}
+	output := RenderTranscript(st, entries, 80, false)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Thinking") {
+		t.Errorf("expected 'Thinking' label in output, got: %q", plain)
+	}
+	// In collapsed mode the thinking text should be present as a preview
+	if !strings.Contains(plain, "I need to analyze") {
+		t.Errorf("expected preview text in collapsed output, got: %q", plain)
+	}
+	// Must be a single line in collapsed mode
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Errorf("collapsed thinking block: expected 1 line, got %d: %v", len(lines), lines)
+	}
+}
+
+func TestRenderTranscriptThinkingVerbose(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	const thinking = "First I will read the file.\nThen I will edit it."
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindThinking, Text: thinking},
+	}
+	output := RenderTranscript(st, entries, 80, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "First I will read the file.") {
+		t.Errorf("verbose thinking: expected full content in output, got: %q", plain)
+	}
+	if !strings.Contains(plain, "Then I will edit it.") {
+		t.Errorf("verbose thinking: expected full content in output, got: %q", plain)
+	}
+}
+
 func TestRenderTranscriptNarrowWidth(t *testing.T) {
 	t.Parallel()
 	st := testStyles()

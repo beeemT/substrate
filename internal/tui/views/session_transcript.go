@@ -20,6 +20,7 @@ const (
 	blockKindTool
 	blockKindLifecycle
 	blockKindQuestion
+	blockKindThinking
 	blockKindForeman
 )
 
@@ -123,6 +124,12 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 				continue
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindAssistant, text: e.Text})
+
+		case sessionlog.KindThinking:
+			if strings.TrimSpace(e.Text) == "" {
+				continue
+			}
+			blocks = append(blocks, transcriptBlock{kind: blockKindThinking, text: e.Text})
 
 		case sessionlog.KindQuestion:
 			if strings.TrimSpace(e.Question) == "" {
@@ -244,6 +251,9 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		return ansi.Hardwrap(block.text, width, true)
 	case blockKindAssistant:
 		return ansi.Hardwrap(block.text, width, true)
+
+	case blockKindThinking:
+		return renderThinkingBlock(st, block, width, verbose)
 
 	case blockKindPrompt, blockKindForeman:
 		label := block.label
@@ -419,4 +429,28 @@ func firstNonEmptyTranscript(vals ...string) string {
 func singleLine(s string) string {
 	r := strings.NewReplacer("\n", " ", "\t", " ")
 	return r.Replace(s)
+}
+
+// renderThinkingBlock renders a thinking block.
+// In default mode it shows a single muted header line with a truncated preview
+// of the thinking content. In verbose mode the full content is shown.
+func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
+	const label = "~ Thinking"
+	labelRendered := st.Muted.Render(label)
+	// header: "~ Thinking  <truncated single line preview>"
+	// label visual width + 2 spaces of separation
+	labelW := ansi.StringWidth(labelRendered)
+	headerBodyW := max(1, width-labelW-2)
+	if !verbose {
+		preview := ansi.Truncate(singleLine(block.text), headerBodyW, "…")
+		return labelRendered + "  " + st.Muted.Render(preview)
+	}
+	// Verbose: label on first line then full wrapped content indented
+	var lines []string
+	lines = append(lines, labelRendered)
+	wrapped := ansi.Hardwrap(block.text, max(1, width-2), true)
+	for _, line := range strings.Split(wrapped, "\n") {
+		lines = append(lines, "  "+line)
+	}
+	return strings.Join(lines, "\n")
 }
