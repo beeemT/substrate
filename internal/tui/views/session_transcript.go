@@ -1,9 +1,11 @@
 package views
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -239,7 +241,7 @@ func dequeueToolResult(blocks []transcriptBlock, toolQueue map[string][]int, too
 	return -1
 }
 
-func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
+func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose, collapseThinking bool) string {
 	switch block.kind {
 	case blockKindPlain:
 		if block.isError {
@@ -253,7 +255,7 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		return ansi.Hardwrap(block.text, width, true)
 
 	case blockKindThinking:
-		return renderThinkingBlock(st, block, width, verbose)
+		return renderThinkingBlock(st, block, width, collapseThinking)
 
 	case blockKindPrompt, blockKindForeman:
 		label := block.label
@@ -298,6 +300,7 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 	case blockKindTool:
 		return renderToolBlock(st, block, width, verbose)
 	}
+
 	return ""
 }
 
@@ -335,18 +338,20 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	var bodyLines []string
 	bodyLines = append(bodyLines, titleLine)
 
-	// Args section
+	// Smart tool detail summary — show the most semantically important args
+	// prominently as a labelled line. Falls back to raw args for unknown tools.
 	if block.toolArgs != "" {
+		summary := toolArgsSummary(st, block.toolName, block.toolArgs, innerW)
+		if summary != "" {
+			bodyLines = append(bodyLines, summary)
+		}
+		// In verbose mode also show the raw JSON args below the summary.
 		if verbose {
 			bodyLines = append(bodyLines, st.SectionLabel.Render("Args:"))
 			wrapped := ansi.Hardwrap(block.toolArgs, max(1, innerW), true)
 			for _, line := range strings.Split(wrapped, "\n") {
 				bodyLines = append(bodyLines, line)
 			}
-		} else {
-			// "Args: " is 6 visible chars
-			argsLine := st.SectionLabel.Render("Args:") + " " + ansi.Truncate(singleLine(block.toolArgs), max(1, innerW-6), "…")
-			bodyLines = append(bodyLines, argsLine)
 		}
 	}
 
@@ -395,21 +400,183 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	}
 
 	body := strings.Join(bodyLines, "\n")
-	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
+
+	// Apply the dark tool-call background to border and content area.
+	// This is inline viewport content (not an overlay), so Background/BorderBackground
+	// are safe to use here without the overlay bleed issue described in AGENTS.md.
+	toolBg := lipgloss.Color(st.Theme.ToolCallBg)
+	return components.RenderCalloutWithBg(st, components.CalloutSpec{Body: body, Width: width, Variant: variant}, toolBg)
+}
+
+// toolArgsSummary returns a concise, human-readable summary line for the most
+// important arguments of a known tool. Returns "" for unknown tools or when no
+// meaningful fields are found. The summary is styled with accent/label colours
+// and truncated to fit innerW.
+func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		// Not valid JSON (e.g. legacy plain-text args): fall back to truncated raw display.
+		return st.SectionLabel.Render("Args:") + " " + ansi.Truncate(singleLine(argsJSON), max(1, innerW-6), "…")
+	}
+
+	stringArg := func(key string) string {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+	intArg := func(key string) int {
+		if v, ok := args[key]; ok {
+			switch n := v.(type) {
+			case float64:
+				return int(n)
+			case int:
+				return n
+			}
+		}
+		return 0
+	}
+
+	highlight := func(v string) string { return st.Accent.Render(v) }
+	dim := func(v string) string { return st.Muted.Render(v) }
+
+	var parts []string
+
+	switch toolName {
+	case "read":
+		if path := stringArg("path"); path != "" {
+			parts = append(parts, highlight(path))
+		}
+		offset, limit := intArg("offset"), intArg("limit")
+		if offset > 0 && limit > 0 {
+			parts = append(parts, dim(fmt.Sprintf("L%d +%d lines", offset, limit)))
+		} else if offset > 0 {
+			parts = append(parts, dim(fmt.Sprintf("L%d+", offset)))
+		} else if limit > 0 {
+			parts = append(parts, dim(fmt.Sprintf("%d lines", limit)))
+		}
+
+	case "grep":
+		if pattern := stringArg("pattern"); pattern != "" {
+			parts = append(parts, highlight("/"+pattern+"/"))
+		}
+		if path := stringArg("path"); path != "" {
+			parts = append(parts, dim(path))
+		}
+		if glob := stringArg("glob"); glob != "" {
+			parts = append(parts, dim(glob))
+		}
+
+	case "find":
+		if pattern := stringArg("pattern"); pattern != "" {
+			parts = append(parts, highlight(pattern))
+		}
+
+	case "write", "edit":
+		if path := stringArg("path"); path != "" {
+			parts = append(parts, highlight(path))
+		}
+
+	case "bash":
+		if cmd := stringArg("command"); cmd != "" {
+			parts = append(parts, highlight(singleLine(cmd)))
+		}
+
+	case "lsp":
+		if action := stringArg("action"); action != "" {
+			parts = append(parts, highlight(action))
+		}
+		if file := stringArg("file"); file != "" {
+			parts = append(parts, dim(file))
+		}
+		if sym := stringArg("symbol"); sym != "" {
+			parts = append(parts, dim(sym))
+		}
+
+	case "ast_grep":
+		if pats, ok := args["pat"]; ok {
+			switch v := pats.(type) {
+			case []interface{}:
+				if len(v) > 0 {
+					if s, ok := v[0].(string); ok {
+						parts = append(parts, highlight(singleLine(s)))
+					}
+					if len(v) > 1 {
+						parts = append(parts, dim(fmt.Sprintf("+%d patterns", len(v)-1)))
+					}
+				}
+			case string:
+				parts = append(parts, highlight(singleLine(v)))
+			}
+		}
+		if path := stringArg("path"); path != "" {
+			parts = append(parts, dim(path))
+		}
+
+	case "ast_edit":
+		if path := stringArg("path"); path != "" {
+			parts = append(parts, highlight(path))
+		}
+		if ops, ok := args["ops"]; ok {
+			if opSlice, ok := ops.([]interface{}); ok && len(opSlice) > 0 {
+				parts = append(parts, dim(fmt.Sprintf("%d op(s)", len(opSlice))))
+			}
+		}
+
+	case "fetch", "web_search":
+		key := "url"
+		if toolName == "web_search" {
+			key = "query"
+		}
+		if v := stringArg(key); v != "" {
+			parts = append(parts, highlight(singleLine(v)))
+		}
+
+	case "task":
+		if tasks, ok := args["tasks"]; ok {
+			if taskSlice, ok := tasks.([]interface{}); ok {
+				parts = append(parts, dim(fmt.Sprintf("%d task(s)", len(taskSlice))))
+			}
+		}
+
+	default:
+		// Unknown tool: show a single-line truncated raw args summary.
+		return st.SectionLabel.Render("Args:") + " " + ansi.Truncate(singleLine(argsJSON), max(1, innerW-6), "…")
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	line := strings.Join(parts, "  ")
+	return ansi.Truncate(line, max(1, innerW), "…")
 }
 
 // RenderTranscript converts a sequence of session-log entries into bounded
 // transcript text suitable for a viewport. width must be positive.
-func RenderTranscript(st styles.Styles, entries []sessionlog.Entry, width int, verbose bool) string {
+// verbose expands tool args and output; collapseThinking collapses thinking
+// blocks to a single preview line (true by default in callers).
+func RenderTranscript(st styles.Styles, entries []sessionlog.Entry, width int, verbose, collapseThinking bool) string {
 	if width <= 0 {
 		return ""
 	}
 	blocks := groupEntries(entries)
 	var parts []string
-	for _, block := range blocks {
-		rendered := renderTranscriptBlock(st, block, width, verbose)
+	for i, block := range blocks {
+		// Insert a blank spacer before the first tool call in a consecutive group.
+		if block.kind == blockKindTool && i > 0 && blocks[i-1].kind != blockKindTool {
+			parts = append(parts, "")
+		}
+
+		rendered := renderTranscriptBlock(st, block, width, verbose, collapseThinking)
 		if rendered != "" {
 			parts = append(parts, rendered)
+		}
+
+		// Insert a blank spacer after the last tool call in a consecutive group.
+		if block.kind == blockKindTool && i < len(blocks)-1 && blocks[i+1].kind != blockKindTool {
+			parts = append(parts, "")
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -432,25 +599,27 @@ func singleLine(s string) string {
 }
 
 // renderThinkingBlock renders a thinking block.
-// In default mode it shows a single muted header line with a truncated preview
-// of the thinking content. In verbose mode the full content is shown.
-func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
+// When collapseThinking is true it shows a single muted header line with a
+// truncated preview. When false the full content is rendered in a muted grey
+// to visually distinguish it from normal agent output.
+func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, collapseThinking bool) string {
 	const label = "~ Thinking"
 	labelRendered := st.Muted.Render(label)
 	// header: "~ Thinking  <truncated single line preview>"
 	// label visual width + 2 spaces of separation
 	labelW := ansi.StringWidth(labelRendered)
 	headerBodyW := max(1, width-labelW-2)
-	if !verbose {
+	if collapseThinking {
 		preview := ansi.Truncate(singleLine(block.text), headerBodyW, "…")
 		return labelRendered + "  " + st.Muted.Render(preview)
 	}
-	// Verbose: label on first line then full wrapped content indented
+	// Expanded: label on first line then full content in muted grey to signal
+	// that this is internal reasoning, not the agent's final output.
 	var lines []string
 	lines = append(lines, labelRendered)
 	wrapped := ansi.Hardwrap(block.text, max(1, width-2), true)
 	for _, line := range strings.Split(wrapped, "\n") {
-		lines = append(lines, "  "+line)
+		lines = append(lines, "  "+st.Subtitle.Render(line))
 	}
 	return strings.Join(lines, "\n")
 }

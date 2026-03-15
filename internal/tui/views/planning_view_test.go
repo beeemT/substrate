@@ -97,8 +97,19 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 		}
 	}
 	hints := m.KeybindHints()
-	if len(hints) < 4 || hints[3].Label != "Open overview" {
-		t.Fatalf("keybind hints = %#v, want open-overview action", hints)
+	hintLabels := make([]string, len(hints))
+	for i, h := range hints {
+		hintLabels[i] = h.Label
+	}
+	foundOpenOverview := false
+	for _, h := range hints {
+		if h.Label == "Open overview" {
+			foundOpenOverview = true
+			break
+		}
+	}
+	if !foundOpenOverview {
+		t.Fatalf("keybind hints = %#v, want open-overview action in hints: %v", hints, hintLabels)
 	}
 	lines := strings.Split(rendered, "\n")
 	if got := len(lines); got != 12 {

@@ -151,7 +151,7 @@ func TestRenderTranscriptWidthBounded(t *testing.T) {
 		{Kind: sessionlog.KindToolResult, Text: "done"},
 		{Kind: sessionlog.KindLifecycle, Stage: "completed", Summary: "All done"},
 	}
-	output := RenderTranscript(st, entries, width, false)
+	output := RenderTranscript(st, entries, width, false, true)
 	for _, line := range strings.Split(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
@@ -182,7 +182,7 @@ func TestRenderTranscriptThinkingCollapsed(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindThinking, Text: "I need to analyze the code carefully."},
 	}
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "Thinking") {
 		t.Errorf("expected 'Thinking' label in output, got: %q", plain)
@@ -198,20 +198,46 @@ func TestRenderTranscriptThinkingCollapsed(t *testing.T) {
 	}
 }
 
-func TestRenderTranscriptThinkingVerbose(t *testing.T) {
+func TestRenderTranscriptThinkingExpanded(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
 	const thinking = "First I will read the file.\nThen I will edit it."
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindThinking, Text: thinking},
 	}
-	output := RenderTranscript(st, entries, 80, true)
+	// collapseThinking=false → full content rendered (verbose flag is irrelevant for thinking)
+	output := RenderTranscript(st, entries, 80, false, false)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "First I will read the file.") {
-		t.Errorf("verbose thinking: expected full content in output, got: %q", plain)
+		t.Errorf("expanded thinking: expected full content in output, got: %q", plain)
 	}
 	if !strings.Contains(plain, "Then I will edit it.") {
-		t.Errorf("verbose thinking: expected full content in output, got: %q", plain)
+		t.Errorf("expanded thinking: expected full content in output, got: %q", plain)
+	}
+	// Expanded mode must produce more than one line.
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Errorf("expanded thinking block: expected multiple lines, got %d: %v", len(lines), lines)
+	}
+}
+
+func TestRenderTranscriptThinkingExpandedIsGrey(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindThinking, Text: "Some reasoning here."},
+	}
+	// In expanded mode, the full content should be present and styled differently
+	// from collapsed (which only shows a single preview line).
+	expanded := RenderTranscript(st, entries, 80, false, false)
+	collapsed := RenderTranscript(st, entries, 80, false, true)
+	// Expanded output should be longer due to full content rendering.
+	if len(expanded) <= len(collapsed) {
+		t.Errorf("expanded thinking should produce more output than collapsed: expanded=%d collapsed=%d", len(expanded), len(collapsed))
+	}
+	// The expanded output must contain the actual thinking text.
+	if !strings.Contains(ansi.Strip(expanded), "Some reasoning here.") {
+		t.Errorf("expanded thinking output missing content: %q", ansi.Strip(expanded))
 	}
 }
 
@@ -221,7 +247,7 @@ func TestRenderTranscriptNarrowWidth(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindAssistant, Text: "hi"},
 	}
-	output := RenderTranscript(st, entries, 10, false)
+	output := RenderTranscript(st, entries, 10, false, true)
 	if output == "" {
 		t.Error("expected non-empty output for narrow width")
 	}
@@ -233,7 +259,7 @@ func TestRenderTranscriptToolCardContainsNameAndIntent(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading guidance", Text: `{"path":"x"}`},
 	}
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "read") {
 		t.Errorf("expected output to contain tool name %q, got: %q", "read", plain)
@@ -249,7 +275,7 @@ func TestRenderTranscriptPromptRendersLabel(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"},
 	}
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "Prompt") {
 		t.Errorf("expected output to contain %q, got: %q", "Prompt", plain)
@@ -270,7 +296,7 @@ func TestRenderTranscriptToolOutputTruncatedCollapsed(t *testing.T) {
 	}
 	entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolResult, Text: "done"})
 
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "more lines") {
 		t.Errorf("expected collapsed output to contain overflow indicator, got: %q", plain)
@@ -288,8 +314,8 @@ func TestRenderTranscriptToolOutputExpandedVerbose(t *testing.T) {
 	}
 	entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolResult, Text: "done"})
 
-	collapsed := RenderTranscript(st, entries, 80, false)
-	verbose := RenderTranscript(st, entries, 80, true)
+	collapsed := RenderTranscript(st, entries, 80, false, true)
+	verbose := RenderTranscript(st, entries, 80, true, true)
 
 	// Verbose output should not have an overflow indicator for 10 lines (limit=12)
 	verbosePlain := ansi.Strip(verbose)
@@ -306,7 +332,7 @@ func TestRenderTranscriptToolOutputExpandedVerbose(t *testing.T) {
 func TestRenderTranscriptEmptyEntriesReturnsEmpty(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
-	output := RenderTranscript(st, nil, 80, false)
+	output := RenderTranscript(st, nil, 80, false, true)
 	if output != "" {
 		t.Errorf("expected empty string for nil entries, got %q", output)
 	}
@@ -318,7 +344,7 @@ func TestRenderTranscriptLifecycleRendered(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindLifecycle, Stage: "completed", Summary: "done"},
 	}
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "done") {
 		t.Errorf("expected lifecycle output to contain %q, got: %q", "done", plain)
@@ -352,7 +378,7 @@ func TestRenderTranscriptLegacyErrorShowsPrefix(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.EntryKind("error"), Message: "bridge crashed"},
 	}
-	output := RenderTranscript(st, entries, 80, false)
+	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "Error:") {
 		t.Errorf("expected output to contain %q, got: %q", "Error:", plain)
@@ -370,7 +396,157 @@ func TestRenderTranscriptLegacyErrorWidthBounded(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.EntryKind("error"), Message: "a very long error message that definitely exceeds forty characters when prefixed"},
 	}
-	output := RenderTranscript(st, entries, width, false)
+	output := RenderTranscript(st, entries, width, false, true)
+	for _, line := range strings.Split(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}
+
+// ---- New tests for spacing, smart args, and thinking ----
+
+func TestRenderTranscriptToolGroupSpacing(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "I will read a file."},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading file", Text: `{"path":"a.go"}`},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "file contents"},
+		{Kind: sessionlog.KindAssistant, Text: "Done reading."},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	// The rendered output should have blank lines separating the tool block from
+	// the surrounding assistant blocks. We verify by checking that two non-empty
+	// lines are not directly adjacent at the tool boundary.
+	lines := strings.Split(output, "\n")
+	// Find index of the first blank line: there should be at least one blank
+	// line before the tool block and one after.
+	blankCount := 0
+	for _, l := range lines {
+		if strings.TrimSpace(ansi.Strip(l)) == "" {
+			blankCount++
+		}
+	}
+	if blankCount < 2 {
+		t.Errorf("expected at least 2 blank separator lines around tool group, got %d in output:\n%s",
+			blankCount, ansi.Strip(output))
+	}
+}
+
+func TestRenderTranscriptConsecutiveToolsOnlyOneGroupSpacer(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// Two consecutive tool calls should get ONE leading blank and ONE trailing blank
+	// (not a blank between them).
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "Starting."},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "read A", Text: `{"path":"a"}`},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "a contents"},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "read B", Text: `{"path":"b"}`},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "b contents"},
+		{Kind: sessionlog.KindAssistant, Text: "Done."},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	lines := strings.Split(output, "\n")
+	blankCount := 0
+	for _, l := range lines {
+		if strings.TrimSpace(ansi.Strip(l)) == "" {
+			blankCount++
+		}
+	}
+	// Should be exactly 2: one before the group, one after.
+	if blankCount != 2 {
+		t.Errorf("expected exactly 2 blank spacer lines for one consecutive tool group, got %d in:\n%s",
+			blankCount, ansi.Strip(output))
+	}
+}
+
+func TestToolArgsSummaryRead(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"path":"internal/tui/views/session_transcript.go","offset":100,"limit":50,"_i":"reading file"}`
+	summary := toolArgsSummary(st, "read", args, 80)
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "internal/tui/views/session_transcript.go") {
+		t.Errorf("read summary missing path, got: %q", plain)
+	}
+	if !strings.Contains(plain, "L100") {
+		t.Errorf("read summary missing offset hint, got: %q", plain)
+	}
+	if !strings.Contains(plain, "50 lines") {
+		t.Errorf("read summary missing limit hint, got: %q", plain)
+	}
+}
+
+func TestToolArgsSummaryGrep(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"pattern":"RenderTranscript","path":"internal/tui","glob":"*.go","_i":"searching"}`
+	summary := toolArgsSummary(st, "grep", args, 80)
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "/RenderTranscript/") {
+		t.Errorf("grep summary missing pattern, got: %q", plain)
+	}
+	if !strings.Contains(plain, "internal/tui") {
+		t.Errorf("grep summary missing path, got: %q", plain)
+	}
+	if !strings.Contains(plain, "*.go") {
+		t.Errorf("grep summary missing glob, got: %q", plain)
+	}
+}
+
+func TestToolArgsSummaryBash(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"command":"go test ./...","_i":"running tests"}`
+	summary := toolArgsSummary(st, "bash", args, 80)
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "go test ./...") {
+		t.Errorf("bash summary missing command, got: %q", plain)
+	}
+}
+
+func TestToolArgsSummaryUnknownTool(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"foo":"bar"}`
+	summary := toolArgsSummary(st, "unknown_tool_xyz", args, 80)
+	// Unknown tool falls back to the raw Args: line.
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "Args:") {
+		t.Errorf("unknown tool should show Args: prefix, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptSmartArgsShownInToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading transcript", Text: `{"path":"internal/tui/views/session_transcript.go","offset":50,"_i":"reading"}`},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "internal/tui/views/session_transcript.go") {
+		t.Errorf("expected smart path summary in tool card, got: %q", plain)
+	}
+	if !strings.Contains(plain, "L50+") {
+		t.Errorf("expected offset hint in tool card, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptToolCardWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 60
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind: sessionlog.KindToolStart, Tool: "bash", Intent: "Running tests",
+			Text: `{"command":"go test -v ./internal/tui/views/... -run TestRender","_i":"tests"}`,
+		},
+		{Kind: sessionlog.KindToolResult, Text: "PASS"},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
 	for _, line := range strings.Split(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)

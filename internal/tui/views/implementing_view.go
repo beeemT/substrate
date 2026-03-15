@@ -38,26 +38,28 @@ func repoStatusIcon(status domain.TaskPlanStatus, st styles.Styles) string {
 
 // ImplementingModel renders multi-repo implementation progress.
 type ImplementingModel struct {
-	repos        []RepoProgress
-	selectedRepo int
-	entryBuffers map[string][]sessionlog.Entry
-	verbose      bool
-	viewports    map[string]viewport.Model
-	offsets      map[string]int64
-	paused       bool
-	title        string
-	styles       styles.Styles
-	width        int
-	height       int
+	repos            []RepoProgress
+	selectedRepo     int
+	entryBuffers     map[string][]sessionlog.Entry
+	verbose          bool
+	collapseThinking bool
+	viewports        map[string]viewport.Model
+	offsets          map[string]int64
+	paused           bool
+	title            string
+	styles           styles.Styles
+	width            int
+	height           int
 }
 
 // NewImplementingModel constructs an ImplementingModel with the given styles.
 func NewImplementingModel(st styles.Styles) ImplementingModel {
 	return ImplementingModel{
-		entryBuffers: make(map[string][]sessionlog.Entry),
-		viewports:    make(map[string]viewport.Model),
-		offsets:      make(map[string]int64),
-		styles:       st,
+		entryBuffers:     make(map[string][]sessionlog.Entry),
+		viewports:        make(map[string]viewport.Model),
+		offsets:          make(map[string]int64),
+		styles:           st,
+		collapseThinking: true,
 	}
 }
 
@@ -70,7 +72,7 @@ func (m *ImplementingModel) SetSize(width, height int) {
 		vp.Width = width
 		vp.Height = vpH
 		if entries, ok := m.entryBuffers[k]; ok && len(entries) > 0 {
-			vp.SetContent(RenderTranscript(m.styles, entries, width, m.verbose))
+			vp.SetContent(RenderTranscript(m.styles, entries, width, m.verbose, m.collapseThinking))
 		}
 		m.viewports[k] = vp
 	}
@@ -115,6 +117,7 @@ func (m ImplementingModel) KeybindHints() []KeybindHint {
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
 		{Key: "v", Label: "Verbose logs"},
+		{Key: "t", Label: "Toggle thinking"},
 	}
 }
 
@@ -130,7 +133,7 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			m.offsets[r.Name] = msg.NextOffset
 			m.entryBuffers[r.Name] = append(m.entryBuffers[r.Name], msg.Entries...)
 			vp := m.viewports[r.Name]
-			vp.SetContent(RenderTranscript(m.styles, m.entryBuffers[r.Name], m.width, m.verbose))
+			vp.SetContent(RenderTranscript(m.styles, m.entryBuffers[r.Name], m.width, m.verbose, m.collapseThinking))
 			if !m.paused || r.Name == m.selectedRepoName() {
 				vp.GotoBottom()
 			}
@@ -154,7 +157,16 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			for name, entries := range m.entryBuffers {
 				if len(entries) > 0 {
 					vp := m.viewports[name]
-					vp.SetContent(RenderTranscript(m.styles, entries, m.width, m.verbose))
+					vp.SetContent(RenderTranscript(m.styles, entries, m.width, m.verbose, m.collapseThinking))
+					m.viewports[name] = vp
+				}
+			}
+		case "t":
+			m.collapseThinking = !m.collapseThinking
+			for name, entries := range m.entryBuffers {
+				if len(entries) > 0 {
+					vp := m.viewports[name]
+					vp.SetContent(RenderTranscript(m.styles, entries, m.width, m.verbose, m.collapseThinking))
 					m.viewports[name] = vp
 				}
 			}

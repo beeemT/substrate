@@ -14,7 +14,7 @@ type Theme struct {
 	// Shared text + chrome roles
 	Title, Subtitle, Muted, Hint, Label, Accent, Link, Divider string
 	Border, PaneBorder, PaneBorderFocused                      string
-	OverlayBorder, OverlayBorderFocused             string
+	OverlayBorder, OverlayBorderFocused                        string
 	SelectedBg, SelectionActive, SelectionInactive             string
 
 	// Settings subtheme
@@ -22,7 +22,7 @@ type Theme struct {
 	ScrollbarTrack, ScrollbarThumb, ScrollbarThumbFocused                               string
 
 	// Diff + plan
-	DiffAdd, DiffDel, CodeBlockBg string
+	DiffAdd, DiffDel, CodeBlockBg, ToolCallBg string
 }
 
 var DefaultTheme = Theme{
@@ -67,6 +67,7 @@ var DefaultTheme = Theme{
 	DiffAdd:     "#34d399",
 	DiffDel:     "#f87171",
 	CodeBlockBg: "#0f0f1a",
+	ToolCallBg:  "#0d0d14",
 }
 
 // Styles pre-builds common lipgloss styles from theme and shared chrome metrics.
@@ -195,15 +196,15 @@ func NewStyles(t Theme) Styles {
 		CalloutWarning: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Warning)).
-				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		CalloutRunning: lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color(t.Active)).
-				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.Active)).
+			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		CalloutError: lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color(t.Error)).
-				Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.Error)).
+			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		SettingsText:              lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
 		SettingsTextStrong:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
 		SettingsBreadcrumb:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)),

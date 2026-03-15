@@ -13,21 +13,22 @@ import (
 
 // SessionLogModel renders either a live-tailing session log or a static interaction transcript.
 type SessionLogModel struct {
-	viewport  viewport.Model
-	entries  []sessionlog.Entry
-	verbose  bool
-	paused    bool
-	title     string
-	modeLabel string
-	meta      string
-	notice    *sourceDetailsNotice
-	logPath   string
-	sessionID string
-	offset    int64
-	live      bool
-	styles    styles.Styles
-	width     int
-	height    int
+	viewport         viewport.Model
+	entries          []sessionlog.Entry
+	verbose          bool
+	collapseThinking bool
+	paused           bool
+	title            string
+	modeLabel        string
+	meta             string
+	notice           *sourceDetailsNotice
+	logPath          string
+	sessionID        string
+	offset           int64
+	live             bool
+	styles           styles.Styles
+	width            int
+	height           int
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -46,7 +47,7 @@ func (m *SessionLogModel) syncViewportSize() {
 	headerLines := len(strings.Split(m.header(), "\n"))
 	m.viewport.Height = max(1, m.height-headerLines-1)
 	if len(m.entries) > 0 {
-		m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
+		m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
 	}
 }
 
@@ -83,7 +84,7 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.sessionID = ""
 	m.offset = 0
 	m.entries = append([]sessionlog.Entry(nil), entries...)
-	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
+	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
 	m.viewport.GotoTop()
 }
 
@@ -99,6 +100,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "p", Label: "Pause/unpause"},
 		{Key: "v", Label: "Verbose logs"},
+		{Key: "t", Label: "Toggle thinking"},
 	}
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
@@ -116,7 +118,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		m.offset = msg.NextOffset
 		if len(msg.Entries) > 0 {
 			m.entries = append(m.entries, msg.Entries...)
-			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
+			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
 			if !m.paused {
 				m.viewport.GotoBottom()
 			}
@@ -128,7 +130,10 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			m.paused = !m.paused
 		case "v":
 			m.verbose = !m.verbose
-			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose))
+			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+		case "t":
+			m.collapseThinking = !m.collapseThinking
+			m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
 		default:
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
