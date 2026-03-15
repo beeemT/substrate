@@ -21,7 +21,16 @@ const (
 	sessionSearchWindowWidth    = 180
 	sessionSearchPaneMinWidth   = 40
 	sessionSearchDetailMinWidth = 52
+
+	sessionSearchSpinnerDelay    = 500 * time.Millisecond
+	sessionSearchSpinnerInterval = 100 * time.Millisecond
 )
+
+// sessionSearchSpinnerFrames are the braille animation frames for the search spinner.
+var sessionSearchSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// sessionSearchSpinnerTickMsg drives the spinner animation inside SessionSearchOverlay.
+type sessionSearchSpinnerTickMsg struct{}
 
 var sessionSearchSizingSpec = components.SplitOverlaySizingSpec{
 	MaxOverlayWidth:   sessionSearchWindowWidth,
@@ -50,22 +59,22 @@ type sessionSearchListItem struct {
 }
 
 func (i sessionSearchListItem) Title() string {
-	prefix := firstNonEmpty(i.entry.WorkItemExternalID, i.entry.WorkItemID, i.entry.SessionID)
-	if i.entry.WorkItemTitle == "" {
-		return prefix
-	}
-	return prefix + "  " + i.entry.WorkItemTitle
+	return firstNonEmpty(i.entry.WorkItemTitle, i.entry.WorkItemExternalID, i.entry.WorkItemID, i.entry.SessionID)
 }
 
 func (i sessionSearchListItem) Description() string {
-	parts := []string{humanHistoryStatus(i.entry)}
+	var parts []string
+	if i.entry.WorkItemExternalID != "" {
+		parts = append(parts, i.entry.WorkItemExternalID)
+	}
+	parts = append(parts, humanHistoryStatus(i.entry))
 	if i.entry.WorkspaceName != "" {
 		parts = append(parts, i.entry.WorkspaceName)
 	}
 	if i.entry.RepositoryName != "" {
 		parts = append(parts, i.entry.RepositoryName)
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, " \u00b7 ")
 }
 
 func (i sessionSearchListItem) FilterValue() string {
@@ -90,6 +99,9 @@ type SessionSearchOverlay struct {
 	entries            []domain.SessionHistoryEntry
 	scope              sessionHistoryScope
 	loading            bool
+	spinnerFrame       int
+	spinnerVisible     bool
+	searchStartedAt    time.Time
 	focus              sessionSearchFocus
 	styles             styles.Styles
 	width              int
@@ -126,6 +138,8 @@ func (m *SessionSearchOverlay) Open(scope sessionHistoryScope, workspaceAvailabl
 	m.scope = scope
 	m.focus = sessionSearchFocusInput
 	m.loading = true
+	m.spinnerFrame = 0
+	m.spinnerVisible = false
 	m.entries = nil
 	m.list.ResetSelected()
 	m.list.SetItems(nil)
@@ -137,6 +151,8 @@ func (m *SessionSearchOverlay) Open(scope sessionHistoryScope, workspaceAvailabl
 func (m *SessionSearchOverlay) Close() {
 	m.active = false
 	m.loading = false
+	m.spinnerFrame = 0
+	m.spinnerVisible = false
 	m.focus = sessionSearchFocusInput
 	m.input.SetValue("")
 	m.input.Blur()
@@ -162,8 +178,18 @@ func (m SessionSearchOverlay) Filter(workspaceID string) domain.SessionHistoryFi
 	return filter
 }
 
-func (m *SessionSearchOverlay) SetLoading(loading bool) {
+func (m *SessionSearchOverlay) SetLoading(loading bool) tea.Cmd {
 	m.loading = loading
+	if loading {
+		m.searchStartedAt = time.Now()
+		m.spinnerVisible = false
+		return tea.Tick(sessionSearchSpinnerDelay, func(time.Time) tea.Msg {
+			return sessionSearchSpinnerTickMsg{}
+		})
+	}
+	m.spinnerVisible = false
+	m.spinnerFrame = 0
+	return nil
 }
 
 func (m *SessionSearchOverlay) SetEntries(entries []domain.SessionHistoryEntry) {
@@ -408,11 +434,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (m SessionSearchOverlay) chromeLines() int {
-	lines := 10 // outer border plus non-body chrome lines
-	if m.loading {
-		lines++
-	}
-	return lines
+	return 10 // outer border plus non-body chrome lines
 }
 
 func (m SessionSearchOverlay) layout() components.SplitOverlayLayout {
@@ -471,9 +493,6 @@ func (m SessionSearchOverlay) View() string {
 		"Search: " + m.input.View(),
 		components.RenderOverlayDivider(m.styles, renderWidth),
 	}
-	if m.loading {
-		header = append(header, m.styles.Muted.Render("Searching…"))
-	}
 
 	leftContent := m.list.View()
 	if m.loading && len(m.entries) == 0 {
@@ -492,7 +511,17 @@ func (m SessionSearchOverlay) View() string {
 		},
 	})
 
-	hints := m.styles.Hint.Render(truncate(m.hintText(), renderWidth))
+	var hints string
+	if m.spinnerVisible {
+		spinner := m.styles.Accent.Render(sessionSearchSpinnerFrames[m.spinnerFrame])
+		maxHintWidth := max(1, renderWidth-2)
+		hintText := ansi.Truncate(m.hintText(), maxHintWidth, "")
+		hintWidth := ansi.StringWidth(hintText)
+		pad := max(0, maxHintWidth-hintWidth)
+		hints = m.styles.Hint.Render(hintText) + strings.Repeat(" ", pad) + " " + spinner
+	} else {
+		hints = m.styles.Hint.Render(truncate(m.hintText(), renderWidth))
+	}
 	return components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        body,
@@ -508,6 +537,16 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case sessionSearchSpinnerTickMsg:
+		if !m.loading {
+			return m, nil
+		}
+		m.spinnerVisible = true
+		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionSearchSpinnerFrames)
+		return m, tea.Tick(sessionSearchSpinnerInterval, func(time.Time) tea.Msg {
+			return sessionSearchSpinnerTickMsg{}
+		})
+
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {

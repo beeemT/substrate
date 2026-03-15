@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -297,6 +298,82 @@ func TestSessionSearchOverlayViewFitsSmallWindow(t *testing.T) {
 		CreatedAt:          time.Now(),
 	}})
 
+	view := overlay.View()
+	assertOverlayFits(t, view, 72, 18)
+}
+
+func TestSessionSearchOverlayViewHeightStableUnderLoading(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, false)
+	overlay.SetSize(120, 30)
+
+	// loading=true (set by Open)
+	viewLoading := overlay.View()
+	linesLoading := len(strings.Split(viewLoading, "\n"))
+
+	// loading=false
+	overlay.SetLoading(false)
+	viewNotLoading := overlay.View()
+	linesNotLoading := len(strings.Split(viewNotLoading, "\n"))
+
+	if linesLoading != linesNotLoading {
+		t.Fatalf("view height changes with loading state: loading=%d lines, not-loading=%d lines", linesLoading, linesNotLoading)
+	}
+}
+
+func TestSessionSearchOverlaySpinnerTickActivatesSpinner(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, false)
+	overlay.SetSize(120, 30)
+	overlay.SetLoading(true)
+
+	if overlay.spinnerVisible {
+		t.Fatal("spinner must not be visible immediately after SetLoading(true)")
+	}
+
+	updated, cmd := overlay.Update(sessionSearchSpinnerTickMsg{})
+	if !updated.spinnerVisible {
+		t.Fatal("spinner must be visible after first spinner tick msg")
+	}
+	if cmd == nil {
+		t.Fatal("spinner tick must return a follow-up tick command to animate")
+	}
+}
+
+func TestSessionSearchOverlaySpinnerHiddenWhenLoadingStopped(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, false)
+	overlay.SetSize(120, 30)
+	overlay.SetLoading(true)
+
+	// activate spinner
+	updated, _ := overlay.Update(sessionSearchSpinnerTickMsg{})
+	if !updated.spinnerVisible {
+		t.Fatal("spinner must be visible after tick")
+	}
+
+	// stop loading
+	updated.SetLoading(false)
+	if updated.spinnerVisible {
+		t.Fatal("spinner must be hidden after SetLoading(false)")
+	}
+
+	// stale tick after loading stops must be a no-op
+	updated2, cmd := updated.Update(sessionSearchSpinnerTickMsg{})
+	if updated2.spinnerVisible {
+		t.Fatal("stale spinner tick must not show spinner after loading stopped")
+	}
+	if cmd != nil {
+		t.Fatal("stale spinner tick while not loading must return nil cmd")
+	}
+}
+
+func TestSessionSearchOverlayViewWithSpinnerFitsSmallWindow(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeWorkspace, true)
+	overlay.SetSize(72, 18)
+	overlay.spinnerVisible = true
+	overlay.spinnerFrame = 0
 	view := overlay.View()
 	assertOverlayFits(t, view, 72, 18)
 }

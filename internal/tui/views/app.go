@@ -383,11 +383,12 @@ func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 		return nil
 	}
 	filter := a.sessionSearchFilter()
+	var spinnerCmd tea.Cmd
 	if showLoading {
-		a.sessionSearch.SetLoading(true)
+		spinnerCmd = a.sessionSearch.SetLoading(true)
 	}
 	a.sessionSearch.SetEntries(a.localSessionSearchEntries(filter))
-	return SearchSessionHistoryCmd(a.svcs.Task, filter)
+	return tea.Batch(spinnerCmd, SearchSessionHistoryCmd(a.svcs.Task, filter))
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
@@ -453,9 +454,6 @@ func (a *App) updateContentForKey(msg tea.KeyMsg, wasOverviewOverlayOpen bool, p
 }
 
 func (a App) historyEntryTitle(entry SidebarEntry) string {
-	if entry.ExternalID != "" && entry.Title != "" {
-		return entry.ExternalID + " · " + entry.Title
-	}
 	if entry.Title != "" {
 		return entry.Title
 	}
@@ -1795,7 +1793,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 func (a *App) rebuildSidebar() {
 	if a.sidebarMode == sidebarPaneTasks && a.currentWorkItemID != "" && a.workItemByID(a.currentWorkItemID) != nil {
 		wi := a.workItemByID(a.currentWorkItemID)
-		a.sidebar.SetTitle(firstNonEmptyString(wi.ExternalID, wi.ID) + " · Tasks")
+		a.sidebar.SetTitle(firstNonEmptyString(wi.Title, wi.ExternalID, wi.ID) + " \u00b7 Tasks")
 		a.sidebar.SetEntries(a.taskSidebarEntries(a.currentWorkItemID))
 		selectedSessionID := a.selectedTaskSessionID()
 		if selectedSessionID == "" {
