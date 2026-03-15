@@ -47,7 +47,6 @@ func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
-	ta.CharLimit = 500
 	ta.MaxHeight = feedbackMaxLines
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
