@@ -24,10 +24,15 @@ const (
 
 	sessionSearchSpinnerDelay    = 500 * time.Millisecond
 	sessionSearchSpinnerInterval = 100 * time.Millisecond
+	sessionSearchDebounceDelay   = 200 * time.Millisecond
 )
 
 // sessionSearchSpinnerFrames are the braille animation frames for the search spinner.
 var sessionSearchSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// sessionSearchDebounceMsg fires after the debounce window expires; stale messages
+// (seq mismatch) are discarded so only the final keystroke triggers a search.
+type sessionSearchDebounceMsg struct{ seq int }
 
 // sessionSearchSpinnerTickMsg drives the spinner animation inside SessionSearchOverlay.
 type sessionSearchSpinnerTickMsg struct{}
@@ -106,6 +111,7 @@ type SessionSearchOverlay struct {
 	styles             styles.Styles
 	width              int
 	height             int
+	searchDebounceSeq  int
 }
 
 func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
@@ -140,6 +146,7 @@ func (m *SessionSearchOverlay) Open(scope sessionHistoryScope, workspaceAvailabl
 	m.loading = true
 	m.spinnerFrame = 0
 	m.spinnerVisible = false
+	m.searchDebounceSeq = 0
 	m.entries = nil
 	m.list.ResetSelected()
 	m.list.SetItems(nil)
@@ -153,6 +160,7 @@ func (m *SessionSearchOverlay) Close() {
 	m.loading = false
 	m.spinnerFrame = 0
 	m.spinnerVisible = false
+	m.searchDebounceSeq = 0
 	m.focus = sessionSearchFocusInput
 	m.input.SetValue("")
 	m.input.Blur()
@@ -391,9 +399,6 @@ func formatSessionTime(t *time.Time) string {
 func (m SessionSearchOverlay) detailContent() string {
 	entry := m.Selected()
 	if entry == nil {
-		if m.loading {
-			return "Loading sessions…"
-		}
 		return "No sessions found for the current scope and query."
 	}
 
@@ -495,9 +500,6 @@ func (m SessionSearchOverlay) View() string {
 	}
 
 	leftContent := m.list.View()
-	if m.loading && len(m.entries) == 0 {
-		leftContent = m.styles.Muted.Render("Loading…")
-	}
 
 	body := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{
 		LeftPane: components.OverlayPaneSpec{
@@ -537,6 +539,12 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case sessionSearchDebounceMsg:
+		if msg.seq == m.searchDebounceSeq {
+			return m, m.requestSearchCmd()
+		}
+		return m, nil
+
 	case sessionSearchSpinnerTickMsg:
 		if !m.loading {
 			return m, nil
@@ -636,10 +644,15 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			before := m.input.Value()
 			m.input, cmd = m.input.Update(msg)
 			if strings.TrimSpace(before) != strings.TrimSpace(m.input.Value()) {
+				m.searchDebounceSeq++
+				seq := m.searchDebounceSeq
+				debounceCmd := tea.Tick(sessionSearchDebounceDelay, func(time.Time) tea.Msg {
+					return sessionSearchDebounceMsg{seq: seq}
+				})
 				if cmd == nil {
-					return m, m.requestSearchCmd()
+					return m, debounceCmd
 				}
-				return m, tea.Batch(cmd, m.requestSearchCmd())
+				return m, tea.Batch(cmd, debounceCmd)
 			}
 			return m, cmd
 		case sessionSearchFocusResults:

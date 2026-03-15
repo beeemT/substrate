@@ -31,34 +31,28 @@ func TestSessionSearchOverlaySortsByUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestSessionSearchOverlayInputChangeRequestsSearch(t *testing.T) {
+func TestSessionSearchOverlayInputChangeEnqueuesDebouncedSearch(t *testing.T) {
 	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
 	overlay.Open(sessionHistoryScopeGlobal, false)
 
+	// Keystroke must return a debounce tick cmd, not an immediate search.
 	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	if cmd == nil {
-		t.Fatal("expected search request command")
-	}
-	msg := cmd()
-	foundRequest := false
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, batchCmd := range batch {
-			if batchCmd == nil {
-				continue
-			}
-			if _, ok := batchCmd().(SessionHistorySearchRequestedMsg); ok {
-				foundRequest = true
-			}
-		}
-	} else if _, ok := msg.(SessionHistorySearchRequestedMsg); ok {
-		foundRequest = true
-	}
-	if !foundRequest {
-		t.Fatalf("cmd() message = %T, want SessionHistorySearchRequestedMsg in response", msg)
+		t.Fatal("expected debounce tick cmd after input change")
 	}
 	if got := updated.Filter("").Search; got != "r" {
 		t.Fatalf("filter search = %q, want r", got)
 	}
+
+	// Firing the debounce msg with the matching seq must trigger a search.
+	updated2, searchCmd := updated.Update(sessionSearchDebounceMsg{seq: updated.searchDebounceSeq})
+	if searchCmd == nil {
+		t.Fatal("debounce msg with current seq must yield a search request cmd")
+	}
+	if _, ok := searchCmd().(SessionHistorySearchRequestedMsg); !ok {
+		t.Fatalf("searchCmd() = %T, want SessionHistorySearchRequestedMsg", searchCmd())
+	}
+	_ = updated2
 }
 
 func TestSessionSearchOverlayEnterOpensSelection(t *testing.T) {
@@ -376,4 +370,57 @@ func TestSessionSearchOverlayViewWithSpinnerFitsSmallWindow(t *testing.T) {
 	overlay.spinnerFrame = 0
 	view := overlay.View()
 	assertOverlayFits(t, view, 72, 18)
+}
+
+func TestSessionSearchOverlayDebounceDiscardsStaleSeq(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, false)
+
+	// First keystroke.
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	seq1 := updated.searchDebounceSeq
+
+	// Second keystroke before first debounce fires.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	seq2 := updated.searchDebounceSeq
+
+	if seq2 <= seq1 {
+		t.Fatalf("second keystroke must increment debounce seq: seq1=%d seq2=%d", seq1, seq2)
+	}
+
+	// Stale tick from the first keystroke must be a no-op.
+	_, stalecmd := updated.Update(sessionSearchDebounceMsg{seq: seq1})
+	if stalecmd != nil {
+		t.Fatal("stale debounce msg must not trigger a search request")
+	}
+
+	// Current tick must fire the search.
+	_, livecmd := updated.Update(sessionSearchDebounceMsg{seq: seq2})
+	if livecmd == nil {
+		t.Fatal("current debounce msg must trigger a search request cmd")
+	}
+	if _, ok := livecmd().(SessionHistorySearchRequestedMsg); !ok {
+		t.Fatalf("livecmd() = %T, want SessionHistorySearchRequestedMsg", livecmd())
+	}
+}
+
+func TestSessionSearchOverlayNoLoadingTextInDetailOrList(t *testing.T) {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeGlobal, false)
+	overlay.SetSize(120, 30)
+
+	if !overlay.loading {
+		t.Fatal("expected overlay in loading state after Open")
+	}
+
+	// Detail pane must not show 'Loading' text; spinner communicates progress instead.
+	if content := overlay.detailContent(); strings.Contains(content, "Loading") {
+		t.Fatalf("detailContent() must not contain 'Loading' while loading: %q", content)
+	}
+
+	// View must not swap the list for a 'Loading…' placeholder.
+	view := overlay.View()
+	if strings.Contains(view, "Loading") {
+		t.Fatalf("View() must not contain 'Loading' text while loading: %q", view)
+	}
 }
