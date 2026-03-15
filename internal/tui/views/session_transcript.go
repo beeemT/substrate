@@ -164,7 +164,7 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 		default:
 			text := firstNonEmptyTranscript(e.Text, e.Message, e.Summary)
 			if text != "" {
-				blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: text})
+				blocks = append(blocks, transcriptBlock{kind: blockKindPlain, text: text, isError: e.Kind == "error"})
 			}
 			i++
 		}
@@ -175,12 +175,13 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
 	switch block.kind {
 	case blockKindPlain:
-		text := ansi.Hardwrap(block.text, width, true)
 		if block.isError {
-			return st.Error.Render("Error:") + " " + text
+			prefix := st.Error.Render("Error:")
+			// "Error:" is 6 visual chars + 1 separating space = 7 overhead
+			text := ansi.Hardwrap(block.text, max(1, width-7), true)
+			return prefix + " " + text
 		}
-		return text
-
+		return ansi.Hardwrap(block.text, width, true)
 	case blockKindAssistant:
 		return ansi.Hardwrap(block.text, width, true)
 

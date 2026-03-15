@@ -219,3 +219,56 @@ func TestRenderTranscriptLifecycleRendered(t *testing.T) {
 		t.Errorf("expected lifecycle output to contain %q, got: %q", "done", plain)
 	}
 }
+
+func TestGroupEntriesLegacyErrorSetsIsError(t *testing.T) {
+	t.Parallel()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.EntryKind("error"), Message: "bridge crashed"},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	b := blocks[0]
+	if b.kind != blockKindPlain {
+		t.Errorf("expected blockKindPlain, got %v", b.kind)
+	}
+	if !b.isError {
+		t.Error("expected isError=true for EntryKind(\"error\")")
+	}
+	if b.text != "bridge crashed" {
+		t.Errorf("expected text=%q, got %q", "bridge crashed", b.text)
+	}
+}
+
+func TestRenderTranscriptLegacyErrorShowsPrefix(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.EntryKind("error"), Message: "bridge crashed"},
+	}
+	output := RenderTranscript(st, entries, 80, false)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Error:") {
+		t.Errorf("expected output to contain %q, got: %q", "Error:", plain)
+	}
+	if !strings.Contains(plain, "bridge crashed") {
+		t.Errorf("expected output to contain %q, got: %q", "bridge crashed", plain)
+	}
+}
+
+func TestRenderTranscriptLegacyErrorWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 40
+	st := testStyles()
+	// Message long enough to require wrapping with the 7-char Error: prefix overhead.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.EntryKind("error"), Message: "a very long error message that definitely exceeds forty characters when prefixed"},
+	}
+	output := RenderTranscript(st, entries, width, false)
+	for _, line := range strings.Split(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}

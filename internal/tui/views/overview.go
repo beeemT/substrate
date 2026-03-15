@@ -356,6 +356,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			}
 		case "c":
 			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionPlanReview {
+				m.planReview.feedbackHeight = 1
+				m.planReview.feedbackInput.SetHeight(1)
 				m.planReview.feedbackInput.SetValue("")
 				m.planReview.inputMode = planReviewChanges
 				m.planReview.feedbackInput.Placeholder = "Describe the changes needed…"
@@ -368,6 +370,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
 				case overviewActionPlanReview:
+					m.planReview.feedbackHeight = 1
+					m.planReview.feedbackInput.SetHeight(1)
 					m.planReview.feedbackInput.SetValue("")
 					m.planReview.inputMode = planReviewReject
 					m.planReview.feedbackInput.Placeholder = "Reason for rejection…"
@@ -427,10 +431,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 	if m.data.Header.Title == "" && m.data.Header.ExternalID == "" {
 		return
 	}
-	title := strings.TrimSpace(strings.TrimPrefix(m.data.Header.ExternalID+" · "+m.data.Header.Title, " · "))
-	if title == "" {
-		title = m.data.Header.Title
-	}
+	title := firstNonEmptyString(m.data.Header.Title, m.data.Header.ExternalID)
 	m.planReview.SetTitle(title)
 	m.question.SetTitle(title)
 	m.interrupted.SetTitle(title)
@@ -499,7 +500,7 @@ func (m SessionOverviewModel) renderHeader() string {
 		metaParts = append(metaParts, "Updated "+timeAgo(m.data.Header.UpdatedAt))
 	}
 	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   firstNonEmptyString(m.data.Header.ExternalID+" · "+m.data.Header.Title, m.data.Header.Title, m.data.Header.ExternalID),
+		Title:   firstNonEmptyString(m.data.Header.Title, m.data.Header.ExternalID),
 		Meta:    strings.Join(filterEmptyStrings(metaParts), " · "),
 		Width:   m.width,
 		Divider: true,

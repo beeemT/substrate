@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,27 +26,38 @@ const (
 	planReviewReject                      // user pressed [r]: rejection reason
 )
 
+const feedbackMaxLines = 6
+
 // PlanReviewModel renders the plan and handles approval flow.
 type PlanReviewModel struct {
-	viewport      viewport.Model
-	feedbackInput textinput.Model
-	inputMode     planReviewInputMode
-	title         string
-	planID        string
-	workItemID    string
-	planContent   string
-	styles        styles.Styles
-	width         int
-	height        int
+	viewport       viewport.Model
+	feedbackInput  textarea.Model
+	feedbackHeight int
+	inputMode      planReviewInputMode
+	title          string
+	planID         string
+	workItemID     string
+	planContent    string
+	styles         styles.Styles
+	width          int
+	height         int
 }
 
 func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
-	ti := textinput.New()
-	ti.CharLimit = 500
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.CharLimit = 500
+	ta.MaxHeight = feedbackMaxLines
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.EndOfBufferCharacter = 0
+	ta.SetHeight(1)
 	return PlanReviewModel{
-		viewport:      viewport.New(0, 0),
-		feedbackInput: ti,
-		styles:        st,
+		viewport:       viewport.New(0, 0),
+		feedbackInput:  ta,
+		feedbackHeight: 1,
+		styles:         st,
 	}
 }
 
@@ -57,13 +68,40 @@ func (m *PlanReviewModel) SetSize(width, height int) {
 }
 
 func (m *PlanReviewModel) syncViewportSize() {
-	reservedRows := 4 // header block + divider above hints + hint row
+	reservedRows := 4 // title + divider (header) + divider-above-hints + hints
 	if m.inputMode != planReviewNormal {
-		reservedRows++
+		reservedRows += 1 + m.feedbackHeight // label row + textarea rows
 	}
+	m.feedbackInput.SetWidth(max(1, m.width))
 	m.viewport.Width = max(1, m.width-1)
 	m.viewport.Height = max(1, m.height-reservedRows)
 	m.refreshViewportContent(false)
+}
+
+// syncFeedbackHeight recomputes the number of visual rows the textarea needs,
+// capped at feedbackMaxLines. If the height changed, syncViewportSize is called.
+func (m *PlanReviewModel) syncFeedbackHeight() {
+	if m.inputMode == planReviewNormal {
+		return
+	}
+	innerWidth := m.feedbackInput.Width()
+	if innerWidth <= 0 {
+		return
+	}
+	value := m.feedbackInput.Value()
+	logicalLines := strings.Split(value, "\n")
+	total := 0
+	for _, ln := range logicalLines {
+		segments := wrapPlanReviewPlainTextLine(ln, innerWidth)
+		total += len(segments)
+	}
+	h := max(1, min(total, feedbackMaxLines))
+	if h == m.feedbackHeight {
+		return
+	}
+	m.feedbackHeight = h
+	m.feedbackInput.SetHeight(h)
+	m.syncViewportSize()
 }
 
 func (m *PlanReviewModel) SetTitle(title string) { m.title = title }
@@ -259,7 +297,9 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 		if m.inputMode != planReviewNormal {
 			switch msg.String() {
 			case "enter":
-				text := m.feedbackInput.Value()
+				text := strings.TrimSpace(m.feedbackInput.Value())
+				m.feedbackHeight = 1
+				m.feedbackInput.SetHeight(1)
 				m.feedbackInput.SetValue("")
 				m.feedbackInput.Blur()
 				if m.inputMode == planReviewChanges {
@@ -276,11 +316,14 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				}
 			case "esc":
 				m.inputMode = planReviewNormal
+				m.feedbackHeight = 1
+				m.feedbackInput.SetHeight(1)
 				m.feedbackInput.SetValue("")
 				m.feedbackInput.Blur()
 				m.syncViewportSize()
 			default:
 				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
+				m.syncFeedbackHeight()
 			}
 			return m, cmd
 		}
@@ -331,11 +374,11 @@ func (m PlanReviewModel) View() string {
 
 	var feedbackRow string
 	if m.inputMode != planReviewNormal {
-		label := "Request changes: "
+		label := "Request changes:"
 		if m.inputMode == planReviewReject {
-			label = "Rejection reason: "
+			label = "Rejection reason:"
 		}
-		feedbackRow = m.styles.Warning.Render(label) + m.feedbackInput.View()
+		feedbackRow = m.styles.Warning.Render(label) + "\n" + m.feedbackInput.View()
 	}
 
 	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)

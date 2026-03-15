@@ -240,3 +240,136 @@ func TestPlanReviewHintsRowHasSymmetricLeadingSpace(t *testing.T) {
 		t.Fatalf("hints line = %q, want at least one trailing space after last hint", hintsLine)
 	}
 }
+
+// checkFeedbackViewBounds asserts every rendered line is within width and the
+// total line count equals height.
+func checkFeedbackViewBounds(t *testing.T, label, view string, wantWidth, wantHeight int) {
+	t.Helper()
+	lines := strings.Split(view, "\n")
+	if got := len(lines); got != wantHeight {
+		t.Errorf("%s: line count = %d, want %d\nview:\n%s", label, got, wantHeight, view)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > wantWidth {
+			t.Errorf("%s: line %d width = %d, want <= %d; line = %q", label, i+1, got, wantWidth, line)
+		}
+	}
+}
+
+// countPlanLines counts the number of plan-content rows visible in view by
+// looking for the line-number │ separator that renderPlanReviewContent injects.
+func countPlanLines(view string) int {
+	n := 0
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(ansi.Strip(line), " │ ") {
+			n++
+		}
+	}
+	return n
+}
+
+// wantViewport computes the expected visible plan rows: terminal height minus
+// 4 base reserved rows (title + header-divider + above-hints-divider + hints),
+// 1 feedback label row, and the current textarea row count.
+func wantViewport(termHeight, feedbackRows int) int {
+	return termHeight - 4 - 1 - feedbackRows
+}
+
+// TestPlanReviewFeedbackInputGrowsAndScrolls verifies that the feedback textarea
+// grows from 1 row to feedbackMaxLines (6) as the user types, then caps and
+// scrolls. Both layout bounds (width × height) and viewport shrinkage are
+// asserted at each stage.
+func TestPlanReviewFeedbackInputGrowsAndScrolls(t *testing.T) {
+	t.Parallel()
+
+	const width, height = 80, 24
+	// 30 plan lines: more than the maximum viewport height (18), so the plan
+	// content always fills the viewport and the countPlanLines delta is observable.
+	planContent := strings.Repeat("plan line\n", 30)
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(width, height)
+	m.SetPlanDocument("p1", planContent)
+	m.SetTitle("TEST")
+
+	// Enter request-changes mode.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	checkFeedbackViewBounds(t, "after c (1-row)", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
+		t.Errorf("after c: plan lines = %d, want %d", got, want)
+	}
+
+	// Type text that word-wraps to exactly 3 display rows.
+	// Inner width 80: "word" (4 chars). Each line fits 16 words (4 + 5×15 = 79).
+	// 33 words → line1(16) + line2(16) + line3(1) = 3 visual rows.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("word ", 33))})
+	checkFeedbackViewBounds(t, "3-row input", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 3); got != want {
+		t.Errorf("3-row: plan lines = %d, want %d", got, want)
+	}
+
+	// Extend past feedbackMaxLines — textarea caps at 6 and scrolls.
+	// 120 more words → total ≥ 7 visual rows → capped at 6.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("word ", 120))})
+	checkFeedbackViewBounds(t, "capped 6-row", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 6); got != want {
+		t.Errorf("capped: plan lines = %d, want %d", got, want)
+	}
+}
+
+// TestPlanReviewFeedbackInputNarrowTerminal guards the layout at a narrow (40-col)
+// terminal where word-wrapping is more aggressive.
+func TestPlanReviewFeedbackInputNarrowTerminal(t *testing.T) {
+	t.Parallel()
+
+	const width, height = 40, 18
+	// 15 plan lines > max viewport height (12) so the count is always meaningful.
+	planContent := strings.Repeat("plan line\n", 15)
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(width, height)
+	m.SetPlanDocument("p1", planContent)
+	m.SetTitle("N")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	checkFeedbackViewBounds(t, "narrow 1-row", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
+		t.Errorf("narrow 1-row: plan lines = %d, want %d", got, want)
+	}
+
+	// Inner width 40: "word" (4 chars) fits 8 per line (4 + 5×7 = 39).
+	// 60 words → ceil(60/8) = 8 rows → capped at 6.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("word ", 60))})
+	checkFeedbackViewBounds(t, "narrow capped", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 6); got != want {
+		t.Errorf("narrow capped: plan lines = %d, want %d", got, want)
+	}
+}
+
+// TestPlanReviewFeedbackInputRejectMode ensures the rejection-reason input
+// obeys the same growth and scrolling rules.
+func TestPlanReviewFeedbackInputRejectMode(t *testing.T) {
+	t.Parallel()
+
+	const width, height = 80, 22
+	// 20 plan lines > max viewport height (16).
+	planContent := strings.Repeat("plan line\n", 20)
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(width, height)
+	m.SetPlanDocument("p1", planContent)
+	m.SetTitle("TEST")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	checkFeedbackViewBounds(t, "reject 1-row", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
+		t.Errorf("reject 1-row: plan lines = %d, want %d", got, want)
+	}
+
+	// 120 words appended → total ≥ 7 rows → capped at 6.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("word ", 120))})
+	checkFeedbackViewBounds(t, "reject capped", m.View(), width, height)
+	if got, want := countPlanLines(m.View()), wantViewport(height, 6); got != want {
+		t.Errorf("reject capped: plan lines = %d, want %d", got, want)
+	}
+}
