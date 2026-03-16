@@ -115,7 +115,7 @@ type SessionSearchOverlay struct {
 }
 
 func NewSessionSearchOverlay(st styles.Styles) SessionSearchOverlay {
-	input := textinput.New()
+	input := components.NewTextInput()
 	input.Placeholder = "Search sessions…"
 	input.CharLimit = 200
 

@@ -26,7 +26,7 @@ type QuestionModel struct {
 
 // NewQuestionModel constructs a QuestionModel with the given styles.
 func NewQuestionModel(st styles.Styles) QuestionModel {
-	ti := textinput.New()
+	ti := components.NewTextInput()
 	ti.Placeholder = "Type reply to Foreman…"
 	ti.CharLimit = 1000
 	return QuestionModel{input: ti, styles: st}

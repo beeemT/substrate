@@ -619,7 +619,7 @@ func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, col
 	lines = append(lines, labelRendered)
 	rendered := strings.Trim(renderMarkdownDocument(block.text, max(1, width-2)), "\n")
 	for _, line := range strings.Split(rendered, "\n") {
-		lines = append(lines, "  "+st.Subtitle.Render(line))
+		lines = append(lines, "  "+st.Thinking.Render(line))
 	}
 	return strings.Join(lines, "\n")
 }

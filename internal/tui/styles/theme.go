@@ -12,10 +12,10 @@ type Theme struct {
 	Pending, Active, Success, Error, Warning, Interrupted string
 
 	// Shared text + chrome roles
-	Title, Subtitle, Muted, Hint, Label, Accent, Link, Divider string
-	Border, PaneBorder, PaneBorderFocused, ToolBorder string
-	OverlayBorder, OverlayBorderFocused                        string
-	SelectedBg, SelectionActive, SelectionInactive             string
+	Title, Subtitle, Muted, Hint, Label, Accent, Link, Divider, Thinking string
+	Border, PaneBorder, PaneBorderFocused, ToolBorder                    string
+	OverlayBorder, OverlayBorderFocused                                  string
+	SelectedBg, SelectionActive, SelectionInactive                       string
 
 	// Settings subtheme
 	SettingsText, SettingsTextStrong, SettingsBreadcrumb, SettingsSelectionInactiveText string
@@ -42,6 +42,7 @@ var DefaultTheme = Theme{
 	Title:                "#f0f0f0",
 	Subtitle:             "#b0b0b0",
 	Muted:                "#6b7280",
+	Thinking:             "#8899a6",
 	Hint:                 "#6b7280",
 	Label:                "#94a3b8",
 	Accent:               "#5b8def",
@@ -94,6 +95,7 @@ type Styles struct {
 	// Text + semantic chrome
 	Title       lipgloss.Style
 	Subtitle    lipgloss.Style
+	Thinking    lipgloss.Style
 	Divider     lipgloss.Style
 	Hint        lipgloss.Style
 	Label       lipgloss.Style
@@ -113,7 +115,7 @@ type Styles struct {
 	CalloutWarning      lipgloss.Style
 	CalloutRunning      lipgloss.Style
 	CalloutError        lipgloss.Style
-	CalloutTool lipgloss.Style
+	CalloutTool         lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -161,6 +163,7 @@ func NewStyles(t Theme) Styles {
 		Interrupted:   lipgloss.NewStyle().Foreground(lipgloss.Color(t.Interrupted)),
 		Title:         lipgloss.NewStyle().Foreground(lipgloss.Color(t.Title)).Bold(true),
 		Subtitle:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.Subtitle)),
+		Thinking:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.Thinking)),
 		Divider:       lipgloss.NewStyle().Foreground(lipgloss.Color(t.Divider)),
 		Hint:          lipgloss.NewStyle().Foreground(lipgloss.Color(t.Hint)),
 		Label:         lipgloss.NewStyle().Foreground(lipgloss.Color(t.Label)),

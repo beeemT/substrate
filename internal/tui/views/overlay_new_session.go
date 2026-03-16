@@ -192,35 +192,35 @@ type NewSessionOverlay struct {
 
 // NewNewSessionOverlay constructs a NewSessionOverlay with sane defaults.
 func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string, st styles.Styles) NewSessionOverlay {
-	fi := textinput.New()
+	fi := components.NewTextInput()
 	fi.Placeholder = "Search work items…"
 	fi.CharLimit = 200
 
-	labels := textinput.New()
+	labels := components.NewTextInput()
 	labels.Placeholder = "Labels (comma-separated)…"
 	labels.CharLimit = 200
 
-	owner := textinput.New()
+	owner := components.NewTextInput()
 	owner.Placeholder = "Owner…"
 	owner.CharLimit = 200
 
-	repo := textinput.New()
+	repo := components.NewTextInput()
 	repo.Placeholder = "Repository / Project…"
 	repo.CharLimit = 200
 
-	group := textinput.New()
+	group := components.NewTextInput()
 	group.Placeholder = "Group…"
 	group.CharLimit = 200
 
-	team := textinput.New()
+	team := components.NewTextInput()
 	team.Placeholder = "Team…"
 	team.CharLimit = 200
 
-	mt := textinput.New()
+	mt := components.NewTextInput()
 	mt.Placeholder = "Work item title…"
 	mt.CharLimit = 200
 
-	md := textarea.New()
+	md := components.NewTextArea()
 	md.Placeholder = "Description (optional)…"
 	md.SetWidth(60)
 	md.SetHeight(3)

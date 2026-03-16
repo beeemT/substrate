@@ -104,7 +104,7 @@ type SettingsPage struct {
 }
 
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
-	ti := textinput.New()
+	ti := components.NewTextInput()
 	ti.CharLimit = 1000
 	ti.Prompt = ""
 	vp := viewport.New(0, 0)

@@ -44,7 +44,7 @@ type PlanReviewModel struct {
 }
 
 func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
-	ta := textarea.New()
+	ta := components.NewTextArea()
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.MaxHeight = feedbackMaxLines
