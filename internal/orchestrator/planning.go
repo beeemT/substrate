@@ -405,7 +405,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		WorkspaceID:  workspaceID,
 		DraftPath:    draftPath,
 		SystemPrompt: systemPrompt,
-		UserPrompt:   fmt.Sprintf("Begin planning. Write the plan progressively to %s. Explore the workspace and determine which repos need changes.", draftPath),
+		UserPrompt:   fmt.Sprintf("Your role is to plan this change. You are not implementing anything.\n\nBegin planning. Write the plan progressively to %s. Explore the workspace and determine which repos need changes.", draftPath),
 		WorktreePath: "", // Planning uses workspace root
 	}
 
