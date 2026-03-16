@@ -675,12 +675,15 @@ Description:
   guidance: {{.AgentsMdPath}}{{end}}{{if .DocPaths}}
   docs: {{range .DocPaths}}{{.}} {{end}}{{end}}
 {{end}}## Instructions
+Your role in this session is to plan this change. Exploration, analysis, and writing
+the plan to {{.SessionDraftPath}} are your only work. You are not implementing anything.
+
 If {{.SessionDraftPath}} already exists, read it first to orient yourself before exploring.
 Write every draft update to {{.SessionDraftPath}}.
 Explore the workspace before finalising your plan. After each significant decision or
 exploration finding, update that file. Substrate reads it as your plan output —
 your final message is not used. The last complete version present when the session
-ends is what gets executed.
+ends is what gets executed by a separate implementation session.
 
 Begin the file with a fenced code block tagged substrate-plan containing YAML:
 
@@ -720,13 +723,14 @@ Every sub-plan must be implementation-ready for a later coding session.
 ### Changes must contain at least three concrete list items.
 The Orchestration section must stay separate from repo-specific implementation details.
 
-## Validation
-Before marking complete: run all relevant formatters, compilation checks, and unit tests.
-All must pass. Refer to AGENTS.md in this repo for tooling specifics.
+## Before Concluding
+Confirm {{.SessionDraftPath}} contains a syntactically complete substrate-plan YAML block,
+all required ## SubPlan sections are present, and every SubPlan has populated ### Goal,
+### Scope, ### Changes, ### Validation, and ### Risks sections.
 `
 
 // correctionPromptTmpl is the correction prompt template.
-const correctionPromptTmpl = `Your plan had structural errors that prevent execution:
+const correctionPromptTmpl = `Your role is still to plan only. Your plan had structural errors that prevent execution:
 {{.Errors}}
 
 Valid repos in this workspace:
