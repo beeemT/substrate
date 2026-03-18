@@ -179,10 +179,8 @@ func NewApp(svcs Services) App {
 // RunTUI launches the bubbletea program.
 func RunTUI(svcs Services) error {
 	app := NewApp(svcs)
-	enableKittyKeyboard()
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
 	_, err := p.Run()
-	disableKittyKeyboard()
 	return err
 }
 
