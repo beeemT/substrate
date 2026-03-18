@@ -91,12 +91,13 @@ func createRepoWithRemote(t *testing.T, remoteURL string) string {
 	runGit(t, repoDir, "add", "README.md")
 	runGit(t, repoDir, "commit", "-m", "initial commit")
 	runGit(t, repoDir, "remote", "add", "origin", remoteURL)
+
 	return repoDir
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))

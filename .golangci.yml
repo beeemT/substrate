@@ -1,0 +1,224 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    # Bugs / correctness
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - bodyclose
+    - nilerr
+    - nilnesserr
+    - sqlclosecheck
+    - rowserrcheck
+    - durationcheck
+    - noctx
+    - reassign
+    - wastedassign
+    - copyloopvar
+
+    # Style / readability
+    - revive
+    - gocritic
+    - misspell
+    - dupword
+    - unconvert
+    - whitespace
+    - nakedret
+    - dogsled
+    - goprintffuncname
+    - nolintlint
+    - predeclared
+    - recvcheck
+    - usestdlibvars
+    - usetesting
+
+    # Complexity
+    - gocognit
+    - nestif
+    - funlen
+
+    # Performance
+    - prealloc
+    - perfsprint
+
+    # Security
+    - gosec
+
+    # Modern Go
+    - intrange
+    - modernize
+    - exptostd
+    - fatcontext
+    - mirror
+
+    # Constants
+    - goconst
+
+    # Formatting
+    - lll
+
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      exclude-functions:
+        - io.Copy
+        - io.ReadAll
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net/http.ResponseWriter).Write
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*github.com/jmoiron/sqlx.DB).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+    govet:
+      disable:
+        - fieldalignment
+
+    staticcheck:
+      checks:
+        - all
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        - name: bool-literal-in-expr
+        - name: constant-logical-expr
+        - name: duplicated-imports
+        - name: unnecessary-stmt
+        - name: use-any
+        - name: early-return
+
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+
+    gocognit:
+      min-complexity: 60
+
+    nestif:
+      min-complexity: 10
+
+    funlen:
+      lines: 200
+      statements: 100
+
+    lll:
+      line-length: 160
+
+    nakedret:
+      max-func-lines: 20
+
+    gosec:
+      excludes:
+        - G101  # hard-coded credentials (too many false positives with variable names)
+        - G104  # unhandled errors (covered by errcheck)
+        - G304  # file inclusion via variable (expected in CLI tools)
+        - G204  # subprocess launched with variable (expected in harness adapters)
+
+    perfsprint:
+      int-conversion: false
+      err-error: false
+      errorf: true
+      sprintf1: true
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Test files get relaxed rules
+      - path: _test\.go
+        linters:
+          - errcheck
+          - goconst
+          - funlen
+          - gocognit
+          - gosec
+          - lll
+          - nestif
+          - prealloc
+
+      # TUI views are inherently complex
+      - path: internal/tui/views/
+        linters:
+          - gocognit
+          - funlen
+          - nestif
+          - lll
+
+      # Adapter implementations are inherently complex
+      - path: internal/adapter/
+        linters:
+          - gocognit
+          - funlen
+
+      # Migrations are auto-generated
+      - path: migrations/
+        linters:
+          - lll
+          - goconst
+
+      # Allow TODO/FIXME
+      - linters:
+          - godox
+        text: "TODO|FIXME|HACK"
+
+      # Allow unchecked errors in defer cleanup
+      - linters:
+          - errcheck
+        source: "defer "
+
+      # Ignore long lines for URLs and struct tags
+      - linters:
+          - lll
+        source: "(https?://|`[^`]+`)"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

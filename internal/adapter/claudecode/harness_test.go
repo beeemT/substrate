@@ -1,6 +1,8 @@
 package claudecode
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -26,12 +28,12 @@ func TestBuildArgsAgentAndForeman(t *testing.T) {
 	args := h.buildArgs(adapter.SessionOpts{Mode: adapter.SessionModeAgent, WorktreePath: "/tmp", SystemPrompt: "sys", UserPrompt: "user"})
 	joined := join(args)
 	for _, want := range []string{"-p", "--output-format", "stream-json", "--model", "sonnet", "--permission-mode", "auto", "--max-turns", "4", "--max-budget-usd", "1.50"} {
-		if !contains(args, want) {
+		if !slices.Contains(args, want) {
 			t.Fatalf("args missing %q: %s", want, joined)
 		}
 	}
 	foreman := h.buildArgs(adapter.SessionOpts{Mode: adapter.SessionModeForeman, WorktreePath: "/tmp", UserPrompt: "review"})
-	if !contains(foreman, "Read,Grep,Glob") {
+	if !slices.Contains(foreman, "Read,Grep,Glob") {
 		t.Fatalf("foreman args missing tool restriction: %v", foreman)
 	}
 }
@@ -47,22 +49,14 @@ func TestMapClaudeEvent(t *testing.T) {
 	}
 }
 
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func join(values []string) string {
-	result := ""
+	var b strings.Builder
 	for i, value := range values {
 		if i > 0 {
-			result += " "
+			b.WriteString(" ")
 		}
-		result += value
+		b.WriteString(value)
 	}
-	return result
+
+	return b.String()
 }

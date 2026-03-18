@@ -9,6 +9,7 @@ func wrapJSON(worktrees string) string {
 	if worktrees == "" {
 		return ""
 	}
+
 	return `{"data":{"worktrees":[` + worktrees + `]},"messages":[]}`
 }
 
@@ -68,6 +69,7 @@ func TestParseListJSON(t *testing.T) {
 			worktrees, err := parseListJSON([]byte(tt.input), "/repo")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseListJSON() error = %v, wantErr %v", err, tt.wantErr)
+
 				return
 			}
 			if tt.wantErr {
@@ -75,6 +77,7 @@ func TestParseListJSON(t *testing.T) {
 			}
 			if len(worktrees) != tt.wantLen {
 				t.Errorf("parseListJSON() got %d worktrees, want %d", len(worktrees), tt.wantLen)
+
 				return
 			}
 			for i, wt := range worktrees {

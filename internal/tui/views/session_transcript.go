@@ -353,7 +353,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 		if verbose {
 			bodyLines = append(bodyLines, st.SectionLabel.Render("Args:"))
 			wrapped := ansi.Hardwrap(block.toolArgs, max(1, innerW), true)
-			for _, line := range strings.Split(wrapped, "\n") {
+			for line := range strings.SplitSeq(wrapped, "\n") {
 				bodyLines = append(bodyLines, line)
 			}
 		}
@@ -365,7 +365,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 		if verbose {
 			limit = 12
 		}
-		var allLines []string
+		allLines := make([]string, 0, len(block.toolOutput))
 		for _, entry := range block.toolOutput {
 			allLines = append(allLines, strings.Split(entry, "\n")...)
 		}
@@ -375,9 +375,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 			shown = allLines[:limit]
 			remaining = len(allLines) - limit
 		}
-		for _, line := range shown {
-			bodyLines = append(bodyLines, line)
-		}
+		bodyLines = append(bodyLines, shown...)
 		if remaining > 0 {
 			bodyLines = append(bodyLines, st.Muted.Render(fmt.Sprintf("… %d more lines", remaining)))
 		}
@@ -413,7 +411,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 // meaningful fields are found. The summary is styled with accent/label colours
 // and truncated to fit innerW.
 func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) string {
-	var args map[string]interface{}
+	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		// Not valid JSON (e.g. legacy plain-text args): fall back to truncated raw display.
 		return st.SectionLabel.Render("Args:") + " " + ansi.Truncate(singleLine(argsJSON), max(1, innerW-6), "…")
@@ -498,7 +496,7 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 	case "ast_grep":
 		if pats, ok := args["pat"]; ok {
 			switch v := pats.(type) {
-			case []interface{}:
+			case []any:
 				if len(v) > 0 {
 					if s, ok := v[0].(string); ok {
 						parts = append(parts, highlight(singleLine(s)))
@@ -520,7 +518,7 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 			parts = append(parts, highlight(path))
 		}
 		if ops, ok := args["ops"]; ok {
-			if opSlice, ok := ops.([]interface{}); ok && len(opSlice) > 0 {
+			if opSlice, ok := ops.([]any); ok && len(opSlice) > 0 {
 				parts = append(parts, dim(fmt.Sprintf("%d op(s)", len(opSlice))))
 			}
 		}
@@ -536,7 +534,7 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 
 	case "task":
 		if tasks, ok := args["tasks"]; ok {
-			if taskSlice, ok := tasks.([]interface{}); ok {
+			if taskSlice, ok := tasks.([]any); ok {
 				parts = append(parts, dim(fmt.Sprintf("%d task(s)", len(taskSlice))))
 			}
 		}
@@ -618,7 +616,7 @@ func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, col
 	var lines []string
 	lines = append(lines, labelRendered)
 	rendered := strings.Trim(renderMarkdownDocument(block.text, max(1, width-2)), "\n")
-	for _, line := range strings.Split(rendered, "\n") {
+	for line := range strings.SplitSeq(rendered, "\n") {
 		lines = append(lines, "  "+st.Thinking.Render(line))
 	}
 	return strings.Join(lines, "\n")

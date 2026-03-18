@@ -22,10 +22,11 @@ func RenderPane(st styles.Styles, spec PaneSpec) string {
 		paneStyle = st.PaneFocused
 	}
 	if spec.Width > 0 {
-		paneStyle = paneStyle.Copy().Width(st.Chrome.Pane.InnerWidth(spec.Width))
+		paneStyle = paneStyle.Width(st.Chrome.Pane.InnerWidth(spec.Width))
 	}
 	if spec.Height > 0 {
-		paneStyle = paneStyle.Copy().Height(st.Chrome.Pane.InnerHeight(spec.Height))
+		paneStyle = paneStyle.Height(st.Chrome.Pane.InnerHeight(spec.Height))
 	}
+
 	return paneStyle.Render(spec.Content)
 }

@@ -34,6 +34,7 @@ func gitlabIssueSourceSummaries(issues []issue) []domain.SourceSummary {
 			UpdatedAt:   issue.UpdatedAt,
 		})
 	}
+
 	return summaries
 }
 
@@ -53,6 +54,7 @@ func gitlabMilestoneSourceSummaries(projectID int64, milestones []milestone) []d
 			UpdatedAt:   milestone.UpdatedAt,
 		})
 	}
+
 	return summaries
 }
 
@@ -61,6 +63,7 @@ func gitlabSummaryExcerpt(text string) string {
 	if len(trimmed) <= 240 {
 		return trimmed
 	}
+
 	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
@@ -70,5 +73,6 @@ func gitlabSourceLabels(labels []string) []string {
 	}
 	clone := append([]string(nil), labels...)
 	sort.Strings(clone)
+
 	return clone
 }

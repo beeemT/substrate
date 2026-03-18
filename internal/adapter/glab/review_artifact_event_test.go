@@ -17,6 +17,7 @@ type glabArtifactEventRepo struct {
 
 func (r *glabArtifactEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
 	r.events = append(r.events, e)
+
 	return nil
 }
 
@@ -30,6 +31,7 @@ func (r *glabArtifactEventRepo) ListByType(_ context.Context, eventType string, 
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 
@@ -43,6 +45,7 @@ func (r *glabArtifactEventRepo) ListByWorkspaceID(_ context.Context, workspaceID
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 

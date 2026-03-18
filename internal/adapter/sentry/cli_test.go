@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,7 @@ func writeCLIExecutable(t *testing.T, dir, name, content string) string {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
+
 	return path
 }
 
@@ -45,11 +47,13 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 		seenName = name
 		seenArgs = append([]string(nil), args...)
 		seenEnv = append([]string(nil), env...)
+
 		return []byte("HTTP/2 200\nLink: <https://ignored>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"\nContent-Type: application/json\n\n[" + string(mustJSON(t, issuePayload(issue, 3))) + "]"), nil
 	}
 
 	a, err := newWithDeps(context.Background(), config.SentryConfig{BaseURL: "https://sentry.example.com/self-hosted/api/0", Organization: "acme", Projects: []string{"web"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected HTTP request: %s", req.URL.String())
+
 		return nil, nil
 	}), runner)
 	if err != nil {
@@ -79,7 +83,7 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 	if got := endpoint.Query().Get("query"); got != "project:web" {
 		t.Fatalf("query = %q, want %q", got, "project:web")
 	}
-	if !containsEnv(seenEnv, "SENTRY_URL=https://sentry.example.com/self-hosted") {
+	if !slices.Contains(seenEnv, "SENTRY_URL=https://sentry.example.com/self-hosted") {
 		t.Fatalf("runner env = %#v, want SENTRY_URL for self-hosted root", seenEnv)
 	}
 	if len(res.Items) != 1 || res.Items[0].Identifier != "SEN-101" {
@@ -111,14 +115,6 @@ func mustJSON(t *testing.T, value any) []byte {
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	return payload
-}
 
-func containsEnv(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return payload
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // InterruptedModel handles the interrupted session display.
-type InterruptedModel struct {
+type InterruptedModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	title     string
 	subPlanID string
 	sessionID string
@@ -44,28 +44,31 @@ func (m InterruptedModel) KeybindHints() []KeybindHint {
 			{Key: "a", Label: "Abandon"},
 		}
 	}
+
 	return []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
 }
 
 func (m InterruptedModel) Update(msg tea.Msg) (InterruptedModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		if !m.canAct {
 			return m, nil
 		}
 		switch msg.String() {
 		case "r":
 			sID, spID := m.sessionID, m.subPlanID
+
 			return m, func() tea.Msg {
 				return ResumeSessionMsg{OldSessionID: sID, SubPlanID: spID}
 			}
 		case "a":
 			sID := m.sessionID
+
 			return m, func() tea.Msg {
 				return ConfirmAbandonMsg{SessionID: sID}
 			}
 		}
 	}
+
 	return m, nil
 }
 
@@ -100,5 +103,6 @@ func (m InterruptedModel) View() string {
 		lines = append(lines, m.styles.Muted.Render("(Owned by another instance — take over not yet available)"))
 	}
 	lines = append(lines, renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width))
+
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

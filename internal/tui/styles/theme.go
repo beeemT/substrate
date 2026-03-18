@@ -135,6 +135,7 @@ type Styles struct {
 // NewStyles builds a Styles from the given Theme.
 func NewStyles(t Theme) Styles {
 	chrome := DefaultChromeMetrics
+
 	return Styles{
 		Theme:  t,
 		Chrome: chrome,
@@ -214,16 +215,19 @@ func NewStyles(t Theme) Styles {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.ToolBorder)).
 			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
-		SettingsText:              lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
-		SettingsTextStrong:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
-		SettingsBreadcrumb:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)),
-		SettingsSection:           lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)).Bold(true),
-		SettingsSelectionActive:   lipgloss.NewStyle().Background(lipgloss.Color(t.SelectionActive)).Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
-		SettingsSelectionInactive: lipgloss.NewStyle().Background(lipgloss.Color(t.SelectionInactive)).Foreground(lipgloss.Color(t.SettingsSelectionInactiveText)).Bold(true),
-		ScrollbarTrack:            lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarTrack)),
-		ScrollbarThumb:            lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarThumb)),
-		ScrollbarThumbFocused:     lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarThumbFocused)),
-		DiffAdd:                   lipgloss.NewStyle().Foreground(lipgloss.Color(t.DiffAdd)),
-		DiffDel:                   lipgloss.NewStyle().Foreground(lipgloss.Color(t.DiffDel)),
+		SettingsText:            lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
+		SettingsTextStrong:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
+		SettingsBreadcrumb:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)),
+		SettingsSection:         lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)).Bold(true),
+		SettingsSelectionActive: lipgloss.NewStyle().Background(lipgloss.Color(t.SelectionActive)).Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
+		SettingsSelectionInactive: lipgloss.NewStyle().
+			Background(lipgloss.Color(t.SelectionInactive)).
+			Foreground(lipgloss.Color(t.SettingsSelectionInactiveText)).
+			Bold(true),
+		ScrollbarTrack:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarTrack)),
+		ScrollbarThumb:        lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarThumb)),
+		ScrollbarThumbFocused: lipgloss.NewStyle().Foreground(lipgloss.Color(t.ScrollbarThumbFocused)),
+		DiffAdd:               lipgloss.NewStyle().Foreground(lipgloss.Color(t.DiffAdd)),
+		DiffDel:               lipgloss.NewStyle().Foreground(lipgloss.Color(t.DiffDel)),
 	}
 }

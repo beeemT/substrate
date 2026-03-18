@@ -10,6 +10,8 @@ import (
 )
 
 // FailedModel shows failure details.
+//
+//nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type FailedModel struct {
 	title   string
 	reason  string
@@ -49,5 +51,6 @@ func (m FailedModel) View() string {
 		lines = append(lines, m.styles.Subtitle.Render(m.details), "")
 	}
 	lines = append(lines, components.RenderKeyHints(m.styles, []components.KeyHint{{Key: "↑↓", Label: "Scroll"}}, "  "))
+
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

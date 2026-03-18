@@ -25,6 +25,7 @@ func (c *SentryConfig) UnmarshalYAML(value *yaml.Node) error {
 		Organization:    raw.Organization,
 		Projects:        raw.Projects,
 	}
+
 	return nil
 }
 
@@ -38,7 +39,9 @@ func sentryBaseURLExplicit(node *yaml.Node) bool {
 		if key.Value != "base_url" {
 			continue
 		}
+
 		return strings.TrimSpace(value.Value) != ""
 	}
+
 	return false
 }

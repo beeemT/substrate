@@ -48,6 +48,7 @@ func (r *workItemRow) toDomain() (domain.Session, error) {
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("updated_at: %w", err)
 	}
+
 	return domain.Session{
 		ID:            r.ID,
 		WorkspaceID:   r.WorkspaceID,
@@ -79,6 +80,7 @@ func rowFromWorkItem(item domain.Session) (workItemRow, error) {
 	if err != nil {
 		return workItemRow{}, fmt.Errorf("marshal metadata: %w", err)
 	}
+
 	return workItemRow{
 		ID:            item.ID,
 		WorkspaceID:   item.WorkspaceID,
@@ -110,6 +112,7 @@ func (r SessionRepo) Get(ctx context.Context, id string) (domain.Session, error)
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM work_items WHERE id = ?`, id); err != nil {
 		return domain.Session{}, fmt.Errorf("get work item %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -153,6 +156,7 @@ func (r SessionRepo) List(ctx context.Context, filter repository.SessionFilter) 
 		}
 		items = append(items, item)
 	}
+
 	return items, nil
 }
 
@@ -171,6 +175,7 @@ func (r SessionRepo) Create(ctx context.Context, item domain.Session) error {
 	if err != nil {
 		return fmt.Errorf("create work item %s: %w", item.ID, err)
 	}
+
 	return nil
 }
 
@@ -196,6 +201,7 @@ func (r SessionRepo) Update(ctx context.Context, item domain.Session) error {
 	if n == 0 {
 		return fmt.Errorf("update work item %s: %w", item.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -204,5 +210,6 @@ func (r SessionRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete work item %s: %w", id, err)
 	}
+
 	return nil
 }

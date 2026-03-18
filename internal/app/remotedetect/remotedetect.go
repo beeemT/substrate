@@ -2,6 +2,7 @@ package remotedetect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -35,7 +36,7 @@ func (p Platform) String() string {
 
 func DetectPlatform(ctx context.Context, dir string, cfg *config.Config) (Platform, error) {
 	if strings.TrimSpace(dir) == "" {
-		return PlatformUnknown, fmt.Errorf("workspace directory is empty")
+		return PlatformUnknown, errors.New("workspace directory is empty")
 	}
 
 	remoteName, remoteURL, err := resolveRemote(ctx, dir)
@@ -83,6 +84,7 @@ func resolveRemote(ctx context.Context, dir string) (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("get git remote url for %s: %w", chosen, err)
 	}
+
 	return chosen, chosenURL, nil
 }
 
@@ -93,6 +95,7 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
+
 	return strings.TrimSpace(string(out)), nil
 }
 
@@ -102,6 +105,7 @@ func remoteHost(remoteURL string) string {
 		if err != nil {
 			return ""
 		}
+
 		return normalizeHost(parsed.Hostname())
 	}
 
@@ -116,6 +120,7 @@ func remoteHost(remoteURL string) string {
 		if colon := strings.Index(trimmed, ":"); colon >= 0 {
 			trimmed = trimmed[:colon]
 		}
+
 		return normalizeHost(trimmed)
 	}
 
@@ -125,6 +130,7 @@ func remoteHost(remoteURL string) string {
 func normalizeHost(host string) string {
 	host = strings.TrimSpace(strings.ToLower(host))
 	host = strings.TrimSuffix(host, ".")
+
 	return host
 }
 
@@ -138,6 +144,7 @@ func isKnownGitHubHost(host string, cfg *config.Config) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -153,9 +160,10 @@ func configuredGitHubHosts(cfg *config.Config) []string {
 	if host == "api.github.com" {
 		hosts = append(hosts, "github.com")
 	}
-	if strings.HasPrefix(host, "api.") {
-		hosts = append(hosts, strings.TrimPrefix(host, "api."))
+	if after, ok := strings.CutPrefix(host, "api."); ok {
+		hosts = append(hosts, after)
 	}
+
 	return hosts
 }
 
@@ -178,6 +186,7 @@ func isKnownGitLabHost(host string, cfg *config.Config) (bool, error) {
 			return true, nil
 		}
 	}
+
 	return false, nil
 }
 
@@ -190,6 +199,7 @@ func hostFromBaseURL(rawURL string) string {
 	if err != nil {
 		return ""
 	}
+
 	return normalizeHost(parsed.Hostname())
 }
 
@@ -209,6 +219,7 @@ func loadGlabKnownHosts() ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, fmt.Errorf("read glab config: %w", err)
 	}
 
@@ -222,5 +233,6 @@ func loadGlabKnownHosts() ([]string, error) {
 		hosts = append(hosts, normalizeHost(host))
 	}
 	sort.Strings(hosts)
+
 	return hosts, nil
 }

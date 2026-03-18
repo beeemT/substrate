@@ -73,19 +73,17 @@ func (h HelpOverlay) View() string {
 
 	sb.WriteString(h.st.Subtitle.Render("Global") + "\n")
 	for _, e := range global {
-		sb.WriteString(fmt.Sprintf("  %-18s %s\n", h.st.KeybindAccent.Render(e.key), e.label))
+		fmt.Fprintf(&sb, "  %-18s %s\n", h.st.KeybindAccent.Render(e.key), e.label)
 	}
 
 	for _, sec := range panels {
 		sb.WriteString("\n" + h.st.Subtitle.Render(sec.name) + "\n")
 		for _, e := range sec.entries {
-			sb.WriteString(fmt.Sprintf("  %-18s %s\n", h.st.KeybindAccent.Render(e.key), e.label))
+			fmt.Fprintf(&sb, "  %-18s %s\n", h.st.KeybindAccent.Render(e.key), e.label)
 		}
 	}
 
 	sb.WriteString("\n" + h.st.Muted.Render("Esc  close"))
 
-	return h.st.OverlayFrame.Copy().
-		Padding(1, 3).
-		Render(sb.String())
+	return h.st.OverlayFrame.Padding(1, 3).Render(sb.String())
 }

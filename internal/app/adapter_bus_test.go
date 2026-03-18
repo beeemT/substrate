@@ -40,6 +40,7 @@ func (f *fakeWorkItemAdapter) UpdateState(context.Context, string, domain.Tracke
 func (f *fakeWorkItemAdapter) AddComment(context.Context, string, string) error { return nil }
 func (f *fakeWorkItemAdapter) OnEvent(_ context.Context, evt domain.SystemEvent) error {
 	f.events <- evt
+
 	return nil
 }
 
@@ -51,6 +52,7 @@ type fakeRepoLifecycleAdapter struct {
 func (f *fakeRepoLifecycleAdapter) Name() string { return f.name }
 func (f *fakeRepoLifecycleAdapter) OnEvent(_ context.Context, evt domain.SystemEvent) error {
 	f.events <- evt
+
 	return nil
 }
 
@@ -77,6 +79,7 @@ func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkIte
 			}
 		}(lifecycleAdapter, sub.C)
 	}
+
 	return nil
 }
 
@@ -112,7 +115,7 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 	if err := bus.Publish(context.Background(), worktreeCreated); err != nil {
 		t.Fatalf("publish worktree created: %v", err)
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-work.events:
 		case <-life.events:

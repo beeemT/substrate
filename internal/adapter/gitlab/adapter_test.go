@@ -25,6 +25,7 @@ func jsonResponse(t *testing.T, status int, v any) *http.Response {
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
 	}
+
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(b)))}
 }
 
@@ -34,6 +35,7 @@ func makeAdapter(t *testing.T, fn roundTripFunc) *GitlabAdapter {
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
+
 	return a
 }
 
@@ -43,6 +45,7 @@ func makeAdapterWithConfig(t *testing.T, cfg config.GitlabConfig, fn roundTripFu
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
+
 	return a
 }
 
@@ -70,6 +73,7 @@ func TestNewAllowsIssueBrowsingWithoutProjectID(t *testing.T) {
 	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls = append(calls, req.Method+" "+req.URL.Path)
 		t.Fatalf("unexpected request during constructor: %s %s", req.Method, req.URL.String())
+
 		return nil, nil
 	}))
 	if len(calls) != 0 {
@@ -109,6 +113,7 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 		if req.URL.Query().Get("per_page") != "5" {
 			t.Fatalf("per_page = %q, want 5", req.URL.Query().Get("per_page"))
 		}
+
 		return jsonResponse(t, http.StatusOK, []map[string]any{{
 			"iid":         42,
 			"project_id":  5678,
@@ -165,6 +170,7 @@ func TestListSelectableInitiativesUsesExplicitGroup(t *testing.T) {
 		if req.URL.Path != "/api/v4/groups/55/epics" {
 			t.Fatalf("path = %s, want /api/v4/groups/55/epics", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, []map[string]any{{"iid": 12, "title": "Epic title", "description": "Epic desc", "state": "opened"}}), nil
 	}))
 	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeInitiatives, Group: "55"})
@@ -212,6 +218,7 @@ func TestUpdateStateNoMappingNoop(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 1, "kind": "group"}}), nil
 		}
 		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+
 		return nil, nil
 	}))
 	if err != nil {
@@ -230,6 +237,7 @@ func TestPlanApprovedAddsComments(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 55, "kind": "group"}}), nil
 		case "/api/v4/projects/1234/issues/42/notes", "/api/v4/projects/1234/issues/43/notes":
 			commentPaths = append(commentPaths, req.URL.Path)
+
 			return jsonResponse(t, http.StatusCreated, map[string]any{"id": 1}), nil
 		case "/api/v4/projects/1234/issues/42":
 			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42, "title": "Issue 42", "state": "opened"}), nil
@@ -254,6 +262,7 @@ func TestResolveProjectMilestoneUsesDirectEndpoint(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, map[string]any{"id": 77, "title": "Platform", "description": "Milestone desc", "web_url": "https://gitlab.example.com/groups/acme/-/milestones/77"}), nil
 		case "/api/v4/projects/1234/milestones":
 			t.Fatal("unexpected paginated milestone list fetch")
+
 			return nil, nil
 		default:
 			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
@@ -287,6 +296,7 @@ func TestResolveInitiativeEpicUsesDirectEndpoint(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 12, "title": "Epic title", "description": "Epic desc", "web_url": "https://gitlab.example.com/groups/acme/-/epics/12"}), nil
 		case "/api/v4/groups/55/epics":
 			t.Fatal("unexpected paginated epic list fetch")
+
 			return nil, nil
 		default:
 			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
@@ -392,6 +402,7 @@ func TestResolveIssueUsesProjectQualifiedSelectionID(t *testing.T) {
 func TestResolveIssueSelectionWithoutProjectIDFails(t *testing.T) {
 	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+
 		return nil, nil
 	}))
 	_, err := a.Resolve(context.Background(), adapter.Selection{Scope: domain.ScopeIssues, ItemIDs: []string{"42"}})
@@ -403,6 +414,7 @@ func TestResolveIssueSelectionWithoutProjectIDFails(t *testing.T) {
 func TestListSelectableIssuesRejectsUnsupportedView(t *testing.T) {
 	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+
 		return nil, nil
 	}))
 	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "mentioned"})

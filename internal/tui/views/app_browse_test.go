@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -39,12 +40,14 @@ func (a *browseTestAdapter) ListSelectable(_ context.Context, opts adapter.ListO
 	if a.listSelectable != nil {
 		return a.listSelectable(opts)
 	}
+
 	return &adapter.ListResult{}, nil
 }
 
 func (a *browseTestAdapter) Resolve(_ context.Context, sel adapter.Selection) (domain.Session, error) {
 	a.resolved = append(a.resolved, sel)
-	return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("%s-session", a.name), Title: a.name, State: domain.SessionIngested}, nil
+
+	return domain.Session{ID: domain.NewID(), ExternalID: a.name + "-session", Title: a.name, State: domain.SessionIngested}, nil
 }
 
 func (a *browseTestAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
@@ -52,7 +55,7 @@ func (a *browseTestAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (
 }
 
 func (a *browseTestAdapter) Fetch(_ context.Context, _ string) (domain.Session, error) {
-	return domain.Session{}, fmt.Errorf("not implemented")
+	return domain.Session{}, errors.New("not implemented")
 }
 
 func (a *browseTestAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error {
@@ -89,6 +92,7 @@ func loadedMsg(items ...adapter.ListItem) issueListLoadedMsg {
 		page.Items = append(page.Items, item)
 		pages[item.Provider] = page
 	}
+
 	return issueListLoadedMsg{pages: pages}
 }
 
@@ -106,8 +110,10 @@ func runOverlayCmd(t *testing.T, cmd tea.Cmd) []tea.Msg {
 			}
 			msgs = append(msgs, batchCmd())
 		}
+
 		return msgs
 	}
+
 	return []tea.Msg{msg}
 }
 
@@ -120,6 +126,7 @@ func applyOverlayCmds(t *testing.T, overlay NewSessionOverlay, cmd tea.Cmd) NewS
 			overlay = applyOverlayCmds(t, overlay, follow)
 		}
 	}
+
 	return overlay
 }
 
@@ -136,6 +143,7 @@ func applyAppCmds(t *testing.T, app App, cmd tea.Cmd) App {
 			app = applyAppCmds(t, app, follow)
 		}
 	}
+
 	return app
 }
 
@@ -258,6 +266,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 		if opts.View == "all" {
 			title = "All issues"
 		}
+
 		return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-" + opts.View, Provider: "github", Title: title}}}, nil
 	}
 
@@ -353,11 +362,12 @@ func TestNewSessionOverlayReopenIgnoresStaleLoadFromPriorSession(t *testing.T) {
 			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}},
 		},
 	}
-	githubAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+	githubAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
 		title := "Fresh"
 		if len(githubAdapter.listCalls) == 1 {
 			title = "Stale"
 		}
+
 		return &adapter.ListResult{Items: []adapter.ListItem{{ID: fmt.Sprintf("gh-%d", len(githubAdapter.listCalls)), Provider: "github", Title: title}}}, nil
 	}
 
@@ -506,7 +516,7 @@ func TestNewSessionOverlayInfiniteScrollUsesOffsetPagination(t *testing.T) {
 			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, SupportsOffset: true},
 		},
 	}
-	githubAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+	githubAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
 		switch len(githubAdapter.listCalls) {
 		case 1:
 			return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-1", Provider: "github", Title: "First"}}, HasMore: true}, nil
@@ -554,7 +564,7 @@ func TestNewSessionOverlayInfiniteScrollUsesCursorPagination(t *testing.T) {
 			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, SupportsCursor: true},
 		},
 	}
-	linearAdapter.listSelectable = func(opts adapter.ListOpts) (*adapter.ListResult, error) {
+	linearAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
 		switch len(linearAdapter.listCalls) {
 		case 1:
 			return &adapter.ListResult{Items: []adapter.ListItem{{ID: "lin-1", Provider: "linear", Title: "First"}}, HasMore: true, NextCursor: "cursor-2"}, nil
@@ -1018,7 +1028,7 @@ func TestNewSessionOverlayBrowsePanesShareBottomBorderRow(t *testing.T) {
 			assertOverlayFits(t, view, tc.width, tc.height)
 
 			aligned := false
-			for _, line := range strings.Split(view, "\n") {
+			for line := range strings.SplitSeq(view, "\n") {
 				if strings.Count(line, "╰") == 2 && strings.Count(line, "╯") == 2 {
 					aligned = true
 					break
@@ -1279,7 +1289,6 @@ func TestNewSessionOverlayClearsRepoFilterAcrossSentryBoundary(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			repoAdapter := &browseTestAdapter{
 				name:         tc.repoHost,
@@ -1663,6 +1672,7 @@ func TestNewSessionOverlayCtrlOOpensFocusedItemURL(t *testing.T) {
 	overlay.openBrowserCmd = func(url string) tea.Cmd {
 		return func() tea.Msg {
 			openedURL = url
+
 			return nil
 		}
 	}
@@ -1745,7 +1755,7 @@ func (manualTestAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-c
 }
 
 func (manualTestAdapter) Fetch(_ context.Context, _ string) (domain.Session, error) {
-	return domain.Session{}, fmt.Errorf("not implemented")
+	return domain.Session{}, errors.New("not implemented")
 }
 
 func (manualTestAdapter) UpdateState(_ context.Context, _ string, _ domain.TrackerState) error {

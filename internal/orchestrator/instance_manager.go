@@ -119,12 +119,14 @@ func (m *InstanceManager) Reconcile(ctx context.Context) error {
 			if firstErr == nil {
 				firstErr = err
 			}
+
 			continue
 		}
 		slog.Info("reconciled orphaned session as interrupted", "session_id", s.ID)
 
 		m.publishInterrupted(ctx, s.ID)
 	}
+
 	return firstErr
 }
 
@@ -144,6 +146,7 @@ func (m *InstanceManager) GracefulShutdown(ctx context.Context) error {
 	for _, s := range running {
 		if err := m.sessionSvc.Interrupt(ctx, s.ID); err != nil {
 			slog.Error("failed to interrupt session during shutdown", "session_id", s.ID, "error", err)
+
 			continue
 		}
 		m.publishInterrupted(ctx, s.ID)
@@ -153,6 +156,7 @@ func (m *InstanceManager) GracefulShutdown(ctx context.Context) error {
 	if err := m.instanceSvc.Delete(ctx, m.instanceID); err != nil {
 		return fmt.Errorf("delete instance on shutdown: %w", err)
 	}
+
 	return nil
 }
 

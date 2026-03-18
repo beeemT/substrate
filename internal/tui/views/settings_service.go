@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -36,6 +37,11 @@ const (
 	SettingsFieldSecret
 	SettingsFieldStringList
 	SettingsFieldKeyValue
+)
+const (
+	statusWarning              = "warning"
+	statusEmpty                = "empty"
+	hintInheritsHarnessDefault = "inherits harness.default"
 )
 
 type SettingsField struct {
@@ -92,6 +98,7 @@ type SettingsLoginResult struct {
 
 func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
 	diagnostics := app.DiagnoseHarnesses(cfg, "")
+
 	return SettingsSnapshot{
 		Sections:       buildSettingsSections(cfg),
 		Providers:      buildProviderStatuses(cfg),
@@ -158,6 +165,7 @@ func (s *SettingsService) Snapshot(cfg *config.Config) (SettingsSnapshot, error)
 		return SettingsSnapshot{}, err
 	}
 	diagnostics := app.DiagnoseHarnesses(cfg, "")
+
 	return SettingsSnapshot{
 		Sections:       buildSettingsSections(cfg),
 		Providers:      buildProviderStatuses(cfg),
@@ -171,7 +179,8 @@ func (s *SettingsService) SaveRaw(raw string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, []byte(raw), 0o644)
+
+	return os.WriteFile(cfgPath, []byte(raw), 0o600)
 }
 
 func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) {
@@ -183,6 +192,7 @@ func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) 
 	defer os.Remove(tmpPath)
 	if _, err := tmp.WriteString(raw); err != nil {
 		_ = tmp.Close()
+
 		return nil, fmt.Errorf("write temp YAML config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -195,6 +205,7 @@ func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) 
 	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
 		return nil, err
 	}
+
 	return cfg, nil
 }
 
@@ -213,6 +224,7 @@ func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config
 	if err != nil {
 		return "", nil, fmt.Errorf("encode YAML config: %w", err)
 	}
+
 	return string(data), cfg, nil
 }
 
@@ -232,6 +244,7 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 		_ = current.Foreman.Stop(ctx)
 	}
 	reloaded.SettingsData.RawYAML = raw
+
 	return SettingsApplyResult{Services: reloaded, Message: "Settings applied"}, nil
 }
 
@@ -247,68 +260,79 @@ func (s *SettingsService) TestProvider(ctx context.Context, provider string, sec
 	case "linear":
 		status := buildProviderStatuses(cfg)[provider]
 		if strings.TrimSpace(cfg.Adapters.Linear.APIKey) == "" {
-			return status, fmt.Errorf("linear api key is required")
+			return status, errors.New("linear api key is required")
 		}
 		client := linearadapter.New(cfg.Adapters.Linear)
 		_, err := client.ListSelectable(ctx, adapter.ListOpts{Scope: domain.ScopeIssues, Limit: 1})
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		status.Connected = true
 		status.LastError = ""
+
 		return status, nil
-	case "gitlab":
+	case providerGitlab:
 		status := buildProviderStatuses(cfg)[provider]
 		client, err := gitlabadapter.New(ctx, cfg.Adapters.GitLab)
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		_, err = client.ListSelectable(ctx, adapter.ListOpts{Scope: domain.ScopeIssues, Limit: 1})
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		status.Connected = true
 		status.LastError = ""
+
 		return status, nil
-	case "sentry":
+	case providerSentry:
 		status := buildProviderStatuses(cfg)[provider]
 		client, err := sentryadapter.New(ctx, cfg.Adapters.Sentry)
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		_, err = client.ListSelectable(ctx, adapter.ListOpts{Scope: domain.ScopeIssues, Limit: 1})
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		status.Connected = true
 		status.LastError = ""
+
 		return status, nil
-	case "github":
+	case providerGithub:
 		status := buildProviderStatuses(cfg)[provider]
 		client, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		_, err = client.ListSelectable(ctx, adapter.ListOpts{Scope: domain.ScopeIssues, Limit: 1})
 		if err != nil {
 			status.Connected = false
 			status.LastError = err.Error()
+
 			return status, err
 		}
 		status.Connected = true
 		status.LastError = ""
+
 		return status, nil
 	default:
 		return ProviderStatus{}, fmt.Errorf("unknown provider %q", provider)
@@ -340,10 +364,10 @@ func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness s
 	dirty := false
 	message := strings.TrimSpace(result.Message)
 	switch provider {
-	case "github":
+	case providerGithub:
 		token := strings.TrimSpace(result.Credentials["token"])
 		if token == "" {
-			return SettingsLoginResult{}, fmt.Errorf("github login did not return a token")
+			return SettingsLoginResult{}, errors.New("github login did not return a token")
 		}
 		cfg.Adapters.GitHub.Token = token
 		cfg.Adapters.GitHub.TokenRef = secretRef("github.token")
@@ -351,13 +375,14 @@ func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness s
 		if message == "" {
 			message = "github login complete"
 		}
-	case "sentry":
+	case providerSentry:
 		if message == "" {
 			message = "sentry login complete"
 		}
 	default:
 		return SettingsLoginResult{}, fmt.Errorf("login not implemented for provider %q", provider)
 	}
+
 	return SettingsLoginResult{Snapshot: settingsSnapshotFromConfig(cfg), Message: message, Dirty: dirty}, nil
 }
 
@@ -366,7 +391,7 @@ func providerLoginInputs(cfg *config.Config, provider string) map[string]string 
 		return nil
 	}
 	switch provider {
-	case "sentry":
+	case providerSentry:
 		if rawBaseURL := strings.TrimSpace(cfg.Adapters.Sentry.BaseURL); rawBaseURL != "" {
 			return map[string]string{"base_url": strings.TrimSpace(config.SentryRootURL(rawBaseURL))}
 		}
@@ -375,6 +400,7 @@ func providerLoginInputs(cfg *config.Config, provider string) map[string]string 
 		if rootURL == "" {
 			return nil
 		}
+
 		return map[string]string{"base_url": rootURL}
 	default:
 		return nil
@@ -386,6 +412,7 @@ func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
 	if !cfg.BaseURLExplicit && config.NormalizeSentryBaseURL(baseURL) == config.DefaultSentryBaseURL {
 		return ""
 	}
+
 	return baseURL
 }
 
@@ -470,6 +497,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	if err != nil {
 		return viewsServicesReload{}, err
 	}
+
 	return viewsServicesReload{
 		ConfigPath:   cfgPath,
 		SessionsDir:  sessionsDir,
@@ -511,6 +539,7 @@ func harnessRunnerForProvider(harness string, svcs Services) adapter.HarnessActi
 		agentHarness = svcs.ForemanHarness()
 	}
 	runner, _ := agentHarness.(adapter.HarnessActionRunner)
+
 	return runner
 }
 
@@ -551,11 +580,11 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields:      []SettingsField{{Section: "foreman", Key: "question_timeout", Label: "Question Timeout", Type: SettingsFieldString, Value: cfg.Foreman.QuestionTimeout}},
 		},
 		{
-			ID:          "harness",
+			ID:          settingHarness,
 			Title:       "Harness Routing",
 			Description: "Select which harness runs each phase",
 			Fields: []SettingsField{
-				{Section: "harness", Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex"}, Required: true},
+				{Section: settingHarness, Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex"}, Required: true},
 				{Section: "harness.phase", Key: "planning", Label: "Planning Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Planning), Options: []string{"ohmypi", "claude-code", "codex"}},
 				{Section: "harness.phase", Key: "implementation", Label: "Implementation Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Implementation), Options: []string{"ohmypi", "claude-code", "codex"}},
 				{Section: "harness.phase", Key: "review", Label: "Review Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Review), Options: []string{"ohmypi", "claude-code", "codex"}},
@@ -665,6 +694,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		sections[i].Status = sectionStatus(sections[i])
 	}
 	annotateHarnessWarnings(sections, cfg, app.DiagnoseHarnesses(cfg, ""))
+
 	return sections
 }
 
@@ -676,7 +706,7 @@ func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, dia
 	routedHarnesses := configuredPhaseHarnesses(cfg)
 	for i := range sections {
 		switch sections[i].ID {
-		case "harness":
+		case settingHarness:
 			setSectionWarning(&sections[i], diagnostics.PhaseWarnings())
 		case "harness.ohmypi":
 			setHarnessSectionWarning(&sections[i], config.HarnessOhMyPi, routedHarnesses, harnessWarnings[config.HarnessOhMyPi])
@@ -704,6 +734,7 @@ func configuredPhaseHarnesses(cfg *config.Config) map[config.HarnessName]bool {
 		}
 		harnesses[harness] = true
 	}
+
 	return harnesses
 }
 
@@ -718,7 +749,7 @@ func setSectionWarning(section *SettingsSection, warnings []string) {
 	if section == nil || len(warnings) == 0 {
 		return
 	}
-	section.Status = "warning"
+	section.Status = statusWarning
 	section.Error = strings.Join(warnings, "\n")
 }
 
@@ -731,21 +762,21 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 			AuthSource:  secretStatus(cfg.Adapters.Linear.APIKeyRef, cfg.Adapters.Linear.APIKey),
 			Description: "Uses OS keychain-backed API key",
 		},
-		"gitlab": {
+		providerGitlab: {
 			Title:       "GitLab",
 			Configured:  cfg.Adapters.GitLab.TokenRef != "" || strings.TrimSpace(cfg.Adapters.GitLab.Token) != "",
 			Connected:   false,
 			AuthSource:  secretStatus(cfg.Adapters.GitLab.TokenRef, cfg.Adapters.GitLab.Token),
 			Description: "Uses OS keychain-backed token",
 		},
-		"sentry": {
+		providerSentry: {
 			Title:       "Sentry",
 			Configured:  config.SentryAuthConfigured(cfg.Adapters.Sentry),
 			Connected:   false,
 			AuthSource:  config.SentryAuthSource(cfg.Adapters.Sentry),
 			Description: "Uses keychain, environment, or sentry CLI authentication",
 		},
-		"github": {
+		providerGithub: {
 			Title:       "GitHub",
 			Configured:  config.GitHubAuthConfigured(cfg.Adapters.GitHub),
 			Connected:   false,
@@ -753,6 +784,7 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 			Description: "Uses OS keychain-backed token or gh CLI fallback",
 		},
 	}
+
 	return statuses
 }
 
@@ -765,6 +797,7 @@ func configFromSections(sections []SettingsSection) (*config.Config, error) {
 			}
 		}
 	}
+
 	return cfg, nil
 }
 
@@ -894,6 +927,7 @@ func applyField(cfg *config.Config, field SettingsField) error {
 	case "repos.doc_paths":
 		cfg.Repos = parseRepos(value)
 	}
+
 	return nil
 }
 
@@ -910,6 +944,7 @@ func validateSettingsConfig(cfg *config.Config) error {
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
+
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -931,6 +966,7 @@ func validateSettingsConfig(cfg *config.Config) error {
 			return fmt.Errorf("invalid gitlab base_url: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -940,6 +976,7 @@ func findSection(sections []SettingsSection, id string) SettingsSection {
 			return sec
 		}
 	}
+
 	return SettingsSection{}
 }
 
@@ -949,6 +986,7 @@ func sectionStatus(section SettingsSection) string {
 			return "incomplete"
 		}
 	}
+
 	return "configured"
 }
 
@@ -967,7 +1005,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "commit.message_format":
 		return "Chooses how commit messages are generated for agent-authored commits.", "ai-generated"
 	case "commit.message_template":
-		return "Custom commit message template used only when the message format is set to custom.", "empty"
+		return "Custom commit message template used only when the message format is set to custom.", statusEmpty
 	case "plan.max_parse_retries":
 		return "Maximum retries for repairing malformed plan output before planning fails.", "2"
 	case "review.pass_threshold":
@@ -979,85 +1017,85 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "harness.default":
 		return "Primary harness used whenever a phase-specific override is not set.", "ohmypi"
 	case "harness.phase.planning":
-		return "Overrides the harness used for the planning phase.", "inherits harness.default"
+		return "Overrides the harness used for the planning phase.", hintInheritsHarnessDefault
 	case "harness.phase.implementation":
-		return "Overrides the harness used for the implementation phase.", "inherits harness.default"
+		return "Overrides the harness used for the implementation phase.", hintInheritsHarnessDefault
 	case "harness.phase.review":
-		return "Overrides the harness used for the review phase.", "inherits harness.default"
+		return "Overrides the harness used for the review phase.", hintInheritsHarnessDefault
 	case "harness.phase.foreman":
-		return "Overrides the harness used for the Foreman coordination phase.", "inherits harness.default"
+		return "Overrides the harness used for the Foreman coordination phase.", hintInheritsHarnessDefault
 	case "adapters.ohmypi.bun_path":
 		return "Optional override for the Bun executable used only when Substrate launches a source bridge script instead of the packaged compiled bridge.", "auto-detect on PATH when needed"
 	case "adapters.ohmypi.bridge_path":
 		return "Optional override for the oh-my-pi bridge binary or script; leave empty to use the packaged compiled bridge.", "packaged compiled bridge"
 	case "adapters.ohmypi.thinking_level":
-		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", "empty"
+		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", statusEmpty
 	case "adapters.claude_code.binary_path":
-		return "Path to the Claude Code CLI binary.", "empty"
+		return "Path to the Claude Code CLI binary.", statusEmpty
 	case "adapters.claude_code.model":
-		return "Claude model name passed to the CLI for new sessions.", "empty"
+		return "Claude model name passed to the CLI for new sessions.", statusEmpty
 	case "adapters.claude_code.permission_mode":
-		return "Permission or sandbox mode requested from Claude Code.", "empty"
+		return "Permission or sandbox mode requested from Claude Code.", statusEmpty
 	case "adapters.claude_code.max_turns":
 		return "Upper bound on Claude Code turns for a single session.", "0"
 	case "adapters.claude_code.max_budget_usd":
 		return "Optional USD budget ceiling passed to Claude Code sessions.", "0"
 	case "adapters.codex.binary_path":
-		return "Path to the Codex CLI binary.", "empty"
+		return "Path to the Codex CLI binary.", statusEmpty
 	case "adapters.codex.model":
-		return "Codex model name used for new sessions.", "empty"
+		return "Codex model name used for new sessions.", statusEmpty
 	case "adapters.codex.approval_mode":
-		return "Approval mode passed to Codex for command execution.", "empty"
+		return "Approval mode passed to Codex for command execution.", statusEmpty
 	case "adapters.codex.full_auto":
-		return "Allows Codex to run in full-auto mode when the CLI supports it.", "false"
+		return "Allows Codex to run in full-auto mode when the CLI supports it.", settingFalse
 	case "adapters.codex.quiet":
-		return "Reduces Codex CLI verbosity in session output.", "false"
+		return "Reduces Codex CLI verbosity in session output.", settingFalse
 	case "adapters.linear.api_key_ref":
-		return "Linear API credential stored in config or the OS keychain.", "empty"
+		return "Linear API credential stored in config or the OS keychain.", statusEmpty
 	case "adapters.linear.team_id":
-		return "Default Linear team used for scoped browsing and identifier resolution.", "empty"
+		return "Default Linear team used for scoped browsing and identifier resolution.", statusEmpty
 	case "adapters.linear.assignee_filter":
-		return "Watcher assignee filter; use 'me' or a specific Linear user identifier.", "empty"
+		return "Watcher assignee filter; use 'me' or a specific Linear user identifier.", statusEmpty
 	case "adapters.linear.poll_interval":
 		return "Polling interval for Linear watch updates.", "30s"
 	case "adapters.linear.state_mappings":
-		return "Maps Substrate tracker states to Linear workflow states.", "empty"
+		return "Maps Substrate tracker states to Linear workflow states.", statusEmpty
 	case "adapters.gitlab.token_ref":
-		return "GitLab token stored in config or the OS keychain for issue and MR APIs.", "empty"
+		return "GitLab token stored in config or the OS keychain for issue and MR APIs.", statusEmpty
 	case "adapters.gitlab.base_url":
 		return "Base URL for the GitLab instance used by the adapter.", "https://gitlab.com"
 	case "adapters.gitlab.assignee":
-		return "GitLab assignee username filter used by watch polling.", "empty"
+		return "GitLab assignee username filter used by watch polling.", statusEmpty
 	case "adapters.gitlab.poll_interval":
 		return "Polling interval for GitLab watch updates.", "60s"
 	case "adapters.gitlab.state_mappings":
-		return "Maps Substrate tracker states to GitLab issue states.", "empty"
+		return "Maps Substrate tracker states to GitLab issue states.", statusEmpty
 	case "adapters.github.token_ref":
-		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", "empty"
+		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", statusEmpty
 	case "adapters.github.assignee":
-		return "GitHub assignee filter used by watch polling.", "empty"
+		return "GitHub assignee filter used by watch polling.", statusEmpty
 	case "adapters.github.poll_interval":
 		return "Polling interval for GitHub watch updates.", "60s"
 	case "adapters.github.reviewers":
-		return "Default reviewers requested when Substrate opens GitHub pull requests.", "empty"
+		return "Default reviewers requested when Substrate opens GitHub pull requests.", statusEmpty
 	case "adapters.github.labels":
-		return "Default labels applied to GitHub pull requests created by Substrate.", "empty"
+		return "Default labels applied to GitHub pull requests created by Substrate.", statusEmpty
 	case "adapters.github.state_mappings":
-		return "Maps Substrate tracker states to GitHub issue states.", "empty"
+		return "Maps Substrate tracker states to GitHub issue states.", statusEmpty
 	case "adapters.sentry.token_ref":
-		return "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.", "empty"
+		return "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.", statusEmpty
 	case "adapters.sentry.base_url":
 		return "Base URL for the Sentry API used by the adapter and sentry CLI fallback.", config.DefaultSentryBaseURL
 	case "adapters.sentry.organization":
-		return "Sentry organization slug required for browsing and resolving issues.", "empty"
+		return "Sentry organization slug required for browsing and resolving issues.", statusEmpty
 	case "adapters.sentry.projects":
-		return "Optional comma-separated Sentry project allowlist used to scope browsing.", "empty"
+		return "Optional comma-separated Sentry project allowlist used to scope browsing.", statusEmpty
 	case "adapters.glab.reviewers":
-		return "Default GitLab merge request reviewers added by the glab lifecycle adapter.", "empty"
+		return "Default GitLab merge request reviewers added by the glab lifecycle adapter.", statusEmpty
 	case "adapters.glab.labels":
-		return "Default GitLab merge request labels added by the glab lifecycle adapter.", "empty"
+		return "Default GitLab merge request labels added by the glab lifecycle adapter.", statusEmpty
 	case "repos.doc_paths":
-		return "Per-repository documentation paths injected into planning context.", "empty"
+		return "Per-repository documentation paths injected into planning context.", statusEmpty
 	default:
 		return "", ""
 	}
@@ -1067,6 +1105,7 @@ func intPtrStr(p *int) string {
 	if p == nil {
 		return ""
 	}
+
 	return strconv.Itoa(*p)
 }
 
@@ -1074,20 +1113,15 @@ func boolStr(v bool) string {
 	if v {
 		return "true"
 	}
-	return "false"
-}
 
-func int64Str(v int64) string {
-	if v == 0 {
-		return ""
-	}
-	return strconv.FormatInt(v, 10)
+	return settingFalse
 }
 
 func formatFloat(v float64) string {
 	if v == 0 {
 		return ""
 	}
+
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
@@ -1099,6 +1133,7 @@ func parseOptionalInt(fieldPath, v string) (*int, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &parsed, nil
 }
 
@@ -1111,12 +1146,8 @@ func parseInt(fieldPath, v string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s: invalid integer %q: %w", fieldPath, trimmed, err)
 	}
-	return n, nil
-}
 
-func parseInt64(v string) int64 {
-	n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-	return n
+	return n, nil
 }
 
 func parseFloat(fieldPath, v string) (float64, error) {
@@ -1128,11 +1159,13 @@ func parseFloat(fieldPath, v string) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s: invalid number %q: %w", fieldPath, trimmed, err)
 	}
+
 	return f, nil
 }
 
 func parseBool(v string) bool {
 	b, _ := strconv.ParseBool(strings.TrimSpace(v))
+
 	return b
 }
 
@@ -1145,6 +1178,7 @@ func parseFieldBool(fieldPath, v string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: invalid boolean %q: %w", fieldPath, trimmed, err)
 	}
+
 	return b, nil
 }
 
@@ -1160,6 +1194,7 @@ func parseList(v string) []string {
 			out = append(out, trimmed)
 		}
 	}
+
 	return out
 }
 
@@ -1175,6 +1210,7 @@ func parseMap(v string) map[string]string {
 	if len(result) == 0 {
 		return nil
 	}
+
 	return result
 }
 
@@ -1191,6 +1227,7 @@ func formatMap(m map[string]string) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+m[k])
 	}
+
 	return strings.Join(parts, ",")
 }
 
@@ -1206,6 +1243,7 @@ func applySecretField(value, defaultRef string) (string, string) {
 	if strings.HasPrefix(trimmed, "keychain:") {
 		return "", trimmed
 	}
+
 	return trimmed, secretRef(defaultRef)
 }
 
@@ -1216,6 +1254,7 @@ func secretDisplayValue(ref, value string) string {
 	if strings.TrimSpace(ref) != "" {
 		return ref
 	}
+
 	return ""
 }
 
@@ -1226,12 +1265,13 @@ func secretStatus(ref, value string) string {
 	if strings.TrimSpace(ref) != "" {
 		return "keychain"
 	}
+
 	return "unset"
 }
 
 func parseRepos(v string) map[string]config.RepoConfig {
 	result := map[string]config.RepoConfig{}
-	for _, entry := range strings.Split(strings.TrimSpace(v), ";") {
+	for entry := range strings.SplitSeq(strings.TrimSpace(v), ";") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
@@ -1247,6 +1287,7 @@ func parseRepos(v string) map[string]config.RepoConfig {
 	if len(result) == 0 {
 		return nil
 	}
+
 	return result
 }
 
@@ -1263,5 +1304,6 @@ func formatRepos(repos map[string]config.RepoConfig) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+strings.Join(repos[k].DocPaths, "|"))
 	}
+
 	return strings.Join(parts, ";")
 }

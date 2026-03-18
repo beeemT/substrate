@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os/exec"
 	"strings"
 
@@ -28,6 +29,13 @@ type settingsEditMode int
 const (
 	settingsEditModeText settingsEditMode = iota
 	settingsEditModeSelect
+)
+
+const (
+	settingHarness = "harness"
+	settingFalse   = "false"
+	providerLinear = "linear"
+	providerGithub = "github"
 )
 
 type settingsEditOption struct {
@@ -71,7 +79,7 @@ type settingsSyntheticGroup struct {
 	label string
 }
 
-type SettingsPage struct {
+type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
 	service            *SettingsService
 	sections           []SettingsSection
 	providerStatus     map[string]ProviderStatus
@@ -190,7 +198,7 @@ func (m *SettingsPage) fieldEditOptions(field *SettingsField) []settingsEditOpti
 		return nil
 	}
 	if field.Type == SettingsFieldBool {
-		return []settingsEditOption{{Label: "Enabled", Value: "true"}, {Label: "Disabled", Value: "false"}}
+		return []settingsEditOption{{Label: "Enabled", Value: "true"}, {Label: "Disabled", Value: settingFalse}}
 	}
 	if len(field.Options) == 0 {
 		return nil
@@ -207,7 +215,7 @@ func displaySettingsOption(field *SettingsField, value string) string {
 		return value
 	}
 	switch field.Section {
-	case "harness", "harness.phase":
+	case settingHarness, "harness.phase":
 		switch config.HarnessName(value) {
 		case config.HarnessOhMyPi:
 			return "Oh My Pi"
@@ -287,10 +295,10 @@ func (m *SettingsPage) updateFieldEditor(msg tea.KeyMsg) tea.Cmd {
 		case "down", "j", "tab", "right", "l":
 			m.cycleEditOption(1)
 			return nil
-		case "enter":
+		case keyEnter:
 			m.commitFieldEditor()
 			return nil
-		case "esc":
+		case keyEsc:
 			m.closeFieldEditor()
 			return nil
 		default:
@@ -298,10 +306,10 @@ func (m *SettingsPage) updateFieldEditor(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	switch msg.String() {
-	case "enter":
+	case keyEnter:
 		m.commitFieldEditor()
 		return nil
-	case "esc":
+	case keyEsc:
 		m.closeFieldEditor()
 		return nil
 	default:
@@ -485,16 +493,6 @@ func (m SettingsPage) visibleNavNodes() []settingsNavNode {
 	return nodes
 }
 
-func (m SettingsPage) navNodeForSection(sectionIndex int) (settingsNavNode, int, bool) {
-	nodes := m.visibleNavNodes()
-	for i, node := range nodes {
-		if !node.synthetic && node.sectionIndex == sectionIndex {
-			return node, i, true
-		}
-	}
-	return settingsNavNode{}, 0, false
-}
-
 func (m SettingsPage) navNodeForKey(key string) (settingsNavNode, int, bool) {
 	nodes := m.visibleNavNodes()
 	for i, node := range nodes {
@@ -543,9 +541,7 @@ func (m SettingsPage) layoutMetrics() (leftWidth, mainWidth, bodyHeight, detailH
 	}
 
 	leftWidth = min(desiredSidebarWidth, max(1, availableWidth-minMainWidth))
-	if leftWidth < minSidebarWidth {
-		leftWidth = minSidebarWidth
-	}
+	leftWidth = max(leftWidth, minSidebarWidth)
 	mainWidth = max(1, availableWidth-leftWidth)
 	detailHeight = min(9, max(7, bodyHeight/3))
 	return leftWidth, mainWidth, bodyHeight, detailHeight
@@ -761,9 +757,7 @@ func (m *SettingsPage) moveSection(delta int) {
 		currentPos = 0
 	}
 	nextPos := currentPos + delta
-	if nextPos < 0 {
-		nextPos = 0
-	}
+	nextPos = max(nextPos, 0)
 	if nextPos >= len(nodes) {
 		nextPos = len(nodes) - 1
 	}
@@ -895,7 +889,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		if mouseMsg.Action != tea.MouseActionPress {
 			return m, nil
 		}
-		direction := 0
+		var direction int
 		switch mouseMsg.Button {
 		case tea.MouseButtonWheelDown:
 			direction = 1
@@ -981,7 +975,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				}
 				m.focusFields()
 			}
-		case "enter":
+		case keyEnter:
 			if m.focus == settingsFocusSections {
 				if node, _, ok := m.currentSidebarNode(); ok && node.synthetic {
 					if m.expandCurrentSection() {
@@ -1002,7 +996,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		case " ":
 			if f := m.currentField(); m.fieldsFocused() && f != nil && f.Type == SettingsFieldBool {
 				if parseBool(f.Value) {
-					f.Value = "false"
+					f.Value = settingFalse
 				} else {
 					f.Value = "true"
 				}
@@ -1044,9 +1038,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 	case SettingsLoginCompletedMsg:
 		wasDirty := m.dirty
 		expanded := make(map[string]bool, len(m.expandedSections))
-		for key, value := range m.expandedSections {
-			expanded[key] = value
-		}
+		maps.Copy(expanded, m.expandedSections)
 		snapshot := msg.Snapshot
 		for name, status := range snapshot.Providers {
 			if prior, ok := m.providerStatus[name]; ok {
@@ -1119,13 +1111,13 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 	if !providerSupportsLogin(provider) {
 		return nil
 	}
-	if provider == "sentry" {
+	if provider == providerSentry {
 		cfg, err := configFromSections(m.sections)
 		if err != nil {
 			return func() tea.Msg { return ErrMsg{Err: err} }
 		}
 		inputs := providerLoginInputs(cfg, provider)
-		cmd := exec.Command("sentry", "auth", "login")
+		cmd := exec.Command("sentry", "auth", "login") //nolint:noctx // Bubble Tea command, no context available
 		cmd.Env = config.SentryCLIEnvironment(inputs["base_url"])
 		return tea.ExecProcess(cmd, func(err error) tea.Msg {
 			if err != nil {
@@ -1145,7 +1137,7 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return SettingsLoginCompletedMsg{Snapshot: result.Snapshot, Message: result.Message, Dirty: result.Dirty}
+		return SettingsLoginCompletedMsg(result)
 	}
 }
 
@@ -1275,7 +1267,8 @@ func (m SettingsPage) renderSidebarContent(width int, height int) string {
 		selectedKey = sec.ID
 	}
 	lineWidth := max(1, width-2)
-	lines := []string{m.styles.Title.Render("Settings"), ""}
+	lines := make([]string, 0, len(nodes)+2)
+	lines = append(lines, m.styles.Title.Render("Settings"), "")
 	for _, node := range nodes {
 		marker := "•"
 		if node.hasChildren {
@@ -1287,15 +1280,13 @@ func (m SettingsPage) renderSidebarContent(width int, height int) string {
 		}
 		prefix := strings.Repeat("  ", node.depth)
 		line := truncate(prefix+marker+" "+node.label, lineWidth)
-		style := lipgloss.NewStyle().Width(lineWidth)
+		style := m.styles.Label.Width(lineWidth)
 		if node.key == selectedKey {
 			if m.focus == settingsFocusSections && !m.editing {
-				style = m.styles.SettingsSelectionActive.Copy().Width(lineWidth)
+				style = m.styles.SettingsSelectionActive.Width(lineWidth)
 			} else {
-				style = m.styles.SettingsSelectionInactive.Copy().Width(lineWidth)
+				style = m.styles.SettingsSelectionInactive.Width(lineWidth)
 			}
-		} else {
-			style = m.styles.Label.Copy().Width(lineWidth)
 		}
 		lines = append(lines, style.Render(line))
 	}
@@ -1372,9 +1363,7 @@ func (m SettingsPage) renderMainScrollbar(vp viewport.Model, height int) string 
 	thumbTop := 0
 	if total > height {
 		thumbHeight = max(1, (height*height)/max(1, total))
-		if thumbHeight > height {
-			thumbHeight = height
-		}
+		thumbHeight = min(thumbHeight, height)
 		thumbRange := max(0, height-thumbHeight)
 		scrollRange := max(1, total-height)
 		if thumbRange > 0 {
@@ -1425,12 +1414,12 @@ func (m SettingsPage) renderStickySectionHeader(width int) string {
 		breadcrumb = m.sectionBreadcrumb(m.sectionCursor)
 	}
 	lines := []string{
-		m.styles.SettingsTextStrong.Copy().Width(width).Render(truncate(title, width)),
+		m.styles.SettingsTextStrong.Width(width).Render(truncate(title, width)),
 	}
 	if breadcrumb != "" {
-		lines = append(lines, m.styles.SettingsBreadcrumb.Copy().Width(width).Render(truncate(breadcrumb, width)))
+		lines = append(lines, m.styles.SettingsBreadcrumb.Width(width).Render(truncate(breadcrumb, width)))
 	}
-	lines = append(lines, m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
+	lines = append(lines, m.styles.Divider.Width(width).Render(strings.Repeat("─", max(1, width))))
 	return strings.Join(lines, "\n")
 }
 
@@ -1452,9 +1441,9 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 				if len(lines) > 0 {
 					lines = append(lines, "", "")
 				}
-				appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("═", max(1, width))))
-				appendRendered(m.styles.SettingsSection.Copy().Width(width).Render(group.label))
-				appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
+				appendRendered(m.styles.Divider.Width(width).Render(strings.Repeat("═", max(1, width))))
+				appendRendered(m.styles.SettingsSection.Width(width).Render(group.label))
+				appendRendered(m.styles.Divider.Width(width).Render(strings.Repeat("─", max(1, width))))
 				lines = append(lines, "")
 				lastSyntheticGroup = group.key
 			}
@@ -1466,33 +1455,33 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			lines = append(lines, "")
 		}
 		if depth == 0 {
-			appendRendered(m.styles.Divider.Copy().Width(width).Render(strings.Repeat("─", max(1, width))))
+			appendRendered(m.styles.Divider.Width(width).Render(strings.Repeat("─", max(1, width))))
 		}
 
 		sectionAnchors[i] = len(lines)
 		title := truncate(strings.Repeat(" ", indent)+m.sectionDisplayTitle(i), width)
-		headerStyle := m.styles.SettingsText.Copy().Width(width).Bold(true)
+		headerStyle := m.styles.SettingsText.Width(width).Bold(true)
 		if depth == 0 {
-			headerStyle = m.styles.SettingsTextStrong.Copy().Width(width)
+			headerStyle = m.styles.SettingsTextStrong.Width(width)
 		}
 		if i == m.sectionCursor {
 			if m.focus == settingsFocusSections && !m.editing {
-				headerStyle = m.styles.SettingsSelectionActive.Copy().Width(width)
+				headerStyle = m.styles.SettingsSelectionActive.Width(width)
 			} else {
-				headerStyle = m.styles.SettingsSelectionInactive.Copy().Width(width)
+				headerStyle = m.styles.SettingsSelectionInactive.Width(width)
 			}
 		}
 		appendRendered(headerStyle.Render(title))
 
 		metaPrefix := strings.Repeat(" ", indent+2)
-		metaStyle := m.styles.Muted.Copy().Width(width)
+		metaStyle := m.styles.Muted.Width(width)
 		if sec.Description != "" {
 			appendRendered(metaStyle.Render(truncate(metaPrefix+sec.Description, width)))
 		}
 		appendRendered(metaStyle.Render(truncate(metaPrefix+"Section status: "+sec.Status, width)))
 		if sec.Error != "" {
-			errorStyle := m.styles.Error.Copy().Width(width)
-			for _, line := range strings.Split(sec.Error, "\n") {
+			errorStyle := m.styles.Error.Width(width)
+			for line := range strings.SplitSeq(sec.Error, "\n") {
 				appendRendered(errorStyle.Render(truncate(metaPrefix+line, width)))
 			}
 		}
@@ -1514,15 +1503,13 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 				label += " *"
 			}
 			value := m.displayFieldValue(field)
-			rowStyle := lipgloss.NewStyle().Width(width)
+			rowStyle := m.styles.Label.Width(width)
 			if i == m.sectionCursor && j == m.fieldCursor {
 				if m.fieldsFocused() || m.editing {
-					rowStyle = m.styles.SettingsSelectionActive.Copy().Width(width)
+					rowStyle = m.styles.SettingsSelectionActive.Width(width)
 				} else {
-					rowStyle = m.styles.SettingsSelectionInactive.Copy().Width(width)
+					rowStyle = m.styles.SettingsSelectionInactive.Width(width)
 				}
-			} else {
-				rowStyle = m.styles.Label.Copy().Width(width)
 			}
 			if contentWidth < 18 {
 				rowLine := ansi.Truncate(strings.Repeat(" ", indent+2)+label+": "+value, width, "…")
@@ -1535,7 +1522,7 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			}
 			valueWidth := max(1, contentWidth-labelWidth)
 			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				m.styles.SettingsText.Copy().Width(labelWidth).Render(truncate(label, labelWidth)),
+				m.styles.SettingsText.Width(labelWidth).Render(truncate(label, labelWidth)),
 				lipgloss.NewStyle().Width(valueWidth).Render(ansi.Truncate(value, valueWidth, "…")),
 			)
 			rowLine := ansi.Truncate(strings.Repeat(" ", indent+2)+row, width, "…")
@@ -1588,7 +1575,7 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 	innerWidth := m.styles.Chrome.Callout.InnerWidth(max(1, width))
 	innerHeight := m.styles.Chrome.Callout.InnerHeight(max(1, height))
 	content := fitViewBox(strings.Join(lines, "\n"), max(1, innerWidth), max(1, innerHeight))
-	return m.styles.Callout.Copy().
+	return m.styles.Callout.
 		Width(max(1, innerWidth)).
 		Height(max(1, innerHeight)).
 		Render(content)
@@ -1628,13 +1615,13 @@ func providerForSection(section *SettingsSection) string {
 	}
 	switch section.ID {
 	case "provider.linear":
-		return "linear"
+		return providerLinear
 	case "provider.gitlab":
-		return "gitlab"
+		return providerGitlab
 	case "provider.sentry":
-		return "sentry"
+		return providerSentry
 	case "provider.github":
-		return "github"
+		return providerGithub
 	default:
 		return ""
 	}
@@ -1646,10 +1633,10 @@ func providerSupportsLogin(provider string) bool {
 
 func harnessForProvider(provider string) string {
 	switch provider {
-	case "github":
+	case providerGithub:
 		return "gh-cli"
-	case "sentry":
-		return "sentry"
+	case providerSentry:
+		return providerSentry
 	default:
 		return ""
 	}
@@ -1672,18 +1659,4 @@ func (m SettingsPage) renderProviderStatusLine(prefix string, status ProviderSta
 		parts = append(parts, m.styles.Muted.Render(" · error: "+status.LastError))
 	}
 	return ansi.Truncate(strings.Join(parts, ""), width, "…")
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

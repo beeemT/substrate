@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestContentSetMode(t *testing.T) {
 	}
 }
 
-func TestContentSetSize(t *testing.T) {
+func TestContentSetSize(_ *testing.T) {
 	m := views.NewContentModel(makeContentStyles())
 	// Must not panic
 	m.SetSize(80, 24)
@@ -66,7 +67,7 @@ func TestContentEmptyViewShowsHelperText(t *testing.T) {
 	}
 }
 
-func TestContentKeybindHints_Empty(t *testing.T) {
+func TestContentKeybindHints_Empty(_ *testing.T) {
 	m := views.NewContentModel(makeContentStyles())
 	// ContentModeEmpty is the default; KeybindHints must not panic
 	// The implementation returns nil for modes without explicit hints (default case)
@@ -118,14 +119,7 @@ func TestContentOverviewKeybindHintsExposeOverviewActions(t *testing.T) {
 		labels = append(labels, hint.Label)
 	}
 	for _, want := range []string{"Scroll", "Approve", "Changes", "Reject", "Inspect"} {
-		found := false
-		for _, label := range labels {
-			if label == want {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(labels, want) {
 			t.Fatalf("overview keybind hints = %#v, want label %q", hints, want)
 		}
 	}

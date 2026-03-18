@@ -231,13 +231,12 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		}
 
 		waveEnd := time.Now()
-		if waveComplete {
-			state.CompleteWave(waveIndex, waveEnd.UnixNano())
-		} else {
+		if !waveComplete {
 			state.FailWave(waveIndex, waveEnd.UnixNano())
 			// Stop execution on wave failure
 			break
 		}
+		state.CompleteWave(waveIndex, waveEnd.UnixNano())
 
 		state.AdvanceWave()
 	}
@@ -279,10 +278,10 @@ func (s *ImplementationService) executeWave(
 	g, ctx := errgroup.WithContext(ctx)
 
 	for _, sp := range wave {
-		sp := sp // capture loop variable
+		spCopy := sp
 
 		g.Go(func() error {
-			result, warning := s.executeSubPlan(ctx, sp, workspace, plan, workItem, branch, worktreePaths, state)
+			result, warning := s.executeSubPlan(ctx, spCopy, workspace, plan, workItem, branch, worktreePaths, state)
 
 			mu.Lock()
 			results = append(results, result)
@@ -293,8 +292,9 @@ func (s *ImplementationService) executeWave(
 
 			// If session failed, return error to cancel other goroutines
 			if result.Status == domain.AgentSessionFailed {
-				return fmt.Errorf("sub-plan %s failed: %s", sp.ID, result.Summary)
+				return fmt.Errorf("sub-plan %s failed: %s", spCopy.ID, result.Summary)
 			}
+
 			return nil
 		})
 	}
@@ -682,7 +682,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			// Convert agent event to system event and publish to bus
 			sysEvent := domain.SystemEvent{
 				ID:          domain.NewID(),
-				EventType:   string(evt.Type),
+				EventType:   evt.Type,
 				WorkspaceID: workspaceID,
 				Payload:     marshalJSONOrEmpty(evt.Payload),
 				CreatedAt:   time.Now(),
@@ -695,7 +695,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 }
 
 // discoverRepoPaths discovers repo paths in the workspace.
-func (s *ImplementationService) discoverRepoPaths(ctx context.Context, workspaceDir string) (map[string]string, error) {
+func (s *ImplementationService) discoverRepoPaths(_ context.Context, workspaceDir string) (map[string]string, error) {
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
 		return nil, fmt.Errorf("read workspace directory: %w", err)
@@ -760,9 +760,12 @@ func trackerRefsFromMetadata(metadata map[string]any) []domain.TrackerReference 
 }
 
 func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {
-	payload := map[string]interface{}{
-		"plan_id":   plan.ID,
-		"work_item": workItem,
+	payload := struct {
+		PlanID   string          `json:"plan_id"`
+		WorkItem *domain.Session `json:"work_item"`
+	}{
+		PlanID:   plan.ID,
+		WorkItem: workItem,
 	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -775,13 +778,20 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 }
 
 func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	payload := map[string]interface{}{
-		"session_id":    session.ID,
-		"work_item_id":  session.WorkItemID,
-		"phase":         session.Phase,
-		"sub_plan_id":   session.SubPlanID,
-		"repository":    session.RepositoryName,
-		"worktree_path": session.WorktreePath,
+	payload := struct {
+		SessionID    string           `json:"session_id"`
+		WorkItemID   string           `json:"work_item_id"`
+		Phase        domain.TaskPhase `json:"phase"`
+		SubPlanID    string           `json:"sub_plan_id"`
+		Repository   string           `json:"repository"`
+		WorktreePath string           `json:"worktree_path"`
+	}{
+		SessionID:    session.ID,
+		WorkItemID:   session.WorkItemID,
+		Phase:        session.Phase,
+		SubPlanID:    session.SubPlanID,
+		Repository:   session.RepositoryName,
+		WorktreePath: session.WorktreePath,
 	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -794,13 +804,20 @@ func (s *ImplementationService) emitSessionStarted(ctx context.Context, session 
 }
 
 func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	payload := map[string]interface{}{
-		"session_id":    session.ID,
-		"work_item_id":  session.WorkItemID,
-		"phase":         session.Phase,
-		"sub_plan_id":   session.SubPlanID,
-		"repository":    session.RepositoryName,
-		"worktree_path": session.WorktreePath,
+	payload := struct {
+		SessionID    string           `json:"session_id"`
+		WorkItemID   string           `json:"work_item_id"`
+		Phase        domain.TaskPhase `json:"phase"`
+		SubPlanID    string           `json:"sub_plan_id"`
+		Repository   string           `json:"repository"`
+		WorktreePath string           `json:"worktree_path"`
+	}{
+		SessionID:    session.ID,
+		WorkItemID:   session.WorkItemID,
+		Phase:        session.Phase,
+		SubPlanID:    session.SubPlanID,
+		Repository:   session.RepositoryName,
+		WorktreePath: session.WorktreePath,
 	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -813,14 +830,22 @@ func (s *ImplementationService) emitSessionCompleted(ctx context.Context, sessio
 }
 
 func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
-	payload := map[string]interface{}{
-		"session_id":    session.ID,
-		"work_item_id":  session.WorkItemID,
-		"phase":         session.Phase,
-		"sub_plan_id":   session.SubPlanID,
-		"repository":    session.RepositoryName,
-		"worktree_path": session.WorktreePath,
-		"error":         errMsg,
+	payload := struct {
+		SessionID    string           `json:"session_id"`
+		WorkItemID   string           `json:"work_item_id"`
+		Phase        domain.TaskPhase `json:"phase"`
+		SubPlanID    string           `json:"sub_plan_id"`
+		Repository   string           `json:"repository"`
+		WorktreePath string           `json:"worktree_path"`
+		Error        string           `json:"error"`
+	}{
+		SessionID:    session.ID,
+		WorkItemID:   session.WorkItemID,
+		Phase:        session.Phase,
+		SubPlanID:    session.SubPlanID,
+		Repository:   session.RepositoryName,
+		WorktreePath: session.WorktreePath,
+		Error:        errMsg,
 	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -844,11 +869,11 @@ func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.Task
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 
-	if err := sessionSvc.Delete(cleanupCtx, sessionID); err == nil {
+	err := sessionSvc.Delete(cleanupCtx, sessionID)
+	if err == nil {
 		return
-	} else {
-		slog.Warn("failed to delete pending session during cleanup", "error", err, "session_id", sessionID)
 	}
+	slog.Warn("failed to delete pending session during cleanup", "error", err, "session_id", sessionID)
 
 	if err := sessionSvc.Fail(cleanupCtx, sessionID, exitCode); err != nil {
 		slog.Warn("failed to terminalize pending session during cleanup", "error", err, "session_id", sessionID)
@@ -867,7 +892,7 @@ func completeSessionDurably(parent context.Context, sessionSvc *service.TaskServ
 	return sessionSvc.Complete(cleanupCtx, sessionID)
 }
 
-func marshalJSONOrEmpty(v interface{}) string {
+func marshalJSONOrEmpty(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
 		slog.Error("marshalJSONOrEmpty: failed to marshal event payload",

@@ -62,6 +62,7 @@ func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
 	if err != nil {
 		return domain.SessionHistoryEntry{}, fmt.Errorf("completed_at: %w", err)
 	}
+
 	return domain.SessionHistoryEntry{
 		SessionID:          r.SessionID,
 		WorkspaceID:        r.WorkspaceID,
@@ -103,6 +104,7 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 	if err != nil {
 		return domain.Task{}, fmt.Errorf("updated_at: %w", err)
 	}
+
 	return domain.Task{
 		ID:              r.ID,
 		WorkItemID:      r.WorkItemID,
@@ -158,6 +160,7 @@ func (r TaskRepo) Get(ctx context.Context, id string) (domain.Task, error) {
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM agent_sessions WHERE id = ?`, id); err != nil {
 		return domain.Task{}, fmt.Errorf("get session %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -190,6 +193,7 @@ func (r TaskRepo) list(ctx context.Context, query string, args ...any) ([]domain
 		}
 		sessions[i] = s
 	}
+
 	return sessions, nil
 }
 
@@ -294,6 +298,7 @@ func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistor
 		}
 		entries = append(entries, entry)
 	}
+
 	return entries, nil
 }
 
@@ -311,6 +316,7 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 	if err != nil {
 		return fmt.Errorf("create session %s: %w", s.ID, err)
 	}
+
 	return nil
 }
 
@@ -332,6 +338,7 @@ func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
 	if n == 0 {
 		return fmt.Errorf("update session %s: %w", s.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -347,5 +354,6 @@ func (r TaskRepo) Delete(ctx context.Context, id string) error {
 	if _, err := r.remote.NamedExecContext(ctx, `DELETE FROM agent_sessions WHERE id = :id`, params); err != nil {
 		return fmt.Errorf("delete session %s: %w", id, err)
 	}
+
 	return nil
 }

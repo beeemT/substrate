@@ -66,6 +66,7 @@ func ApplyOverlayListStyles(m list.Model, st styles.Styles) list.Model {
 	muted := lipgloss.Color(st.Theme.Muted)
 	m.Styles.NoItems = m.Styles.NoItems.Foreground(muted)
 	m.Styles.StatusEmpty = m.Styles.StatusEmpty.Foreground(muted)
+
 	return m
 }
 
@@ -112,7 +113,8 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 	if spec.Focused {
 		frameStyle = st.OverlayFrameFocused
 	}
-	return frameStyle.Copy().
+
+	return frameStyle.
 		Width(maxInt(1, frameWidth)).
 		Render(content)
 }
@@ -122,6 +124,7 @@ func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec Sp
 	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
 	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
 	sep := strings.TrimSuffix(strings.Repeat(" \n", layout.BodyHeight), "\n")
+
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 }
 
@@ -153,7 +156,7 @@ func renderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec
 	}
 	body = fitRenderedBox(body, renderWidth, contentHeight)
 
-	return paneStyle.Copy().
+	return paneStyle.
 		Width(contentWidth).
 		Height(contentHeight).
 		Render(body)
@@ -175,6 +178,7 @@ func fitRenderedBox(rendered string, width, height int) string {
 	for len(fitted) < height {
 		fitted = append(fitted, "")
 	}
+
 	return strings.Join(fitted, "\n")
 }
 
@@ -184,12 +188,14 @@ func overlayFrameWidth(termWidth, maxOverlayWidth int, chrome styles.ChromeMetri
 		if maxOverlayWidth > 0 {
 			return maxInt(1, maxOverlayWidth-reservedHorizontalInset)
 		}
+
 		return 1
 	}
 	frameWidth := maxInt(1, termWidth-reservedHorizontalInset)
 	if maxOverlayWidth > 0 {
 		frameWidth = maxInt(1, minInt(frameWidth, maxOverlayWidth-reservedHorizontalInset))
 	}
+
 	return frameWidth
 }
 
@@ -206,6 +212,7 @@ func overlayBodyHeight(termHeight, chromeLines int, spec SplitOverlaySizingSpec)
 	if maxHeight < 1 {
 		return 1
 	}
+
 	return maxInt(1, minInt(target, maxHeight))
 }
 
@@ -216,6 +223,7 @@ func splitPaneWidths(contentWidth int, spec SplitOverlaySizingSpec) (int, int) {
 	if contentWidth <= leftMinWidth+rightMinWidth+1 {
 		leftWidth := maxInt(1, available/2)
 		rightWidth := maxInt(1, available-leftWidth)
+
 		return leftWidth, rightWidth
 	}
 
@@ -229,6 +237,7 @@ func splitPaneWidths(contentWidth int, spec SplitOverlaySizingSpec) (int, int) {
 		rightWidth = rightMinWidth
 		leftWidth = maxInt(1, available-rightWidth)
 	}
+
 	return leftWidth, rightWidth
 }
 
@@ -236,6 +245,7 @@ func inputWidthOffset(offset int) int {
 	if offset > 0 {
 		return offset
 	}
+
 	return 20
 }
 
@@ -248,6 +258,7 @@ func splitWeights(spec SplitOverlaySizingSpec) (int, int) {
 	if rightWeight <= 0 {
 		rightWeight = 3
 	}
+
 	return leftWeight, rightWeight
 }
 
@@ -255,6 +266,7 @@ func ceilDiv(n, d int) int {
 	if d <= 0 {
 		return 0
 	}
+
 	return (n + d - 1) / d
 }
 
@@ -262,6 +274,7 @@ func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
+
 	return b
 }
 
@@ -269,5 +282,6 @@ func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}
+
 	return b
 }

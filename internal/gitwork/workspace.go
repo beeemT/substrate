@@ -112,7 +112,7 @@ func initWorkspace(ctx context.Context, initializer repoInitializer, dir, name s
 	}
 	for _, repoPath := range scan.PlainGitRepos {
 		if initializer == nil {
-			return nil, fmt.Errorf("repo initializer is nil")
+			return nil, errors.New("repo initializer is nil")
 		}
 		if err := initializer.Init(ctx, repoPath); err != nil {
 			return nil, fmt.Errorf("initialize git-work repo %s: %w", filepath.Base(repoPath), err)
@@ -131,7 +131,7 @@ func initWorkspace(ctx context.Context, initializer repoInitializer, dir, name s
 	}
 
 	// Use O_EXCL for atomic creation - fails if file already exists.
-	f, err := os.OpenFile(workspacePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(workspacePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
 			return nil, ErrWorkspaceExists
@@ -181,7 +181,7 @@ func WriteWorkspaceFile(dir string, ws *WorkspaceFile) error {
 		return fmt.Errorf("marshal workspace file: %w", err)
 	}
 
-	if err := os.WriteFile(workspacePath, data, 0o644); err != nil {
+	if err := os.WriteFile(workspacePath, data, 0o600); err != nil {
 		return fmt.Errorf("write workspace file: %w", err)
 	}
 
@@ -211,7 +211,7 @@ func ReadWorkspaceFile(dir string) (*WorkspaceFile, error) {
 		return nil, err
 	}
 	if ws.CreatedAt.IsZero() {
-		return nil, fmt.Errorf("workspace file missing created_at")
+		return nil, errors.New("workspace file missing created_at")
 	}
 
 	return &ws, nil

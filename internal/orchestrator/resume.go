@@ -105,6 +105,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	// durable session row never lags external state.
 	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
 		deleteOrFailPendingSession(ctx, r.sessionSvc, newSession.ID, nil)
+
 		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
 	}
 	now = time.Now()
@@ -130,6 +131,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 				"error", failErr,
 				"session_id", newSession.ID)
 		}
+
 		return ResumeSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
@@ -162,6 +164,7 @@ func (r *Resumption) AbandonSession(ctx context.Context, id string) error {
 	if session.Status != domain.AgentSessionInterrupted {
 		return fmt.Errorf("can only abandon interrupted sessions (status: %s)", session.Status)
 	}
+
 	return r.sessionSvc.Fail(ctx, id, nil)
 }
 
@@ -178,6 +181,7 @@ func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) strin
 	sb.WriteString("## Instructions\n\n")
 	sb.WriteString("You are continuing work on this sub-plan. The worktree may contain partial changes.\n")
 	sb.WriteString("Run `git status` and `git diff` to understand current state, then continue implementing remaining items.")
+
 	return sb.String()
 }
 
@@ -207,5 +211,6 @@ func readLastNLines(sessionID string, n int) (string, error) {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
+
 	return strings.Join(lines, "\n"), nil
 }

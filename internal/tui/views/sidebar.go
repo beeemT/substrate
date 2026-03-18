@@ -59,6 +59,7 @@ func (e SidebarEntry) titlePrefix() string {
 		if e.SessionID != "" {
 			return "Task " + shortSessionID(e.SessionID)
 		}
+
 		return "Task"
 	default:
 		if label := e.displayExternalID(); label != "" {
@@ -67,20 +68,20 @@ func (e SidebarEntry) titlePrefix() string {
 		if e.WorkItemID != "" {
 			return e.WorkItemID
 		}
+
 		return e.SessionID
 	}
 }
 
 func (e SidebarEntry) displayExternalID() string {
 	raw := strings.TrimSpace(e.ExternalID)
-	switch {
-	case strings.HasPrefix(raw, "gh:issue:"):
-		return strings.TrimPrefix(raw, "gh:issue:")
-	case strings.HasPrefix(raw, "gl:issue:"):
-		return strings.TrimPrefix(raw, "gl:issue:")
-	default:
-		return raw
+	if after, ok := strings.CutPrefix(raw, "gh:issue:"); ok {
+		return after
 	}
+	if after, ok := strings.CutPrefix(raw, "gl:issue:"); ok {
+		return after
+	}
+	return raw
 }
 
 func (e SidebarEntry) displaySource() string {
@@ -89,9 +90,9 @@ func (e SidebarEntry) displaySource() string {
 	}
 	switch {
 	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gh:issue:"):
-		return "github"
+		return providerGithub
 	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gl:issue:"):
-		return "gitlab"
+		return providerGitlab
 	default:
 		return ""
 	}
@@ -195,11 +196,12 @@ func (e SidebarEntry) Subtitle() string {
 	if e.RepositoryName != "" {
 		parts = append(parts, e.RepositoryName)
 	}
+
 	return strings.Join(parts, " · ")
 }
 
 // SidebarModel manages the session list sidebar.
-type SidebarModel struct {
+type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
 	entries []SidebarEntry
 	cursor  int
 	title   string
@@ -226,15 +228,18 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 	m.entries = entries
 	if len(m.entries) == 0 {
 		m.cursor = -1
+
 		return
 	}
 	if !hadSelection {
 		m.cursor = -1
+
 		return
 	}
 	for i, entry := range m.entries {
 		if entry.WorkItemID == selectedWorkItemID && entry.SessionID == selectedSessionID {
 			m.cursor = i
+
 			return
 		}
 	}
@@ -260,10 +265,12 @@ func (m *SidebarModel) SetTitle(title string) {
 func (m *SidebarModel) MoveUp() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = len(m.entries) - 1
+
 		return
 	}
 	if m.cursor > 0 {
@@ -275,10 +282,12 @@ func (m *SidebarModel) MoveUp() {
 func (m *SidebarModel) MoveDown() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
+
 		return
 	}
 	if m.cursor < len(m.entries)-1 {
@@ -290,6 +299,7 @@ func (m *SidebarModel) MoveDown() {
 func (m *SidebarModel) GotoTop() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+
 		return
 	}
 	m.cursor = 0
@@ -299,6 +309,7 @@ func (m *SidebarModel) GotoTop() {
 func (m *SidebarModel) GotoBottom() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+
 		return
 	}
 	m.cursor = len(m.entries) - 1
@@ -314,9 +325,11 @@ func (m *SidebarModel) SelectEntry(workItemID, sessionID string) bool {
 	for i, entry := range m.entries {
 		if entry.WorkItemID == workItemID && entry.SessionID == sessionID {
 			m.cursor = i
+
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -331,6 +344,7 @@ func (m *SidebarModel) Selected() *SidebarEntry {
 		return nil
 	}
 	entry := m.entries[m.cursor]
+
 	return &entry
 }
 
@@ -380,7 +394,7 @@ func (m SidebarModel) View() string {
 		}
 		block := strings.Join([]string{line1, titleLine, line3}, "\n")
 		if selected {
-			lines = append(lines, m.styles.SidebarSelected.Copy().Width(width).Render(block))
+			lines = append(lines, m.styles.SidebarSelected.Width(width).Render(block))
 		} else {
 			lines = append(lines, lipgloss.NewStyle().Width(width).Render(block))
 		}
@@ -389,6 +403,7 @@ func (m SidebarModel) View() string {
 	for len(lines) < m.height {
 		lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
 	}
+
 	return fitViewBox(strings.Join(lines, "\n"), width, m.height)
 }
 
@@ -415,6 +430,7 @@ func shortSessionID(id string) string {
 	if len(id) <= 8 {
 		return id
 	}
+
 	return id[:8]
 }
 
@@ -429,5 +445,6 @@ func truncate(s string, maxLen int) string {
 	if maxLen == 1 {
 		return "…"
 	}
+
 	return ansi.Truncate(s, maxLen, "…")
 }

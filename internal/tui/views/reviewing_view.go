@@ -20,7 +20,7 @@ type RepoReviewResult struct {
 }
 
 // ReviewModel renders review output with critiques and severity.
-type ReviewModel struct {
+type ReviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	workItemID string
 	repos      []RepoReviewResult
 	cursor     int // critique cursor within active repo
@@ -70,8 +70,7 @@ func critiqueSeverityStyle(sev domain.CritiqueSeverity, st styles.Styles) lipglo
 }
 
 func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "j", "down":
 			if len(m.repos) > m.activeRepo {
@@ -95,6 +94,7 @@ func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 			return m, func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: m.workItemID} }
 		}
 	}
+
 	return m, nil
 }
 
@@ -120,7 +120,7 @@ func (m ReviewModel) View() string {
 		if len(repo.Critiques) == 0 {
 			body.WriteString(m.styles.Success.Render("✓ No critiques for this repo."))
 		} else {
-			body.WriteString(fmt.Sprintf("%d critique(s):\n", len(repo.Critiques)))
+			fmt.Fprintf(&body, "%d critique(s):\n", len(repo.Critiques))
 			for i, c := range repo.Critiques {
 				sevStyle := critiqueSeverityStyle(c.Severity, m.styles)
 				prefix := "  "
@@ -144,8 +144,11 @@ func (m ReviewModel) View() string {
 	headerLines := strings.Split(header, "\n")
 	bodyHeight := max(1, m.height-len(headerLines)-1-1-1)
 	bodyBlock := fitViewBox(body.String(), m.width, bodyHeight)
-	parts := append(headerLines, tabRow, components.RenderDivider(m.styles, m.width))
+	parts := make([]string, 0, len(headerLines)+3+len(strings.Split(bodyBlock, "\n")))
+	parts = append(parts, headerLines...)
+	parts = append(parts, tabRow, components.RenderDivider(m.styles, m.width))
 	parts = append(parts, strings.Split(bodyBlock, "\n")...)
 	parts = append(parts, hints)
+
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

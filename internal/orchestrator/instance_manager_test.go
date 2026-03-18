@@ -33,16 +33,17 @@ func newMockInstanceRepo() *mockInstanceRepo {
 	}
 }
 
-func (r *mockInstanceRepo) Get(ctx context.Context, id string) (domain.SubstrateInstance, error) {
+func (r *mockInstanceRepo) Get(_ context.Context, id string) (domain.SubstrateInstance, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if inst, ok := r.instances[id]; ok {
 		return inst, nil
 	}
+
 	return domain.SubstrateInstance{}, repository.ErrNotFound
 }
 
-func (r *mockInstanceRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SubstrateInstance, error) {
+func (r *mockInstanceRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.SubstrateInstance, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ids := r.byWorkspace[workspaceID]
@@ -52,28 +53,31 @@ func (r *mockInstanceRepo) ListByWorkspaceID(ctx context.Context, workspaceID st
 			result = append(result, inst)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockInstanceRepo) Create(ctx context.Context, inst domain.SubstrateInstance) error {
+func (r *mockInstanceRepo) Create(_ context.Context, inst domain.SubstrateInstance) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.instances[inst.ID] = inst
 	r.byWorkspace[inst.WorkspaceID] = append(r.byWorkspace[inst.WorkspaceID], inst.ID)
+
 	return nil
 }
 
-func (r *mockInstanceRepo) Update(ctx context.Context, inst domain.SubstrateInstance) error {
+func (r *mockInstanceRepo) Update(_ context.Context, inst domain.SubstrateInstance) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.instances[inst.ID]; !ok {
 		return repository.ErrNotFound
 	}
 	r.instances[inst.ID] = inst
+
 	return nil
 }
 
-func (r *mockInstanceRepo) Delete(ctx context.Context, id string) error {
+func (r *mockInstanceRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	inst, ok := r.instances[id]
@@ -90,6 +94,7 @@ func (r *mockInstanceRepo) Delete(ctx context.Context, id string) error {
 	}
 	r.byWorkspace[inst.WorkspaceID] = filtered
 	delete(r.instances, id)
+
 	return nil
 }
 
@@ -108,7 +113,7 @@ type captureHarness struct {
 
 func (h *captureHarness) Name() string { return "capture" }
 
-func (h *captureHarness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+func (h *captureHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.returnErr != nil {
@@ -123,6 +128,7 @@ func (h *captureHarness) StartSession(ctx context.Context, opts adapter.SessionO
 	session := newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"})
 	session.abortErr = h.abortErr
 	h.lastSession = session
+
 	return session, nil
 }
 
@@ -133,6 +139,7 @@ func (h *captureHarness) lastOpts() adapter.SessionOpts {
 	if len(h.captured) == 0 {
 		return adapter.SessionOpts{}
 	}
+
 	return h.captured[len(h.captured)-1]
 }
 
@@ -245,6 +252,7 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 func (f *phase9bFixture) getSessionStatus(id string) domain.TaskStatus {
 	f.sessionRepo.mu.Lock()
 	defer f.sessionRepo.mu.Unlock()
+
 	return f.sessionRepo.sessions[id].Status
 }
 
@@ -252,6 +260,7 @@ func (f *phase9bFixture) instanceExists(id string) bool {
 	f.instanceRepo.mu.Lock()
 	defer f.instanceRepo.mu.Unlock()
 	_, ok := f.instanceRepo.instances[id]
+
 	return ok
 }
 
@@ -418,15 +427,7 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		t.Fatalf("create sessions dir: %v", err)
 	}
-	origHome := os.Getenv("SUBSTRATE_HOME")
-	os.Setenv("SUBSTRATE_HOME", tmpDir)
-	defer func() {
-		if origHome == "" {
-			os.Unsetenv("SUBSTRATE_HOME")
-		} else {
-			os.Setenv("SUBSTRATE_HOME", origHome)
-		}
-	}()
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	intID := "sess-interrupted"
 	fix.seedInterruptedSession(intID)
@@ -502,15 +503,7 @@ func TestResumeSession_OldSessionRemainInterrupted(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionsDir := filepath.Join(tmpDir, "sessions")
 	_ = os.MkdirAll(sessionsDir, 0o755)
-	origHome := os.Getenv("SUBSTRATE_HOME")
-	os.Setenv("SUBSTRATE_HOME", tmpDir)
-	defer func() {
-		if origHome == "" {
-			os.Unsetenv("SUBSTRATE_HOME")
-		} else {
-			os.Setenv("SUBSTRATE_HOME", origHome)
-		}
-	}()
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int2")
 	// No log file — readLastNLines falls back to "unavailable" gracefully.
@@ -538,15 +531,7 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		t.Fatalf("create sessions dir: %v", err)
 	}
-	origHome := os.Getenv("SUBSTRATE_HOME")
-	os.Setenv("SUBSTRATE_HOME", tmpDir)
-	defer func() {
-		if origHome == "" {
-			os.Unsetenv("SUBSTRATE_HOME")
-		} else {
-			os.Setenv("SUBSTRATE_HOME", origHome)
-		}
-	}()
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int3")
 	fix.sessionRepo.updateErr = repository.ErrNotFound
@@ -590,26 +575,19 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		t.Fatalf("create sessions dir: %v", err)
 	}
-	origHome := os.Getenv("SUBSTRATE_HOME")
-	os.Setenv("SUBSTRATE_HOME", tmpDir)
-	defer func() {
-		if origHome == "" {
-			os.Unsetenv("SUBSTRATE_HOME")
-		} else {
-			os.Setenv("SUBSTRATE_HOME", origHome)
-		}
-	}()
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int4")
-	fix.sessionRepo.updateHook = func(ctx context.Context, session domain.Task) error {
+	fix.sessionRepo.updateHook = func(_ context.Context, session domain.Task) error {
 		if session.Status == domain.AgentSessionRunning {
 			cancel()
 		}
+
 		return nil
 	}
 	fix.sessionRepo.updateErr = repository.ErrNotFound
 	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
-	fix.sessionRepo.deleteHook = func(ctx context.Context, id string) error {
+	fix.sessionRepo.deleteHook = func(ctx context.Context, _ string) error {
 		return ctx.Err()
 	}
 

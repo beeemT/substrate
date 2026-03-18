@@ -105,6 +105,7 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 	for _, h := range hints {
 		if h.Label == "Open overview" {
 			foundOpenOverview = true
+
 			break
 		}
 	}

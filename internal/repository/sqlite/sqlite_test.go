@@ -14,7 +14,6 @@ import (
 	goatomicsqlx "github.com/beeemT/go-atomic/generic/sqlx"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
-	repocore "github.com/beeemT/substrate/internal/repository"
 	reposqlite "github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/migrations"
 )
@@ -36,14 +35,15 @@ func setupDB(t *testing.T) *sqlx.DB {
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
 	} {
-		if _, err := db.Exec(pragma); err != nil {
+		if _, err := db.ExecContext(context.Background(), pragma); err != nil {
 			t.Fatalf("pragma %s: %v", pragma, err)
 		}
 	}
 
-	if err := repocore.Migrate(context.Background(), db, migrations.FS); err != nil {
+	if err := repository.Migrate(context.Background(), db, migrations.FS); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+
 	return db
 }
 
@@ -54,6 +54,7 @@ func beginTx(t *testing.T, db *sqlx.DB) *sqlx.Tx {
 		t.Fatalf("begin tx: %v", err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
+
 	return tx
 }
 
@@ -72,6 +73,7 @@ func makeWorkspace(t *testing.T, tx generic.SQLXRemote) domain.Workspace {
 	if err := reposqlite.NewWorkspaceRepo(tx).Create(context.Background(), ws); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
+
 	return ws
 }
 
@@ -89,6 +91,7 @@ func makeWorkItem(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Sessi
 	if err := reposqlite.NewSessionRepo(tx).Create(context.Background(), item); err != nil {
 		t.Fatalf("create work item: %v", err)
 	}
+
 	return item
 }
 
@@ -106,6 +109,7 @@ func makePlan(t *testing.T, tx generic.SQLXRemote, wiID string) domain.Plan {
 	if err := reposqlite.NewPlanRepo(tx).Create(context.Background(), plan); err != nil {
 		t.Fatalf("create plan: %v", err)
 	}
+
 	return plan
 }
 
@@ -124,6 +128,7 @@ func makeSubPlan(t *testing.T, tx generic.SQLXRemote, planID string) domain.Task
 	if err := reposqlite.NewSubPlanRepo(tx).Create(context.Background(), sp); err != nil {
 		t.Fatalf("create sub-plan: %v", err)
 	}
+
 	return sp
 }
 
@@ -140,6 +145,7 @@ func makeInstance(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Subst
 	if err := reposqlite.NewInstanceRepo(tx).Create(context.Background(), inst); err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
+
 	return inst
 }
 
@@ -165,6 +171,7 @@ func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.
 	if err := reposqlite.NewTaskRepo(tx).Create(context.Background(), s); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+
 	return s
 }
 
@@ -269,7 +276,7 @@ func TestWorkItemListFilter(t *testing.T) {
 	ws := makeWorkspace(t, tx)
 	repo := reposqlite.NewSessionRepo(tx)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		makeWorkItem(t, tx, ws.ID)
 	}
 
@@ -1047,6 +1054,7 @@ func TestTransactCommit(t *testing.T) {
 			UpdatedAt: now(),
 		}
 		wsID = ws.ID
+
 		return res.Workspaces.Create(ctx, ws)
 	})
 	if err != nil {
@@ -1088,6 +1096,7 @@ func TestTransactRollback(t *testing.T) {
 		if err := res.Workspaces.Create(ctx, ws); err != nil {
 			return err
 		}
+
 		return deliberateErr
 	})
 	if err == nil {

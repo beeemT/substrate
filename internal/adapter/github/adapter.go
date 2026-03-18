@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,10 +42,6 @@ type GithubAdapter struct {
 
 	mu      sync.RWMutex
 	tracked map[string]githubPull
-}
-
-type repoInfo struct {
-	DefaultBranch string `json:"default_branch"`
 }
 
 type githubOwner struct {
@@ -113,6 +111,8 @@ type completedPayload struct {
 	Review      domain.ReviewRef `json:"review"`
 }
 
+const filterAll = "all"
+
 func New(ctx context.Context, cfg config.GithubConfig) (*GithubAdapter, error) {
 	return newWithDeps(ctx, cfg, nil, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
@@ -121,7 +121,13 @@ func NewRepoLifecycle(ctx context.Context, cfg config.GithubConfig, eventRepo re
 	return newWithDeps(ctx, cfg, eventRepo, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
 
-func newWithDeps(ctx context.Context, cfg config.GithubConfig, eventRepo repository.EventRepository, client httpClient, resolver tokenResolver) (*GithubAdapter, error) {
+func newWithDeps(
+	ctx context.Context,
+	cfg config.GithubConfig,
+	eventRepo repository.EventRepository,
+	client httpClient,
+	resolver tokenResolver,
+) (*GithubAdapter, error) {
 	token := strings.TrimSpace(cfg.Token)
 	if token == "" {
 		var err error
@@ -134,7 +140,15 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, eventRepo reposit
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}
-	a := &GithubAdapter{cfg: cfg, client: client, baseURL: baseURL, token: token, tracked: make(map[string]githubPull), defaultBranch: "main", eventRepo: eventRepo}
+	a := &GithubAdapter{
+		cfg:           cfg,
+		client:        client,
+		baseURL:       baseURL,
+		token:         token,
+		tracked:       make(map[string]githubPull),
+		defaultBranch: "main",
+		eventRepo:     eventRepo,
+	}
 	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
 		if viewer != "" {
@@ -145,6 +159,7 @@ func newWithDeps(ctx context.Context, cfg config.GithubConfig, eventRepo reposit
 	} else {
 		a.assignee = cfg.Assignee
 	}
+
 	return a, nil
 }
 
@@ -158,12 +173,13 @@ func (a *GithubAdapter) viewerLogin(ctx context.Context) (string, error) {
 	}
 	login := strings.TrimSpace(user.Login)
 	if login == "" {
-		return "", fmt.Errorf("resolve github viewer: empty login")
+		return "", errors.New("resolve github viewer: empty login")
 	}
 	a.viewer = login
 	if a.assignee == "" || a.assignee == "me" {
 		a.assignee = login
 	}
+
 	return login, nil
 }
 
@@ -174,8 +190,9 @@ func execTokenResolver(ctx context.Context) (string, error) {
 	}
 	token := strings.TrimSpace(string(out))
 	if token == "" {
-		return "", fmt.Errorf("gh auth token returned empty output")
+		return "", errors.New("gh auth token returned empty output")
 	}
+
 	return token, nil
 }
 
@@ -188,8 +205,8 @@ func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects},
 		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
-				Views:          []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", "all"},
-				States:         []string{"open", "closed", "all"},
+				Views:          []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", filterAll},
+				States:         []string{"open", "closed", filterAll},
 				SupportsLabels: true,
 				SupportsSearch: true,
 				SupportsOffset: true,
@@ -213,8 +230,19 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
-			items = append(items, adapter.ListItem{ID: issueSelectionID(iss), Title: issueListTitle(iss), Description: iss.Body, State: iss.State, Labels: issueLabels(iss), URL: iss.HTMLURL, ParentRef: issueParentRef(iss), CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
+			items = append(items, adapter.ListItem{
+				ID:          issueSelectionID(iss),
+				Title:       issueListTitle(iss),
+				Description: iss.Body,
+				State:       iss.State,
+				Labels:      issueLabels(iss),
+				URL:         iss.HTMLURL,
+				ParentRef:   issueParentRef(iss),
+				CreatedAt:   derefTime(iss.CreatedAt),
+				UpdatedAt:   derefTime(iss.UpdatedAt),
+			})
 		}
+
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeProjects:
 		milestones, err := a.listMilestones(ctx, opts)
@@ -223,8 +251,16 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(milestones))
 		for _, ms := range milestones {
-			items = append(items, adapter.ListItem{ID: strconv.FormatInt(ms.Number, 10), Title: fmt.Sprintf("%s (repo milestone)", ms.Title), Description: ms.Description, State: ms.State, CreatedAt: derefTime(ms.CreatedAt), UpdatedAt: derefTime(ms.UpdatedAt)})
+			items = append(items, adapter.ListItem{
+				ID:          strconv.FormatInt(ms.Number, 10),
+				Title:       ms.Title + " (repo milestone)",
+				Description: ms.Description,
+				State:       ms.State,
+				CreatedAt:   derefTime(ms.CreatedAt),
+				UpdatedAt:   derefTime(ms.UpdatedAt),
+			})
 		}
+
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeInitiatives:
 		// TODO(phase-N): GitHub Projects v2 via GraphQL
@@ -252,6 +288,7 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(issues) == 1 {
 			return issueToWorkItem(issues[0]), nil
 		}
+
 		return aggregateIssues(issues), nil
 	case domain.ScopeProjects:
 		metaOwner, _ := sel.Metadata["owner"].(string)
@@ -259,7 +296,7 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		owner := strings.TrimSpace(metaOwner)
 		repo := strings.TrimSpace(metaRepo)
 		if owner == "" || repo == "" {
-			return domain.Session{}, fmt.Errorf("github milestone selection requires owner and repo")
+			return domain.Session{}, errors.New("github milestone selection requires owner and repo")
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
@@ -277,7 +314,22 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			titles = append(titles, ms.Title)
 			parts = append(parts, strings.TrimSpace(ms.Title+"\n"+ms.Description))
 		}
-		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gh:milestone:%s/%s", owner, repo), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"source_summaries": githubMilestoneSourceSummaries(owner, repo, milestones)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+
+		return domain.Session{
+			ID:            domain.NewID(),
+			ExternalID:    fmt.Sprintf("gh:milestone:%s/%s", owner, repo),
+			Source:        a.Name(),
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: append([]string(nil), sel.ItemIDs...),
+			Title:         strings.Join(titles, ", "),
+			Description:   strings.Join(parts, "\n\n"),
+			State:         domain.SessionIngested,
+			Metadata: map[string]any{
+				"source_summaries": githubMilestoneSourceSummaries(owner, repo, milestones),
+			},
+			CreatedAt: domain.Now(),
+			UpdatedAt: domain.Now(),
+		}, nil
 	default:
 		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
@@ -302,6 +354,7 @@ func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 				issues, err := a.fetchAssignedOpenIssues(ctx)
 				if err != nil {
 					ch <- adapter.WorkItemEvent{Type: "error", Timestamp: domain.Now()}
+
 					continue
 				}
 				for _, iss := range issues {
@@ -319,6 +372,7 @@ func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 			}
 		}
 	}()
+
 	return ch, nil
 }
 
@@ -331,6 +385,7 @@ func (a *GithubAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 	if err != nil {
 		return domain.Session{}, err
 	}
+
 	return issueToWorkItem(iss), nil
 }
 
@@ -338,12 +393,14 @@ func (a *GithubAdapter) UpdateState(ctx context.Context, externalID string, stat
 	mapped, ok := a.cfg.StateMappings[string(state)]
 	if !ok || strings.TrimSpace(mapped) == "" {
 		slog.Warn("github: no state mapping configured; UpdateState is a no-op", "state", state, "external_id", externalID)
+
 		return nil
 	}
 	owner, repo, number, err := parseExternalID(externalID)
 	if err != nil {
 		return err
 	}
+
 	return a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]any{"state": mapped}, nil)
 }
 
@@ -352,6 +409,7 @@ func (a *GithubAdapter) AddComment(ctx context.Context, externalID string, body 
 	if err != nil {
 		return err
 	}
+
 	return a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number), map[string]any{"body": body}, nil)
 }
 
@@ -365,11 +423,13 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if externalID == "" {
 			return nil
 		}
+
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
 	case domain.EventWorktreeCreated:
 		if err := a.onWorktreeCreated(ctx, event.Payload); err != nil {
 			slog.Warn("github: worktree created handler failed", "err", err)
 		}
+
 		return nil
 	case domain.EventWorkItemCompleted:
 		externalID := extractExternalID(event.Payload)
@@ -379,6 +439,7 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
 			slog.Warn("github: work item completed handler failed", "err", err)
 		}
+
 		return nil
 	default:
 		return nil
@@ -391,13 +452,13 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		return fmt.Errorf("unmarshal worktree payload: %w", err)
 	}
 	if p.Branch == "" {
-		return fmt.Errorf("missing branch in worktree payload")
+		return errors.New("missing branch in worktree payload")
 	}
 	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
 	headOwner := p.Review.HeadRepo.Owner
 	baseBranch := strings.TrimSpace(p.Review.BaseBranch)
 	if baseOwner == "" || baseRepo == "" || headOwner == "" {
-		return fmt.Errorf("worktree payload missing review repository coordinates")
+		return errors.New("worktree payload missing review repository coordinates")
 	}
 	if baseBranch == "" {
 		baseBranch = "main"
@@ -421,6 +482,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 			Draft:     pull.Draft,
 			UpdatedAt: time.Now(),
 		})
+
 		return nil
 	}
 	title := p.WorkItemTitle
@@ -429,7 +491,18 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	}
 	body := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
 	var created githubPull
-	if err := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), map[string]any{"title": title, "head": headOwner + ":" + p.Branch, "base": baseBranch, "draft": true, "body": body}, &created); err != nil {
+	if err := a.postJSON(
+		ctx,
+		fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo),
+		map[string]any{
+			"title": title,
+			"head":  headOwner + ":" + p.Branch,
+			"base":  baseBranch,
+			"draft": true,
+			"body":  body,
+		},
+		&created,
+	); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -446,6 +519,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		Draft:     created.Draft,
 		UpdatedAt: time.Now(),
 	})
+
 	return nil
 }
 
@@ -459,6 +533,7 @@ func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) erro
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -469,6 +544,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 	}
 	if p.Branch == "" {
 		slog.Warn("github: work_item.completed payload has no branch; skipping pr update")
+
 		return nil
 	}
 	artifacts := a.artifactsForCompletion(ctx, p)
@@ -476,7 +552,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
 		headOwner := p.Review.HeadRepo.Owner
 		if baseOwner == "" || baseRepo == "" || headOwner == "" {
-			return fmt.Errorf("work item completion payload missing review coordinates")
+			return errors.New("work item completion payload missing review coordinates")
 		}
 		pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, strings.TrimSpace(p.Review.BaseBranch), headOwner, p.Branch)
 		if err != nil {
@@ -514,6 +590,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		artifact.UpdatedAt = time.Now()
 		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, artifact)
 	}
+
 	return nil
 }
 
@@ -521,6 +598,7 @@ func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	if strings.TrimSpace(opts.View) == "created_by_me" {
 		return a.listCreatedIssues(ctx, opts)
 	}
+
 	return a.listInboxIssues(ctx, opts)
 }
 
@@ -544,17 +622,17 @@ func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOp
 	}
 	if opts.Limit > 0 && opts.Offset > 0 {
 		pageStart := opts.Offset % opts.Limit
-		if pageStart > len(filtered) {
-			pageStart = len(filtered)
-		}
+		pageStart = min(pageStart, len(filtered))
 		filtered = filtered[pageStart:]
 	}
 	sort.Slice(filtered, func(i, j int) bool {
 		if left, right := issueRepoFullName(filtered[i]), issueRepoFullName(filtered[j]); left != right {
 			return left < right
 		}
+
 		return filtered[i].Number < filtered[j].Number
 	})
+
 	return filtered, nil
 }
 
@@ -584,8 +662,10 @@ func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.List
 		if left, right := issueRepoFullName(issues[i]), issueRepoFullName(issues[j]); left != right {
 			return left < right
 		}
+
 		return issues[i].Number < issues[j].Number
 	})
+
 	return issues, nil
 }
 
@@ -610,6 +690,7 @@ func githubIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
 	if opts.Limit > 0 && opts.Offset > 0 {
 		query.Set("page", strconv.Itoa((opts.Offset/opts.Limit)+1))
 	}
+
 	return query, nil
 }
 
@@ -619,7 +700,7 @@ func githubCreatedIssueSearchQuery(viewer string, opts adapter.ListOpts) (url.Va
 		return nil, err
 	}
 	terms := []string{"is:issue", "author:" + strings.TrimSpace(viewer)}
-	if state != "all" {
+	if state != filterAll {
 		terms = append(terms, "state:"+state)
 	}
 	if owner := strings.TrimSpace(opts.Owner); owner != "" {
@@ -645,6 +726,7 @@ func githubCreatedIssueSearchQuery(viewer string, opts adapter.ListOpts) (url.Va
 	if opts.Limit > 0 && opts.Offset > 0 {
 		query.Set("page", strconv.Itoa((opts.Offset/opts.Limit)+1))
 	}
+
 	return query, nil
 }
 
@@ -656,8 +738,8 @@ func githubIssueFilterValue(view string) (string, error) {
 		return "mentioned", nil
 	case "subscribed":
 		return "subscribed", nil
-	case "all":
-		return "all", nil
+	case filterAll:
+		return filterAll, nil
 	default:
 		return "", fmt.Errorf("github issue view %q not supported", view)
 	}
@@ -669,8 +751,8 @@ func githubIssueStateValue(state string) (string, error) {
 		return "open", nil
 	case "closed":
 		return "closed", nil
-	case "all":
-		return "all", nil
+	case filterAll:
+		return filterAll, nil
 	default:
 		return "", fmt.Errorf("github issue state %q not supported", state)
 	}
@@ -688,6 +770,7 @@ func filterGitHubIssuesByContainer(issues []githubIssue, owner, repo string) []g
 		}
 		filtered = append(filtered, iss)
 	}
+
 	return filtered
 }
 
@@ -713,6 +796,7 @@ func filterGitHubIssuesByLabels(issues []githubIssue, labels []string) []githubI
 		for label := range want {
 			if _, ok := have[label]; !ok {
 				matched = false
+
 				break
 			}
 		}
@@ -720,6 +804,7 @@ func filterGitHubIssuesByLabels(issues []githubIssue, labels []string) []githubI
 			filtered = append(filtered, iss)
 		}
 	}
+
 	return filtered
 }
 
@@ -727,7 +812,7 @@ func (a *GithubAdapter) listMilestones(ctx context.Context, opts adapter.ListOpt
 	owner := strings.TrimSpace(opts.Owner)
 	repo := strings.TrimSpace(opts.Repo)
 	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("github milestones browse requires owner and repo filters")
+		return nil, errors.New("github milestones browse requires owner and repo filters")
 	}
 	query := url.Values{}
 	if opts.Limit > 0 {
@@ -737,6 +822,7 @@ func (a *GithubAdapter) listMilestones(ctx context.Context, opts adapter.ListOpt
 	if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/milestones", owner, repo), query, &milestones); err != nil {
 		return nil, err
 	}
+
 	return milestones, nil
 }
 
@@ -749,6 +835,7 @@ func (a *GithubAdapter) fetchIssue(ctx context.Context, owner, repo string, numb
 		return githubIssue{}, fmt.Errorf("github issue %s/%s#%d is a pull request", owner, repo, number)
 	}
 	normalizeGitHubIssueRepository(&iss, owner, repo)
+
 	return iss, nil
 }
 
@@ -757,6 +844,7 @@ func (a *GithubAdapter) fetchMilestone(ctx context.Context, owner, repo string, 
 	if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/milestones/%d", owner, repo, number), nil, &ms); err != nil {
 		return githubMilestone{}, err
 	}
+
 	return ms, nil
 }
 
@@ -774,8 +862,10 @@ func (a *GithubAdapter) fetchAssignedOpenIssues(ctx context.Context) ([]githubIs
 		if left, right := issueRepoFullName(filtered[i]), issueRepoFullName(filtered[j]); left != right {
 			return left < right
 		}
+
 		return filtered[i].Number < filtered[j].Number
 	})
+
 	return filtered, nil
 }
 
@@ -797,7 +887,11 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 			continue
 		}
 		artifact := payload.Artifact
-		if payload.WorkItemID != p.WorkItemID || artifact.Provider != "github" || strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) || strings.TrimSpace(artifact.Ref) == "" || strings.TrimSpace(artifact.RepoName) == "" {
+		if payload.WorkItemID != p.WorkItemID ||
+			artifact.Provider != "github" ||
+			strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) ||
+			strings.TrimSpace(artifact.Ref) == "" ||
+			strings.TrimSpace(artifact.RepoName) == "" {
 			continue
 		}
 		key := artifact.RepoName + "|" + artifact.Branch
@@ -814,8 +908,10 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 		if artifacts[i].RepoName != artifacts[j].RepoName {
 			return artifacts[i].RepoName < artifacts[j].RepoName
 		}
+
 		return artifacts[i].Ref < artifacts[j].Ref
 	})
+
 	return artifacts
 }
 
@@ -824,18 +920,20 @@ func splitGitHubRepoName(raw string) (string, string, bool) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
 	}
+
 	return parts[0], parts[1], true
 }
 
 func parseGitHubPullRef(ref string) (int, error) {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "#")
 	if trimmed == "" {
-		return 0, fmt.Errorf("github pull ref is required")
+		return 0, errors.New("github pull ref is required")
 	}
 	value, err := strconv.Atoi(trimmed)
 	if err != nil {
 		return 0, fmt.Errorf("parse github pull ref %q: %w", ref, err)
 	}
+
 	return value, nil
 }
 
@@ -849,6 +947,7 @@ func githubArtifactState(pull githubPull) string {
 	if pull.Draft {
 		return "draft"
 	}
+
 	return "ready"
 }
 
@@ -864,6 +963,7 @@ func (a *GithubAdapter) findOpenPullByBranch(ctx context.Context, baseOwner, bas
 	if len(pulls) == 0 {
 		return nil, nil
 	}
+
 	return &pulls[0], nil
 }
 
@@ -910,6 +1010,7 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
+
 		return fmt.Errorf("github api status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if dst == nil {
@@ -918,6 +1019,7 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
+
 	return nil
 }
 
@@ -928,6 +1030,7 @@ func filterIssues(issues []githubIssue) []githubIssue {
 			filtered = append(filtered, iss)
 		}
 	}
+
 	return filtered
 }
 
@@ -937,12 +1040,30 @@ func issueLabels(iss githubIssue) []string {
 		labels = append(labels, label.Name)
 	}
 	sort.Strings(labels)
+
 	return labels
 }
 
 func issueToWorkItem(iss githubIssue) domain.Session {
 	owner, repo := issueOwnerRepo(iss)
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, iss.Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{issueSelectionID(iss)}, Title: iss.Title, Description: iss.Body, Labels: issueLabels(iss), State: domain.SessionIngested, Metadata: map[string]any{"url": iss.HTMLURL, "tracker_refs": githubTrackerRefs([]githubIssue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+
+	return domain.Session{
+		ID:            domain.NewID(),
+		ExternalID:    formatExternalID(owner, repo, iss.Number),
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{issueSelectionID(iss)},
+		Title:         iss.Title,
+		Description:   iss.Body,
+		Labels:        issueLabels(iss),
+		State:         domain.SessionIngested,
+		Metadata: map[string]any{
+			"url":          iss.HTMLURL,
+			"tracker_refs": githubTrackerRefs([]githubIssue{iss}),
+		},
+		CreatedAt: derefTime(iss.CreatedAt),
+		UpdatedAt: derefTime(iss.UpdatedAt),
+	}
 }
 
 func aggregateIssues(issues []githubIssue) domain.Session {
@@ -967,7 +1088,24 @@ func aggregateIssues(issues []githubIssue) domain.Session {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	owner, repo := issueOwnerRepo(issues[0])
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(owner, repo, issues[0].Number), Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": githubTrackerRefs(issues), "source_summaries": githubIssueSourceSummaries(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+
+	return domain.Session{
+		ID:            domain.NewID(),
+		ExternalID:    formatExternalID(owner, repo, issues[0].Number),
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: itemIDs,
+		Title:         title,
+		Description:   strings.Join(parts, "\n\n---\n\n"),
+		Labels:        merged,
+		State:         domain.SessionIngested,
+		Metadata: map[string]any{
+			"tracker_refs":     githubTrackerRefs(issues),
+			"source_summaries": githubIssueSourceSummaries(issues),
+		},
+		CreatedAt: domain.Now(),
+		UpdatedAt: domain.Now(),
+	}
 }
 
 func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {
@@ -983,8 +1121,17 @@ func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {
 			continue
 		}
 		seen[key] = struct{}{}
-		refs = append(refs, domain.TrackerReference{Provider: "github", Kind: "issue", ID: strconv.FormatInt(iss.Number, 10), URL: iss.HTMLURL, Owner: owner, Repo: repo, Number: iss.Number})
+		refs = append(refs, domain.TrackerReference{
+			Provider: "github",
+			Kind:     "issue",
+			ID:       strconv.FormatInt(iss.Number, 10),
+			URL:      iss.HTMLURL,
+			Owner:    owner,
+			Repo:     repo,
+			Number:   iss.Number,
+		})
 	}
+
 	return refs
 }
 
@@ -1012,6 +1159,7 @@ func githubIssueRepositoryIdentity(iss githubIssue) (string, string) {
 	if owner, repo := parseGitHubRepositoryURL(iss.RepositoryURL); owner != "" && repo != "" {
 		return owner, repo
 	}
+
 	return parseGitHubRepositoryURL(iss.HTMLURL)
 }
 
@@ -1033,11 +1181,13 @@ func parseGitHubRepositoryURL(rawURL string) (string, string) {
 
 func issueSelectionID(iss githubIssue) string {
 	owner, repo := issueOwnerRepo(iss)
+
 	return formatIssueSelectionID(owner, repo, iss.Number)
 }
 
 func issueListTitle(iss githubIssue) string {
 	owner, repo := issueOwnerRepo(iss)
+
 	return fmt.Sprintf("[%s/%s] #%d: %s", owner, repo, iss.Number, iss.Title)
 }
 
@@ -1046,6 +1196,7 @@ func issueParentRef(iss githubIssue) *adapter.ParentRef {
 	if owner == "" || repo == "" {
 		return nil
 	}
+
 	return &adapter.ParentRef{ID: owner + "/" + repo, Type: "repository", Title: owner + "/" + repo}
 }
 
@@ -1063,6 +1214,7 @@ func issueOwnerRepo(iss githubIssue) (string, string) {
 	if len(parts) != 2 {
 		return "", ""
 	}
+
 	return parts[0], parts[1]
 }
 
@@ -1071,6 +1223,7 @@ func issueRepoFullName(iss githubIssue) string {
 	if owner == "" || repo == "" {
 		return ""
 	}
+
 	return owner + "/" + repo
 }
 
@@ -1082,22 +1235,24 @@ func parseIssueSelectionID(defaultOwner, defaultRepo, itemID string) (string, st
 	if strings.Contains(itemID, "/") && strings.Contains(itemID, "#") {
 		parts := strings.SplitN(itemID, "#", 2)
 		if len(parts) != 2 || parts[0] == "" {
-			return "", "", 0, fmt.Errorf("invalid repo-scoped issue id")
+			return "", "", 0, errors.New("invalid repo-scoped issue id")
 		}
 		repoParts := strings.SplitN(parts[0], "/", 2)
 		if len(repoParts) != 2 || repoParts[0] == "" || repoParts[1] == "" {
-			return "", "", 0, fmt.Errorf("invalid repo-scoped issue id")
+			return "", "", 0, errors.New("invalid repo-scoped issue id")
 		}
 		number, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
 			return "", "", 0, err
 		}
+
 		return repoParts[0], repoParts[1], number, nil
 	}
 	number, err := strconv.ParseInt(itemID, 10, 64)
 	if err != nil {
 		return "", "", 0, err
 	}
+
 	return defaultOwner, defaultRepo, number, nil
 }
 
@@ -1123,6 +1278,7 @@ func parseExternalID(externalID string) (string, string, int64, error) {
 	if err != nil {
 		return "", "", 0, fmt.Errorf("parse issue number: %w", err)
 	}
+
 	return owner, repo, number, nil
 }
 
@@ -1133,6 +1289,7 @@ func extractExternalID(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return ""
 	}
+
 	return parsed.ExternalID
 }
 
@@ -1144,6 +1301,7 @@ func extractPlanCommentPayload(payload string) (string, []string) {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return "", nil
 	}
+
 	return parsed.CommentBody, parsed.ExternalIDs
 }
 
@@ -1151,16 +1309,12 @@ func derefTime(t *time.Time) time.Time {
 	if t == nil {
 		return domain.Now()
 	}
+
 	return t.UTC()
 }
 
 func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 func appendTrackerFooter(body, footer string) string {
@@ -1193,6 +1347,7 @@ func renderGitHubTrackerRefs(refs []domain.TrackerReference, baseRepo domain.Rep
 	if len(parts) == 0 {
 		return ""
 	}
+
 	return "Resolves " + strings.Join(parts, ", ")
 }
 
@@ -1216,6 +1371,7 @@ func renderGitHubTrackerRef(ref domain.TrackerReference, baseRepo domain.RepoRef
 		if refOwner != "" && refRepo != "" {
 			return fmt.Sprintf("%s/%s#%d", refOwner, refRepo, ref.Number)
 		}
+
 		return ""
 	case "linear":
 		if ref.ID == "" {
@@ -1224,6 +1380,7 @@ func renderGitHubTrackerRef(ref domain.TrackerReference, baseRepo domain.RepoRef
 		if ref.URL != "" {
 			return fmt.Sprintf("[%s](%s)", ref.ID, ref.URL)
 		}
+
 		return ref.ID
 	default:
 		return ""

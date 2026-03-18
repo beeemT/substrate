@@ -84,5 +84,6 @@ func ParseLine(line string) (Entry, bool) {
 	if entry.Kind == "" {
 		return Entry{Kind: KindPlain, Text: raw}, true
 	}
+
 	return entry, true
 }

@@ -2,6 +2,7 @@ package manual
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -10,7 +11,7 @@ import (
 )
 
 // ErrNotSupported is returned for operations not supported by the manual adapter.
-var ErrNotSupported = fmt.Errorf("operation not supported by manual adapter")
+var ErrNotSupported = errors.New("operation not supported by manual adapter")
 
 // WorkspaceStore provides the minimal DB access needed by ManualAdapter.
 // It is typically satisfied by a WorkItemRepository from the enclosing Transact call.
@@ -42,6 +43,7 @@ func (s *workItemStoreAdapter) CountManualWorkItems(ctx context.Context, workspa
 	if err != nil {
 		return 0, fmt.Errorf("count manual work items: %w", err)
 	}
+
 	return len(items), nil
 }
 
@@ -77,7 +79,7 @@ func (a *ManualAdapter) ListSelectable(_ context.Context, _ adapter.ListOpts) (*
 // Resolve converts a manual selection into a WorkItem with a stable ExternalID.
 func (a *ManualAdapter) Resolve(ctx context.Context, sel adapter.Selection) (domain.Session, error) {
 	if sel.Manual == nil {
-		return domain.Session{}, fmt.Errorf("manual adapter requires sel.Manual to be set")
+		return domain.Session{}, errors.New("manual adapter requires sel.Manual to be set")
 	}
 
 	n, err := a.store.CountManualWorkItems(ctx, a.workspaceID)
@@ -105,6 +107,7 @@ func (a *ManualAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 func (a *ManualAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	ch := make(chan adapter.WorkItemEvent)
 	close(ch)
+
 	return ch, nil
 }
 

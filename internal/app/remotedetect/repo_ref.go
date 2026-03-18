@@ -2,12 +2,15 @@ package remotedetect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/beeemT/substrate/internal/domain"
 )
+
+const defaultBranch = "main"
 
 type ReviewContext struct {
 	Platform   Platform
@@ -18,7 +21,7 @@ type ReviewContext struct {
 
 func ResolveReviewContext(ctx context.Context, dir string) (ReviewContext, error) {
 	if strings.TrimSpace(dir) == "" {
-		return ReviewContext{}, fmt.Errorf("workspace directory is empty")
+		return ReviewContext{}, errors.New("workspace directory is empty")
 	}
 
 	remotes, err := resolveRemotes(ctx, dir)
@@ -26,7 +29,7 @@ func ResolveReviewContext(ctx context.Context, dir string) (ReviewContext, error
 		return ReviewContext{}, err
 	}
 	if len(remotes) == 0 {
-		return ReviewContext{}, fmt.Errorf("no git remotes found in %s", dir)
+		return ReviewContext{}, errors.New("no git remotes found in " + dir)
 	}
 
 	headBranch, err := gitOutput(ctx, dir, "branch", "--show-current")
@@ -41,6 +44,7 @@ func ResolveReviewContext(ctx context.Context, dir string) (ReviewContext, error
 	}
 
 	baseBranch := detectDefaultBranch(ctx, dir, baseRemote.Name)
+
 	return ReviewContext{
 		Platform:   platform,
 		RemoteName: headRemote.Name,
@@ -80,6 +84,7 @@ func resolveRemotes(ctx context.Context, dir string) ([]resolvedRemote, error) {
 		repoRef, host := parseRepoRefFromRemoteURL(remoteURL)
 		resolved = append(resolved, resolvedRemote{Name: name, URL: remoteURL, Host: host, RepoRef: repoRef})
 	}
+
 	return resolved, nil
 }
 
@@ -88,6 +93,7 @@ func chooseReviewRemotes(remotes []resolvedRemote) (base resolvedRemote, head re
 	for _, remote := range remotes {
 		if remote.Name == "origin" {
 			head = remote
+
 			break
 		}
 	}
@@ -95,28 +101,31 @@ func chooseReviewRemotes(remotes []resolvedRemote) (base resolvedRemote, head re
 	for _, remote := range remotes {
 		if remote.Name == "upstream" {
 			base = remote
+
 			break
 		}
 	}
+
 	return base, head
 }
 
 func detectDefaultBranch(ctx context.Context, dir, remote string) string {
 	if strings.TrimSpace(remote) == "" {
-		return "main"
+		return defaultBranch
 	}
 	ref, err := gitOutput(ctx, dir, "symbolic-ref", fmt.Sprintf("refs/remotes/%s/HEAD", remote))
 	if err != nil {
-		return "main"
+		return defaultBranch
 	}
 	parts := strings.Split(strings.TrimSpace(ref), "/")
 	if len(parts) == 0 {
-		return "main"
+		return defaultBranch
 	}
 	branch := parts[len(parts)-1]
 	if strings.TrimSpace(branch) == "" {
-		return "main"
+		return defaultBranch
 	}
+
 	return branch
 }
 
@@ -127,6 +136,7 @@ func parseRepoRefFromRemoteURL(remoteURL string) (domain.RepoRef, string) {
 	if provider == PlatformUnknown.String() {
 		provider = ""
 	}
+
 	return domain.RepoRef{Provider: provider, Host: host, Owner: owner, Repo: repo, URL: strings.TrimSpace(remoteURL)}, host
 }
 
@@ -139,6 +149,7 @@ func parseRemoteOwnerRepo(remoteURL string) (string, string) {
 			return "", ""
 		}
 		path := strings.Trim(parsed.Path, "/")
+
 		return splitOwnerRepo(path)
 	}
 	if strings.HasPrefix(trimmed, "git@") || strings.HasPrefix(trimmed, "ssh://") {
@@ -151,8 +162,10 @@ func parseRemoteOwnerRepo(remoteURL string) (string, string) {
 		} else if slash := strings.Index(trimmed, "/"); slash >= 0 {
 			trimmed = trimmed[slash+1:]
 		}
+
 		return splitOwnerRepo(trimmed)
 	}
+
 	return "", ""
 }
 
@@ -163,6 +176,7 @@ func splitOwnerRepo(path string) (string, string) {
 	}
 	owner := strings.Join(parts[:len(parts)-1], "/")
 	repo := parts[len(parts)-1]
+
 	return owner, repo
 }
 
@@ -179,6 +193,7 @@ func platformForHost(host string) Platform {
 				return PlatformGitLab
 			}
 		}
+
 		return PlatformUnknown
 	}
 }

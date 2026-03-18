@@ -24,6 +24,7 @@ func TestResolveMultipleIssuesPersistsSourceSummaries(t *testing.T) {
 		if !ok {
 			t.Fatalf("unexpected request path: %s", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, nil, issue), nil
 	}))
 
@@ -52,6 +53,7 @@ func TestResolveRepeatedIssuesDedupesSourceSummaries(t *testing.T) {
 		if issueID != "101" {
 			t.Fatalf("unexpected request path: %s", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, nil, issue), nil
 	}))
 

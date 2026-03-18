@@ -21,6 +21,14 @@ type duplicateSessionDialogOption struct {
 	CompactTitle string
 }
 
+const (
+	keyTab      = "tab"
+	keyShiftTab = "shift+tab"
+	keyDown     = "down"
+	keyEsc      = "esc"
+	keyEnter    = "enter"
+)
+
 func (a *App) showDuplicateSessionDialog(requested, existing domain.Session) {
 	a.duplicateSession = duplicateSessionDialogState{
 		RequestedSession: requested,
@@ -47,6 +55,7 @@ func (a *App) cycleDuplicateSessionOption(delta int) {
 	options := a.duplicateSessionOptions()
 	if len(options) == 0 {
 		a.duplicateSession.Selected = 0
+
 		return
 	}
 	a.duplicateSession.Selected = (a.duplicateSession.Selected + delta + len(options)) % len(options)
@@ -61,25 +70,29 @@ func (a App) selectedDuplicateSessionAction() SessionDuplicateAction {
 	if index < 0 || index >= len(options) {
 		index = 0
 	}
+
 	return options[index].Action
 }
 
 func (a App) handleDuplicateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "up", "k", "shift+tab":
+	case "up", "k", keyShiftTab:
 		a.cycleDuplicateSessionOption(-1)
+
 		return a, nil
-	case "down", "j", "tab":
+	case keyDown, "j", keyTab:
 		a.cycleDuplicateSessionOption(1)
+
 		return a, nil
-	case "esc", "c":
+	case keyEsc, "c":
 		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateCancel} }
 	case "o", "g":
 		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateOpenExisting} }
 	case "s", "n":
 		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: SessionDuplicateCreateSession} }
-	case "enter":
+	case keyEnter:
 		action := a.selectedDuplicateSessionAction()
+
 		return a, func() tea.Msg { return SessionDuplicateActionMsg{Action: action} }
 	default:
 		return a, nil
@@ -99,12 +112,10 @@ func (a App) duplicateSessionDialogView() string {
 	if a.windowWidth > 0 {
 		finalWidth = min(finalWidth, a.windowWidth)
 	}
-	
-	frame := styles.OverlayFrame.Copy().Width(finalWidth)
+
+	frame := styles.OverlayFrame.Width(finalWidth)
 	innerWidth := finalWidth - frame.GetHorizontalFrameSize()
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
+	innerWidth = max(innerWidth, 1)
 	content := lipgloss.NewStyle().Width(innerWidth)
 	titleStyle := styles.Title
 	subtitleStyle := styles.Subtitle
@@ -147,6 +158,7 @@ func (a App) duplicateSessionDialogView() string {
 	} else {
 		rows = append(rows, content.Render(hintStyle.Render("↑/↓ choose • Enter confirm • Esc cancel")))
 	}
+
 	return frame.Render(strings.Join(rows, "\n"))
 }
 
@@ -156,5 +168,6 @@ func sessionSummaryLabel(session domain.Session) string {
 	if title != "" && title != label {
 		return label + " · " + title
 	}
+
 	return label
 }

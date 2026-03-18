@@ -18,6 +18,7 @@ type sentryStringNumber string
 func (v *sentryStringNumber) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(data, []byte("null")) {
 		*v = ""
+
 		return nil
 	}
 
@@ -41,8 +42,8 @@ func (v *sentryStringNumber) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (v sentryStringNumber) String() string {
-	return string(v)
+func (v *sentryStringNumber) String() string {
+	return string(*v)
 }
 
 type sentryIssue struct {
@@ -67,6 +68,7 @@ type sentryTime struct {
 func (t *sentryTime) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		t.Time = time.Time{}
+
 		return nil
 	}
 
@@ -77,6 +79,7 @@ func (t *sentryTime) UnmarshalJSON(data []byte) error {
 
 	if raw == "" {
 		t.Time = time.Time{}
+
 		return nil
 	}
 
@@ -86,5 +89,6 @@ func (t *sentryTime) UnmarshalJSON(data []byte) error {
 	}
 
 	t.Time = parsed
+
 	return nil
 }

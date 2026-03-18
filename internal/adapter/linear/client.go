@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -21,6 +22,7 @@ func newGQLClient(apiKey, endpoint string) *gqlClient {
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
+
 	return &gqlClient{
 		apiKey:   apiKey,
 		endpoint: endpoint,
@@ -46,7 +48,7 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", c.apiKey)
-	resp, err := c.http.Do(req)
+	resp, err := c.http.Do(req) //nolint:gosec // G704: URL constructed from trusted config, not user input
 	if err != nil {
 		return fmt.Errorf("http request: %w", err)
 	}
@@ -72,8 +74,9 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 			return fmt.Errorf("unmarshal data: %w", err)
 		}
 	}
+
 	return nil
 }
 
 // ErrRateLimited is returned when Linear returns HTTP 429.
-var ErrRateLimited = fmt.Errorf("linear: rate limited (429)")
+var ErrRateLimited = errors.New("linear: rate limited (429)")

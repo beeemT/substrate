@@ -35,6 +35,7 @@ func newDetailMarkdownStyleConfig() glamouransi.StyleConfig {
 	cfg.H4.Prefix = ""
 	cfg.H5.Prefix = ""
 	cfg.H6.Prefix = ""
+
 	return cfg
 }
 
@@ -82,6 +83,7 @@ func renderMarkdownDocument(content string, width int) string {
 	}
 
 	mdRenderCache.Store(key, result)
+
 	return result
 }
 
@@ -97,6 +99,7 @@ func renderMarkdownSegment(content string, width int) string {
 	if err != nil {
 		return content
 	}
+
 	return strings.TrimRight(out, "\n")
 }
 
@@ -111,5 +114,6 @@ func renderMermaidBlock(source string) string {
 	if err != nil {
 		return "Mermaid diagram\n" + source
 	}
+
 	return "Mermaid diagram\n" + strings.TrimRight(diagram, "\n")
 }

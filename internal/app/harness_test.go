@@ -17,6 +17,7 @@ func newHarnessConfig(primary config.HarnessName) *config.Config {
 	cfg.Harness.Phase.Review = primary
 	cfg.Harness.Phase.Foreman = primary
 	cfg.Adapters.Codex.BinaryPath = "/bin/sh"
+
 	return cfg
 }
 
@@ -36,6 +37,7 @@ func writePackagedBridge(t *testing.T) string {
 
 	bridgePath := filepath.Join(t.TempDir(), "omp-bridge")
 	writeTestFile(t, bridgePath, "#!/bin/sh\n", 0o755)
+
 	return bridgePath
 }
 
@@ -49,6 +51,7 @@ func writeSourceBridge(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(runtimeDir, "node_modules", "@oh-my-pi", "pi-coding-agent"), 0o755); err != nil {
 		t.Fatalf("mkdir bridge dependencies: %v", err)
 	}
+
 	return bridgePath
 }
 

@@ -3,11 +3,13 @@ package sentry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,8 @@ import (
 )
 
 const defaultBaseURL = config.DefaultSentryBaseURL
+
+const providerSentry = "sentry"
 
 type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -56,16 +60,17 @@ func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient
 	}
 	organization := strings.TrimSpace(resolved.Organization)
 	if organization == "" {
-		return nil, fmt.Errorf("sentry organization is required")
+		return nil, errors.New("sentry organization is required")
 	}
 	transport := client
 	token := strings.TrimSpace(resolved.Token)
 	if token == "" {
 		if !resolved.UseCLI {
-			return nil, fmt.Errorf("sentry token is required")
+			return nil, errors.New("sentry token is required")
 		}
 		transport = newCLIHTTPClient(resolved.BaseURL, runner)
 	}
+
 	return &SentryAdapter{
 		cfg:          cfg,
 		client:       transport,
@@ -77,8 +82,9 @@ func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient
 }
 
 func execCommandRunner(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G702: command name comes from trusted config
 	cmd.Env = append([]string(nil), env...)
+
 	return cmd.CombinedOutput()
 }
 
@@ -88,6 +94,7 @@ func newCLIHTTPClient(baseURL string, runner commandRunner) httpClient {
 	if parsed != nil && strings.TrimSpace(parsed.Path) != "" {
 		apiPrefix = strings.TrimRight(parsed.Path, "/")
 	}
+
 	return &cliHTTPClient{
 		runner:    runner,
 		rootURL:   config.SentryRootURL(baseURL),
@@ -97,11 +104,11 @@ func newCLIHTTPClient(baseURL string, runner commandRunner) httpClient {
 
 func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	if c == nil || c.runner == nil {
-		return nil, fmt.Errorf("sentry cli runner is not configured")
+		return nil, errors.New("sentry cli runner is not configured")
 	}
 	endpointPath := req.URL.Path
-	if strings.HasPrefix(endpointPath, c.apiPrefix) {
-		endpointPath = strings.TrimPrefix(endpointPath, c.apiPrefix)
+	if trimmed, ok := strings.CutPrefix(endpointPath, c.apiPrefix); ok {
+		endpointPath = trimmed
 	}
 	if endpointPath == "" {
 		endpointPath = "/"
@@ -118,6 +125,7 @@ func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	if parseErr != nil {
 		return nil, parseErr
 	}
+
 	return resp, nil
 }
 
@@ -129,7 +137,7 @@ func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) 
 	}
 	lines := strings.Split(headerPart, "\n")
 	if len(lines) == 0 {
-		return nil, fmt.Errorf("parse sentry cli response: missing status line")
+		return nil, errors.New("parse sentry cli response: missing status line")
 	}
 	statusLine := strings.TrimSpace(lines[0])
 	fields := strings.Fields(statusLine)
@@ -152,6 +160,7 @@ func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) 
 		}
 		headers.Add(strings.TrimSpace(key), strings.TrimSpace(value))
 	}
+
 	return &http.Response{
 		Status:     statusLine,
 		StatusCode: statusCode,
@@ -161,7 +170,7 @@ func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) 
 	}, nil
 }
 
-func (a *SentryAdapter) Name() string { return "sentry" }
+func (a *SentryAdapter) Name() string { return providerSentry }
 
 func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
 	return adapter.AdapterCapabilities{
@@ -202,6 +211,7 @@ func (a *SentryAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		items = append(items, issueListItem(a.organization, issue))
 	}
 	nextCursor, hasMore := parseNextCursor(headers.Get("Link"))
+
 	return &adapter.ListResult{
 		Items:      items,
 		TotalCount: len(items),
@@ -215,13 +225,13 @@ func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
 	if len(sel.ItemIDs) == 0 {
-		return domain.Session{}, fmt.Errorf("sentry resolve requires at least one issue ID")
+		return domain.Session{}, errors.New("sentry resolve requires at least one issue ID")
 	}
 	issues := make([]sentryIssue, 0, len(sel.ItemIDs))
 	for _, itemID := range sel.ItemIDs {
 		issueID := strings.TrimSpace(itemID)
 		if issueID == "" {
-			return domain.Session{}, fmt.Errorf("sentry resolve requires non-empty issue IDs")
+			return domain.Session{}, errors.New("sentry resolve requires non-empty issue IDs")
 		}
 		issue, err := a.fetchIssue(ctx, a.organization, issueID)
 		if err != nil {
@@ -232,12 +242,14 @@ func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 	if len(issues) == 1 {
 		return issueToWorkItem(a.organization, issues[0]), nil
 	}
+
 	return aggregateIssues(a.organization, issues), nil
 }
 
 func (a *SentryAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
 	ch := make(chan adapter.WorkItemEvent)
 	close(ch)
+
 	return ch, nil
 }
 
@@ -250,6 +262,7 @@ func (a *SentryAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 	if err != nil {
 		return domain.Session{}, err
 	}
+
 	return issueToWorkItem(organization, issue), nil
 }
 
@@ -274,15 +287,16 @@ func (a *SentryAdapter) fetchIssue(ctx context.Context, organization, issueID st
 	if strings.TrimSpace(issue.ID) == "" {
 		issue.ID = strings.TrimSpace(issueID)
 	}
+
 	return issue, nil
 }
 
 func (a *SentryAdapter) getJSON(ctx context.Context, organization, path string, query url.Values, out any) (http.Header, error) {
 	endpoint := a.baseURL + "/organizations/" + url.PathEscape(strings.TrimSpace(organization)) + path
-	if query != nil && len(query) > 0 {
+	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -297,11 +311,13 @@ func (a *SentryAdapter) getJSON(ctx context.Context, organization, path string, 
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+
 		return nil, fmt.Errorf("sentry api %s: %s", req.URL.Path, strings.TrimSpace(string(body)))
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return nil, fmt.Errorf("decode sentry response: %w", err)
 	}
+
 	return resp.Header.Clone(), nil
 }
 
@@ -344,8 +360,9 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 		values.Set("cursor", cursor)
 	}
 	if limit := normalizeLimit(opts.Limit); limit > 0 {
-		values.Set("limit", fmt.Sprintf("%d", limit))
+		values.Set("limit", strconv.Itoa(limit))
 	}
+
 	return values, false, nil
 }
 
@@ -377,6 +394,7 @@ func normalizeProjects(projects []string) []string {
 		seen[project] = struct{}{}
 		out = append(out, project)
 	}
+
 	return out
 }
 
@@ -388,11 +406,10 @@ func scopedProjects(allowlist []string, repo string) ([]string, bool) {
 	if len(allowlist) == 0 {
 		return []string{repo}, true
 	}
-	for _, project := range allowlist {
-		if project == repo {
-			return []string{repo}, true
-		}
+	if slices.Contains(allowlist, repo) {
+		return []string{repo}, true
 	}
+
 	return nil, false
 }
 
@@ -403,6 +420,7 @@ func normalizeLimit(limit int) int {
 	if limit > 100 {
 		return 100
 	}
+
 	return limit
 }
 
@@ -412,7 +430,7 @@ func issueListItem(organization string, issue sentryIssue) adapter.ListItem {
 		Title:        strings.TrimSpace(issue.Title),
 		Description:  listDescription(issue),
 		State:        strings.TrimSpace(issue.Status),
-		Provider:     "sentry",
+		Provider:     providerSentry,
 		Identifier:   issueIdentifier(issue),
 		ContainerRef: issueProject(issue),
 		URL:          strings.TrimSpace(issue.Permalink),
@@ -424,10 +442,11 @@ func issueListItem(organization string, issue sentryIssue) adapter.ListItem {
 
 func issueToWorkItem(organization string, issue sentryIssue) domain.Session {
 	issueID := strings.TrimSpace(issue.ID)
+
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(organization, issueID),
-		Source:        "sentry",
+		Source:        providerSentry,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{issueID},
 		Title:         strings.TrimSpace(issue.Title),
@@ -463,10 +482,11 @@ func aggregateIssues(organization string, issues []sentryIssue) domain.Session {
 	if len(projectList) > 0 {
 		metadata["sentry_projects"] = projectList
 	}
+
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(organization, strings.TrimSpace(issues[0].ID)),
-		Source:        "sentry",
+		Source:        providerSentry,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: sourceIDs,
 		Title:         title,
@@ -516,6 +536,7 @@ func issueMetadata(organization string, issues []sentryIssue) map[string]any {
 		metadata["sentry_permalink"] = strings.TrimSpace(issues[0].Permalink)
 		metadata["sentry_project"] = issueProject(issues[0])
 	}
+
 	return metadata
 }
 
@@ -532,13 +553,14 @@ func sentryTrackerRefs(issues []sentryIssue) []domain.TrackerReference {
 		}
 		seen[issueID] = struct{}{}
 		refs = append(refs, domain.TrackerReference{
-			Provider: "sentry",
+			Provider: providerSentry,
 			Kind:     "issue",
 			ID:       issueIdentifier(issue),
 			URL:      strings.TrimSpace(issue.Permalink),
 			Repo:     strings.TrimSpace(issue.Project.Slug),
 		})
 	}
+
 	return refs
 }
 
@@ -546,6 +568,7 @@ func issueIdentifier(issue sentryIssue) string {
 	if shortID := strings.TrimSpace(issue.ShortID); shortID != "" {
 		return shortID
 	}
+
 	return strings.TrimSpace(issue.ID)
 }
 
@@ -553,6 +576,7 @@ func issueProject(issue sentryIssue) string {
 	if slug := strings.TrimSpace(issue.Project.Slug); slug != "" {
 		return slug
 	}
+
 	return strings.TrimSpace(issue.Project.Name)
 }
 
@@ -573,6 +597,7 @@ func listDescription(issue sentryIssue) string {
 	if permalink := strings.TrimSpace(issue.Permalink); permalink != "" {
 		parts = append(parts, "url: "+permalink)
 	}
+
 	return strings.Join(parts, " | ")
 }
 
@@ -599,31 +624,34 @@ func issueSection(issue sentryIssue) string {
 	if permalink := strings.TrimSpace(issue.Permalink); permalink != "" {
 		lines = append(lines, "url: "+permalink)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
 func issueFirstSeen(issue sentryIssue) time.Time {
 	if issue.FirstSeen != nil {
-		return issue.FirstSeen.Time.UTC()
+		return issue.FirstSeen.UTC()
 	}
+
 	return time.Time{}
 }
 
 func issueUpdatedAt(issue sentryIssue) time.Time {
 	if issue.LastSeen != nil {
-		return issue.LastSeen.Time.UTC()
+		return issue.LastSeen.UTC()
 	}
+
 	return issueFirstSeen(issue)
 }
 
 func parseNextCursor(link string) (string, bool) {
-	for _, part := range strings.Split(link, ",") {
+	for part := range strings.SplitSeq(link, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
 		params := map[string]string{}
-		for _, field := range strings.Split(part, ";") {
+		for field := range strings.SplitSeq(part, ";") {
 			field = strings.TrimSpace(field)
 			if field == "" || strings.HasPrefix(field, "<") {
 				continue
@@ -644,6 +672,7 @@ func parseNextCursor(link string) (string, bool) {
 			return cursor, true
 		}
 	}
+
 	return "", false
 }
 
@@ -665,6 +694,7 @@ func parseExternalID(externalID string) (string, string, error) {
 	if organization == "" || issueID == "" {
 		return "", "", fmt.Errorf("invalid sentry external id %q", externalID)
 	}
+
 	return organization, issueID, nil
 }
 
@@ -674,6 +704,7 @@ func parseSentryTime(raw string) (time.Time, error) {
 			return parsed.UTC(), nil
 		}
 	}
+
 	return time.Time{}, fmt.Errorf("parse sentry time %q", raw)
 }
 
@@ -681,5 +712,6 @@ func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
 	}
+
 	return ts.UTC().Format(time.RFC3339)
 }

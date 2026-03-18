@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -61,7 +62,8 @@ func (s *ohMyPiSession) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		// Context cancelled, abort the session
-		s.Abort(ctx)
+		s.Abort(ctx) //nolint:errcheck // best-effort cleanup
+
 		return ctx.Err()
 	case err := <-done:
 		// Subprocess exited
@@ -75,7 +77,7 @@ func (s *ohMyPiSession) Wait(ctx context.Context) error {
 
 			// Compress the final log segment
 			compressedPath := s.logPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
-			go compressFile(s.logPath, compressedPath)
+			go compressFile(s.logPath, compressedPath) //nolint:errcheck // best-effort async compression
 		}
 
 		s.closeEvents()
@@ -85,6 +87,7 @@ func (s *ohMyPiSession) Wait(ctx context.Context) error {
 			if s.aborted {
 				return nil // Graceful abort, not an error
 			}
+
 			return fmt.Errorf("bridge subprocess exited: %w", err)
 		}
 
@@ -99,16 +102,17 @@ func (s *ohMyPiSession) Events() <-chan adapter.AgentEvent {
 
 // SendMessage sends a message to the running agent.
 // Used for foreman iteration and critique feedback.
-func (s *ohMyPiSession) SendMessage(ctx context.Context, msg string) error {
+func (s *ohMyPiSession) SendMessage(_ context.Context, msg string) error {
 	return s.sendMessage(msg)
 }
 
 // Abort terminates the agent session gracefully.
 // Returns an error if the session cannot be aborted.
-func (s *ohMyPiSession) Abort(ctx context.Context) error {
+func (s *ohMyPiSession) Abort(_ context.Context) error {
 	s.mu.Lock()
 	if s.aborted {
 		s.mu.Unlock()
+
 		return nil // Already aborted
 	}
 	s.aborted = true
@@ -137,7 +141,7 @@ func (s *ohMyPiSession) Abort(ctx context.Context) error {
 		// Timeout, force kill
 		if s.cmd.Process != nil {
 			slog.Warn("bridge subprocess did not exit gracefully, sending SIGKILL")
-			s.cmd.Process.Kill()
+			s.cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
 		}
 	case <-done:
 		// Subprocess exited gracefully
@@ -196,7 +200,7 @@ func (s *ohMyPiSession) sendMessage(text string) error {
 }
 
 // SendAnswer sends an answer to resolve a pending ask_foreman tool call.
-func (s *ohMyPiSession) SendAnswer(ctx context.Context, answer string) error {
+func (s *ohMyPiSession) SendAnswer(_ context.Context, answer string) error {
 	msg := bridgeMsg{Type: "answer", Text: answer}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -244,7 +248,8 @@ func (s *ohMyPiSession) readEvents() {
 			Event json.RawMessage `json:"event"`
 		}
 		if err := json.Unmarshal(line, &rawEvent); err != nil {
-			slog.Warn("failed to parse bridge event", "line", string(line), "err", err)
+			slog.Warn("failed to parse bridge event", "line", string(line), "err", err) //nolint:gosec // G706: log message is static, taint analysis false positive
+
 			continue
 		}
 
@@ -252,6 +257,7 @@ func (s *ohMyPiSession) readEvents() {
 		event, err := s.mapBridgeEvent(rawEvent)
 		if err != nil {
 			slog.Warn("failed to map bridge event", "err", err)
+
 			continue
 		}
 
@@ -288,13 +294,14 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 
 	eventType, ok := eventMap["type"].(string)
 	if !ok {
-		return nil, fmt.Errorf("missing event type")
+		return nil, errors.New("missing event type")
 	}
 
 	switch eventType {
 	case "input":
 		text, _ := eventMap["text"].(string)
 		inputKind, _ := eventMap["input_kind"].(string)
+
 		return &adapter.AgentEvent{
 			Type:      "input",
 			Timestamp: time.Now(),
@@ -305,8 +312,9 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 	case "assistant_output":
 		text, ok := eventMap["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing assistant_output text")
+			return nil, errors.New("missing assistant_output text")
 		}
+
 		return &adapter.AgentEvent{
 			Type:      "text_delta",
 			Timestamp: time.Now(),
@@ -317,6 +325,7 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 		toolName, _ := eventMap["tool"].(string)
 		text, _ := eventMap["text"].(string)
 		intent, _ := eventMap["intent"].(string)
+
 		return &adapter.AgentEvent{
 			Type:      "tool_start",
 			Timestamp: time.Now(),
@@ -327,6 +336,7 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 	case "tool_output":
 		toolName, _ := eventMap["tool"].(string)
 		text, _ := eventMap["text"].(string)
+
 		return &adapter.AgentEvent{
 			Type:      "tool_output",
 			Timestamp: time.Now(),
@@ -338,6 +348,7 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 		toolName, _ := eventMap["tool"].(string)
 		text, _ := eventMap["text"].(string)
 		isError, _ := eventMap["is_error"].(bool)
+
 		return &adapter.AgentEvent{
 			Type:      "tool_result",
 			Timestamp: time.Now(),
@@ -348,9 +359,10 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 	case "question":
 		question, ok := eventMap["question"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing question text")
+			return nil, errors.New("missing question text")
 		}
 		context, _ := eventMap["context"].(string)
+
 		return &adapter.AgentEvent{
 			Type:      "question",
 			Timestamp: time.Now(),
@@ -361,9 +373,10 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 	case "foreman_proposed":
 		text, ok := eventMap["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing foreman_proposed text")
+			return nil, errors.New("missing foreman_proposed text")
 		}
 		uncertain, _ := eventMap["uncertain"].(bool)
+
 		return &adapter.AgentEvent{
 			Type:      "foreman_proposed",
 			Timestamp: time.Now(),
@@ -409,6 +422,7 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -416,13 +430,9 @@ func firstNonEmpty(values ...string) string {
 func (s *ohMyPiSession) readStderr() {
 	scanner := bufio.NewScanner(s.stderr)
 	for scanner.Scan() {
-		slog.Debug("bridge stderr", "line", scanner.Text())
+		slog.Debug("bridge stderr", "line", scanner.Text()) //nolint:gosec // G706: log message is static, taint analysis false positive
 	}
 }
-
-// checkLogRotation checks if log rotation is needed.
-// Deprecated: rotation is now handled inline in readEvents.
-func (s *ohMyPiSession) checkLogRotation() {}
 
 // rotateLogLocked performs log rotation.
 // Must be called with s.mu held.
@@ -449,9 +459,10 @@ func (s *ohMyPiSession) rotateLogLocked() {
 	}
 
 	// Open fresh log file (still under lock so writers don't see a nil logFile).
-	newFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	newFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.Error("failed to open new log file after rotation", "err", err)
+
 		return
 	}
 	s.logFile = newFile
@@ -466,6 +477,7 @@ func (s *ohMyPiSession) rotateLogLocked() {
 	go func() {
 		if err := compressFile(rotateSrc, compressedPath); err != nil {
 			slog.Warn("failed to compress log segment", "err", err)
+
 			return
 		}
 		cleanupOldSegments(logDir, sessionID)
@@ -484,6 +496,7 @@ func compressFile(src, dst string) error {
 	dstFile, err := os.Create(dst)
 	if err != nil {
 		srcFile.Close()
+
 		return err
 	}
 
@@ -499,12 +512,14 @@ func compressFile(src, dst string) error {
 
 	if err != nil {
 		os.Remove(dst) // remove incomplete output
+
 		return err
 	}
 
 	if err := os.Remove(src); err != nil {
 		slog.Warn("failed to remove log file after compression", "path", src, "err", err)
 	}
+
 	return nil
 }
 
@@ -526,6 +541,7 @@ func cleanupOldSegments(logDir, sessionID string) {
 		if err != nil {
 			return false
 		}
+
 		return fi.ModTime().Before(fj.ModTime())
 	})
 

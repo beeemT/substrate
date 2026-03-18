@@ -71,17 +71,6 @@ type linearInitiative struct {
 	Projects    linearProjectConn `json:"projects"`
 }
 
-type linearInitiativeConn struct {
-	Nodes []linearInitiative `json:"nodes"`
-}
-
-// GraphQL envelope types
-
-type gqlResponse struct {
-	Data   interface{} `json:"data"`
-	Errors []gqlError  `json:"errors"`
-}
-
 type gqlError struct {
 	Message string `json:"message"`
 }

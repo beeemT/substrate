@@ -37,6 +37,7 @@ func (r *planRow) toDomain() (domain.Plan, error) {
 			faq = []domain.FAQEntry{} // Default to empty on parse error
 		}
 	}
+
 	return domain.Plan{
 		ID:               r.ID,
 		WorkItemID:       r.WorkItemID,
@@ -54,6 +55,7 @@ func rowFromPlan(p domain.Plan) planRow {
 	if err != nil {
 		faqJSON = []byte("[]") // Default to empty array
 	}
+
 	return planRow{
 		ID:               p.ID,
 		WorkItemID:       p.WorkItemID,
@@ -78,6 +80,7 @@ func (r PlanRepo) Get(ctx context.Context, id string) (domain.Plan, error) {
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM plans WHERE id = ?`, id); err != nil {
 		return domain.Plan{}, fmt.Errorf("get plan %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -86,6 +89,7 @@ func (r PlanRepo) GetByWorkItemID(ctx context.Context, workItemID string) (domai
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM plans WHERE work_item_id = ?`, workItemID); err != nil {
 		return domain.Plan{}, fmt.Errorf("get plan by work item %s: %w", workItemID, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -97,6 +101,7 @@ func (r PlanRepo) Create(ctx context.Context, p domain.Plan) error {
 	if err != nil {
 		return fmt.Errorf("create plan %s: %w", p.ID, err)
 	}
+
 	return nil
 }
 
@@ -115,6 +120,7 @@ func (r PlanRepo) Update(ctx context.Context, p domain.Plan) error {
 	if n == 0 {
 		return fmt.Errorf("update plan %s: %w", p.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -123,6 +129,7 @@ func (r PlanRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete plan %s: %w", id, err)
 	}
+
 	return nil
 }
 

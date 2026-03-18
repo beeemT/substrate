@@ -29,6 +29,7 @@ func (r *duplicateCreateWorkItemRepo) Get(_ context.Context, id string) (domain.
 			return item, nil
 		}
 	}
+
 	return domain.Session{}, repository.ErrNotFound
 }
 
@@ -49,6 +50,7 @@ func (r *duplicateCreateWorkItemRepo) List(_ context.Context, filter repository.
 		}
 		items = append(items, item)
 	}
+
 	return items, nil
 }
 
@@ -68,6 +70,7 @@ func (r *duplicateCreateWorkItemRepo) Delete(_ context.Context, id string) error
 		}
 	}
 	r.items = filtered
+
 	return nil
 }
 
@@ -81,6 +84,7 @@ func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.Task
 	if !ok {
 		return domain.Task{}, repository.ErrNotFound
 	}
+
 	return session, nil
 }
 
@@ -91,6 +95,7 @@ func (r *sessionSearchDeleteRepo) ListByWorkItemID(_ context.Context, workItemID
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -101,6 +106,7 @@ func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID s
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -111,6 +117,7 @@ func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspace
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -121,6 +128,7 @@ func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, insta
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -131,21 +139,25 @@ func (r *sessionSearchDeleteRepo) SearchHistory(_ context.Context, filter domain
 	if filter.WorkspaceID != nil && r.entry.WorkspaceID != *filter.WorkspaceID {
 		return nil, nil
 	}
+
 	return []domain.SessionHistoryEntry{r.entry}, nil
 }
 
 func (r *sessionSearchDeleteRepo) Create(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
+
 	return nil
 }
 
 func (r *sessionSearchDeleteRepo) Update(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
+
 	return nil
 }
 
 func (r *sessionSearchDeleteRepo) Delete(_ context.Context, id string) error {
 	delete(r.sessions, id)
+
 	return nil
 }
 
@@ -927,6 +939,7 @@ func newDuplicatePromptTestApp() (App, domain.Session, domain.Session, domain.Se
 	app.rebuildSidebar()
 	app.sidebar.SelectWorkItem(other.ID)
 	_ = app.updateContentFromState()
+
 	return app, existing, other, requested
 }
 
@@ -1189,6 +1202,7 @@ func newSidebarDrilldownTestApp() App {
 	app.currentWorkItemID = workItem.ID
 	app.sidebar.SelectWorkItem(workItem.ID)
 	_ = app.updateContentFromState()
+
 	return app
 }
 
@@ -1242,6 +1256,7 @@ func newPlanningDrilldownTestApp() App {
 	app.currentWorkItemID = workItem.ID
 	app.sidebar.SelectWorkItem(workItem.ID)
 	_ = app.updateContentFromState()
+
 	return app
 }
 
@@ -1456,6 +1471,7 @@ func TestPlanningTaskViewShowsPlanReviewNoticeWithoutAutoNavigating(t *testing.T
 	for _, hint := range updated.currentHints() {
 		if hint.Key == "Enter" && hint.Label == "Open overview" {
 			foundEnter = true
+
 			break
 		}
 	}
@@ -1660,6 +1676,7 @@ func TestSidebarSessionsHintsUseTasksLabel(t *testing.T) {
 		if hint.Label != "Tasks" {
 			t.Fatalf("right-arrow hint label = %q, want %q", hint.Label, "Tasks")
 		}
+
 		return
 	}
 
@@ -1801,6 +1818,7 @@ func TestSidebarSourceDetailsShowsQuestionAlertWithoutAutoNavigating(t *testing.
 	for _, hint := range hints {
 		if hint.Key == "Enter" && hint.Label == "Open overview" {
 			foundEnter = true
+
 			break
 		}
 	}
@@ -1889,6 +1907,7 @@ func TestSidebarSourceDetailsShowsCompletedAlertWithoutAutoNavigating(t *testing
 	for _, hint := range hints {
 		if hint.Key == "Enter" && hint.Label == "Open overview" {
 			foundEnter = true
+
 			break
 		}
 	}
@@ -1994,6 +2013,7 @@ func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T
 	for _, hint := range updated.currentHints() {
 		if hint.Key == "Enter" && hint.Label == "Open overview" {
 			foundEnter = true
+
 			break
 		}
 	}

@@ -20,14 +20,14 @@ import (
 func enableKittyKeyboard() {
 	// Write to stderr, which is bubbletea's default renderer output and is
 	// therefore the fd connected to the controlling terminal.
-	os.Stderr.WriteString("\x1b[>1u") //nolint:errcheck
+	os.Stderr.WriteString("\x1b[>1u")
 }
 
 // disableKittyKeyboard pops the kitty keyboard protocol stack, restoring the
 // terminal's previous keyboard encoding.  Must be called after tea.Program.Run()
 // returns.
 func disableKittyKeyboard() {
-	os.Stderr.WriteString("\x1b[<u") //nolint:errcheck
+	os.Stderr.WriteString("\x1b[<u")
 }
 
 // macOSKeyFilter is a tea.WithFilter hook that runs before every message is
@@ -52,6 +52,7 @@ func macOSKeyFilter(_ tea.Model, msg tea.Msg) tea.Msg {
 	if translated, ok := translateKittySequence(msg); ok {
 		return translated
 	}
+
 	return msg
 }
 
@@ -79,5 +80,6 @@ func translateKittySequence(msg tea.Msg) (tea.KeyMsg, bool) {
 		// Kitty: ⌘+Backspace (Super)  →  ctrl+u  →  DeleteBeforeCursor
 		return tea.KeyMsg{Type: tea.KeyCtrlU}, true
 	}
+
 	return tea.KeyMsg{}, false
 }

@@ -23,8 +23,8 @@ func stripANSI(s string) string {
 }
 
 func trimSidebarBorder(line string) string {
-	if strings.HasSuffix(line, "│") {
-		return strings.TrimSuffix(line, "│")
+	if trimmed, ok := strings.CutSuffix(line, "│"); ok {
+		return trimmed
 	}
 
 	return line
@@ -45,6 +45,7 @@ func makeSessions(n int) []views.SidebarEntry {
 			State:      domain.SessionIngested,
 		}
 	}
+
 	return sessions
 }
 

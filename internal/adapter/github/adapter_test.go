@@ -24,6 +24,7 @@ func jsonResp(t *testing.T, status int, v any) *http.Response {
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
 	}
+
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(b)))}
 }
 
@@ -33,6 +34,7 @@ func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
+
 	return a
 }
 
@@ -41,6 +43,7 @@ func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
 	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		seenHost = req.URL.Host
 		seenPath = req.URL.Path
+
 		return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
 	}), func(context.Context) (string, error) { return "token-from-gh", nil })
 	if err != nil {
@@ -65,7 +68,11 @@ func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
 		}
-	}), func(context.Context) (string, error) { resolved = true; return "resolved-token", nil })
+	}), func(context.Context) (string, error) {
+		resolved = true
+
+		return "resolved-token", nil
+	})
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
@@ -87,12 +94,15 @@ func TestCreatedByMeUsesViewerLoginWhenAssigneeConfigured(t *testing.T) {
 		switch req.URL.Path {
 		case "/user":
 			userCalls++
+
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
 		case "/search/issues":
 			issueQuery = req.URL.RawQuery
+
 			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{}}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
+
 			return nil, nil
 		}
 	}), func(context.Context) (string, error) { return "token-from-gh", nil })
@@ -181,6 +191,7 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 			if pullLookups == 1 {
 				return jsonResp(t, http.StatusOK, []any{}), nil
 			}
+
 			return jsonResp(t, http.StatusOK, []any{map[string]any{"number": 7, "draft": true, "html_url": "https://github.com/acme/rocket/pull/7"}}), nil
 		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
 			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true, "html_url": "https://github.com/acme/rocket/pull/7"}), nil
@@ -224,12 +235,14 @@ func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t
 		case "/search/issues":
 			issuePath = req.URL.Path
 			issueQuery = req.URL.RawQuery
+
 			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
 				map[string]any{"number": 7, "title": "Shared bug", "state": "closed", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "html_url": "https://github.com/other/engine/issues/7", "repository_url": "https://api.github.com/repos/other/engine"},
 				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "html_url": "https://github.com/acme/rocket/pull/8", "repository_url": "https://api.github.com/repos/acme/rocket"},
 			}}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
+
 			return nil, nil
 		}
 	}))
@@ -333,6 +346,7 @@ func TestPlanApprovedAddsComments(t *testing.T) {
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
 		case "/repos/acme/rocket/issues/42/comments", "/repos/acme/rocket/issues/43/comments":
 			commentPaths = append(commentPaths, req.URL.Path)
+
 			return jsonResp(t, http.StatusCreated, map[string]any{"id": 1}), nil
 		case "/repos/acme/rocket/issues/42":
 			return jsonResp(t, http.StatusOK, map[string]any{"number": 42, "title": "Issue", "state": "open", "labels": []any{}, "body": "body"}), nil
@@ -359,6 +373,7 @@ func TestLifecycleCreateAddsGitHubResolvesFooter(t *testing.T) {
 		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
 			payload, _ := io.ReadAll(req.Body)
 			createBody = string(payload)
+
 			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
@@ -384,6 +399,7 @@ func TestLifecycleCreateAddsLinearResolvesFooter(t *testing.T) {
 		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
 			payload, _ := io.ReadAll(req.Body)
 			createBody = string(payload)
+
 			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
@@ -407,6 +423,7 @@ func TestListIssuesRejectsUnsupportedNormalizedView(t *testing.T) {
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
+
 			return nil, nil
 		}
 	}))

@@ -84,6 +84,7 @@ func TestIntegration_Client_List(t *testing.T) {
 	for _, wt := range worktrees {
 		if wt.Branch == "main" && wt.IsMain {
 			hasMain = true
+
 			break
 		}
 	}
@@ -228,8 +229,10 @@ func createPlainGitRepo(t *testing.T, parentDir, name string) (string, error) {
 	}
 	if err := seedTestGitRepo(repoDir); err != nil {
 		os.RemoveAll(repoDir)
+
 		return "", err
 	}
+
 	return repoDir, nil
 }
 
@@ -245,10 +248,12 @@ func createTestGitWorkRepo(t *testing.T) (string, error) {
 
 	if err := seedTestGitRepo(repoDir); err != nil {
 		os.RemoveAll(repoDir)
+
 		return "", err
 	}
 	if err := runGitWorkInit(repoDir); err != nil {
 		os.RemoveAll(repoDir)
+
 		return "", err
 	}
 
@@ -310,5 +315,6 @@ func runGitWorkInit(repoDir string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git-work init: %w (output: %s)", err, string(output))
 	}
+
 	return nil
 }

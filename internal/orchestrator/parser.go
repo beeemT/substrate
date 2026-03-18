@@ -28,6 +28,7 @@ func (p *PlanParser) Parse(content string) (domain.RawPlanOutput, domain.ParseEr
 	yamlBlock, found := extractYAMLBlock(content, "substrate-plan")
 	if !found {
 		errors.MissingBlock = true
+
 		return output, errors
 	}
 
@@ -38,12 +39,14 @@ func (p *PlanParser) Parse(content string) (domain.RawPlanOutput, domain.ParseEr
 	if err := yaml.Unmarshal([]byte(yamlBlock), &planYAML); err != nil {
 		errors.InvalidYAML = true
 		errors.YAMLParseError = err.Error()
+
 		return output, errors
 	}
 
 	// Check for empty execution groups
 	if len(planYAML.ExecutionGroups) == 0 {
 		errors.EmptyExecutionGroups = true
+
 		return output, errors
 	}
 
@@ -118,6 +121,7 @@ func (p *PlanParser) ParseAndValidate(content string, discoveredRepos []domain.R
 	}
 
 	validationErrors := p.Validate(output, discoveredRepos)
+
 	return output, validationErrors
 }
 
@@ -131,6 +135,7 @@ func extractYAMLBlock(content, infoString string) (string, bool) {
 	if len(match) < 2 {
 		return "", false
 	}
+
 	return strings.TrimSpace(match[1]), true
 }
 
@@ -177,7 +182,7 @@ func extractSubPlans(content string) []domain.RawSubPlan {
 
 		// match[0] is start of full match, match[1] is end of full match
 		// match[2] is start of capture group 1, match[3] is end of capture group 1
-		repoName := string(content[match[2]:match[3]])
+		repoName := content[match[2]:match[3]]
 		repoName = strings.TrimSpace(repoName)
 		repoName = strings.TrimRight(repoName, ":-")
 		repoName = strings.TrimSpace(repoName)
@@ -228,17 +233,19 @@ func validateSubPlanCompleteness(subPlans []domain.RawSubPlan) []string {
 		for _, req := range requiredSubPlanSections {
 			body := extractSubSection(subPlan.Content, req.heading)
 			if req.requireBody && strings.TrimSpace(body) == "" {
-				issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, fmt.Sprintf("missing ### %s", req.heading)))
+				issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, "missing ### "+req.heading))
 				continue
 			}
 			if req.requireList {
 				itemCount := countMarkdownListItems(body)
 				if itemCount < req.minListItems {
-					issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, fmt.Sprintf("### %s must include at least %d list item(s)", req.heading, req.minListItems)))
+					msg := fmt.Sprintf("### %s must include at least %d list item(s)", req.heading, req.minListItems)
+					issues = append(issues, domain.FormatIncompleteSubPlanIssue(subPlan.RepoName, msg))
 				}
 			}
 		}
 	}
+
 	return issues
 }
 
@@ -259,6 +266,7 @@ func extractSubSection(content, heading string) string {
 	if nextMatch == nil {
 		return strings.TrimSpace(content[contentStart:])
 	}
+
 	return strings.TrimSpace(content[contentStart : contentStart+nextMatch[0]])
 }
 
@@ -267,6 +275,7 @@ func countMarkdownListItems(content string) int {
 		return 0
 	}
 	itemRe := regexp.MustCompile(`(?m)^\s*(?:[-*+] |\d+\. )\S`)
+
 	return len(itemRe.FindAllString(content, -1))
 }
 
@@ -295,6 +304,7 @@ func containsRepo(repos []string, name string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -308,5 +318,6 @@ func dedupe(s []string) []string {
 			result = append(result, v)
 		}
 	}
+
 	return result
 }

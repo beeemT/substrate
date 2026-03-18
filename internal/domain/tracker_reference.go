@@ -25,5 +25,5 @@ type TrackerReference struct {
 	Repo       string  `json:"repo,omitempty"`
 	ProjectID  int64   `json:"project_id,omitempty"`
 	Number     int64   `json:"number,omitempty"`
-	Repository RepoRef `json:"repository,omitempty"`
+	Repository RepoRef `json:"repository,omitzero"`
 }

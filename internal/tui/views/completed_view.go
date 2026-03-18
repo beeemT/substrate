@@ -20,6 +20,8 @@ type MRInfo struct {
 }
 
 // CompletedModel shows durable PR/MR completion details and review artifacts.
+//
+//nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type CompletedModel struct {
 	title        string
 	statusLabel  string
@@ -56,12 +58,12 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 	if len(m.mrLinks) > 0 {
 		hints = append([]KeybindHint{{Key: "↑↓", Label: "Select"}, {Key: "Enter", Label: "Open"}}, hints...)
 	}
+
 	return hints
 }
 
 func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "up", "k":
 			if len(m.mrLinks) > 0 && m.selectedLink > 0 {
@@ -74,10 +76,12 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 		case "enter":
 			if len(m.mrLinks) > 0 && strings.TrimSpace(m.mrLinks[m.selectedLink].MRURL) != "" {
 				url := m.mrLinks[m.selectedLink].MRURL
+
 				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
 			}
 		}
 	}
+
 	return m, nil
 }
 
@@ -123,6 +127,6 @@ func (m CompletedModel) View() string {
 	}
 
 	lines = append(lines, "", renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width))
+
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }
-

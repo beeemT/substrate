@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ func jsonResponse(t *testing.T, status int, header http.Header, body any) *http.
 	if header.Get("Content-Type") == "" {
 		header.Set("Content-Type", "application/json")
 	}
+
 	return &http.Response{
 		StatusCode: status,
 		Header:     header,
@@ -44,12 +46,14 @@ func testAdapter(t *testing.T, cfg config.SentryConfig, rt roundTripFunc) *Sentr
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
+
 	return a
 }
 
 func testIssue(id, shortID, title, project string) sentryIssue {
 	firstSeen := &sentryTime{Time: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)}
 	lastSeen := &sentryTime{Time: time.Date(2024, 1, 3, 4, 5, 6, 0, time.UTC)}
+
 	return sentryIssue{
 		ID:        id,
 		ShortID:   shortID,
@@ -88,11 +92,12 @@ func issuePayload(issue sentryIssue, userCount any) map[string]any {
 		},
 	}
 	if issue.FirstSeen != nil {
-		payload["firstSeen"] = issue.FirstSeen.Time.Format(time.RFC3339Nano)
+		payload["firstSeen"] = issue.FirstSeen.Format(time.RFC3339Nano)
 	}
 	if issue.LastSeen != nil {
-		payload["lastSeen"] = issue.LastSeen.Time.Format(time.RFC3339Nano)
+		payload["lastSeen"] = issue.LastSeen.Format(time.RFC3339Nano)
 	}
+
 	return payload
 }
 
@@ -109,6 +114,7 @@ func TestNewRequiresTokenAndOrganization(t *testing.T) {
 
 	a, err := newWithClient(context.Background(), config.SentryConfig{Token: " token ", Organization: " acme "}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s", req.URL.String())
+
 		return nil, nil
 	}))
 	if err != nil {
@@ -134,12 +140,12 @@ func TestCapabilitiesExposeSourceOnlyIssueBrowse(t *testing.T) {
 		t.Fatalf("issue capabilities = %#v", issues)
 	}
 	for _, want := range []string{"assigned_to_me", "all"} {
-		if !contains(issues.Views, want) {
+		if !slices.Contains(issues.Views, want) {
 			t.Fatalf("views = %#v, want %q", issues.Views, want)
 		}
 	}
 	for _, want := range []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"} {
-		if !contains(issues.States, want) {
+		if !slices.Contains(issues.States, want) {
 			t.Fatalf("states = %#v, want %q", issues.States, want)
 		}
 	}
@@ -228,6 +234,7 @@ func TestListSelectableMapsIssuesAndPagination(t *testing.T) {
 		}
 		header := http.Header{}
 		header.Set("Link", `<https://sentry.example/api/0/organizations/acme/issues/?cursor=0:100:0>; rel="next"; results="true"; cursor="0:100:0"`)
+
 		return jsonResponse(t, http.StatusOK, header, []map[string]any{issuePayload(issue, 3)}), nil
 	}))
 
@@ -290,6 +297,7 @@ func TestListSelectableOutsideAllowlistReturnsEmpty(t *testing.T) {
 
 	a := testAdapter(t, config.SentryConfig{Token: "token", Organization: "acme", Projects: []string{"web"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s", req.URL.String())
+
 		return nil, nil
 	}))
 	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Repo: "api"})
@@ -309,6 +317,7 @@ func TestResolveSingleIssue(t *testing.T) {
 		if req.URL.Path != "/api/0/organizations/acme/issues/101/" {
 			t.Fatalf("path = %q, want detail endpoint", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, nil, issuePayload(issue, 3)), nil
 	}))
 
@@ -352,6 +361,7 @@ func TestResolveMultipleIssuesAggregates(t *testing.T) {
 		if !ok {
 			t.Fatalf("unexpected request path: %s", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, nil, issue), nil
 	}))
 
@@ -386,6 +396,7 @@ func TestFetchParsesExternalIDAndFallsBackToNumericIdentifier(t *testing.T) {
 		if req.URL.Path != "/api/0/organizations/acme-prod/issues/303/" {
 			t.Fatalf("path = %q, want org from external id", req.URL.Path)
 		}
+
 		return jsonResponse(t, http.StatusOK, nil, issuePayload(issue, 3)), nil
 	}))
 
@@ -413,6 +424,7 @@ func TestSourceOnlyMethodsAreNoOps(t *testing.T) {
 
 	a := testAdapter(t, config.SentryConfig{Token: "token", Organization: "acme"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("unexpected request: %s", req.URL.String())
+
 		return nil, nil
 	}))
 
@@ -439,15 +451,6 @@ func TestSourceOnlyMethodsAreNoOps(t *testing.T) {
 	}
 }
 
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
-
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -457,6 +460,7 @@ func equalStrings(got, want []string) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -471,6 +475,7 @@ func anyToStrings(v any) []string {
 				out = append(out, s)
 			}
 		}
+
 		return out
 	default:
 		return nil

@@ -60,6 +60,7 @@ func (h *planningHarnessSpy) StartSession(_ context.Context, opts adapter.Sessio
 	events := make(chan adapter.AgentEvent, 1)
 	events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
 	close(events)
+
 	return &planningHarnessSession{id: opts.SessionID, events: events}, nil
 }
 
@@ -91,7 +92,7 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 		templates: templates,
 	}
 
-	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
+	rawContent, retries, warnings, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
 			Title:       "Investigate planning failure",
 			ExternalID:  "ISSUE-123",
@@ -105,6 +106,9 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 		SessionID:        "plan-123",
 		SessionDraftPath: draftPath,
 	}, "workspace-123")
+	_ = rawContent
+	_ = retries
+	_ = warnings
 	if planErr != nil {
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
@@ -129,6 +133,7 @@ func (h *scriptedPlanningHarness) Name() string { return "planning-scripted" }
 
 func (h *scriptedPlanningHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.lastOpts = opts
+
 	return h.startSession(opts)
 }
 
@@ -145,6 +150,7 @@ func (s *scriptedPlanningSession) SendMessage(ctx context.Context, msg string) e
 	if s.sendMessage != nil {
 		return s.sendMessage(ctx, msg)
 	}
+
 	return nil
 }
 func (s *scriptedPlanningSession) Abort(context.Context) error { return nil }
@@ -174,10 +180,12 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 				time.Sleep(20 * time.Millisecond)
 				if err := os.WriteFile(opts.DraftPath, []byte(finalPlan), 0o644); err != nil {
 					writeErrCh <- err
+
 					return
 				}
 				events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
 			}()
+
 			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
 		},
 	}
@@ -243,9 +251,11 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 					return err
 				}
 				events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+
 				return nil
 			}
 			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+
 			return session, nil
 		},
 	}

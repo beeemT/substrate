@@ -35,23 +35,30 @@ func newMockSession(id string, events ...adapter.AgentEvent) *mockAgentSession {
 	for _, e := range events {
 		ch <- e
 	}
+
 	return &mockAgentSession{id: id, eventsCh: ch}
 }
 
-func (s *mockAgentSession) ID() string                        { return s.id }
-func (s *mockAgentSession) Wait(ctx context.Context) error    { <-ctx.Done(); return ctx.Err() }
+func (s *mockAgentSession) ID() string { return s.id }
+func (s *mockAgentSession) Wait(ctx context.Context) error {
+	<-ctx.Done()
+
+	return ctx.Err()
+}
 func (s *mockAgentSession) Events() <-chan adapter.AgentEvent { return s.eventsCh }
-func (s *mockAgentSession) SendMessage(ctx context.Context, msg string) error {
+func (s *mockAgentSession) SendMessage(_ context.Context, msg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, msg)
+
 	return nil
 }
 
-func (s *mockAgentSession) Abort(ctx context.Context) error {
+func (s *mockAgentSession) Abort(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aborted = true
+
 	return s.abortErr
 }
 
@@ -71,7 +78,7 @@ type mockAgentHarness struct {
 
 func (h *mockAgentHarness) Name() string { return "mock" }
 
-func (h *mockAgentHarness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+func (h *mockAgentHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -93,6 +100,7 @@ func (h *mockAgentHarness) StartSession(ctx context.Context, opts adapter.Sessio
 func writeTestSessionLog(sessionsDir, sessionID, output string) error {
 	logPath := filepath.Join(sessionsDir, sessionID+".log")
 	entry := fmt.Sprintf(`{"type":"event","event":{"type":"assistant_output","text":%q}}`+"\n", output)
+
 	return os.WriteFile(logPath, []byte(entry), 0o644)
 }
 
@@ -110,44 +118,49 @@ func newMockPlanRepo() *mockPlanRepo {
 	return &mockPlanRepo{plans: make(map[string]domain.Plan)}
 }
 
-func (r *mockPlanRepo) Get(ctx context.Context, id string) (domain.Plan, error) {
+func (r *mockPlanRepo) Get(_ context.Context, id string) (domain.Plan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if p, ok := r.plans[id]; ok {
 		return p, nil
 	}
+
 	return domain.Plan{}, repository.ErrNotFound
 }
 
-func (r *mockPlanRepo) GetByWorkItemID(ctx context.Context, workItemID string) (domain.Plan, error) {
+func (r *mockPlanRepo) GetByWorkItemID(_ context.Context, _ string) (domain.Plan, error) {
 	return domain.Plan{}, repository.ErrNotFound
 }
 
-func (r *mockPlanRepo) Create(ctx context.Context, plan domain.Plan) error {
+func (r *mockPlanRepo) Create(_ context.Context, plan domain.Plan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.plans[plan.ID] = plan
+
 	return nil
 }
 
-func (r *mockPlanRepo) Update(ctx context.Context, plan domain.Plan) error {
+func (r *mockPlanRepo) Update(_ context.Context, plan domain.Plan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.plans[plan.ID] = plan
+
 	return nil
 }
 
-func (r *mockPlanRepo) Delete(ctx context.Context, id string) error {
+func (r *mockPlanRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.plans, id)
+
 	return nil
 }
 
-func (r *mockPlanRepo) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
+func (r *mockPlanRepo) AppendFAQ(_ context.Context, entry domain.FAQEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.faqAdded = append(r.faqAdded, entry)
+
 	return nil
 }
 
@@ -160,16 +173,17 @@ func newMockSubPlanRepo() *mockSubPlanRepo {
 	return &mockSubPlanRepo{subPlans: make(map[string]domain.TaskPlan)}
 }
 
-func (r *mockSubPlanRepo) Get(ctx context.Context, id string) (domain.TaskPlan, error) {
+func (r *mockSubPlanRepo) Get(_ context.Context, id string) (domain.TaskPlan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sp, ok := r.subPlans[id]; ok {
 		return sp, nil
 	}
+
 	return domain.TaskPlan{}, repository.ErrNotFound
 }
 
-func (r *mockSubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
+func (r *mockSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.TaskPlan
@@ -178,27 +192,31 @@ func (r *mockSubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]do
 			result = append(result, sp)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockSubPlanRepo) Create(ctx context.Context, sp domain.TaskPlan) error {
+func (r *mockSubPlanRepo) Create(_ context.Context, sp domain.TaskPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subPlans[sp.ID] = sp
+
 	return nil
 }
 
-func (r *mockSubPlanRepo) Update(ctx context.Context, sp domain.TaskPlan) error {
+func (r *mockSubPlanRepo) Update(_ context.Context, sp domain.TaskPlan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subPlans[sp.ID] = sp
+
 	return nil
 }
 
-func (r *mockSubPlanRepo) Delete(ctx context.Context, id string) error {
+func (r *mockSubPlanRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.subPlans, id)
+
 	return nil
 }
 
@@ -217,16 +235,17 @@ func newMockSessionRepo() *mockSessionRepo {
 	return &mockSessionRepo{sessions: make(map[string]domain.Task)}
 }
 
-func (r *mockSessionRepo) Get(ctx context.Context, id string) (domain.Task, error) {
+func (r *mockSessionRepo) Get(_ context.Context, id string) (domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s, ok := r.sessions[id]; ok {
 		return s, nil
 	}
+
 	return domain.Task{}, repository.ErrNotFound
 }
 
-func (r *mockSessionRepo) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.Task
@@ -235,10 +254,11 @@ func (r *mockSessionRepo) ListByWorkItemID(ctx context.Context, workItemID strin
 			result = append(result, s)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.Task
@@ -247,10 +267,11 @@ func (r *mockSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string)
 			result = append(result, s)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.Task
@@ -259,10 +280,11 @@ func (r *mockSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID str
 			result = append(result, s)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.Task
@@ -271,21 +293,24 @@ func (r *mockSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID 
 			result = append(result, s)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockSessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+func (r *mockSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entries := make([]domain.SessionHistoryEntry, len(r.searchHistory))
 	copy(entries, r.searchHistory)
+
 	return entries, nil
 }
 
-func (r *mockSessionRepo) Create(ctx context.Context, s domain.Task) error {
+func (r *mockSessionRepo) Create(_ context.Context, s domain.Task) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[s.ID] = s
+
 	return nil
 }
 
@@ -301,6 +326,7 @@ func (r *mockSessionRepo) Update(ctx context.Context, s domain.Task) error {
 		return r.updateErr
 	}
 	r.sessions[s.ID] = s
+
 	return nil
 }
 
@@ -316,6 +342,7 @@ func (r *mockSessionRepo) Delete(ctx context.Context, id string) error {
 		return r.deleteErr
 	}
 	delete(r.sessions, id)
+
 	return nil
 }
 
@@ -336,16 +363,17 @@ func newMockReviewRepo() *mockReviewRepo {
 	}
 }
 
-func (r *mockReviewRepo) GetCycle(ctx context.Context, id string) (domain.ReviewCycle, error) {
+func (r *mockReviewRepo) GetCycle(_ context.Context, id string) (domain.ReviewCycle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if c, ok := r.cycles[id]; ok {
 		return c, nil
 	}
+
 	return domain.ReviewCycle{}, repository.ErrNotFound
 }
 
-func (r *mockReviewRepo) ListCyclesBySessionID(ctx context.Context, sessionID string) ([]domain.ReviewCycle, error) {
+func (r *mockReviewRepo) ListCyclesBySessionID(_ context.Context, sessionID string) ([]domain.ReviewCycle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.ReviewCycle
@@ -354,37 +382,41 @@ func (r *mockReviewRepo) ListCyclesBySessionID(ctx context.Context, sessionID st
 			result = append(result, c)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockReviewRepo) CreateCycle(ctx context.Context, rc domain.ReviewCycle) error {
+func (r *mockReviewRepo) CreateCycle(_ context.Context, rc domain.ReviewCycle) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cycles[rc.ID] = rc
 	r.bySessID[rc.AgentSessionID] = append(r.bySessID[rc.AgentSessionID], rc.ID)
+
 	return nil
 }
 
-func (r *mockReviewRepo) UpdateCycle(ctx context.Context, rc domain.ReviewCycle) error {
+func (r *mockReviewRepo) UpdateCycle(_ context.Context, rc domain.ReviewCycle) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.cycles[rc.ID]; !ok {
 		return repository.ErrNotFound
 	}
 	r.cycles[rc.ID] = rc
+
 	return nil
 }
 
-func (r *mockReviewRepo) GetCritique(ctx context.Context, id string) (domain.Critique, error) {
+func (r *mockReviewRepo) GetCritique(_ context.Context, id string) (domain.Critique, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if c, ok := r.critiques[id]; ok {
 		return c, nil
 	}
+
 	return domain.Critique{}, repository.ErrNotFound
 }
 
-func (r *mockReviewRepo) ListCritiquesByReviewCycleID(ctx context.Context, cycleID string) ([]domain.Critique, error) {
+func (r *mockReviewRepo) ListCritiquesByReviewCycleID(_ context.Context, cycleID string) ([]domain.Critique, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var result []domain.Critique
@@ -393,24 +425,27 @@ func (r *mockReviewRepo) ListCritiquesByReviewCycleID(ctx context.Context, cycle
 			result = append(result, c)
 		}
 	}
+
 	return result, nil
 }
 
-func (r *mockReviewRepo) CreateCritique(ctx context.Context, c domain.Critique) error {
+func (r *mockReviewRepo) CreateCritique(_ context.Context, c domain.Critique) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.critiques[c.ID] = c
 	r.byCycleID[c.ReviewCycleID] = append(r.byCycleID[c.ReviewCycleID], c.ID)
+
 	return nil
 }
 
-func (r *mockReviewRepo) UpdateCritique(ctx context.Context, c domain.Critique) error {
+func (r *mockReviewRepo) UpdateCritique(_ context.Context, c domain.Critique) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.critiques[c.ID]; !ok {
 		return repository.ErrNotFound
 	}
 	r.critiques[c.ID] = c
+
 	return nil
 }
 
@@ -423,45 +458,48 @@ func newMockQuestionRepo() *mockQuestionRepo {
 	return &mockQuestionRepo{questions: make(map[string]domain.Question)}
 }
 
-func (r *mockQuestionRepo) Get(ctx context.Context, id string) (domain.Question, error) {
+func (r *mockQuestionRepo) Get(_ context.Context, id string) (domain.Question, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if q, ok := r.questions[id]; ok {
 		return q, nil
 	}
+
 	return domain.Question{}, repository.ErrNotFound
 }
 
-func (r *mockQuestionRepo) ListBySessionID(ctx context.Context, sessionID string) ([]domain.Question, error) {
+func (r *mockQuestionRepo) ListBySessionID(_ context.Context, _ string) ([]domain.Question, error) {
 	return nil, nil
 }
 
-func (r *mockQuestionRepo) Create(ctx context.Context, q domain.Question) error {
+func (r *mockQuestionRepo) Create(_ context.Context, q domain.Question) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.questions[q.ID] = q
+
 	return nil
 }
 
-func (r *mockQuestionRepo) Update(ctx context.Context, q domain.Question) error {
+func (r *mockQuestionRepo) Update(_ context.Context, q domain.Question) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.questions[q.ID] = q
+
 	return nil
 }
 
 type mockWorkItemRepo struct{}
 
-func (r *mockWorkItemRepo) Get(ctx context.Context, id string) (domain.Session, error) {
+func (r *mockWorkItemRepo) Get(_ context.Context, _ string) (domain.Session, error) {
 	return domain.Session{}, repository.ErrNotFound
 }
 
-func (r *mockWorkItemRepo) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
+func (r *mockWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
 	return nil, nil
 }
-func (r *mockWorkItemRepo) Create(ctx context.Context, item domain.Session) error { return nil }
-func (r *mockWorkItemRepo) Update(ctx context.Context, item domain.Session) error { return nil }
-func (r *mockWorkItemRepo) Delete(ctx context.Context, id string) error           { return nil }
+func (r *mockWorkItemRepo) Create(_ context.Context, _ domain.Session) error { return nil }
+func (r *mockWorkItemRepo) Update(_ context.Context, _ domain.Session) error { return nil }
+func (r *mockWorkItemRepo) Delete(_ context.Context, _ string) error         { return nil }
 
 // ============================================================
 // Test helpers
@@ -474,6 +512,7 @@ func testReviewConfig(maxCycles int) *config.Config {
 	cfg.Review.PassThreshold = config.PassThresholdMinorOK // majors trigger re-impl
 	cfg.Plan.MaxParseRetries = ptrInt(2)
 	cfg.Foreman.QuestionTimeout = "5s"
+
 	return cfg
 }
 
@@ -500,15 +539,8 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	}
 
 	// Set SUBSTRATE_HOME so config.GlobalDir() returns tmpDir.
-	origHome := os.Getenv("SUBSTRATE_HOME")
-	os.Setenv("SUBSTRATE_HOME", tmpDir)
-	cleanup := func() {
-		if origHome == "" {
-			os.Unsetenv("SUBSTRATE_HOME")
-		} else {
-			os.Setenv("SUBSTRATE_HOME", origHome)
-		}
-	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+	cleanup := func() {}
 
 	reviewRepo := newMockReviewRepo()
 	planRepo := newMockPlanRepo()

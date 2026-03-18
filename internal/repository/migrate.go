@@ -77,11 +77,13 @@ func Migrate(ctx context.Context, db *sqlx.DB, migrationsFS fs.FS) error {
 
 		if _, err := tx.ExecContext(ctx, string(sql)); err != nil {
 			_ = tx.Rollback()
+
 			return fmt.Errorf("applying migration %s: %w", m.filename, err)
 		}
 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
 			_ = tx.Rollback()
+
 			return fmt.Errorf("recording migration %d: %w", m.version, err)
 		}
 

@@ -31,6 +31,7 @@ func (r *questionRow) toDomain() (domain.Question, error) {
 	if err != nil {
 		return domain.Question{}, fmt.Errorf("answered_at: %w", err)
 	}
+
 	return domain.Question{
 		ID:             r.ID,
 		AgentSessionID: r.AgentSessionID,
@@ -72,6 +73,7 @@ func (r QuestionRepo) Get(ctx context.Context, id string) (domain.Question, erro
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM questions WHERE id = ?`, id); err != nil {
 		return domain.Question{}, fmt.Errorf("get question %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -88,6 +90,7 @@ func (r QuestionRepo) ListBySessionID(ctx context.Context, sessionID string) ([]
 		}
 		questions[i] = q
 	}
+
 	return questions, nil
 }
 
@@ -99,6 +102,7 @@ func (r QuestionRepo) Create(ctx context.Context, q domain.Question) error {
 	if err != nil {
 		return fmt.Errorf("create question %s: %w", q.ID, err)
 	}
+
 	return nil
 }
 
@@ -118,6 +122,7 @@ func (r QuestionRepo) Update(ctx context.Context, q domain.Question) error {
 	if n == 0 {
 		return fmt.Errorf("update question %s: %w", q.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 

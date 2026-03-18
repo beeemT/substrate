@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -15,6 +16,7 @@ func (s *memorySecretStore) Get(key string) (string, error) {
 	if value, ok := s.values[key]; ok {
 		return value, nil
 	}
+
 	return "", keyring.ErrNotFound
 }
 
@@ -23,12 +25,14 @@ func (s *memorySecretStore) Set(key, value string) error {
 		s.values = map[string]string{}
 	}
 	s.values[key] = value
+
 	return nil
 }
 
 func (s *memorySecretStore) Delete(key string) error {
 	s.deleted = append(s.deleted, key)
 	delete(s.values, key)
+
 	return nil
 }
 
@@ -117,14 +121,7 @@ func TestSaveSecretsDeletesBlankSentryToken(t *testing.T) {
 	if _, ok := store.values["sentry.token"]; ok {
 		t.Fatal("store.values should not retain sentry.token after deleting blank secret")
 	}
-	found := false
-	for _, key := range store.deleted {
-		if key == "sentry.token" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.Contains(store.deleted, "sentry.token") {
 		t.Fatalf("store.deleted = %#v, want delete for %q", store.deleted, "sentry.token")
 	}
 }

@@ -56,6 +56,7 @@ func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return SessionsLoadedMsg{WorkspaceID: workspaceID, Items: items}
 	}
 }
@@ -67,6 +68,7 @@ func LoadTasksCmd(svc *service.TaskService, workspaceID string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return TasksLoadedMsg{WorkspaceID: workspaceID, Sessions: sessions}
 	}
 }
@@ -78,6 +80,7 @@ func SearchSessionHistoryCmd(svc *service.TaskService, filter domain.SessionHist
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return SessionHistoryLoadedMsg{Filter: filter, Entries: entries}
 	}
 }
@@ -94,6 +97,7 @@ func LoadPlanCmd(svc *service.PlanService, workItemID string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return PlanLoadedMsg{WorkItemID: workItemID, Plan: &plan, SubPlans: subPlans}
 	}
 }
@@ -105,6 +109,7 @@ func LoadQuestionsCmd(svc *service.QuestionService, sessionID string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return QuestionsLoadedMsg{SessionID: sessionID, Questions: questions}
 	}
 }
@@ -123,6 +128,7 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 				critiques[c.ID] = cc
 			}
 		}
+
 		return ReviewsLoadedMsg{SessionID: sessionID, Cycles: cycles, Critiques: critiques}
 	}
 }
@@ -145,6 +151,7 @@ func ApprovePlanCmd(
 		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, planID, workItemID); err != nil {
 			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
 		}
+
 		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
 	}
 }
@@ -169,6 +176,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Forem
 		if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Answer submitted"}
 	}
 }
@@ -177,6 +185,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Forem
 func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = svc.UpdateHeartbeat(context.Background(), instanceID)
+
 		return nil
 	}
 }
@@ -185,6 +194,7 @@ func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = svc.Delete(context.Background(), instanceID)
+
 		return nil
 	}
 }
@@ -194,10 +204,10 @@ func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd 
 func initializeWorkspaceServicesCmd(settings *SettingsService, current Services, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
 	return func() tea.Msg {
 		if settings == nil {
-			return ErrMsg{Err: fmt.Errorf("settings service is unavailable")}
+			return ErrMsg{Err: errors.New("settings service is unavailable")}
 		}
 		if current.Cfg == nil {
-			return ErrMsg{Err: fmt.Errorf("config is unavailable")}
+			return ErrMsg{Err: errors.New("config is unavailable")}
 		}
 		current.WorkspaceID = workspaceID
 		current.WorkspaceName = workspaceName
@@ -232,6 +242,7 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 		if err != nil {
 			return WorkspaceHealthCheckMsg{Error: err}
 		}
+
 		return WorkspaceHealthCheckMsg{Check: domain.WorkspaceHealthCheck{
 			GitWorkRepos:   scan.GitWorkRepos,
 			PlainGitClones: scan.PlainGitRepos,
@@ -251,6 +262,7 @@ func scanSessionInteraction(r io.Reader) ([]sessionlog.Entry, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+
 	return entries, nil
 }
 
@@ -268,6 +280,7 @@ func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("stat session log: %w", err)
 	}
+
 	return paths, nil
 }
 
@@ -283,6 +296,7 @@ func readSessionInteractionFile(path string) ([]sessionlog.Entry, error) {
 			return nil, fmt.Errorf("open compressed session log %s: %w", path, err)
 		}
 		defer gz.Close()
+
 		return scanSessionInteraction(gz)
 	}
 	file, err := os.Open(path)
@@ -290,6 +304,7 @@ func readSessionInteractionFile(path string) ([]sessionlog.Entry, error) {
 		return nil, fmt.Errorf("open session log %s: %w", path, err)
 	}
 	defer file.Close()
+
 	return scanSessionInteraction(file)
 }
 
@@ -307,6 +322,7 @@ func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
 			}
 			entries = append(entries, chunk...)
 		}
+
 		return SessionInteractionLoadedMsg{SessionID: sessionID, Entries: entries}
 	}
 }
@@ -333,6 +349,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 				if stat, statErr := os.Stat(logPath); statErr == nil {
 					nextOffset = stat.Size()
 				}
+
 				return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: nextOffset}
 			}
 			// Path discovery failed (should be rare); fall through to single-file read.
@@ -344,6 +361,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		stat, err := os.Stat(logPath)
 		if err != nil {
 			time.Sleep(tailPollInterval)
+
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
 		}
 		offset := since
@@ -352,6 +370,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		}
 		if stat.Size() == offset {
 			time.Sleep(tailPollInterval)
+
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
 		}
 		f, err := os.Open(logPath)
@@ -376,6 +395,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 			newOffset = pos
 		}
 		_ = scanner.Err()
+
 		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
 	}
 }
@@ -384,12 +404,13 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 func SaveReviewedPlanCmd(planningSvc *orchestrator.PlanningService, planID, content string) tea.Cmd {
 	return func() tea.Msg {
 		if planningSvc == nil {
-			return ErrMsg{Err: fmt.Errorf("planning service not configured")}
+			return ErrMsg{Err: errors.New("planning service not configured")}
 		}
 		plan, subPlans, err := planningSvc.UpdateReviewedPlan(context.Background(), planID, content)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return PlanSavedMsg{
 			WorkItemID: plan.WorkItemID,
 			Plan:       plan,
@@ -400,7 +421,7 @@ func SaveReviewedPlanCmd(planningSvc *orchestrator.PlanningService, planID, cont
 }
 
 // RejectPlanCmd transitions a work item and its plan back to the Ingested state.
-func RejectPlanCmd(workItemSvc *service.SessionService, planSvc *service.PlanService, workItemID, planID, reason string) tea.Cmd {
+func RejectPlanCmd(workItemSvc *service.SessionService, planSvc *service.PlanService, workItemID, planID, _ string) tea.Cmd {
 	return func() tea.Msg {
 		if err := planSvc.RejectPlan(context.Background(), planID); err != nil {
 			return ErrMsg{Err: err}
@@ -408,6 +429,7 @@ func RejectPlanCmd(workItemSvc *service.SessionService, planSvc *service.PlanSer
 		if err := workItemSvc.RejectPlan(context.Background(), workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Plan rejected"}
 	}
 }
@@ -428,6 +450,7 @@ func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.
 				alive[inst.ID] = true
 			}
 		}
+
 		return LiveInstancesLoadedMsg{AliveIDs: alive}
 	}
 }
@@ -439,6 +462,7 @@ func StartPlanningCmd(svc *orchestrator.PlanningService, workItemID string) tea.
 		if _, err := svc.Plan(context.Background(), workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Planning complete"}
 	}
 }
@@ -449,6 +473,7 @@ func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, 
 		if _, err := svc.PlanWithFeedback(context.Background(), workItemID, planID, feedback); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Plan revised"}
 	}
 }
@@ -467,6 +492,7 @@ func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string
 				sessionIDs = append(sessionIDs, s.SessionID)
 			}
 		}
+
 		return ImplementationCompleteMsg{
 			PlanID:     planID,
 			WorkItemID: result.WorkItemID,
@@ -487,6 +513,7 @@ func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *serv
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ReviewCompleteMsg{ImplSessionID: sessionID, ReviewSessionID: result.SessionID}
 	}
 }
@@ -501,6 +528,7 @@ func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.T
 		if _, err := resumption.ResumeSession(context.Background(), session, instanceID); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Session resumed"}
 	}
 }
@@ -521,6 +549,7 @@ func OverrideAcceptCmd(
 		if err := emitWorkItemCompleted(ctx, bus, planSvc, sessionSvc, workItemSvc, workItemID); err != nil {
 			slog.Warn("failed to emit work item completed event", "work_item_id", workItemID, "err", err)
 		}
+
 		return ActionDoneMsg{Message: "Work item accepted"}
 	}
 }
@@ -548,6 +577,7 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
 		payload["external_ids"] = externalIDs
 	}
+
 	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
 }
 
@@ -577,6 +607,7 @@ func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service
 	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
 		payload["external_ids"] = externalIDs
 	}
+
 	return publishSystemEvent(ctx, bus, domain.EventWorkItemCompleted, workItem.WorkspaceID, payload)
 }
 
@@ -585,6 +616,7 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", eventType, err)
 	}
+
 	return bus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(eventType),
@@ -623,9 +655,11 @@ func completionReviewContext(ctx context.Context, planSvc *service.PlanService, 
 			if branch == "" {
 				continue
 			}
+
 			return reviewCtx.Review, branch, nil
 		}
 	}
+
 	return domain.ReviewRef{}, "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
 }
 
@@ -654,6 +688,7 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 		}
 	}
 	appendID(workItem.ExternalID)
+
 	return ids
 }
 
@@ -674,6 +709,7 @@ func SkipQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman
 		if err := svc.Answer(context.Background(), questionID, "", "human"); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Question skipped"}
 	}
 }
@@ -686,6 +722,7 @@ func SendToForemanCmd(foreman *orchestrator.Foreman, questionID, text string) te
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ForemanReplyMsg{QuestionID: questionID, NewProposal: newProposal, Uncertain: uncertain}
 	}
 }
@@ -697,6 +734,7 @@ func StartForemanCmd(foreman *orchestrator.Foreman, planID string) tea.Cmd {
 		if err := foreman.Start(context.Background(), planID); err != nil {
 			return ErrMsg{Err: err}
 		}
+
 		return ActionDoneMsg{Message: "Foreman started"}
 	}
 }
@@ -705,13 +743,14 @@ func StartForemanCmd(foreman *orchestrator.Foreman, planID string) tea.Cmd {
 func OpenBrowserCmd(rawURL string) tea.Cmd {
 	url := strings.TrimSpace(rawURL)
 	if url == "" {
-		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("browser URL is required")} }
+		return func() tea.Msg { return ErrMsg{Err: errors.New("browser URL is required")} }
 	}
 
 	return tea.ExecProcess(browserOpenExecCmd(url), func(err error) tea.Msg {
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("open browser for %q: %w", url, err)}
 		}
+
 		return nil
 	})
 }
@@ -719,11 +758,11 @@ func OpenBrowserCmd(rawURL string) tea.Cmd {
 func browserOpenExecCmd(url string) *exec.Cmd {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", url)
+		return exec.CommandContext(context.TODO(), "open", url)
 	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		return exec.CommandContext(context.TODO(), "rundll32", "url.dll,FileProtocolHandler", url)
 	default:
-		return exec.Command("xdg-open", url)
+		return exec.CommandContext(context.TODO(), "xdg-open", url)
 	}
 }
 
@@ -734,6 +773,7 @@ func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
 		if err := foreman.Stop(context.Background()); err != nil {
 			slog.Warn("foreman stop returned an error", "err", err)
 		}
+
 		return nil
 	}
 }

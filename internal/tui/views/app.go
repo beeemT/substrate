@@ -75,7 +75,7 @@ func appContentBodyWidth(width int) int {
 }
 
 // App is the top-level bubbletea model.
-type App struct {
+type App struct { //nolint:recvcheck // Bubble Tea convention
 	svcs Services
 
 	// Layout sub-models
@@ -105,7 +105,6 @@ type App struct {
 
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
-	prevContentMode   ContentMode
 	// reviewSessionLogs maps implementation session ID → review agent log path.
 	// Populated when RunReviewSessionCmd returns a ReviewCompleteMsg.
 	reviewSessionLogs map[string]string
@@ -520,15 +519,6 @@ func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
 	a.currentHistoryEntry = SidebarEntry{}
 	a.currentWorkItemID = workItemID
 	return a.updateContentFromState()
-}
-
-func (a App) sessionByID(sessionID string) *domain.Task {
-	for i := range a.sessions {
-		if a.sessions[i].ID == sessionID {
-			return &a.sessions[i]
-		}
-	}
-	return nil
 }
 
 func (a App) selectedTaskSessionID() string {
@@ -972,7 +962,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConfirmOverrideAcceptMsg:
 		a.showConfirm("Override Accept",
 			"Accept this work item despite outstanding critiques? This cannot be undone.",
-			func() tea.Msg { return OverrideAcceptMsg{WorkItemID: msg.WorkItemID} },
+			func() tea.Msg { return OverrideAcceptMsg(msg) },
 		)
 		return a, nil
 
@@ -1267,7 +1257,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Route to active overlay or content.
-	if a.activeOverlay == overlayWorkspaceInit {
+	if a.activeOverlay == overlayWorkspaceInit { //nolint:staticcheck // simple condition, switch not warranted
 		a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlayNewSession {
@@ -1606,28 +1596,6 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	return nil
 }
 
-func (a *App) buildRepoProgress(plan *domain.Plan) []RepoProgress {
-	if plan == nil {
-		return nil
-	}
-	var repos []RepoProgress
-	for _, sp := range a.subPlans[plan.ID] {
-		rp := RepoProgress{
-			Name:      sp.RepositoryName,
-			SubPlanID: sp.ID,
-			Status:    sp.Status,
-		}
-		for _, s := range a.sessions {
-			if s.SubPlanID == sp.ID && s.Status == domain.AgentSessionRunning {
-				rp.SessionID = s.ID
-				rp.LogPath = filepath.Join(a.sessionsDir, s.ID+".log")
-			}
-		}
-		repos = append(repos, rp)
-	}
-	return repos
-}
-
 func (a *App) canActOnSession(s domain.Task) bool {
 	if a.svcs.InstanceID == "" || s.OwnerInstanceID == nil {
 		return true
@@ -1886,7 +1854,7 @@ func (a App) View() string {
 
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 
-	toastView := ""
+	var toastView string
 	if pinned := a.pinnedToasts(); len(pinned) > 0 {
 		toastView = a.toasts.StackView(pinned...)
 	} else {
@@ -1914,11 +1882,6 @@ func (a App) View() string {
 	}
 
 	return base
-}
-
-func mainPageLayoutMetrics(totalWidth, totalHeight int) (sidebarPaneWidth, contentPaneWidth, bodyHeight, paneInnerHeight int) {
-	layout := styles.ComputeMainPageLayout(totalWidth, totalHeight, SidebarWidth, styles.DefaultChromeMetrics)
-	return layout.SidebarPaneWidth, layout.ContentPaneWidth, layout.BodyHeight, layout.PaneInnerHeight
 }
 
 func (a App) statusBarText() string {
@@ -2037,15 +2000,9 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 
 	start := topInset
 	maxStart := maxOverlayBottom - len(overlayLines)
-	if maxStart < 0 {
-		maxStart = 0
-	}
-	if start > maxStart {
-		start = maxStart
-	}
-	if start < 0 {
-		start = 0
-	}
+	maxStart = max(maxStart, 0)
+	start = min(start, maxStart)
+	start = max(start, 0)
 
 	const overlayRightInset = 2
 	blockWidth := 0
@@ -2130,13 +2087,13 @@ func deleteSessionCmd(svcs Services, sessionsDir, sessionID string, reviewSessio
 
 func deleteSessionTasksAndArtifacts(ctx context.Context, svcs Services, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
 	if svcs.Session == nil {
-		return sessionDeleteResult{}, fmt.Errorf("session service not configured")
+		return sessionDeleteResult{}, errors.New("session service not configured")
 	}
 	if svcs.Plan == nil {
-		return sessionDeleteResult{}, fmt.Errorf("plan service not configured")
+		return sessionDeleteResult{}, errors.New("plan service not configured")
 	}
 	if svcs.Task == nil {
-		return sessionDeleteResult{}, fmt.Errorf("task service not configured")
+		return sessionDeleteResult{}, errors.New("task service not configured")
 	}
 
 	result := sessionDeleteResult{TaskIDs: make([]string, 0)}
@@ -2223,8 +2180,7 @@ func deleteTaskArtifactIDs(sessionsDir, taskID, reviewLogPath string) []string {
 		return ids
 	}
 	base := filepath.Base(reviewLogPath)
-	if strings.HasSuffix(base, ".log") {
-		reviewID := strings.TrimSuffix(base, ".log")
+	if reviewID, ok := strings.CutSuffix(base, ".log"); ok {
 		if reviewID != "" && reviewID != taskID {
 			ids = append(ids, reviewID)
 		}
@@ -2246,11 +2202,11 @@ func workItemDisplayLabel(wi domain.Session) string {
 func existingWorkItemByExternalID(svc *service.SessionService, workspaceID, externalID string) (domain.Session, error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if trimmedWorkspaceID == "" {
-		return domain.Session{}, fmt.Errorf("workspace not configured")
+		return domain.Session{}, errors.New("workspace not configured")
 	}
 	trimmedExternalID := strings.TrimSpace(externalID)
 	if trimmedExternalID == "" {
-		return domain.Session{}, fmt.Errorf("work item external_id is required")
+		return domain.Session{}, errors.New("work item external_id is required")
 	}
 	items, err := svc.List(context.Background(), repository.SessionFilter{
 		WorkspaceID: &trimmedWorkspaceID,
@@ -2268,10 +2224,10 @@ func existingWorkItemByExternalID(svc *service.SessionService, workspaceID, exte
 
 func persistCreatedWorkItemMsg(svcs Services, wi domain.Session) tea.Msg {
 	if svcs.Session == nil {
-		return ErrMsg{Err: fmt.Errorf("work item service not configured")}
+		return ErrMsg{Err: errors.New("work item service not configured")}
 	}
 	if strings.TrimSpace(svcs.WorkspaceID) == "" {
-		return ErrMsg{Err: fmt.Errorf("workspace not configured")}
+		return ErrMsg{Err: errors.New("workspace not configured")}
 	}
 	wi.WorkspaceID = svcs.WorkspaceID
 	label := workItemDisplayLabel(wi)
@@ -2299,7 +2255,7 @@ func persistCreatedWorkItemMsg(svcs Services, wi domain.Session) tea.Msg {
 func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 	return func() tea.Msg {
 		if msg.Adapter == nil {
-			return ErrMsg{Err: fmt.Errorf("no adapter available")}
+			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), adapter.Selection{
 			Scope:  domain.ScopeManual,
@@ -2315,7 +2271,7 @@ func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 	return func() tea.Msg {
 		if msg.Adapter == nil {
-			return ErrMsg{Err: fmt.Errorf("no adapter available")}
+			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), msg.Selection)
 		if err != nil {

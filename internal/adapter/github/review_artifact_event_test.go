@@ -17,6 +17,7 @@ type githubArtifactEventRepo struct {
 
 func (r *githubArtifactEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
 	r.events = append(r.events, e)
+
 	return nil
 }
 
@@ -30,6 +31,7 @@ func (r *githubArtifactEventRepo) ListByType(_ context.Context, eventType string
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 
@@ -43,6 +45,7 @@ func (r *githubArtifactEventRepo) ListByWorkspaceID(_ context.Context, workspace
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 
@@ -52,6 +55,7 @@ func mustReviewArtifactPayload(t *testing.T, workItemID string, artifact domain.
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
+
 	return string(payload)
 }
 
@@ -67,6 +71,7 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 			if req.Method == http.MethodGet {
 				return jsonResp(t, http.StatusOK, []any{}), nil
 			}
+
 			return jsonResp(t, http.StatusCreated, map[string]any{"number": 7, "draft": true, "html_url": "https://github.com/acme/rocket/pull/7"}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil

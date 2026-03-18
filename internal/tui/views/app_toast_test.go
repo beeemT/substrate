@@ -23,15 +23,17 @@ func lastNonSpaceColumn(line string) int {
 	if trimmed == "" {
 		return -1
 	}
+
 	return ansi.StringWidth(trimmed) - 1
 }
 
 func visibleColumn(line, needle string) int {
-	idx := strings.Index(line, needle)
-	if idx < 0 {
+	before, _, ok := strings.Cut(line, needle)
+	if !ok {
 		return -1
 	}
-	return ansi.StringWidth(line[:idx])
+
+	return ansi.StringWidth(before)
 }
 
 func findLineContaining(lines []string, needle string) int {
@@ -40,6 +42,7 @@ func findLineContaining(lines []string, needle string) int {
 			return i
 		}
 	}
+
 	return -1
 }
 
@@ -61,6 +64,7 @@ func newToastTestApp(t *testing.T) App {
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
+
 	return updated
 }
 
@@ -91,6 +95,7 @@ func TestAppView_RendersToastInUpperRightWithoutGrowingLayout(t *testing.T) {
 	for i, line := range withToast {
 		if strings.Contains(line, "Workspace initialized") {
 			toastLine = i
+
 			break
 		}
 	}
@@ -132,7 +137,7 @@ func TestAppView_ReadOnlyToastStacksTransientToastsBelow(t *testing.T) {
 	if readOnlyLine == -1 || secondLine == -1 || firstLine == -1 {
 		t.Fatalf("view missing stacked toasts: %q", strings.Join(lines, "\n"))
 	}
-	if !(readOnlyLine < secondLine && secondLine < firstLine) {
+	if readOnlyLine >= secondLine || secondLine >= firstLine {
 		t.Fatalf("toast order = read-only:%d second:%d first:%d, want read only above transient stack", readOnlyLine, secondLine, firstLine)
 	}
 }

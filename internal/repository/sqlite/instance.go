@@ -27,6 +27,7 @@ func (r *instanceRow) toDomain() (domain.SubstrateInstance, error) {
 	if err != nil {
 		return domain.SubstrateInstance{}, fmt.Errorf("started_at: %w", err)
 	}
+
 	return domain.SubstrateInstance{
 		ID:            r.ID,
 		WorkspaceID:   r.WorkspaceID,
@@ -60,6 +61,7 @@ func (r InstanceRepo) Get(ctx context.Context, id string) (domain.SubstrateInsta
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM substrate_instances WHERE id = ?`, id); err != nil {
 		return domain.SubstrateInstance{}, fmt.Errorf("get instance %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -76,6 +78,7 @@ func (r InstanceRepo) ListByWorkspaceID(ctx context.Context, workspaceID string)
 		}
 		instances[i] = inst
 	}
+
 	return instances, nil
 }
 
@@ -87,6 +90,7 @@ func (r InstanceRepo) Create(ctx context.Context, inst domain.SubstrateInstance)
 	if err != nil {
 		return fmt.Errorf("create instance %s: %w", inst.ID, err)
 	}
+
 	return nil
 }
 
@@ -105,6 +109,7 @@ func (r InstanceRepo) Update(ctx context.Context, inst domain.SubstrateInstance)
 	if n == 0 {
 		return fmt.Errorf("update instance %s: %w", inst.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -113,5 +118,6 @@ func (r InstanceRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete instance %s: %w", id, err)
 	}
+
 	return nil
 }

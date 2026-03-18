@@ -36,7 +36,7 @@ type KeybindHint struct {
 }
 
 // ContentModel holds all content panel sub-models and routes to the active one.
-type ContentModel struct {
+type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 	mode   ContentMode
 	styles styles.Styles
 	width  int
@@ -230,11 +230,7 @@ func (m ContentModel) emptyStateView() string {
 
 	message := lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", detail)
 
-	container := m.styles.Border.Copy().
-		Padding(1, 2).
-		Width(panelWidth).
-		Render(message)
-
+	container := m.styles.Border.Padding(1, 2).Width(panelWidth).Render(message)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
 }
 

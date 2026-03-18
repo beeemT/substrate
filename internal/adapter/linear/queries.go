@@ -4,7 +4,11 @@ package linear
 // Expanded inline in each query below for explicitness.
 
 const queryAssignedIssues = `
-query AssignedIssues($teamId: String!, $assigneeId: String!, $first: Int, $after: String, $search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]) {
+query AssignedIssues(
+	$teamId: String!, $assigneeId: String!,
+	$first: Int, $after: String, $search: String,
+	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]
+) {
 	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
 		assignee: { id: { eq: $assigneeId } }
@@ -28,18 +32,6 @@ query AssignedIssues($teamId: String!, $assigneeId: String!, $first: Int, $after
 	}
 }`
 
-const queryIssueByID = `
-query IssueByID($id: String!) {
-	issue(id: $id) {
-		id identifier title description priority url
-		state { id name type }
-		labels { nodes { name } }
-		assignee { id name }
-		team { id key }
-		createdAt updatedAt
-	}
-}`
-
 const queryIssuesByIDs = `
 query IssuesByIDs($ids: [String!]!) {
 	issues(filter: { id: { in: $ids } }) {
@@ -55,7 +47,12 @@ query IssuesByIDs($ids: [String!]!) {
 }`
 
 const queryTeamIssues = `
-query TeamIssues($teamId: String!, $search: String, $assigneeId: String, $creatorId: String, $subscriberId: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!], $first: Int, $after: String) {
+query TeamIssues(
+	$teamId: String!, $search: String,
+	$assigneeId: String, $creatorId: String, $subscriberId: String,
+	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
+	$first: Int, $after: String
+) {
 	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
 		title: { containsIgnoreCase: $search }

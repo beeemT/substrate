@@ -150,11 +150,11 @@ func TestBus_PreHook_Aborts(t *testing.T) {
 
 	// Register pre-hook that aborts
 	var hookCalled int32
-	bus.RegisterPreHook(HookConfig{Name: "abort"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "abort"}, func(_ context.Context, _ domain.SystemEvent) error {
 		atomic.AddInt32(&hookCalled, 1)
-		return errors.New("abort!")
-	})
 
+		return errors.New("abort")
+	})
 	event := newTestEvent()
 	ctx := context.Background()
 
@@ -187,7 +187,7 @@ func TestBus_PreHook_AbortPreventsDelivery(t *testing.T) {
 	defer bus.Unsubscribe("sub-1")
 
 	// Pre-hook that aborts
-	bus.RegisterPreHook(HookConfig{Name: "abort"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "abort"}, func(_ context.Context, _ domain.SystemEvent) error {
 		return errors.New("abort")
 	})
 
@@ -213,7 +213,7 @@ func TestBus_PreHook_Timeout(t *testing.T) {
 	defer bus.Close()
 
 	// Pre-hook that sleeps for 5s with 100ms timeout
-	bus.RegisterPreHook(HookConfig{Name: "slow", Timeout: 100 * time.Millisecond}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "slow", Timeout: 100 * time.Millisecond}, func(_ context.Context, _ domain.SystemEvent) error {
 		time.Sleep(5 * time.Second) // will exceed timeout
 		return nil
 	})
@@ -246,14 +246,14 @@ func TestBus_PreHook_ExecutesInOrder(t *testing.T) {
 	var order []string
 	var mu sync.Mutex
 
-	bus.RegisterPreHook(HookConfig{Name: "first"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "first"}, func(_ context.Context, _ domain.SystemEvent) error {
 		mu.Lock()
 		order = append(order, "first")
 		mu.Unlock()
 		return nil
 	})
 
-	bus.RegisterPreHook(HookConfig{Name: "second"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "second"}, func(_ context.Context, _ domain.SystemEvent) error {
 		mu.Lock()
 		order = append(order, "second")
 		mu.Unlock()
@@ -282,7 +282,7 @@ func TestBus_PostHook_Async(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	bus.RegisterPostHook(HookConfig{Name: "post"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPostHook(HookConfig{Name: "post"}, func(_ context.Context, _ domain.SystemEvent) error {
 		atomic.AddInt32(&postHookCalled, 1)
 		wg.Done()
 		return nil
@@ -308,7 +308,7 @@ func TestBus_PostHook_Timeout(t *testing.T) {
 	defer bus.Close()
 
 	// Post-hook that sleeps with short timeout - should not block Publish
-	bus.RegisterPostHook(HookConfig{Name: "slow-post", Timeout: 100 * time.Millisecond}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPostHook(HookConfig{Name: "slow-post", Timeout: 100 * time.Millisecond}, func(_ context.Context, _ domain.SystemEvent) error {
 		time.Sleep(5 * time.Second) // will timeout
 		return nil
 	})
@@ -336,7 +336,7 @@ func TestBus_Concurrent_100Goroutines(t *testing.T) {
 	// Create subscribers
 	numSubscribers := 10
 	subs := make([]*Subscriber, numSubscribers)
-	for i := 0; i < numSubscribers; i++ {
+	for i := range subs {
 		sub, err := bus.Subscribe(fmt.Sprintf("sub-%d", i))
 		if err != nil {
 			t.Fatalf("Subscribe failed: %v", err)
@@ -352,16 +352,16 @@ func TestBus_Concurrent_100Goroutines(t *testing.T) {
 	var otherErrors int32
 
 	ctx := context.Background()
-	for i := 0; i < numPublishers; i++ {
+	for publisherID := range make([]struct{}, numPublishers) {
 		wg.Add(1)
 		go func(publisherID int) {
 			defer wg.Done()
-			for j := 0; j < eventsPerPublisher; j++ {
+			for seq := range make([]struct{}, eventsPerPublisher) {
 				event := domain.SystemEvent{
-					ID:          fmt.Sprintf("pub-%d-evt-%d", publisherID, j),
+					ID:          fmt.Sprintf("pub-%d-evt-%d", publisherID, seq),
 					EventType:   "concurrent.test",
 					WorkspaceID: "ws-concurrent",
-					Payload:     fmt.Sprintf(`{"publisher": %d, "seq": %d}`, publisherID, j),
+					Payload:     fmt.Sprintf(`{"publisher": %d, "seq": %d}`, publisherID, seq),
 					CreatedAt:   domain.Now(),
 				}
 				if err := bus.Publish(ctx, event); err != nil {
@@ -372,7 +372,7 @@ func TestBus_Concurrent_100Goroutines(t *testing.T) {
 					}
 				}
 			}
-		}(i)
+		}(publisherID)
 	}
 
 	wg.Wait()
@@ -553,16 +553,16 @@ func TestBus_RetryLater(t *testing.T) {
 	defer bus.Unsubscribe("sub-1")
 
 	// Fill the subscriber's buffer (100 capacity)
-	for i := 0; i < 100; i++ {
+	for fillID := range make([]struct{}, 100) {
 		event := domain.SystemEvent{
-			ID:          fmt.Sprintf("fill-%d", i),
+			ID:          fmt.Sprintf("fill-%d", fillID),
 			EventType:   "test.event",
 			WorkspaceID: "ws-123",
 			Payload:     "fill",
 			CreatedAt:   domain.Now(),
 		}
 		if err := bus.Publish(context.Background(), event); err != nil {
-			t.Fatalf("Publish %d failed: %v", i, err)
+			t.Fatalf("Publish %d failed: %v", fillID, err)
 		}
 	}
 

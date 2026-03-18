@@ -13,6 +13,11 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+const (
+	keyPgDown = "pgdown"
+	keyPgUp   = "pgup"
+)
+
 // RepoProgress tracks one repo's implementation status.
 type RepoProgress struct {
 	Name      string
@@ -37,7 +42,7 @@ func repoStatusIcon(status domain.TaskPlanStatus, st styles.Styles) string {
 }
 
 // ImplementingModel renders multi-repo implementation progress.
-type ImplementingModel struct {
+type ImplementingModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	repos            []RepoProgress
 	selectedRepo     int
 	entryBuffers     map[string][]sessionlog.Entry
@@ -107,6 +112,7 @@ func (m ImplementingModel) selectedRepoName() string {
 	if len(m.repos) == 0 || m.selectedRepo >= len(m.repos) {
 		return ""
 	}
+
 	return m.repos[m.selectedRepo].Name
 }
 
@@ -121,9 +127,11 @@ func (m ImplementingModel) KeybindHints() []KeybindHint {
 	for _, entries := range m.entryBuffers {
 		if hasThinkingBlocks(entries) {
 			hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})
+
 			break
 		}
 	}
+
 	return hints
 }
 
@@ -147,12 +155,13 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			if r.LogPath != "" {
 				cmds = append(cmds, TailSessionLogCmd(r.LogPath, r.SessionID, msg.NextOffset))
 			}
+
 			break
 		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab":
+		case keyTab:
 			if len(m.repos) > 0 {
 				m.selectedRepo = (m.selectedRepo + 1) % len(m.repos)
 			}
@@ -176,7 +185,7 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 					m.viewports[name] = vp
 				}
 			}
-		case "up", "k", "down", "j", "pgup", "pgdown":
+		case "up", "k", keyDown, "j", keyPgUp, keyPgDown:
 			name := m.selectedRepoName()
 			if name != "" {
 				vp := m.viewports[name]
@@ -202,6 +211,7 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			}
 		}
 	}
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -232,9 +242,7 @@ func (m ImplementingModel) View() string {
 	outputBlock := strings.Repeat("\n", max(0, m.viewportHeight()-1))
 	if selectedName != "" {
 		dashCount := m.width - len(selectedName) - 5
-		if dashCount < 0 {
-			dashCount = 0
-		}
+		dashCount = max(dashCount, 0)
 		repoHeader := m.styles.Divider.Render(fmt.Sprintf("─── %s ", selectedName) + strings.Repeat("─", dashCount))
 		vp := m.viewports[selectedName]
 		outputBlock = repoHeader + "\n" + vp.View()
@@ -246,5 +254,6 @@ func (m ImplementingModel) View() string {
 	}
 
 	parts := append(strings.Split(header, "\n"), repoRow, outputBlock, hints)
+
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

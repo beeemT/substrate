@@ -18,6 +18,7 @@ func openTestDB(t *testing.T) *sqlx.DB {
 	}
 	db.MustExec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
 	t.Cleanup(func() { db.Close() })
+
 	return db
 }
 

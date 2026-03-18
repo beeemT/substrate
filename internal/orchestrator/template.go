@@ -13,4 +13,12 @@ type RevisionData struct {
 	NewSessionDraftPath string
 }
 
-var revisionPromptTemplate = "Your role is still to plan only. The human has requested changes to this plan:\n{{.Feedback}}\n\nThe current full plan is below. Apply the requested changes, keep the orchestrator section distinct from repo sub-plans, and write your revised plan to\n" + bt + "{{.NewSessionDraftPath}}" + bt + ". Preserve the substrate-plan format and keep every repo sub-plan implementation-ready with ### Goal, ### Scope, ### Changes, ### Validation, and ### Risks sections.\n\n--- CURRENT PLAN ---\n{{.CurrentPlan}}\n---\n"
+var revisionPromptTemplate = "Your role is still to plan only. The human has requested changes to this plan:\n" +
+	"{{.Feedback}}\n\n" +
+	"The current full plan is below. Apply the requested changes, keep the orchestrator section distinct from repo sub-plans, " +
+	"and write your revised plan to\n" +
+	bt + "{{.NewSessionDraftPath}}" + bt + ". Preserve the substrate-plan format " +
+	"and keep every repo sub-plan implementation-ready with ### Goal, ### Scope, ### Changes, ### Validation, and ### Risks sections.\n\n" +
+	"--- CURRENT PLAN ---\n" +
+	"{{.CurrentPlan}}\n" +
+	"---\n"

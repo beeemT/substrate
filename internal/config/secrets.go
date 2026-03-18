@@ -22,6 +22,7 @@ func (OSKeychainStore) Get(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return value, nil
 }
 
@@ -58,6 +59,7 @@ func LoadSecrets(cfg *Config, store SecretStore) error {
 			cfg.Adapters.Sentry.Token = value
 		}
 	}
+
 	return nil
 }
 
@@ -71,6 +73,7 @@ func SaveSecrets(cfg *Config, store SecretStore) error {
 			if err := store.Delete(key); err != nil && err != keyring.ErrNotFound {
 				return fmt.Errorf("delete secret %s: %w", field, err)
 			}
+
 			continue
 		}
 		if err := store.Set(key, value); err != nil {
@@ -91,6 +94,7 @@ func SaveSecrets(cfg *Config, store SecretStore) error {
 			cfg.Adapters.Sentry.Token = ""
 		}
 	}
+
 	return nil
 }
 
@@ -98,6 +102,7 @@ func sentryTokenKey(cfg *Config) (string, bool) {
 	if cfg == nil {
 		return "", false
 	}
+
 	return keychainSecretKey(cfg.Adapters.Sentry.TokenRef)
 }
 
@@ -110,6 +115,7 @@ func keychainSecretKey(ref string) (string, bool) {
 	if key == "" {
 		return "", false
 	}
+
 	return key, true
 }
 

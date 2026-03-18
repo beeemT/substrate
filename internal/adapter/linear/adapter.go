@@ -13,6 +13,11 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+const (
+	providerLinear = "linear"
+	filterAll      = "all"
+)
+
 // queryIssueByIdentifier fetches a single issue by its display identifier (e.g. "FOO-123").
 // The identifier filter matches exactly; no team constraint so it works across team keys.
 const queryIssueByIdentifier = `
@@ -49,7 +54,7 @@ func New(cfg config.LinearConfig) *LinearAdapter {
 }
 
 // Name returns the adapter identifier.
-func (a *LinearAdapter) Name() string { return "linear" }
+func (a *LinearAdapter) Name() string { return providerLinear }
 
 // Capabilities describes what the Linear adapter supports.
 func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
@@ -60,21 +65,21 @@ func (a *LinearAdapter) Capabilities() adapter.AdapterCapabilities {
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives},
 		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
-				Views:          []string{"assigned_to_me", "created_by_me", "subscribed", "all"},
-				States:         []string{"open", "closed", "all", "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
+				Views:          []string{"assigned_to_me", "created_by_me", "subscribed", filterAll},
+				States:         []string{"open", "closed", filterAll, "triage", "backlog", "started", "unstarted", "completed", "cancelled"},
 				SupportsLabels: true,
 				SupportsSearch: true,
 				SupportsCursor: true,
 				SupportsTeam:   true,
 			},
 			domain.ScopeProjects: {
-				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", filterAll},
 				SupportsSearch: true,
 				SupportsCursor: true,
 				SupportsTeam:   true,
 			},
 			domain.ScopeInitiatives: {
-				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", "all"},
+				States:         []string{"planned", "backlog", "started", "paused", "completed", "canceled", filterAll},
 				SupportsSearch: true,
 				SupportsCursor: true,
 			},
@@ -141,7 +146,7 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 			return nil, err
 		}
 		vars["subscriberId"] = subscriberID
-	case "", "all":
+	case "", filterAll:
 	default:
 		return nil, fmt.Errorf("linear issue view %q is not supported", opts.View)
 	}
@@ -164,7 +169,13 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 			UpdatedAt:    derefTime(issue.UpdatedAt),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Issues.PageInfo.HasNextPage, NextCursor: resp.Issues.PageInfo.EndCursor}, nil
+
+	return &adapter.ListResult{
+		Items:      items,
+		TotalCount: len(items),
+		HasMore:    resp.Issues.PageInfo.HasNextPage,
+		NextCursor: resp.Issues.PageInfo.EndCursor,
+	}, nil
 }
 
 func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -201,7 +212,13 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 			UpdatedAt:   projectUpdatedAt(proj),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Projects.PageInfo.HasNextPage, NextCursor: resp.Projects.PageInfo.EndCursor}, nil
+
+	return &adapter.ListResult{
+		Items:      items,
+		TotalCount: len(items),
+		HasMore:    resp.Projects.PageInfo.HasNextPage,
+		NextCursor: resp.Projects.PageInfo.EndCursor,
+	}, nil
 }
 
 func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -233,7 +250,13 @@ func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOp
 			UpdatedAt:   initiativeUpdatedAt(init),
 		}
 	}
-	return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: resp.Initiatives.PageInfo.HasNextPage, NextCursor: resp.Initiatives.PageInfo.EndCursor}, nil
+
+	return &adapter.ListResult{
+		Items:      items,
+		TotalCount: len(items),
+		HasMore:    resp.Initiatives.PageInfo.HasNextPage,
+		NextCursor: resp.Initiatives.PageInfo.EndCursor,
+	}, nil
 }
 
 // Resolve converts a user selection into a WorkItem, aggregating multiple items when needed.
@@ -250,6 +273,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(issues) == 1 {
 			return issueToWorkItem(issues[0]), nil
 		}
+
 		return aggregateIssues(issues), nil
 
 	case domain.ScopeProjects:
@@ -273,15 +297,16 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			extSuffix = firstID[:8]
 		}
 		metadata := linearProjectMetadata(projects, domain.TrackerReference{
-			Provider: "linear",
+			Provider: providerLinear,
 			Kind:     "project",
 			ID:       projects[0].ID,
 		})
 		metadata["source_summaries"] = linearProjectSourceSummaries(projects)
+
 		return domain.Session{
 			ID:            domain.NewID(),
 			ExternalID:    "LIN-PRJ-" + extSuffix,
-			Source:        "linear",
+			Source:        providerLinear,
 			SourceScope:   domain.ScopeProjects,
 			SourceItemIDs: sel.ItemIDs,
 			Title:         strings.Join(names, ", "),
@@ -305,17 +330,18 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(id) > 8 {
 			extSuffix = id[:8]
 		}
+
 		return domain.Session{
 			ID:            domain.NewID(),
 			ExternalID:    "LIN-INIT-" + extSuffix,
-			Source:        "linear",
+			Source:        providerLinear,
 			SourceScope:   domain.ScopeInitiatives,
 			SourceItemIDs: []string{id},
 			Title:         init.Name,
 			Description:   formatInitiativeWorkItem(init),
 			State:         domain.SessionIngested,
 			Metadata: linearInitiativeMetadata(init, domain.TrackerReference{
-				Provider: "linear",
+				Provider: providerLinear,
 				Kind:     "initiative",
 				ID:       init.ID,
 			}),
@@ -340,6 +366,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 		defer close(ch)
 		if err := a.resolveAssigneeID(ctx); err != nil {
 			ch <- adapter.WorkItemEvent{Type: "error", Timestamp: domain.Now()}
+
 			return
 		}
 		ticker := time.NewTicker(interval)
@@ -362,6 +389,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 					} else {
 						ch <- adapter.WorkItemEvent{Type: "error", WorkItem: domain.Session{}, Timestamp: domain.Now()}
 					}
+
 					continue
 				}
 				backoff = interval // reset on success
@@ -372,6 +400,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 						for _, s := range filter.States {
 							if s == issue.State.Type || s == issue.State.Name {
 								matched = true
+
 								break
 							}
 						}
@@ -390,6 +419,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 			}
 		}
 	}()
+
 	return ch, nil
 }
 
@@ -404,6 +434,7 @@ func (a *LinearAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("fetch issue by identifier %q: %w", identifier, err)
 	}
+
 	return issueToWorkItem(issue), nil
 }
 
@@ -414,6 +445,7 @@ func (a *LinearAdapter) UpdateState(ctx context.Context, externalID string, stat
 	if !ok {
 		slog.Warn("linear: no state mapping configured; UpdateState is a no-op",
 			"state", state, "external_id", externalID)
+
 		return nil
 	}
 	linearID, err := a.externalIDToLinearID(ctx, externalID)
@@ -421,6 +453,7 @@ func (a *LinearAdapter) UpdateState(ctx context.Context, externalID string, stat
 		return fmt.Errorf("resolve internal ID for %q: %w", externalID, err)
 	}
 	var result updateIssueStateResponse
+
 	return a.client.do(ctx, mutationUpdateIssueState, map[string]any{
 		"issueId": linearID,
 		"stateId": stateID,
@@ -435,6 +468,7 @@ func (a *LinearAdapter) AddComment(ctx context.Context, externalID string, body 
 		return fmt.Errorf("resolve internal ID for %q: %w", externalID, err)
 	}
 	var result addCommentResponse
+
 	return a.client.do(ctx, mutationAddComment, map[string]any{
 		"issueId": linearID,
 		"body":    body,
@@ -450,12 +484,14 @@ func (a *LinearAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if id == "" {
 			return nil
 		}
+
 		return a.UpdateState(ctx, id, domain.TrackerStateInProgress)
 	case domain.EventWorkItemCompleted:
 		id := extractExternalID(event.Payload)
 		if id == "" {
 			return nil
 		}
+
 		return a.UpdateState(ctx, id, domain.TrackerStateDone)
 	default:
 		return nil
@@ -471,6 +507,7 @@ func extractExternalID(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		return ""
 	}
+
 	return p.ExternalID
 }
 
@@ -489,6 +526,7 @@ func (a *LinearAdapter) resolveAssigneeID(ctx context.Context) error {
 	} else {
 		a.assigneeID = a.cfg.AssigneeFilter
 	}
+
 	return nil
 }
 
@@ -500,6 +538,7 @@ func (a *LinearAdapter) fetchAssignedIssues(ctx context.Context) ([]linearIssue,
 	}, &resp); err != nil {
 		return nil, err
 	}
+
 	return resp.Issues.Nodes, nil
 }
 
@@ -510,12 +549,13 @@ func (a *LinearAdapter) assigneeIDForBrowse(ctx context.Context) (string, error)
 	if err := a.resolveAssigneeID(ctx); err != nil {
 		return "", err
 	}
+
 	return a.assigneeID, nil
 }
 
 func linearIssueStateTypes(state string) []string {
 	switch state {
-	case "", "all":
+	case "", filterAll:
 		return nil
 	case "open":
 		return []string{"triage", "backlog", "unstarted", "started"}
@@ -529,15 +569,16 @@ func linearIssueStateTypes(state string) []string {
 }
 
 func linearIssueStateNames(state string) []string {
-	if state == "" || state == "all" || len(linearIssueStateTypes(state)) > 0 {
+	if state == "" || state == filterAll || len(linearIssueStateTypes(state)) > 0 {
 		return nil
 	}
+
 	return []string{state}
 }
 
 func linearProjectStates(state string) []string {
 	switch state {
-	case "", "all":
+	case "", filterAll:
 		return nil
 	case "closed":
 		return []string{"completed", "canceled"}
@@ -556,6 +597,7 @@ func optionalString(value string) any {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
+
 	return value
 }
 
@@ -563,6 +605,7 @@ func optionalStrings(values []string) any {
 	if len(values) == 0 {
 		return nil
 	}
+
 	return values
 }
 
@@ -577,6 +620,7 @@ func projectCreatedAt(proj linearProject) time.Time {
 			created = candidate
 		}
 	}
+
 	return created
 }
 
@@ -588,6 +632,7 @@ func projectUpdatedAt(proj linearProject) time.Time {
 			updated = candidate
 		}
 	}
+
 	return updated
 }
 
@@ -602,6 +647,7 @@ func initiativeCreatedAt(init linearInitiative) time.Time {
 			created = candidate
 		}
 	}
+
 	return created
 }
 
@@ -613,6 +659,7 @@ func initiativeUpdatedAt(init linearInitiative) time.Time {
 			updated = candidate
 		}
 	}
+
 	return updated
 }
 
@@ -624,6 +671,7 @@ func (a *LinearAdapter) fetchIssuesByIDs(ctx context.Context, ids []string) ([]l
 	if err := a.client.do(ctx, queryIssuesByIDs, map[string]any{"ids": ids}, &resp); err != nil {
 		return nil, err
 	}
+
 	return resp.Issues.Nodes, nil
 }
 
@@ -635,6 +683,7 @@ func (a *LinearAdapter) fetchProjectWithIssues(ctx context.Context, id string) (
 	if resp.Project == nil {
 		return linearProject{}, fmt.Errorf("project %q not found", id)
 	}
+
 	return *resp.Project, nil
 }
 
@@ -648,6 +697,7 @@ func (a *LinearAdapter) fetchInitiativeDeep(ctx context.Context, id string) (lin
 	if resp.Initiative == nil {
 		return linearInitiative{}, fmt.Errorf("initiative %q not found", id)
 	}
+
 	return *resp.Initiative, nil
 }
 
@@ -659,6 +709,7 @@ func (a *LinearAdapter) fetchIssueByIdentifier(ctx context.Context, identifier s
 	if len(resp.Issues.Nodes) == 0 {
 		return linearIssue{}, fmt.Errorf("issue with identifier %q not found", identifier)
 	}
+
 	return resp.Issues.Nodes[0], nil
 }
 
@@ -673,6 +724,7 @@ func (a *LinearAdapter) externalIDToLinearID(ctx context.Context, externalID str
 	if err != nil {
 		return "", err
 	}
+
 	return issue.ID, nil
 }
 
@@ -685,10 +737,11 @@ func issueToWorkItem(issue linearIssue) domain.Session {
 	if issue.Assignee != nil {
 		assigneeID = issue.Assignee.ID
 	}
+
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    linearExternalID(issue),
-		Source:        "linear",
+		Source:        providerLinear,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{issue.ID},
 		Title:         issue.Title,
@@ -697,7 +750,7 @@ func issueToWorkItem(issue linearIssue) domain.Session {
 		State:         domain.SessionIngested,
 		AssigneeID:    assigneeID,
 		Metadata: linearIssueMetadata(issue, []domain.TrackerReference{{
-			Provider: "linear",
+			Provider: providerLinear,
 			Kind:     "issue",
 			ID:       issue.Identifier,
 			URL:      issue.URL,
@@ -737,10 +790,11 @@ func aggregateIssues(issues []linearIssue) domain.Session {
 
 	metadata := linearIssueMetadata(issues[0], linearTrackerRefs(issues))
 	metadata["source_summaries"] = linearIssueSourceSummaries(issues)
+
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    linearExternalID(issues[0]),
-		Source:        "linear",
+		Source:        providerLinear,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: sourceIDs,
 		Title:         issues[0].Title + fmt.Sprintf(" (+%d more)", len(issues)-1),
@@ -765,12 +819,13 @@ func linearTrackerRefs(issues []linearIssue) []domain.TrackerReference {
 		}
 		seen[issue.Identifier] = struct{}{}
 		refs = append(refs, domain.TrackerReference{
-			Provider: "linear",
+			Provider: providerLinear,
 			Kind:     "issue",
 			ID:       issue.Identifier,
 			URL:      issue.URL,
 		})
 	}
+
 	return refs
 }
 
@@ -790,6 +845,7 @@ func linearIssueMetadata(issue linearIssue, trackerRefs []domain.TrackerReferenc
 		metadata["linear_assignee_id"] = issue.Assignee.ID
 		metadata["linear_assignee_name"] = issue.Assignee.Name
 	}
+
 	return metadata
 }
 
@@ -810,6 +866,7 @@ func linearProjectMetadata(projects []linearProject, trackerRefs ...domain.Track
 		metadata["linear_project_name"] = projects[0].Name
 		metadata["linear_project_state"] = projects[0].State
 	}
+
 	return metadata
 }
 
@@ -820,6 +877,7 @@ func linearInitiativeMetadata(init linearInitiative, trackerRefs ...domain.Track
 		projectIDs = append(projectIDs, proj.ID)
 		projectNames = append(projectNames, proj.Name)
 	}
+
 	return map[string]any{
 		"linear_initiative_id":     init.ID,
 		"linear_initiative_name":   init.Name,
@@ -841,6 +899,7 @@ func projectIssueIdentifiers(proj linearProject) []string {
 	if len(ids) == 0 {
 		return nil
 	}
+
 	return ids
 }
 
@@ -855,6 +914,7 @@ func initiativeProjectNames(init linearInitiative) []string {
 	if len(names) == 0 {
 		return nil
 	}
+
 	return names
 }
 
@@ -874,6 +934,7 @@ func formatProjectSection(proj linearProject) string {
 			sb.WriteString("- " + issue.Identifier + ": " + issue.Title + " (" + issue.State.Name + ")\n")
 		}
 	}
+
 	return sb.String()
 }
 
@@ -892,6 +953,7 @@ func formatInitiativeWorkItem(init linearInitiative) string {
 			sb.WriteString("\n")
 		}
 	}
+
 	return sb.String()
 }
 
@@ -908,6 +970,7 @@ func numericSuffix(identifier string) string {
 	if len(parts) < 2 {
 		return identifier
 	}
+
 	return parts[1]
 }
 
@@ -922,6 +985,7 @@ func substrateToLinearIdentifier(externalID string) (string, error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", fmt.Errorf("invalid external ID %q: expected LIN-TEAM-NUM", externalID)
 	}
+
 	return parts[0] + "-" + parts[1], nil
 }
 
@@ -936,6 +1000,7 @@ func labelNames(labels linearLabels) []string {
 	for i, l := range labels.Nodes {
 		names[i] = l.Name
 	}
+
 	return names
 }
 
@@ -944,5 +1009,6 @@ func derefTime(t *time.Time) time.Time {
 	if t == nil {
 		return time.Time{}
 	}
+
 	return *t
 }

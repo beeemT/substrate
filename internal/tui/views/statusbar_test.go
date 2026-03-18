@@ -143,7 +143,7 @@ func TestStatusBarPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	if newIndex == -1 || deleteIndex == -1 || searchIndex == -1 {
 		t.Fatalf("content = %q, want new, delete, and search hints visible", lines[0])
 	}
-	if !(newIndex < deleteIndex && deleteIndex < searchIndex) {
+	if newIndex >= deleteIndex || deleteIndex >= searchIndex {
 		t.Fatalf("content = %q, want delete hint between new and search", lines[0])
 	}
 }
@@ -159,6 +159,7 @@ func TestDefaultHintsExposeSettingsOnS(t *testing.T) {
 		if hint.Key != "s" {
 			t.Fatalf("settings hint key = %q, want %q", hint.Key, "s")
 		}
+
 		return
 	}
 

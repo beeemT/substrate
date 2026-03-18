@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,9 @@ const (
 	overviewActionQuestion    OverviewActionKind = "question"
 	overviewActionInterrupted OverviewActionKind = "interrupted"
 	overviewActionReviewing   OverviewActionKind = "reviewing"
+
+	providerGitlab       = "gitlab"
+	labelReviewArtifacts = "Review artifacts"
 )
 
 type overviewOverlayKind int
@@ -132,7 +136,7 @@ type OverviewActivityItem struct {
 	Timestamp time.Time
 }
 
-type SessionOverviewModel struct {
+type SessionOverviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	styles         styles.Styles
 	width          int
 	height         int
@@ -165,6 +169,7 @@ func (m *SessionOverviewModel) planOverlayInnerSize() (innerWidth, innerHeight i
 	frameWidth := min(max(72, m.termWidth-12), 220)
 	innerHeight = max(12, min(m.termHeight-2, 36))
 	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
+
 	return
 }
 
@@ -172,6 +177,7 @@ func (m *SessionOverviewModel) defaultOverlayInnerSize() (innerWidth, innerHeigh
 	frameWidth := min(max(48, m.termWidth-6), 112)
 	innerHeight = max(10, min(m.termHeight-4, 26))
 	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
+
 	return
 }
 
@@ -228,56 +234,65 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 	if action := m.selectedActionCard(); action != nil {
 		hints = append(hints, actionKeybindHints(*action)...)
 	} else if len(m.data.External.Reviews) > 0 {
-		hints = append(hints, KeybindHint{Key: "o", Label: "Review artifacts"})
+		hints = append(hints, KeybindHint{Key: "o", Label: labelReviewArtifacts})
 	} else if m.data.State == domain.SessionIngested {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Start planning"})
 	} else if m.data.Plan.Exists {
 		hints = append(hints, KeybindHint{Key: "i", Label: "View full plan"})
 	}
+
 	return hints
 }
 
 func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd) {
 	if m.overlay != overviewOverlayNone {
-		if key, ok := msg.(tea.KeyMsg); ok && (key.String() == "left" || key.String() == "esc") {
-			if key.String() == "esc" {
+		if key, ok := msg.(tea.KeyMsg); ok && (key.String() == panelLeft || key.String() == keyEsc) {
+			if key.String() == keyEsc {
 				switch m.overlay {
 				case overviewOverlayQuestion:
 					var cmd tea.Cmd
 					m.question, cmd = m.question.Update(msg)
+
 					return m, cmd
 				case overviewOverlayPlan:
 					if m.planReview.inputMode != planReviewNormal {
 						var cmd tea.Cmd
 						m.planReview, cmd = m.planReview.Update(msg)
+
 						return m, cmd
 					}
 				}
 			}
 			m.overlay = overviewOverlayNone
 			m.syncViewport(false)
+
 			return m, nil
 		}
 		switch m.overlay {
 		case overviewOverlayPlan:
 			var cmd tea.Cmd
 			m.planReview, cmd = m.planReview.Update(msg)
+
 			return m, cmd
 		case overviewOverlayQuestion:
 			var cmd tea.Cmd
 			m.question, cmd = m.question.Update(msg)
+
 			return m, cmd
 		case overviewOverlayInterrupted:
 			var cmd tea.Cmd
 			m.interrupted, cmd = m.interrupted.Update(msg)
+
 			return m, cmd
 		case overviewOverlayCompleted:
 			var cmd tea.Cmd
 			m.completed, cmd = m.completed.Update(msg)
+
 			return m, cmd
 		case overviewOverlayReviewing:
 			var cmd tea.Cmd
 			m.reviewing, cmd = m.reviewing.Update(msg)
+
 			return m, cmd
 		}
 	}
@@ -286,17 +301,19 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab":
+		case keyTab:
 			if len(m.data.Actions) > 1 {
 				m.selectedAction = (m.selectedAction + 1) % len(m.data.Actions)
 				m.syncActionModels()
 				m.syncViewport(false)
 			}
+
 			return m, nil
-		case "enter":
+		case keyEnter:
 			if action := m.selectedActionCard(); action != nil {
 				if action.Kind == overviewActionQuestion {
 					m.overlay = overviewOverlayQuestion
+
 					return m, nil
 				}
 			} else if m.data.State == domain.SessionIngested {
@@ -307,19 +324,24 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				switch action.Kind {
 				case overviewActionPlanReview:
 					m.overlay = overviewOverlayPlan
+
 					return m, nil
 				case overviewActionQuestion:
 					m.overlay = overviewOverlayQuestion
+
 					return m, nil
 				case overviewActionInterrupted:
 					m.overlay = overviewOverlayInterrupted
+
 					return m, nil
 				case overviewActionReviewing:
 					m.overlay = overviewOverlayReviewing
+
 					return m, nil
 				}
 			} else if m.data.Plan.Exists && m.data.Plan.Document != nil {
 				m.overlay = overviewOverlayPlan
+
 				return m, nil
 			}
 		case "o":
@@ -328,6 +350,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			}
 			if len(m.data.External.Reviews) > 0 {
 				m.overlay = overviewOverlayCompleted
+
 				return m, nil
 			}
 		case "a":
@@ -340,6 +363,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
 						sessionID := action.Session.ID
+
 						return m, func() tea.Msg { return ConfirmAbandonMsg{SessionID: sessionID} }
 					}
 				}
@@ -349,9 +373,11 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				answer := strings.TrimSpace(action.ProposedAnswer)
 				if answer == "" {
 					m.overlay = overviewOverlayQuestion
+
 					return m, nil
 				}
 				questionID := action.Question.ID
+
 				return m, func() tea.Msg { return AnswerQuestionMsg{QuestionID: questionID, Answer: answer, AnsweredBy: "human"} }
 			}
 		case "c":
@@ -364,6 +390,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				m.planReview.feedbackInput.Focus()
 				m.planReview.syncViewportSize()
 				m.overlay = overviewOverlayPlan
+
 				return m, nil
 			}
 		case "r":
@@ -378,19 +405,22 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					m.planReview.feedbackInput.Focus()
 					m.planReview.syncViewportSize()
 					m.overlay = overviewOverlayPlan
+
 					return m, nil
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
 						oldSessionID := action.Session.ID
 						subPlanID := action.Session.SubPlanID
+
 						return m, func() tea.Msg { return ResumeSessionMsg{OldSessionID: oldSessionID, SubPlanID: subPlanID} }
 					}
 				case overviewActionReviewing:
 					return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.data.WorkItemID} }
 				}
 			}
-		case "up", "down", "j", "k", "pgup", "pgdown", "home", "end":
+		case "up", keyDown, "j", "k", "pgup", "pgdown", "home", "end":
 			m.viewport, cmd = m.viewport.Update(msg)
+
 			return m, cmd
 		}
 	case tea.MouseMsg:
@@ -398,13 +428,16 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 				m.viewport, cmd = m.viewport.Update(msg)
+
 				return m, cmd
 			}
 		}
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
+
 		return m, nil
 	}
+
 	return m, nil
 }
 
@@ -412,6 +445,7 @@ func (m SessionOverviewModel) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+
 	return fitViewBox(m.viewport.View(), m.width, m.height)
 }
 
@@ -471,6 +505,7 @@ func (m SessionOverviewModel) selectedActionCard() *OverviewActionCard {
 		return nil
 	}
 	action := m.data.Actions[m.selectedAction]
+
 	return &action
 }
 
@@ -491,6 +526,7 @@ func (m SessionOverviewModel) renderDocument() string {
 			filtered = append(filtered, section)
 		}
 	}
+
 	return fitViewBox(strings.Join(filtered, "\n\n"), m.width, max(1, len(strings.Split(strings.Join(filtered, "\n\n"), "\n"))))
 }
 
@@ -499,6 +535,7 @@ func (m SessionOverviewModel) renderHeader() string {
 	if !m.data.Header.UpdatedAt.IsZero() {
 		metaParts = append(metaParts, "Updated "+timeAgo(m.data.Header.UpdatedAt))
 	}
+
 	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
 		Title:   firstNonEmptyString(m.data.Header.Title, m.data.Header.ExternalID),
 		Meta:    strings.Join(filterEmptyStrings(metaParts), " · "),
@@ -521,6 +558,7 @@ func (m SessionOverviewModel) renderSummarySection() string {
 		rows = append(rows, renderKeyValueLine(m.styles, innerWidth, "Blockers", strings.Join(m.data.Header.Badges, ", ")))
 	}
 	body := components.RenderCallout(m.styles, components.CalloutSpec{Body: strings.Join(rows, "\n"), Width: m.width, Variant: components.CalloutCard})
+
 	return renderOverviewSection(m.styles, "Summary", body)
 }
 
@@ -532,6 +570,7 @@ func (m SessionOverviewModel) renderActionSection() string {
 	for i, action := range m.data.Actions {
 		cards = append(cards, renderOverviewActionCard(m.styles, m.width, action, i == m.selectedAction))
 	}
+
 	return renderOverviewSection(m.styles, "Action required", strings.Join(cards, "\n\n"))
 }
 
@@ -543,6 +582,7 @@ func (m SessionOverviewModel) renderSourceSection() string {
 	for _, item := range m.data.Sources {
 		items = append(items, renderOverviewSourceItem(m.styles, m.width, item))
 	}
+
 	return renderOverviewSection(m.styles, "Source", strings.Join(items, "\n\n"))
 }
 
@@ -553,10 +593,10 @@ func (m SessionOverviewModel) renderPlanSection() string {
 		rows = append(rows,
 			renderKeyValueLine(m.styles, innerWidth, "Version", fmt.Sprintf("v%d", m.data.Plan.Version)),
 			renderKeyValueLine(m.styles, innerWidth, "Updated", formatAbsoluteTime(m.data.Plan.UpdatedAt)),
-			renderKeyValueLine(m.styles, innerWidth, "Repos", fmt.Sprintf("%d", m.data.Plan.RepoCount)),
+			renderKeyValueLine(m.styles, innerWidth, "Repos", strconv.Itoa(m.data.Plan.RepoCount)),
 		)
 		if m.data.Plan.FAQCount > 0 {
-			rows = append(rows, renderKeyValueLine(m.styles, innerWidth, "FAQ", fmt.Sprintf("%d", m.data.Plan.FAQCount)))
+			rows = append(rows, renderKeyValueLine(m.styles, innerWidth, "FAQ", strconv.Itoa(m.data.Plan.FAQCount)))
 		}
 	}
 	if m.data.Plan.DraftSession != "" {
@@ -572,6 +612,7 @@ func (m SessionOverviewModel) renderPlanSection() string {
 		rows = append(rows, "", m.styles.Subtitle.Render("Excerpt"), strings.Join(m.data.Plan.Excerpt, "\n"))
 	}
 	body := components.RenderCallout(m.styles, components.CalloutSpec{Body: strings.Join(rows, "\n"), Width: m.width, Variant: components.CalloutCard})
+
 	return renderOverviewSection(m.styles, "Plan", body)
 }
 
@@ -583,6 +624,7 @@ func (m SessionOverviewModel) renderTasksSection() string {
 	for _, row := range m.data.Tasks {
 		rows = append(rows, renderOverviewTaskRow(m.styles, m.width, row))
 	}
+
 	return renderOverviewSection(m.styles, "Tasks", strings.Join(rows, "\n\n"))
 }
 
@@ -603,12 +645,13 @@ func (m SessionOverviewModel) renderExternalSection() string {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, m.styles.Subtitle.Render("Review artifacts"), strings.Join(reviewLines, "\n"))
+		lines = append(lines, m.styles.Subtitle.Render(labelReviewArtifacts), strings.Join(reviewLines, "\n"))
 	}
 	if len(lines) == 0 {
 		return ""
 	}
 	body := components.RenderCallout(m.styles, components.CalloutSpec{Body: strings.Join(lines, "\n"), Width: m.width, Variant: components.CalloutCard})
+
 	return renderOverviewSection(m.styles, "External lifecycle", body)
 }
 
@@ -621,6 +664,7 @@ func (m SessionOverviewModel) renderActivitySection() string {
 		lines = append(lines, ansi.Hardwrap(m.styles.SettingsText.Render("• "+item.Summary+" · "+timeAgo(item.Timestamp)), components.CalloutInnerWidth(m.styles, m.width), true))
 	}
 	body := components.RenderCallout(m.styles, components.CalloutSpec{Body: strings.Join(lines, "\n"), Width: m.width, Variant: components.CalloutCard})
+
 	return renderOverviewSection(m.styles, "Recent activity", body)
 }
 
@@ -647,6 +691,7 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	default:
 		return ""
 	}
+
 	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewBox(body, innerWidth, innerHeight), Focused: true})
 }
 
@@ -661,6 +706,7 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		if action.CanAct {
 			hints = append([]KeybindHint{{Key: "r", Label: "Resume"}, {Key: "a", Label: "Abandon"}}, hints...)
 		}
+
 		return hints
 	case overviewActionReviewing:
 		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
@@ -673,6 +719,7 @@ func renderOverviewSection(st styles.Styles, label, body string) string {
 	if strings.TrimSpace(body) == "" {
 		return ""
 	}
+
 	return st.SectionLabel.Render(label) + "\n" + body
 }
 
@@ -696,7 +743,7 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 			lines = append(lines, ansi.Hardwrap(st.SettingsText.Render(line), innerWidth, true))
 		}
 	}
-	hintLabels := make([]string, 0)
+	hintLabels := make([]string, 0, len(actionKeybindHints(action)))
 	for _, hint := range actionKeybindHints(action) {
 		hintLabels = append(hintLabels, hint.Key+" "+hint.Label)
 	}
@@ -707,6 +754,7 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 	if selected {
 		variant = components.CalloutWarning
 	}
+
 	return components.RenderCallout(st, components.CalloutSpec{Body: strings.Join(filterEmptyStringsPreserveBlanks(lines), "\n"), Width: width, Variant: variant})
 }
 
@@ -725,6 +773,7 @@ func renderOverviewSourceItem(st styles.Styles, width int, item OverviewSourceIt
 	if strings.TrimSpace(item.URL) != "" {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "URL", item.URL))
 	}
+
 	return components.RenderCallout(st, components.CalloutSpec{Body: strings.Join(lines, "\n"), Width: width, Variant: components.CalloutCard})
 }
 
@@ -749,6 +798,7 @@ func renderOverviewTaskRow(st styles.Styles, width int, row OverviewTaskRow) str
 	if strings.TrimSpace(row.Note) != "" {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "Note", row.Note))
 	}
+
 	return components.RenderCallout(st, components.CalloutSpec{Body: strings.Join(lines, "\n"), Width: width, Variant: components.CalloutCard})
 }
 
@@ -766,6 +816,7 @@ func renderOverviewReviewRow(st styles.Styles, width int, row OverviewReviewRow)
 	} else if row.Branch != "" {
 		line += " · branch " + row.Branch
 	}
+
 	return ansi.Hardwrap(st.SettingsText.Render("• "+line), width, true)
 }
 
@@ -773,6 +824,7 @@ func renderKeyValueLine(st styles.Styles, width int, key, value string) string {
 	if strings.TrimSpace(value) == "" {
 		value = "—"
 	}
+
 	return ansi.Hardwrap(st.SectionLabel.Render(key+": ")+st.SettingsText.Render(value), width, true)
 }
 
@@ -784,6 +836,7 @@ func filterEmptyStrings(values []string) []string {
 		}
 		filtered = append(filtered, value)
 	}
+
 	return filtered
 }
 
@@ -800,6 +853,7 @@ func filterEmptyStringsPreserveBlanks(values []string) []string {
 		}
 		previousBlank = blank
 	}
+
 	return filtered
 }
 
@@ -807,6 +861,7 @@ func formatAbsoluteTime(ts time.Time) string {
 	if ts.IsZero() {
 		return "—"
 	}
+
 	return ts.Local().Format("2006-01-02 15:04 MST")
 }
 
@@ -847,6 +902,7 @@ func excerptLines(content string, width, maxLines int) []string {
 			break
 		}
 	}
+
 	return excerpt
 }
 
@@ -858,8 +914,10 @@ func stripPlanPrelude(content string) string {
 	}
 	if idx := strings.Index(trimmed[len(prefix):], "```"); idx >= 0 {
 		body := strings.TrimSpace(trimmed[len(prefix)+idx+3:])
+
 		return body
 	}
+
 	return trimmed
 }
 
@@ -871,8 +929,7 @@ func sessionSourceSummaries(metadata map[string]any) []domain.SourceSummary {
 	if !ok || raw == nil {
 		return nil
 	}
-	switch typed := raw.(type) {
-	case []domain.SourceSummary:
+	if typed, ok := raw.([]domain.SourceSummary); ok {
 		return append([]domain.SourceSummary(nil), typed...)
 	}
 	payload, err := json.Marshal(raw)
@@ -883,6 +940,7 @@ func sessionSourceSummaries(metadata map[string]any) []domain.SourceSummary {
 	if err := json.Unmarshal(payload, &summaries); err != nil {
 		return nil
 	}
+
 	return summaries
 }
 
@@ -892,6 +950,7 @@ func sessionURL(metadata map[string]any) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -905,6 +964,7 @@ func (a *App) buildOverviewData(wi *domain.Session) SessionOverviewData {
 	if plan != nil {
 		subPlans = append(subPlans, a.subPlans[plan.ID]...)
 	}
+
 	return SessionOverviewData{
 		WorkItemID: wi.ID,
 		State:      wi.State,
@@ -936,6 +996,7 @@ func buildOverviewHeader(wi domain.Session, entry SidebarEntry) OverviewHeader {
 	if entry.TotalSubPlans > 0 {
 		progressText = fmt.Sprintf("%d/%d repos complete", entry.DoneSubPlans, entry.TotalSubPlans)
 	}
+
 	return OverviewHeader{
 		ExternalID:   wi.ExternalID,
 		Title:        wi.Title,
@@ -949,7 +1010,7 @@ func buildOverviewHeader(wi domain.Session, entry SidebarEntry) OverviewHeader {
 func buildOverviewSources(wi domain.Session, width int) []OverviewSourceItem {
 	summaries := sessionSourceSummaries(wi.Metadata)
 	if len(wi.SourceItemIDs) <= 1 {
-		ref := ""
+		var ref string
 		if refs := sessionTrackerRefs(wi.Metadata); len(refs) > 0 {
 			ref = formatTrackerRef(refs[0])
 		} else if len(wi.SourceItemIDs) == 1 {
@@ -961,6 +1022,7 @@ func buildOverviewSources(wi domain.Session, width int) []OverviewSourceItem {
 		if lines := excerptLines(wi.Description, max(20, width), 4); len(lines) > 0 {
 			excerpt = strings.Join(lines, "\n")
 		}
+
 		return []OverviewSourceItem{{
 			Provider: detailProviderLabel(wi.Source),
 			Ref:      ref,
@@ -980,6 +1042,7 @@ func buildOverviewSources(wi domain.Session, width int) []OverviewSourceItem {
 				URL:      summary.URL,
 			})
 		}
+
 		return items
 	}
 	refs := sessionTrackerRefs(wi.Metadata)
@@ -988,11 +1051,13 @@ func buildOverviewSources(wi domain.Session, width int) []OverviewSourceItem {
 		for _, ref := range refs {
 			items = append(items, OverviewSourceItem{Provider: detailProviderLabel(firstNonEmptyString(ref.Provider, wi.Source)), Ref: formatTrackerRef(ref)})
 		}
+
 		return items
 	}
 	for _, id := range wi.SourceItemIDs {
 		items = append(items, OverviewSourceItem{Provider: detailProviderLabel(wi.Source), Ref: id})
 	}
+
 	return items
 }
 
@@ -1010,6 +1075,7 @@ func (a *App) buildOverviewPlan(wi *domain.Session, plan *domain.Plan, subPlans 
 				}
 			}
 		}
+
 		return overview
 	}
 	overview.Exists = true
@@ -1022,6 +1088,7 @@ func (a *App) buildOverviewPlan(wi *domain.Session, plan *domain.Plan, subPlans 
 	overview.ActionText = planActionText(wi.State)
 	excerptWidth := components.CalloutInnerWidth(a.statusBar.styles, max(20, a.widthForInnerContent()))
 	overview.Excerpt = excerptLines(stripPlanPrelude(plan.OrchestratorPlan), excerptWidth, 6)
+
 	return overview
 }
 
@@ -1050,21 +1117,22 @@ func (a *App) buildOverviewTasks(wi *domain.Session, subPlans []domain.TaskPlan)
 		case waiting != nil:
 			row.Note = buildQuestionNote(a.questions[waiting.ID])
 		case interrupted != nil:
-			row.Note = "Interrupted"
+			row.Note = statusInterrupted
 		case latest != nil && latest.Status == domain.AgentSessionFailed:
-			row.Note = "Failed"
+			row.Note = statusFailed
 		case wi.State == domain.SessionReviewing:
 			row.Note = a.buildOverviewReviewNote(wi.ID, sp.ID)
 		case sp.Status == domain.SubPlanCompleted:
-			row.Note = "Completed"
+			row.Note = statusCompleted
 		}
 		rows = append(rows, row)
 	}
+
 	return rows
 }
 
 func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waiting, interrupted *domain.Task) {
-	tasks := make([]domain.Task, 0)
+	tasks := make([]domain.Task, 0, len(a.sessionsForWorkItem(workItemID)))
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		if session.SubPlanID == subPlanID {
 			tasks = append(tasks, session)
@@ -1077,6 +1145,7 @@ func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waitin
 		if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
 			return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
 		}
+
 		return tasks[i].CreatedAt.After(tasks[j].CreatedAt)
 	})
 	for i := range tasks {
@@ -1091,6 +1160,7 @@ func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waitin
 			interrupted = &task
 		}
 	}
+
 	return latest, waiting, interrupted
 }
 
@@ -1105,6 +1175,7 @@ func latestOverviewReviewCycle(review ReviewsLoadedMsg) (*domain.ReviewCycle, []
 		}
 	}
 	critiques := append([]domain.Critique(nil), review.Critiques[latest.ID]...)
+
 	return &latest, critiques
 }
 
@@ -1120,6 +1191,7 @@ func (a *App) buildOverviewReviewNote(workItemID, subPlanID string) string {
 	if cycle != nil {
 		return humanReviewCycleStatus(cycle.Status)
 	}
+
 	return "Under review"
 }
 
@@ -1134,7 +1206,7 @@ func humanReviewCycleStatus(status domain.ReviewCycleStatus) string {
 	case domain.ReviewCyclePassed:
 		return "Passed"
 	case domain.ReviewCycleFailed:
-		return "Failed"
+		return statusFailed
 	default:
 		return strings.TrimSpace(string(status))
 	}
@@ -1146,6 +1218,7 @@ func buildQuestionNote(questions []domain.Question) string {
 			return "Waiting for answer: " + summarizeText(question.Content, 72)
 		}
 	}
+
 	return "Waiting for answer"
 }
 
@@ -1155,6 +1228,7 @@ func hasEscalatedQuestion(questions []domain.Question) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1165,11 +1239,11 @@ func humanTaskPlanStatus(status domain.TaskPlanStatus) string {
 	case domain.SubPlanInProgress:
 		return "In progress"
 	case domain.SubPlanCompleted:
-		return "Completed"
+		return statusCompleted
 	case domain.SubPlanFailed:
-		return "Failed"
+		return statusFailed
 	case domain.SubPlanInterrupted:
-		return "Interrupted"
+		return statusInterrupted
 	default:
 		return string(status)
 	}
@@ -1236,11 +1310,12 @@ func readPlanningDraftExcerpt(path string, width int) (time.Time, []string) {
 	if err != nil {
 		return info.ModTime(), nil
 	}
+
 	return info.ModTime(), excerptLines(stripPlanPrelude(string(data)), width, 5)
 }
 
 func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPlans []domain.TaskPlan) []OverviewActionCard {
-	actions := make([]OverviewActionCard, 0)
+	actions := make([]OverviewActionCard, 0, 4)
 	if wi.State == domain.SessionPlanReview && plan != nil {
 		affected := make([]string, 0, len(subPlans))
 		for _, subPlan := range subPlans {
@@ -1301,6 +1376,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 					QuestionAsked:  question.CreatedAt,
 					ProposedAnswer: question.ProposedAnswer,
 				})
+
 				break
 			}
 		}
@@ -1321,6 +1397,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			})
 		}
 	}
+
 	return actions
 }
 
@@ -1349,6 +1426,7 @@ func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPl
 	if firstCritique != "" {
 		context = append(context, "First critique: "+firstCritique)
 	}
+
 	return &OverviewActionCard{
 		Kind:        overviewActionReviewing,
 		Title:       "Review requires decision",
@@ -1375,11 +1453,13 @@ func (a *App) reviewResultsForOverview(workItemID string, subPlans []domain.Task
 		}
 		results = append(results, repoResult)
 	}
+
 	return results
 }
 
 func ptrQuestion(question domain.Question) *domain.Question {
 	q := question
+
 	return &q
 }
 
@@ -1391,6 +1471,7 @@ func summarizeText(text string, limit int) string {
 	if ansi.StringWidth(trimmed) <= limit {
 		return trimmed
 	}
+
 	return ansi.Truncate(trimmed, limit, "…")
 }
 
@@ -1445,14 +1526,16 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 		if external.Reviews[i].Branch != external.Reviews[j].Branch {
 			return external.Reviews[i].Branch < external.Reviews[j].Branch
 		}
+
 		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
+
 	return external
 }
 
 func reviewKindForProvider(provider string) string {
 	switch provider {
-	case "gitlab":
+	case providerGitlab:
 		return "MR"
 	default:
 		return "PR"
@@ -1463,7 +1546,8 @@ func reviewArtifactOverlayLabel(state domain.SessionState) string {
 	if state == domain.SessionCompleted {
 		return "✓ Completed"
 	}
-	return "Review artifacts"
+
+	return labelReviewArtifacts
 }
 
 func overviewReviewRowsToMRInfo(rows []OverviewReviewRow) []MRInfo {
@@ -1477,6 +1561,7 @@ func overviewReviewRowsToMRInfo(rows []OverviewReviewRow) []MRInfo {
 			IsOpen:   row.State != "merged" && row.State != "closed" && row.State != "done",
 		})
 	}
+
 	return links
 }
 
@@ -1507,6 +1592,7 @@ func (a *App) buildOverviewActivity(wi *domain.Session, plan *domain.Plan) []Ove
 	if len(items) > 3 {
 		items = items[:3]
 	}
+
 	return items
 }
 
@@ -1518,5 +1604,6 @@ func (a *App) widthForInnerContent() int {
 	if layout.ContentInnerWidth > 0 {
 		return layout.ContentInnerWidth
 	}
+
 	return 72
 }

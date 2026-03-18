@@ -27,6 +27,7 @@ func (r *workspaceRow) toDomain() (domain.Workspace, error) {
 	if err != nil {
 		return domain.Workspace{}, fmt.Errorf("updated_at: %w", err)
 	}
+
 	return domain.Workspace{
 		ID:        r.ID,
 		Name:      r.Name,
@@ -60,6 +61,7 @@ func (r WorkspaceRepo) Get(ctx context.Context, id string) (domain.Workspace, er
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM workspaces WHERE id = ?`, id); err != nil {
 		return domain.Workspace{}, fmt.Errorf("get workspace %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -71,6 +73,7 @@ func (r WorkspaceRepo) Create(ctx context.Context, ws domain.Workspace) error {
 	if err != nil {
 		return fmt.Errorf("create workspace %s: %w", ws.ID, err)
 	}
+
 	return nil
 }
 
@@ -89,6 +92,7 @@ func (r WorkspaceRepo) Update(ctx context.Context, ws domain.Workspace) error {
 	if n == 0 {
 		return fmt.Errorf("update workspace %s: %w", ws.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -97,5 +101,6 @@ func (r WorkspaceRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete workspace %s: %w", id, err)
 	}
+
 	return nil
 }

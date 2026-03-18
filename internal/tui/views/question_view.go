@@ -12,7 +12,7 @@ import (
 )
 
 // QuestionModel handles human-in-the-loop question resolution.
-type QuestionModel struct {
+type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	question         domain.Question
 	foremanProposed  string
 	foremanUncertain bool
@@ -29,6 +29,7 @@ func NewQuestionModel(st styles.Styles) QuestionModel {
 	ti := components.NewTextInput()
 	ti.Placeholder = "Type reply to Foreman…"
 	ti.CharLimit = 1000
+
 	return QuestionModel{input: ti, styles: st}
 }
 
@@ -49,6 +50,7 @@ func (m *QuestionModel) SetQuestion(q domain.Question, proposed string, uncertai
 			m.inputActive = true
 			m.input.Focus()
 		}
+
 		return
 	}
 	m.input.SetValue("")
@@ -68,8 +70,7 @@ func (m QuestionModel) KeybindHints() []KeybindHint {
 // Update handles messages and input for QuestionModel.
 func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "A":
 			answer := m.foremanProposed
@@ -79,21 +80,24 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 			qID := m.question.ID
 			m.inputActive = false
 			m.input.Blur()
+
 			return m, func() tea.Msg {
 				return AnswerQuestionMsg{QuestionID: qID, Answer: answer, AnsweredBy: "human"}
 			}
 
-		case "esc":
+		case keyEsc:
 			qID := m.question.ID
 			m.inputActive = false
 			m.input.Blur()
+
 			return m, func() tea.Msg { return SkipQuestionMsg{QuestionID: qID} }
 
-		case "enter":
+		case keyEnter:
 			if m.inputActive {
 				text := m.input.Value()
 				m.input.SetValue("")
 				qID := m.question.ID
+
 				return m, func() tea.Msg {
 					return SendToForemanMsg{QuestionID: qID, Message: text}
 				}
@@ -105,6 +109,7 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 			}
 		}
 	}
+
 	return m, cmd
 }
 
@@ -164,5 +169,6 @@ func (m QuestionModel) View() string {
 		parts = append(parts, strings.Split(middle, "\n")...)
 	}
 	parts = append(parts, footerBlocks...)
+
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

@@ -2,7 +2,9 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -13,6 +15,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
@@ -26,11 +30,11 @@ type providerOption struct {
 }
 
 var providerOptions = []providerOption{
-	{Key: "all", Label: "All"},
+	{Key: viewFilterAll, Label: "All"},
 	{Key: "linear", Label: "Linear"},
 	{Key: "github", Label: "GitHub"},
 	{Key: "gitlab", Label: "GitLab"},
-	{Key: "sentry", Label: "Sentry"},
+	{Key: providerSentry, Label: "Sentry"},
 }
 
 var scopeOptions = []domain.SelectionScope{
@@ -39,9 +43,13 @@ var scopeOptions = []domain.SelectionScope{
 	domain.ScopeInitiatives,
 }
 
-var defaultViewOptions = []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", "all"}
-
 const (
+	viewFilterAll  = "all"
+	providerSentry = "sentry"
+	providerManual = "manual"
+	panelLeft      = "left"
+	panelRight     = "right"
+
 	browseMaxOverlayWidth   = 0
 	browseHeightNumerator   = 4
 	browseHeightDenom       = 5
@@ -152,7 +160,7 @@ func (i selectableItem) FilterValue() string {
 }
 
 // NewSessionOverlay is the overlay for creating a new work item session.
-type NewSessionOverlay struct {
+type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	adapters       []adapter.WorkItemAdapter
 	browseAdapters []adapter.WorkItemAdapter
 	workspaceID    string
@@ -361,7 +369,7 @@ func (m *NewSessionOverlay) toggleSelection(item adapter.ListItem) error {
 		return nil
 	}
 	if provider != "" && provider != item.Provider {
-		return fmt.Errorf("multi-select must stay within one provider")
+		return errors.New("multi-select must stay within one provider")
 	}
 	m.selectedIDs[item.ID] = true
 	m.refreshBrowseListItems()
@@ -370,13 +378,13 @@ func (m *NewSessionOverlay) toggleSelection(item adapter.ListItem) error {
 
 func (m NewSessionOverlay) currentProvider() string {
 	if m.providerIndex < 0 || m.providerIndex >= len(providerOptions) {
-		return "all"
+		return viewFilterAll
 	}
 	return providerOptions[m.providerIndex].Key
 }
 
 func crossesSentryProjectFilterBoundary(fromProvider, toProvider string) bool {
-	return (fromProvider == "sentry") != (toProvider == "sentry")
+	return (fromProvider == providerSentry) != (toProvider == providerSentry)
 }
 
 func (m NewSessionOverlay) activeProviderOptions() []providerOption {
@@ -435,12 +443,12 @@ func (m NewSessionOverlay) currentState() string {
 
 func (m NewSessionOverlay) adaptersForProvider() []adapter.WorkItemAdapter {
 	provider := m.currentProvider()
-	if provider == "all" && m.currentScope() == domain.ScopeIssues {
+	if provider == viewFilterAll && m.currentScope() == domain.ScopeIssues {
 		return append([]adapter.WorkItemAdapter(nil), m.browseAdapters...)
 	}
 	filtered := make([]adapter.WorkItemAdapter, 0, len(m.browseAdapters))
 	for _, a := range m.browseAdapters {
-		if provider == "all" || a.Name() == provider {
+		if provider == viewFilterAll || a.Name() == provider {
 			filtered = append(filtered, a)
 		}
 	}
@@ -449,7 +457,7 @@ func (m NewSessionOverlay) adaptersForProvider() []adapter.WorkItemAdapter {
 
 func (m NewSessionOverlay) availableScopes() []domain.SelectionScope {
 	provider := m.currentProvider()
-	if provider == "all" {
+	if provider == viewFilterAll {
 		return []domain.SelectionScope{domain.ScopeIssues}
 	}
 	adapters := m.adaptersForProvider()
@@ -471,14 +479,7 @@ func (m NewSessionOverlay) scopeSupportedByAdapters(scope domain.SelectionScope,
 	}
 	for _, a := range adapters {
 		caps := a.Capabilities()
-		supported := false
-		for _, available := range caps.BrowseScopes {
-			if available == scope {
-				supported = true
-				break
-			}
-		}
-		if !supported {
+		if !slices.Contains(caps.BrowseScopes, scope) {
 			return false
 		}
 	}
@@ -548,10 +549,8 @@ func intersectStrings(left, right []string) []string {
 
 func (m *NewSessionOverlay) normalizeProviderSelection() {
 	indices := m.activeProviderIndices()
-	for _, index := range indices {
-		if index == m.providerIndex {
-			return
-		}
+	if slices.Contains(indices, m.providerIndex) {
+		return
 	}
 	m.providerIndex = indices[0]
 }
@@ -603,8 +602,8 @@ func (m NewSessionOverlay) providerScopeStatusMessage() string {
 	filters := m.currentFilterCapabilities()
 	if m.currentScope() == domain.ScopeIssues && len(filters.Views) == 0 && filters.SupportsTeam {
 		provider := m.currentProvider()
-		label := strings.Title(provider)
-		if provider == "all" || provider == "" {
+		label := cases.Title(language.English).String(provider)
+		if provider == viewFilterAll || provider == "" {
 			label = "This provider"
 		}
 		return label + " browsing is container-scoped; inbox-style view filters are hidden."
@@ -706,23 +705,9 @@ func (m *NewSessionOverlay) setBrowseControlFocus(control browseControl) {
 		m.blurBrowseInputs()
 		return
 	}
-	valid := false
-	for _, candidate := range controls {
-		if candidate == control {
-			valid = true
-			break
-		}
-	}
-	if !valid {
+	if !slices.Contains(controls, control) {
 		control = browseControlSearch
-		valid = false
-		for _, candidate := range controls {
-			if candidate == control {
-				valid = true
-				break
-			}
-		}
-		if !valid {
+		if !slices.Contains(controls, control) {
 			control = controls[0]
 		}
 	}
@@ -813,10 +798,10 @@ func (m *NewSessionOverlay) moveBrowseFocus(delta int) bool {
 func (m NewSessionOverlay) activeProviderIndices() []int {
 	indices := make([]int, 0, len(providerOptions))
 	if m.currentScope() == domain.ScopeIssues {
-		indices = append(indices, providerOptionIndex("all"))
+		indices = append(indices, providerOptionIndex(viewFilterAll))
 	}
 	for i, option := range providerOptions {
-		if option.Key == "all" {
+		if option.Key == viewFilterAll {
 			continue
 		}
 		providerAdapter := m.adapterForName(option.Key)
@@ -829,7 +814,7 @@ func (m NewSessionOverlay) activeProviderIndices() []int {
 		indices = append(indices, i)
 	}
 	if len(indices) == 0 {
-		return []int{providerOptionIndex("all")}
+		return []int{providerOptionIndex(viewFilterAll)}
 	}
 	return indices
 }
@@ -845,7 +830,7 @@ func (m *NewSessionOverlay) reloadItems() tea.Cmd {
 }
 
 func (m *NewSessionOverlay) resetBrowseState() {
-	m.providerIndex = providerOptionIndex("all")
+	m.providerIndex = providerOptionIndex(viewFilterAll)
 	m.scopeIndex = scopeOptionIndex(domain.ScopeIssues)
 	m.viewIndex = 0
 	m.stateIndex = 0
@@ -1012,13 +997,6 @@ func (m NewSessionOverlay) advancedFilterRows() []string {
 		rows = append(rows, m.controlLabel("Team:   ", browseControlTeam)+m.teamInput.View())
 	}
 	return rows
-}
-
-func fitOverlayLine(line string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	return lipgloss.NewStyle().Width(width).Render(ansi.Truncate(line, width, ""))
 }
 
 func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
@@ -1207,7 +1185,7 @@ func detailProviderLabel(provider string) string {
 			return option.Label
 		}
 	}
-	return strings.Title(provider)
+	return cases.Title(language.English).String(provider)
 }
 
 func detailPaneTitle(st styles.Styles, item adapter.ListItem, width int) string {
@@ -1279,7 +1257,7 @@ func appendUniqueItems(existing []adapter.ListItem, fresh []adapter.ListItem) []
 }
 
 func flattenBrowsePages(pages map[string]browsePageState) []adapter.ListItem {
-	merged := make([]adapter.ListItem, 0)
+	merged := make([]adapter.ListItem, 0, len(pages)*10)
 	for _, page := range pages {
 		merged = append(merged, page.Items...)
 	}
@@ -1344,10 +1322,10 @@ func (m NewSessionOverlay) currentListItem() (adapter.ListItem, bool) {
 func (m NewSessionOverlay) openCurrentItemInBrowserCmd() tea.Cmd {
 	item, ok := m.currentListItem()
 	if !ok {
-		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("no work item selected")} }
+		return func() tea.Msg { return ErrMsg{Err: errors.New("no work item selected")} }
 	}
 	if strings.TrimSpace(item.URL) == "" {
-		return func() tea.Msg { return ErrMsg{Err: fmt.Errorf("selected work item has no URL")} }
+		return func() tea.Msg { return ErrMsg{Err: errors.New("selected work item has no URL")} }
 	}
 	openBrowserCmd := m.openBrowserCmd
 	if openBrowserCmd == nil {
@@ -1518,15 +1496,15 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.showManual {
 			switch msg.String() {
-			case "esc":
+			case keyEsc:
 				return m, func() tea.Msg { return CloseOverlayMsg{} }
-			case "backtab", "shift+tab":
+			case "backtab", keyShiftTab:
 				if m.manualFocus == 1 {
 					m.manualDesc.Blur()
 					m.manualFocus = 0
 					m.manualTitle.Focus()
 				}
-			case "tab":
+			case keyTab:
 				if m.manualFocus == 0 {
 					m.manualTitle.Blur()
 					m.manualFocus = 1
@@ -1536,7 +1514,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					m.manualDesc.Blur()
 					m.setBrowseControlFocus(browseControlSearch)
 				}
-			case "enter":
+			case keyEnter:
 				if m.manualFocus == 1 || m.manualTitle.Value() != "" {
 					title := strings.TrimSpace(m.manualTitle.Value())
 					if title == "" {
@@ -1544,11 +1522,11 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					}
 					desc := m.manualDesc.Value()
 					for _, a := range m.adapters {
-						if a.Name() == "manual" {
+						if a.Name() == providerManual {
 							return m, func() tea.Msg { return NewSessionManualMsg{Adapter: a, Title: title, Desc: desc} }
 						}
 					}
-					return m, func() tea.Msg { return ErrMsg{Err: fmt.Errorf("no manual adapter configured")} }
+					return m, func() tea.Msg { return ErrMsg{Err: errors.New("no manual adapter configured")} }
 				}
 			default:
 				if m.manualFocus == 0 {
@@ -1562,13 +1540,13 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "esc":
+		case keyEsc:
 			return m, func() tea.Msg { return CloseOverlayMsg{} }
-		case "tab":
+		case keyTab:
 			if cmd = m.cycleProvider(1); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-		case "shift+tab", "backtab":
+		case keyShiftTab, "backtab":
 			if cmd = m.cycleProvider(-1); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -1604,7 +1582,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			}
 			m.issueList, cmd = m.issueList.Update(msg)
 			cmds = append(cmds, cmd)
-		case "down":
+		case keyDown:
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
 				return m, cmd
@@ -1617,7 +1595,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			if cmd = m.maybeLoadMore(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-		case "pgup":
+		case keyPgUp:
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
 				return m, cmd
@@ -1626,7 +1604,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				m.issueList, cmd = m.issueList.Update(msg)
 				cmds = append(cmds, cmd)
 			}
-		case "pgdown":
+		case keyPgDown:
 			if m.browseFocus == browseFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
 				return m, cmd
@@ -1638,7 +1616,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					cmds = append(cmds, cmd)
 				}
 			}
-		case "left":
+		case panelLeft:
 			if m.browseFocus == browseFocusDetails {
 				m.setBrowseListFocus()
 				break
@@ -1665,7 +1643,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					cmds = append(cmds, m.updateFocusedBrowseInput(msg)...)
 				}
 			}
-		case "right":
+		case panelRight:
 			if m.browseFocus == browseFocusList {
 				m.setBrowseDetailsFocus()
 				break
@@ -1694,7 +1672,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			}
 		case "ctrl+o":
 			return m, m.openCurrentItemInBrowserCmd()
-		case "enter":
+		case keyEnter:
 			if len(m.selectedIDs) == 0 {
 				if item, ok := m.currentListItem(); ok {
 					if err := m.toggleSelection(item); err != nil {
@@ -1706,7 +1684,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				provider := m.selectedProvider()
 				if provider == "" || provider == "mixed" {
 					return m, func() tea.Msg {
-						return ErrMsg{Err: fmt.Errorf("selected work items must come from exactly one provider")}
+						return ErrMsg{Err: errors.New("selected work items must come from exactly one provider")}
 					}
 				}
 				ids := make([]string, 0, len(m.selectedIDs))
@@ -1720,11 +1698,9 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 						return ErrMsg{Err: fmt.Errorf("no browse adapter configured for provider %s", provider)}
 					}
 				}
-				for _, available := range a.Capabilities().BrowseScopes {
-					if available == m.currentScope() {
-						sel := adapter.Selection{Scope: m.currentScope(), ItemIDs: ids, Metadata: map[string]any{"provider": a.Name()}}
-						return m, func() tea.Msg { return NewSessionBrowseMsg{Adapter: a, Selection: sel} }
-					}
+				if slices.Contains(a.Capabilities().BrowseScopes, m.currentScope()) {
+					sel := adapter.Selection{Scope: m.currentScope(), ItemIDs: ids, Metadata: map[string]any{"provider": a.Name()}}
+					return m, func() tea.Msg { return NewSessionBrowseMsg{Adapter: a, Selection: sel} }
 				}
 				return m, func() tea.Msg {
 					return ErrMsg{Err: fmt.Errorf("provider %s does not support %s selection", provider, m.currentScope())}
@@ -1782,7 +1758,7 @@ func (m *NewSessionOverlay) View() string {
 
 	scopeLabels := make([]string, 0, len(m.availableScopes()))
 	for _, option := range m.availableScopes() {
-		label := strings.Title(string(option))
+		label := cases.Title(language.English).String(string(option))
 		if option == m.currentScope() {
 			scopeLabels = append(scopeLabels, activeLabelStyle.Render("["+label+"]"))
 		} else {
@@ -1961,10 +1937,6 @@ func (m NewSessionOverlay) browserHintText() string {
 
 func (m NewSessionOverlay) wrappedBrowserHintText(width int) string {
 	return wrapBrowserHintParts(browserHintParts(len(m.availableStateOptions()) > 0, len(m.availableViewOptions()) > 0), width)
-}
-
-func (m NewSessionOverlay) browserHintLineCount(width int) int {
-	return browserHintLineCountForParts(browserHintParts(len(m.availableStateOptions()) > 0, len(m.availableViewOptions()) > 0), width)
 }
 
 func (m NewSessionOverlay) manualView(width int) string {

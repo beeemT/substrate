@@ -21,6 +21,7 @@ func (r *eventRow) toDomain() (domain.SystemEvent, error) {
 	if err != nil {
 		return domain.SystemEvent{}, fmt.Errorf("created_at: %w", err)
 	}
+
 	return domain.SystemEvent{
 		ID:          r.ID,
 		EventType:   r.EventType,
@@ -55,6 +56,7 @@ func (r EventRepo) Create(ctx context.Context, e domain.SystemEvent) error {
 	if err != nil {
 		return fmt.Errorf("create event %s: %w", e.ID, err)
 	}
+
 	return nil
 }
 
@@ -78,6 +80,7 @@ func (r EventRepo) ListByType(ctx context.Context, eventType string, limit int) 
 		}
 		events[i] = ev
 	}
+
 	return events, nil
 }
 
@@ -101,5 +104,6 @@ func (r EventRepo) ListByWorkspaceID(ctx context.Context, workspaceID string, li
 		}
 		events[i] = ev
 	}
+
 	return events, nil
 }

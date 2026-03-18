@@ -19,7 +19,7 @@ func NewMockWorkItemRepository() *MockWorkItemRepository {
 	}
 }
 
-func (m *MockWorkItemRepository) Get(ctx context.Context, id string) (domain.Session, error) {
+func (m *MockWorkItemRepository) Get(_ context.Context, id string) (domain.Session, error) {
 	if m.err != nil {
 		return domain.Session{}, m.err
 	}
@@ -27,10 +27,11 @@ func (m *MockWorkItemRepository) Get(ctx context.Context, id string) (domain.Ses
 	if !ok {
 		return domain.Session{}, repository.ErrNotFound
 	}
+
 	return item, nil
 }
 
-func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
+func (m *MockWorkItemRepository) List(_ context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -50,18 +51,20 @@ func (m *MockWorkItemRepository) List(ctx context.Context, filter repository.Ses
 		}
 		result = append(result, item)
 	}
+
 	return result, nil
 }
 
-func (m *MockWorkItemRepository) Create(ctx context.Context, item domain.Session) error {
+func (m *MockWorkItemRepository) Create(_ context.Context, item domain.Session) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.items[item.ID] = item
+
 	return nil
 }
 
-func (m *MockWorkItemRepository) Update(ctx context.Context, item domain.Session) error {
+func (m *MockWorkItemRepository) Update(_ context.Context, item domain.Session) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -69,10 +72,11 @@ func (m *MockWorkItemRepository) Update(ctx context.Context, item domain.Session
 		return repository.ErrNotFound
 	}
 	m.items[item.ID] = item
+
 	return nil
 }
 
-func (m *MockWorkItemRepository) Delete(ctx context.Context, id string) error {
+func (m *MockWorkItemRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -80,6 +84,7 @@ func (m *MockWorkItemRepository) Delete(ctx context.Context, id string) error {
 		return repository.ErrNotFound
 	}
 	delete(m.items, id)
+
 	return nil
 }
 
@@ -97,7 +102,7 @@ func NewMockPlanRepository() *MockPlanRepository {
 	}
 }
 
-func (m *MockPlanRepository) Get(ctx context.Context, id string) (domain.Plan, error) {
+func (m *MockPlanRepository) Get(_ context.Context, id string) (domain.Plan, error) {
 	if m.err != nil {
 		return domain.Plan{}, m.err
 	}
@@ -105,10 +110,11 @@ func (m *MockPlanRepository) Get(ctx context.Context, id string) (domain.Plan, e
 	if !ok {
 		return domain.Plan{}, repository.ErrNotFound
 	}
+
 	return plan, nil
 }
 
-func (m *MockPlanRepository) GetByWorkItemID(ctx context.Context, workItemID string) (domain.Plan, error) {
+func (m *MockPlanRepository) GetByWorkItemID(_ context.Context, workItemID string) (domain.Plan, error) {
 	if m.err != nil {
 		return domain.Plan{}, m.err
 	}
@@ -116,19 +122,21 @@ func (m *MockPlanRepository) GetByWorkItemID(ctx context.Context, workItemID str
 	if !ok {
 		return domain.Plan{}, repository.ErrNotFound
 	}
+
 	return m.plans[planID], nil
 }
 
-func (m *MockPlanRepository) Create(ctx context.Context, plan domain.Plan) error {
+func (m *MockPlanRepository) Create(_ context.Context, plan domain.Plan) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.plans[plan.ID] = plan
 	m.byWorkItem[plan.WorkItemID] = plan.ID
+
 	return nil
 }
 
-func (m *MockPlanRepository) Update(ctx context.Context, plan domain.Plan) error {
+func (m *MockPlanRepository) Update(_ context.Context, plan domain.Plan) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -136,10 +144,11 @@ func (m *MockPlanRepository) Update(ctx context.Context, plan domain.Plan) error
 		return repository.ErrNotFound
 	}
 	m.plans[plan.ID] = plan
+
 	return nil
 }
 
-func (m *MockPlanRepository) Delete(ctx context.Context, id string) error {
+func (m *MockPlanRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -149,13 +158,15 @@ func (m *MockPlanRepository) Delete(ctx context.Context, id string) error {
 	}
 	delete(m.byWorkItem, plan.WorkItemID)
 	delete(m.plans, id)
+
 	return nil
 }
 
-func (m *MockPlanRepository) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
+func (m *MockPlanRepository) AppendFAQ(_ context.Context, _ domain.FAQEntry) error {
 	if m.err != nil {
 		return m.err
 	}
+
 	return nil
 }
 
@@ -173,7 +184,7 @@ func NewMockSubPlanRepository() *MockSubPlanRepository {
 	}
 }
 
-func (m *MockSubPlanRepository) Get(ctx context.Context, id string) (domain.TaskPlan, error) {
+func (m *MockSubPlanRepository) Get(_ context.Context, id string) (domain.TaskPlan, error) {
 	if m.err != nil {
 		return domain.TaskPlan{}, m.err
 	}
@@ -181,10 +192,11 @@ func (m *MockSubPlanRepository) Get(ctx context.Context, id string) (domain.Task
 	if !ok {
 		return domain.TaskPlan{}, repository.ErrNotFound
 	}
+
 	return sp, nil
 }
 
-func (m *MockSubPlanRepository) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
+func (m *MockSubPlanRepository) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -192,19 +204,21 @@ func (m *MockSubPlanRepository) ListByPlanID(ctx context.Context, planID string)
 	for _, id := range m.byPlan[planID] {
 		result = append(result, m.subPlans[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockSubPlanRepository) Create(ctx context.Context, sp domain.TaskPlan) error {
+func (m *MockSubPlanRepository) Create(_ context.Context, sp domain.TaskPlan) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.subPlans[sp.ID] = sp
 	m.byPlan[sp.PlanID] = append(m.byPlan[sp.PlanID], sp.ID)
+
 	return nil
 }
 
-func (m *MockSubPlanRepository) Update(ctx context.Context, sp domain.TaskPlan) error {
+func (m *MockSubPlanRepository) Update(_ context.Context, sp domain.TaskPlan) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -212,10 +226,11 @@ func (m *MockSubPlanRepository) Update(ctx context.Context, sp domain.TaskPlan) 
 		return repository.ErrNotFound
 	}
 	m.subPlans[sp.ID] = sp
+
 	return nil
 }
 
-func (m *MockSubPlanRepository) Delete(ctx context.Context, id string) error {
+func (m *MockSubPlanRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -232,6 +247,7 @@ func (m *MockSubPlanRepository) Delete(ctx context.Context, id string) error {
 	}
 	m.byPlan[sp.PlanID] = newIDs
 	delete(m.subPlans, id)
+
 	return nil
 }
 
@@ -247,7 +263,7 @@ func NewMockWorkspaceRepository() *MockWorkspaceRepository {
 	}
 }
 
-func (m *MockWorkspaceRepository) Get(ctx context.Context, id string) (domain.Workspace, error) {
+func (m *MockWorkspaceRepository) Get(_ context.Context, id string) (domain.Workspace, error) {
 	if m.err != nil {
 		return domain.Workspace{}, m.err
 	}
@@ -255,18 +271,20 @@ func (m *MockWorkspaceRepository) Get(ctx context.Context, id string) (domain.Wo
 	if !ok {
 		return domain.Workspace{}, repository.ErrNotFound
 	}
+
 	return ws, nil
 }
 
-func (m *MockWorkspaceRepository) Create(ctx context.Context, ws domain.Workspace) error {
+func (m *MockWorkspaceRepository) Create(_ context.Context, ws domain.Workspace) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.workspaces[ws.ID] = ws
+
 	return nil
 }
 
-func (m *MockWorkspaceRepository) Update(ctx context.Context, ws domain.Workspace) error {
+func (m *MockWorkspaceRepository) Update(_ context.Context, ws domain.Workspace) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -274,10 +292,11 @@ func (m *MockWorkspaceRepository) Update(ctx context.Context, ws domain.Workspac
 		return repository.ErrNotFound
 	}
 	m.workspaces[ws.ID] = ws
+
 	return nil
 }
 
-func (m *MockWorkspaceRepository) Delete(ctx context.Context, id string) error {
+func (m *MockWorkspaceRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -285,6 +304,7 @@ func (m *MockWorkspaceRepository) Delete(ctx context.Context, id string) error {
 		return repository.ErrNotFound
 	}
 	delete(m.workspaces, id)
+
 	return nil
 }
 
@@ -308,7 +328,7 @@ func NewMockSessionRepository() *MockSessionRepository {
 	}
 }
 
-func (m *MockSessionRepository) Get(ctx context.Context, id string) (domain.Task, error) {
+func (m *MockSessionRepository) Get(_ context.Context, id string) (domain.Task, error) {
 	if m.err != nil {
 		return domain.Task{}, m.err
 	}
@@ -316,10 +336,11 @@ func (m *MockSessionRepository) Get(ctx context.Context, id string) (domain.Task
 	if !ok {
 		return domain.Task{}, repository.ErrNotFound
 	}
+
 	return s, nil
 }
 
-func (m *MockSessionRepository) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -327,10 +348,11 @@ func (m *MockSessionRepository) ListByWorkItemID(ctx context.Context, workItemID
 	for _, id := range m.byWorkItem[workItemID] {
 		result = append(result, m.sessions[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -338,10 +360,11 @@ func (m *MockSessionRepository) ListBySubPlanID(ctx context.Context, subPlanID s
 	for _, id := range m.bySubPlan[subPlanID] {
 		result = append(result, m.sessions[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -349,10 +372,11 @@ func (m *MockSessionRepository) ListByWorkspaceID(ctx context.Context, workspace
 	for _, id := range m.byWorkspace[workspaceID] {
 		result = append(result, m.sessions[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -360,17 +384,19 @@ func (m *MockSessionRepository) ListByOwnerInstanceID(ctx context.Context, insta
 	for _, id := range m.byOwnerInstance[instanceID] {
 		result = append(result, m.sessions[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockSessionRepository) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+func (m *MockSessionRepository) SearchHistory(_ context.Context, _ domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
+
 	return nil, nil
 }
 
-func (m *MockSessionRepository) Create(ctx context.Context, s domain.Task) error {
+func (m *MockSessionRepository) Create(_ context.Context, s domain.Task) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -383,10 +409,11 @@ func (m *MockSessionRepository) Create(ctx context.Context, s domain.Task) error
 	if s.OwnerInstanceID != nil {
 		m.byOwnerInstance[*s.OwnerInstanceID] = append(m.byOwnerInstance[*s.OwnerInstanceID], s.ID)
 	}
+
 	return nil
 }
 
-func (m *MockSessionRepository) Update(ctx context.Context, s domain.Task) error {
+func (m *MockSessionRepository) Update(_ context.Context, s domain.Task) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -394,10 +421,11 @@ func (m *MockSessionRepository) Update(ctx context.Context, s domain.Task) error
 		return repository.ErrNotFound
 	}
 	m.sessions[s.ID] = s
+
 	return nil
 }
 
-func (m *MockSessionRepository) Delete(ctx context.Context, id string) error {
+func (m *MockSessionRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -429,6 +457,7 @@ func (m *MockSessionRepository) Delete(ctx context.Context, id string) error {
 		}
 	}
 	m.byWorkspace[s.WorkspaceID] = newWorkspaceIDs
+
 	return nil
 }
 
@@ -450,7 +479,7 @@ func NewMockReviewRepository() *MockReviewRepository {
 	}
 }
 
-func (m *MockReviewRepository) GetCycle(ctx context.Context, id string) (domain.ReviewCycle, error) {
+func (m *MockReviewRepository) GetCycle(_ context.Context, id string) (domain.ReviewCycle, error) {
 	if m.err != nil {
 		return domain.ReviewCycle{}, m.err
 	}
@@ -458,10 +487,11 @@ func (m *MockReviewRepository) GetCycle(ctx context.Context, id string) (domain.
 	if !ok {
 		return domain.ReviewCycle{}, repository.ErrNotFound
 	}
+
 	return c, nil
 }
 
-func (m *MockReviewRepository) ListCyclesBySessionID(ctx context.Context, sessionID string) ([]domain.ReviewCycle, error) {
+func (m *MockReviewRepository) ListCyclesBySessionID(_ context.Context, sessionID string) ([]domain.ReviewCycle, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -469,19 +499,21 @@ func (m *MockReviewRepository) ListCyclesBySessionID(ctx context.Context, sessio
 	for _, id := range m.bySession[sessionID] {
 		result = append(result, m.cycles[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockReviewRepository) CreateCycle(ctx context.Context, rc domain.ReviewCycle) error {
+func (m *MockReviewRepository) CreateCycle(_ context.Context, rc domain.ReviewCycle) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.cycles[rc.ID] = rc
 	m.bySession[rc.AgentSessionID] = append(m.bySession[rc.AgentSessionID], rc.ID)
+
 	return nil
 }
 
-func (m *MockReviewRepository) UpdateCycle(ctx context.Context, rc domain.ReviewCycle) error {
+func (m *MockReviewRepository) UpdateCycle(_ context.Context, rc domain.ReviewCycle) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -489,10 +521,11 @@ func (m *MockReviewRepository) UpdateCycle(ctx context.Context, rc domain.Review
 		return repository.ErrNotFound
 	}
 	m.cycles[rc.ID] = rc
+
 	return nil
 }
 
-func (m *MockReviewRepository) GetCritique(ctx context.Context, id string) (domain.Critique, error) {
+func (m *MockReviewRepository) GetCritique(_ context.Context, id string) (domain.Critique, error) {
 	if m.err != nil {
 		return domain.Critique{}, m.err
 	}
@@ -500,10 +533,11 @@ func (m *MockReviewRepository) GetCritique(ctx context.Context, id string) (doma
 	if !ok {
 		return domain.Critique{}, repository.ErrNotFound
 	}
+
 	return c, nil
 }
 
-func (m *MockReviewRepository) ListCritiquesByReviewCycleID(ctx context.Context, cycleID string) ([]domain.Critique, error) {
+func (m *MockReviewRepository) ListCritiquesByReviewCycleID(_ context.Context, cycleID string) ([]domain.Critique, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -511,19 +545,21 @@ func (m *MockReviewRepository) ListCritiquesByReviewCycleID(ctx context.Context,
 	for _, id := range m.byCycle[cycleID] {
 		result = append(result, m.critiques[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockReviewRepository) CreateCritique(ctx context.Context, c domain.Critique) error {
+func (m *MockReviewRepository) CreateCritique(_ context.Context, c domain.Critique) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.critiques[c.ID] = c
 	m.byCycle[c.ReviewCycleID] = append(m.byCycle[c.ReviewCycleID], c.ID)
+
 	return nil
 }
 
-func (m *MockReviewRepository) UpdateCritique(ctx context.Context, c domain.Critique) error {
+func (m *MockReviewRepository) UpdateCritique(_ context.Context, c domain.Critique) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -531,6 +567,7 @@ func (m *MockReviewRepository) UpdateCritique(ctx context.Context, c domain.Crit
 		return repository.ErrNotFound
 	}
 	m.critiques[c.ID] = c
+
 	return nil
 }
 
@@ -548,7 +585,7 @@ func NewMockQuestionRepository() *MockQuestionRepository {
 	}
 }
 
-func (m *MockQuestionRepository) Get(ctx context.Context, id string) (domain.Question, error) {
+func (m *MockQuestionRepository) Get(_ context.Context, id string) (domain.Question, error) {
 	if m.err != nil {
 		return domain.Question{}, m.err
 	}
@@ -556,10 +593,11 @@ func (m *MockQuestionRepository) Get(ctx context.Context, id string) (domain.Que
 	if !ok {
 		return domain.Question{}, repository.ErrNotFound
 	}
+
 	return q, nil
 }
 
-func (m *MockQuestionRepository) ListBySessionID(ctx context.Context, sessionID string) ([]domain.Question, error) {
+func (m *MockQuestionRepository) ListBySessionID(_ context.Context, sessionID string) ([]domain.Question, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -567,19 +605,21 @@ func (m *MockQuestionRepository) ListBySessionID(ctx context.Context, sessionID 
 	for _, id := range m.bySession[sessionID] {
 		result = append(result, m.questions[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockQuestionRepository) Create(ctx context.Context, q domain.Question) error {
+func (m *MockQuestionRepository) Create(_ context.Context, q domain.Question) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.questions[q.ID] = q
 	m.bySession[q.AgentSessionID] = append(m.bySession[q.AgentSessionID], q.ID)
+
 	return nil
 }
 
-func (m *MockQuestionRepository) Update(ctx context.Context, q domain.Question) error {
+func (m *MockQuestionRepository) Update(_ context.Context, q domain.Question) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -587,10 +627,11 @@ func (m *MockQuestionRepository) Update(ctx context.Context, q domain.Question) 
 		return repository.ErrNotFound
 	}
 	m.questions[q.ID] = q
+
 	return nil
 }
 
-func (m *MockQuestionRepository) UpdateProposedAnswer(ctx context.Context, id, proposedAnswer string) error {
+func (m *MockQuestionRepository) UpdateProposedAnswer(_ context.Context, id, proposedAnswer string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -603,6 +644,7 @@ func (m *MockQuestionRepository) UpdateProposedAnswer(ctx context.Context, id, p
 	}
 	q.ProposedAnswer = proposedAnswer
 	m.questions[id] = q
+
 	return nil
 }
 
@@ -620,7 +662,7 @@ func NewMockInstanceRepository() *MockInstanceRepository {
 	}
 }
 
-func (m *MockInstanceRepository) Get(ctx context.Context, id string) (domain.SubstrateInstance, error) {
+func (m *MockInstanceRepository) Get(_ context.Context, id string) (domain.SubstrateInstance, error) {
 	if m.err != nil {
 		return domain.SubstrateInstance{}, m.err
 	}
@@ -628,10 +670,11 @@ func (m *MockInstanceRepository) Get(ctx context.Context, id string) (domain.Sub
 	if !ok {
 		return domain.SubstrateInstance{}, repository.ErrNotFound
 	}
+
 	return inst, nil
 }
 
-func (m *MockInstanceRepository) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SubstrateInstance, error) {
+func (m *MockInstanceRepository) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.SubstrateInstance, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -639,19 +682,21 @@ func (m *MockInstanceRepository) ListByWorkspaceID(ctx context.Context, workspac
 	for _, id := range m.byWorkspace[workspaceID] {
 		result = append(result, m.instances[id])
 	}
+
 	return result, nil
 }
 
-func (m *MockInstanceRepository) Create(ctx context.Context, inst domain.SubstrateInstance) error {
+func (m *MockInstanceRepository) Create(_ context.Context, inst domain.SubstrateInstance) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.instances[inst.ID] = inst
 	m.byWorkspace[inst.WorkspaceID] = append(m.byWorkspace[inst.WorkspaceID], inst.ID)
+
 	return nil
 }
 
-func (m *MockInstanceRepository) Update(ctx context.Context, inst domain.SubstrateInstance) error {
+func (m *MockInstanceRepository) Update(_ context.Context, inst domain.SubstrateInstance) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -659,10 +704,11 @@ func (m *MockInstanceRepository) Update(ctx context.Context, inst domain.Substra
 		return repository.ErrNotFound
 	}
 	m.instances[inst.ID] = inst
+
 	return nil
 }
 
-func (m *MockInstanceRepository) Delete(ctx context.Context, id string) error {
+func (m *MockInstanceRepository) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -678,5 +724,6 @@ func (m *MockInstanceRepository) Delete(ctx context.Context, id string) error {
 		}
 	}
 	m.byWorkspace[inst.WorkspaceID] = newIDs
+
 	return nil
 }

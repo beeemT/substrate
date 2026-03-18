@@ -141,15 +141,13 @@ func TestBuildWavesRaceCondition(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 100 {
+		wg.Go(func() {
 			waves := BuildWaves(subPlans)
 			if len(waves) != 2 {
 				t.Errorf("expected 2 waves, got %d", len(waves))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -432,30 +430,33 @@ type implementationWorkItemRepo struct {
 	updateHook func(context.Context, domain.Session) error
 }
 
-func (r *implementationWorkItemRepo) Get(ctx context.Context, id string) (domain.Session, error) {
+func (r *implementationWorkItemRepo) Get(_ context.Context, id string) (domain.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.items[id]
 	if !ok {
 		return domain.Session{}, repository.ErrNotFound
 	}
+
 	return item, nil
 }
 
-func (r *implementationWorkItemRepo) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
+func (r *implementationWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	items := make([]domain.Session, 0, len(r.items))
 	for _, item := range r.items {
 		items = append(items, item)
 	}
+
 	return items, nil
 }
 
-func (r *implementationWorkItemRepo) Create(ctx context.Context, item domain.Session) error {
+func (r *implementationWorkItemRepo) Create(_ context.Context, item domain.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.items[item.ID] = item
+
 	return nil
 }
 
@@ -468,13 +469,15 @@ func (r *implementationWorkItemRepo) Update(ctx context.Context, item domain.Ses
 		}
 	}
 	r.items[item.ID] = item
+
 	return nil
 }
 
-func (r *implementationWorkItemRepo) Delete(ctx context.Context, id string) error {
+func (r *implementationWorkItemRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.items, id)
+
 	return nil
 }
 
@@ -482,26 +485,30 @@ type implementationWorkspaceRepo struct {
 	workspaces map[string]domain.Workspace
 }
 
-func (r *implementationWorkspaceRepo) Get(ctx context.Context, id string) (domain.Workspace, error) {
+func (r *implementationWorkspaceRepo) Get(_ context.Context, id string) (domain.Workspace, error) {
 	ws, ok := r.workspaces[id]
 	if !ok {
 		return domain.Workspace{}, repository.ErrNotFound
 	}
+
 	return ws, nil
 }
 
-func (r *implementationWorkspaceRepo) Create(ctx context.Context, ws domain.Workspace) error {
+func (r *implementationWorkspaceRepo) Create(_ context.Context, ws domain.Workspace) error {
 	r.workspaces[ws.ID] = ws
+
 	return nil
 }
 
-func (r *implementationWorkspaceRepo) Update(ctx context.Context, ws domain.Workspace) error {
+func (r *implementationWorkspaceRepo) Update(_ context.Context, ws domain.Workspace) error {
 	r.workspaces[ws.ID] = ws
+
 	return nil
 }
 
-func (r *implementationWorkspaceRepo) Delete(ctx context.Context, id string) error {
+func (r *implementationWorkspaceRepo) Delete(_ context.Context, id string) error {
 	delete(r.workspaces, id)
+
 	return nil
 }
 
@@ -509,12 +516,13 @@ type implementationEventRepo struct {
 	events []domain.SystemEvent
 }
 
-func (r *implementationEventRepo) Create(ctx context.Context, evt domain.SystemEvent) error {
+func (r *implementationEventRepo) Create(_ context.Context, evt domain.SystemEvent) error {
 	r.events = append(r.events, evt)
+
 	return nil
 }
 
-func (r *implementationEventRepo) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
+func (r *implementationEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
 	var events []domain.SystemEvent
 	for _, evt := range r.events {
 		if evt.EventType == eventType {
@@ -524,10 +532,11 @@ func (r *implementationEventRepo) ListByType(ctx context.Context, eventType stri
 	if limit > 0 && len(events) > limit {
 		events = events[:limit]
 	}
+
 	return events, nil
 }
 
-func (r *implementationEventRepo) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
+func (r *implementationEventRepo) ListByWorkspaceID(_ context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
 	var events []domain.SystemEvent
 	for _, evt := range r.events {
 		if evt.WorkspaceID == workspaceID {
@@ -537,6 +546,7 @@ func (r *implementationEventRepo) ListByWorkspaceID(ctx context.Context, workspa
 	if limit > 0 && len(events) > limit {
 		events = events[:limit]
 	}
+
 	return events, nil
 }
 
@@ -657,11 +667,13 @@ func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.
 	workItemRepo.updateHook = func(ctx context.Context, item domain.Session) error {
 		if item.State == domain.SessionImplementing {
 			cancel()
+
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
 		return nil
 	}
 

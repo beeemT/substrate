@@ -26,6 +26,7 @@ func linearIssueSourceSummaries(issues []linearIssue) []domain.SourceSummary {
 			Metadata:    linearIssueSummaryMetadata(issue),
 		})
 	}
+
 	return summaries
 }
 
@@ -43,6 +44,7 @@ func linearProjectSourceSummaries(projects []linearProject) []domain.SourceSumma
 			Metadata:    linearProjectSummaryMetadata(project),
 		})
 	}
+
 	return summaries
 }
 
@@ -51,6 +53,7 @@ func linearSummaryExcerpt(text string) string {
 	if len(trimmed) <= 240 {
 		return trimmed
 	}
+
 	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
@@ -68,6 +71,7 @@ func linearIssueSummaryMetadata(issue linearIssue) []domain.SourceMetadataField 
 	if strings.TrimSpace(issue.State.Type) != "" {
 		fields = append(fields, domain.SourceMetadataField{Label: "Workflow", Value: strings.TrimSpace(issue.State.Type)})
 	}
+
 	return fields
 }
 
@@ -79,5 +83,6 @@ func linearProjectSummaryMetadata(project linearProject) []domain.SourceMetadata
 	if strings.TrimSpace(project.Color) != "" {
 		fields = append(fields, domain.SourceMetadataField{Label: "Color", Value: strings.TrimSpace(project.Color)})
 	}
+
 	return fields
 }

@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -23,7 +24,7 @@ func (a stubWorkspaceInitAdapter) ListSelectable(context.Context, adapter.ListOp
 }
 
 func (a stubWorkspaceInitAdapter) Resolve(context.Context, adapter.Selection) (domain.Session, error) {
-	return domain.Session{}, fmt.Errorf("not implemented")
+	return domain.Session{}, errors.New("not implemented")
 }
 
 func (a stubWorkspaceInitAdapter) Watch(context.Context, adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
@@ -31,7 +32,7 @@ func (a stubWorkspaceInitAdapter) Watch(context.Context, adapter.WorkItemFilter)
 }
 
 func (a stubWorkspaceInitAdapter) Fetch(context.Context, string) (domain.Session, error) {
-	return domain.Session{}, fmt.Errorf("not implemented")
+	return domain.Session{}, errors.New("not implemented")
 }
 
 func (a stubWorkspaceInitAdapter) UpdateState(context.Context, string, domain.TrackerState) error {
@@ -53,6 +54,7 @@ func (r *stubInstanceRepo) Get(_ context.Context, id string) (domain.SubstrateIn
 	if !ok {
 		return domain.SubstrateInstance{}, fmt.Errorf("instance %s not found", id)
 	}
+
 	return inst, nil
 }
 
@@ -63,6 +65,7 @@ func (r *stubInstanceRepo) ListByWorkspaceID(_ context.Context, workspaceID stri
 			instances = append(instances, inst)
 		}
 	}
+
 	return instances, nil
 }
 
@@ -72,6 +75,7 @@ func (r *stubInstanceRepo) Create(_ context.Context, inst domain.SubstrateInstan
 	}
 	r.created = append(r.created, inst)
 	r.byID[inst.ID] = inst
+
 	return nil
 }
 
@@ -80,11 +84,13 @@ func (r *stubInstanceRepo) Update(_ context.Context, inst domain.SubstrateInstan
 		r.byID = make(map[string]domain.SubstrateInstance)
 	}
 	r.byID[inst.ID] = inst
+
 	return nil
 }
 
 func (r *stubInstanceRepo) Delete(_ context.Context, id string) error {
 	delete(r.byID, id)
+
 	return nil
 }
 
@@ -95,6 +101,7 @@ func newWorkspaceInitHarnessConfig() *config.Config {
 	cfg.Harness.Phase.Review = config.HarnessClaudeCode
 	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
 	cfg.Adapters.ClaudeCode.BinaryPath = "/bin/sh"
+
 	return cfg
 }
 

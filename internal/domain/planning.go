@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // RepoPointer contains information about a discovered git-work repository.
 type RepoPointer struct {
 	// Name is the directory name of the repository.
@@ -99,7 +101,7 @@ func (e ParseErrors) Error() string {
 		return ""
 	}
 
-	var parts []string
+	parts := make([]string, 0, 8)
 	if e.MissingBlock {
 		parts = append(parts, "missing substrate-plan YAML block")
 	}
@@ -125,14 +127,17 @@ func (e ParseErrors) Error() string {
 		parts = append(parts, "incomplete sub-plans: "+joinQuoted(e.IncompleteSubPlans))
 	}
 
-	result := "Plan parsing failed: "
+	var b strings.Builder
+
+	b.WriteString("Plan parsing failed: ")
 	for i, p := range parts {
 		if i > 0 {
-			result += "; "
+			b.WriteString("; ")
 		}
-		result += p
+		b.WriteString(p)
 	}
-	return result
+
+	return b.String()
 }
 
 // HasErrors returns true if any parse errors are present.
@@ -191,7 +196,7 @@ type PullFailure struct {
 
 // ToPlanningWarnings converts the health check issues to warnings.
 func (c WorkspaceHealthCheck) ToPlanningWarnings() []PlanningWarning {
-	var warnings []PlanningWarning
+	warnings := make([]PlanningWarning, 0, len(c.PlainGitClones)+len(c.PullFailures))
 
 	for _, clone := range c.PlainGitClones {
 		warnings = append(warnings, PlanningWarning{
@@ -227,12 +232,14 @@ func joinQuoted(s []string) string {
 	if len(s) == 0 {
 		return ""
 	}
-	result := ""
+	var b strings.Builder
 	for i, v := range s {
 		if i > 0 {
-			result += ", "
+			b.WriteString(", ")
 		}
-		result += "\"" + v + "\""
+		b.WriteByte('"')
+		b.WriteString(v)
+		b.WriteByte('"')
 	}
-	return result
+	return b.String()
 }

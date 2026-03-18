@@ -124,6 +124,7 @@ func (s *ExecutionState) AllWavesCompleted() bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -132,6 +133,7 @@ func (s *ExecutionState) CurrentWaveComplete() bool {
 	if s.CurrentWave >= len(s.WaveStates) {
 		return true
 	}
+
 	return s.WaveStates[s.CurrentWave].Status == WaveCompleted
 }
 
@@ -147,6 +149,7 @@ func (s *ExecutionState) HasFailed() bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -160,6 +163,7 @@ func (s *ExecutionState) AdvanceWave() bool {
 		return false
 	}
 	s.CurrentWave++
+
 	return true
 }
 
@@ -168,6 +172,7 @@ func (s *ExecutionState) GetWaveSubPlans(waveIndex int) []string {
 	if waveIndex < 0 || waveIndex >= len(s.WaveStates) {
 		return nil
 	}
+
 	return s.WaveStates[waveIndex].SubPlanIDs
 }
 

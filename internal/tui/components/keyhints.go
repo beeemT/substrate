@@ -29,6 +29,7 @@ func RenderKeyHintFragments(st styles.Styles, hints []KeyHint) []RenderedKeyHint
 			Rendered: st.KeybindAccent.Render(keyRaw) + st.Hint.Render(labelRaw),
 		})
 	}
+
 	return parts
 }
 
@@ -42,5 +43,6 @@ func RenderKeyHints(st styles.Styles, hints []KeyHint, separator string) string 
 	for _, part := range parts {
 		rendered = append(rendered, part.Rendered)
 	}
+
 	return strings.Join(rendered, separator)
 }

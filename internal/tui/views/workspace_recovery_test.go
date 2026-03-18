@@ -20,6 +20,7 @@ func (r *recoveryWorkspaceRepo) Get(_ context.Context, id string) (domain.Worksp
 	if ws, ok := r.workspaces[id]; ok {
 		return ws, nil
 	}
+
 	return domain.Workspace{}, repository.ErrNotFound
 }
 
@@ -29,6 +30,7 @@ func (r *recoveryWorkspaceRepo) Create(_ context.Context, ws domain.Workspace) e
 	}
 	r.creates++
 	r.workspaces[ws.ID] = ws
+
 	return nil
 }
 
@@ -37,11 +39,13 @@ func (r *recoveryWorkspaceRepo) Update(_ context.Context, ws domain.Workspace) e
 		r.workspaces = make(map[string]domain.Workspace)
 	}
 	r.workspaces[ws.ID] = ws
+
 	return nil
 }
 
 func (r *recoveryWorkspaceRepo) Delete(_ context.Context, id string) error {
 	delete(r.workspaces, id)
+
 	return nil
 }
 

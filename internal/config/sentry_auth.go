@@ -146,8 +146,8 @@ func SentryRootURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	path := strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(path, "/api/0") {
-		path = strings.TrimSuffix(path, "/api/0")
+	if before, ok := strings.CutSuffix(path, "/api/0"); ok {
+		path = before
 	}
 	if path == "" {
 		parsed.Path = ""

@@ -23,6 +23,7 @@ func (r *cmdWorkItemRepo) Get(_ context.Context, id string) (domain.Session, err
 	if !ok {
 		return domain.Session{}, repository.ErrNotFound
 	}
+
 	return item, nil
 }
 
@@ -34,19 +35,27 @@ func (r *cmdWorkItemRepo) List(_ context.Context, filter repository.SessionFilte
 		}
 		items = append(items, item)
 	}
+
 	return items, nil
 }
 
 func (r *cmdWorkItemRepo) Create(_ context.Context, item domain.Session) error {
 	r.items[item.ID] = item
+
 	return nil
 }
 
 func (r *cmdWorkItemRepo) Update(_ context.Context, item domain.Session) error {
 	r.items[item.ID] = item
+
 	return nil
 }
-func (r *cmdWorkItemRepo) Delete(_ context.Context, id string) error { delete(r.items, id); return nil }
+
+func (r *cmdWorkItemRepo) Delete(_ context.Context, id string) error {
+	delete(r.items, id)
+
+	return nil
+}
 
 type cmdPlanRepo struct{ plans map[string]domain.Plan }
 
@@ -55,6 +64,7 @@ func (r *cmdPlanRepo) Get(_ context.Context, id string) (domain.Plan, error) {
 	if !ok {
 		return domain.Plan{}, repository.ErrNotFound
 	}
+
 	return plan, nil
 }
 
@@ -64,19 +74,27 @@ func (r *cmdPlanRepo) GetByWorkItemID(_ context.Context, workItemID string) (dom
 			return plan, nil
 		}
 	}
+
 	return domain.Plan{}, repository.ErrNotFound
 }
 
 func (r *cmdPlanRepo) Create(_ context.Context, plan domain.Plan) error {
 	r.plans[plan.ID] = plan
+
 	return nil
 }
 
 func (r *cmdPlanRepo) Update(_ context.Context, plan domain.Plan) error {
 	r.plans[plan.ID] = plan
+
 	return nil
 }
-func (r *cmdPlanRepo) Delete(_ context.Context, id string) error            { delete(r.plans, id); return nil }
+
+func (r *cmdPlanRepo) Delete(_ context.Context, id string) error {
+	delete(r.plans, id)
+
+	return nil
+}
 func (r *cmdPlanRepo) AppendFAQ(_ context.Context, _ domain.FAQEntry) error { return nil }
 
 type cmdSubPlanRepo struct{ subPlans map[string]domain.TaskPlan }
@@ -86,6 +104,7 @@ func (r *cmdSubPlanRepo) Get(_ context.Context, id string) (domain.TaskPlan, err
 	if !ok {
 		return domain.TaskPlan{}, repository.ErrNotFound
 	}
+
 	return sp, nil
 }
 
@@ -96,21 +115,25 @@ func (r *cmdSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domai
 			result = append(result, sp)
 		}
 	}
+
 	return result, nil
 }
 
 func (r *cmdSubPlanRepo) Create(_ context.Context, sp domain.TaskPlan) error {
 	r.subPlans[sp.ID] = sp
+
 	return nil
 }
 
 func (r *cmdSubPlanRepo) Update(_ context.Context, sp domain.TaskPlan) error {
 	r.subPlans[sp.ID] = sp
+
 	return nil
 }
 
 func (r *cmdSubPlanRepo) Delete(_ context.Context, id string) error {
 	delete(r.subPlans, id)
+
 	return nil
 }
 
@@ -123,6 +146,7 @@ func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.Task, error) 
 	if !ok {
 		return domain.Task{}, repository.ErrNotFound
 	}
+
 	return session, nil
 }
 
@@ -133,6 +157,7 @@ func (r *cmdSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) 
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -143,6 +168,7 @@ func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -153,6 +179,7 @@ func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -163,6 +190,7 @@ func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID str
 			result = append(result, session)
 		}
 	}
+
 	return result, nil
 }
 
@@ -172,16 +200,19 @@ func (r *cmdSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHistor
 
 func (r *cmdSessionRepo) Create(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
+
 	return nil
 }
 
 func (r *cmdSessionRepo) Update(_ context.Context, session domain.Task) error {
 	r.sessions[session.ID] = session
+
 	return nil
 }
 
 func (r *cmdSessionRepo) Delete(_ context.Context, id string) error {
 	delete(r.sessions, id)
+
 	return nil
 }
 
@@ -299,12 +330,13 @@ func createReviewContextRepo(t *testing.T, branch string) string {
 	runCmdGit(t, repoDir, "commit", "-m", "initial commit")
 	runCmdGit(t, repoDir, "checkout", "-b", branch)
 	runCmdGit(t, repoDir, "remote", "add", "origin", "git@github.com:acme/rocket.git")
+
 	return repoDir
 }
 
 func runCmdGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -232,7 +233,13 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 }
 
 // startReviewAgent starts a review agent session and returns the session (still alive) along with output.
-func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Task, subPlan domain.TaskPlan, plan domain.Plan, cycle domain.ReviewCycle) (adapter.AgentSession, string, string, error) {
+func (p *ReviewPipeline) startReviewAgent(
+	ctx context.Context,
+	session domain.Task,
+	subPlan domain.TaskPlan,
+	plan domain.Plan,
+	_ domain.ReviewCycle,
+) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
 
@@ -293,9 +300,10 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
 					slog.Warn("failed to fail closed review session", "error", failErr, "session_id", reviewSessionID)
 				}
-				return reviewSession, "", reviewSessionID, fmt.Errorf("review session events channel closed unexpectedly")
+				return reviewSession, "", reviewSessionID, errors.New("review session events channel closed unexpectedly")
 			}
-			if evt.Type == "done" {
+			switch evt.Type {
+			case "done":
 				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
 					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
 				}
@@ -305,7 +313,7 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 					return reviewSession, "NO_CRITIQUES", reviewSessionID, nil
 				}
 				return reviewSession, output, reviewSessionID, nil
-			} else if evt.Type == "error" {
+			case "error":
 				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
 					slog.Warn("failed to fail review session after agent error", "error", failErr, "session_id", reviewSessionID)
 				}
@@ -317,17 +325,18 @@ func (p *ReviewPipeline) startReviewAgent(ctx context.Context, session domain.Ta
 
 // buildReviewPrompt builds the prompt for the review agent.
 func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.TaskPlan, plan domain.Plan) string {
+	var faqBuilder strings.Builder
+	for _, entry := range plan.FAQ {
+		fmt.Fprintf(&faqBuilder, "Q: %s\nA: %s\n\n", entry.Question, entry.Answer)
+	}
+
 	prompt := `## Task
 
 Review the changes in this repository against the plan. Compare the feature branch against main. Identify correctness, completeness, and quality issues.
 
 ## Sub-Plan
 
-` + subPlan.Content + "\n\n## FAQ\n\n"
-
-	for _, entry := range plan.FAQ {
-		prompt += fmt.Sprintf("Q: %s\nA: %s\n\n", entry.Question, entry.Answer)
-	}
+` + subPlan.Content + "\n\n## FAQ\n\n" + faqBuilder.String()
 
 	prompt += `
 ## Output Format
@@ -357,7 +366,7 @@ func (p *ReviewPipeline) parseCritiques(output string) ([]domain.Critique, error
 	matches := re.FindAllStringSubmatch(output, -1)
 
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("no valid CRITIQUE blocks found and no NO_CRITIQUES marker")
+		return nil, errors.New("no valid CRITIQUE blocks found and no NO_CRITIQUES marker")
 	}
 
 	critiques := make([]domain.Critique, 0, len(matches))
@@ -389,36 +398,41 @@ func (p *ReviewPipeline) parseCritiqueBlock(block string) (domain.Critique, erro
 			continue
 		}
 
-		if strings.HasPrefix(line, "File:") {
-			critique.FilePath = strings.TrimSpace(strings.TrimPrefix(line, "File:"))
-		} else if strings.HasPrefix(line, "Severity:") {
-			sev := strings.TrimSpace(strings.TrimPrefix(line, "Severity:"))
+		if after, ok := strings.CutPrefix(line, "File:"); ok {
+			critique.FilePath = strings.TrimSpace(after)
+		} else if after, ok := strings.CutPrefix(line, "Severity:"); ok {
+			sev := strings.TrimSpace(after)
 			critique.Severity = domain.CritiqueSeverity(sev)
-		} else if strings.HasPrefix(line, "Description:") {
-			critique.Description = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
+		} else if after, ok := strings.CutPrefix(line, "Description:"); ok {
+			critique.Description = strings.TrimSpace(after)
 		}
 	}
 
 	if critique.Description == "" {
-		return domain.Critique{}, fmt.Errorf("missing description")
+		return domain.Critique{}, errors.New("missing description")
 	}
 
 	return critique, nil
 }
 
 // runCorrectionLoop runs the correction loop for unparsable output.
-func (p *ReviewPipeline) runCorrectionLoop(ctx context.Context, reviewSession adapter.AgentSession, cycle domain.ReviewCycle, originalOutput string) (string, error) {
+func (p *ReviewPipeline) runCorrectionLoop(
+	ctx context.Context,
+	reviewSession adapter.AgentSession,
+	_ domain.ReviewCycle,
+	originalOutput string,
+) (string, error) {
 	maxRetries := *p.cfg.Plan.MaxParseRetries
 
-	for i := 0; i < maxRetries; i++ {
-		correctionMsg := fmt.Sprintf(`Your output was not parseable. Output either:
+	for range make([]struct{}, maxRetries) {
+		correctionMsg := `Your output was not parseable. Output either:
 - Exactly "NO_CRITIQUES" if there are no issues requiring fixes, or
 - One or more CRITIQUE / END_CRITIQUE blocks.
 
 Do not include explanatory prose outside these markers.
 
 Original output:
-%s`, originalOutput)
+` + originalOutput
 
 		// Send correction message to review session
 		if err := reviewSession.SendMessage(ctx, correctionMsg); err != nil {
@@ -432,7 +446,7 @@ Original output:
 				return "", ctx.Err()
 			case evt, ok := <-reviewSession.Events():
 				if !ok {
-					return "", fmt.Errorf("review session ended during correction")
+					return "", errors.New("review session ended during correction")
 				}
 				if evt.Type == "done" {
 					// Read new output from session log
@@ -447,7 +461,7 @@ Original output:
 		}
 	}
 
-	return "", fmt.Errorf("max correction retries exceeded")
+	return "", errors.New("max correction retries exceeded")
 }
 
 // makeDecision makes the pass/fail decision based on critiques.
@@ -525,7 +539,7 @@ func (p *ReviewPipeline) needsReimplementation(ctx context.Context, cycle domain
 
 // readSessionOutputFromLog reads the session output from the log file.
 // The log file is stored at ~/.substrate/sessions/<session-id>.log
-func (p *ReviewPipeline) readSessionOutputFromLog(ctx context.Context, sessionID string) (string, error) {
+func (p *ReviewPipeline) readSessionOutputFromLog(_ context.Context, sessionID string) (string, error) {
 	globalDir, err := config.GlobalDir()
 	if err != nil {
 		return "", fmt.Errorf("get global dir: %w", err)

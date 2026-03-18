@@ -170,6 +170,7 @@ func TestMapBridgeEvent(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
+
 				return
 			}
 			if err != nil {
@@ -180,6 +181,7 @@ func TestMapBridgeEvent(t *testing.T) {
 				if got != nil {
 					t.Errorf("expected nil, got %+v", got)
 				}
+
 				return
 			}
 
@@ -267,7 +269,7 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("expected uncertain in metadata")
 	}
-	if uncertain != true {
+	if !uncertain {
 		t.Errorf("uncertain mismatch: got %v, want true", uncertain)
 	}
 }

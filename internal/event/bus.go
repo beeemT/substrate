@@ -2,8 +2,10 @@ package event
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -111,9 +113,7 @@ type BusConfig struct {
 // NewBus creates a new event bus with the given options.
 func NewBus(cfg BusConfig, opts ...BusOption) *Bus {
 	prehookTypes := make(map[string]bool)
-	for k, v := range defaultPreHookTypes {
-		prehookTypes[k] = v
-	}
+	maps.Copy(prehookTypes, defaultPreHookTypes)
 	b := &Bus{
 		subscribers:  make(map[string]*Subscriber),
 		preHooks:     make([]preHookEntry, 0),
@@ -248,7 +248,7 @@ func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error {
 	b.mu.RUnlock()
 
 	if closed {
-		return fmt.Errorf("event bus is closed")
+		return errors.New("event bus is closed")
 	}
 
 	if isPreHookEvent {
@@ -360,14 +360,14 @@ func (b *Bus) dispatch(event domain.SystemEvent) error {
 		select {
 		case sub.C <- event:
 			// delivered
+			// no-op
 		default:
 			if b.onDrop != nil {
 				// Invoke handler asynchronously to avoid blocking the bus
 				go func(subID string, ev domain.SystemEvent) {
 					defer func() {
 						if r := recover(); r != nil {
-							// Handler panicked; log but don't crash the application
-							// TODO: integrate with structured logging when available
+							slog.Error("drop handler panicked", "subscriber", subID, "panic", r)
 						}
 					}()
 					b.onDrop(subID, ev)

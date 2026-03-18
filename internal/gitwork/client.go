@@ -28,6 +28,7 @@ func (c *Client) bin() string {
 	if c.BinPath != "" {
 		return c.BinPath
 	}
+
 	return "git-work"
 }
 
@@ -59,6 +60,7 @@ func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, 
 		if errors.As(err, &exitErr) {
 			return "", fmt.Errorf("git-work checkout -b %s: %w (stderr: %s)", branch, err, string(exitErr.Stderr))
 		}
+
 		return "", fmt.Errorf("git-work checkout -b %s: %w", branch, err)
 	}
 
@@ -183,6 +185,7 @@ func (c *Client) CheckInstalled() error {
 	if _, err := exec.LookPath(bin); err != nil {
 		return fmt.Errorf("git-work not found in PATH: %w", err)
 	}
+
 	return nil
 }
 
@@ -207,6 +210,7 @@ func (c *Client) GetMainWorktree(ctx context.Context, repoDir string) (string, e
 func IsGitWorkRepo(dir string) bool {
 	barePath := filepath.Join(dir, ".bare")
 	info, err := os.Stat(barePath)
+
 	return err == nil && info.IsDir()
 }
 
@@ -225,6 +229,7 @@ func (c *Client) PullMainWorktree(ctx context.Context, repoDir string) (string, 
 	cmd.Dir = mainDir
 
 	output, err := cmd.CombinedOutput()
+
 	return string(output), err
 }
 

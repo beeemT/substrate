@@ -16,7 +16,7 @@ type HeaderBlockSpec struct {
 
 // RenderDivider renders a full-width semantic divider.
 func RenderDivider(st styles.Styles, width int) string {
-	return st.Divider.Copy().Width(maxInt(1, width)).Render(strings.Repeat("─", maxInt(1, width)))
+	return st.Divider.Width(maxInt(1, width)).Render(strings.Repeat("─", maxInt(1, width)))
 }
 
 // RenderHeaderBlock renders shared title/meta/divider workflow chrome.
@@ -28,5 +28,6 @@ func RenderHeaderBlock(st styles.Styles, spec HeaderBlockSpec) string {
 	if spec.Divider {
 		lines = append(lines, RenderDivider(st, spec.Width))
 	}
+
 	return strings.Join(lines, "\n")
 }

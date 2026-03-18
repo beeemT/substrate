@@ -20,11 +20,7 @@ func (s *stubRepoInitializer) Init(_ context.Context, repoDir string) error {
 
 func TestInitWorkspace(t *testing.T) {
 	// Create temp dir
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	ws, err := InitWorkspace(dir, "test-workspace")
 	if err != nil {
@@ -114,11 +110,7 @@ func TestInitWorkspace_InitializerFailureDoesNotWriteWorkspaceFile(t *testing.T)
 
 func TestInitWorkspace_AlreadyExists(t *testing.T) {
 	// Create temp dir
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// Create workspace file
 	if _, err := InitWorkspace(dir, "first"); err != nil {
@@ -126,7 +118,7 @@ func TestInitWorkspace_AlreadyExists(t *testing.T) {
 	}
 
 	// Try to create again
-	_, err = InitWorkspace(dir, "second")
+	_, err := InitWorkspace(dir, "second")
 	if !IsWorkspaceExists(err) {
 		t.Errorf("second InitWorkspace() error = %v, want ErrWorkspaceExists", err)
 	}
@@ -134,11 +126,7 @@ func TestInitWorkspace_AlreadyExists(t *testing.T) {
 
 func TestReadWorkspaceFile(t *testing.T) {
 	// Create temp dir
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// Create workspace
 	original, err := InitWorkspace(dir, "test-workspace")
@@ -163,13 +151,9 @@ func TestReadWorkspaceFile(t *testing.T) {
 
 func TestReadWorkspaceFile_NotFound(t *testing.T) {
 	// Create temp dir without workspace file
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
-	_, err = ReadWorkspaceFile(dir)
+	_, err := ReadWorkspaceFile(dir)
 	if !IsNotInWorkspace(err) {
 		t.Errorf("ReadWorkspaceFile() error = %v, want ErrNotInWorkspace", err)
 	}
@@ -177,11 +161,7 @@ func TestReadWorkspaceFile_NotFound(t *testing.T) {
 
 func TestFindWorkspace(t *testing.T) {
 	// Create nested directory structure
-	rootDir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(rootDir)
+	rootDir := t.TempDir()
 
 	subDir := filepath.Join(rootDir, "subdir", "nested")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
@@ -210,13 +190,9 @@ func TestFindWorkspace(t *testing.T) {
 
 func TestFindWorkspace_NotFound(t *testing.T) {
 	// Create temp dir without workspace file
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
-	_, _, err = FindWorkspace(dir)
+	_, _, err := FindWorkspace(dir)
 	if !IsNotInWorkspace(err) {
 		t.Errorf("FindWorkspace() error = %v, want ErrNotInWorkspace", err)
 	}
@@ -224,11 +200,7 @@ func TestFindWorkspace_NotFound(t *testing.T) {
 
 func TestDiscoverRepos(t *testing.T) {
 	// Create temp workspace dir
-	workspaceDir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(workspaceDir)
+	workspaceDir := t.TempDir()
 
 	// Create git-work repo (has .bare subdirectory)
 	repo1 := filepath.Join(workspaceDir, "repo1")
@@ -279,11 +251,7 @@ func TestDiscoverRepos(t *testing.T) {
 
 func TestDiscoverRepos_EmptyDir(t *testing.T) {
 	// Create empty temp dir
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	repos, err := DiscoverRepos(dir)
 	if err != nil {
@@ -332,11 +300,7 @@ func TestScanWorkspace(t *testing.T) {
 
 func TestIsGitWorkRepo(t *testing.T) {
 	// Create temp dir
-	dir, err := os.MkdirTemp("", "substrate-gitwork-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// Test with .bare directory
 	gitWorkDir := filepath.Join(dir, "gitwork")
@@ -409,11 +373,7 @@ func TestValidateWorkspaceID(t *testing.T) {
 
 func TestReadWorkspaceFile_MalformedYAML(t *testing.T) {
 	// Create temp dir
-	dir, err := os.MkdirTemp("", "substrate-workspace-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// Write malformed YAML
 	workspacePath := filepath.Join(dir, ".substrate-workspace")
@@ -422,7 +382,7 @@ func TestReadWorkspaceFile_MalformedYAML(t *testing.T) {
 		t.Fatalf("write malformed yaml: %v", err)
 	}
 
-	_, err = ReadWorkspaceFile(dir)
+	_, err := ReadWorkspaceFile(dir)
 	if err == nil {
 		t.Error("expected error for malformed YAML, got nil")
 	}

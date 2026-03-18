@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,7 +194,7 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 	f.mu.Unlock()
 
 	if session == nil {
-		return fmt.Errorf("foreman session not started")
+		return errors.New("foreman session not started")
 	}
 
 	// Get session to retrieve repository name.
@@ -208,6 +209,7 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 	f.sessionMu.Lock()
 	if err := session.SendMessage(ctx, questionText); err != nil {
 		f.sessionMu.Unlock()
+
 		return fmt.Errorf("send message: %w", err)
 	}
 	// Wait for the foreman_proposed event.
@@ -280,7 +282,7 @@ func (f *Foreman) waitForAnswer(ctx context.Context, session adapter.AgentSessio
 		case evt, ok := <-eventsCh:
 			if !ok {
 				// Channel closed, session ended
-				return "", true, fmt.Errorf("foreman session ended without response")
+				return "", true, errors.New("foreman session ended without response")
 			}
 
 			// Check for foreman_proposed event
@@ -292,6 +294,7 @@ func (f *Foreman) waitForAnswer(ctx context.Context, session adapter.AgentSessio
 						uncertain = u
 					}
 				}
+
 				return answer, uncertain, nil
 			}
 
@@ -345,18 +348,20 @@ func (f *Foreman) restartSession(ctx context.Context) error {
 	}
 
 	f.session = session
+
 	return nil
 }
 
 // buildSystemPrompt builds the system prompt for the foreman session.
 func (f *Foreman) buildSystemPrompt(ctx context.Context, plan domain.Plan) string {
-	prompt := `You are the Foreman, a question-answering assistant for the Substrate agent system.
+	var prompt strings.Builder
+	prompt.WriteString(`You are the Foreman, a question-answering assistant for the Substrate agent system.
 
 Your role is to answer questions from sub-agents based on the plan context and accumulated FAQ.
 
 ## Current Plan
 
-`
+`)
 
 	// Get sub-plans to build the plan content
 	subPlans, err := f.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
@@ -364,18 +369,18 @@ Your role is to answer questions from sub-agents based on the plan context and a
 		slog.Warn("failed to get sub-plans for system prompt", "error", err)
 	} else {
 		for _, sp := range subPlans {
-			prompt += fmt.Sprintf("### Repository: %s\n\n%s\n\n", sp.RepositoryName, sp.Content)
+			fmt.Fprintf(&prompt, "### Repository: %s\n\n%s\n\n", sp.RepositoryName, sp.Content)
 		}
 	}
 
-	prompt += "## FAQ\n\n"
+	prompt.WriteString("## FAQ\n\n")
 
 	for _, entry := range plan.FAQ {
-		prompt += fmt.Sprintf("Q: %s\nA: %s (answered by %s)\n\n",
+		fmt.Fprintf(&prompt, "Q: %s\nA: %s (answered by %s)\n\n",
 			entry.Question, entry.Answer, entry.AnsweredBy)
 	}
 
-	prompt += `
+	prompt.WriteString(`
 ## Instructions
 
 Answer questions concisely based on the plan and FAQ context.
@@ -386,9 +391,9 @@ If you are uncertain or need more information, end your response with:
 CONFIDENCE: uncertain
 
 Do not fabricate facts about the codebase.
-`
+`)
 
-	return prompt
+	return prompt.String()
 }
 
 // ErrQuestionNotEscalated is returned by ResolveEscalated and SendUserMessage
@@ -419,6 +424,7 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 
 	// Unblock the sub-agent that was waiting.
 	ch <- answer
+
 	return nil
 }
 
@@ -432,6 +438,7 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	f.mu.Lock()
 	if f.session == nil {
 		f.mu.Unlock()
+
 		return nil
 	}
 	session := f.session
@@ -445,6 +452,7 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	if err := session.Abort(ctx); err != nil {
 		return fmt.Errorf("abort session: %w", err)
 	}
+
 	return nil
 }
 
@@ -467,12 +475,13 @@ func (f *Foreman) SendUserMessage(ctx context.Context, questionID, text string) 
 	f.mu.Unlock()
 
 	if session == nil {
-		return "", false, fmt.Errorf("foreman session not started")
+		return "", false, errors.New("foreman session not started")
 	}
 
 	f.sessionMu.Lock()
 	if err := session.SendMessage(ctx, text); err != nil {
 		f.sessionMu.Unlock()
+
 		return "", false, fmt.Errorf("send user message to foreman: %w", err)
 	}
 	newProposal, uncertain, err = f.waitForAnswer(ctx, session)

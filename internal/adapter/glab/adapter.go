@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -36,6 +37,7 @@ type commandRunner func(ctx context.Context, dir string, name string, args ...st
 func execRunner(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+
 	return cmd.CombinedOutput()
 }
 
@@ -94,6 +96,7 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 			slog.Warn("glab: work item completed handler failed", "error", err)
 		}
 	}
+
 	return nil
 }
 
@@ -126,7 +129,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 		return fmt.Errorf("unmarshal worktree payload: %w", err)
 	}
 	if p.Branch == "" || p.WorktreePath == "" {
-		return fmt.Errorf("worktree payload missing branch or worktree_path")
+		return errors.New("worktree payload missing branch or worktree_path")
 	}
 
 	title := mrTitle(p.WorkItemTitle, p.Branch)
@@ -179,6 +182,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	if artifact != nil {
 		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, *artifact)
 	}
+
 	return nil
 }
 
@@ -189,6 +193,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	}
 	if p.Branch == "" {
 		slog.Warn("glab: work_item.completed payload has no branch; skipping mr update")
+
 		return nil
 	}
 
@@ -197,6 +202,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	for _, entry := range entries {
 		if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
 			slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+
 			continue
 		}
 		if mr, ok := a.mrView(ctx, entry.worktreePath, p.Branch); ok {
@@ -211,6 +217,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 				WorktreePath: entry.worktreePath,
 				UpdatedAt:    time.Now(),
 			})
+
 			continue
 		}
 		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
@@ -225,6 +232,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 			UpdatedAt:    time.Now(),
 		})
 	}
+
 	return nil
 }
 
@@ -255,6 +263,7 @@ func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, descript
 	if url != "" {
 		slog.Info("glab: MR created", "branch", branch, "url", url)
 	}
+
 	return url, nil
 }
 
@@ -284,11 +293,13 @@ func (a *GlabAdapter) mrView(ctx context.Context, dir, branch string) (glabMRVie
 	if mr.IID <= 0 {
 		return glabMRView{}, false
 	}
+
 	return mr, true
 }
 
 func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
 	_, ok := a.mrView(ctx, dir, branch)
+
 	return ok
 }
 
@@ -303,17 +314,19 @@ func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error
 	if err != nil {
 		return fmt.Errorf("glab mr update: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
+
 	return nil
 }
 
 // parseMRURL scans command output for the first line containing a GitLab MR URL.
 func parseMRURL(output []byte) string {
-	for _, line := range bytes.Split(output, []byte("\n")) {
+	for line := range bytes.SplitSeq(output, []byte("\n")) {
 		s := strings.TrimSpace(string(line))
 		if strings.Contains(s, "/-/merge_requests/") {
 			return s
 		}
 	}
+
 	return ""
 }
 
@@ -326,6 +339,7 @@ func glabArtifactRef(rawURL string, iid int) string {
 	if idx == -1 {
 		return ""
 	}
+
 	return "!" + strings.TrimSpace(rawURL[idx+len(marker):])
 }
 
@@ -335,6 +349,7 @@ func glabArtifactState(mr glabMRView) string {
 		if mr.Draft || mr.WorkInProgress {
 			return "draft"
 		}
+
 		return "ready"
 	case "merged":
 		return "merged"
@@ -364,10 +379,15 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 			continue
 		}
 		artifact := payload.Artifact
-		if payload.WorkItemID != p.WorkItemID || artifact.Provider != "gitlab" || strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) || strings.TrimSpace(artifact.WorktreePath) == "" {
+		if payload.WorkItemID != p.WorkItemID || artifact.Provider != "gitlab" ||
+			strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) ||
+			strings.TrimSpace(artifact.WorktreePath) == "" {
 			continue
 		}
-		seen[artifact.RepoName+"|"+artifact.WorktreePath] = branchEntry{repo: artifact.RepoName, worktreePath: artifact.WorktreePath, ref: artifact.Ref, url: artifact.URL}
+		seen[artifact.RepoName+"|"+artifact.WorktreePath] = branchEntry{
+			repo: artifact.RepoName, worktreePath: artifact.WorktreePath,
+			ref: artifact.Ref, url: artifact.URL,
+		}
 	}
 	if len(seen) == 0 {
 		return tracked
@@ -380,8 +400,10 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 		if entries[i].repo != entries[j].repo {
 			return entries[i].repo < entries[j].repo
 		}
+
 		return entries[i].worktreePath < entries[j].worktreePath
 	})
+
 	return entries
 }
 
@@ -399,6 +421,7 @@ func mrTitle(workItemTitle, branch string) string {
 	if workItemTitle != "" {
 		return workItemTitle
 	}
+
 	return titleFromBranch(branch)
 }
 
@@ -450,6 +473,7 @@ func titleFromBranch(branch string) string {
 	}
 
 	human := capitalize(strings.ReplaceAll(remainder, "-", " "))
+
 	return fmt.Sprintf("%s [%s]", human, externalID)
 }
 
@@ -462,6 +486,7 @@ func capitalize(s string) string {
 	if runes[0] >= 'a' && runes[0] <= 'z' {
 		runes[0] -= 32
 	}
+
 	return string(runes)
 }
 
@@ -495,6 +520,7 @@ func renderGitLabTrackerRefs(refs []domain.TrackerReference) string {
 	if len(parts) == 0 {
 		return ""
 	}
+
 	return "Resolves " + strings.Join(parts, ", ")
 }
 
@@ -510,6 +536,7 @@ func renderGitLabTrackerRef(ref domain.TrackerReference) string {
 		if ref.URL != "" {
 			return fmt.Sprintf("[%s#%d](%s)", ref.Repo, ref.Number, ref.URL)
 		}
+
 		return fmt.Sprintf("%s#%d", ref.Repo, ref.Number)
 	case "linear":
 		if ref.ID == "" {
@@ -518,6 +545,7 @@ func renderGitLabTrackerRef(ref domain.TrackerReference) string {
 		if ref.URL != "" {
 			return fmt.Sprintf("[%s](%s)", ref.ID, ref.URL)
 		}
+
 		return ref.ID
 	default:
 		return ""

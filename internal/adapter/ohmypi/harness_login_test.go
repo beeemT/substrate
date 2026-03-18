@@ -17,6 +17,7 @@ func writeHarnessExecutable(t *testing.T, dir, name, content string) string {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
+
 	return path
 }
 

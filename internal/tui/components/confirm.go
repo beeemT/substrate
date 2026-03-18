@@ -29,7 +29,7 @@ func (d ConfirmDialog) View() string {
 	if !d.Active {
 		return ""
 	}
-	style := d.Styles.OverlayFrame.Copy().Padding(1, 2)
+	style := d.Styles.OverlayFrame.Padding(1, 2)
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		d.Styles.Title.Render(d.Title),
 		"",
@@ -38,5 +38,6 @@ func (d ConfirmDialog) View() string {
 		d.Styles.KeybindAccent.Render("[y]")+d.Styles.Subtitle.Render(" Confirm  ")+
 			d.Styles.KeybindAccent.Render("[n]")+d.Styles.Subtitle.Render(" Cancel"),
 	)
+
 	return style.Render(content)
 }

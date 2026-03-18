@@ -44,7 +44,7 @@ func main() {
 
 var Version = "dev"
 
-func run() error {
+func run() error { //nolint:funlen
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
@@ -64,7 +64,7 @@ func run() error {
 	}
 
 	// Ensure global directory exists
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+	if err := os.MkdirAll(globalDir, 0o750); err != nil {
 		return fmt.Errorf("creating global directory: %w", err)
 	}
 
@@ -90,7 +90,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("getting sessions directory: %w", err)
 	}
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionsDir, 0o750); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
 	_ = sessionsDir // used at runtime by TUI log tailing
@@ -106,17 +106,18 @@ func run() error {
 	}
 	defer db.Close()
 
+	ctx := context.Background()
+
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
 	} {
-		if _, err := db.Exec(pragma); err != nil {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
 			return fmt.Errorf("set pragma: %w", err)
 		}
 	}
 
-	ctx := context.Background()
 	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
 	}
@@ -355,11 +356,12 @@ func initializeGlobalConfig(cfgPath string) error {
 		"#     bridge_path: /custom/path/to/omp-bridge",
 		"",
 	}, "\n")
-	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o600); err != nil {
 		return fmt.Errorf("writing default config: %w", err)
 	}
 
 	fmt.Printf("substrate: created default config at %s\n", cfgPath)
+
 	return nil
 }
 

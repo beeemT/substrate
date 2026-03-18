@@ -31,6 +31,7 @@ func sentrySourceSummaries(issues []sentryIssue) []domain.SourceSummary {
 			Metadata:    sentryIssueSummaryMetadata(issue),
 		})
 	}
+
 	return summaries
 }
 
@@ -39,6 +40,7 @@ func sentrySummaryExcerpt(text string) string {
 	if len(trimmed) <= 240 {
 		return trimmed
 	}
+
 	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
@@ -56,11 +58,12 @@ func sentryIssueSummaryMetadata(issue sentryIssue) []domain.SourceMetadataField 
 	if value := strings.TrimSpace(issue.UserCount.String()); value != "" {
 		fields = append(fields, domain.SourceMetadataField{Label: "Users", Value: value})
 	}
-	if issue.FirstSeen != nil && !issue.FirstSeen.Time.IsZero() {
+	if issue.FirstSeen != nil && !issue.FirstSeen.IsZero() {
 		fields = append(fields, domain.SourceMetadataField{Label: "First seen", Value: issue.FirstSeen.Time.UTC().Format("2006-01-02 15:04 MST")})
 	}
-	if issue.LastSeen != nil && !issue.LastSeen.Time.IsZero() {
+	if issue.LastSeen != nil && !issue.LastSeen.IsZero() {
 		fields = append(fields, domain.SourceMetadataField{Label: "Last seen", Value: issue.LastSeen.Time.UTC().Format("2006-01-02 15:04 MST")})
 	}
+
 	return fields
 }

@@ -416,7 +416,7 @@ func TestSettingsService_TestProviderSentryMarksConnectedOnSuccess(t *testing.T)
 func TestSettingsService_TestProviderSentrySurfacesAPIError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream unavailable"))
 	}))
@@ -464,6 +464,7 @@ func newSettingsApplyHarnessConfig() *config.Config {
 	cfg.Harness.Phase.Review = config.HarnessClaudeCode
 	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
 	cfg.Adapters.ClaudeCode.BinaryPath = "/bin/sh"
+
 	return cfg
 }
 
@@ -473,6 +474,7 @@ func mustSerializeSettingsConfig(t *testing.T, svc *SettingsService, cfg *config
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
+
 	return raw
 }
 
@@ -483,6 +485,7 @@ func setSettingsFieldValue(t *testing.T, sections []SettingsSection, section, ke
 			field := &sections[i].Fields[j]
 			if field.Section == section && field.Key == key {
 				field.Value = value
+
 				return
 			}
 		}

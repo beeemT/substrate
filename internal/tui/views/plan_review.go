@@ -29,7 +29,7 @@ const (
 const feedbackMaxLines = 6
 
 // PlanReviewModel renders the plan and handles approval flow.
-type PlanReviewModel struct {
+type PlanReviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	viewport       viewport.Model
 	feedbackInput  textarea.Model
 	feedbackHeight int
@@ -52,6 +52,7 @@ func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.EndOfBufferCharacter = 0
 	ta.SetHeight(1)
+
 	return PlanReviewModel{
 		viewport:       viewport.New(0, 0),
 		feedbackInput:  ta,
@@ -126,6 +127,7 @@ func (m *PlanReviewModel) refreshViewportContent(reset bool) {
 	m.viewport.SetContent(renderPlanReviewContent(m.styles, m.planContent, m.viewport.Width))
 	if reset {
 		m.viewport.GotoTop()
+
 		return
 	}
 	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
@@ -154,7 +156,7 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 	inCodeBlock := false
 	for index, rawLine := range rawLines {
 		trimmedLine := strings.TrimSpace(rawLine)
-		segments := []string{""}
+		var segments []string
 		renderMarkdown := false
 		style := st.SettingsText
 		switch {
@@ -187,6 +189,7 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 			inCodeBlock = !inCodeBlock
 		}
 	}
+
 	return strings.Join(rendered, "\n")
 }
 
@@ -202,6 +205,7 @@ func planReviewLineUsesMarkdown(trimmedLine string) bool {
 			return i > 0 && r == '.' && i+1 < len(trimmedLine) && trimmedLine[i+1] == ' '
 		}
 	}
+
 	return false
 }
 
@@ -226,6 +230,7 @@ func renderPlanReviewMarkdownLine(line string, width int) []string {
 	if len(parts) == 0 {
 		return []string{""}
 	}
+
 	return parts
 }
 
@@ -251,6 +256,7 @@ func wrapPlanReviewPlainTextLine(line string, width int) []string {
 		if current == "" {
 			current = indent + word
 			currentWidth = indentDisplayWidth + wordWidth
+
 			continue
 		}
 		candidateWidth := currentWidth + 1 + wordWidth
@@ -258,6 +264,7 @@ func wrapPlanReviewPlainTextLine(line string, width int) []string {
 			lines = append(lines, current)
 			current = indent + word
 			currentWidth = indentDisplayWidth + wordWidth
+
 			continue
 		}
 		current += " " + word
@@ -269,6 +276,7 @@ func wrapPlanReviewPlainTextLine(line string, width int) []string {
 	if len(lines) == 0 {
 		return []string{""}
 	}
+
 	return lines
 }
 
@@ -285,6 +293,7 @@ func (m *PlanReviewModel) KeybindHints() []KeybindHint {
 			{Key: "Esc", Label: "Cancel"},
 		}
 	}
+
 	return []KeybindHint{
 		{Key: "a", Label: "Approve"},
 		{Key: "c", Label: "Request changes"},
@@ -301,7 +310,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.inputMode != planReviewNormal {
 			switch msg.String() {
-			case "enter":
+			case keyEnter:
 				text := strings.TrimSpace(m.feedbackInput.Value())
 				m.feedbackHeight = 1
 				m.feedbackInput.SetHeight(1)
@@ -310,16 +319,18 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				if m.inputMode == planReviewChanges {
 					m.inputMode = planReviewNormal
 					m.syncViewportSize()
+
 					return m, func() tea.Msg {
 						return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
 					}
 				}
 				m.inputMode = planReviewNormal
 				m.syncViewportSize()
+
 				return m, func() tea.Msg {
 					return PlanRejectMsg{PlanID: m.planID, Reason: text, WorkItemID: m.workItemID}
 				}
-			case "esc":
+			case keyEsc:
 				m.inputMode = planReviewNormal
 				m.feedbackHeight = 1
 				m.feedbackInput.SetHeight(1)
@@ -330,6 +341,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
 				m.syncFeedbackHeight()
 			}
+
 			return m, cmd
 		}
 		switch msg.String() {
@@ -349,7 +361,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.syncViewportSize()
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
-		case "up", "k", "down", "j", "pgup", "pgdown":
+		case "up", "k", "down", "j", "pgup", "pgdown": //nolint:goconst
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 	case tea.WindowSizeMsg:
@@ -358,6 +370,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
+
 	return m, cmd
 }
 
@@ -393,6 +406,7 @@ func (m PlanReviewModel) View() string {
 		parts = append(parts, feedbackRow)
 	}
 	parts = append(parts, components.RenderDivider(m.styles, m.width), hints)
+
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }
 
@@ -406,9 +420,7 @@ func (m PlanReviewModel) renderScrollbar(vp viewport.Model, height int) string {
 	}
 	lines := make([]string, height)
 	thumbHeight := max(1, (height*height)/max(1, total))
-	if thumbHeight > height {
-		thumbHeight = height
-	}
+	thumbHeight = min(thumbHeight, height)
 	thumbRange := max(0, height-thumbHeight)
 	scrollRange := max(1, total-height)
 	thumbTop := 0
@@ -421,6 +433,7 @@ func (m PlanReviewModel) renderScrollbar(vp viewport.Model, height int) string {
 			lines[i] = m.styles.ScrollbarThumbFocused.Render("▐")
 		}
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -436,14 +449,17 @@ func editPlanInEditorCmd(planID, workItemID, content string) tea.Cmd {
 	}
 	if _, err := f.WriteString(content); err != nil {
 		f.Close()
-		os.Remove(f.Name())
+		os.Remove(f.Name()) //nolint:gosec // taint-analysis false positive
+
 		return func() tea.Msg { return ErrMsg{Err: err} }
 	}
 	f.Close()
 	tmpFile := f.Name()
-	return tea.ExecProcess(exec.Command(editor, tmpFile), func(err error) tea.Msg {
+
+	return tea.ExecProcess(exec.Command(editor, tmpFile), func(err error) tea.Msg { //nolint:gosec,noctx // taint-analysis false positive; Bubble Tea ExecProcess has no context parameter
 		if err != nil {
 			os.Remove(tmpFile)
+
 			return ErrMsg{Err: err}
 		}
 		data, readErr := os.ReadFile(tmpFile)
@@ -451,12 +467,13 @@ func editPlanInEditorCmd(planID, workItemID, content string) tea.Cmd {
 		if readErr != nil {
 			return ErrMsg{Err: readErr}
 		}
+
 		return PlanEditedMsg{PlanID: planID, WorkItemID: workItemID, NewContent: string(data)}
 	})
 }
 
 // ReadyToPlanModel shows work item details when state is "ingested".
-type ReadyToPlanModel struct {
+type ReadyToPlanModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	workItem *domain.Session
 	styles   styles.Styles
 	width    int
@@ -472,10 +489,12 @@ func (m *ReadyToPlanModel) SetSize(w, h int) { m.width = w; m.height = h }
 func (m *ReadyToPlanModel) SetWorkItem(wi *domain.Session) { m.workItem = wi }
 
 func (m ReadyToPlanModel) Update(msg tea.Msg) (ReadyToPlanModel, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "enter" && m.workItem != nil {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.workItem != nil {
 		id := m.workItem.ID
+
 		return m, func() tea.Msg { return StartPlanMsg{WorkItemID: id} }
 	}
+
 	return m, nil
 }
 
@@ -521,7 +540,7 @@ func (m ReadyToPlanModel) View() string {
 }
 
 // AwaitingImplModel shows plan summary when state is "approved".
-type AwaitingImplModel struct {
+type AwaitingImplModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	workItem *domain.Session
 	styles   styles.Styles
 	width    int
@@ -540,6 +559,7 @@ func (m AwaitingImplModel) View() string {
 	if m.workItem == nil {
 		return ""
 	}
+
 	return strings.Join([]string{
 		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
 		components.RenderDivider(m.styles, m.width),

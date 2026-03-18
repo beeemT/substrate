@@ -103,7 +103,6 @@ func TestSourceDetailsNoticeFromOverviewAction(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			notice := sourceDetailsNoticeFromOverviewAction(tc.action)
 			if notice == nil {

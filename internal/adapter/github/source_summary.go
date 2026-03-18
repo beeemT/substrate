@@ -27,6 +27,7 @@ func githubIssueSourceSummaries(issues []githubIssue) []domain.SourceSummary {
 			UpdatedAt:   issue.UpdatedAt,
 		})
 	}
+
 	return summaries
 }
 
@@ -48,6 +49,7 @@ func githubMilestoneSourceSummaries(owner, repo string, milestones []githubMiles
 			UpdatedAt:   milestone.UpdatedAt,
 		})
 	}
+
 	return summaries
 }
 
@@ -56,6 +58,7 @@ func summaryExcerpt(text string) string {
 	if len(trimmed) <= 240 {
 		return trimmed
 	}
+
 	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
@@ -68,5 +71,6 @@ func githubSourceContainer(owner, repo string) string {
 	if repo != "" {
 		return repo
 	}
+
 	return owner
 }

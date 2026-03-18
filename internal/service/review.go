@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -32,12 +33,7 @@ func canTransitionReviewCycle(from, to domain.ReviewCycleStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // Critique state transitions
@@ -51,12 +47,7 @@ func canTransitionCritique(from, to domain.CritiqueStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // ReviewCycle operations
@@ -67,6 +58,7 @@ func (s *ReviewService) GetCycle(ctx context.Context, id string) (domain.ReviewC
 	if err != nil {
 		return domain.ReviewCycle{}, newNotFoundError("review cycle", id)
 	}
+
 	return cycle, nil
 }
 
@@ -173,6 +165,7 @@ func (s *ReviewService) GetCritique(ctx context.Context, id string) (domain.Crit
 	if err != nil {
 		return domain.Critique{}, newNotFoundError("critique", id)
 	}
+
 	return critique, nil
 }
 
@@ -230,6 +223,7 @@ func (s *ReviewService) CreateCritiquesBatch(ctx context.Context, critiques []do
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -246,6 +240,7 @@ func (s *ReviewService) CountMajorCritiques(ctx context.Context, cycleID string)
 			count++
 		}
 	}
+
 	return count, nil
 }
 
@@ -261,5 +256,6 @@ func (s *ReviewService) HasUnresolvedCritiques(ctx context.Context, cycleID stri
 			return true, nil
 		}
 	}
+
 	return false, nil
 }

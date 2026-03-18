@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -387,7 +388,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	draftPath := planningCtx.SessionDraftPath
 
 	// Build discovered repo names list
-	var discoveredRepoNames []string
+	discoveredRepoNames := make([]string, 0, len(planningCtx.Repos))
 	for _, repo := range planningCtx.Repos {
 		discoveredRepoNames = append(discoveredRepoNames, repo.Name)
 	}
@@ -405,7 +406,12 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		WorkspaceID:  workspaceID,
 		DraftPath:    draftPath,
 		SystemPrompt: systemPrompt,
-		UserPrompt:   fmt.Sprintf("Your role is to plan this change. You are not implementing anything.\n\nBegin planning. Write the plan progressively to %s. Explore the workspace and determine which repos need changes.", draftPath),
+		UserPrompt: fmt.Sprintf(
+			"Your role is to plan this change. You are not implementing anything.\n\n"+
+				"Begin planning. Write the plan progressively to %s. "+
+				"Explore the workspace and determine which repos need changes.",
+			draftPath,
+		),
 		WorktreePath: "", // Planning uses workspace root
 	}
 
@@ -479,7 +485,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		}
 	}
 
-	return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("max retries exceeded")}
+	return "", attempt, warnings, &PlanningError{Err: errors.New("max retries exceeded")}
 }
 
 // waitForPlanningTurn waits for the planner to signal that its current turn is complete.
@@ -494,14 +500,14 @@ func (s *PlanningService) waitForPlanningTurn(ctx context.Context, session adapt
 			return ctx.Err()
 		case evt, ok := <-events:
 			if !ok {
-				return fmt.Errorf("agent session ended before planner signaled completion")
+				return errors.New("agent session ended before planner signaled completion")
 			}
 			switch evt.Type {
 			case "done":
 				return nil
 			case "error":
 				if strings.TrimSpace(evt.Payload) == "" {
-					return fmt.Errorf("planner session failed")
+					return errors.New("planner session failed")
 				}
 				return fmt.Errorf("planner session failed: %s", evt.Payload)
 			}

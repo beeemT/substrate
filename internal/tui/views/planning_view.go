@@ -12,6 +12,8 @@ import (
 )
 
 // SessionLogModel renders either a live-tailing session log or a static interaction transcript.
+//
+//nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type SessionLogModel struct {
 	viewport         viewport.Model
 	entries          []sessionlog.Entry
@@ -42,6 +44,7 @@ type SessionLogModel struct {
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	vp := viewport.New(0, 0)
+
 	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction"}
 }
 
@@ -122,6 +125,7 @@ func (m *SessionLogModel) TailCmd() tea.Cmd {
 	if !m.live || m.logPath == "" {
 		return nil
 	}
+
 	return TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 }
 
@@ -137,6 +141,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
+
 	return hints
 }
 
@@ -155,6 +160,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 				m.viewport.GotoBottom()
 			}
 		}
+
 		return m, TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -172,6 +178,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
+
 	return m, cmd
 }
 
@@ -194,6 +201,7 @@ func (m SessionLogModel) header() string {
 	if notice := m.noticeView(); notice != "" {
 		return header + "\n" + notice
 	}
+
 	return header
 }
 
@@ -213,5 +221,6 @@ func (m SessionLogModel) View() string {
 	}
 	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
 	parts := append(strings.Split(header, "\n"), body, hints)
+
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

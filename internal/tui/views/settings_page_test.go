@@ -15,6 +15,7 @@ import (
 func newTestSettingsPageWithSnapshot(snapshot SettingsSnapshot) SettingsPage {
 	page := NewSettingsPage(&SettingsService{}, snapshot, styles.NewStyles(styles.DefaultTheme))
 	page.SetSize(120, 40)
+
 	return page
 }
 
@@ -30,6 +31,7 @@ func findSectionIndex(t *testing.T, page SettingsPage, sectionID string) int {
 		}
 	}
 	t.Fatalf("section %q not found", sectionID)
+
 	return -1
 }
 
@@ -42,6 +44,7 @@ func findFieldIndex(t *testing.T, page SettingsPage, sectionID, key string) int 
 		}
 	}
 	t.Fatalf("field %q not found in section %q", key, sectionID)
+
 	return -1
 }
 
@@ -53,6 +56,7 @@ func findFirstSectionWithFields(t *testing.T, page SettingsPage) int {
 		}
 	}
 	t.Fatal("no section with fields found")
+
 	return -1
 }
 
@@ -64,6 +68,7 @@ func findLastSectionWithFields(t *testing.T, page SettingsPage) int {
 		}
 	}
 	t.Fatal("no section with fields found")
+
 	return -1
 }
 
@@ -75,6 +80,7 @@ func findFirstVisibleSidebarSection(t *testing.T, page SettingsPage) int {
 		}
 	}
 	t.Fatal("no visible sidebar section found")
+
 	return -1
 }
 
@@ -87,6 +93,7 @@ func findLastVisibleSidebarSection(t *testing.T, page SettingsPage) int {
 		}
 	}
 	t.Fatal("no visible sidebar section found")
+
 	return -1
 }
 
@@ -101,6 +108,7 @@ func assertSettingsPageFitsWindow(t *testing.T, rendered string, width, height i
 			t.Fatalf("line %d width = %d, want <= %d\nview:\n%s", i+1, got, width, rendered)
 		}
 	}
+
 	return lines
 }
 
@@ -142,6 +150,7 @@ func scrollbarThumbTop(rendered string) int {
 			return i
 		}
 	}
+
 	return -1
 }
 
@@ -512,6 +521,7 @@ func TestSettingsPage_ViewShowsHarnessWarningAndSectionError(t *testing.T) {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
 			snapshot.Sections[i].Error = `Planning: Codex not found.`
+
 			break
 		}
 	}
@@ -542,6 +552,7 @@ func TestSettingsPage_ViewWithHarnessWarningFitsNarrowWidth(t *testing.T) {
 		if snapshot.Sections[i].ID == "harness" {
 			snapshot.Sections[i].Status = "warning"
 			snapshot.Sections[i].Error = `Planning: Codex not found.`
+
 			break
 		}
 	}
@@ -944,7 +955,7 @@ func TestSettingsPage_MouseWheelDownMovesViewportImmediatelyFromTopBoundaryForFi
 	}
 	page.mainViewport.YOffset = 0
 	overshot := page
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, Services{})
 		overshot = next
 	}
@@ -978,7 +989,7 @@ func TestSettingsPage_MouseWheelUpMovesViewportImmediatelyFromBottomBoundaryForF
 	}
 	page.mainViewport.YOffset = maxOffset
 	overshot := page
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		next, _ := overshot.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
 		overshot = next
 	}
@@ -1009,7 +1020,7 @@ func TestSettingsPage_MouseWheelScrollPastEndDoesNotJumpToTop(t *testing.T) {
 
 	// Scroll all the way down in many steps.
 	current := page
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		next, _ := current.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}, Services{})
 		current = next
 	}
@@ -1047,10 +1058,11 @@ func TestSettingsPage_KeyboardScrollPastEndDoesNotJumpToTop(t *testing.T) {
 
 	// Move down field by field to the bottom.
 	current := page
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		next, _ := current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, Services{})
 		if next.sectionCursor == current.sectionCursor && next.fieldCursor == current.fieldCursor {
 			current = next
+
 			break // Clamped at end.
 		}
 		current = next
@@ -1148,7 +1160,7 @@ func TestSettingsPage_ScrollbarTracksSelectedFieldMovement(t *testing.T) {
 	}
 
 	updated := page
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
 		updated = next
 	}
@@ -1178,7 +1190,7 @@ func TestSettingsPage_KeyNavigationKeepsSelectedSectionVisible(t *testing.T) {
 	page.syncMainViewport()
 
 	updated := page
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
 		updated = next
 		assertSelectedSectionVisibleInViewport(t, updated)
@@ -1196,7 +1208,7 @@ func TestSettingsPage_KeyNavigationKeepsSelectedFieldVisible(t *testing.T) {
 	page.syncMainViewport()
 
 	updated := page
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
 		updated = next
 		assertSelectedFieldVisibleInViewport(t, updated)
@@ -1270,7 +1282,7 @@ func TestSettingsPage_StickyDetailsOrderDescriptionBeforeDefaultBeforeCurrent(t 
 	if descriptionIndex == -1 || defaultIndex == -1 || currentIndex == -1 {
 		t.Fatalf("expected description, default, and current lines in sticky details, got %q", rendered)
 	}
-	if !(descriptionIndex < defaultIndex && defaultIndex < currentIndex) {
+	if descriptionIndex >= defaultIndex || defaultIndex >= currentIndex {
 		t.Fatalf("expected description before default before current, got %q", rendered)
 	}
 }

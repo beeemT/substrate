@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -20,8 +21,13 @@ func NewTaskService(repo repository.TaskRepository) *TaskService {
 
 // Task state transitions.
 var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
-	domain.AgentSessionPending:          {domain.AgentSessionRunning, domain.AgentSessionFailed},
-	domain.AgentSessionRunning:          {domain.AgentSessionWaitingForAnswer, domain.AgentSessionCompleted, domain.AgentSessionInterrupted, domain.AgentSessionFailed},
+	domain.AgentSessionPending: {domain.AgentSessionRunning, domain.AgentSessionFailed},
+	domain.AgentSessionRunning: {
+		domain.AgentSessionWaitingForAnswer,
+		domain.AgentSessionCompleted,
+		domain.AgentSessionInterrupted,
+		domain.AgentSessionFailed,
+	},
 	domain.AgentSessionWaitingForAnswer: {domain.AgentSessionRunning, domain.AgentSessionFailed},
 	domain.AgentSessionCompleted:        {},
 	domain.AgentSessionInterrupted:      {domain.AgentSessionRunning, domain.AgentSessionFailed},
@@ -33,12 +39,7 @@ func canTransitionTask(from, to domain.TaskStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // Get retrieves a task by ID.
@@ -47,6 +48,7 @@ func (s *TaskService) Get(ctx context.Context, id string) (domain.Task, error) {
 	if err != nil {
 		return domain.Task{}, newNotFoundError("task", id)
 	}
+
 	return task, nil
 }
 
@@ -100,6 +102,7 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	now := time.Now()
 	task.CreatedAt = now
 	task.UpdatedAt = now
+
 	return s.repo.Create(ctx, task)
 }
 
@@ -120,6 +123,7 @@ func (s *TaskService) Transition(ctx context.Context, id string, to domain.TaskS
 
 	task.Status = to
 	task.UpdatedAt = time.Now()
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -142,6 +146,7 @@ func (s *TaskService) Start(ctx context.Context, id string) error {
 	task.Status = domain.AgentSessionRunning
 	task.StartedAt = &now
 	task.UpdatedAt = now
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -174,6 +179,7 @@ func (s *TaskService) Complete(ctx context.Context, id string) error {
 	task.Status = domain.AgentSessionCompleted
 	task.CompletedAt = &now
 	task.UpdatedAt = now
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -196,6 +202,7 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 	task.Status = domain.AgentSessionInterrupted
 	task.ShutdownAt = &now
 	task.UpdatedAt = now
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -224,6 +231,7 @@ func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error 
 	task.CompletedAt = &now
 	task.ExitCode = exitCode
 	task.UpdatedAt = now
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -236,6 +244,7 @@ func (s *TaskService) UpdateOwnerInstance(ctx context.Context, id string, instan
 
 	task.OwnerInstanceID = &instanceID
 	task.UpdatedAt = time.Now()
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -248,6 +257,7 @@ func (s *TaskService) UpdatePID(ctx context.Context, id string, pid int) error {
 
 	task.PID = &pid
 	task.UpdatedAt = time.Now()
+
 	return s.repo.Update(ctx, task)
 }
 
@@ -257,6 +267,7 @@ func (s *TaskService) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return newNotFoundError("task", id)
 	}
+
 	return s.repo.Delete(ctx, id)
 }
 
@@ -273,6 +284,7 @@ func (s *TaskService) FindInterruptedByWorkspace(ctx context.Context, workspaceI
 			interrupted = append(interrupted, task)
 		}
 	}
+
 	return interrupted, nil
 }
 
@@ -289,5 +301,6 @@ func (s *TaskService) FindRunningByOwner(ctx context.Context, instanceID string)
 			running = append(running, task)
 		}
 	}
+
 	return running, nil
 }

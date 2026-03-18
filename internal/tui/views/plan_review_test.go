@@ -78,9 +78,10 @@ func TestPlanReviewModel_WrapsAndNumbersPlanLines(t *testing.T) {
 		}
 	}
 	continuationFound := false
-	for _, line := range strings.Split(plain, "\n") {
+	for line := range strings.SplitSeq(plain, "\n") {
 		if strings.HasPrefix(line, "   │ ") {
 			continuationFound = true
+
 			break
 		}
 	}
@@ -176,6 +177,7 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 	for i, line := range plainLines {
 		if strings.Contains(line, "┌") {
 			cardIndex = i
+
 			break
 		}
 	}
@@ -260,11 +262,12 @@ func checkFeedbackViewBounds(t *testing.T, label, view string, wantWidth, wantHe
 // looking for the line-number │ separator that renderPlanReviewContent injects.
 func countPlanLines(view string) int {
 	n := 0
-	for _, line := range strings.Split(view, "\n") {
+	for line := range strings.SplitSeq(view, "\n") {
 		if strings.Contains(ansi.Strip(line), " │ ") {
 			n++
 		}
 	}
+
 	return n
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -30,12 +31,7 @@ func canTransitionQuestion(from, to domain.QuestionStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // Get retrieves a question by ID.
@@ -44,6 +40,7 @@ func (s *QuestionService) Get(ctx context.Context, id string) (domain.Question, 
 	if err != nil {
 		return domain.Question{}, newNotFoundError("question", id)
 	}
+
 	return q, nil
 }
 
@@ -134,6 +131,7 @@ func (s *QuestionService) EscalateWithProposal(ctx context.Context, id string, p
 	}
 	q.Status = domain.QuestionEscalated
 	q.ProposedAnswer = proposedAnswer
+
 	return s.repo.Update(ctx, q)
 }
 
@@ -173,5 +171,6 @@ func (s *QuestionService) HasPendingQuestions(ctx context.Context, sessionID str
 			return true, nil
 		}
 	}
+
 	return false, nil
 }

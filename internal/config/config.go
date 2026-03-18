@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -77,6 +78,7 @@ const (
 	HarnessClaudeCode HarnessName = "claude-code"
 	HarnessCodex      HarnessName = "codex"
 )
+const defaultPollInterval = "60s"
 
 type HarnessConfig struct {
 	Default HarnessName        `yaml:"default"`
@@ -105,7 +107,7 @@ type AdaptersConfig struct {
 // LinearConfig configures the Linear GraphQL adapter.
 type LinearConfig struct {
 	APIKeyRef      string            `yaml:"api_key_ref"`
-	APIKey         string            `yaml:"-"`
+	APIKey         string            `yaml:"-"` //nolint:gosec // credential field name, not a hardcoded value
 	TeamID         string            `yaml:"team_id"`
 	AssigneeFilter string            `yaml:"assignee_filter"` // "me" or explicit user ID
 	PollInterval   string            `yaml:"poll_interval"`   // e.g. "30s"; default "30s"
@@ -308,13 +310,13 @@ func applyDefaults(cfg *Config) {
 		cfg.Adapters.GitLab.BaseURL = "https://gitlab.com"
 	}
 	if cfg.Adapters.GitLab.PollInterval == "" {
-		cfg.Adapters.GitLab.PollInterval = "60s"
+		cfg.Adapters.GitLab.PollInterval = defaultPollInterval
 	}
 	if cfg.Adapters.GitHub.BaseURL == "" {
 		cfg.Adapters.GitHub.BaseURL = "https://api.github.com"
 	}
 	if cfg.Adapters.GitHub.PollInterval == "" {
-		cfg.Adapters.GitHub.PollInterval = "60s"
+		cfg.Adapters.GitHub.PollInterval = defaultPollInterval
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
@@ -398,12 +400,12 @@ func validateAbsoluteHTTPURL(raw string) error {
 		return err
 	}
 	if !parsed.IsAbs() || parsed.Host == "" {
-		return fmt.Errorf("must be an absolute URL")
+		return errors.New("must be an absolute URL")
 	}
 	switch parsed.Scheme {
 	case "http", "https":
 		return nil
 	default:
-		return fmt.Errorf("must use http or https")
+		return errors.New("must use http or https")
 	}
 }

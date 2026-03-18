@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -23,26 +23,20 @@ import (
 
 const minPollInterval = 30 * time.Second
 
+const (
+	filterAll         = "all"
+	filterCreatedByMe = "created_by_me"
+	filterClosed      = "closed"
+)
+
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
 type GitlabAdapter struct {
-	cfg            config.GitlabConfig
-	baseURL        string
-	client         httpDoer
-	defaultProject int64
-	defaultGroup   int64
-	hasEpics       bool
-
-	mu sync.RWMutex
-}
-
-type projectMeta struct {
-	Namespace struct {
-		ID   int64  `json:"id"`
-		Kind string `json:"kind"`
-	} `json:"namespace"`
+	cfg     config.GitlabConfig
+	baseURL string
+	client  httpDoer
 }
 
 type issue struct {
@@ -85,9 +79,9 @@ func New(ctx context.Context, cfg config.GitlabConfig) (*GitlabAdapter, error) {
 	return newWithClient(ctx, cfg, &http.Client{Timeout: 30 * time.Second})
 }
 
-func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer) (*GitlabAdapter, error) {
+func newWithClient(_ context.Context, cfg config.GitlabConfig, client httpDoer) (*GitlabAdapter, error) {
 	if strings.TrimSpace(cfg.Token) == "" {
-		return nil, fmt.Errorf("gitlab token is required")
+		return nil, errors.New("gitlab token is required")
 	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
@@ -96,6 +90,7 @@ func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	a := &GitlabAdapter{cfg: cfg, baseURL: baseURL, client: client}
+
 	return a, nil
 }
 
@@ -104,8 +99,8 @@ func (a *GitlabAdapter) Name() string { return "gitlab" }
 func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 	filters := map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 		domain.ScopeIssues: {
-			Views:          []string{"assigned_to_me", "created_by_me", "all"},
-			States:         []string{"open", "closed", "all"},
+			Views:          []string{"assigned_to_me", filterCreatedByMe, filterAll},
+			States:         []string{"open", filterClosed, filterAll},
 			SupportsLabels: true,
 			SupportsSearch: true,
 			SupportsOffset: true,
@@ -115,7 +110,16 @@ func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 		domain.ScopeProjects:    {SupportsOffset: true, SupportsRepo: true},
 		domain.ScopeInitiatives: {SupportsOffset: true, SupportsGroup: true},
 	}
-	return adapter.AdapterCapabilities{CanWatch: true, CanBrowse: true, CanMutate: true, BrowseScopes: []domain.SelectionScope{domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives}, BrowseFilters: filters}
+
+	return adapter.AdapterCapabilities{
+		CanWatch:  true,
+		CanBrowse: true,
+		CanMutate: true,
+		BrowseScopes: []domain.SelectionScope{
+			domain.ScopeIssues, domain.ScopeProjects, domain.ScopeInitiatives,
+		},
+		BrowseFilters: filters,
+	}
 }
 
 func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -128,8 +132,20 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
 			itemID := gitlabIssueSelectionID(0, iss)
-			items = append(items, adapter.ListItem{ID: itemID, Identifier: fmt.Sprintf("#%d", iss.IID), Title: iss.Title, Description: iss.Description, State: iss.State, Labels: append([]string(nil), iss.Labels...), ContainerRef: gitlabProjectPath(iss), URL: iss.WebURL, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)})
+			items = append(items, adapter.ListItem{
+				ID:           itemID,
+				Identifier:   fmt.Sprintf("#%d", iss.IID),
+				Title:        iss.Title,
+				Description:  iss.Description,
+				State:        iss.State,
+				Labels:       append([]string(nil), iss.Labels...),
+				ContainerRef: gitlabProjectPath(iss),
+				URL:          iss.WebURL,
+				CreatedAt:    derefTime(iss.CreatedAt),
+				UpdatedAt:    derefTime(iss.UpdatedAt),
+			})
 		}
+
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeProjects:
 		milestones, err := a.listMilestones(ctx, opts)
@@ -138,8 +154,16 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(milestones))
 		for _, ms := range milestones {
-			items = append(items, adapter.ListItem{ID: strconv.FormatInt(ms.ID, 10), Title: ms.Title, Description: ms.Description, State: ms.State, CreatedAt: derefTime(ms.CreatedAt), UpdatedAt: derefTime(ms.UpdatedAt)})
+			items = append(items, adapter.ListItem{
+				ID:          strconv.FormatInt(ms.ID, 10),
+				Title:       ms.Title,
+				Description: ms.Description,
+				State:       ms.State,
+				CreatedAt:   derefTime(ms.CreatedAt),
+				UpdatedAt:   derefTime(ms.UpdatedAt),
+			})
 		}
+
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	case domain.ScopeInitiatives:
 		epics, err := a.listEpics(ctx, opts)
@@ -147,12 +171,21 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			if errors.Is(err, adapter.ErrBrowseNotSupported) {
 				return nil, err
 			}
+
 			return nil, err
 		}
 		items := make([]adapter.ListItem, 0, len(epics))
 		for _, ep := range epics {
-			items = append(items, adapter.ListItem{ID: strconv.FormatInt(ep.IID, 10), Title: ep.Title, Description: ep.Description, State: ep.State, CreatedAt: derefTime(ep.CreatedAt), UpdatedAt: derefTime(ep.UpdatedAt)})
+			items = append(items, adapter.ListItem{
+				ID:          strconv.FormatInt(ep.IID, 10),
+				Title:       ep.Title,
+				Description: ep.Description,
+				State:       ep.State,
+				CreatedAt:   derefTime(ep.CreatedAt),
+				UpdatedAt:   derefTime(ep.UpdatedAt),
+			})
 		}
+
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
 	default:
 		return nil, adapter.ErrBrowseNotSupported
@@ -177,11 +210,12 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if len(issues) == 1 {
 			return issueToWorkItem(issues[0]), nil
 		}
+
 		return aggregateIssues(issues), nil
 	case domain.ScopeProjects:
 		projectID := resolveSelectionProjectID(sel)
 		if projectID == 0 {
-			return domain.Session{}, fmt.Errorf("gitlab milestone selection requires project_id metadata")
+			return domain.Session{}, errors.New("gitlab milestone selection requires project_id metadata")
 		}
 		parts := make([]string, 0, len(sel.ItemIDs))
 		titles := make([]string, 0, len(sel.ItemIDs))
@@ -199,14 +233,30 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 			titles = append(titles, ms.Title)
 			parts = append(parts, formatMilestone(ms))
 		}
-		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:milestone:%d", projectID), Source: a.Name(), SourceScope: domain.ScopeProjects, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: strings.Join(titles, ", "), Description: strings.Join(parts, "\n\n"), State: domain.SessionIngested, Metadata: map[string]any{"project_id": projectID, "source_summaries": gitlabMilestoneSourceSummaries(projectID, milestones)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+
+		return domain.Session{
+			ID:            domain.NewID(),
+			ExternalID:    fmt.Sprintf("gl:milestone:%d", projectID),
+			Source:        a.Name(),
+			SourceScope:   domain.ScopeProjects,
+			SourceItemIDs: append([]string(nil), sel.ItemIDs...),
+			Title:         strings.Join(titles, ", "),
+			Description:   strings.Join(parts, "\n\n"),
+			State:         domain.SessionIngested,
+			Metadata: map[string]any{
+				"project_id":       projectID,
+				"source_summaries": gitlabMilestoneSourceSummaries(projectID, milestones),
+			},
+			CreatedAt: domain.Now(),
+			UpdatedAt: domain.Now(),
+		}, nil
 	case domain.ScopeInitiatives:
 		groupID := parseGroupIDFromMetadata(sel.Metadata)
 		if groupID == 0 {
-			return domain.Session{}, fmt.Errorf("gitlab epic selection requires group_id metadata")
+			return domain.Session{}, errors.New("gitlab epic selection requires group_id metadata")
 		}
 		if len(sel.ItemIDs) != 1 {
-			return domain.Session{}, fmt.Errorf("initiatives scope requires exactly one selection")
+			return domain.Session{}, errors.New("initiatives scope requires exactly one selection")
 		}
 		iid, err := strconv.ParseInt(sel.ItemIDs[0], 10, 64)
 		if err != nil {
@@ -216,7 +266,20 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 		if err != nil {
 			return domain.Session{}, err
 		}
-		return domain.Session{ID: domain.NewID(), ExternalID: fmt.Sprintf("gl:epic:%d", ep.IID), Source: a.Name(), SourceScope: domain.ScopeInitiatives, SourceItemIDs: append([]string(nil), sel.ItemIDs...), Title: ep.Title, Description: ep.Description, State: domain.SessionIngested, Metadata: map[string]any{"group_id": groupID}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}, nil
+
+		return domain.Session{
+			ID:            domain.NewID(),
+			ExternalID:    fmt.Sprintf("gl:epic:%d", ep.IID),
+			Source:        a.Name(),
+			SourceScope:   domain.ScopeInitiatives,
+			SourceItemIDs: append([]string(nil), sel.ItemIDs...),
+			Title:         ep.Title,
+			Description:   ep.Description,
+			State:         domain.SessionIngested,
+			Metadata:      map[string]any{"group_id": groupID},
+			CreatedAt:     domain.Now(),
+			UpdatedAt:     domain.Now(),
+		}, nil
 	default:
 		return domain.Session{}, adapter.ErrBrowseNotSupported
 	}
@@ -238,6 +301,7 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 				issues, err := a.fetchAssignedOpenedIssues(ctx)
 				if err != nil {
 					ch <- adapter.WorkItemEvent{Type: "error", Timestamp: domain.Now()}
+
 					continue
 				}
 				for _, iss := range issues {
@@ -255,6 +319,7 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 			}
 		}
 	}()
+
 	return ch, nil
 }
 
@@ -267,6 +332,7 @@ func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 	if err != nil {
 		return domain.Session{}, err
 	}
+
 	return issueToWorkItem(iss), nil
 }
 
@@ -274,12 +340,14 @@ func (a *GitlabAdapter) UpdateState(ctx context.Context, externalID string, stat
 	mapped, ok := a.cfg.StateMappings[string(state)]
 	if !ok || strings.TrimSpace(mapped) == "" {
 		slog.Warn("gitlab: no state mapping configured; UpdateState is a no-op", "state", state, "external_id", externalID)
+
 		return nil
 	}
 	projectID, iid, err := parseExternalID(externalID)
 	if err != nil {
 		return err
 	}
+
 	return a.putJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", projectID, iid), map[string]any{"state_event": mapped}, nil)
 }
 
@@ -288,6 +356,7 @@ func (a *GitlabAdapter) AddComment(ctx context.Context, externalID string, body 
 	if err != nil {
 		return err
 	}
+
 	return a.postJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d/notes", projectID, iid), map[string]any{"body": body}, nil)
 }
 
@@ -301,11 +370,13 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if externalID == "" {
 			return nil
 		}
+
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
 	case domain.EventWorkItemCompleted:
 		if externalID == "" {
 			return nil
 		}
+
 		return a.UpdateState(ctx, externalID, domain.TrackerStateDone)
 	default:
 		return nil
@@ -322,6 +393,7 @@ func (a *GitlabAdapter) onPlanApproved(ctx context.Context, payload string) erro
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -334,6 +406,7 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	if err := a.getJSON(ctx, "/api/v4/issues", query, &issues); err != nil {
 		return nil, err
 	}
+
 	return issues, nil
 }
 
@@ -350,6 +423,7 @@ func parseProjectIDFromMetadata(meta map[string]any) int64 {
 		return int64(value)
 	case string:
 		id, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+
 		return id
 	default:
 		return 0
@@ -369,16 +443,11 @@ func parseGroupIDFromMetadata(meta map[string]any) int64 {
 		return int64(value)
 	case string:
 		id, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+
 		return id
 	default:
 		return 0
 	}
-}
-
-func (a *GitlabAdapter) getProjectByID(ctx context.Context, projectID int64) (projectMeta, error) {
-	var meta projectMeta
-	err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d", projectID), nil, &meta)
-	return meta, err
 }
 
 func resolveSelectionProjectID(sel adapter.Selection) int64 {
@@ -389,6 +458,7 @@ func resolveListProjectID(opts adapter.ListOpts) int64 {
 	if id, err := strconv.ParseInt(strings.TrimSpace(opts.Repo), 10, 64); err == nil {
 		return id
 	}
+
 	return 0
 }
 
@@ -396,13 +466,14 @@ func resolveListGroupID(opts adapter.ListOpts) int64 {
 	if id, err := strconv.ParseInt(strings.TrimSpace(opts.Group), 10, 64); err == nil {
 		return id
 	}
+
 	return 0
 }
 
 func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]milestone, error) {
 	projectID := resolveListProjectID(opts)
 	if projectID == 0 {
-		return nil, fmt.Errorf("gitlab milestones browse requires project_id in repo filter")
+		return nil, errors.New("gitlab milestones browse requires project_id in repo filter")
 	}
 	query := url.Values{}
 	applyListOpts(query, opts)
@@ -410,6 +481,7 @@ func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpt
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/milestones", projectID), query, &milestones); err != nil {
 		return nil, err
 	}
+
 	return milestones, nil
 }
 
@@ -426,8 +498,10 @@ func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
 			return nil, adapter.ErrBrowseNotSupported
 		}
+
 		return nil, err
 	}
+
 	return epics, nil
 }
 
@@ -436,6 +510,7 @@ func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (i
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", projectID, iid), nil, &iss); err != nil {
 		return issue{}, err
 	}
+
 	return iss, nil
 }
 
@@ -444,6 +519,7 @@ func (a *GitlabAdapter) fetchMilestone(ctx context.Context, projectID, id int64)
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/milestones/%d", projectID, id), nil, &ms); err != nil {
 		return milestone{}, err
 	}
+
 	return ms, nil
 }
 
@@ -452,6 +528,7 @@ func (a *GitlabAdapter) fetchEpic(ctx context.Context, groupID, iid int64) (epic
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/groups/%d/epics/%d", groupID, iid), nil, &ep); err != nil {
 		return epic{}, err
 	}
+
 	return ep, nil
 }
 
@@ -466,6 +543,7 @@ func (a *GitlabAdapter) fetchAssignedOpenedIssues(ctx context.Context) ([]issue,
 		return nil, err
 	}
 	sort.Slice(issues, func(i, j int) bool { return issues[i].IID < issues[j].IID })
+
 	return issues, nil
 }
 
@@ -524,6 +602,7 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
+
 		return &apiError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if dst == nil {
@@ -532,13 +611,31 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
+
 	return nil
 }
 
 func issueToWorkItem(iss issue) domain.Session {
 	projectID := gitlabIssueProjectID(iss)
 	selectionID := gitlabIssueSelectionID(projectID, iss)
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, iss.IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{selectionID}, Title: iss.Title, Description: iss.Description, Labels: append([]string(nil), iss.Labels...), State: domain.SessionIngested, Metadata: map[string]any{"url": iss.WebURL, "tracker_refs": gitlabTrackerRefs([]issue{iss})}, CreatedAt: derefTime(iss.CreatedAt), UpdatedAt: derefTime(iss.UpdatedAt)}
+
+	return domain.Session{
+		ID:            domain.NewID(),
+		ExternalID:    formatExternalID(projectID, iss.IID),
+		Source:        "gitlab",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{selectionID},
+		Title:         iss.Title,
+		Description:   iss.Description,
+		Labels:        append([]string(nil), iss.Labels...),
+		State:         domain.SessionIngested,
+		Metadata: map[string]any{
+			"url":          iss.WebURL,
+			"tracker_refs": gitlabTrackerRefs([]issue{iss}),
+		},
+		CreatedAt: derefTime(iss.CreatedAt),
+		UpdatedAt: derefTime(iss.UpdatedAt),
+	}
 }
 
 func aggregateIssues(issues []issue) domain.Session {
@@ -562,7 +659,24 @@ func aggregateIssues(issues []issue) domain.Session {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
 	projectID := gitlabIssueProjectID(issues[0])
-	return domain.Session{ID: domain.NewID(), ExternalID: formatExternalID(projectID, issues[0].IID), Source: "gitlab", SourceScope: domain.ScopeIssues, SourceItemIDs: itemIDs, Title: title, Description: strings.Join(parts, "\n\n---\n\n"), Labels: merged, State: domain.SessionIngested, Metadata: map[string]any{"tracker_refs": gitlabTrackerRefs(issues), "source_summaries": gitlabIssueSourceSummaries(issues)}, CreatedAt: domain.Now(), UpdatedAt: domain.Now()}
+
+	return domain.Session{
+		ID:            domain.NewID(),
+		ExternalID:    formatExternalID(projectID, issues[0].IID),
+		Source:        "gitlab",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: itemIDs,
+		Title:         title,
+		Description:   strings.Join(parts, "\n\n---\n\n"),
+		Labels:        merged,
+		State:         domain.SessionIngested,
+		Metadata: map[string]any{
+			"tracker_refs":     gitlabTrackerRefs(issues),
+			"source_summaries": gitlabIssueSourceSummaries(issues),
+		},
+		CreatedAt: domain.Now(),
+		UpdatedAt: domain.Now(),
+	}
 }
 
 func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {
@@ -578,8 +692,16 @@ func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {
 			continue
 		}
 		seen[key] = struct{}{}
-		refs = append(refs, domain.TrackerReference{Provider: "gitlab", Kind: "issue", ID: strconv.FormatInt(iss.IID, 10), URL: iss.WebURL, Repo: projectPath, Number: iss.IID})
+		refs = append(refs, domain.TrackerReference{
+			Provider: "gitlab",
+			Kind:     "issue",
+			ID:       strconv.FormatInt(iss.IID, 10),
+			URL:      iss.WebURL,
+			Repo:     projectPath,
+			Number:   iss.IID,
+		})
 	}
+
 	return refs
 }
 
@@ -602,6 +724,7 @@ func gitlabProjectPath(iss issue) string {
 	if idx == -1 {
 		return ""
 	}
+
 	return strings.TrimPrefix(parsed.Path[:idx], "/")
 }
 
@@ -613,6 +736,7 @@ func gitlabIssueSelectionID(defaultProjectID int64, iss issue) string {
 	if projectID > 0 {
 		return fmt.Sprintf("%d#%d", projectID, iss.IID)
 	}
+
 	return strconv.FormatInt(iss.IID, 10)
 }
 
@@ -627,6 +751,7 @@ func parseIssueSelectionID(defaultProjectID int64, raw string) (projectID, iid i
 		if defaultProjectID == 0 {
 			return 0, 0, fmt.Errorf("gitlab issue selection %q missing project id", raw)
 		}
+
 		return defaultProjectID, iid, nil
 	}
 	projectID, err = strconv.ParseInt(parts[0], 10, 64)
@@ -637,6 +762,7 @@ func parseIssueSelectionID(defaultProjectID int64, raw string) (projectID, iid i
 	if err != nil {
 		return 0, 0, fmt.Errorf("parse issue iid %q: %w", raw, err)
 	}
+
 	return projectID, iid, nil
 }
 
@@ -670,6 +796,7 @@ func parseExternalID(externalID string) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("parse issue iid: %w", err)
 	}
+
 	return projectID, iid, nil
 }
 
@@ -680,6 +807,7 @@ func extractExternalID(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return ""
 	}
+
 	return parsed.ExternalID
 }
 
@@ -691,6 +819,7 @@ func extractPlanCommentPayload(payload string) (string, []string) {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return "", nil
 	}
+
 	return parsed.CommentBody, parsed.ExternalIDs
 }
 
@@ -707,17 +836,18 @@ func gitlabIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
 	query.Set("scope", scope)
 	query.Set("state", state)
 	applyListOpts(query, opts)
+
 	return query, nil
 }
 
 func gitlabIssueScopeValue(view string) (string, error) {
 	switch strings.TrimSpace(view) {
 	case "", "all":
-		return "all", nil
+		return filterAll, nil
 	case "assigned_to_me":
 		return "assigned_to_me", nil
 	case "created_by_me":
-		return "created_by_me", nil
+		return filterCreatedByMe, nil
 	case "mentioned", "subscribed":
 		return "", fmt.Errorf("gitlab issue view %q not supported", view)
 	default:
@@ -730,9 +860,9 @@ func gitlabIssueStateValue(state string) (string, error) {
 	case "", "open":
 		return "opened", nil
 	case "closed":
-		return "closed", nil
+		return filterClosed, nil
 	case "all":
-		return "all", nil
+		return filterAll, nil
 	default:
 		return "", fmt.Errorf("gitlab issue state %q not supported", state)
 	}
@@ -764,6 +894,7 @@ func parsePollInterval(raw string) time.Duration {
 	if err != nil || interval < minPollInterval {
 		return minPollInterval
 	}
+
 	return interval
 }
 
@@ -771,14 +902,10 @@ func derefTime(t *time.Time) time.Time {
 	if t == nil {
 		return domain.Now()
 	}
+
 	return t.UTC()
 }
 
 func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }

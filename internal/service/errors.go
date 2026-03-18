@@ -24,7 +24,7 @@ type ErrNotFound struct {
 }
 
 func (e ErrNotFound) Error() string {
-	return fmt.Sprintf("%s not found: %s", e.Entity, e.ID)
+	return e.Entity + " not found: " + e.ID
 }
 
 // ErrAlreadyExists is returned when an entity already exists.
@@ -34,7 +34,7 @@ type ErrAlreadyExists struct {
 }
 
 func (e ErrAlreadyExists) Error() string {
-	return fmt.Sprintf("%s already exists: %s", e.Entity, e.ID)
+	return e.Entity + " already exists: " + e.ID
 }
 
 // ErrInvalidInput is returned when input validation fails.
@@ -47,7 +47,8 @@ func (e ErrInvalidInput) Error() string {
 	if e.Field != "" {
 		return fmt.Sprintf("invalid input for field %q: %s", e.Field, e.Message)
 	}
-	return fmt.Sprintf("invalid input: %s", e.Message)
+
+	return "invalid input: " + e.Message
 }
 
 // ErrConstraintViolation is returned when a business constraint is violated.
@@ -56,7 +57,7 @@ type ErrConstraintViolation struct {
 }
 
 func (e ErrConstraintViolation) Error() string {
-	return fmt.Sprintf("constraint violation: %s", e.Message)
+	return "constraint violation: " + e.Message
 }
 
 // Helper functions to create typed errors

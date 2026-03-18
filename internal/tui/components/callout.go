@@ -15,7 +15,7 @@ const (
 	CalloutWarning
 	CalloutRunning // active/accent border color for in-progress tool cards
 	CalloutError   // error border color for failed tool cards
-	CalloutTool   // completed tool call — more visible border than CalloutDefault
+	CalloutTool    // completed tool call — more visible border than CalloutDefault
 )
 
 // CalloutSpec describes a bordered content box.
@@ -35,7 +35,7 @@ func RenderCallout(st styles.Styles, spec CalloutSpec) string {
 	calloutStyle := st.Callout
 	switch spec.Variant {
 	case CalloutCard:
-		calloutStyle = st.Callout.Copy().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(st.Theme.Divider))
+		calloutStyle = st.Callout.BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(st.Theme.Divider))
 	case CalloutWarning:
 		calloutStyle = st.CalloutWarning
 	case CalloutRunning:
@@ -47,8 +47,8 @@ func RenderCallout(st styles.Styles, spec CalloutSpec) string {
 	}
 	if spec.Width > 0 {
 		horizontalBorder := st.Chrome.Callout.BorderLeft + st.Chrome.Callout.BorderRight
-		calloutStyle = calloutStyle.Copy().Width(max(1, spec.Width-horizontalBorder))
+		calloutStyle = calloutStyle.Width(max(1, spec.Width-horizontalBorder))
 	}
+
 	return calloutStyle.Render(spec.Body)
 }
-

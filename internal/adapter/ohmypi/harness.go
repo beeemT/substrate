@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,7 @@ func (h *OhMyPiHarness) Capabilities() adapter.HarnessCapabilities {
 // ValidateReadiness verifies that the oh-my-pi bridge can run with the configured runtime prerequisites.
 func ValidateReadiness(cfg config.OhMyPiConfig) error {
 	_, _, err := resolveReadyBridgeRuntime(cfg)
+
 	return err
 }
 
@@ -107,7 +109,7 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	var cmd *exec.Cmd
 
 	// Create session temp directory for sandbox
-	sessionTmpDir := fmt.Sprintf("/tmp/substrate-%s", opts.SessionID)
+	sessionTmpDir := "/tmp/substrate-" + opts.SessionID
 
 	if runtime.GOOS == "darwin" {
 		// macOS sandbox-exec profile
@@ -191,16 +193,18 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 
 	// Create session log writer
 	sessionLogPath := filepath.Join(sessionLogDir, opts.SessionID+".log")
-	if err := os.MkdirAll(sessionLogDir, 0o755); err != nil {
-		cmd.Process.Kill()
-		cmd.Wait() // reap the killed process to avoid zombie
+	if err := os.MkdirAll(sessionLogDir, 0o750); err != nil {
+		cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
+		cmd.Wait()         //nolint:errcheck // best-effort cleanup
+
 		return nil, fmt.Errorf("create session log dir: %w", err)
 	}
 
-	logFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		cmd.Process.Kill()
-		cmd.Wait() // reap the killed process to avoid zombie
+		cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
+		cmd.Wait()         //nolint:errcheck // best-effort cleanup
+
 		return nil, fmt.Errorf("open session log: %w", err)
 	}
 
@@ -228,7 +232,8 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	// Send initial prompt if provided (agent mode)
 	if opts.Mode == adapter.SessionModeAgent && opts.UserPrompt != "" {
 		if err := session.sendPrompt(opts.UserPrompt); err != nil {
-			session.Abort(ctx)
+			session.Abort(ctx) //nolint:errcheck // best-effort cleanup
+
 			return nil, fmt.Errorf("send initial prompt: %w", err)
 		}
 	}
@@ -265,6 +270,7 @@ func (r bridgeRuntime) launchDir(workDir string) string {
 	if r.NeedsBun {
 		return filepath.Dir(r.Path)
 	}
+
 	return workDir
 }
 
@@ -298,6 +304,7 @@ func resolveBridgeRuntimeFrom(configured, executablePath string) (bridgeRuntime,
 		if err != nil {
 			return bridgeRuntime{}, fmt.Errorf("resolve bridge path %q: %w", candidate, err)
 		}
+
 		return bridgeRuntime{
 			Path:     absolute,
 			NeedsBun: isBridgeScript(absolute),
@@ -318,6 +325,7 @@ func ensureBridgeDependencies(runtime bridgeRuntime) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+
 		return fmt.Errorf("check bridge package metadata: %w", err)
 	}
 
@@ -326,6 +334,7 @@ func ensureBridgeDependencies(runtime bridgeRuntime) error {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("ohmypi source bridge dependencies missing under %s; run `bun install --cwd %s`", runtimeDir, runtimeDir)
 		}
+
 		return fmt.Errorf("check ohmypi source bridge dependencies: %w", err)
 	}
 
@@ -359,6 +368,7 @@ func bridgeCandidates(configured, executablePath string) []string {
 		} else {
 			candidates = append(candidates, configured)
 		}
+
 		return dedupePaths(candidates)
 	}
 
@@ -384,6 +394,7 @@ func dedupePaths(paths []string) []string {
 		seen[path] = struct{}{}
 		result = append(result, path)
 	}
+
 	return result
 }
 
@@ -393,6 +404,7 @@ func escapeSandboxPath(path string) string {
 	// Replace backslashes first, then double quotes
 	path = strings.ReplaceAll(path, "\\", "\\\\")
 	path = strings.ReplaceAll(path, "\"", "\\\"")
+
 	return path
 }
 
@@ -406,6 +418,7 @@ func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessAction
 		if bunPath != "" {
 			return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bridgeRuntime.Path + " via " + bunPath}, nil
 		}
+
 		return adapter.HarnessActionResult{Success: true, Message: "ohmypi bridge available", Identity: bridgeRuntime.Path}, nil
 	case "login_provider":
 		switch req.Provider {
@@ -416,8 +429,9 @@ func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessAction
 			}
 			token := strings.TrimSpace(string(out))
 			if token == "" {
-				return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+				return adapter.HarnessActionResult{}, errors.New("gh auth token returned empty output")
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
 		case "sentry":
 			cmd := exec.CommandContext(ctx, "sentry", "auth", "login")
@@ -429,8 +443,10 @@ func (h *OhMyPiHarness) RunAction(ctx context.Context, req adapter.HarnessAction
 			cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 			if err := cmd.Run(); err != nil {
 				combined := strings.TrimSpace(strings.TrimSpace(stdout.String()) + " " + strings.TrimSpace(stderr.String()))
+
 				return adapter.HarnessActionResult{}, fmt.Errorf("sentry auth login: %w: %s", err, combined)
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "sentry login succeeded"}, nil
 		default:
 			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)

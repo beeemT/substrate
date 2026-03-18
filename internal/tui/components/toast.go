@@ -66,6 +66,7 @@ func (m *ToastModel) View() string {
 		return ""
 	}
 	rendered, _ := m.toastRenderData(m.toasts[len(m.toasts)-1])
+
 	return rendered
 }
 
@@ -94,10 +95,12 @@ func (m *ToastModel) StackView(pinned ...Toast) string {
 	for i, toast := range items {
 		if widths[i] < maxWidth {
 			normalized = append(normalized, renderToastAtWidth(m.styles, toast, maxWidth))
+
 			continue
 		}
 		normalized = append(normalized, views[i])
 	}
+
 	return lipgloss.JoinVertical(lipgloss.Left, normalized...)
 }
 
@@ -106,6 +109,7 @@ func (m *ToastModel) toastRenderData(toast Toast) (string, int) {
 		return toast.rendered, toast.renderedWidth
 	}
 	rendered := renderToastAtWidth(m.styles, toast, 0)
+
 	return rendered, lipgloss.Width(rendered)
 }
 
@@ -119,24 +123,19 @@ func renderToastAtWidth(st styles.Styles, t Toast, width int) string {
 	if width <= 0 {
 		width = contentWidth + 4
 	}
-	if width < 4 {
-		width = 4
-	}
+	width = max(width, 4)
 	innerWidth := width - 2
-	if innerWidth < 2 {
-		innerWidth = 2
-	}
+	innerWidth = max(innerWidth, 2)
 	textWidth := innerWidth - 2
-	if textWidth < 0 {
-		textWidth = 0
-	}
+	textWidth = max(textWidth, 0)
 	padding := strings.Repeat(" ", max(0, textWidth-contentWidth))
-	
+
 	borderStyle := lipgloss.NewStyle().Foreground(borderColorForLevel(st, t.Level))
 	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Bold(true)
 	top := borderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
 	middle := borderStyle.Render("│") + contentStyle.Render(" "+contentText+padding+" ") + borderStyle.Render("│")
 	bottom := borderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+
 	return strings.Join([]string{top, middle, bottom}, "\n")
 }
 

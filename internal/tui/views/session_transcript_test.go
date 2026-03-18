@@ -152,7 +152,7 @@ func TestRenderTranscriptWidthBounded(t *testing.T) {
 		{Kind: sessionlog.KindLifecycle, Stage: "completed", Summary: "All done"},
 	}
 	output := RenderTranscript(st, entries, width, false, true)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
 		}
@@ -291,7 +291,7 @@ func TestRenderTranscriptToolOutputTruncatedCollapsed(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindToolStart, Tool: "search"},
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolOutput, Text: "result line"})
 	}
 	entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolResult, Text: "done"})
@@ -309,7 +309,7 @@ func TestRenderTranscriptToolOutputExpandedVerbose(t *testing.T) {
 	entries := []sessionlog.Entry{
 		{Kind: sessionlog.KindToolStart, Tool: "search"},
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolOutput, Text: "result line"})
 	}
 	entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindToolResult, Text: "done"})
@@ -397,7 +397,7 @@ func TestRenderTranscriptLegacyErrorWidthBounded(t *testing.T) {
 		{Kind: sessionlog.EntryKind("error"), Message: "a very long error message that definitely exceeds forty characters when prefixed"},
 	}
 	output := RenderTranscript(st, entries, width, false, true)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
 		}
@@ -547,7 +547,7 @@ func TestRenderTranscriptToolCardWidthBounded(t *testing.T) {
 		{Kind: sessionlog.KindToolResult, Text: "PASS"},
 	}
 	output := RenderTranscript(st, entries, width, false, true)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
 		}
@@ -592,7 +592,7 @@ func TestRenderTranscriptPromptWidthBounded(t *testing.T) {
 		{Kind: sessionlog.KindInput, InputKind: "message", Text: "Please also update all the tests and make sure nothing is broken."},
 	}
 	output := RenderTranscript(st, entries, width, false, true)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
 		}

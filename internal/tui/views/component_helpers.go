@@ -15,6 +15,7 @@ func componentHints(hints []KeybindHint) []components.KeyHint {
 	for _, hint := range hints {
 		converted = append(converted, components.KeyHint{Key: hint.Key, Label: hint.Label})
 	}
+
 	return converted
 }
 
@@ -33,9 +34,9 @@ func renderOverlayHintsRow(st styles.Styles, hints []KeybindHint, width int) str
 	raw := strings.Join(parts, "  ")
 
 	contentWidth := width - 2
+
 	return lipgloss.NewStyle().
 		Width(width).
 		Padding(0, 1).
 		Render(ansi.Truncate(raw, contentWidth, ""))
 }
-

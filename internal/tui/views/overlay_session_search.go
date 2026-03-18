@@ -25,6 +25,13 @@ const (
 	sessionSearchSpinnerDelay    = 500 * time.Millisecond
 	sessionSearchSpinnerInterval = 100 * time.Millisecond
 	sessionSearchDebounceDelay   = 200 * time.Millisecond
+
+	statusWaiting     = "Waiting for answer"
+	statusCompleted   = "Completed"
+	statusInterrupted = "Interrupted"
+	statusFailed      = "Failed"
+	statusPlanning    = "Planning"
+	statusUnderReview = "Under review"
 )
 
 // sessionSearchSpinnerFrames are the braille animation frames for the search spinner.
@@ -79,6 +86,7 @@ func (i sessionSearchListItem) Description() string {
 	if i.entry.RepositoryName != "" {
 		parts = append(parts, i.entry.RepositoryName)
 	}
+
 	return strings.Join(parts, " \u00b7 ")
 }
 
@@ -95,7 +103,7 @@ func (i sessionSearchListItem) FilterValue() string {
 	}, " ")
 }
 
-type SessionSearchOverlay struct {
+type SessionSearchOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	active             bool
 	workspaceAvailable bool
 	input              textinput.Model
@@ -173,7 +181,7 @@ func (m *SessionSearchOverlay) Close() {
 
 func (m SessionSearchOverlay) Active() bool { return m.active }
 
-func (m SessionSearchOverlay) Scope() sessionHistoryScope { return m.scope }
+func (m SessionSearchOverlay) Scope() sessionHistoryScope { return m.scope } //nolint:revive // internal use
 
 func (m SessionSearchOverlay) Filter(workspaceID string) domain.SessionHistoryFilter {
 	filter := domain.SessionHistoryFilter{
@@ -183,6 +191,7 @@ func (m SessionSearchOverlay) Filter(workspaceID string) domain.SessionHistoryFi
 	if m.scope == sessionHistoryScopeWorkspace && workspaceID != "" {
 		filter.WorkspaceID = &workspaceID
 	}
+
 	return filter
 }
 
@@ -191,12 +200,14 @@ func (m *SessionSearchOverlay) SetLoading(loading bool) tea.Cmd {
 	if loading {
 		m.searchStartedAt = time.Now()
 		m.spinnerVisible = false
+
 		return tea.Tick(sessionSearchSpinnerDelay, func(time.Time) tea.Msg {
 			return sessionSearchSpinnerTickMsg{}
 		})
 	}
 	m.spinnerVisible = false
 	m.spinnerFrame = 0
+
 	return nil
 }
 
@@ -214,6 +225,7 @@ func (m *SessionSearchOverlay) SetEntries(entries []domain.SessionHistoryEntry) 
 		if !m.entries[i].CreatedAt.Equal(m.entries[j].CreatedAt) {
 			return m.entries[i].CreatedAt.After(m.entries[j].CreatedAt)
 		}
+
 		return m.entries[i].WorkItemID < m.entries[j].WorkItemID
 	})
 
@@ -240,6 +252,7 @@ func (m SessionSearchOverlay) Selected() *domain.SessionHistoryEntry {
 		return nil
 	}
 	entry := item.entry
+
 	return &entry
 }
 
@@ -264,6 +277,7 @@ func (m *SessionSearchOverlay) focusScope() bool {
 	}
 	m.focus = sessionSearchFocusScope
 	m.input.Blur()
+
 	return true
 }
 
@@ -273,6 +287,7 @@ func (m *SessionSearchOverlay) focusResults() bool {
 	}
 	m.focus = sessionSearchFocusResults
 	m.input.Blur()
+
 	return true
 }
 
@@ -282,6 +297,7 @@ func (m *SessionSearchOverlay) focusPreview() bool {
 	}
 	m.focus = sessionSearchFocusPreview
 	m.input.Blur()
+
 	return true
 }
 
@@ -308,6 +324,7 @@ func (m *SessionSearchOverlay) moveFocusLeft() bool {
 		return m.focusResults()
 	case sessionSearchFocusResults:
 		m.focusInput()
+
 		return true
 	default:
 		return false
@@ -328,6 +345,7 @@ func (m *SessionSearchOverlay) setScope(scope sessionHistoryScope) tea.Cmd {
 		return nil
 	}
 	m.scope = scope
+
 	return m.requestSearchCmd()
 }
 
@@ -338,6 +356,7 @@ func (m *SessionSearchOverlay) toggleScope() tea.Cmd {
 	if m.scope == sessionHistoryScopeWorkspace {
 		return m.setScope(sessionHistoryScopeGlobal)
 	}
+
 	return m.setScope(sessionHistoryScopeWorkspace)
 }
 
@@ -348,13 +367,13 @@ func humanAgentSessionStatus(status domain.TaskStatus) string {
 	case domain.AgentSessionRunning:
 		return "Running"
 	case domain.AgentSessionWaitingForAnswer:
-		return "Waiting for answer"
+		return statusWaiting
 	case domain.AgentSessionCompleted:
-		return "Completed"
+		return statusCompleted
 	case domain.AgentSessionInterrupted:
-		return "Interrupted"
+		return statusInterrupted
 	case domain.AgentSessionFailed:
-		return "Failed"
+		return statusFailed
 	default:
 		return ""
 	}
@@ -365,25 +384,26 @@ func humanHistoryStatus(entry domain.SessionHistoryEntry) string {
 	case domain.SessionIngested:
 		return "Ready to plan"
 	case domain.SessionPlanning:
-		return "Planning"
+		return statusPlanning
 	case domain.SessionPlanReview:
 		return "Plan review needed"
 	case domain.SessionApproved:
 		return "Awaiting implementation"
 	case domain.SessionImplementing:
 		if entry.HasOpenQuestion {
-			return "Waiting for answer"
+			return statusWaiting
 		}
 		if entry.HasInterrupted {
-			return "Interrupted"
+			return statusInterrupted
 		}
+
 		return "Implementing"
 	case domain.SessionReviewing:
-		return "Under review"
+		return statusUnderReview
 	case domain.SessionCompleted:
-		return "Completed"
+		return statusCompleted
 	case domain.SessionFailed:
-		return "Failed"
+		return statusFailed
 	default:
 		return firstNonEmpty(string(entry.WorkItemState), humanAgentSessionStatus(entry.Status), "Unknown")
 	}
@@ -393,6 +413,7 @@ func formatSessionTime(t *time.Time) string {
 	if t == nil {
 		return "—"
 	}
+
 	return t.Local().Format("2006-01-02 15:04:05")
 }
 
@@ -409,23 +430,24 @@ func (m SessionSearchOverlay) detailContent() string {
 	lines := []string{
 		entry.WorkItemTitle,
 		"",
-		fmt.Sprintf("Work item:            %s", firstNonEmpty(entry.WorkItemExternalID, entry.WorkItemID)),
-		fmt.Sprintf("State:                %s", humanHistoryStatus(*entry)),
-		fmt.Sprintf("Workspace:            %s", firstNonEmpty(workspace, "—")),
+		"Work item:            " + firstNonEmpty(entry.WorkItemExternalID, entry.WorkItemID),
+		"State:                " + humanHistoryStatus(*entry),
+		"Workspace:            " + firstNonEmpty(workspace, "—"),
 		fmt.Sprintf("Agent sessions:       %d", entry.AgentSessionCount),
-		fmt.Sprintf("Latest agent session: %s", firstNonEmpty(entry.SessionID, "—")),
-		fmt.Sprintf("Latest repo:          %s", firstNonEmpty(entry.RepositoryName, "—")),
-		fmt.Sprintf("Latest harness:       %s", firstNonEmpty(entry.HarnessName, "—")),
-		fmt.Sprintf("Latest agent status:  %s", firstNonEmpty(humanAgentSessionStatus(entry.Status), "—")),
-		fmt.Sprintf("Created:              %s", entry.CreatedAt.Local().Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("Updated:              %s", entry.UpdatedAt.Local().Format("2006-01-02 15:04:05")),
-		fmt.Sprintf("Finished:             %s", formatSessionTime(entry.CompletedAt)),
+		"Latest agent session: " + firstNonEmpty(entry.SessionID, "—"),
+		"Latest repo:          " + firstNonEmpty(entry.RepositoryName, "—"),
+		"Latest harness:       " + firstNonEmpty(entry.HarnessName, "—"),
+		"Latest agent status:  " + firstNonEmpty(humanAgentSessionStatus(entry.Status), "—"),
+		"Created:              " + entry.CreatedAt.Local().Format("2006-01-02 15:04:05"),
+		"Updated:              " + entry.UpdatedAt.Local().Format("2006-01-02 15:04:05"),
+		"Finished:             " + formatSessionTime(entry.CompletedAt),
 		"",
 		"Press Enter to open the selected session.",
 	}
 	if strings.TrimSpace(entry.SessionID) != "" {
 		lines = append(lines, "Press d to delete the latest agent session and related records.")
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -435,6 +457,7 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -478,7 +501,7 @@ func (m SessionSearchOverlay) View() string {
 
 	title := m.styles.Title.Render("Search Sessions")
 	scopePrefixStyle := m.styles.Hint
-	activeScopeStyle := m.styles.Warning.Copy().Bold(true)
+	activeScopeStyle := m.styles.Warning.Bold(true)
 	if m.focus == sessionSearchFocusScope {
 		scopePrefixStyle = m.styles.Accent
 		activeScopeStyle = activeScopeStyle.Underline(true)
@@ -524,6 +547,7 @@ func (m SessionSearchOverlay) View() string {
 	} else {
 		hints = m.styles.Hint.Render(truncate(m.hintText(), renderWidth))
 	}
+
 	return components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        body,
@@ -543,6 +567,7 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 		if msg.seq == m.searchDebounceSeq {
 			return m, m.requestSearchCmd()
 		}
+
 		return m, nil
 
 	case sessionSearchSpinnerTickMsg:
@@ -551,6 +576,7 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 		}
 		m.spinnerVisible = true
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionSearchSpinnerFrames)
+
 		return m, tea.Tick(sessionSearchSpinnerInterval, func(time.Time) tea.Msg {
 			return sessionSearchSpinnerTickMsg{}
 		})
@@ -573,21 +599,24 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 					if before != after {
 						m.syncDetailViewport(true)
 					}
+
 					return m, cmd
 				case sessionSearchFocusPreview:
 					m.detail, cmd = m.detail.Update(msg)
+
 					return m, cmd
 				}
 			}
 		}
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc":
+		case keyEsc:
 			return m, func() tea.Msg { return CloseOverlayMsg{} }
 		case "ctrl+s":
 			return m, m.toggleScope()
-		case "tab":
+		case keyTab:
 			m.cycleFocus()
+
 			return m, nil
 		case "shift+tab":
 			if m.focus == sessionSearchFocusInput && m.focusScope() {
@@ -596,17 +625,18 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			if m.moveFocusLeft() {
 				return m, nil
 			}
-		case "left", "right":
+		case panelLeft, panelRight:
 			if m.focus == sessionSearchFocusScope {
-				if msg.String() == "left" {
+				if msg.String() == panelLeft {
 					return m, m.setScope(sessionHistoryScopeWorkspace)
 				}
+
 				return m, m.setScope(sessionHistoryScopeGlobal)
 			}
-			if msg.String() == "left" && m.moveFocusLeft() {
+			if msg.String() == panelLeft && m.moveFocusLeft() {
 				return m, nil
 			}
-			if msg.String() == "right" && m.moveFocusRight() {
+			if msg.String() == panelRight && m.moveFocusRight() {
 				return m, nil
 			}
 		case "up":
@@ -615,14 +645,16 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			}
 			if m.focus == sessionSearchFocusResults && m.list.Index() <= 0 {
 				m.focusInput()
+
 				return m, nil
 			}
 			if m.focus == sessionSearchFocusInput && m.focusScope() {
 				return m, nil
 			}
-		case "down":
+		case keyDown:
 			if m.focus == sessionSearchFocusScope {
 				m.focusInput()
+
 				return m, nil
 			}
 			if m.focus == sessionSearchFocusInput && m.focusResults() {
@@ -632,13 +664,15 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 
 		switch m.focus {
 		case sessionSearchFocusScope:
-			if msg.String() == "enter" {
+			if msg.String() == keyEnter {
 				return m, m.toggleScope()
 			}
+
 			return m, nil
 		case sessionSearchFocusInput:
-			if msg.String() == "enter" {
+			if msg.String() == keyEnter {
 				m.focusResults()
+
 				return m, nil
 			}
 			before := m.input.Value()
@@ -652,20 +686,24 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 				if cmd == nil {
 					return m, debounceCmd
 				}
+
 				return m, tea.Batch(cmd, debounceCmd)
 			}
+
 			return m, cmd
 		case sessionSearchFocusResults:
-			if msg.String() == "enter" {
+			if msg.String() == keyEnter {
 				if entry := m.Selected(); entry != nil {
 					return m, func() tea.Msg { return OpenSessionHistoryMsg{Entry: *entry} }
 				}
+
 				return m, nil
 			}
 			if msg.String() == "d" {
 				if entry := m.Selected(); entry != nil && strings.TrimSpace(entry.WorkItemID) != "" {
 					return m, func() tea.Msg { return ConfirmDeleteSessionMsg{SessionID: entry.WorkItemID} }
 				}
+
 				return m, nil
 			}
 			before := ""
@@ -680,9 +718,11 @@ func (m SessionSearchOverlay) Update(msg tea.Msg) (SessionSearchOverlay, tea.Cmd
 			if before != after {
 				m.syncDetailViewport(true)
 			}
+
 			return m, cmd
 		case sessionSearchFocusPreview:
 			m.detail, cmd = m.detail.Update(msg)
+
 			return m, cmd
 		}
 	}

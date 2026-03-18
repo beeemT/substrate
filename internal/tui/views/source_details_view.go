@@ -15,6 +15,8 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+const sourceTypeIssue = "issue"
+
 // SourceDetailsModel renders source-system details for the selected session.
 type sourceDetailsNotice struct {
 	Title   string
@@ -23,7 +25,7 @@ type sourceDetailsNotice struct {
 	Variant components.CalloutVariant
 }
 
-type SourceDetailsModel struct {
+type SourceDetailsModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	viewport viewport.Model
 	session  *domain.Session
 	notice   *sourceDetailsNotice
@@ -58,6 +60,7 @@ func (m SourceDetailsModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
+
 	return hints
 }
 
@@ -79,6 +82,7 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.syncViewport(false)
 	}
+
 	return m, cmd
 }
 
@@ -95,6 +99,7 @@ func (m SourceDetailsModel) View() string {
 	if strings.TrimSpace(body) == "" {
 		body = m.styles.Muted.Render("No source details available.")
 	}
+
 	return fitViewBox(header+"\n"+body, m.width, m.height)
 }
 
@@ -111,6 +116,7 @@ func (m SourceDetailsModel) header() string {
 	if notice := m.noticeView(); notice != "" {
 		return header + "\n" + notice
 	}
+
 	return header
 }
 
@@ -130,6 +136,7 @@ func renderTaskViewNotice(st styles.Styles, width int, notice *sourceDetailsNoti
 	if hint := strings.TrimSpace(notice.Hint); hint != "" {
 		lines = append(lines, "", ansi.Hardwrap(st.Muted.Render(hint), innerWidth, true))
 	}
+
 	return components.RenderCallout(st, components.CalloutSpec{
 		Body:    strings.Join(filterEmptyStringsPreserveBlanks(lines), "\n"),
 		Width:   width,
@@ -173,6 +180,7 @@ func renderSourceDetailsDocument(st styles.Styles, session *domain.Session, widt
 			items,
 		)
 	}
+
 	return strings.Join(sections, "\n\n")
 }
 
@@ -205,6 +213,7 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 	if len(rows) == 0 {
 		return st.Muted.Render("No source summary available.")
 	}
+
 	return strings.Join(rows, "\n")
 }
 
@@ -212,6 +221,7 @@ func renderAggregateWorkItemBody(session *domain.Session, width int) string {
 	if session == nil || sessionSourceCount(session) <= 1 {
 		return ""
 	}
+
 	return renderMarkdownDocument(strings.TrimSpace(session.Description), width)
 }
 
@@ -222,6 +232,7 @@ func renderSourceItemsBody(st styles.Styles, session *domain.Session, width int)
 		for i, item := range items {
 			blocks = append(blocks, renderSourceItemBlock(st, item, i, width))
 		}
+
 		return strings.Join(blocks, "\n\n")
 	}
 
@@ -241,6 +252,7 @@ func renderSourceItemsBody(st styles.Styles, session *domain.Session, width int)
 	if len(rows) == 0 {
 		return ""
 	}
+
 	return strings.Join(rows, "\n")
 }
 
@@ -254,6 +266,7 @@ func renderSourceItemBlock(st styles.Styles, item domain.SourceSummary, index, w
 	} else {
 		sections = append(sections, st.Muted.Render("No description captured."))
 	}
+
 	return strings.Join(sections, "\n\n")
 }
 
@@ -312,6 +325,7 @@ func renderSourceItemMetadata(st styles.Styles, item domain.SourceSummary, width
 	if len(rows) == 0 {
 		return st.Muted.Render("No metadata available.")
 	}
+
 	return strings.Join(rows, "\n")
 }
 
@@ -319,6 +333,7 @@ func sourceItemMarkdown(item domain.SourceSummary) string {
 	if strings.TrimSpace(item.Description) != "" {
 		return item.Description
 	}
+
 	return strings.TrimSpace(item.Excerpt)
 }
 
@@ -332,11 +347,13 @@ func sessionSourceItems(session *domain.Session) []domain.SourceSummary {
 		for i, summary := range summaries {
 			items[i] = hydrateSourceSummary(session, summary, i, len(summaries))
 		}
+
 		return items
 	}
 	if sessionSourceCount(session) != 1 {
 		return nil
 	}
+
 	return []domain.SourceSummary{hydrateSourceSummary(session, domain.SourceSummary{
 		Provider:    session.Source,
 		Kind:        sourceScopeKind(session.SourceScope),
@@ -382,6 +399,7 @@ func hydrateSourceSummary(session *domain.Session, summary domain.SourceSummary,
 	if strings.TrimSpace(hydrated.URL) == "" {
 		hydrated.URL = sessionURL(session.Metadata)
 	}
+
 	return hydrated
 }
 
@@ -398,13 +416,14 @@ func sessionSourceRef(session *domain.Session, index int) string {
 	if index == 0 {
 		return strings.TrimSpace(session.ExternalID)
 	}
+
 	return ""
 }
 
 func sourceScopeKind(scope domain.SelectionScope) string {
 	switch scope {
 	case domain.ScopeIssues:
-		return "issue"
+		return sourceTypeIssue
 	case domain.ScopeProjects:
 		return "project"
 	case domain.ScopeInitiatives:
@@ -415,7 +434,7 @@ func sourceScopeKind(scope domain.SelectionScope) string {
 }
 
 func sessionHasSourceDetails(session *domain.Session) bool {
-	if session == nil || session.Source == "" || session.Source == "manual" {
+	if session == nil || session.Source == "" || session.Source == providerManual {
 		return false
 	}
 	if sessionSourceCount(session) > 0 {
@@ -427,6 +446,7 @@ func sessionHasSourceDetails(session *domain.Session) bool {
 	if len(sessionContainers(session)) > 0 {
 		return true
 	}
+
 	return sessionExternalState(session) != ""
 }
 
@@ -441,6 +461,7 @@ func sessionSourceSidebarSubtitle(session *domain.Session) string {
 	if selected := sessionSourceSelectionSummary(session); selected != "" {
 		parts = append(parts, selected)
 	}
+
 	return strings.Join(parts, " · ")
 }
 
@@ -456,6 +477,7 @@ func sessionSourceSelectionSummary(session *domain.Session) string {
 	if count <= 0 {
 		return noun
 	}
+
 	return fmt.Sprintf("%d %s", count, noun)
 }
 
@@ -469,9 +491,10 @@ func sessionSourceCount(session *domain.Session) int {
 	if refs := sessionTrackerRefs(session.Metadata); len(refs) > 0 {
 		return len(refs)
 	}
-	if session.Source != "" && session.Source != "manual" {
+	if session.Source != "" && session.Source != providerManual {
 		return 1
 	}
+
 	return 0
 }
 
@@ -482,26 +505,31 @@ func sessionSourceNoun(scope domain.SelectionScope, count int) string {
 		if plural {
 			return "issues"
 		}
-		return "issue"
+
+		return sourceTypeIssue
 	case domain.ScopeProjects:
 		if plural {
 			return "projects"
 		}
+
 		return "project"
 	case domain.ScopeInitiatives:
 		if plural {
 			return "initiatives"
 		}
+
 		return "initiative"
 	case domain.ScopeManual:
 		if plural {
 			return "manual items"
 		}
+
 		return "manual item"
 	default:
 		if plural {
 			return "source items"
 		}
+
 		return "source item"
 	}
 }
@@ -534,6 +562,7 @@ func sessionContainers(session *domain.Session) []string {
 		seen[container] = struct{}{}
 		containers = append(containers, container)
 	}
+
 	return containers
 }
 
@@ -546,6 +575,7 @@ func sessionExternalState(session *domain.Session) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -554,6 +584,7 @@ func sessionMetadataString(metadata map[string]any, key string) string {
 		return ""
 	}
 	value, _ := metadata[key].(string)
+
 	return strings.TrimSpace(value)
 }
 
@@ -565,10 +596,10 @@ func sessionMetadataStrings(metadata map[string]any, key string) []string {
 	if !ok || raw == nil {
 		return nil
 	}
-	switch typed := raw.(type) {
-	case []string:
+	if typed, ok := raw.([]string); ok {
 		return append([]string(nil), typed...)
 	}
+
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		return nil
@@ -577,6 +608,7 @@ func sessionMetadataStrings(metadata map[string]any, key string) []string {
 	if err := json.Unmarshal(payload, &values); err != nil {
 		return nil
 	}
+
 	return values
 }
 
@@ -588,10 +620,10 @@ func sessionTrackerRefs(metadata map[string]any) []domain.TrackerReference {
 	if !ok || raw == nil {
 		return nil
 	}
-	switch typed := raw.(type) {
-	case []domain.TrackerReference:
+	if typed, ok := raw.([]domain.TrackerReference); ok {
 		return append([]domain.TrackerReference(nil), typed...)
 	}
+
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		return nil
@@ -600,12 +632,13 @@ func sessionTrackerRefs(metadata map[string]any) []domain.TrackerReference {
 	if err := json.Unmarshal(payload, &refs); err != nil {
 		return nil
 	}
+
 	return refs
 }
 
 func formatTrackerRef(ref domain.TrackerReference) string {
 	container := trackerRefContainer(ref)
-	if ref.Kind == "issue" {
+	if ref.Kind == sourceTypeIssue {
 		if container != "" && ref.Number > 0 {
 			return container + "#" + strconv.FormatInt(ref.Number, 10)
 		}
@@ -629,12 +662,13 @@ func formatTrackerRef(ref domain.TrackerReference) string {
 	if ref.URL != "" {
 		return ref.URL
 	}
+
 	return kind
 }
 
 func trackerRefKindLabel(kind string) string {
 	switch strings.TrimSpace(kind) {
-	case "issue":
+	case sourceTypeIssue:
 		return "Issue"
 	case "project":
 		return "Project"
@@ -644,6 +678,7 @@ func trackerRefKindLabel(kind string) string {
 		if kind == "" {
 			return "Item"
 		}
+
 		return strings.ToUpper(kind[:1]) + kind[1:]
 	}
 }
@@ -662,7 +697,9 @@ func trackerRefContainer(ref domain.TrackerReference) string {
 		if ref.Repository.Owner != "" {
 			return ref.Repository.Owner + "/" + ref.Repository.Repo
 		}
+
 		return ref.Repository.Repo
 	}
+
 	return ""
 }

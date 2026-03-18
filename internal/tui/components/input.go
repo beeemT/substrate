@@ -30,6 +30,7 @@ func NewTextInput() textinput.Model {
 func NewTextArea() textarea.Model {
 	m := textarea.New()
 	m.KeyMap = macOSTextAreaKeyMap()
+
 	return m
 }
 
@@ -51,5 +52,6 @@ func macOSTextAreaKeyMap() textarea.KeyMap {
 		key.WithKeys("alt+left", "alt+b", "ctrl+left"),
 		key.WithHelp("alt+left", "word backward"),
 	)
+
 	return km
 }

@@ -23,6 +23,7 @@ func PersistReviewArtifact(ctx context.Context, eventRepo repository.EventReposi
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+
 	return eventRepo.Create(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewArtifactRecorded),

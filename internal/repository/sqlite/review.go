@@ -29,6 +29,7 @@ func (r *reviewCycleRow) toDomain() (domain.ReviewCycle, error) {
 	if err != nil {
 		return domain.ReviewCycle{}, fmt.Errorf("updated_at: %w", err)
 	}
+
 	return domain.ReviewCycle{
 		ID:              r.ID,
 		AgentSessionID:  r.AgentSessionID,
@@ -71,6 +72,7 @@ func (r *critiqueRow) toDomain() (domain.Critique, error) {
 	if err != nil {
 		return domain.Critique{}, fmt.Errorf("created_at: %w", err)
 	}
+
 	return domain.Critique{
 		ID:            r.ID,
 		ReviewCycleID: r.ReviewCycleID,
@@ -110,6 +112,7 @@ func (r ReviewRepo) GetCycle(ctx context.Context, id string) (domain.ReviewCycle
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM review_cycles WHERE id = ?`, id); err != nil {
 		return domain.ReviewCycle{}, fmt.Errorf("get review cycle %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -126,6 +129,7 @@ func (r ReviewRepo) ListCyclesBySessionID(ctx context.Context, sessionID string)
 		}
 		cycles[i] = rc
 	}
+
 	return cycles, nil
 }
 
@@ -137,6 +141,7 @@ func (r ReviewRepo) CreateCycle(ctx context.Context, rc domain.ReviewCycle) erro
 	if err != nil {
 		return fmt.Errorf("create review cycle %s: %w", rc.ID, err)
 	}
+
 	return nil
 }
 
@@ -156,6 +161,7 @@ func (r ReviewRepo) UpdateCycle(ctx context.Context, rc domain.ReviewCycle) erro
 	if n == 0 {
 		return fmt.Errorf("update review cycle %s: %w", rc.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -164,6 +170,7 @@ func (r ReviewRepo) GetCritique(ctx context.Context, id string) (domain.Critique
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM critiques WHERE id = ?`, id); err != nil {
 		return domain.Critique{}, fmt.Errorf("get critique %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -180,6 +187,7 @@ func (r ReviewRepo) ListCritiquesByReviewCycleID(ctx context.Context, cycleID st
 		}
 		critiques[i] = c
 	}
+
 	return critiques, nil
 }
 
@@ -191,6 +199,7 @@ func (r ReviewRepo) CreateCritique(ctx context.Context, c domain.Critique) error
 	if err != nil {
 		return fmt.Errorf("create critique %s: %w", c.ID, err)
 	}
+
 	return nil
 }
 
@@ -210,5 +219,6 @@ func (r ReviewRepo) UpdateCritique(ctx context.Context, c domain.Critique) error
 	if n == 0 {
 		return fmt.Errorf("update critique %s: %w", c.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }

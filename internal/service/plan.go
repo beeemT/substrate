@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,12 +37,7 @@ func canTransitionPlan(from, to domain.PlanStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // SubPlan state transitions
@@ -57,12 +53,7 @@ func canTransitionSubPlan(from, to domain.TaskPlanStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // GetPlan retrieves a plan by ID.
@@ -71,6 +62,7 @@ func (s *PlanService) GetPlan(ctx context.Context, id string) (domain.Plan, erro
 	if err != nil {
 		return domain.Plan{}, newNotFoundError("plan", id)
 	}
+
 	return plan, nil
 }
 
@@ -80,6 +72,7 @@ func (s *PlanService) GetPlanByWorkItemID(ctx context.Context, workItemID string
 	if err != nil {
 		return domain.Plan{}, newNotFoundError("plan for work item", workItemID)
 	}
+
 	return plan, nil
 }
 
@@ -219,6 +212,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				return domain.Plan{}, nil, err
 			}
 			updatedSubPlans = append(updatedSubPlans, existing)
+
 			continue
 		}
 		changed = true
@@ -255,6 +249,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 	if err := s.planRepo.Update(ctx, plan); err != nil {
 		return domain.Plan{}, nil, err
 	}
+
 	return plan, updatedSubPlans, nil
 }
 
@@ -266,6 +261,7 @@ func findSubPlanOrder(repoName string, groups [][]string) int {
 			}
 		}
 	}
+
 	return 0
 }
 
@@ -275,6 +271,7 @@ func (s *PlanService) DeletePlan(ctx context.Context, id string) error {
 	if err != nil {
 		return newNotFoundError("plan", id)
 	}
+
 	return s.planRepo.Delete(ctx, id)
 }
 
@@ -286,6 +283,7 @@ func (s *PlanService) GetSubPlan(ctx context.Context, id string) (domain.TaskPla
 	if err != nil {
 		return domain.TaskPlan{}, newNotFoundError("sub-plan", id)
 	}
+
 	return sp, nil
 }
 
@@ -372,6 +370,7 @@ func (s *PlanService) DeleteSubPlan(ctx context.Context, id string) error {
 	if err != nil {
 		return newNotFoundError("sub-plan", id)
 	}
+
 	return s.subPlanRepo.Delete(ctx, id)
 }
 
@@ -382,6 +381,7 @@ func (s *PlanService) CreateSubPlansBatch(ctx context.Context, subPlans []domain
 			return err
 		}
 	}
+
 	return nil
 }
 

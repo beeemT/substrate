@@ -36,6 +36,7 @@ func ComposePlanDocument(plan Plan, subPlans []TaskPlan) string {
 		b.WriteString(strings.TrimSpace(sp.Content))
 		b.WriteString("\n")
 	}
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -45,8 +46,10 @@ func orderedTaskPlans(subPlans []TaskPlan) []TaskPlan {
 		if ordered[i].Order != ordered[j].Order {
 			return ordered[i].Order < ordered[j].Order
 		}
+
 		return strings.ToLower(ordered[i].RepositoryName) < strings.ToLower(ordered[j].RepositoryName)
 	})
+
 	return ordered
 }
 
@@ -67,6 +70,7 @@ func executionGroupsFromTaskPlans(subPlans []TaskPlan) [][]string {
 		currentGroup = append(currentGroup, sp.RepositoryName)
 	}
 	groups = append(groups, append([]string(nil), currentGroup...))
+
 	return groups
 }
 

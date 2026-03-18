@@ -16,7 +16,7 @@ func TestBus_PreHookEvent_NotPersistedOnReject(t *testing.T) {
 	defer bus.Close()
 
 	// Register a pre-hook that always rejects
-	bus.RegisterPreHook(HookConfig{Name: "reject"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "reject"}, func(_ context.Context, _ domain.SystemEvent) error {
 		return errors.New("rejected")
 	})
 
@@ -56,7 +56,7 @@ func TestBus_RegularEvent_PersistedOnReject(t *testing.T) {
 	defer bus.Unsubscribe("sub-1")
 
 	// Register a pre-hook that always rejects
-	bus.RegisterPreHook(HookConfig{Name: "reject"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "reject"}, func(_ context.Context, _ domain.SystemEvent) error {
 		return errors.New("rejected")
 	})
 
@@ -104,7 +104,7 @@ func TestBus_PreHookEvent_PersistedOnSuccess(t *testing.T) {
 	defer bus.Unsubscribe("sub-1")
 
 	// Register a pre-hook that passes
-	bus.RegisterPreHook(HookConfig{Name: "pass"}, func(ctx context.Context, event domain.SystemEvent) error {
+	bus.RegisterPreHook(HookConfig{Name: "pass"}, func(_ context.Context, _ domain.SystemEvent) error {
 		return nil
 	})
 

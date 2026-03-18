@@ -36,6 +36,7 @@ func GenerateBranchName(externalID, title string) string {
 	if slug == "" {
 		slug = "work"
 	}
+
 	return "sub-" + externalID + "-" + slug
 }
 
@@ -83,5 +84,6 @@ func ValidateBranchName(branch string) bool {
 		return false
 	}
 	rest := strings.TrimPrefix(branch, "sub-")
+
 	return rest != "" && !strings.HasPrefix(rest, "-") && !strings.HasSuffix(rest, "-")
 }

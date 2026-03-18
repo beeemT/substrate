@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -41,7 +42,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		opts.Mode = adapter.SessionModeAgent
 	}
 	if opts.WorktreePath == "" {
-		return nil, fmt.Errorf("codex requires worktree path")
+		return nil, errors.New("codex requires worktree path")
 	}
 	binary := h.cfg.BinaryPath
 	if binary == "" {
@@ -74,11 +75,13 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	}
 	if err := session.openLogFile(); err != nil {
 		_ = cmd.Process.Kill()
+
 		return nil, err
 	}
 	go session.waitProcess()
 	go session.readStdout()
 	go session.readStderr()
+
 	return session, nil
 }
 
@@ -103,6 +106,7 @@ func (h *Harness) buildArgs(opts adapter.SessionOpts) []string {
 	if strings.TrimSpace(prompt) != "" {
 		args = append(args, prompt)
 	}
+
 	return args
 }
 
@@ -116,6 +120,7 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 		if _, err := exec.LookPath(binary); err != nil {
 			return adapter.HarnessActionResult{}, err
 		}
+
 		return adapter.HarnessActionResult{Success: true, Message: "codex binary available", Identity: binary}, nil
 	case "login_provider":
 		switch req.Provider {
@@ -126,8 +131,9 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 			}
 			token := strings.TrimSpace(string(out))
 			if token == "" {
-				return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+				return adapter.HarnessActionResult{}, errors.New("gh auth token returned empty output")
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
 		case "sentry":
 			cmd := exec.CommandContext(ctx, "sentry", "auth", "login")
@@ -139,8 +145,10 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 			cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 			if err := cmd.Run(); err != nil {
 				combined := strings.TrimSpace(strings.TrimSpace(stdout.String()) + " " + strings.TrimSpace(stderr.String()))
+
 				return adapter.HarnessActionResult{}, fmt.Errorf("sentry auth login: %w: %s", err, combined)
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "sentry login succeeded"}, nil
 		default:
 			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)
@@ -166,14 +174,15 @@ type session struct {
 
 func (s *session) ID() string                        { return s.id }
 func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
-func (s *session) SendMessage(ctx context.Context, msg string) error {
-	return fmt.Errorf("codex harness does not support SendMessage")
+func (s *session) SendMessage(_ context.Context, _ string) error {
+	return errors.New("codex harness does not support SendMessage")
 }
 
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		_ = s.Abort(ctx)
+
 		return ctx.Err()
 	case err := <-s.completed:
 		return err
@@ -184,6 +193,7 @@ func (s *session) Abort(ctx context.Context) error {
 	s.mu.Lock()
 	if s.aborted {
 		s.mu.Unlock()
+
 		return nil
 	}
 	s.aborted = true
@@ -199,9 +209,11 @@ func (s *session) Abort(ctx context.Context) error {
 		return err
 	case <-time.After(5 * time.Second):
 		_ = s.cmd.Process.Kill()
+
 		return nil
 	case <-ctx.Done():
 		_ = s.cmd.Process.Kill()
+
 		return ctx.Err()
 	}
 }
@@ -218,10 +230,12 @@ func (s *session) waitProcess() {
 	s.closeOnce.Do(func() { close(s.events) })
 	if aborted {
 		s.completed <- nil
+
 		return
 	}
 	if err != nil {
 		s.completed <- fmt.Errorf("codex exited: %w", err)
+
 		return
 	}
 	s.completed <- nil
@@ -231,14 +245,15 @@ func (s *session) openLogFile() error {
 	if s.logPath == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepathDir(s.logPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepathDir(s.logPath), 0o750); err != nil {
 		return fmt.Errorf("create session log dir: %w", err)
 	}
-	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open session log: %w", err)
 	}
 	s.logFile = f
+
 	return nil
 }
 
@@ -265,7 +280,7 @@ func (s *session) readStderr() {
 	for scanner.Scan() {
 		line := scanner.Text()
 		s.writeLogLine(line)
-		slog.Debug("codex stderr", "line", line)
+		slog.Debug("codex stderr", "line", line) //nolint:gosec // G706: log message is static, taint analysis false positive
 	}
 }
 
@@ -282,6 +297,7 @@ func sessionLogPath(opts adapter.SessionOpts) string {
 	if opts.SessionLogDir == "" {
 		return ""
 	}
+
 	return filepathJoin(opts.SessionLogDir, opts.SessionID+".log")
 }
 
@@ -294,5 +310,6 @@ func filepathDir(path string) string {
 	if idx <= 0 {
 		return "."
 	}
+
 	return path[:idx]
 }

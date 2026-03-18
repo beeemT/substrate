@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -60,7 +61,7 @@ func (d HarnessDiagnostics) WarningSummary() string {
 		return ""
 	}
 	if len(groups) == 1 && len(groups[0].Phases) == 1 {
-		return fmt.Sprintf("%s unavailable. Check Harness Routing.", groups[0].Phases[0])
+		return groups[0].Phases[0] + " unavailable. Check Harness Routing."
 	}
 	return "Harnesses unavailable. Check Harness Routing."
 }
@@ -108,7 +109,7 @@ func (d HarnessDiagnostics) warningGroups() []settingsWarningGroup {
 }
 
 func formatGroupedPhaseWarning(phases []string, reason string) string {
-	return fmt.Sprintf("%s: %s.", strings.Join(phases, ", "), reason)
+	return strings.Join(phases, ", ") + ": " + reason + "."
 }
 
 func settingsHarnessFailureReason(harness config.HarnessName, message string) string {
@@ -144,12 +145,12 @@ func settingsOhMyPiFailureReason(message string) string {
 func settingsBinaryFailureReason(name string, defaultBinary string, message string) string {
 	binary, ok := extractQuotedValue(message)
 	if !ok {
-		return fmt.Sprintf("%s unavailable", name)
+		return name + " unavailable"
 	}
 	if binary == defaultBinary {
-		return fmt.Sprintf("%s not found", name)
+		return name + " not found"
 	}
-	return fmt.Sprintf("%s binary not found", name)
+	return name + " binary not found"
 }
 
 func extractQuotedValue(message string) (string, bool) {
@@ -188,7 +189,7 @@ func DiagnoseHarnesses(cfg *config.Config, workspaceRoot string) HarnessDiagnost
 
 func BuildAgentHarnesses(cfg *config.Config, workspaceRoot string) (AgentHarnesses, error) {
 	if cfg == nil {
-		return AgentHarnesses{}, fmt.Errorf("config is nil")
+		return AgentHarnesses{}, errors.New("config is nil")
 	}
 
 	planning := resolveHarnessPhase(cfg, "planning", cfg.Harness.Phase.Planning, workspaceRoot).harness
@@ -218,15 +219,6 @@ func resolveHarnessPhase(cfg *config.Config, phase string, name config.HarnessNa
 	}
 	diagnostic.Failures = append(diagnostic.Failures, HarnessCandidateFailure{Harness: name, Message: err.Error()})
 	return resolvedHarnessPhase{diagnostic: diagnostic}
-}
-
-func appendUniqueWarning(existing []string, message string) []string {
-	for _, current := range existing {
-		if current == message {
-			return existing
-		}
-	}
-	return append(existing, message)
 }
 
 func displayHarnessPhase(phase string) string {
@@ -270,6 +262,6 @@ func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRo
 		}
 		return codexadapter.NewHarness(cfg.Adapters.Codex), nil
 	default:
-		return nil, fmt.Errorf("unsupported harness: %s", name)
+		return nil, errors.New("unsupported harness: " + string(name))
 	}
 }

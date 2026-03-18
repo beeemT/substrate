@@ -1,6 +1,7 @@
 package views
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -70,10 +71,6 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 			}
 			right = s.styles.Muted.Render(rightText)
 			rightLen = lipgloss.Width(rightText)
-			requiredGap = 0
-			if rightLen > 0 {
-				requiredGap = 1
-			}
 		}
 	}
 
@@ -81,13 +78,11 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	leftRaw = joinStatusBarHintRaw(parts)
 	left := joinStatusBarHintRendered(parts)
 	leftLen := lipgloss.Width(leftRaw)
-	gapLen := innerWidth - leftLen - rightLen
-	if gapLen < 0 {
-		gapLen = 0
-	}
+	gapLen := max(innerWidth-leftLen-rightLen, 0)
 
 	line := left + strings.Repeat(" ", gapLen) + right
-	lineStyle := s.styles.StatusBar.Copy().Padding(0, horizontalPadding)
+	lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
+
 	return lineStyle.Render(line)
 }
 
@@ -109,6 +104,7 @@ func renderStatusBarHintParts(st styles.Styles, hints []KeybindHint, maxWidth in
 		}
 		parts = append(parts, statusBarHintPart{hint: hints[i], part: part})
 	}
+
 	return parts
 }
 
@@ -117,6 +113,7 @@ func joinStatusBarHintRaw(parts []statusBarHintPart) string {
 	for _, part := range parts {
 		raw = append(raw, part.part.Raw)
 	}
+
 	return strings.Join(raw, "  ")
 }
 
@@ -125,6 +122,7 @@ func joinStatusBarHintRendered(parts []statusBarHintPart) string {
 	for _, part := range parts {
 		rendered = append(rendered, part.part.Rendered)
 	}
+
 	return strings.Join(rendered, "  ")
 }
 
@@ -146,6 +144,7 @@ func reorderStatusBarHintParts(parts []statusBarHintPart) []statusBarHintPart {
 	reordered = append(reordered, statusBarHintPart{})
 	copy(reordered[insertIndex+1:], reordered[insertIndex:])
 	reordered[insertIndex] = deletePart
+
 	return reordered
 }
 
@@ -155,6 +154,7 @@ func indexStatusBarHint(parts []statusBarHintPart, want KeybindHint) int {
 			return i
 		}
 	}
+
 	return -1
 }
 
@@ -166,10 +166,12 @@ func renderHintFragment(st styles.Styles, hint KeybindHint, maxWidth int) compon
 	keyWidth := lipgloss.Width(keyRaw)
 	if keyWidth >= maxWidth {
 		keyRaw = truncate(keyRaw, maxWidth)
+
 		return components.RenderedKeyHint{Raw: keyRaw, Rendered: st.KeybindAccent.Render(keyRaw)}
 	}
 	labelRaw := truncate(" "+hint.Label, maxWidth-keyWidth)
 	raw := keyRaw + labelRaw
+
 	return components.RenderedKeyHint{
 		Raw:      raw,
 		Rendered: st.KeybindAccent.Render(keyRaw) + st.Hint.Render(labelRaw),
@@ -180,12 +182,7 @@ func hasContextualLeadingHint(hints []KeybindHint) bool {
 	if len(hints) == 0 {
 		return false
 	}
-	for _, hint := range DefaultHints() {
-		if hint == hints[0] {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(DefaultHints(), hints[0])
 }
 
 // DefaultHints returns the global keybind hints always shown in the status bar.

@@ -46,5 +46,6 @@ func (s Services) ForemanHarness() adapter.AgentHarness {
 	if s.Harnesses.Foreman != nil {
 		return s.Harnesses.Foreman
 	}
+
 	return nil
 }

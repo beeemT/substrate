@@ -19,6 +19,7 @@ func fitViewHeight(rendered string, height int) string {
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -32,5 +33,6 @@ func fitViewBox(rendered string, width, height int) string {
 	for _, line := range lines {
 		fitted = append(fitted, lipgloss.NewStyle().Width(width).Render(ansi.Truncate(line, width, "")))
 	}
+
 	return fitViewHeight(strings.Join(fitted, "\n"), height)
 }

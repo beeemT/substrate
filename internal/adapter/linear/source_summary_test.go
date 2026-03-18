@@ -15,7 +15,7 @@ func TestResolveMultipleIssuesPersistsSourceSummaries(t *testing.T) {
 
 	issue1 := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
 	issue2 := testIssueNode("def456", "FOO-456", "Add feature", []string{"frontend"}, "FOO")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue1, issue2}}}})
 	}))
 	defer srv.Close()
@@ -41,7 +41,7 @@ func TestResolveProjectPersistsSourceSummary(t *testing.T) {
 	t.Parallel()
 
 	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{}, "FOO")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, map[string]any{"data": map[string]any{"project": map[string]any{"id": "proj1", "name": "Project Alpha", "description": "Desc", "state": "in_progress", "icon": "", "color": "", "issues": map[string]any{"nodes": []any{issue}}}}})
 	}))
 	defer srv.Close()

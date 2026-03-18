@@ -68,6 +68,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	for _, hint := range hints {
 		if hint.Key == "d" && hint.Label == "Delete session" {
 			found = true
+
 			break
 		}
 	}
@@ -106,6 +107,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *
 	for _, hint := range hints {
 		if hint.Key == "d" && hint.Label == "Delete session" {
 			found = true
+
 			break
 		}
 	}
@@ -168,7 +170,7 @@ func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	if newIndex == -1 || deleteIndex == -1 || searchIndex == -1 {
 		t.Fatalf("footer = %q, want new, delete, and search hints visible", footer)
 	}
-	if !(newIndex < deleteIndex && deleteIndex < searchIndex) {
+	if newIndex >= deleteIndex || deleteIndex >= searchIndex {
 		t.Fatalf("footer = %q, want delete hint between new and search", footer)
 	}
 }
@@ -331,6 +333,7 @@ func sizedLayoutTestApp(t *testing.T, width, height int) App {
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
+
 	return updated
 }
 
@@ -346,6 +349,7 @@ func assertAppViewFitsWindow(t *testing.T, view string, width, height int) []str
 			t.Fatalf("line %d width = %d, want <= %d\nline: %q", i+1, got, width, line)
 		}
 	}
+
 	return lines
 }
 
@@ -471,6 +475,7 @@ func TestAppViewAddsHorizontalInsetToMainContentPane(t *testing.T) {
 		if !strings.Contains(plain, "│ line 1") {
 			t.Fatalf("line = %q, want a horizontal inset between the content border and session output", plain)
 		}
+
 		break
 	}
 	if !found {

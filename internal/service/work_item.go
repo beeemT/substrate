@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,12 +39,7 @@ func canTransition(from, to domain.SessionState) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // Get retrieves a work item by ID.
@@ -52,6 +48,7 @@ func (s *SessionService) Get(ctx context.Context, id string) (domain.Session, er
 	if err != nil {
 		return domain.Session{}, newNotFoundError("work item", id)
 	}
+
 	return item, nil
 }
 
@@ -137,9 +134,11 @@ func (s *SessionService) duplicateSourceItemID(ctx context.Context, item domain.
 			if strings.TrimSpace(current.ExternalID) != "" {
 				return current.ExternalID, nil
 			}
+
 			return trimmed, nil
 		}
 	}
+
 	return "", nil
 }
 
@@ -163,11 +162,13 @@ func scopedSourceSelectionIDs(item domain.Session) map[string]sourceSelectionIde
 			hasContainerID: hasContainerID,
 		}
 	}
+
 	return selected
 }
 
 func scopedSourceSelectionIdentity(item domain.Session, itemID string) sourceSelectionIdentity {
 	containerKey, hasContainerID := scopedSourceContainerKey(item)
+
 	return sourceSelectionIdentity{
 		itemID:         strings.TrimSpace(itemID),
 		containerKey:   containerKey,
@@ -185,6 +186,7 @@ func scopedSourceSelectionConflict(scope domain.SelectionScope, left, right sour
 	if !left.hasContainerID || !right.hasContainerID {
 		return true
 	}
+
 	return left.containerKey == right.containerKey
 }
 
@@ -194,6 +196,7 @@ func scopedSourceContainerKey(item domain.Session) (string, bool) {
 		if item.SourceScope != domain.ScopeProjects {
 			return "", false
 		}
+
 		return parseExternalIDScope(item.ExternalID, "gh:milestone:", "repo:")
 	case "gitlab":
 		switch item.SourceScope {
@@ -201,6 +204,7 @@ func scopedSourceContainerKey(item domain.Session) (string, bool) {
 			if projectID, ok := metadataInt64(item.Metadata, "project_id"); ok {
 				return projectID, true
 			}
+
 			return parseExternalIDScope(item.ExternalID, "gl:milestone:", "project:")
 		case domain.ScopeInitiatives:
 			if groupID, ok := metadataInt64(item.Metadata, "group_id"); ok {
@@ -208,6 +212,7 @@ func scopedSourceContainerKey(item domain.Session) (string, bool) {
 			}
 		}
 	}
+
 	return "", false
 }
 
@@ -219,6 +224,7 @@ func parseExternalIDScope(externalID, prefix, kind string) (string, bool) {
 	if scope == "" {
 		return "", false
 	}
+
 	return kind + scope, true
 }
 
@@ -243,10 +249,12 @@ func metadataInt64(metadata map[string]any, key string) (string, bool) {
 		if trimmed == "" {
 			return "", false
 		}
+
 		return key[:len(key)-3] + ":" + trimmed, true
 	default:
 		return "", false
 	}
+
 	return key[:len(key)-3] + ":" + strconv.FormatInt(value, 10), true
 }
 

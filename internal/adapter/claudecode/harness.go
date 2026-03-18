@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +44,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		opts.Mode = adapter.SessionModeAgent
 	}
 	if opts.WorktreePath == "" {
-		return nil, fmt.Errorf("claude-code requires worktree path")
+		return nil, errors.New("claude-code requires worktree path")
 	}
 	binary := h.cfg.BinaryPath
 	if binary == "" {
@@ -78,11 +80,13 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		_ = cmd.Process.Kill()
 		_, _ = io.Copy(io.Discard, stdout)
 		_, _ = io.Copy(io.Discard, stderr)
+
 		return nil, err
 	}
 	go session.waitProcess()
 	go session.readStdout()
 	go session.readStderr()
+
 	return session, nil
 }
 
@@ -99,7 +103,7 @@ func (h *Harness) buildArgs(opts adapter.SessionOpts) []string {
 		args = append(args, "--permission-mode", h.cfg.PermissionMode)
 	}
 	if h.cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", h.cfg.MaxTurns))
+		args = append(args, "--max-turns", strconv.Itoa(h.cfg.MaxTurns))
 	}
 	if h.cfg.MaxBudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", h.cfg.MaxBudgetUSD))
@@ -110,6 +114,7 @@ func (h *Harness) buildArgs(opts adapter.SessionOpts) []string {
 	if strings.TrimSpace(prompt) != "" {
 		args = append(args, prompt)
 	}
+
 	return args
 }
 
@@ -123,6 +128,7 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 		if _, err := exec.LookPath(binary); err != nil {
 			return adapter.HarnessActionResult{}, err
 		}
+
 		return adapter.HarnessActionResult{Success: true, Message: "claude binary available", Identity: binary}, nil
 	case "login_provider":
 		switch req.Provider {
@@ -133,8 +139,9 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 			}
 			token := strings.TrimSpace(string(out))
 			if token == "" {
-				return adapter.HarnessActionResult{}, fmt.Errorf("gh auth token returned empty output")
+				return adapter.HarnessActionResult{}, errors.New("gh auth token returned empty output")
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "github login succeeded", Credentials: map[string]string{"token": token}, NeedsConfirm: true}, nil
 		case "sentry":
 			cmd := exec.CommandContext(ctx, "sentry", "auth", "login")
@@ -146,8 +153,10 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 			cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 			if err := cmd.Run(); err != nil {
 				combined := strings.TrimSpace(strings.TrimSpace(stdout.String()) + " " + strings.TrimSpace(stderr.String()))
+
 				return adapter.HarnessActionResult{}, fmt.Errorf("sentry auth login: %w: %s", err, combined)
 			}
+
 			return adapter.HarnessActionResult{Success: true, Message: "sentry login succeeded"}, nil
 		default:
 			return adapter.HarnessActionResult{}, fmt.Errorf("unsupported provider %q", req.Provider)
@@ -173,14 +182,15 @@ type session struct {
 
 func (s *session) ID() string                        { return s.id }
 func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
-func (s *session) SendMessage(ctx context.Context, msg string) error {
-	return fmt.Errorf("claude-code harness does not support SendMessage")
+func (s *session) SendMessage(_ context.Context, _ string) error {
+	return errors.New("claude-code harness does not support SendMessage")
 }
 
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		_ = s.Abort(ctx)
+
 		return ctx.Err()
 	case err := <-s.completed:
 		return err
@@ -191,6 +201,7 @@ func (s *session) Abort(ctx context.Context) error {
 	s.mu.Lock()
 	if s.aborted {
 		s.mu.Unlock()
+
 		return nil
 	}
 	s.aborted = true
@@ -206,9 +217,11 @@ func (s *session) Abort(ctx context.Context) error {
 		return err
 	case <-time.After(5 * time.Second):
 		_ = s.cmd.Process.Kill()
+
 		return nil
 	case <-ctx.Done():
 		_ = s.cmd.Process.Kill()
+
 		return ctx.Err()
 	}
 }
@@ -225,10 +238,12 @@ func (s *session) waitProcess() {
 	s.closeOnce.Do(func() { close(s.events) })
 	if aborted {
 		s.completed <- nil
+
 		return
 	}
 	if err != nil {
 		s.completed <- fmt.Errorf("claude code exited: %w", err)
+
 		return
 	}
 	s.completed <- nil
@@ -238,14 +253,15 @@ func (s *session) openLogFile() error {
 	if s.logPath == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepathDir(s.logPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepathDir(s.logPath), 0o750); err != nil {
 		return fmt.Errorf("create session log dir: %w", err)
 	}
-	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open session log: %w", err)
 	}
 	s.logFile = f
+
 	return nil
 }
 
@@ -262,7 +278,7 @@ func (s *session) readStdout() {
 		select {
 		case s.events <- evt:
 		default:
-			slog.Warn("claude-code event channel full", "type", evt.Type)
+			slog.Warn("claude-code event channel full", "type", evt.Type) //nolint:gosec // G706: log message is static, taint analysis false positive
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -273,7 +289,7 @@ func (s *session) readStdout() {
 func (s *session) readStderr() {
 	scanner := bufio.NewScanner(s.stderr)
 	for scanner.Scan() {
-		slog.Debug("claude-code stderr", "line", scanner.Text())
+		slog.Debug("claude-code stderr", "line", scanner.Text()) //nolint:gosec // G706: log message is static, taint analysis false positive
 	}
 }
 
@@ -302,14 +318,17 @@ func mapClaudeEvent(line string) (adapter.AgentEvent, bool) {
 		if summary == "" {
 			summary, _ = raw["result"].(string)
 		}
+
 		return adapter.AgentEvent{Type: "done", Timestamp: time.Now(), Payload: summary}, true
 	case "error":
 		msg, _ := raw["message"].(string)
 		if msg == "" {
 			msg = line
 		}
+
 		return adapter.AgentEvent{Type: "error", Timestamp: time.Now(), Payload: msg}, true
 	}
+
 	return adapter.AgentEvent{}, false
 }
 
@@ -328,8 +347,10 @@ func extractClaudeText(raw map[string]any) string {
 				parts = append(parts, text)
 			}
 		}
+
 		return strings.Join(parts, "\n")
 	}
+
 	return ""
 }
 
@@ -337,6 +358,7 @@ func sessionLogPath(opts adapter.SessionOpts) string {
 	if opts.SessionLogDir == "" {
 		return ""
 	}
+
 	return filepathJoin(opts.SessionLogDir, opts.SessionID+".log")
 }
 
@@ -349,5 +371,6 @@ func filepathDir(path string) string {
 	if idx <= 0 {
 		return "."
 	}
+
 	return path[:idx]
 }

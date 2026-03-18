@@ -151,6 +151,7 @@ func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	for i, line := range lines {
 		if strings.Contains(line, "Preview") && i+1 < len(lines) {
 			dividerLine = lines[i+1]
+
 			break
 		}
 	}

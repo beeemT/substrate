@@ -29,6 +29,7 @@ func (r *subPlanRow) toDomain() (domain.TaskPlan, error) {
 	if err != nil {
 		return domain.TaskPlan{}, fmt.Errorf("updated_at: %w", err)
 	}
+
 	return domain.TaskPlan{
 		ID:             r.ID,
 		PlanID:         r.PlanID,
@@ -66,6 +67,7 @@ func (r SubPlanRepo) Get(ctx context.Context, id string) (domain.TaskPlan, error
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM sub_plans WHERE id = ?`, id); err != nil {
 		return domain.TaskPlan{}, fmt.Errorf("get sub-plan %s: %w", id, err)
 	}
+
 	return row.toDomain()
 }
 
@@ -82,6 +84,7 @@ func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.
 		}
 		sps[i] = sp
 	}
+
 	return sps, nil
 }
 
@@ -93,6 +96,7 @@ func (r SubPlanRepo) Create(ctx context.Context, sp domain.TaskPlan) error {
 	if err != nil {
 		return fmt.Errorf("create sub-plan %s: %w", sp.ID, err)
 	}
+
 	return nil
 }
 
@@ -111,6 +115,7 @@ func (r SubPlanRepo) Update(ctx context.Context, sp domain.TaskPlan) error {
 	if n == 0 {
 		return fmt.Errorf("update sub-plan %s: %w", sp.ID, sql.ErrNoRows)
 	}
+
 	return nil
 }
 
@@ -119,5 +124,6 @@ func (r SubPlanRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete sub-plan %s: %w", id, err)
 	}
+
 	return nil
 }

@@ -15,6 +15,8 @@ import (
 )
 
 // WorkspaceInitModal is shown at startup when no workspace is found.
+//
+//nolint:recvcheck // Bubble Tea convention
 type WorkspaceInitModal struct {
 	cwd          string
 	check        domain.WorkspaceHealthCheck
@@ -54,6 +56,7 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 	case WorkspaceHealthCheckMsg:
 		if msg.Error != nil {
 			m.loading = false
+
 			return m, func() tea.Msg { return ErrMsg{Err: msg.Error} }
 		}
 		m.check = msg.Check
@@ -64,15 +67,16 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
-		case "y", "enter":
+		case "y", keyEnter:
 			return m, initWorkspaceCmd(m.cwd, m.workspaceSvc)
-		case "n", "esc":
+		case "n", keyEsc:
 			return m, func() tea.Msg { return WorkspaceCancelMsg{} }
 		}
 
 	case WorkspaceInitDoneMsg:
 		m.active = false
 	}
+
 	return m, nil
 }
 
@@ -107,8 +111,10 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 			if createdWorkspaceFile {
 				_ = os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName))
 			}
+
 			return ErrMsg{Err: err}
 		}
+
 		return WorkspaceInitDoneMsg{
 			WorkspaceID:   wsFile.ID,
 			WorkspaceName: wsFile.Name,
@@ -124,12 +130,8 @@ func (m WorkspaceInitModal) View() string {
 	}
 
 	w := m.width - 4
-	if w < 50 {
-		w = 50
-	}
-	if w > 82 {
-		w = 82
-	}
+	w = max(w, 50)
+	w = min(w, 82)
 
 	var lines []string
 	lines = append(lines,
@@ -188,8 +190,8 @@ func (m WorkspaceInitModal) View() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	boxStyle := m.styles.OverlayFrame.Copy().
-		Padding(1, 2).
+	boxStyle := m.styles.OverlayFrame.Padding(1, 2).
 		Width(m.styles.Chrome.OverlayFrame.InnerWidth(w))
+
 	return boxStyle.Render(content)
 }

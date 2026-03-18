@@ -143,7 +143,7 @@ func TestSourceDetailsRefreshPreservesScrollForSameSession(t *testing.T) {
 	m.SetSize(48, 18)
 	m.SetSession(session)
 	top := ansi.Strip(m.View())
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated
 	}

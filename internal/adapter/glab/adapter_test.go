@@ -25,8 +25,9 @@ type stubCall struct {
 	args []string
 }
 
-func (s *stubRunner) run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+func (s *stubRunner) run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	s.calls = append(s.calls, stubCall{dir: dir, name: name, args: args})
+
 	return s.output, s.err
 }
 
@@ -35,6 +36,7 @@ func mustJSON(v any) string {
 	if err != nil {
 		panic(err)
 	}
+
 	return string(b)
 }
 
@@ -399,13 +401,14 @@ func TestMRExists_ZeroIID_ReturnsFalse(t *testing.T) {
 func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 	// First call (mr view) returns valid MR JSON; second call (mr create) must NOT happen.
 	callCount := 0
-	runner := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	runner := func(_ context.Context, _ /* dir */, name string, args ...string) ([]byte, error) {
 		callCount++
 		// Only the mr view call should fire.
 		if callCount == 1 {
 			return []byte(`{"iid":7,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/7"}`), nil
 		}
 		t.Errorf("unexpected call %d: %q %v", callCount, name, args)
+
 		return nil, errors.New("unexpected")
 	}
 	a := newWithRunner(config.GlabConfig{}, nil, runner)

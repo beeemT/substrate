@@ -2,7 +2,8 @@ package config
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"slices"
 	"strings"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -18,12 +19,13 @@ func HarnessCredentialFields() map[string][]string {
 
 func RunHarnessAction(ctx context.Context, runner adapter.HarnessActionRunner, req adapter.HarnessActionRequest) (adapter.HarnessActionResult, error) {
 	if runner == nil {
-		return adapter.HarnessActionResult{}, fmt.Errorf("harness action runner is nil")
+		return adapter.HarnessActionResult{}, errors.New("harness action runner is nil")
 	}
 	result, err := runner.RunAction(ctx, req)
 	if err != nil {
 		return adapter.HarnessActionResult{}, err
 	}
+
 	return result, nil
 }
 
@@ -32,10 +34,5 @@ func HarnessFieldAllowed(harness, key string) bool {
 	if !ok {
 		return false
 	}
-	for _, candidate := range allowed {
-		if candidate == key {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, key)
 }

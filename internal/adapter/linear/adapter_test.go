@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -73,7 +74,7 @@ func testIssueNode(id, identifier, title string, labelNames []string, teamKey st
 func TestListSelectable(t *testing.T) {
 	t.Run("issues", func(t *testing.T) {
 		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{
@@ -114,7 +115,7 @@ func TestListSelectable(t *testing.T) {
 	})
 
 	t.Run("projects", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"projects": map[string]any{
@@ -165,7 +166,7 @@ func TestListSelectable(t *testing.T) {
 	})
 
 	t.Run("initiatives", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"initiatives": map[string]any{
@@ -257,7 +258,7 @@ func TestListSelectableIssuesSupportsViewStateLabelsAndCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req testGQLBody
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		requests = append(requests, capturedRequest{Query: req.Query, Variables: req.Variables})
+		requests = append(requests, capturedRequest(req))
 		switch {
 		case strings.Contains(req.Query, "Viewer"):
 			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
@@ -329,7 +330,7 @@ func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
 			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
 			return
 		}
-		issueReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		issueReq = capturedRequest(req)
 		respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}}}})
 	}))
 	defer srv.Close()
@@ -359,7 +360,7 @@ func TestListSelectableIssuesSupportsSubscribed(t *testing.T) {
 			respondJSON(w, map[string]any{"data": map[string]any{"viewer": map[string]any{"id": "user1"}}})
 			return
 		}
-		issueReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		issueReq = capturedRequest(req)
 		respondJSON(w, map[string]any{"data": map[string]any{"issues": map[string]any{"nodes": []any{issue}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}}}})
 	}))
 	defer srv.Close()
@@ -384,7 +385,7 @@ func TestListSelectableProjectsSupportSearchStateAndCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req testGQLBody
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		projectReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		projectReq = capturedRequest(req)
 		respondJSON(w, map[string]any{"data": map[string]any{"projects": map[string]any{"nodes": []any{map[string]any{"id": "proj1", "name": "Project Alpha", "description": "Desc", "state": "started", "icon": "", "color": "", "issues": map[string]any{"nodes": []any{testIssueNode("abc123", "FOO-123", "Fix bug", nil, "FOO")}}}}, "pageInfo": map[string]any{"hasNextPage": true, "endCursor": "proj-cursor-2"}}}})
 	}))
 	defer srv.Close()
@@ -415,7 +416,7 @@ func TestListSelectableInitiativesSupportSearchStateAndCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req testGQLBody
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		initiativeReq = capturedRequest{Query: req.Query, Variables: req.Variables}
+		initiativeReq = capturedRequest(req)
 		respondJSON(w, map[string]any{
 			"data": map[string]any{
 				"initiatives": map[string]any{
@@ -463,12 +464,7 @@ func TestListSelectableInitiativesSupportSearchStateAndCursor(t *testing.T) {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 func equalStrings(got, want []string) bool {
@@ -558,7 +554,7 @@ func TestResolve(t *testing.T) {
 	t.Run("multi_issue", func(t *testing.T) {
 		issue1 := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
 		issue2 := testIssueNode("def456", "FOO-456", "Add feature", []string{"frontend"}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{"nodes": []any{issue1, issue2}},
@@ -593,7 +589,7 @@ func TestResolve(t *testing.T) {
 
 	t.Run("project", func(t *testing.T) {
 		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"project": map[string]any{
@@ -629,7 +625,7 @@ func TestResolve(t *testing.T) {
 	})
 
 	t.Run("initiative_single", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"initiative": map[string]any{
@@ -672,7 +668,7 @@ func TestResolve(t *testing.T) {
 	t.Run("initiative_multiple_ids_error", func(t *testing.T) {
 		// Initiatives scope with >1 ID must return an error; server must not be hit.
 		var hit int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			atomic.AddInt32(&hit, 1)
 			respondJSON(w, map[string]any{"data": map[string]any{}})
 		}))
@@ -784,7 +780,7 @@ func TestLinearExternalID(t *testing.T) {
 func TestResolveMetadataIncludesProviderAwareFields(t *testing.T) {
 	t.Run("issue", func(t *testing.T) {
 		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{"nodes": []any{issue}},
@@ -811,7 +807,7 @@ func TestResolveMetadataIncludesProviderAwareFields(t *testing.T) {
 
 	t.Run("project", func(t *testing.T) {
 		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"project": map[string]any{
@@ -847,7 +843,7 @@ func TestResolveMetadataIncludesProviderAwareFields(t *testing.T) {
 	})
 
 	t.Run("initiative", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"initiative": map[string]any{
@@ -890,7 +886,7 @@ func TestResolveMetadataIncludesProviderAwareFields(t *testing.T) {
 
 func TestResolveIssueTrackerRefs(t *testing.T) {
 	issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{"nodes": []any{issue}},
@@ -916,7 +912,7 @@ func TestResolveIssueTrackerRefs(t *testing.T) {
 func TestResolveMultiIssueTrackerRefs(t *testing.T) {
 	issue1 := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
 	issue2 := testIssueNode("def456", "FOO-456", "Add feature", []string{"frontend"}, "FOO")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, map[string]any{
 			"data": map[string]any{
 				"issues": map[string]any{"nodes": []any{issue1, issue2}},

@@ -85,6 +85,7 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 		for _, hint := range hints {
 			if hint.Label == want {
 				found = true
+
 				break
 			}
 		}
@@ -145,6 +146,7 @@ type overviewEventRepo struct {
 
 func (r *overviewEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
 	r.events = append(r.events, e)
+
 	return nil
 }
 
@@ -158,6 +160,7 @@ func (r *overviewEventRepo) ListByType(_ context.Context, eventType string, limi
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 
@@ -171,6 +174,7 @@ func (r *overviewEventRepo) ListByWorkspaceID(_ context.Context, workspaceID str
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
 	}
+
 	return filtered, nil
 }
 
@@ -195,7 +199,7 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	noise := make([]domain.SystemEvent, 0, 251)
-	for i := 0; i < 250; i++ {
+	for i := range 250 {
 		noise = append(noise, domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventWorkItemCompleted), WorkspaceID: "ws-local", Payload: `{}`, CreatedAt: now.Add(time.Duration(i+1) * time.Minute)})
 	}
 	noise = append(noise, domain.SystemEvent{
@@ -272,6 +276,7 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 		for _, hint := range hints {
 			if hint.Label == want {
 				found = true
+
 				break
 			}
 		}
@@ -304,6 +309,7 @@ func TestReviewingOverviewExposesReviewArtifactAction(t *testing.T) {
 	for _, hint := range m.KeybindHints() {
 		if hint.Label == "Review artifacts" {
 			foundHint = true
+
 			break
 		}
 	}
@@ -341,6 +347,7 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 	for _, hint := range m.KeybindHints() {
 		if hint.Label == "Review artifacts" {
 			foundHint = true
+
 			break
 		}
 	}
@@ -672,7 +679,7 @@ func TestOverviewPlanOverlayUsesExpandedFrame(t *testing.T) {
 	}
 	overlay := stripBrowseANSI(updated.overlayView(220, 30))
 	maxWidth := 0
-	for _, line := range strings.Split(overlay, "\n") {
+	for line := range strings.SplitSeq(overlay, "\n") {
 		maxWidth = max(maxWidth, ansi.StringWidth(line))
 	}
 	if maxWidth > 220 {
@@ -708,6 +715,7 @@ func TestAppOverviewOverlayCentersOnFullWindow(t *testing.T) {
 	for i, line := range lines {
 		if strings.Contains(line, "· Plan Review") {
 			titleLineIndex = i
+
 			break
 		}
 	}

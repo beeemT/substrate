@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -31,12 +32,7 @@ func canTransitionWorkspace(from, to domain.WorkspaceStatus) bool {
 	if !exists {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // Get retrieves a workspace by ID.
@@ -45,6 +41,7 @@ func (s *WorkspaceService) Get(ctx context.Context, id string) (domain.Workspace
 	if err != nil {
 		return domain.Workspace{}, newNotFoundError("workspace", id)
 	}
+
 	return ws, nil
 }
 
@@ -125,5 +122,6 @@ func (s *WorkspaceService) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return newNotFoundError("workspace", id)
 	}
+
 	return s.repo.Delete(ctx, id)
 }

@@ -63,13 +63,14 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 }
 
 // DiscoverRepos discovers git-work repos and builds RepoPointers with metadata.
-func (d *Discoverer) DiscoverRepos(ctx context.Context, workspaceDir string, repoPaths []string) ([]domain.RepoPointer, error) {
+func (d *Discoverer) DiscoverRepos(ctx context.Context, _ string, repoPaths []string) ([]domain.RepoPointer, error) {
 	var pointers []domain.RepoPointer
 
 	for _, repoPath := range repoPaths {
 		pointer, err := d.buildRepoPointer(ctx, repoPath)
 		if err != nil {
 			slog.Warn("failed to build repo pointer, skipping", "repo", repoPath, "err", err)
+
 			continue
 		}
 		pointers = append(pointers, pointer)
@@ -121,6 +122,7 @@ func (d *Discoverer) detectLanguage(mainDir string, pointer *domain.RepoPointer)
 	if _, err := os.Stat(filepath.Join(mainDir, "go.mod")); err == nil {
 		pointer.Language = "go"
 		d.detectGoFramework(mainDir, pointer)
+
 		return
 	}
 
@@ -128,6 +130,7 @@ func (d *Discoverer) detectLanguage(mainDir string, pointer *domain.RepoPointer)
 	if _, err := os.Stat(filepath.Join(mainDir, "package.json")); err == nil {
 		pointer.Language = "typescript"
 		d.detectJSFramework(mainDir, pointer)
+
 		return
 	}
 
@@ -135,6 +138,7 @@ func (d *Discoverer) detectLanguage(mainDir string, pointer *domain.RepoPointer)
 	if _, err := os.Stat(filepath.Join(mainDir, "Cargo.toml")); err == nil {
 		pointer.Language = "rust"
 		d.detectRustFramework(mainDir, pointer)
+
 		return
 	}
 
@@ -142,11 +146,13 @@ func (d *Discoverer) detectLanguage(mainDir string, pointer *domain.RepoPointer)
 	if _, err := os.Stat(filepath.Join(mainDir, "pyproject.toml")); err == nil {
 		pointer.Language = "python"
 		d.detectPythonFramework(mainDir, pointer)
+
 		return
 	}
 	if _, err := os.Stat(filepath.Join(mainDir, "setup.py")); err == nil {
 		pointer.Language = "python"
 		d.detectPythonFramework(mainDir, pointer)
+
 		return
 	}
 
@@ -182,6 +188,7 @@ func (d *Discoverer) detectGoFramework(mainDir string, pointer *domain.RepoPoint
 		for _, imp := range fw.imports {
 			if strings.Contains(contentStr, imp) {
 				pointer.Framework = fw.name
+
 				return
 			}
 		}
@@ -219,6 +226,7 @@ func (d *Discoverer) detectJSFramework(mainDir string, pointer *domain.RepoPoint
 		for _, pkg := range fw.pkgs {
 			if strings.Contains(contentStr, pkg) {
 				pointer.Framework = fw.name
+
 				return
 			}
 		}
@@ -256,6 +264,7 @@ func (d *Discoverer) detectRustFramework(mainDir string, pointer *domain.RepoPoi
 	for _, fw := range frameworks {
 		if strings.Contains(contentStr, fw.crate) {
 			pointer.Framework = fw.name
+
 			return
 		}
 	}
@@ -284,6 +293,7 @@ func (d *Discoverer) detectPythonFramework(mainDir string, pointer *domain.RepoP
 		for _, fw := range frameworks {
 			if strings.Contains(contentStr, fw.pkg) {
 				pointer.Framework = fw.name
+
 				return
 			}
 		}
@@ -310,6 +320,7 @@ func (d *Discoverer) detectPythonFramework(mainDir string, pointer *domain.RepoP
 		for _, fw := range frameworks {
 			if strings.Contains(reqStr, fw.pkg) {
 				pointer.Framework = fw.name
+
 				return
 			}
 		}
@@ -324,8 +335,10 @@ func ReadWorkspaceAgentsMd(workspaceDir string) (string, error) {
 		if os.IsNotExist(err) {
 			return "", nil // File doesn't exist, return empty string
 		}
+
 		return "", fmt.Errorf("read AGENTS.md: %w", err)
 	}
+
 	return string(content), nil
 }
 
@@ -343,11 +356,12 @@ func EnsureSessionDir(workspaceDir, sessionID string) (domain.SessionDirInfo, er
 	// Check if directory exists
 	if _, err := os.Stat(sessionDir); err == nil {
 		info.Exists = true
+
 		return info, nil
 	}
 
 	// Create directory
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0o750); err != nil {
 		return domain.SessionDirInfo{}, fmt.Errorf("create session directory: %w", err)
 	}
 

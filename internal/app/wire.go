@@ -71,7 +71,12 @@ func BuildWorkItemAdapters(
 }
 
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
-func BuildRepoLifecycleAdapters(ctx context.Context, cfg *config.Config, workspaceDir string, eventRepo repository.EventRepository) []adapter.RepoLifecycleAdapter {
+func BuildRepoLifecycleAdapters(
+	ctx context.Context,
+	cfg *config.Config,
+	workspaceDir string,
+	eventRepo repository.EventRepository,
+) []adapter.RepoLifecycleAdapter {
 	if workspaceDir == "" {
 		return nil
 	}

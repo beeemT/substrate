@@ -26,6 +26,7 @@ func (s *InstanceService) Get(ctx context.Context, id string) (domain.SubstrateI
 	if err != nil {
 		return domain.SubstrateInstance{}, newNotFoundError("instance", id)
 	}
+
 	return inst, nil
 }
 
@@ -62,6 +63,7 @@ func (s *InstanceService) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return newNotFoundError("instance", id)
 	}
+
 	return s.repo.Delete(ctx, id)
 }
 
@@ -89,6 +91,7 @@ func (s *InstanceService) FindStaleInstances(ctx context.Context, workspaceID st
 			stale = append(stale, inst)
 		}
 	}
+
 	return stale, nil
 }
 
@@ -108,9 +111,11 @@ func (s *InstanceService) CleanupStaleInstances(ctx context.Context, workspaceID
 	for _, inst := range stale {
 		if err := s.repo.Delete(ctx, inst.ID); err != nil {
 			deleteErr = errors.Join(deleteErr, fmt.Errorf("delete instance %s: %w", inst.ID, err))
+
 			continue
 		}
 		count++
 	}
+
 	return count, deleteErr
 }

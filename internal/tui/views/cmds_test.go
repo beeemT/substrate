@@ -336,10 +336,7 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	gz := gzip.NewWriter(compressedFile)
-	compressedContent := strings.Join([]string{
-		`{"type":"event","event":{"type":"assistant_output","text":"first chunk"}}`,
-		`{"type":"event","event":{"type":"lifecycle","stage":"completed","summary":"done"}}`,
-	}, "\n") + "\n"
+	compressedContent := `{"type":"event","event":{"type":"assistant_output","text":"first chunk"}}` + "\n" + `{"type":"event","event":{"type":"lifecycle","stage":"completed","summary":"done"}}` + "\n"
 	if _, err := gz.Write([]byte(compressedContent)); err != nil {
 		t.Fatal(err)
 	}

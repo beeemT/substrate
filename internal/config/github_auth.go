@@ -16,10 +16,12 @@ func GitHubAuthSource(cfg GithubConfig) string {
 	if HasGitHubCLI() {
 		return "gh cli"
 	}
+
 	return "unset"
 }
 
 func HasGitHubCLI() bool {
 	_, err := exec.LookPath("gh")
+
 	return err == nil
 }

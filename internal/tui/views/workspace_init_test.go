@@ -12,6 +12,7 @@ import (
 
 func newTestStyles(t *testing.T) styles.Styles {
 	t.Helper()
+
 	return styles.NewStyles(styles.DefaultTheme)
 }
 

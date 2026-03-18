@@ -13,7 +13,7 @@ type ReviewArtifact struct {
 	Branch       string    `json:"branch,omitempty"`
 	WorktreePath string    `json:"worktree_path,omitempty"`
 	Draft        bool      `json:"draft,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitzero"`
 }
 
 // ReviewArtifactEventPayload persists a review artifact against a work item.
