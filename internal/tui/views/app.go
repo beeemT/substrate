@@ -179,7 +179,7 @@ func NewApp(svcs Services) App {
 // RunTUI launches the bubbletea program.
 func RunTUI(svcs Services) error {
 	app := NewApp(svcs)
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
+	p := tea.NewProgram(app, tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
 	_, err := p.Run()
 	return err
 }
@@ -188,7 +188,7 @@ func RunTUI(svcs Services) error {
 func (a App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
-	cmds = append(cmds, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd())
+	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd())
 
 	if a.svcs.WorkspaceID != "" {
 		cmds = append(cmds,
