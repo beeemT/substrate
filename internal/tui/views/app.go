@@ -1010,6 +1010,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case SteerSessionMsg:
+		if a.svcs.SessionRegistry != nil && msg.SessionID != "" && msg.Message != "" {
+			cmds = append(cmds, SteerSessionCmd(a.svcs.SessionRegistry, msg.SessionID, msg.Message))
+		}
+		return a, tea.Batch(cmds...)
+
+	case SteerSessionSentMsg:
+		a.toasts.AddToast("Steering prompt sent", components.ToastSuccess)
+		return a, nil
+
 	case SkipQuestionMsg:
 		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID))
 		return a, tea.Batch(cmds...)
@@ -1327,6 +1337,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	previousFocus := a.mainFocus
 	wasOverviewOverlayOpen := a.overviewOverlayOpen()
 	if wasOverviewOverlayOpen {
+		return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
+	}
+	// When a sub-model is capturing text input (e.g. steering prompt),
+	// bypass global shortcuts and route directly to content.
+	if a.content.InputCaptured() {
 		return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 	}
 	if msg.String() == "enter" && a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() != "" {

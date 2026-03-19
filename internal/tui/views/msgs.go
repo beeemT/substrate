@@ -292,3 +292,14 @@ type ReviewCompleteMsg struct {
 	ImplSessionID   string // implementation session that was reviewed
 	ReviewSessionID string // review agent session whose log to display
 }
+
+// SteerSessionMsg fires when the user submits a steering prompt for a running session.
+type SteerSessionMsg struct {
+	SessionID string
+	Message   string
+}
+
+// SteerSessionSentMsg confirms a steering message was delivered to the agent.
+type SteerSessionSentMsg struct {
+	SessionID string
+}

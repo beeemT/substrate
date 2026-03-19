@@ -257,3 +257,14 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 		return nil
 	}
 }
+
+func (m ContentModel) InputCaptured() bool {
+	switch m.mode {
+	case ContentModePlanning, ContentModeSessionInteraction:
+		return m.sessionLog.InputCaptured()
+	case ContentModeImplementing:
+		return m.implementing.InputCaptured()
+	default:
+		return false
+	}
+}

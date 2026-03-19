@@ -32,6 +32,7 @@ type ReviewPipeline struct {
 	sessionRepo repository.TaskRepository
 	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
+	registry    *SessionRegistry
 }
 
 // NewReviewPipeline creates a new ReviewPipeline instance.
@@ -45,6 +46,7 @@ func NewReviewPipeline(
 	sessionRepo repository.TaskRepository,
 	planRepo repository.PlanRepository,
 	eventBus *event.Bus,
+	registry *SessionRegistry,
 ) *ReviewPipeline {
 	return &ReviewPipeline{
 		cfg:         cfg,
@@ -56,6 +58,7 @@ func NewReviewPipeline(
 		sessionRepo: sessionRepo,
 		planRepo:    planRepo,
 		eventBus:    eventBus,
+		registry:    registry,
 	}
 }
 
@@ -288,6 +291,11 @@ func (p *ReviewPipeline) startReviewAgent(
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	// Register session for steering.
+	if p.registry != nil {
+		p.registry.Register(reviewSessionID, reviewSession)
+		defer p.registry.Deregister(reviewSessionID)
+	}
 	for {
 		select {
 		case <-timeoutCtx.Done():

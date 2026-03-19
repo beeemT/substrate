@@ -38,6 +38,7 @@ const (
 	SettingsFieldStringList
 	SettingsFieldKeyValue
 )
+
 const (
 	statusWarning              = "warning"
 	statusEmpty                = "empty"
@@ -462,24 +463,25 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		return viewsServicesReload{}, fmt.Errorf("building agent harnesses: %w", err)
 	}
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
+	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, cfg)
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, registry, cfg)
 		if err != nil {
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}
 	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc, registry)
 	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
-		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus)
+		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus, registry)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, s.sessionRepo, bus)
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, s.sessionRepo, bus, registry)
 	}
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
@@ -503,29 +505,30 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		SessionsDir:  sessionsDir,
 		SettingsData: snapshot,
 		Services: Services{
-			Session:        workItemSvc,
-			Plan:           planSvc,
-			TaskPlan:       s.subPlanRepo,
-			Task:           sessionSvc,
-			Question:       questionSvc,
-			Instance:       instanceSvc,
-			Workspace:      workspaceSvc,
-			Review:         reviewSvc,
-			Events:         s.eventRepo,
-			Planning:       planningSvc,
-			Implementation: implSvc,
-			ReviewPipeline: reviewPipeline,
-			Resumption:     resumption,
-			Foreman:        foreman,
-			Cfg:            cfg,
-			Adapters:       adapters,
-			Harnesses:      harnesses,
-			GitClient:      gitClient,
-			Bus:            bus,
-			InstanceID:     current.InstanceID,
-			WorkspaceID:    current.WorkspaceID,
-			WorkspaceDir:   current.WorkspaceDir,
-			WorkspaceName:  current.WorkspaceName,
+			Session:         workItemSvc,
+			Plan:            planSvc,
+			TaskPlan:        s.subPlanRepo,
+			Task:            sessionSvc,
+			Question:        questionSvc,
+			Instance:        instanceSvc,
+			Workspace:       workspaceSvc,
+			Review:          reviewSvc,
+			Events:          s.eventRepo,
+			Planning:        planningSvc,
+			Implementation:  implSvc,
+			ReviewPipeline:  reviewPipeline,
+			Resumption:      resumption,
+			Foreman:         foreman,
+			SessionRegistry: registry,
+			Cfg:             cfg,
+			Adapters:        adapters,
+			Harnesses:       harnesses,
+			GitClient:       gitClient,
+			Bus:             bus,
+			InstanceID:      current.InstanceID,
+			WorkspaceID:     current.WorkspaceID,
+			WorkspaceDir:    current.WorkspaceDir,
+			WorkspaceName:   current.WorkspaceName,
 		},
 	}, nil
 }

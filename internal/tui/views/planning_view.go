@@ -3,6 +3,7 @@ package views
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,7 +20,6 @@ type SessionLogModel struct {
 	entries          []sessionlog.Entry
 	verbose          bool
 	collapseThinking bool
-	paused           bool
 	title            string
 	modeLabel        string
 	meta             string
@@ -40,12 +40,19 @@ type SessionLogModel struct {
 	renderedWidth      int
 	renderedVerbose    bool
 	renderedCollapse   bool
+
+	steerInput  textinput.Model
+	steerActive bool
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	vp := viewport.New(0, 0)
 
-	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction"}
+	ti := components.NewTextInput()
+	ti.Placeholder = "Send steering prompt to agent..."
+	ti.CharLimit = 2000
+
+	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction", steerInput: ti}
 }
 
 func (m *SessionLogModel) SetSize(width, height int) {
@@ -57,7 +64,11 @@ func (m *SessionLogModel) SetSize(width, height int) {
 func (m *SessionLogModel) syncViewportSize() {
 	m.viewport.Width = m.width
 	headerLines := len(strings.Split(m.header(), "\n"))
-	m.viewport.Height = max(1, m.height-headerLines-1)
+	reserved := headerLines + 1 // 1 for hints row
+	if m.steerActive {
+		reserved += 2 // divider + input row
+	}
+	m.viewport.Height = max(1, m.height-reserved)
 	if len(m.entries) > 0 && m.transcriptNeedsRebuild() {
 		m.doRebuildTranscript()
 	}
@@ -118,7 +129,7 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.offset = 0
 	m.entries = append([]sessionlog.Entry(nil), entries...)
 	m.doRebuildTranscript()
-	m.viewport.GotoTop()
+	m.viewport.GotoBottom()
 }
 
 func (m *SessionLogModel) TailCmd() tea.Cmd {
@@ -129,10 +140,22 @@ func (m *SessionLogModel) TailCmd() tea.Cmd {
 	return TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 }
 
+// SessionID returns the session ID being tailed (empty if static).
+func (m SessionLogModel) SessionID() string { return m.sessionID }
+
+func (m SessionLogModel) InputCaptured() bool { return m.steerActive }
+
 func (m SessionLogModel) KeybindHints() []KeybindHint {
+	if m.steerActive {
+		return []KeybindHint{
+			{Key: "Enter", Label: "Send"},
+			{Key: "Esc", Label: "Cancel"},
+		}
+	}
 	hints := []KeybindHint{
 		{Key: "↑↓", Label: "Scroll"},
-		{Key: "p", Label: "Pause/unpause"},
+		{Key: "f", Label: "Follow tail"},
+		{Key: "g", Label: "Go to start"},
 		{Key: "v", Label: "Verbose logs"},
 	}
 	if hasThinkingBlocks(m.entries) {
@@ -141,7 +164,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
-
+	if m.live {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
+	}
 	return hints
 }
 
@@ -154,18 +179,55 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		}
 		m.offset = msg.NextOffset
 		if len(msg.Entries) > 0 {
+			wasAtBottom := m.viewport.AtBottom()
 			m.entries = append(m.entries, msg.Entries...)
 			m.doRebuildTranscript()
-			if !m.paused {
+			if wasAtBottom {
 				m.viewport.GotoBottom()
 			}
 		}
 
 		return m, TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 	case tea.KeyMsg:
+		if m.steerActive {
+			switch msg.String() {
+			case "enter":
+				text := m.steerInput.Value()
+				m.steerInput.SetValue("")
+				m.steerActive = false
+				m.steerInput.Blur()
+				m.syncViewportSize()
+				if text != "" {
+					sid := m.sessionID
+					return m, func() tea.Msg {
+						return SteerSessionMsg{SessionID: sid, Message: text}
+					}
+				}
+			case "esc":
+				if m.steerInput.Value() != "" {
+					m.steerInput.SetValue("")
+				} else {
+					m.steerActive = false
+					m.steerInput.Blur()
+					m.syncViewportSize()
+				}
+			default:
+				m.steerInput, cmd = m.steerInput.Update(msg)
+			}
+			return m, cmd
+		}
 		switch msg.String() {
 		case "p":
-			m.paused = !m.paused
+			if m.live {
+				m.steerActive = true
+				m.steerInput.Focus()
+				m.syncViewportSize()
+				return m, m.steerInput.Focus()
+			}
+		case "f":
+			m.viewport.GotoBottom()
+		case "g":
+			m.viewport.GotoTop()
 		case "v":
 			m.verbose = !m.verbose
 			m.doRebuildTranscript()
@@ -193,11 +255,6 @@ func (m SessionLogModel) header() string {
 		Width:   m.width,
 		Divider: true,
 	})
-	if m.paused {
-		headerLines := strings.Split(header, "\n")
-		headerLines[0] += m.styles.Warning.Render(" [PAUSED]")
-		header = strings.Join(headerLines, "\n")
-	}
 	if notice := m.noticeView(); notice != "" {
 		return header + "\n" + notice
 	}
@@ -220,7 +277,11 @@ func (m SessionLogModel) View() string {
 		body = m.styles.Muted.Render("No session output captured.")
 	}
 	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
-	parts := append(strings.Split(header, "\n"), body, hints)
+	parts := append(strings.Split(header, "\n"), body)
+	if m.steerActive {
+		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
+	}
+	parts = append(parts, hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

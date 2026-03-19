@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -50,21 +51,26 @@ type ImplementingModel struct { //nolint:recvcheck // Bubble Tea: Update returns
 	collapseThinking bool
 	viewports        map[string]viewport.Model
 	offsets          map[string]int64
-	paused           bool
 	title            string
 	styles           styles.Styles
 	width            int
 	height           int
+	steerInput       textinput.Model
+	steerActive      bool
 }
 
 // NewImplementingModel constructs an ImplementingModel with the given styles.
 func NewImplementingModel(st styles.Styles) ImplementingModel {
+	ti := components.NewTextInput()
+	ti.Placeholder = "Send steering prompt to agent..."
+	ti.CharLimit = 2000
 	return ImplementingModel{
 		entryBuffers:     make(map[string][]sessionlog.Entry),
 		viewports:        make(map[string]viewport.Model),
 		offsets:          make(map[string]int64),
 		styles:           st,
 		collapseThinking: true,
+		steerInput:       ti,
 	}
 }
 
@@ -78,13 +84,18 @@ func (m *ImplementingModel) SetSize(width, height int) {
 		vp.Height = vpH
 		if entries, ok := m.entryBuffers[k]; ok && len(entries) > 0 {
 			vp.SetContent(RenderTranscript(m.styles, entries, width, m.verbose, m.collapseThinking))
+			vp.GotoBottom()
 		}
 		m.viewports[k] = vp
 	}
 }
 
 func (m ImplementingModel) viewportHeight() int {
-	return max(1, m.height-5) // header + divider + repo row + repo header + hints
+	reserved := 5 // header + divider + repo row + repo header + hints
+	if m.steerActive {
+		reserved += 2 // divider + input row
+	}
+	return max(1, m.height-reserved)
 }
 
 // SetTitle sets the work-item title shown in the implementing view.
@@ -116,22 +127,48 @@ func (m ImplementingModel) selectedRepoName() string {
 	return m.repos[m.selectedRepo].Name
 }
 
+// selectedRepoSessionID returns the session ID of the currently selected repo.
+func (m ImplementingModel) selectedRepoSessionID() string {
+	if len(m.repos) == 0 || m.selectedRepo >= len(m.repos) {
+		return ""
+	}
+	return m.repos[m.selectedRepo].SessionID
+}
+
+// selectedRepoIsRunning returns true if the selected repo's session is in progress.
+func (m ImplementingModel) selectedRepoIsRunning() bool {
+	if len(m.repos) == 0 || m.selectedRepo >= len(m.repos) {
+		return false
+	}
+	return m.repos[m.selectedRepo].Status == domain.SubPlanInProgress
+}
+
+func (m ImplementingModel) InputCaptured() bool { return m.steerActive }
+
 // KeybindHints returns the keybind hints for the status bar.
 func (m ImplementingModel) KeybindHints() []KeybindHint {
+	if m.steerActive {
+		return []KeybindHint{
+			{Key: "Enter", Label: "Send"},
+			{Key: "Esc", Label: "Cancel"},
+		}
+	}
 	hints := []KeybindHint{
 		{Key: "Tab", Label: "Cycle repos"},
 		{Key: "↑↓", Label: "Scroll"},
-		{Key: "p", Label: "Pause/unpause"},
+		{Key: "f", Label: "Follow tail"},
+		{Key: "g", Label: "Go to start"},
 		{Key: "v", Label: "Verbose logs"},
 	}
 	for _, entries := range m.entryBuffers {
 		if hasThinkingBlocks(entries) {
 			hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})
-
 			break
 		}
 	}
-
+	if m.selectedRepoIsRunning() {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
+	}
 	return hints
 }
 
@@ -147,8 +184,9 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 			m.offsets[r.Name] = msg.NextOffset
 			m.entryBuffers[r.Name] = append(m.entryBuffers[r.Name], msg.Entries...)
 			vp := m.viewports[r.Name]
+			wasAtBottom := vp.AtBottom()
 			vp.SetContent(RenderTranscript(m.styles, m.entryBuffers[r.Name], m.width, m.verbose, m.collapseThinking))
-			if !m.paused || r.Name == m.selectedRepoName() {
+			if wasAtBottom {
 				vp.GotoBottom()
 			}
 			m.viewports[r.Name] = vp
@@ -160,13 +198,55 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.steerActive {
+			switch msg.String() {
+			case "enter":
+				text := m.steerInput.Value()
+				m.steerInput.SetValue("")
+				m.steerActive = false
+				m.steerInput.Blur()
+				if text != "" {
+					sid := m.selectedRepoSessionID()
+					cmds = append(cmds, func() tea.Msg {
+						return SteerSessionMsg{SessionID: sid, Message: text}
+					})
+				}
+			case "esc":
+				if m.steerInput.Value() != "" {
+					m.steerInput.SetValue("")
+				} else {
+					m.steerActive = false
+					m.steerInput.Blur()
+				}
+			default:
+				var cmd tea.Cmd
+				m.steerInput, cmd = m.steerInput.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch msg.String() {
+		case "p":
+			if m.selectedRepoIsRunning() {
+				m.steerActive = true
+				cmds = append(cmds, m.steerInput.Focus())
+			}
 		case keyTab:
 			if len(m.repos) > 0 {
 				m.selectedRepo = (m.selectedRepo + 1) % len(m.repos)
 			}
-		case "p":
-			m.paused = !m.paused
+		case "g":
+			name := m.selectedRepoName()
+			if vp, ok := m.viewports[name]; ok {
+				vp.GotoTop()
+				m.viewports[name] = vp
+			}
+		case "f":
+			name := m.selectedRepoName()
+			if vp, ok := m.viewports[name]; ok {
+				vp.GotoBottom()
+				m.viewports[name] = vp
+			}
 		case "v":
 			m.verbose = !m.verbose
 			for name, entries := range m.entryBuffers {
@@ -249,11 +329,12 @@ func (m ImplementingModel) View() string {
 	}
 
 	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
-	if m.paused {
-		hints += m.styles.Warning.Render(" [PAUSED]")
-	}
 
-	parts := append(strings.Split(header, "\n"), repoRow, outputBlock, hints)
+	parts := append(strings.Split(header, "\n"), repoRow, outputBlock)
+	if m.steerActive {
+		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
+	}
+	parts = append(parts, hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

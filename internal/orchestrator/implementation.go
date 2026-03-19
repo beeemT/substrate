@@ -36,6 +36,7 @@ type ImplementationService struct {
 	sessionRepo  repository.TaskRepository
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
+	registry     *SessionRegistry
 	sessTimeout  time.Duration
 }
 
@@ -64,6 +65,7 @@ func NewImplementationService(
 	sessionRepo repository.TaskRepository,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
+	registry *SessionRegistry,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
 	return &ImplementationService{
@@ -78,6 +80,7 @@ func NewImplementationService(
 		sessionRepo:  sessionRepo,
 		eventRepo:    eventRepo,
 		workspaceSvc: workspaceSvc,
+		registry:     registry,
 		sessTimeout:  implCfg.SessionTimeout,
 	}
 }
@@ -424,6 +427,12 @@ func (s *ImplementationService) executeSubPlan(
 
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
 	defer sessionCancel()
+
+	// Register session for steering before forwarding events.
+	if s.registry != nil {
+		s.registry.Register(sessionID, harnessSession)
+		defer s.registry.Deregister(sessionID)
+	}
 
 	// Forward events to bus while session runs
 	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID)

@@ -56,6 +56,7 @@ type PlanningService struct {
 	subPlanRepo  repository.TaskPlanRepository
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
+	registry     *SessionRegistry
 	globalCfg    *config.Config
 	templates    *PlanningTemplates
 }
@@ -91,7 +92,6 @@ func NewPlanningTemplates() (*PlanningTemplates, error) {
 	}, nil
 }
 
-// NewPlanningService creates a new PlanningService.
 func NewPlanningService(
 	cfg *PlanningConfig,
 	discoverer *Discoverer,
@@ -104,6 +104,7 @@ func NewPlanningService(
 	subPlanRepo repository.TaskPlanRepository,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
+	registry *SessionRegistry,
 	globalCfg *config.Config,
 ) (*PlanningService, error) {
 	templates, err := NewPlanningTemplates()
@@ -123,6 +124,7 @@ func NewPlanningService(
 		subPlanRepo:  subPlanRepo,
 		eventRepo:    eventRepo,
 		workspaceSvc: workspaceSvc,
+		registry:     registry,
 		globalCfg:    globalCfg,
 		templates:    templates,
 	}, nil
@@ -425,6 +427,12 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		return "", 0, warnings, &PlanningError{Err: fmt.Errorf("start planning session: %w", err)}
 	}
 	defer session.Abort(sessionCtx)
+
+	// Register session for steering.
+	if s.registry != nil {
+		s.registry.Register(planningCtx.SessionID, session)
+		defer s.registry.Deregister(planningCtx.SessionID)
+	}
 
 	parser := NewPlanParser()
 	attempt := 0

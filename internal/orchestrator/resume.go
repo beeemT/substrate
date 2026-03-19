@@ -27,6 +27,7 @@ type Resumption struct {
 	planSvc     *service.PlanService
 	sessionRepo repository.TaskRepository
 	eventBus    *event.Bus
+	registry    *SessionRegistry
 }
 
 // NewResumption creates a Resumption instance.
@@ -36,6 +37,7 @@ func NewResumption(
 	planSvc *service.PlanService,
 	sessionRepo repository.TaskRepository,
 	eventBus *event.Bus,
+	registry *SessionRegistry,
 ) *Resumption {
 	return &Resumption{
 		harness:     harness,
@@ -43,6 +45,7 @@ func NewResumption(
 		planSvc:     planSvc,
 		sessionRepo: sessionRepo,
 		eventBus:    eventBus,
+		registry:    registry,
 	}
 }
 
@@ -147,6 +150,15 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 			}),
 			CreatedAt: time.Now(),
 		})
+	}
+
+	// Register session for steering; deregister when the session finishes.
+	if r.registry != nil {
+		r.registry.Register(newSession.ID, harnessSession)
+		go func() {
+			_ = harnessSession.Wait(context.Background())
+			r.registry.Deregister(newSession.ID)
+		}()
 	}
 
 	return ResumeSessionResult{

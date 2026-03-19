@@ -604,6 +604,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		sessionRepo,
 		eventRepo,
 		service.NewWorkspaceService(workspaceRepo),
+		nil,
 	)
 
 	return svc, workItemRepo, eventRepo

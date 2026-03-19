@@ -777,3 +777,14 @@ func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
 		return nil
 	}
 }
+
+// SteerSessionCmd sends a steering/follow-up message to a running agent session.
+func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
+	return func() tea.Msg {
+		if err := registry.SendMessage(context.Background(), sessionID, message); err != nil {
+			return ErrMsg{Err: fmt.Errorf("steer session %s: %w", sessionID, err)}
+		}
+
+		return SteerSessionSentMsg{SessionID: sessionID}
+	}
+}

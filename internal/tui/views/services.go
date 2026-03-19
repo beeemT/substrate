@@ -23,18 +23,19 @@ type Services struct {
 	Review    *service.ReviewService
 	Events    repository.EventRepository
 	// Orchestration pipelines backed by the configured agent harnesses.
-	Planning       *orchestrator.PlanningService
-	Implementation *orchestrator.ImplementationService
-	ReviewPipeline *orchestrator.ReviewPipeline
-	Resumption     *orchestrator.Resumption
-	Foreman        *orchestrator.Foreman
-	Cfg            *config.Config
-	Adapters       []adapter.WorkItemAdapter
-	Harnesses      app.AgentHarnesses
-	Settings       *SettingsService
-	SettingsData   SettingsSnapshot
-	GitClient      *gitwork.Client
-	Bus            *event.Bus
+	Planning        *orchestrator.PlanningService
+	Implementation  *orchestrator.ImplementationService
+	ReviewPipeline  *orchestrator.ReviewPipeline
+	Resumption      *orchestrator.Resumption
+	Foreman         *orchestrator.Foreman
+	SessionRegistry *orchestrator.SessionRegistry
+	Cfg             *config.Config
+	Adapters        []adapter.WorkItemAdapter
+	Harnesses       app.AgentHarnesses
+	Settings        *SettingsService
+	SettingsData    SettingsSnapshot
+	GitClient       *gitwork.Client
+	Bus             *event.Bus
 	// Instance identity
 	InstanceID    string
 	WorkspaceID   string

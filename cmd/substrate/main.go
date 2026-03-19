@@ -235,11 +235,12 @@ func run() error { //nolint:funlen
 		return fmt.Errorf("building agent harnesses: %w", err)
 	}
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
+	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			planSvc, workItemSvc, sessionSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, cfg,
+			planSvc, workItemSvc, sessionSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, registry, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)
@@ -249,20 +250,20 @@ func run() error { //nolint:funlen
 	if harnesses.Implementation != nil {
 		implSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
-			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc,
+			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc, registry,
 		)
 	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(
 			cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
-			sessionRepo, planRepo, bus,
+			sessionRepo, planRepo, bus, registry,
 		)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus,
+			harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus, registry,
 		)
 	}
 	var foreman *orchestrator.Foreman
@@ -277,31 +278,32 @@ func run() error { //nolint:funlen
 	}
 
 	svcs := views.Services{
-		Session:        workItemSvc,
-		Plan:           planSvc,
-		TaskPlan:       subPlanRepo,
-		Task:           sessionSvc,
-		Question:       questionSvc,
-		Instance:       instanceSvc,
-		Workspace:      workspaceSvc,
-		Review:         reviewSvc,
-		Events:         eventRepo,
-		Cfg:            cfg,
-		Adapters:       adapters,
-		Harnesses:      harnesses,
-		Settings:       settingsSvc,
-		SettingsData:   settingsData,
-		GitClient:      gitClient,
-		Bus:            bus,
-		InstanceID:     instanceID,
-		WorkspaceID:    workspaceID,
-		WorkspaceName:  workspaceName,
-		WorkspaceDir:   workspaceDir,
-		Planning:       planningSvc,
-		Implementation: implSvc,
-		ReviewPipeline: reviewPipeline,
-		Resumption:     resumption,
-		Foreman:        foreman,
+		Session:         workItemSvc,
+		Plan:            planSvc,
+		TaskPlan:        subPlanRepo,
+		Task:            sessionSvc,
+		Question:        questionSvc,
+		Instance:        instanceSvc,
+		Workspace:       workspaceSvc,
+		Review:          reviewSvc,
+		Events:          eventRepo,
+		Cfg:             cfg,
+		Adapters:        adapters,
+		Harnesses:       harnesses,
+		Settings:        settingsSvc,
+		SettingsData:    settingsData,
+		GitClient:       gitClient,
+		Bus:             bus,
+		InstanceID:      instanceID,
+		WorkspaceID:     workspaceID,
+		WorkspaceName:   workspaceName,
+		WorkspaceDir:    workspaceDir,
+		Planning:        planningSvc,
+		Implementation:  implSvc,
+		ReviewPipeline:  reviewPipeline,
+		Resumption:      resumption,
+		Foreman:         foreman,
+		SessionRegistry: registry,
 	}
 
 	return views.RunTUI(svcs)

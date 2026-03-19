@@ -558,7 +558,7 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
 
-	pipeline := NewReviewPipeline(cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc, sessionRepo, planRepo, bus)
+	pipeline := NewReviewPipeline(cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc, sessionRepo, planRepo, bus, nil)
 
 	return &reviewPipelineFixture{
 		pipeline:    pipeline,
