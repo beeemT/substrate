@@ -25,7 +25,4 @@ func TestImplementingViewRespectsRequestedHeight(t *testing.T) {
 	if got := len(lines); got != 12 {
 		t.Fatalf("line count = %d, want 12", got)
 	}
-	if !strings.Contains(lines[len(lines)-1], "[Tab] Cycle repos") {
-		t.Fatalf("last line = %q, want implementing hints", lines[len(lines)-1])
-	}
 }

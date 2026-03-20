@@ -64,7 +64,7 @@ func (m *SessionLogModel) SetSize(width, height int) {
 func (m *SessionLogModel) syncViewportSize() {
 	m.viewport.Width = m.width
 	headerLines := len(strings.Split(m.header(), "\n"))
-	reserved := headerLines + 1 // 1 for hints row
+	reserved := headerLines
 	if m.steerActive {
 		reserved += 2 // divider + input row
 	}
@@ -276,12 +276,10 @@ func (m SessionLogModel) View() string {
 	if strings.TrimSpace(body) == "" {
 		body = m.styles.Muted.Render("No session output captured.")
 	}
-	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
 	parts := append(strings.Split(header, "\n"), body)
 	if m.steerActive {
 		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
 	}
-	parts = append(parts, hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

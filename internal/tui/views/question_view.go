@@ -149,15 +149,13 @@ func (m QuestionModel) View() string {
 	replyLabel := m.styles.Subtitle.Render("Your reply (or press ") +
 		m.styles.KeybindAccent.Render("[A]") +
 		m.styles.Subtitle.Render(" to approve):")
-	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
-
 	headerLines := strings.Split(header, "\n")
 	middleBlocks := []string{questionLabel, questionBox}
 	if ctxBlock != "" {
 		middleBlocks = append(middleBlocks, ctxBlock)
 	}
 	middleBlocks = append(middleBlocks, "", foremanLabel, foremanBox)
-	footerBlocks := []string{"", replyLabel, m.input.View(), "", hints}
+	footerBlocks := []string{"", replyLabel, m.input.View()}
 	reserved := len(headerLines)
 	for _, block := range footerBlocks {
 		reserved += len(strings.Split(block, "\n"))

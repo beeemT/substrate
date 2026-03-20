@@ -33,6 +33,10 @@ func (m *FailedModel) SetFailure(reason, details string) {
 	m.details = details
 }
 
+func (m FailedModel) KeybindHints() []KeybindHint {
+	return []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+}
+
 func (m FailedModel) Update(_ tea.Msg) (FailedModel, tea.Cmd) {
 	return m, nil
 }
@@ -50,7 +54,6 @@ func (m FailedModel) View() string {
 	if m.details != "" {
 		lines = append(lines, m.styles.Subtitle.Render(m.details), "")
 	}
-	lines = append(lines, components.RenderKeyHints(m.styles, []components.KeyHint{{Key: "↑↓", Label: "Scroll"}}, "  "))
 
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

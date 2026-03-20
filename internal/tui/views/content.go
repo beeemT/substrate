@@ -253,6 +253,10 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 		return m.reviewing.KeybindHints()
 	case ContentModeInterrupted:
 		return m.interrupted.KeybindHints()
+	case ContentModeCompleted:
+		return m.completed.KeybindHints()
+	case ContentModeFailed:
+		return m.failed.KeybindHints()
 	default:
 		return nil
 	}

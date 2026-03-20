@@ -68,7 +68,7 @@ func (m *PlanReviewModel) SetSize(width, height int) {
 }
 
 func (m *PlanReviewModel) syncViewportSize() {
-	reservedRows := 4 // title + divider (header) + divider-above-hints + hints
+	reservedRows := 2 // title + divider (header)
 	if m.inputMode != planReviewNormal {
 		reservedRows += 1 + m.feedbackHeight // label row + textarea rows
 	}
@@ -399,13 +399,10 @@ func (m PlanReviewModel) View() string {
 		feedbackRow = m.styles.Warning.Render(label) + "\n" + m.feedbackInput.View()
 	}
 
-	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
-
 	parts := append(strings.Split(header, "\n"), body)
 	if feedbackRow != "" {
 		parts = append(parts, feedbackRow)
 	}
-	parts = append(parts, components.RenderDivider(m.styles, m.width), hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

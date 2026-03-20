@@ -91,7 +91,7 @@ func (m *ImplementingModel) SetSize(width, height int) {
 }
 
 func (m ImplementingModel) viewportHeight() int {
-	reserved := 5 // header + divider + repo row + repo header + hints
+	reserved := 4 // header + divider + repo row + repo header
 	if m.steerActive {
 		reserved += 2 // divider + input row
 	}
@@ -328,13 +328,10 @@ func (m ImplementingModel) View() string {
 		outputBlock = repoHeader + "\n" + vp.View()
 	}
 
-	hints := components.RenderKeyHints(m.styles, componentHints(m.KeybindHints()), "  ")
-
 	parts := append(strings.Split(header, "\n"), repoRow, outputBlock)
 	if m.steerActive {
 		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
 	}
-	parts = append(parts, hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }

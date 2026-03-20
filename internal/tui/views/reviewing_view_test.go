@@ -37,7 +37,7 @@ func TestReviewViewFitsRequestedSize(t *testing.T) {
 		}
 	}
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"Reviewing", "repository-with-a-long-name", "Re-implement"} {
+	for _, want := range []string{"Reviewing", "repository-with-a-long-name"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
 		}

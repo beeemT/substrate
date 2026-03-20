@@ -126,7 +126,5 @@ func (m CompletedModel) View() string {
 		lines = append(lines, m.styles.Warning.Render("⚠ "+w))
 	}
 
-	lines = append(lines, "", renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width))
-
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)
 }

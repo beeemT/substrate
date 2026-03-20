@@ -206,43 +206,6 @@ func TestReadyToPlanModelViewSeparatesSectionsAndRespectsSize(t *testing.T) {
 	}
 }
 
-func TestPlanReviewHintsRowHasSymmetricLeadingSpace(t *testing.T) {
-	t.Parallel()
-
-	// Use a wide enough view so none of the hint labels are truncated.
-	m := views.NewPlanReviewModel(newTestStyles(t))
-	m.SetSize(120, 20)
-	m.SetTitle("SUB-1")
-	m.SetPlanDocument("p1", "## Plan\n\nSome content.")
-
-	rendered := m.View()
-	plain := ansi.Strip(rendered)
-	lines := strings.Split(plain, "\n")
-
-	// The last line is the hints row. It should be exactly width chars.
-	hintsLine := lines[len(lines)-1]
-	if got := len([]rune(hintsLine)); got != 120 {
-		t.Fatalf("hints line width = %d, want 120; line=%q", got, hintsLine)
-	}
-
-	// Must have at least 1 leading space before [a] (Padding(0,1) applied).
-	if !strings.HasPrefix(hintsLine, " ") {
-		t.Fatalf("hints line = %q, want at least one leading space before first hint", hintsLine)
-	}
-	firstTextIdx := len(hintsLine) - len(strings.TrimLeft(hintsLine, " "))
-	if firstTextIdx < 1 {
-		t.Fatalf("hints line = %q, want firstTextIdx >= 1, got %d", hintsLine, firstTextIdx)
-	}
-	if !strings.HasPrefix(hintsLine[firstTextIdx:], "[a]") {
-		t.Fatalf("hints line = %q, want [a] as first hint text (after leading spaces), got prefix %q", hintsLine, hintsLine[firstTextIdx:])
-	}
-
-	// Must have at least 1 trailing space after the last hint text (Padding(0,1)).
-	if !strings.HasSuffix(hintsLine, " ") {
-		t.Fatalf("hints line = %q, want at least one trailing space after last hint", hintsLine)
-	}
-}
-
 // checkFeedbackViewBounds asserts every rendered line is within width and the
 // total line count equals height.
 func checkFeedbackViewBounds(t *testing.T, label, view string, wantWidth, wantHeight int) {
@@ -272,10 +235,10 @@ func countPlanLines(view string) int {
 }
 
 // wantViewport computes the expected visible plan rows: terminal height minus
-// 4 base reserved rows (title + header-divider + above-hints-divider + hints),
-// 1 feedback label row, and the current textarea row count.
+// 2 base reserved rows (title + header-divider), 1 feedback label row, and the
+// current textarea row count.
 func wantViewport(termHeight, feedbackRows int) int {
-	return termHeight - 4 - 1 - feedbackRows
+	return termHeight - 2 - 1 - feedbackRows
 }
 
 // TestPlanReviewFeedbackInputGrowsAndScrolls verifies that the feedback textarea

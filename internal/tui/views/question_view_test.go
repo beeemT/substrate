@@ -33,7 +33,7 @@ func TestQuestionViewFitsRequestedSize(t *testing.T) {
 		}
 	}
 	plain := ansi.Strip(rendered)
-	for _, want := range []string{"Agent question:", "Foreman's proposed answer", "Your reply", "Approve Foreman answer"} {
+	for _, want := range []string{"Agent question:", "Foreman's proposed answer", "Your reply"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view = %q, want %q", plain, want)
 		}

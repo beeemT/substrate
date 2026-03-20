@@ -24,9 +24,6 @@ func TestSessionLogViewRespectsRequestedHeightWithMeta(t *testing.T) {
 	if got := len(lines); got != 10 {
 		t.Fatalf("line count = %d, want 10", got)
 	}
-	if !strings.Contains(lines[len(lines)-1], "Pause/unpause") {
-		t.Fatalf("last line = %q, want session log hints", lines[len(lines)-1])
-	}
 }
 
 func TestSessionLogSetLogPathKeepsExistingLiveContentForSameSession(t *testing.T) {

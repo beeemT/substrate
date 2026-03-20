@@ -140,15 +140,13 @@ func (m ReviewModel) View() string {
 		}
 	}
 
-	hints := renderOverlayHintsRow(m.styles, m.KeybindHints(), m.width)
 	headerLines := strings.Split(header, "\n")
-	bodyHeight := max(1, m.height-len(headerLines)-1-1-1)
+	bodyHeight := max(1, m.height-len(headerLines)-1-1)
 	bodyBlock := fitViewBox(body.String(), m.width, bodyHeight)
 	parts := make([]string, 0, len(headerLines)+3+len(strings.Split(bodyBlock, "\n")))
 	parts = append(parts, headerLines...)
 	parts = append(parts, tabRow, components.RenderDivider(m.styles, m.width))
 	parts = append(parts, strings.Split(bodyBlock, "\n")...)
-	parts = append(parts, hints)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }
