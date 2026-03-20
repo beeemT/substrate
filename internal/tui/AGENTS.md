@@ -31,8 +31,9 @@
 - **Inter-pane separators**: the separator column in `RenderSplitOverlayBody` is a plain repeated space:
   `strings.TrimSuffix(strings.Repeat(" \n", h), "\n")`. Do not switch it to a lipgloss-styled cell
   unless the whole split body also moves to an explicit background.
-- **Hints rows**: use `renderOverlayHintsRow` in `views/component_helpers.go`; it handles width and
-  truncation without any background styling.
+- **Hints rows**: content-pane views expose hints via their `KeybindHints()` method. The main status
+  bar renders them through `app.go:currentHints()`. Do not render inline hint bars in content views.
+  Overlays and modals that replace the entire screen keep their own hint rendering.
 
 
 ## TUI Layout Tests
