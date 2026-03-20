@@ -22,17 +22,17 @@ import (
 
 // ohMyPiSession implements adapter.AgentSession for oh-my-pi.
 type ohMyPiSession struct {
-	id      string
-	mode    adapter.SessionMode
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.Reader
-	stderr  io.Reader
-	events  chan adapter.AgentEvent
-	logFile *os.File
-	logPath string
-	logDir  string
-	workDir string
+	id             string
+	mode           adapter.SessionMode
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	stdout         io.Reader
+	stderr         io.Reader
+	events         chan adapter.AgentEvent
+	logFile        *os.File
+	logPath        string
+	logDir         string
+	workDir        string
 	ompSessionFile string // OMP native session JSONL file path
 	ompSessionID   string // OMP native session ID
 
@@ -54,10 +54,18 @@ func (s *ohMyPiSession) ID() string {
 }
 
 // OmpSessionFile returns the OMP native session file path captured from session_meta.
-func (s *ohMyPiSession) OmpSessionFile() string { return s.ompSessionFile }
+func (s *ohMyPiSession) OmpSessionFile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ompSessionFile
+}
 
 // OmpSessionID returns the OMP native session ID captured from session_meta.
-func (s *ohMyPiSession) OmpSessionID() string { return s.ompSessionID }
+func (s *ohMyPiSession) OmpSessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ompSessionID
+}
 
 // Wait blocks until the session completes (done or error).
 func (s *ohMyPiSession) Wait(ctx context.Context) error {
@@ -291,8 +299,10 @@ func (s *ohMyPiSession) readEvents() {
 				OmpSessionID   string `json:"omp_session_id"`
 			}
 			if err := json.Unmarshal(line, &meta); err == nil {
+				s.mu.Lock()
 				s.ompSessionFile = meta.OmpSessionFile
 				s.ompSessionID = meta.OmpSessionID
+				s.mu.Unlock()
 			}
 			continue
 		}

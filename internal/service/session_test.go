@@ -131,7 +131,7 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 		{domain.AgentSessionWaitingForAnswer, domain.AgentSessionCompleted, "waiting_for_answer -> completed"},
 		{domain.AgentSessionWaitingForAnswer, domain.AgentSessionInterrupted, "waiting_for_answer -> interrupted"},
 		{domain.AgentSessionCompleted, domain.AgentSessionFailed, "completed -> failed"},
-		{domain.AgentSessionCompleted, domain.AgentSessionFailed, "completed -> failed"},
+		{domain.AgentSessionCompleted, domain.AgentSessionPending, "completed -> pending"},
 		{domain.AgentSessionInterrupted, domain.AgentSessionCompleted, "interrupted -> completed"},
 		{domain.AgentSessionFailed, domain.AgentSessionRunning, "failed -> running"},
 		{domain.AgentSessionFailed, domain.AgentSessionPending, "failed -> pending"},

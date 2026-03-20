@@ -229,9 +229,9 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
-		if failErr := failSessionDurably(ctx, r.sessionSvc, completedTask.ID, nil); failErr != nil {
-			slog.Warn("failed to revert task after follow-up harness start error",
-				"error", failErr,
+		if revertErr := completeSessionDurably(ctx, r.sessionSvc, completedTask.ID); revertErr != nil {
+			slog.Warn("failed to revert task to completed after follow-up harness start error",
+				"error", revertErr,
 				"task_id", completedTask.ID)
 		}
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
@@ -267,7 +267,6 @@ func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback s
 	sb.WriteString("Review the current worktree state, then apply the requested changes.")
 	return sb.String()
 }
-
 
 // buildResumeSystemPrompt constructs the system prompt for a resumed agent session.
 func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) string {
