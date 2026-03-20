@@ -781,10 +781,25 @@ func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
 // SteerSessionCmd sends a steering/follow-up message to a running agent session.
 func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
 	return func() tea.Msg {
-		if err := registry.SendMessage(context.Background(), sessionID, message); err != nil {
+		if err := registry.Steer(context.Background(), sessionID, message); err != nil {
 			return ErrMsg{Err: fmt.Errorf("steer session %s: %w", sessionID, err)}
 		}
 
 		return SteerSessionSentMsg{SessionID: sessionID}
+	}
+}
+
+// FollowUpSessionCmd starts a follow-up agent session on a completed task.
+func FollowUpSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		task, err := svc.Get(ctx, taskID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("get task for follow-up: %w", err)}
+		}
+		if _, err := resumption.FollowUpSession(ctx, task, feedback, instanceID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("start follow-up session: %w", err)}
+		}
+		return FollowUpSessionSentMsg{TaskID: taskID}
 	}
 }

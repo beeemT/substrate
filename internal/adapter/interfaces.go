@@ -89,6 +89,10 @@ type AgentSession interface {
 	// Used for foreman iteration and critique feedback.
 	SendMessage(ctx context.Context, msg string) error
 
+	// Steer sends a steering prompt that interrupts the agent's active streaming turn.
+	// Returns ErrSteerNotSupported if the harness does not support mid-stream steering.
+	Steer(ctx context.Context, msg string) error
+
 	// Abort terminates the agent session gracefully.
 	// Returns an error if the session cannot be aborted.
 	Abort(ctx context.Context) error
@@ -107,14 +111,20 @@ var (
 	// ErrMutateNotSupported is returned when mutation methods are called
 	// on an adapter that doesn't support mutations.
 	ErrMutateNotSupported = error(mutateNotSupported{})
+
+	// ErrSteerNotSupported is returned when Steer is called
+	// on a harness that doesn't support mid-stream steering.
+	ErrSteerNotSupported = error(steerNotSupported{})
 )
 
 type (
 	browseNotSupported struct{}
 	watchNotSupported  struct{}
 	mutateNotSupported struct{}
+	steerNotSupported  struct{}
 )
 
 func (browseNotSupported) Error() string { return "browse not supported by this adapter" }
 func (watchNotSupported) Error() string  { return "watch not supported by this adapter" }
 func (mutateNotSupported) Error() string { return "mutation not supported by this adapter" }
+func (steerNotSupported) Error() string { return "steer not supported by this harness" }

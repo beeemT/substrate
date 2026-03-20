@@ -30,6 +30,8 @@ type Task struct {
 	OwnerInstanceID *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	OmpSessionFile  string
+	OmpSessionID    string
 }
 
 // SessionHistoryEntry is one searchable root-session result.

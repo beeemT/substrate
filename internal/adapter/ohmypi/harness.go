@@ -43,9 +43,10 @@ func (h *OhMyPiHarness) Name() string {
 // Capabilities returns the harness capabilities.
 func (h *OhMyPiHarness) Capabilities() adapter.HarnessCapabilities {
 	return adapter.HarnessCapabilities{
-		SupportsStreaming: true,
-		SupportsMessaging: true,
-		SupportedTools:    []string{"read", "grep", "find", "edit", "write", "bash", "ask_foreman"},
+		SupportsStreaming:    true,
+		SupportsMessaging:    true,
+		SupportsNativeResume: true,
+		SupportedTools:       []string{"read", "grep", "find", "edit", "write", "bash", "ask_foreman"},
 	}
 }
 
@@ -166,6 +167,10 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	if opts.SystemPrompt != "" {
 		encoded := base64.StdEncoding.EncodeToString([]byte(opts.SystemPrompt))
 		env = append(env, "SUBSTRATE_SYSTEM_PROMPT="+encoded)
+	}
+
+	if opts.ResumeSessionFile != "" {
+		env = append(env, "SUBSTRATE_RESUME_SESSION_FILE="+opts.ResumeSessionFile)
 	}
 
 	cmd.Env = env

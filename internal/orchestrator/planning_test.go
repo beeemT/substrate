@@ -76,6 +76,9 @@ func (s *planningHarnessSession) SendMessage(context.Context, string) error {
 	return nil
 }
 func (s *planningHarnessSession) Abort(context.Context) error { return nil }
+func (s *planningHarnessSession) Steer(context.Context, string) error {
+	return adapter.ErrSteerNotSupported
+}
 
 func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -154,6 +157,9 @@ func (s *scriptedPlanningSession) SendMessage(ctx context.Context, msg string) e
 	return nil
 }
 func (s *scriptedPlanningSession) Abort(context.Context) error { return nil }
+func (s *scriptedPlanningSession) Steer(context.Context, string) error {
+	return adapter.ErrSteerNotSupported
+}
 
 func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t *testing.T) {
 	templates, err := NewPlanningTemplates()

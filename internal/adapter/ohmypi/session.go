@@ -33,6 +33,8 @@ type ohMyPiSession struct {
 	logPath string
 	logDir  string
 	workDir string
+	ompSessionFile string // OMP native session JSONL file path
+	ompSessionID   string // OMP native session ID
 
 	mu        sync.Mutex
 	aborted   bool
@@ -50,6 +52,12 @@ func (s *ohMyPiSession) closeEvents() {
 func (s *ohMyPiSession) ID() string {
 	return s.id
 }
+
+// OmpSessionFile returns the OMP native session file path captured from session_meta.
+func (s *ohMyPiSession) OmpSessionFile() string { return s.ompSessionFile }
+
+// OmpSessionID returns the OMP native session ID captured from session_meta.
+func (s *ohMyPiSession) OmpSessionID() string { return s.ompSessionID }
 
 // Wait blocks until the session completes (done or error).
 func (s *ohMyPiSession) Wait(ctx context.Context) error {
@@ -104,6 +112,11 @@ func (s *ohMyPiSession) Events() <-chan adapter.AgentEvent {
 // Used for foreman iteration and critique feedback.
 func (s *ohMyPiSession) SendMessage(_ context.Context, msg string) error {
 	return s.sendMessage(msg)
+}
+
+// Steer sends a steering prompt that interrupts the agent's active streaming turn.
+func (s *ohMyPiSession) Steer(_ context.Context, msg string) error {
+	return s.sendSteer(msg)
 }
 
 // Abort terminates the agent session gracefully.
@@ -199,6 +212,24 @@ func (s *ohMyPiSession) sendMessage(text string) error {
 	return nil
 }
 
+// sendSteer sends a steer message to the bridge.
+func (s *ohMyPiSession) sendSteer(text string) error {
+	msg := bridgeMsg{Type: "steer", Text: text}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal steer message: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write steer: %w", err)
+	}
+
+	return nil
+}
+
 // SendAnswer sends an answer to resolve a pending ask_foreman tool call.
 func (s *ohMyPiSession) SendAnswer(_ context.Context, answer string) error {
 	msg := bridgeMsg{Type: "answer", Text: answer}
@@ -250,6 +281,19 @@ func (s *ohMyPiSession) readEvents() {
 		if err := json.Unmarshal(line, &rawEvent); err != nil {
 			slog.Warn("failed to parse bridge event", "line", string(line), "err", err) //nolint:gosec // G706: log message is static, taint analysis false positive
 
+			continue
+		}
+
+		// Handle session_meta separately (not wrapped in {type:"event",event:{...}}).
+		if rawEvent.Type == "session_meta" {
+			var meta struct {
+				OmpSessionFile string `json:"omp_session_file"`
+				OmpSessionID   string `json:"omp_session_id"`
+			}
+			if err := json.Unmarshal(line, &meta); err == nil {
+				s.ompSessionFile = meta.OmpSessionFile
+				s.ompSessionID = meta.OmpSessionID
+			}
 			continue
 		}
 

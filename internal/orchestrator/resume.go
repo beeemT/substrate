@@ -180,6 +180,95 @@ func (r *Resumption) AbandonSession(ctx context.Context, id string) error {
 	return r.sessionSvc.Fail(ctx, id, nil)
 }
 
+// FollowUpSessionResult holds the outputs of a successful follow-up.
+type FollowUpSessionResult struct {
+	Task           domain.Task
+	HarnessSession adapter.AgentSession
+}
+
+// FollowUpSession restarts a completed task with a user follow-up message.
+// Reuses the same Task row (same ID/log file), transitions completed → running,
+// and resumes the native OMP session if available.
+func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.Task, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
+	if completedTask.Status != domain.AgentSessionCompleted {
+		return FollowUpSessionResult{}, fmt.Errorf("task %s is not completed (status: %s)", completedTask.ID, completedTask.Status)
+	}
+
+	subPlan, err := r.planSvc.GetSubPlan(ctx, completedTask.SubPlanID)
+	if err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan: %w", err)
+	}
+
+	lastLines, err := readLastNLines(completedTask.ID, resumeLogLines)
+	if err != nil {
+		lastLines = "(prior session log unavailable)"
+	}
+
+	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback)
+
+	if err := r.sessionSvc.FollowUpRestart(ctx, completedTask.ID); err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("restart task for follow-up: %w", err)
+	}
+
+	now := time.Now()
+	completedTask.Status = domain.AgentSessionRunning
+	completedTask.CompletedAt = nil
+	completedTask.UpdatedAt = now
+
+	opts := adapter.SessionOpts{
+		SessionID:         completedTask.ID,
+		Mode:              adapter.SessionModeAgent,
+		WorkspaceID:       completedTask.WorkspaceID,
+		SubPlanID:         completedTask.SubPlanID,
+		Repository:        completedTask.RepositoryName,
+		WorktreePath:      completedTask.WorktreePath,
+		SystemPrompt:      systemPrompt,
+		UserPrompt:        "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
+		ResumeSessionFile: completedTask.OmpSessionFile,
+	}
+
+	harnessSession, err := r.harness.StartSession(ctx, opts)
+	if err != nil {
+		if failErr := failSessionDurably(ctx, r.sessionSvc, completedTask.ID, nil); failErr != nil {
+			slog.Warn("failed to revert task after follow-up harness start error",
+				"error", failErr,
+				"task_id", completedTask.ID)
+		}
+		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
+	}
+
+	if r.registry != nil {
+		r.registry.Register(completedTask.ID, harnessSession)
+		go func() {
+			_ = harnessSession.Wait(context.Background())
+			r.registry.Deregister(completedTask.ID)
+		}()
+	}
+
+	return FollowUpSessionResult{
+		Task:           completedTask,
+		HarnessSession: harnessSession,
+	}, nil
+}
+
+// buildFollowUpSystemPrompt constructs the system prompt for a follow-up agent session.
+func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback string) string {
+	var sb strings.Builder
+	sb.WriteString("## Sub-Plan\n\n")
+	sb.WriteString(subPlan.Content)
+	sb.WriteString("\n\n## Previous Session Summary\n\n")
+	sb.WriteString("The previous agent session for this sub-plan has completed. The following is the last output:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString(lastLogLines)
+	sb.WriteString("\n```\n\n")
+	sb.WriteString("## Follow-Up Request\n\n")
+	sb.WriteString(feedback)
+	sb.WriteString("\n\n## Instructions\n\n")
+	sb.WriteString("Review the current worktree state, then apply the requested changes.")
+	return sb.String()
+}
+
+
 // buildResumeSystemPrompt constructs the system prompt for a resumed agent session.
 func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) string {
 	var sb strings.Builder

@@ -201,7 +201,12 @@ function createAskForemanTool(): unknown {
 async function initSession(): Promise<void> {
 	const { createAgentSession, SessionManager, Settings } = await import("@oh-my-pi/pi-coding-agent");
 
-	const sessionManager = mode === "foreman" ? SessionManager.inMemory() : SessionManager.create(worktreePath);
+	const resumeSessionFile = process.env.SUBSTRATE_RESUME_SESSION_FILE ?? "";
+	const sessionManager = mode === "foreman"
+		? SessionManager.inMemory()
+		: resumeSessionFile
+			? SessionManager.open(resumeSessionFile)
+			: SessionManager.create(worktreePath);
 	const customTools = mode === "agent" ? [createAskForemanTool()] : [];
 
 	const sessionOpts: Parameters<typeof createAgentSession>[0] = {
@@ -223,6 +228,17 @@ async function initSession(): Promise<void> {
 
 	const result = await createAgentSession(sessionOpts);
 	session = result.session;
+
+	// Emit session metadata for the Go harness to persist.
+	try {
+		process.stdout.write(JSON.stringify({
+			type: "session_meta",
+			omp_session_id: sessionManager.getSessionId(),
+			omp_session_file: sessionManager.getSessionFile() ?? "",
+		}) + "\n");
+	} catch {
+		// Best-effort: session metadata is non-critical.
+	}
 
 	session.subscribe((event: unknown) => {
 		for (const mapped of mapEvent(event)) {
@@ -278,6 +294,16 @@ async function main(): Promise<void> {
 				break;
 			case "message":
 				await runPrompt(String(msg.text ?? ""), "message");
+				break;
+			case "steer":
+				if (session) {
+					// Fire-and-forget: steer interrupts the active streaming turn.
+					session.prompt(String(msg.text ?? ""), { streamingBehavior: "steer" }).catch((err: unknown) => {
+						const errorMessage = err instanceof Error ? err.message : String(err);
+						emitLifecycle("failed", { message: `Steer failed: ${errorMessage}` });
+					});
+					emitInput("message", String(msg.text ?? ""));
+				}
 				break;
 			default:
 				emitLifecycle("failed", { message: `Unknown message type: ${msg.type}` });

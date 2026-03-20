@@ -456,6 +456,16 @@ func (s *ImplementationService) executeSubPlan(
 		if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
 			slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
 		}
+
+		// Store native OMP session file for follow-up resumes.
+		if omp, ok := harnessSession.(interface{ OmpSessionFile() string; OmpSessionID() string }); ok {
+			if file := omp.OmpSessionFile(); file != "" {
+				if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
+					slog.Warn("failed to store omp session file", "error", err, "session_id", sessionID)
+				}
+			}
+		}
+
 		state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
 
 		// Update sub-plan to completed

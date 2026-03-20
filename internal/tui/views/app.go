@@ -1020,6 +1020,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Steering prompt sent", components.ToastSuccess)
 		return a, nil
 
+	case FollowUpSessionMsg:
+		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
+			cmds = append(cmds, FollowUpSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+		}
+		return a, tea.Batch(cmds...)
+
+	case FollowUpSessionSentMsg:
+		a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
+		return a, nil
+
 	case SkipQuestionMsg:
 		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID))
 		return a, tea.Batch(cmds...)

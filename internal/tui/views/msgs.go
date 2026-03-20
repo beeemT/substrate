@@ -303,3 +303,14 @@ type SteerSessionMsg struct {
 type SteerSessionSentMsg struct {
 	SessionID string
 }
+
+// FollowUpSessionMsg fires when the user submits a follow-up prompt for a completed session.
+type FollowUpSessionMsg struct {
+	TaskID   string
+	Feedback string
+}
+
+// FollowUpSessionSentMsg confirms a follow-up session was started.
+type FollowUpSessionSentMsg struct {
+	TaskID string
+}

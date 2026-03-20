@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
 )
@@ -129,7 +130,7 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 		{domain.AgentSessionRunning, domain.AgentSessionPending, "running -> pending"},
 		{domain.AgentSessionWaitingForAnswer, domain.AgentSessionCompleted, "waiting_for_answer -> completed"},
 		{domain.AgentSessionWaitingForAnswer, domain.AgentSessionInterrupted, "waiting_for_answer -> interrupted"},
-		{domain.AgentSessionCompleted, domain.AgentSessionRunning, "completed -> running"},
+		{domain.AgentSessionCompleted, domain.AgentSessionFailed, "completed -> failed"},
 		{domain.AgentSessionCompleted, domain.AgentSessionFailed, "completed -> failed"},
 		{domain.AgentSessionInterrupted, domain.AgentSessionCompleted, "interrupted -> completed"},
 		{domain.AgentSessionFailed, domain.AgentSessionRunning, "failed -> running"},
@@ -247,5 +248,64 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 
 	if len(interrupted) != 2 {
 		t.Errorf("got %d interrupted sessions, want 2", len(interrupted))
+	}
+}
+
+func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewTaskService(repo)
+
+	now := time.Now()
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
+	session.CompletedAt = &now
+	repo.sessions["session-1"] = session
+
+	if err := svc.FollowUpRestart(ctx, "session-1"); err != nil {
+		t.Fatalf("FollowUpRestart failed: %v", err)
+	}
+
+	got, _ := svc.Get(ctx, "session-1")
+	if got.Status != domain.AgentSessionRunning {
+		t.Errorf("Status = %s, want running", got.Status)
+	}
+	if got.CompletedAt != nil {
+		t.Error("CompletedAt should be nil after FollowUpRestart")
+	}
+}
+
+func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewTaskService(repo)
+
+	repo.sessions["session-1"] = implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+
+	err := svc.FollowUpRestart(ctx, "session-1")
+	if err == nil {
+		t.Fatal("expected error for FollowUpRestart on running session")
+	}
+}
+
+func TestSessionService_UpdateOmpSessionFile(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewTaskService(repo)
+
+	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	repo.sessions["session-1"] = session
+
+	const wantFile = "/home/user/.omp/agent/sessions/repo/1234_abcd.jsonl"
+	const wantID = "abcd1234"
+	if err := svc.UpdateOmpSessionFile(ctx, "session-1", wantFile, wantID); err != nil {
+		t.Fatalf("UpdateOmpSessionFile failed: %v", err)
+	}
+
+	got, _ := svc.Get(ctx, "session-1")
+	if got.OmpSessionFile != wantFile {
+		t.Errorf("OmpSessionFile = %q, want %q", got.OmpSessionFile, wantFile)
+	}
+	if got.OmpSessionID != wantID {
+		t.Errorf("OmpSessionID = %q, want %q", got.OmpSessionID, wantID)
 	}
 }

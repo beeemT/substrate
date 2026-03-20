@@ -48,6 +48,19 @@ func (r *SessionRegistry) SendMessage(ctx context.Context, sessionID string, msg
 	return session.SendMessage(ctx, msg)
 }
 
+// Steer sends a steering prompt that interrupts a running session's active streaming turn.
+// Returns ErrSessionNotRunning if the session is not registered.
+func (r *SessionRegistry) Steer(ctx context.Context, sessionID string, msg string) error {
+	r.mu.RLock()
+	session, ok := r.sessions[sessionID]
+	r.mu.RUnlock()
+	if !ok {
+		return ErrSessionNotRunning
+	}
+	return session.Steer(ctx, msg)
+}
+
+
 // IsRunning reports whether the given session ID is registered.
 func (r *SessionRegistry) IsRunning(sessionID string) bool {
 	r.mu.RLock()

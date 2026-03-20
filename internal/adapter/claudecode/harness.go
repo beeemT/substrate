@@ -185,6 +185,9 @@ func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
 func (s *session) SendMessage(_ context.Context, _ string) error {
 	return errors.New("claude-code harness does not support SendMessage")
 }
+func (s *session) Steer(_ context.Context, _ string) error {
+	return adapter.ErrSteerNotSupported
+}
 
 func (s *session) Wait(ctx context.Context) error {
 	select {

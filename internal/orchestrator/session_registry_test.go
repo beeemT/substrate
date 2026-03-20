@@ -27,6 +27,12 @@ func (m *registryMockSession) SendMessage(_ context.Context, msg string) error {
 	return nil
 }
 func (m *registryMockSession) Abort(_ context.Context) error { return nil }
+func (m *registryMockSession) Steer(_ context.Context, msg string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sentMsgs = append(m.sentMsgs, msg)
+	return nil
+}
 
 func (m *registryMockSession) messages() []string {
 	m.mu.Lock()

@@ -62,7 +62,7 @@ type ImplementingModel struct { //nolint:recvcheck // Bubble Tea: Update returns
 // NewImplementingModel constructs an ImplementingModel with the given styles.
 func NewImplementingModel(st styles.Styles) ImplementingModel {
 	ti := components.NewTextInput()
-	ti.Placeholder = "Send steering prompt to agent..."
+	ti.Placeholder = "Prompt agent / Follow up..."
 	ti.CharLimit = 2000
 	return ImplementingModel{
 		entryBuffers:     make(map[string][]sessionlog.Entry),
@@ -143,6 +143,14 @@ func (m ImplementingModel) selectedRepoIsRunning() bool {
 	return m.repos[m.selectedRepo].Status == domain.SubPlanInProgress
 }
 
+// selectedRepoIsCompleted returns true if the selected repo's session has completed.
+func (m ImplementingModel) selectedRepoIsCompleted() bool {
+	if len(m.repos) == 0 || m.selectedRepo >= len(m.repos) {
+		return false
+	}
+	return m.repos[m.selectedRepo].Status == domain.SubPlanCompleted
+}
+
 func (m ImplementingModel) InputCaptured() bool { return m.steerActive }
 
 // KeybindHints returns the keybind hints for the status bar.
@@ -168,6 +176,8 @@ func (m ImplementingModel) KeybindHints() []KeybindHint {
 	}
 	if m.selectedRepoIsRunning() {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
+	} else if m.selectedRepoIsCompleted() {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Follow up"})
 	}
 	return hints
 }
@@ -207,9 +217,15 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 				m.steerInput.Blur()
 				if text != "" {
 					sid := m.selectedRepoSessionID()
-					cmds = append(cmds, func() tea.Msg {
-						return SteerSessionMsg{SessionID: sid, Message: text}
-					})
+					if m.selectedRepoIsRunning() {
+						cmds = append(cmds, func() tea.Msg {
+							return SteerSessionMsg{SessionID: sid, Message: text}
+						})
+					} else if m.selectedRepoIsCompleted() {
+						cmds = append(cmds, func() tea.Msg {
+							return FollowUpSessionMsg{TaskID: sid, Feedback: text}
+						})
+					}
 				}
 			case "esc":
 				if m.steerInput.Value() != "" {
@@ -227,7 +243,7 @@ func (m ImplementingModel) Update(msg tea.Msg) (ImplementingModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "p":
-			if m.selectedRepoIsRunning() {
+			if m.selectedRepoIsRunning() || m.selectedRepoIsCompleted() {
 				m.steerActive = true
 				cmds = append(cmds, m.steerInput.Focus())
 			}

@@ -29,7 +29,7 @@ var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.AgentSessionFailed,
 	},
 	domain.AgentSessionWaitingForAnswer: {domain.AgentSessionRunning, domain.AgentSessionFailed},
-	domain.AgentSessionCompleted:        {},
+	domain.AgentSessionCompleted:        {domain.AgentSessionRunning},
 	domain.AgentSessionInterrupted:      {domain.AgentSessionRunning, domain.AgentSessionFailed},
 	domain.AgentSessionFailed:           {},
 }
@@ -209,6 +209,44 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 // Resume transitions a task from interrupted to running.
 func (s *TaskService) Resume(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.AgentSessionRunning)
+}
+
+// FollowUpRestart transitions a completed task back to running for a follow-up session.
+// Unlike Start(), this preserves the original StartedAt and clears CompletedAt.
+func (s *TaskService) FollowUpRestart(ctx context.Context, id string) error {
+	task, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("task", id)
+	}
+
+	if !canTransitionTask(task.Status, domain.AgentSessionRunning) {
+		return newInvalidTransitionError(
+			sessionStatusName(task.Status),
+			sessionStatusName(domain.AgentSessionRunning),
+			"task",
+		)
+	}
+
+	now := time.Now()
+	task.Status = domain.AgentSessionRunning
+	task.CompletedAt = nil
+	task.UpdatedAt = now
+
+	return s.repo.Update(ctx, task)
+}
+
+// UpdateOmpSessionFile stores the native OMP session file path and ID on the task record.
+func (s *TaskService) UpdateOmpSessionFile(ctx context.Context, id, file, ompID string) error {
+	task, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("task", id)
+	}
+
+	task.OmpSessionFile = file
+	task.OmpSessionID = ompID
+	task.UpdatedAt = time.Now()
+
+	return s.repo.Update(ctx, task)
 }
 
 // Fail transitions a task to failed.

@@ -138,6 +138,7 @@ type SessionOpts struct {
 	SessionLogDir        string // Directory for session output logs
 	CommitConfig         CommitConfig
 	AllowPush            bool // Whether agent is allowed to push to remote
+	ResumeSessionFile    string // OMP session JSONL file for native resume
 }
 
 // CommitConfig contains commit strategy settings.
@@ -159,6 +160,7 @@ type AgentEvent struct {
 type HarnessCapabilities struct {
 	SupportsStreaming bool     // Supports real-time event streaming
 	SupportsMessaging bool     // Supports SendMessage for iteration
+	SupportsNativeResume bool     // Supports resuming completed sessions natively
 	SupportedTools    []string // List of supported tool names
 }
 
