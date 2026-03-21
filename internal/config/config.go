@@ -67,8 +67,21 @@ type PlanConfig struct {
 
 // ReviewConfig controls the review pipeline.
 type ReviewConfig struct {
-	PassThreshold PassThreshold `yaml:"pass_threshold"`
-	MaxCycles     *int          `yaml:"max_cycles"`
+	PassThreshold    PassThreshold `yaml:"pass_threshold"`
+	MaxCycles        *int          `yaml:"max_cycles"`
+	Timeout          *string       `yaml:"timeout"`
+	AutoFeedbackLoop *bool         `yaml:"auto_feedback_loop"`
+}
+
+// ReviewTimeout returns the parsed review session timeout duration.
+// Falls back to 1 hour if parsing fails.
+func (r ReviewConfig) ReviewTimeout() time.Duration {
+	if r.Timeout != nil {
+		if d, err := time.ParseDuration(*r.Timeout); err == nil {
+			return d
+		}
+	}
+	return time.Hour
 }
 
 type HarnessName string
@@ -284,6 +297,12 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Review.MaxCycles == nil {
 		cfg.Review.MaxCycles = ptr(3)
+	}
+	if cfg.Review.Timeout == nil {
+		cfg.Review.Timeout = ptr("1h")
+	}
+	if cfg.Review.AutoFeedbackLoop == nil {
+		cfg.Review.AutoFeedbackLoop = ptr(true)
 	}
 	if cfg.Harness.Default == "" {
 		cfg.Harness.Default = HarnessOhMyPi

@@ -246,18 +246,19 @@ func run() error { //nolint:funlen
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)
 		}
 	}
-	var implSvc *orchestrator.ImplementationService
-	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(
-			cfg, harnesses.Implementation, gitClient, bus,
-			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc, registry,
-		)
-	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(
 			cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
 			sessionRepo, planRepo, bus, registry,
+		)
+	}
+	var implSvc *orchestrator.ImplementationService
+	if harnesses.Implementation != nil {
+		implSvc = orchestrator.NewImplementationService(
+			cfg, harnesses.Implementation, gitClient, bus,
+			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc, registry,
+			reviewPipeline,
 		)
 	}
 	var resumption *orchestrator.Resumption

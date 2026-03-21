@@ -471,13 +471,13 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}
 	}
-	var implSvc *orchestrator.ImplementationService
-	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc, registry)
-	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus, registry)
+	}
+	var implSvc *orchestrator.ImplementationService
+	if harnesses.Implementation != nil {
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc, registry, reviewPipeline)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {

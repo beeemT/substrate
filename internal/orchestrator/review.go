@@ -32,7 +32,8 @@ type ReviewPipeline struct {
 	sessionRepo repository.TaskRepository
 	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
-	registry    *SessionRegistry
+	registry      *SessionRegistry
+	reviewTimeout time.Duration
 }
 
 // NewReviewPipeline creates a new ReviewPipeline instance.
@@ -57,8 +58,9 @@ func NewReviewPipeline(
 		workItemSvc: workItemSvc,
 		sessionRepo: sessionRepo,
 		planRepo:    planRepo,
-		eventBus:    eventBus,
-		registry:    registry,
+		eventBus:      eventBus,
+		registry:      registry,
+		reviewTimeout: cfg.Review.ReviewTimeout(),
 	}
 }
 
@@ -287,8 +289,8 @@ func (p *ReviewPipeline) startReviewAgent(
 		return nil, "", "", fmt.Errorf("start review session: %w", err)
 	}
 	// Watch for done event instead of calling Wait().
-	// Add 5-minute timeout to prevent hanging.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Apply configured review timeout.
+	timeoutCtx, cancel := context.WithTimeout(ctx, p.reviewTimeout)
 	defer cancel()
 
 	// Register session for steering.

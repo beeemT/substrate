@@ -106,7 +106,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
 	// reviewSessionLogs maps implementation session ID → review agent log path.
-	// Populated when RunReviewSessionCmd returns a ReviewCompleteMsg.
+	// Populated when ReviewCompleteMsg arrives with a review session log path.
 	reviewSessionLogs map[string]string
 
 	// Live instance cache for dead-owner detection
@@ -1196,10 +1196,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ImplementationCompleteMsg:
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
-		if a.svcs.ReviewPipeline != nil {
-			for _, sID := range msg.SessionIDs {
-				cmds = append(cmds, RunReviewSessionCmd(a.svcs.ReviewPipeline, a.svcs.Task, sID))
-			}
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
 		}
 		if a.svcs.Foreman != nil {
 			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeTestConfig(t *testing.T, content string) string {
@@ -307,5 +308,52 @@ func TestGlobalDBPath(t *testing.T) {
 	}
 	if filepath.Base(path) != "state.db" {
 		t.Errorf("GlobalDBPath() = %q, want to end with state.db", path)
+	}
+}
+
+
+func TestReviewTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout *string
+		want    time.Duration
+	}{
+		{name: "nil defaults to 1h", timeout: nil, want: time.Hour},
+		{name: "custom 30m", timeout: ptr("30m"), want: 30 * time.Minute},
+		{name: "invalid falls back to 1h", timeout: ptr("not-a-duration"), want: time.Hour},
+		{name: "short 5s", timeout: ptr("5s"), want: 5 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rc := ReviewConfig{Timeout: tt.timeout}
+			if got := rc.ReviewTimeout(); got != tt.want {
+				t.Errorf("ReviewTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAutoFeedbackLoopDefault(t *testing.T) {
+	path := writeTestConfig(t, `# empty
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Review.AutoFeedbackLoop == nil || !*cfg.Review.AutoFeedbackLoop {
+		t.Errorf("AutoFeedbackLoop = %v, want ptr(true)", cfg.Review.AutoFeedbackLoop)
+	}
+
+	// Explicit false is preserved.
+	path = writeTestConfig(t, `
+review:
+  auto_feedback_loop: false
+`)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Review.AutoFeedbackLoop == nil || *cfg.Review.AutoFeedbackLoop {
+		t.Errorf("AutoFeedbackLoop = %v, want ptr(false)", cfg.Review.AutoFeedbackLoop)
 	}
 }

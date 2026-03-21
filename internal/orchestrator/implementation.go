@@ -25,19 +25,20 @@ import (
 // ImplementationService orchestrates the implementation phase after plan approval.
 // It manages wave-based execution of sub-plans, worktree creation, and agent sessions.
 type ImplementationService struct {
-	cfg          *config.Config
-	harness      adapter.AgentHarness
-	gitClient    *gitwork.Client
-	eventBus     *event.Bus
-	planSvc      *service.PlanService
-	workItemSvc  *service.SessionService
-	sessionSvc   *service.TaskService
-	subPlanRepo  repository.TaskPlanRepository
-	sessionRepo  repository.TaskRepository
-	eventRepo    repository.EventRepository
-	workspaceSvc *service.WorkspaceService
-	registry     *SessionRegistry
-	sessTimeout  time.Duration
+	cfg            *config.Config
+	harness        adapter.AgentHarness
+	gitClient      *gitwork.Client
+	eventBus       *event.Bus
+	planSvc        *service.PlanService
+	workItemSvc    *service.SessionService
+	sessionSvc     *service.TaskService
+	subPlanRepo    repository.TaskPlanRepository
+	sessionRepo    repository.TaskRepository
+	eventRepo      repository.EventRepository
+	workspaceSvc   *service.WorkspaceService
+	registry       *SessionRegistry
+	reviewPipeline *ReviewPipeline
+	sessTimeout    time.Duration
 }
 
 // ImplementationConfig contains configuration for the implementation service.
@@ -66,33 +67,48 @@ func NewImplementationService(
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
+	reviewPipeline *ReviewPipeline,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
 	return &ImplementationService{
-		cfg:          cfg,
-		harness:      harness,
-		gitClient:    gitClient,
-		eventBus:     eventBus,
-		planSvc:      planSvc,
-		workItemSvc:  workItemSvc,
-		sessionSvc:   sessionSvc,
-		subPlanRepo:  subPlanRepo,
-		sessionRepo:  sessionRepo,
-		eventRepo:    eventRepo,
-		workspaceSvc: workspaceSvc,
-		registry:     registry,
-		sessTimeout:  implCfg.SessionTimeout,
+		cfg:            cfg,
+		harness:        harness,
+		gitClient:      gitClient,
+		eventBus:       eventBus,
+		planSvc:        planSvc,
+		workItemSvc:    workItemSvc,
+		sessionSvc:     sessionSvc,
+		subPlanRepo:    subPlanRepo,
+		sessionRepo:    sessionRepo,
+		eventRepo:      eventRepo,
+		workspaceSvc:   workspaceSvc,
+		registry:       registry,
+		reviewPipeline: reviewPipeline,
+		sessTimeout:    implCfg.SessionTimeout,
 	}
 }
 
 // ImplementResult contains the result of implementation execution.
 type ImplementResult struct {
-	PlanID      string
-	WorkItemID  string
-	State       *ExecutionState
-	Sessions    []SessionResult
-	Warnings    []ImplementationWarning
-	CompletedAt time.Time
+	PlanID        string
+	WorkItemID    string
+	State         *ExecutionState
+	Sessions      []SessionResult
+	Warnings      []ImplementationWarning
+	ReviewResults map[string]*SubPlanOutcome // keyed by sub-plan ID
+	CompletedAt   time.Time
+}
+
+// SubPlanOutcome captures the final state of a sub-plan after the full
+// implement→review→reimpl cycle.
+type SubPlanOutcome struct {
+	SubPlanID    string
+	Repository   string
+	Passed       bool
+	Escalated    bool
+	Failed       bool
+	ReviewResult *ReviewResult // nil when review was skipped (impl failed or no pipeline)
+	Cycles       int           // total impl→review cycles executed
 }
 
 // SessionResult contains the result of a single agent session.
@@ -108,6 +124,7 @@ type SessionResult struct {
 	ExitCode     *int
 	Summary      string
 	Errors       []string
+	Outcome      *SubPlanOutcome // populated after review loop completes
 }
 
 // ImplementationWarning represents a non-fatal issue during implementation.
@@ -190,11 +207,12 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 
 	// 11. Execute waves
 	result = &ImplementResult{
-		PlanID:     planID,
-		WorkItemID: workItem.ID,
-		State:      state,
-		Sessions:   make([]SessionResult, 0),
-		Warnings:   make([]ImplementationWarning, 0),
+		PlanID:        planID,
+		WorkItemID:    workItem.ID,
+		State:         state,
+		Sessions:      make([]SessionResult, 0),
+		Warnings:      make([]ImplementationWarning, 0),
+		ReviewResults: make(map[string]*SubPlanOutcome),
 	}
 
 	// Pre-create all worktrees sequentially before fan-out to eliminate the
@@ -224,10 +242,13 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		result.Sessions = append(result.Sessions, sessionResults...)
 		result.Warnings = append(result.Warnings, warnings...)
 
-		// Check if wave completed successfully
+		// Check if wave completed successfully (impl + review).
 		waveComplete := true
 		for _, sr := range sessionResults {
-			if sr.Status == domain.AgentSessionFailed {
+			if sr.Outcome != nil {
+				result.ReviewResults[sr.SubPlanID] = sr.Outcome
+			}
+			if sr.Status == domain.AgentSessionFailed || (sr.Outcome != nil && sr.Outcome.Failed) {
 				waveComplete = false
 				break
 			}
@@ -236,7 +257,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		waveEnd := time.Now()
 		if !waveComplete {
 			state.FailWave(waveIndex, waveEnd.UnixNano())
-			// Stop execution on wave failure
+			// Stop execution on wave failure.
 			break
 		}
 		state.CompleteWave(waveIndex, waveEnd.UnixNano())
@@ -246,17 +267,35 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 
 	result.CompletedAt = time.Now()
 
-	// Update work item state based on overall result using a detached cleanup context
-	// so cancellation cannot strand the work item in implementing.
+	// Determine final work item state based on review outcomes.
 	cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
 	defer cleanupCancel()
-	if state.AllWavesCompleted() {
+
+	hasEscalated := false
+	hasFailed := false
+	for _, outcome := range result.ReviewResults {
+		if outcome.Failed {
+			hasFailed = true
+		}
+		if outcome.Escalated {
+			hasEscalated = true
+		}
+	}
+
+	switch {
+	case hasFailed || !state.AllWavesCompleted():
+		if failErr := s.workItemSvc.FailWorkItem(cleanupCtx, workItem.ID); failErr != nil {
+			slog.Warn("failed to transition work item to failed", "error", failErr)
+		}
+	case hasEscalated:
+		// At least one repo needs human decision. Transition to reviewing.
 		if reviewErr := s.workItemSvc.SubmitForReview(cleanupCtx, workItem.ID); reviewErr != nil {
 			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
 		}
-	} else {
-		if failErr := s.workItemSvc.FailWorkItem(cleanupCtx, workItem.ID); failErr != nil {
-			slog.Warn("failed to transition work item to failed", "error", failErr)
+	default:
+		// All repos passed review (or no review pipeline). Complete.
+		if completeErr := s.workItemSvc.CompleteWorkItem(cleanupCtx, workItem.ID); completeErr != nil {
+			slog.Warn("failed to transition work item to completed", "error", completeErr)
 		}
 	}
 
@@ -293,9 +332,13 @@ func (s *ImplementationService) executeWave(
 			}
 			mu.Unlock()
 
-			// If session failed, return error to cancel other goroutines
+			// Cancel other goroutines only on hard failure (impl or review).
+			// Review escalation is not a failure — it's a human-decision pause.
 			if result.Status == domain.AgentSessionFailed {
 				return fmt.Errorf("sub-plan %s failed: %s", spCopy.ID, result.Summary)
+			}
+			if result.Outcome != nil && result.Outcome.Failed {
+				return fmt.Errorf("sub-plan %s review failed", spCopy.ID)
 			}
 
 			return nil
@@ -450,47 +493,262 @@ func (s *ImplementationService) executeSubPlan(
 			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
 		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), waitErr)
-	} else {
-		result.Status = domain.AgentSessionCompleted
-		result.Summary = "Session completed successfully"
-		if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-			slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
-		}
-
-		// Store native OMP session file for follow-up resumes.
-		if omp, ok := harnessSession.(interface {
-			OmpSessionFile() string
-			OmpSessionID() string
-		}); ok {
-			if file := omp.OmpSessionFile(); file != "" {
-				if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
-					slog.Warn("failed to store omp session file", "error", err, "session_id", sessionID)
-				}
-			}
-		}
-
-		state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
-
-		// Update sub-plan to completed
-		subPlan.Status = domain.SubPlanCompleted
-		subPlan.UpdatedAt = time.Now()
-		if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-			slog.Warn("failed to update sub-plan status to completed", "error", err)
-		}
-	}
-
-	// Emit session completed/failed event
-	if result.Status == domain.AgentSessionCompleted {
-		if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
-			slog.Warn("failed to emit session completed event", "error", err)
-		}
-	} else {
 		if err := s.emitSessionFailed(ctx, &session, result.Summary, workspace.ID); err != nil {
 			slog.Warn("failed to emit session failed event", "error", err)
 		}
+		return result, nil
+	}
+
+	// Implementation succeeded.
+	result.Status = domain.AgentSessionCompleted
+	result.Summary = "Session completed successfully"
+	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
+		slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
+	}
+
+	// Store native OMP session file for follow-up resumes.
+	if omp, ok := harnessSession.(interface {
+		OmpSessionFile() string
+		OmpSessionID() string
+	}); ok {
+		if file := omp.OmpSessionFile(); file != "" {
+			if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
+				slog.Warn("failed to store omp session file", "error", err, "session_id", sessionID)
+			}
+		}
+	}
+
+	if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
+		slog.Warn("failed to emit session completed event", "error", err)
+	}
+
+	// Run review loop if pipeline is configured.
+	if s.reviewPipeline != nil {
+		outcome := s.reviewLoop(ctx, session, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
+		result.Outcome = outcome
+
+		if outcome.Passed {
+			state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
+			subPlan.Status = domain.SubPlanCompleted
+			subPlan.UpdatedAt = time.Now()
+			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
+				slog.Warn("failed to update sub-plan status to completed", "error", err)
+			}
+		} else if outcome.Failed {
+			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
+			subPlan.Status = domain.SubPlanFailed
+			subPlan.UpdatedAt = time.Now()
+			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
+				slog.Warn("failed to update sub-plan status to failed", "error", err)
+			}
+		}
+		// Escalated: sub-plan stays in current status (in_progress). Human decides.
+		return result, nil
+	}
+
+	// No review pipeline — mark sub-plan completed immediately.
+	state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
+	subPlan.Status = domain.SubPlanCompleted
+	subPlan.UpdatedAt = time.Now()
+	if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
+		slog.Warn("failed to update sub-plan status to completed", "error", err)
 	}
 
 	return result, nil
+}
+
+// reviewLoop runs the implement→review→reimpl cycle for a single sub-plan.
+// It returns the final SubPlanOutcome. The initial implementation session is
+// already completed; this method starts with the first review.
+func (s *ImplementationService) reviewLoop(
+	ctx context.Context,
+	implSession domain.Task,
+	subPlan domain.TaskPlan,
+	workspace *domain.Workspace,
+	plan *domain.Plan,
+	workItem *domain.Session,
+	branch string,
+	worktreePaths map[string]string,
+	state *ExecutionState,
+) *SubPlanOutcome {
+	outcome := &SubPlanOutcome{
+		SubPlanID:  subPlan.ID,
+		Repository: subPlan.RepositoryName,
+	}
+
+	currentSession := implSession
+	autoLoop := s.cfg.Review.AutoFeedbackLoop != nil && *s.cfg.Review.AutoFeedbackLoop
+
+	for {
+		outcome.Cycles++
+
+		reviewResult, err := s.reviewPipeline.ReviewSession(ctx, currentSession)
+		if err != nil {
+			slog.Warn("review session failed", "error", err,
+				"session_id", currentSession.ID, "sub_plan", subPlan.ID)
+			outcome.Failed = true
+			return outcome
+		}
+		outcome.ReviewResult = reviewResult
+
+		if reviewResult.Passed {
+			outcome.Passed = true
+			return outcome
+		}
+
+		if reviewResult.Escalated {
+			outcome.Escalated = true
+			return outcome
+		}
+
+		if !reviewResult.NeedsReimpl || !autoLoop {
+			// Needs reimpl but auto-loop disabled — escalate for human decision.
+			outcome.Escalated = true
+			return outcome
+		}
+
+		// Auto-reimpl: build critique feedback and re-run implementation.
+		feedback := buildCritiqueFeedback(reviewResult.Critiques)
+		newSession, err := s.reimplementSubPlan(ctx, subPlan, workspace, plan, workItem, branch, worktreePaths, state, feedback)
+		if err != nil {
+			slog.Warn("reimplementation failed", "error", err,
+				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
+			outcome.Failed = true
+			return outcome
+		}
+		currentSession = newSession
+	}
+}
+
+// reimplementSubPlan creates a fresh implementation session for a sub-plan
+// after review critiques. Uses the same worktree (accumulates changes).
+func (s *ImplementationService) reimplementSubPlan(
+	ctx context.Context,
+	subPlan domain.TaskPlan,
+	workspace *domain.Workspace,
+	plan *domain.Plan,
+	workItem *domain.Session,
+	branch string,
+	worktreePaths map[string]string,
+	state *ExecutionState,
+	critiqueFeedback string,
+) (domain.Task, error) {
+	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
+	if !ok {
+		return domain.Task{}, fmt.Errorf("worktree for repository %s not found", subPlan.RepositoryName)
+	}
+
+	sessionID := domain.NewID()
+	session := domain.Task{
+		ID:             sessionID,
+		WorkItemID:     workItem.ID,
+		WorkspaceID:    workspace.ID,
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      subPlan.ID,
+		RepositoryName: subPlan.RepositoryName,
+		WorktreePath:   worktreePath,
+		HarnessName:    s.harness.Name(),
+		Status:         domain.AgentSessionPending,
+	}
+	if err := s.sessionSvc.Create(ctx, session); err != nil {
+		return domain.Task{}, fmt.Errorf("create reimpl session: %w", err)
+	}
+	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
+		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		return domain.Task{}, fmt.Errorf("start reimpl session: %w", err)
+	}
+	now := time.Now()
+	session.Status = domain.AgentSessionRunning
+	session.StartedAt = &now
+	session.UpdatedAt = now
+
+	if err := s.emitSessionStarted(ctx, &session, workspace.ID); err != nil {
+		slog.Warn("failed to emit reimpl session started event", "error", err)
+	}
+
+	// Build session options with critique feedback appended to the prompt.
+	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
+	if critiqueFeedback != "" {
+		opts.SystemPrompt += "\n\n" + critiqueFeedback
+	}
+
+	harnessSession, err := s.harness.StartSession(ctx, opts)
+	if err != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail reimpl session after harness start error", "error", failErr)
+		}
+		return domain.Task{}, fmt.Errorf("start reimpl agent: %w", err)
+	}
+
+	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
+	defer sessionCancel()
+
+	if s.registry != nil {
+		s.registry.Register(sessionID, harnessSession)
+		defer s.registry.Deregister(sessionID)
+	}
+
+	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID)
+
+	waitErr := harnessSession.Wait(sessionCtx)
+
+	if waitErr != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail reimpl session", "error", failErr)
+		}
+		if err := s.emitSessionFailed(ctx, &session, waitErr.Error(), workspace.ID); err != nil {
+			slog.Warn("failed to emit reimpl session failed event", "error", err)
+		}
+		return domain.Task{}, fmt.Errorf("reimpl session failed: %w", waitErr)
+	}
+
+	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
+		slog.Warn("failed to complete reimpl session", "error", completeErr)
+	}
+
+	// Store native OMP session file for follow-up resumes.
+	if omp, ok := harnessSession.(interface {
+		OmpSessionFile() string
+		OmpSessionID() string
+	}); ok {
+		if file := omp.OmpSessionFile(); file != "" {
+			if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
+				slog.Warn("failed to store omp session file for reimpl", "error", err)
+			}
+		}
+	}
+
+	if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
+		slog.Warn("failed to emit reimpl session completed event", "error", err)
+	}
+
+	return session, nil
+}
+
+// buildCritiqueFeedback formats review critiques into a prompt section
+// that instructs the implementation agent to address them.
+func buildCritiqueFeedback(critiques []domain.Critique) string {
+	if len(critiques) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Review Critiques\n\n")
+	b.WriteString("The following issues were found during code review. Address each one:\n\n")
+	for i, c := range critiques {
+		fmt.Fprintf(&b, "%d. [%s] %s", i+1, c.Severity, c.Description)
+		if c.FilePath != "" {
+			fmt.Fprintf(&b, " (file: %s", c.FilePath)
+			if c.LineNumber != nil && *c.LineNumber > 0 {
+				fmt.Fprintf(&b, ", line %d", *c.LineNumber)
+			}
+			b.WriteString(")")
+		}
+		if c.Suggestion != "" {
+			fmt.Fprintf(&b, "\n   Suggestion: %s", c.Suggestion)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // ensureWorktree creates a worktree if it doesn't exist, or returns the existing one.

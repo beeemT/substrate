@@ -640,6 +640,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		eventRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil,
+		nil,
 	)
 
 	return svc, workItemRepo, eventRepo
@@ -792,5 +793,117 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 		if evt.EventType == string(domain.EventAgentSessionStarted) {
 			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentSessionStarted)
 		}
+	}
+}
+
+func TestBuildCritiqueFeedback(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []domain.Critique
+		contains []string
+		empty    bool
+	}{
+		{
+			name:  "empty critiques returns empty string",
+			input: nil,
+			empty: true,
+		},
+		{
+			name: "single critique with file and line",
+			input: []domain.Critique{
+				{
+					Severity:    domain.CritiqueCritical,
+					Description: "nil pointer dereference",
+					FilePath:    "cmd/main.go",
+					LineNumber:  ptrInt(42),
+				},
+			},
+			contains: []string{
+				"1. [critical] nil pointer dereference",
+				"file: cmd/main.go",
+				"line 42",
+			},
+		},
+		{
+			name: "critique with nil LineNumber omits line",
+			input: []domain.Critique{
+				{
+					Severity:    domain.CritiqueMajor,
+					Description: "missing error check",
+					FilePath:    "pkg/server.go",
+					LineNumber:  nil,
+				},
+			},
+			contains: []string{
+				"1. [major] missing error check",
+				"file: pkg/server.go)",
+			},
+		},
+		{
+			name: "critique with suggestion includes suggestion line",
+			input: []domain.Critique{
+				{
+					Severity:    domain.CritiqueMinor,
+					Description: "use constants",
+					FilePath:    "pkg/config.go",
+					LineNumber:  ptrInt(10),
+					Suggestion:  "Replace magic number with named constant",
+				},
+			},
+			contains: []string{
+				"Suggestion: Replace magic number with named constant",
+			},
+		},
+		{
+			name: "empty file path omits file info",
+			input: []domain.Critique{
+				{
+					Severity:    domain.CritiqueNit,
+					Description: "trailing whitespace",
+				},
+			},
+			contains: []string{
+				"1. [nit] trailing whitespace",
+			},
+		},
+		{
+			name: "multiple critiques are numbered",
+			input: []domain.Critique{
+				{
+					Severity:    domain.CritiqueCritical,
+					Description: "first issue",
+				},
+				{
+					Severity:    domain.CritiqueMinor,
+					Description: "second issue",
+					Suggestion:  "fix it",
+				},
+			},
+			contains: []string{
+				"1. [critical] first issue",
+				"2. [minor] second issue",
+				"Suggestion: fix it",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildCritiqueFeedback(tt.input)
+			if tt.empty {
+				if got != "" {
+					t.Fatalf("expected empty string, got %q", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("expected non-empty string")
+			}
+			for _, s := range tt.contains {
+				if !strings.Contains(got, s) {
+					t.Errorf("output missing %q\ngot:\n%s", s, got)
+				}
+			}
+		})
 	}
 }
