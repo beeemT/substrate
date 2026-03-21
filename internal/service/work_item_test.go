@@ -344,6 +344,7 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 		{domain.SessionReviewing, domain.SessionCompleted, "reviewing -> completed"},
 		{domain.SessionReviewing, domain.SessionImplementing, "reviewing -> implementing"},
 		{domain.SessionReviewing, domain.SessionFailed, "reviewing -> failed"},
+		{domain.SessionFailed, domain.SessionImplementing, "failed -> implementing"},
 	}
 
 	for _, tc := range validTransitions {
@@ -530,6 +531,30 @@ func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 			t.Errorf("State = %q, want %q", got.State, domain.SessionFailed)
 		}
 	})
+}
+
+func TestSessionService_RetryFailedWorkItem(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockWorkItemRepository()
+	svc := NewSessionService(repo)
+	repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionFailed}
+	if err := svc.RetryFailedWorkItem(ctx, "wi-1"); err != nil {
+		t.Fatalf("RetryFailedWorkItem: %v", err)
+	}
+	got, _ := svc.Get(ctx, "wi-1")
+	if got.State != domain.SessionImplementing {
+		t.Errorf("state = %v, want implementing", got.State)
+	}
+}
+
+func TestSessionService_RetryFailedWorkItem_NotFailed(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockWorkItemRepository()
+	svc := NewSessionService(repo)
+	repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionImplementing}
+	if err := svc.RetryFailedWorkItem(ctx, "wi-1"); err == nil {
+		t.Fatal("expected error for non-failed work item")
+	}
 }
 
 func TestWorkItemService_NotFound(t *testing.T) {

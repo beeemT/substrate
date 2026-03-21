@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
@@ -905,5 +907,265 @@ func TestBuildCritiqueFeedback(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildWavesSkipsCompletedKeepsFailed verifies that completed sub-plans are
+// skipped but failed sub-plans are included (they will be reset to pending by Implement).
+func TestBuildWavesSkipsCompletedKeepsFailed(t *testing.T) {
+	subPlans := []domain.TaskPlan{
+		{ID: "sp1", Order: 0, RepositoryName: "repo1", Status: domain.SubPlanCompleted},
+		{ID: "sp2", Order: 0, RepositoryName: "repo2", Status: domain.SubPlanFailed},
+		{ID: "sp3", Order: 1, RepositoryName: "repo3", Status: domain.SubPlanPending},
+	}
+
+	waves := BuildWaves(subPlans)
+	if len(waves) != 2 {
+		t.Fatalf("expected 2 waves, got %d", len(waves))
+	}
+	// Wave 0: sp2 (failed — not filtered)
+	if len(waves[0]) != 1 || waves[0][0].ID != "sp2" {
+		t.Errorf("wave 0: expected [sp2], got %v", waves[0])
+	}
+	// Wave 1: sp3 (pending)
+	if len(waves[1]) != 1 || waves[1][0].ID != "sp3" {
+		t.Errorf("wave 1: expected [sp3], got %v", waves[1])
+	}
+}
+
+// completingMockSession is a mock session that completes immediately on Wait.
+type completingMockSession struct {
+	id     string
+	events chan adapter.AgentEvent
+	mu     sync.Mutex
+	msgs   []string
+	opts   adapter.SessionOpts // captured from StartSession
+}
+
+func (s *completingMockSession) ID() string                   { return s.id }
+func (s *completingMockSession) Wait(_ context.Context) error { return nil }
+func (s *completingMockSession) Events() <-chan adapter.AgentEvent {
+	close(s.events)
+	return s.events
+}
+
+func (s *completingMockSession) SendMessage(_ context.Context, msg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msgs = append(s.msgs, msg)
+	return nil
+}
+func (s *completingMockSession) Steer(_ context.Context, _ string) error { return nil }
+func (s *completingMockSession) Abort(_ context.Context) error           { return nil }
+
+// completingHarness returns sessions that complete immediately on Wait.
+type completingHarness struct {
+	mu       sync.Mutex
+	lastSess *completingMockSession
+}
+
+func (h *completingHarness) Name() string { return "completing-mock" }
+func (h *completingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	s := &completingMockSession{
+		id:     opts.SessionID,
+		events: make(chan adapter.AgentEvent, 1),
+		opts:   opts,
+	}
+	h.mu.Lock()
+	h.lastSess = s
+	h.mu.Unlock()
+	return s, nil
+}
+
+// TestReimplementSubPlan_WithOmpSessionFile verifies that reimplementation
+// resumes the previous OMP session and sends critique as a follow-up message.
+func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+
+	sessionRepo := newMockSessionRepo()
+	harness := &completingHarness{}
+
+	cfg := &config.Config{}
+	subPlanRepo := newMockSubPlanRepo()
+	planRepo := newMockPlanRepo()
+	workItemRepo := &implementationWorkItemRepo{items: make(map[string]domain.Session)}
+	eventRepo := &implementationEventRepo{}
+	workspaceRepo := &implementationWorkspaceRepo{
+		workspaces: map[string]domain.Workspace{
+			"ws-1": {ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady},
+		},
+	}
+
+	svc := NewImplementationService(
+		cfg,
+		harness,
+		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
+		service.NewPlanService(planRepo, subPlanRepo),
+		service.NewSessionService(workItemRepo),
+		service.NewTaskService(sessionRepo),
+		subPlanRepo,
+		sessionRepo,
+		eventRepo,
+		service.NewWorkspaceService(workspaceRepo),
+		nil, nil,
+	)
+
+	// Seed a "previous" completed session with OmpSessionFile.
+	prevSession := domain.Task{
+		ID:             "prev-session",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   workspaceRoot,
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+		OmpSessionFile: "/tmp/session.jsonl",
+		OmpSessionID:   "omp-123",
+	}
+	sessionRepo.sessions[prevSession.ID] = prevSession
+
+	subPlan := domain.TaskPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+	plan := &domain.Plan{ID: "plan-1"}
+	worktreePaths := map[string]string{"repo-a": workspaceRoot}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+
+	newSess, err := svc.reimplementSubPlan(ctx, prevSession, subPlan, workspace, plan, workItem, "main", worktreePaths, state, "Fix the bug")
+	if err != nil {
+		t.Fatalf("reimplementSubPlan: %v", err)
+	}
+
+	// Verify a new session was created (different ID from previous).
+	if newSess.ID == prevSession.ID {
+		t.Error("new session should have a different ID from previous session")
+	}
+
+	// Verify the new session exists in the repo.
+	if _, err := sessionRepo.Get(ctx, newSess.ID); err != nil {
+		t.Fatalf("new session not found in repo: %v", err)
+	}
+
+	// Verify the harness received ResumeSessionFile in opts.
+	harness.mu.Lock()
+	lastSess := harness.lastSess
+	harness.mu.Unlock()
+	if lastSess == nil {
+		t.Fatal("harness did not create a session")
+	}
+	if lastSess.opts.ResumeSessionFile != "/tmp/session.jsonl" {
+		t.Errorf("ResumeSessionFile = %q, want %q", lastSess.opts.ResumeSessionFile, "/tmp/session.jsonl")
+	}
+
+	// Verify critique feedback was sent as a follow-up message (not in system prompt).
+	lastSess.mu.Lock()
+	msgs := lastSess.msgs
+	lastSess.mu.Unlock()
+	if len(msgs) != 1 || msgs[0] != "Fix the bug" {
+		t.Errorf("SendMessage calls = %v, want [\"Fix the bug\"]", msgs)
+	}
+	if strings.Contains(lastSess.opts.SystemPrompt, "Fix the bug") {
+		t.Error("critique should NOT be in SystemPrompt when resuming (should be sent via SendMessage)")
+	}
+}
+
+// TestReimplementSubPlan_WithoutOmpSessionFile verifies fallback behavior
+// when the previous session has no OMP session file (non-OMP harness).
+func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+
+	sessionRepo := newMockSessionRepo()
+	harness := &completingHarness{}
+
+	cfg := &config.Config{}
+	subPlanRepo := newMockSubPlanRepo()
+	planRepo := newMockPlanRepo()
+	workItemRepo := &implementationWorkItemRepo{items: make(map[string]domain.Session)}
+	eventRepo := &implementationEventRepo{}
+	workspaceRepo := &implementationWorkspaceRepo{
+		workspaces: map[string]domain.Workspace{
+			"ws-1": {ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady},
+		},
+	}
+
+	svc := NewImplementationService(
+		cfg,
+		harness,
+		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
+		service.NewPlanService(planRepo, subPlanRepo),
+		service.NewSessionService(workItemRepo),
+		service.NewTaskService(sessionRepo),
+		subPlanRepo,
+		sessionRepo,
+		eventRepo,
+		service.NewWorkspaceService(workspaceRepo),
+		nil, nil,
+	)
+
+	// Seed a "previous" completed session WITHOUT OmpSessionFile.
+	prevSession := domain.Task{
+		ID:             "prev-session",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   workspaceRoot,
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+	}
+	sessionRepo.sessions[prevSession.ID] = prevSession
+
+	subPlan := domain.TaskPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+	plan := &domain.Plan{ID: "plan-1"}
+	worktreePaths := map[string]string{"repo-a": workspaceRoot}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+
+	newSess, err := svc.reimplementSubPlan(ctx, prevSession, subPlan, workspace, plan, workItem, "main", worktreePaths, state, "Fix the bug")
+	if err != nil {
+		t.Fatalf("reimplementSubPlan: %v", err)
+	}
+
+	// Verify session was created.
+	if newSess.ID == prevSession.ID {
+		t.Error("new session should have a different ID")
+	}
+
+	// Verify no ResumeSessionFile was set (fallback mode).
+	harness.mu.Lock()
+	lastSess := harness.lastSess
+	harness.mu.Unlock()
+	if lastSess == nil {
+		t.Fatal("harness did not create a session")
+	}
+	if lastSess.opts.ResumeSessionFile != "" {
+		t.Errorf("ResumeSessionFile = %q, want empty (no OMP file)", lastSess.opts.ResumeSessionFile)
+	}
+
+	// Verify critique feedback was baked into SystemPrompt (fallback for non-OMP).
+	if !strings.Contains(lastSess.opts.SystemPrompt, "Fix the bug") {
+		t.Error("critique should be in SystemPrompt when no OMP session file is available")
+	}
+
+	// Verify no SendMessage was called (feedback is in SystemPrompt instead).
+	lastSess.mu.Lock()
+	msgs := lastSess.msgs
+	lastSess.mu.Unlock()
+	if len(msgs) != 0 {
+		t.Errorf("SendMessage should not be called in fallback mode, got %v", msgs)
 	}
 }

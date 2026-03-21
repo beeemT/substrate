@@ -554,6 +554,34 @@ func OverrideAcceptCmd(
 	}
 }
 
+// RetryFailedCmd transitions a failed work item back to implementing and re-runs
+// the implementation pipeline for failed sub-plans.
+func RetryFailedCmd(workItemSvc *service.SessionService, implSvc *orchestrator.ImplementationService, planID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := workItemSvc.RetryFailedWorkItem(ctx, workItemID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("retry failed work item: %w", err)}
+		}
+		// Re-run implementation — Implement() will reset failed sub-plans
+		// to pending and only execute those.
+		result, err := implSvc.Implement(ctx, planID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("retry implementation: %w", err)}
+		}
+		var sessionIDs []string
+		for _, s := range result.Sessions {
+			if s.Status == domain.AgentSessionCompleted {
+				sessionIDs = append(sessionIDs, s.SessionID)
+			}
+		}
+		return ImplementationCompleteMsg{
+			PlanID:     planID,
+			WorkItemID: workItemID,
+			SessionIDs: sessionIDs,
+		}
+	}
+}
+
 func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, planID, workItemID string) error {
 	if bus == nil {
 		return nil

@@ -1080,6 +1080,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case RetryFailedMsg:
+		a.toasts.AddToast("Retrying failed repos...", components.ToastInfo)
+		if a.svcs.Implementation != nil {
+			if plan := a.plans[msg.WorkItemID]; plan != nil {
+				cmds = append(cmds, RetryFailedCmd(a.svcs.Session, a.svcs.Implementation, plan.ID, msg.WorkItemID))
+				if a.svcs.Foreman != nil {
+					a.foremanPlanID = plan.ID
+					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
+				}
+			} else {
+				a.toasts.AddToast("Plan not found for retry", components.ToastError)
+			}
+		} else {
+			a.toasts.AddToast("Implementation service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
+
 	case OverrideAcceptMsg:
 		cmds = append(cmds, OverrideAcceptCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Task, a.svcs.Bus, msg.WorkItemID))
 		return a, tea.Batch(cmds...)

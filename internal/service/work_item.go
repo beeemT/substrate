@@ -30,7 +30,7 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionCompleted:    {domain.SessionPlanning},
-	domain.SessionFailed:       {}, // Terminal state
+	domain.SessionFailed:       {domain.SessionImplementing},
 }
 
 // canTransition checks if a state transition is valid.
@@ -347,6 +347,24 @@ func (s *SessionService) FailWorkItem(ctx context.Context, id string) error {
 	}
 
 	return s.Transition(ctx, id, domain.SessionFailed)
+}
+
+// RetryFailedWorkItem transitions a failed work item back to implementing for retry.
+func (s *SessionService) RetryFailedWorkItem(ctx context.Context, id string) error {
+	item, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("work item", id)
+	}
+
+	if !canTransition(item.State, domain.SessionImplementing) {
+		return newInvalidTransitionError(
+			workItemStateName(item.State),
+			workItemStateName(domain.SessionImplementing),
+			"work item",
+		)
+	}
+
+	return s.Transition(ctx, id, domain.SessionImplementing)
 }
 
 // StartFollowUpPlanning transitions a completed work item back to planning for a follow-up round.

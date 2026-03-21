@@ -27,6 +27,7 @@ const (
 	overviewActionQuestion    OverviewActionKind = "question"
 	overviewActionInterrupted OverviewActionKind = "interrupted"
 	overviewActionReviewing   OverviewActionKind = "reviewing"
+	overviewActionFailed      OverviewActionKind = "failed"
 
 	providerGitlab       = "gitlab"
 	labelReviewArtifacts = "Review artifacts"
@@ -311,10 +312,17 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			return m, nil
 		case keyEnter:
 			if action := m.selectedActionCard(); action != nil {
-				if action.Kind == overviewActionQuestion {
+				switch action.Kind {
+				case overviewActionQuestion:
 					m.overlay = overviewOverlayQuestion
 
 					return m, nil
+				case overviewActionFailed:
+					if len(action.ReviewRepos) > 0 {
+						m.overlay = overviewOverlayReviewing
+
+						return m, nil
+					}
 				}
 			} else if m.data.State == domain.SessionIngested {
 				return m, func() tea.Msg { return StartPlanMsg{WorkItemID: m.data.WorkItemID} }
@@ -338,6 +346,12 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					m.overlay = overviewOverlayReviewing
 
 					return m, nil
+				case overviewActionFailed:
+					if len(action.ReviewRepos) > 0 {
+						m.overlay = overviewOverlayReviewing
+
+						return m, nil
+					}
 				}
 			} else if m.data.Plan.Exists && m.data.Plan.Document != nil {
 				m.overlay = overviewOverlayPlan
@@ -416,6 +430,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					}
 				case overviewActionReviewing:
 					return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.data.WorkItemID} }
+				case overviewActionFailed:
+					return m, func() tea.Msg { return RetryFailedMsg{WorkItemID: m.data.WorkItemID} }
 				}
 			}
 		case "up", keyDown, "j", "k", "pgup", "pgdown", "home", "end":
@@ -497,6 +513,8 @@ func (m *SessionOverviewModel) syncActionModels() {
 			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.CanAct)
 		}
 	case overviewActionReviewing:
+		m.reviewing.SetRepos(action.ReviewRepos)
+	case overviewActionFailed:
 		m.reviewing.SetRepos(action.ReviewRepos)
 	}
 }
@@ -711,6 +729,8 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		return hints
 	case overviewActionReviewing:
 		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
+	case overviewActionFailed:
+		return []KeybindHint{{Key: "r", Label: "Retry"}, {Key: "i", Label: "Inspect"}}
 	default:
 		return nil
 	}
@@ -1351,6 +1371,9 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	if reviewAction := a.buildReviewActionCard(wi, subPlans); reviewAction != nil {
 		actions = append(actions, *reviewAction)
 	}
+	if failedAction := a.buildFailedActionCard(wi, subPlans); failedAction != nil {
+		actions = append(actions, *failedAction)
+	}
 	for _, session := range a.sessionsForWorkItem(wi.ID) {
 		if session.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[session.ID] {
@@ -1433,6 +1456,42 @@ func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPl
 		Title:       "Review requires decision",
 		Blocked:     "Critiques are waiting for a human decision",
 		Why:         "You can re-implement the reviewed work or override accept from the overview.",
+		Affected:    affected,
+		Context:     context,
+		ReviewRepos: reviewRepos,
+	}
+}
+
+func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {
+	if wi.State != domain.SessionFailed {
+		return nil
+	}
+	var affected []string
+	for _, subPlan := range subPlans {
+		if subPlan.Status != domain.SubPlanFailed {
+			continue
+		}
+		affected = append(affected, subPlan.RepositoryName)
+	}
+	if len(affected) == 0 {
+		// No failed sub-plans found; show a generic card.
+		affected = []string{"(unknown)"}
+	}
+	context := []string{fmt.Sprintf("Failed repos: %d of %d", len(affected), len(subPlans))}
+	// Check for review critiques on failed sessions.
+	reviewRepos := a.reviewResultsForOverview(wi.ID, subPlans)
+	critiqueCount := 0
+	for _, repo := range reviewRepos {
+		critiqueCount += len(repo.Critiques)
+	}
+	if critiqueCount > 0 {
+		context = append(context, fmt.Sprintf("Outstanding critiques: %d", critiqueCount))
+	}
+	return &OverviewActionCard{
+		Kind:        overviewActionFailed,
+		Title:       "Implementation failed",
+		Blocked:     fmt.Sprintf("%d repo(s) failed during implementation or review", len(affected)),
+		Why:         "You can retry the failed repos or inspect their session logs for details.",
 		Affected:    affected,
 		Context:     context,
 		ReviewRepos: reviewRepos,

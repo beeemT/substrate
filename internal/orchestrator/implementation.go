@@ -223,6 +223,19 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("prepare worktrees: %w", err)
 	}
 
+	// Reset failed sub-plans to pending so they are picked up by BuildWaves.
+	// Completed sub-plans are left alone — only failed ones need re-execution.
+	for i := range subPlans {
+		if subPlans[i].Status == domain.SubPlanFailed {
+			subPlans[i].Status = domain.SubPlanPending
+			subPlans[i].UpdatedAt = time.Now()
+			if err := s.subPlanRepo.Update(ctx, subPlans[i]); err != nil {
+				slog.Warn("failed to reset failed sub-plan to pending", "error", err,
+					"sub_plan_id", subPlans[i].ID)
+			}
+		}
+	}
+
 	// Execute each wave sequentially
 	for waveIndex, wave := range BuildWaves(subPlans) {
 		if ctx.Err() != nil {
@@ -607,9 +620,9 @@ func (s *ImplementationService) reviewLoop(
 			return outcome
 		}
 
-		// Auto-reimpl: build critique feedback and re-run implementation.
+		// Auto-reimpl: resume the previous session with critique feedback.
 		feedback := buildCritiqueFeedback(reviewResult.Critiques)
-		newSession, err := s.reimplementSubPlan(ctx, subPlan, workspace, plan, workItem, branch, worktreePaths, state, feedback)
+		newSession, err := s.reimplementSubPlan(ctx, currentSession, subPlan, workspace, plan, workItem, branch, worktreePaths, state, feedback)
 		if err != nil {
 			slog.Warn("reimplementation failed", "error", err,
 				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
@@ -620,10 +633,15 @@ func (s *ImplementationService) reviewLoop(
 	}
 }
 
-// reimplementSubPlan creates a fresh implementation session for a sub-plan
-// after review critiques. Uses the same worktree (accumulates changes).
+// reimplementSubPlan creates a new implementation session to address review critiques.
+// When the previous session has an OMP session file, the new session resumes from it
+// so the model retains its full conversation context. The critique feedback is sent as
+// a follow-up message rather than being baked into the system prompt.
+// When no OMP session file is available (non-OMP harnesses), falls back to a fresh
+// session with critiques appended to the system prompt.
 func (s *ImplementationService) reimplementSubPlan(
 	ctx context.Context,
+	prevSession domain.Task,
 	subPlan domain.TaskPlan,
 	workspace *domain.Workspace,
 	plan *domain.Plan,
@@ -636,6 +654,13 @@ func (s *ImplementationService) reimplementSubPlan(
 	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
 	if !ok {
 		return domain.Task{}, fmt.Errorf("worktree for repository %s not found", subPlan.RepositoryName)
+	}
+
+	// Resolve the previous session's OMP file for resume. We need to read the
+	// stored record because the in-memory Task may not have it (set after Wait).
+	var resumeFile string
+	if stored, err := s.sessionSvc.Get(ctx, prevSession.ID); err == nil {
+		resumeFile = stored.OmpSessionFile
 	}
 
 	sessionID := domain.NewID()
@@ -666,9 +691,16 @@ func (s *ImplementationService) reimplementSubPlan(
 		slog.Warn("failed to emit reimpl session started event", "error", err)
 	}
 
-	// Build session options with critique feedback appended to the prompt.
+	// Build session options. When we have an OMP session file, set ResumeSessionFile
+	// so the bridge resumes the previous conversation instead of starting fresh.
 	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
-	if critiqueFeedback != "" {
+	if resumeFile != "" {
+		opts.ResumeSessionFile = resumeFile
+		// Clear user prompt — the critique feedback will be sent as a follow-up message
+		// after the session starts, preserving the model's conversation context.
+		opts.UserPrompt = ""
+	} else if critiqueFeedback != "" {
+		// Fallback for non-OMP harnesses: bake critique into the system prompt.
 		opts.SystemPrompt += "\n\n" + critiqueFeedback
 	}
 
@@ -678,6 +710,18 @@ func (s *ImplementationService) reimplementSubPlan(
 			slog.Warn("failed to fail reimpl session after harness start error", "error", failErr)
 		}
 		return domain.Task{}, fmt.Errorf("start reimpl agent: %w", err)
+	}
+
+	// Send critique feedback as a follow-up message when resuming a previous session.
+	// This preserves the model's conversation history — it knows what it implemented
+	// and can see the critique in context.
+	if resumeFile != "" && critiqueFeedback != "" {
+		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
+			slog.Warn("failed to send critique feedback to resumed session", "error", err,
+				"session_id", sessionID)
+			// Non-fatal: session may still work without the critique prompt,
+			// but the model won't know what to fix.
+		}
 	}
 
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)

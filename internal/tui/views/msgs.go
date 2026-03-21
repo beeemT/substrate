@@ -135,6 +135,9 @@ type WorkspaceCancelMsg struct{}
 // ReimplementMsg fires when user triggers re-implementation from review.
 type ReimplementMsg struct{ WorkItemID string }
 
+// RetryFailedMsg fires when user retries a failed work item from the overview.
+type RetryFailedMsg struct{ WorkItemID string }
+
 // StartPlanMsg fires when the user presses Enter on a work item in the ready-to-plan state.
 type StartPlanMsg struct{ WorkItemID string }
 
