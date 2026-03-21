@@ -27,6 +27,8 @@ const (
 	keyDown     = "down"
 	keyEsc      = "esc"
 	keyEnter    = "enter"
+	keyPgUp     = "pgup"
+	keyPgDown   = "pgdown"
 )
 
 func (a *App) showDuplicateSessionDialog(requested, existing domain.Session) {

@@ -1132,7 +1132,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, qs := range a.questions {
 			for _, q := range qs {
 				if q.ID == msg.QuestionID {
-					a.content.question.SetQuestion(q, msg.NewProposal, msg.Uncertain)
+					a.content.UpdateQuestionProposal(q, msg.NewProposal, msg.Uncertain)
 					break questionLoop
 				}
 			}
@@ -1497,7 +1497,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 			if taskSessionID == taskSidebarSourceDetailsID {
 				a.content.sourceDetails.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 				a.content.SetMode(ContentModeSourceDetails)
-				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction) {
+				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
 				}
 				return nil
@@ -1511,7 +1511,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 
 	a.content.SetMode(ContentModeOverview)
 	a.content.SetOverviewData(a.buildOverviewData(wi))
-	if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeImplementing || prevMode == ContentModeSessionInteraction) {
+	if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
 		a.tailingSessionIDs = make(map[string]bool)
 	}
 	return nil

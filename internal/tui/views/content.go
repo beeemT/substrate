@@ -15,18 +15,9 @@ type ContentMode int
 const (
 	ContentModeEmpty              ContentMode = iota // no session selected
 	ContentModeOverview                              // canonical root-session overview/control surface
-	ContentModeReadyToPlan                           // legacy ingested summary surface
 	ContentModeSourceDetails                         // task-pane source metadata for the selected work item
 	ContentModePlanning                              // planning/task session log tailing
 	ContentModeSessionInteraction                    // historical or task session interaction view
-	ContentModePlanReview                            // legacy full-page plan review surface
-	ContentModeAwaitingImpl                          // legacy approved summary surface
-	ContentModeImplementing                          // legacy implementing surface
-	ContentModeReviewing                             // legacy reviewing surface
-	ContentModeCompleted                             // legacy completed surface
-	ContentModeFailed                                // legacy failed surface
-	ContentModeInterrupted                           // legacy interrupted surface
-	ContentModeQuestion                              // legacy question surface
 )
 
 // KeybindHint is a label/key pair rendered by the status bar.
@@ -44,17 +35,8 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 
 	// Per-mode sub-models
 	overview      SessionOverviewModel
-	readyToPlan   ReadyToPlanModel
 	sourceDetails SourceDetailsModel
 	sessionLog    SessionLogModel
-	planReview    PlanReviewModel
-	awaitingImpl  AwaitingImplModel
-	implementing  ImplementingModel
-	reviewing     ReviewModel
-	completed     CompletedModel
-	failed        FailedModel
-	interrupted   InterruptedModel
-	question      QuestionModel
 
 	// Current work item being displayed
 	currentWorkItem *domain.Session
@@ -65,17 +47,8 @@ func NewContentModel(st styles.Styles) ContentModel {
 		mode:          ContentModeEmpty,
 		styles:        st,
 		overview:      NewSessionOverviewModel(st),
-		readyToPlan:   NewReadyToPlanModel(st),
 		sourceDetails: NewSourceDetailsModel(st),
 		sessionLog:    NewSessionLogModel(st),
-		planReview:    NewPlanReviewModel(st),
-		awaitingImpl:  NewAwaitingImplModel(st),
-		implementing:  NewImplementingModel(st),
-		reviewing:     NewReviewModel(st),
-		completed:     NewCompletedModel(st),
-		failed:        NewFailedModel(st),
-		interrupted:   NewInterruptedModel(st),
-		question:      NewQuestionModel(st),
 	}
 }
 
@@ -83,17 +56,8 @@ func (m *ContentModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.overview.SetSize(width, height)
-	m.readyToPlan.SetSize(width, height)
 	m.sourceDetails.SetSize(width, height)
 	m.sessionLog.SetSize(width, height)
-	m.planReview.SetSize(width, height)
-	m.awaitingImpl.SetSize(width, height)
-	m.implementing.SetSize(width, height)
-	m.reviewing.SetSize(width, height)
-	m.completed.SetSize(width, height)
-	m.failed.SetSize(width, height)
-	m.interrupted.SetSize(width, height)
-	m.question.SetSize(width, height)
 }
 
 func (m *ContentModel) SetTerminalSize(w, h int) {
@@ -106,24 +70,17 @@ func (m ContentModel) Mode() ContentMode         { return m.mode }
 func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 	m.currentWorkItem = wi
 	if wi != nil {
-		title := wi.Title
-		m.planReview.SetTitle(title)
-		m.implementing.SetTitle(title)
-		m.reviewing.SetTitle(title)
-		m.completed.SetTitle(title)
-		m.completed.SetWorkItemID(wi.ID)
-		m.failed.SetTitle(title)
-		m.interrupted.SetTitle(title)
-		m.question.SetTitle(title)
-		m.sessionLog.SetTitle(title)
-		m.readyToPlan.SetWorkItem(wi)
+		m.sessionLog.SetTitle(wi.Title)
 		m.sourceDetails.SetSession(wi)
-		m.awaitingImpl.SetWorkItem(wi)
 	}
 }
 
 func (m *ContentModel) SetOverviewData(data SessionOverviewData) {
 	m.overview.SetData(data)
+}
+
+func (m *ContentModel) UpdateQuestionProposal(q domain.Question, proposed string, uncertain bool) {
+	m.overview.question.SetQuestion(q, proposed, uncertain)
 }
 
 func (m *ContentModel) SetSessionInteraction(title, meta string, entries []sessionlog.Entry) {
@@ -143,35 +100,11 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	case ContentModeOverview:
 		m.overview, cmd = m.overview.Update(msg)
 		cmds = append(cmds, cmd)
-	case ContentModeReadyToPlan:
-		m.readyToPlan, cmd = m.readyToPlan.Update(msg)
-		cmds = append(cmds, cmd)
 	case ContentModeSourceDetails:
 		m.sourceDetails, cmd = m.sourceDetails.Update(msg)
 		cmds = append(cmds, cmd)
 	case ContentModePlanning, ContentModeSessionInteraction:
 		m.sessionLog, cmd = m.sessionLog.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModePlanReview:
-		m.planReview, cmd = m.planReview.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeImplementing:
-		m.implementing, cmd = m.implementing.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeQuestion:
-		m.question, cmd = m.question.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeReviewing:
-		m.reviewing, cmd = m.reviewing.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeCompleted:
-		m.completed, cmd = m.completed.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeFailed:
-		m.failed, cmd = m.failed.Update(msg)
-		cmds = append(cmds, cmd)
-	case ContentModeInterrupted:
-		m.interrupted, cmd = m.interrupted.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -184,28 +117,10 @@ func (m ContentModel) View() string {
 		return m.emptyStateView()
 	case ContentModeOverview:
 		return m.overview.View()
-	case ContentModeReadyToPlan:
-		return m.readyToPlan.View()
 	case ContentModeSourceDetails:
 		return m.sourceDetails.View()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.View()
-	case ContentModePlanReview:
-		return m.planReview.View()
-	case ContentModeAwaitingImpl:
-		return m.awaitingImpl.View()
-	case ContentModeImplementing:
-		return m.implementing.View()
-	case ContentModeReviewing:
-		return m.reviewing.View()
-	case ContentModeCompleted:
-		return m.completed.View()
-	case ContentModeFailed:
-		return m.failed.View()
-	case ContentModeInterrupted:
-		return m.interrupted.View()
-	case ContentModeQuestion:
-		return m.question.View()
 	default:
 		return ""
 	}
@@ -244,20 +159,6 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 		return m.sourceDetails.KeybindHints()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.KeybindHints()
-	case ContentModePlanReview:
-		return m.planReview.KeybindHints()
-	case ContentModeImplementing:
-		return m.implementing.KeybindHints()
-	case ContentModeQuestion:
-		return m.question.KeybindHints()
-	case ContentModeReviewing:
-		return m.reviewing.KeybindHints()
-	case ContentModeInterrupted:
-		return m.interrupted.KeybindHints()
-	case ContentModeCompleted:
-		return m.completed.KeybindHints()
-	case ContentModeFailed:
-		return m.failed.KeybindHints()
 	default:
 		return nil
 	}
@@ -267,10 +168,6 @@ func (m ContentModel) InputCaptured() bool {
 	switch m.mode {
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.InputCaptured()
-	case ContentModeImplementing:
-		return m.implementing.InputCaptured()
-	case ContentModeCompleted:
-		return m.completed.InputCaptured()
 	default:
 		return false
 	}

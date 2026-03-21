@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -467,101 +466,4 @@ func editPlanInEditorCmd(planID, workItemID, content string) tea.Cmd {
 
 		return PlanEditedMsg{PlanID: planID, WorkItemID: workItemID, NewContent: string(data)}
 	})
-}
-
-// ReadyToPlanModel shows work item details when state is "ingested".
-type ReadyToPlanModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	workItem *domain.Session
-	styles   styles.Styles
-	width    int
-	height   int
-}
-
-func NewReadyToPlanModel(st styles.Styles) ReadyToPlanModel {
-	return ReadyToPlanModel{styles: st}
-}
-
-func (m *ReadyToPlanModel) SetSize(w, h int) { m.width = w; m.height = h }
-
-func (m *ReadyToPlanModel) SetWorkItem(wi *domain.Session) { m.workItem = wi }
-
-func (m ReadyToPlanModel) Update(msg tea.Msg) (ReadyToPlanModel, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.workItem != nil {
-		id := m.workItem.ID
-
-		return m, func() tea.Msg { return StartPlanMsg{WorkItemID: id} }
-	}
-
-	return m, nil
-}
-
-func (m ReadyToPlanModel) View() string {
-	if m.workItem == nil || m.width <= 0 || m.height <= 0 {
-		return ""
-	}
-
-	description := strings.TrimSpace(m.workItem.Description)
-	if description == "" {
-		description = "_No description provided._"
-	}
-
-	descriptionInnerWidth := components.CalloutInnerWidth(m.styles, m.width)
-	nextStepInset := 2
-	nextStepWidth := max(1, m.width-(nextStepInset*2))
-	nextStepInnerWidth := components.CalloutInnerWidth(m.styles, nextStepWidth)
-	nextStep := m.styles.Muted.Render("Press ") +
-		m.styles.KeybindAccent.Render("[Enter]") +
-		m.styles.Muted.Render(" to start planning.")
-
-	headingInset := lipgloss.NewStyle().PaddingLeft(2)
-	nextStepInsetStyle := lipgloss.NewStyle().Padding(0, nextStepInset, 1, nextStepInset)
-	descriptionContent := strings.Trim(renderMarkdownDocument(description, descriptionInnerWidth), "\n")
-	nextStepContent := ansi.Hardwrap(nextStep, nextStepInnerWidth, true)
-	nextStepCard := components.RenderCallout(m.styles, components.CalloutSpec{Body: nextStepContent, Width: nextStepWidth, Variant: components.CalloutCard})
-	nextStepBlock := nextStepInsetStyle.Render(nextStepCard)
-
-	topBlocks := []string{
-		headingInset.Render(m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title)),
-		headingInset.Render(m.styles.SectionLabel.Render("Details")),
-		components.RenderCallout(m.styles, components.CalloutSpec{Body: descriptionContent, Width: m.width}),
-	}
-
-	footerLineCount := len(strings.Split(nextStepBlock, "\n"))
-	bodyHeight := max(0, m.height-footerLineCount)
-	body := fitViewHeight(strings.Join(topBlocks, "\n"), bodyHeight)
-	if body == "" {
-		return fitViewBox(nextStepBlock, m.width, m.height)
-	}
-
-	return fitViewBox(body+"\n"+nextStepBlock, m.width, m.height)
-}
-
-// AwaitingImplModel shows plan summary when state is "approved".
-type AwaitingImplModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	workItem *domain.Session
-	styles   styles.Styles
-	width    int
-	height   int
-}
-
-func NewAwaitingImplModel(st styles.Styles) AwaitingImplModel {
-	return AwaitingImplModel{styles: st}
-}
-
-func (m *AwaitingImplModel) SetSize(w, h int) { m.width = w; m.height = h }
-
-func (m *AwaitingImplModel) SetWorkItem(wi *domain.Session) { m.workItem = wi }
-
-func (m AwaitingImplModel) View() string {
-	if m.workItem == nil {
-		return ""
-	}
-
-	return strings.Join([]string{
-		m.styles.Title.Render(m.workItem.ExternalID + " · " + m.workItem.Title),
-		components.RenderDivider(m.styles, m.width),
-		"",
-		m.styles.Active.Render("Plan approved."),
-		m.styles.Subtitle.Render("Implementation will begin shortly."),
-	}, "\n")
 }

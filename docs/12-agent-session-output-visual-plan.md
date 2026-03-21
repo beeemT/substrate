@@ -3,7 +3,7 @@
 
 ## Status
 
-Planned. This document is the implementation plan for making agent-session output visually structured, readable, and state-aware across live planning, historical session interaction, and per-repository implementation views.
+Implemented. All acceptance criteria (section 13) are met. The optional follow-ups (detail overlay, read-group compaction) remain available as future enhancements.
 
 ---
 
@@ -287,6 +287,8 @@ This is preferable to jumping immediately to per-card focus or detail overlays b
 
 ### Possible later follow-up
 
+> **Note:** This remains an available follow-up enhancement and was intentionally deferred from the initial implementation.
+
 If verbose mode proves too blunt, we can add a focused detail overlay using:
 
 - `ComputeSplitOverlayLayout`
@@ -372,45 +374,45 @@ Work:
 
 ### Phase 1 TODO — Data-path cutover
 
-- [ ] Replace `SessionLogLinesMsg` string payloads with structured transcript entries.
-- [ ] Update `TailSessionLogCmd` to emit parsed structured entries for live logs.
-- [ ] Update `LoadSessionInteractionCmd` to emit structured entries for historical logs.
-- [ ] Remove `FormatForTranscript` from the live session-log rendering path.
-- [ ] Update `SessionLogModel` to store structured entries rather than flattened strings.
-- [ ] Update `ImplementingModel` to store per-repo structured entries rather than flattened strings.
+- [x] Replace `SessionLogLinesMsg` string payloads with structured transcript entries.
+- [x] Update `TailSessionLogCmd` to emit parsed structured entries for live logs.
+- [x] Update `LoadSessionInteractionCmd` to emit structured entries for historical logs.
+- [x] Remove `FormatForTranscript` from the live session-log rendering path.
+- [x] Update `SessionLogModel` to store structured entries rather than flattened strings.
+- [x] Update `ImplementingModel` to store per-repo structured entries rather than flattened strings.
 
 ### Phase 2 TODO — Shared transcript rendering
 
-- [ ] Add a shared transcript renderer that accepts a bounded width and returns bounded transcript output.
-- [ ] Introduce internal block grouping for assistant, thinking, tool, lifecycle, and question-style transcript events.
-- [ ] Group adjacent tool start/output/result entries into one tool card.
-- [ ] Preserve multiline tool output internally rather than flattening it during parsing.
-- [ ] Render tool cards with labeled sections and state-aware chrome.
-- [ ] Render thinking text distinctly from assistant text.
+- [x] Add a shared transcript renderer that accepts a bounded width and returns bounded transcript output.
+- [x] Introduce internal block grouping for assistant, thinking, tool, lifecycle, and question-style transcript events.
+- [x] Group adjacent tool start/output/result entries into one tool card.
+- [x] Preserve multiline tool output internally rather than flattening it during parsing.
+- [x] Render tool cards with labeled sections and state-aware chrome.
+- [x] Render thinking text distinctly from assistant text.
 
 ### Phase 3 TODO — Design-system evolution
 
-- [ ] Audit whether `RenderCallout` can express the needed transcript card states cleanly.
-- [ ] If yes, extend existing callout variants or styles rather than reimplementing card chrome in a view.
-- [ ] If no, add a new shared transcript-oriented primitive under `internal/tui/components/`.
-- [ ] Add transcript-specific semantic theme roles in `internal/tui/styles/` if existing roles are insufficient.
-- [ ] Keep semantic ownership in `styles/` rather than hardcoding transcript colors in view code.
+- [x] Audit whether `RenderCallout` can express the needed transcript card states cleanly.
+- [x] If yes, extend existing callout variants or styles rather than reimplementing card chrome in a view.
+- [x] If no, add a new shared transcript-oriented primitive under `internal/tui/components/`.
+- [x] Add transcript-specific semantic theme roles in `internal/tui/styles/` if existing roles are insufficient.
+- [x] Keep semantic ownership in `styles/` rather than hardcoding transcript colors in view code.
 
 ### Phase 4 TODO — Truncation and operator ergonomics
 
-- [ ] Add a verbose transcript toggle shared by planning and implementation transcript views.
-- [ ] Truncate tool output previews by default and render explicit overflow markers.
-- [ ] Ensure long single lines wrap or truncate to the real inner width.
-- [ ] Evaluate whether repetitive read activity should collapse into a grouped summary block.
-- [ ] Leave detail-overlay work out of the initial cut unless verbose mode proves insufficient.
+- [x] Add a verbose transcript toggle shared by planning and implementation transcript views.
+- [x] Truncate tool output previews by default and render explicit overflow markers.
+- [x] Ensure long single lines wrap or truncate to the real inner width.
+- [x] Evaluate whether repetitive read activity should collapse into a grouped summary block.
+- [x] Leave detail-overlay work out of the initial cut unless verbose mode proves insufficient.
 
 ### Phase 5 TODO — Verification and cleanup
 
-- [ ] Add renderer unit tests for grouping, truncation, and narrow-width output.
-- [ ] Add or update view tests for planning and implementation transcript sizing.
-- [ ] Verify width and height remain bounded in empty, loading, and populated transcript states.
-- [ ] Remove any obsolete helpers, tests, or comments that describe transcript rendering as string-only.
-- [ ] Confirm both live planning and historical session interaction use the same canonical transcript renderer.
+- [x] Add renderer unit tests for grouping, truncation, and narrow-width output.
+- [x] Add or update view tests for planning and implementation transcript sizing.
+- [x] Verify width and height remain bounded in empty, loading, and populated transcript states.
+- [x] Remove any obsolete helpers, tests, or comments that describe transcript rendering as string-only.
+- [x] Confirm both live planning and historical session interaction use the same canonical transcript renderer.
 
 ---
 
@@ -452,6 +454,8 @@ If transcript behavior spans both parsing and views after the refactor, run both
 
 ## 13. Acceptance criteria
 
+> **All 13 acceptance criteria below are met as of the initial implementation.**
+
 The work is done when all of the following are true:
 
 1. Live planning, historical session interaction, and per-repo implementation transcripts all render from structured session-log entries rather than pre-flattened strings.
@@ -472,13 +476,13 @@ The work is done when all of the following are true:
 
 ## 14. Recommended implementation order
 
-1. structured transcript cutover
-2. shared renderer introduction
-3. tool-card styling and grouped rendering
-4. truncation + verbose-mode ergonomics
-5. design-system cleanup and API tightening
-6. optional read-group compaction
-7. optional detail overlay if needed later
+1. structured transcript cutover _(complete)_
+2. shared renderer introduction _(complete)_
+3. tool-card styling and grouped rendering _(complete)_
+4. truncation + verbose-mode ergonomics _(complete)_
+5. design-system cleanup and API tightening _(complete)_
+6. optional read-group compaction _(available follow-up)_
+7. optional detail overlay if needed later _(available follow-up)_
 
 ---
 

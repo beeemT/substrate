@@ -3,7 +3,7 @@
 
 ## Status
 
-Planned. This document specifies the unified overview page for a single root work item/session. The overview is both the default summary surface and the primary control surface for any human action required to move the session forward.
+Implemented (initial ship scope). Phases 1–4 and 8 are complete. Phases 5–7 remain deferred follow-ups. This document specifies the unified overview page for a single root work item/session. The overview is both the default summary surface and the primary control surface for any human action required to move the session forward.
 
 ---
 
@@ -214,12 +214,14 @@ The overview should treat raw child session IDs as secondary detail only. Users 
 
 Initial ship scope:
 
-- original tracker refs / source refs only
-- no speculative PR/MR rows
+- original tracker refs / source refs
+- PR/MR data surfaced via Events-based `ReviewArtifact` records, unified under `OverviewReviewRow` (no separate PR vs MR lists)
+
+Note: The initial implementation uses an Events-based `ReviewArtifact` approach rather than a dedicated persistence table. PRs and MRs are unified under a single `OverviewReviewRow` type. Durable dedicated persistence remains a follow-up.
 
 Follow-up target:
 
-- created PR/MR rows with ref, URL, open/ready status, and later actions
+- durable dedicated PR/MR persistence model for restart-safe lifecycle actions
 - external ticket state sync visibility when durably known
 
 ### 4.9 Recent activity section
@@ -377,25 +379,23 @@ Important precedence rule:
 
 ---
 
-## 7. Proposed view model
+## 7. Implemented view model
 
-Introduce a dedicated overview view model instead of composing the page ad hoc from state branches.
+The overview is driven by a dedicated view model rather than ad hoc per-state render tweaks. The following structs reflect the actual implementation:
 
 ```go
-type SessionOverviewModel struct {
-    Header   OverviewHeader
-    Actions  []OverviewActionCard
-    Sources  []OverviewSourceItem
-    Plan     OverviewPlan
-    Tasks    []OverviewTaskRow
-    External OverviewExternalLifecycle
-    Activity []OverviewActivityItem
+type SessionOverviewData struct {
+    WorkItemID string
+    State      domain.SessionState
+    Header     OverviewHeader
+    Actions    []OverviewActionCard
+    Sources    []OverviewSourceItem
+    Plan       OverviewPlan
+    Tasks      []OverviewTaskRow
+    External   OverviewExternalLifecycle
+    Activity   []OverviewActivityItem
 }
-```
 
-Suggested sub-structures:
-
-```go
 type OverviewHeader struct {
     ExternalID   string
     Title        string
@@ -414,19 +414,25 @@ type OverviewSourceItem struct {
 }
 
 type OverviewPlan struct {
-    State      string
-    Exists     bool
-    Version    int
-    UpdatedAt  time.Time
-    RepoCount  int
-    FAQCount   int
-    Excerpt    []string
-    Actionable bool
+    StateLabel     string
+    Exists         bool
+    Version        int
+    UpdatedAt      time.Time
+    RepoCount      int
+    FAQCount       int
+    Excerpt        []string
+    ActionText     string
+    DraftSession   string
+    DraftUpdatedAt time.Time
+    DraftPath      string
+    Document       *domain.Plan
+    FullDocument   string
 }
 
 type OverviewTaskRow struct {
     RepoName       string
     TaskPlanStatus string
+    SessionTitle   string
     SessionStatus  string
     HarnessName    string
     UpdatedAt      time.Time
@@ -436,12 +442,26 @@ type OverviewTaskRow struct {
 
 type OverviewExternalLifecycle struct {
     TrackerRefs []string
-    PullRequests []OverviewPRRow
-    MergeRequests []OverviewPRRow
+    Reviews     []OverviewReviewRow
+}
+
+type OverviewReviewRow struct {
+    Kind     string
+    RepoName string
+    Ref      string
+    URL      string
+    State    string
+    Branch   string
 }
 ```
 
-The exact names can vary; the important point is that the overview should be driven by one explicit mapping layer, not by a scattered sequence of per-state render tweaks.
+Notable differences vs the original proposal:
+
+- `SessionOverviewData` wraps the model with `WorkItemID` and `State` fields for routing
+- `OverviewPlan` is richer: `StateLabel`/`ActionText` instead of `State`/`Actionable`; adds `DraftSession`/`DraftUpdatedAt`/`DraftPath` for live planning preview; adds `Document`/`FullDocument` for overlay rendering
+- `OverviewExternalLifecycle` uses a unified `Reviews []OverviewReviewRow` instead of separate `PullRequests`/`MergeRequests` lists
+- `OverviewTaskRow` adds `SessionTitle` field
+- `OverviewActionCard` is richer than originally specified (has overlay data fields)
 
 ---
 
@@ -502,35 +522,35 @@ The TUI has a `GitClient` service available, but the current git-work plumbing i
 
 ### Phase 1 — Unify the overview surface
 
-- [ ] Add a dedicated overview content mode/model in `internal/tui/views/content.go`.
-- [ ] Route main work-item selection and task-pane `Overview` selection to the same overview renderer.
-- [ ] Remove the current conceptual split where the root work item content is mostly state-specific while the task-pane `Overview` row is only a routing alias.
-- [ ] Preserve `Source details` and task/session drill-down as separate surfaces.
+- [x] Add a dedicated overview content mode/model in `internal/tui/views/content.go`.
+- [x] Route main work-item selection and task-pane `Overview` selection to the same overview renderer.
+- [x] Remove the current conceptual split where the root work item content is mostly state-specific while the task-pane `Overview` row is only a routing alias.
+- [x] Preserve `Source details` and task/session drill-down as separate surfaces.
 
 ### Phase 2 — Ship-first overview content
 
-- [ ] Implement the summary section using existing root state and sidebar-style derived status semantics.
-- [ ] Implement the source section using durable source data already available.
-- [ ] For aggregated sessions without canonical per-source summaries, render provider + ref only rather than guessing titles/excerpts.
-- [ ] Implement the plan snapshot section using bounded excerpts from `Plan.OrchestratorPlan`.
-- [ ] Implement the repo/sub-plan task table using sub-plan order and latest/active child session state.
-- [ ] Implement the minimal external lifecycle section using original tracker refs only.
-- [ ] Keep the layout concise and stable across all root states.
+- [x] Implement the summary section using existing root state and sidebar-style derived status semantics.
+- [x] Implement the source section using durable source data already available.
+- [x] For aggregated sessions without canonical per-source summaries, render provider + ref only rather than guessing titles/excerpts.
+- [x] Implement the plan snapshot section using bounded excerpts from `Plan.OrchestratorPlan`.
+- [x] Implement the repo/sub-plan task table using sub-plan order and latest/active child session state.
+- [x] Implement the minimal external lifecycle section using original tracker refs only.
+- [x] Keep the layout concise and stable across all root states.
 
 ### Phase 3 — Overview-native action surfaces
 
-- [ ] Add an `Action required` section that appears whenever the session is blocked on the user.
-- [ ] Surface plan review actions directly from overview.
-- [ ] Surface open-question answering directly from overview.
-- [ ] Surface interruption recovery actions directly from overview.
-- [ ] Add overlays for deeper context so the user can inspect without leaving the overview.
-- [ ] Ensure all required actions remain available without navigating to dedicated detail pages.
+- [x] Add an `Action required` section that appears whenever the session is blocked on the user.
+- [x] Surface plan review actions directly from overview.
+- [x] Surface open-question answering directly from overview.
+- [x] Surface interruption recovery actions directly from overview.
+- [x] Add overlays for deeper context so the user can inspect without leaving the overview.
+- [x] Ensure all required actions remain available without navigating to dedicated detail pages.
 
 ### Phase 4 — Planning enrichment
 
-- [ ] Replace static planning placeholder copy with a bounded live planning snapshot on the overview.
-- [ ] Reuse planning session ID / draft path plumbing already present in the orchestrator.
-- [ ] Ensure planning progress remains visible both from overview and task/session drill-down.
+- [x] Replace static planning placeholder copy with a bounded live planning snapshot on the overview.
+- [x] Reuse planning session ID / draft path plumbing already present in the orchestrator.
+- [x] Ensure planning progress remains visible both from overview and task/session drill-down.
 
 ### Phase 5 — Durable source summary enrichment
 
@@ -540,6 +560,8 @@ The TUI has a `GitClient` service available, but the current git-work plumbing i
 - [ ] Do not preserve any fallback that parses merged descriptions to simulate per-source items.
 
 ### Phase 6 — PR/MR lifecycle follow-up
+
+Note: Initial PR/MR data is surfaced via Events-based `ReviewArtifact` records and rendered through `OverviewReviewRow`. Durable dedicated persistence remains a follow-up.
 
 - [ ] Add a durable UI-facing persistence model for created PR/MR artifacts.
 - [ ] Record enough data to render repo, ref, URL, and current known state.
@@ -554,9 +576,11 @@ The TUI has a `GitClient` service available, but the current git-work plumbing i
 
 ### Phase 8 — Cleanup and cutover
 
-- [ ] Remove obsolete content-routing assumptions that require separate state-specific summary pages where the overview now owns the job.
-- [ ] Update tests and fixtures that assume the old routing/content model.
-- [ ] Update docs once the implementation stabilizes.
+- [x] Remove obsolete content-routing assumptions that require separate state-specific summary pages where the overview now owns the job.
+- [x] Update tests and fixtures that assume the old routing/content model.
+- [x] Update docs once the implementation stabilizes.
+
+Note: Legacy content modes still need cleanup (being done separately).
 
 ---
 
@@ -609,42 +633,47 @@ The operator should continue to prefer focused tests for the touched subsystems 
 
 ### 11.1 Initial ship scope acceptance criteria
 
+All initial ship scope criteria are met.
+
 The initial overview feature is done when all of the following are true:
 
-1. Selecting a root work item in the main `Sessions` sidebar renders the overview page.
-2. Selecting the `Overview` row in the task sidebar renders the same overview page, not a divergent variant.
-3. The overview page always shows a summary/header section with root status and last-update context.
-4. The overview page shows source information for the root session using only durable source data.
-5. For aggregated sessions without per-source-item summaries, the overview does not fabricate source titles/excerpts from merged descriptions.
-6. The overview page shows a bounded plan snapshot whenever a plan exists.
-7. The overview page shows repo/sub-plan task rows whenever a plan exists.
-8. The overview page shows the current blocker state prominently when the work item is waiting for human action or is interrupted.
-9. The layout remains within width and height constraints, including narrow terminal cases.
-10. Existing drill-down behavior for `Source details` and task/session rows still works.
-11. Focused tests covering the touched TUI behavior pass.
-
+1. [x] Selecting a root work item in the main `Sessions` sidebar renders the overview page.
+2. [x] Selecting the `Overview` row in the task sidebar renders the same overview page, not a divergent variant.
+3. [x] The overview page always shows a summary/header section with root status and last-update context.
+4. [x] The overview page shows source information for the root session using only durable source data.
+5. [x] For aggregated sessions without per-source-item summaries, the overview does not fabricate source titles/excerpts from merged descriptions.
+6. [x] The overview page shows a bounded plan snapshot whenever a plan exists.
+7. [x] The overview page shows repo/sub-plan task rows whenever a plan exists.
+8. [x] The overview page shows the current blocker state prominently when the work item is waiting for human action or is interrupted.
+9. [x] The layout remains within width and height constraints, including narrow terminal cases.
+10. [x] Existing drill-down behavior for `Source details` and task/session rows still works.
+11. [x] Focused tests covering the touched TUI behavior pass.
 ### 11.2 Actionability acceptance criteria
+
+All actionability criteria are met.
 
 The overview control-surface behavior is done when all of the following are true:
 
-1. Any human action required to unblock the session is invokable from the overview page.
-2. Plan approval and plan-change actions are available from the overview page.
-3. Open-question answering is available from the overview page.
-4. Interruption recovery actions are available from the overview page.
-5. The overview provides enough inline context that the operator can understand what they are deciding about.
-6. A richer overlay is available whenever the inline summary is intentionally bounded.
-7. The operator never has to navigate into a dedicated detail view just to perform a required action.
+1. [x] Any human action required to unblock the session is invokable from the overview page.
+2. [x] Plan approval and plan-change actions are available from the overview page.
+3. [x] Open-question answering is available from the overview page.
+4. [x] Interruption recovery actions are available from the overview page.
+5. [x] The overview provides enough inline context that the operator can understand what they are deciding about.
+6. [x] A richer overlay is available whenever the inline summary is intentionally bounded.
+7. [x] The operator never has to navigate into a dedicated detail view just to perform a required action.
 
 ### 11.3 PR/MR lifecycle follow-up acceptance criteria
 
+This remains a follow-up. Initial PR/MR data is surfaced via Events-based ReviewArtifact records, but durable dedicated persistence is not yet implemented.
+
 The PR/MR follow-up is done when all of the following are true:
 
-1. Created PR/MR artifacts are stored durably enough to survive app reload/restart.
-2. The overview page shows created PR/MR rows with repo, ref, and URL when known.
-3. The completed surface also renders those PR/MR rows from the same durable source.
-4. External lifecycle information clearly distinguishes source-ticket state from created PR/MR state.
-5. Overview-native PR/MR actions use durable state rather than ephemeral adapter memory.
-6. Focused tests covering adapter persistence, UI mapping, and rendering pass.
+1. [ ] Created PR/MR artifacts are stored durably enough to survive app reload/restart.
+2. [ ] The overview page shows created PR/MR rows with repo, ref, and URL when known.
+3. [ ] The completed surface also renders those PR/MR rows from the same durable source.
+4. [ ] External lifecycle information clearly distinguishes source-ticket state from created PR/MR state.
+5. [ ] Overview-native PR/MR actions use durable state rather than ephemeral adapter memory.
+6. [ ] Focused tests covering adapter persistence, UI mapping, and rendering pass.
 
 ---
 

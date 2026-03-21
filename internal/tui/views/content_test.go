@@ -24,14 +24,9 @@ func TestContentSetMode(t *testing.T) {
 	modes := []views.ContentMode{
 		views.ContentModeEmpty,
 		views.ContentModeOverview,
-		views.ContentModeReadyToPlan,
 		views.ContentModeSourceDetails,
 		views.ContentModePlanning,
 		views.ContentModeSessionInteraction,
-		views.ContentModePlanReview,
-		views.ContentModeImplementing,
-		views.ContentModeCompleted,
-		views.ContentModeFailed,
 	}
 
 	for _, mode := range modes {
@@ -79,7 +74,7 @@ func TestContentKeybindHints_Empty(_ *testing.T) {
 func TestContentKeybindHintsHaveKeyAndLabel(t *testing.T) {
 	m := views.NewContentModel(makeContentStyles())
 	m.SetSize(80, 24)
-	m.SetMode(views.ContentModeReadyToPlan)
+	m.SetMode(views.ContentModeOverview)
 	hints := m.KeybindHints()
 	// hints may be nil if no hints are defined for this mode; if non-nil, validate shape
 	for i, h := range hints {

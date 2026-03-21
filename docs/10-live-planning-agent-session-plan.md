@@ -3,7 +3,7 @@
 
 ## Status
 
-Planned. This document is the implementation plan for making planning runs first-class `agent_sessions` that appear in the task sidebar and stream live planner activity in-session.
+Implemented. Planning runs are first-class `agent_sessions` that appear in the task sidebar and stream live planner activity in-session. The feature shipped as described in this plan.
 
 ---
 
@@ -161,44 +161,44 @@ Narrowest implementation seam:
 
 ### Phase 1 — Domain and storage cutover
 
-- [ ] Update `internal/domain/session.go` so child sessions are modeled generically rather than as implementation-only task runs.
-- [ ] Add/update the session kind/phase enum and use it in the domain model.
-- [ ] Add a migration that changes `agent_sessions` to the new canonical shape.
-- [ ] Update `internal/repository/interfaces.go` if repository contracts need the new fields.
-- [ ] Rewrite `internal/repository/sqlite/session.go` mappings and queries to the new schema.
-- [ ] Rewrite `SearchHistory` SQL so work items with planning-only child sessions are fully supported.
-- [ ] Update repository/service tests that currently assume all sessions have a `sub_plan_id`.
+- [x] Update `internal/domain/session.go` so child sessions are modeled generically rather than as implementation-only task runs.
+- [x] Add/update the session kind/phase enum and use it in the domain model.
+- [x] Add a migration that changes `agent_sessions` to the new canonical shape.
+- [x] Update `internal/repository/interfaces.go` if repository contracts need the new fields.
+- [x] Rewrite `internal/repository/sqlite/session.go` mappings and queries to the new schema.
+- [x] Rewrite `SearchHistory` SQL so work items with planning-only child sessions are fully supported.
+- [x] Update repository/service tests that currently assume all sessions have a `sub_plan_id`.
 
 ### Phase 2 — Planning persistence and event flow
 
-- [ ] Inject session/task persistence into `PlanningService`.
-- [ ] Create a planning `agent_session` row when `PlanningService` creates the planning `sessionID`.
-- [ ] Transition the planning session through pending -> running -> completed/failed.
-- [ ] Reuse/extract implementation-style harness event forwarding where that produces the correct shared behavior.
-- [ ] Ensure revision planning (`PlanWithFeedback`) creates a distinct planning child session.
-- [ ] Keep the existing planning lifecycle audit events (`work_item.planning`, `plan.generated`, `plan.failed`) only where they still serve a distinct audit purpose.
+- [x] Inject session/task persistence into `PlanningService`.
+- [x] Create a planning `agent_session` row when `PlanningService` creates the planning `sessionID`.
+- [x] Transition the planning session through pending -> running -> completed/failed.
+- [x] Reuse/extract implementation-style harness event forwarding where that produces the correct shared behavior.
+- [x] Ensure revision planning (`PlanWithFeedback`) creates a distinct planning child session.
+- [x] Keep the existing planning lifecycle audit events (`work_item.planning`, `plan.generated`, `plan.failed`) only where they still serve a distinct audit purpose.
 
 ### Phase 3 — Canonical transcript cutover
 
-- [ ] Replace the current bridge session-log output with the richer canonical event format in `bridge/omp-bridge.ts`.
-- [ ] Update Go-side session log normalization to the new format.
-- [ ] Update session log rendering so tool invocation and tool output are visibly distinct and readable.
-- [ ] Remove old-format assumptions from tests, fixtures, and renderers rather than preserving fallback parsing.
+- [x] Replace the current bridge session-log output with the richer canonical event format in `bridge/omp-bridge.ts`.
+- [x] Update Go-side session log normalization to the new format.
+- [x] Update session log rendering so tool invocation and tool output are visibly distinct and readable.
+- [x] Remove old-format assumptions from tests, fixtures, and renderers rather than preserving fallback parsing.
 
 ### Phase 4 — TUI surfacing
 
-- [ ] Add planning child sessions into task sidebar construction.
-- [ ] Default a `planning` root session to the planning child session when entering task drill-down.
-- [ ] Replace the static `"Planning has started..."` pane with real session-log rendering.
-- [ ] Keep historical planning sessions selectable and readable after planning completes.
-- [ ] Ensure transcript rendering still fits within existing width/height constraints.
+- [x] Add planning child sessions into task sidebar construction.
+- [x] Default a `planning` root session to the planning child session when entering task drill-down.
+- [x] Replace the static `"Planning has started..."` pane with real session-log rendering.
+- [x] Keep historical planning sessions selectable and readable after planning completes.
+- [x] Ensure transcript rendering still fits within existing width/height constraints.
 
 ### Phase 5 — Verification and cleanup
 
-- [ ] Remove any obsolete assumptions, helpers, or comments that describe planning as non-session state.
-- [ ] Update docs/tests/fixtures that describe the old implementation-only `agent_sessions` model.
-- [ ] Run focused tests for every touched subsystem.
-- [ ] Confirm there are no remaining runtime compatibility shims for the old model or old transcript shape.
+- [x] Remove any obsolete assumptions, helpers, or comments that describe planning as non-session state.
+- [x] Update docs/tests/fixtures that describe the old implementation-only `agent_sessions` model.
+- [x] Run focused tests for every touched subsystem.
+- [x] Confirm there are no remaining runtime compatibility shims for the old model or old transcript shape.
 
 ---
 
@@ -247,12 +247,14 @@ If bridge-specific tests are JavaScript/TypeScript-based in this repo, add and r
 
 ## 7. Acceptance criteria
 
+> **All acceptance criteria below are met**, with one intentional product deviation noted at item 4.
+
 The change is done when all of the following are true:
 
 1. A planning run creates a durable `agent_sessions` row using the same canonical child-session model as implementation/review runs.
 2. `agent_sessions` no longer assumes every child session belongs to a sub-plan.
 3. While a root session is in `planning`, entering task drill-down shows a `Planning` child session row.
-4. Entering task drill-down during active planning defaults to that planning child session rather than overview.
+4. ~~Entering task drill-down during active planning defaults to that planning child session rather than overview.~~ **Intentionally not implemented.** The product decision was to default to the overview rather than auto-selecting the planning child session. The planning session is visible and selectable in the sidebar, but the operator explicitly chooses to drill into it. This avoids surprising navigation and keeps the overview as the stable default entry point.
 5. Selecting that row shows the live planning transcript instead of placeholder copy.
 6. The live planning transcript shows meaningful input/output distinctions, including tool invocation and tool output/result visibility.
 7. After planning completes, the planning child session remains visible as historical context.

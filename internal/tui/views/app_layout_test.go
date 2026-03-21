@@ -483,50 +483,6 @@ func TestAppViewAddsHorizontalInsetToMainContentPane(t *testing.T) {
 	}
 }
 
-func TestAppViewWithReadyToPlanOverviewFitsWindow(t *testing.T) {
-	t.Parallel()
-
-	app := sizedLayoutTestApp(t, 72, 16)
-	app.sidebar.SetEntries([]SidebarEntry{{
-		Kind:       SidebarEntryWorkItem,
-		WorkItemID: "wi-1",
-		ExternalID: "SUB-1",
-		Title:      "Investigate overflow",
-		State:      domain.SessionIngested,
-	}})
-	app.content.SetWorkItem(&domain.Session{
-		ID:          "wi-1",
-		ExternalID:  "SUB-1",
-		Source:      "github",
-		Title:       "Investigate overflow",
-		Description: "## Summary\n\nThis is **important**.",
-		Labels:      []string{"bug", "backend"},
-		Metadata: map[string]any{
-			"tracker_refs": []domain.TrackerReference{{Provider: "github", Kind: "issue", Owner: "acme", Repo: "rocket", Number: 42}},
-		},
-		State: domain.SessionIngested,
-	})
-	app.content.SetMode(ContentModeReadyToPlan)
-
-	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
-	assertBodyEndsAboveFooter(t, lines)
-	plain := ansi.Strip(strings.Join(lines, "\n"))
-	for _, want := range []string{"Details", "╭", "╮", "┌", "┐"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("view = %q, want %q in ready overview layout", plain, want)
-		}
-	}
-	for _, hidden := range []string{"GitHub", "acme/rocket", "Labels: bug, backend"} {
-		if strings.Contains(plain, hidden) {
-			t.Fatalf("view = %q, want ready overview to omit source detail %q", plain, hidden)
-		}
-	}
-	footerRegion := ansi.Strip(strings.Join(lines[max(0, len(lines)-6):], "\n"))
-	if !strings.Contains(footerRegion, "Press [Enter]") {
-		t.Fatalf("footer region = %q, want the CTA near the bottom of the content pane", footerRegion)
-	}
-}
-
 func TestAppSidebarShowsProviderWithoutExternalIDPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -624,36 +580,6 @@ func TestAppViewWithOverviewActionRequiredFitsWindow(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAppViewWithImplementingSessionFitsWindow(t *testing.T) {
-	t.Parallel()
-
-	app := sizedLayoutTestApp(t, 72, 16)
-	app.sidebar.SetEntries([]SidebarEntry{{
-		Kind:          SidebarEntryWorkItem,
-		WorkItemID:    "wi-1",
-		ExternalID:    "SUB-1",
-		Title:         "Implement overflow fix",
-		State:         domain.SessionImplementing,
-		SessionStatus: domain.AgentSessionRunning,
-	}})
-	app.content.SetWorkItem(&domain.Session{
-		ID:         "wi-1",
-		ExternalID: "SUB-1",
-		Title:      "Implement overflow fix",
-		State:      domain.SessionImplementing,
-	})
-	app.content.SetMode(ContentModeImplementing)
-	app.content.implementing.SetRepos([]RepoProgress{{
-		Name:      "repo-1",
-		SubPlanID: "sp-1",
-		SessionID: "sess-1",
-		Status:    domain.SubPlanInProgress,
-	}})
-
-	lines := assertAppViewFitsWindow(t, app.View(), 72, 16)
-	assertBodyEndsAboveFooter(t, lines)
 }
 
 func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
