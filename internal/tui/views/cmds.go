@@ -501,23 +501,6 @@ func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string
 	}
 }
 
-// RunReviewSessionCmd runs the review pipeline for a single completed implementation session.
-// Returns ReviewCompleteMsg so the TUI can tail the review agent's log.
-func RunReviewSessionCmd(pipeline *orchestrator.ReviewPipeline, sessionSvc *service.TaskService, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		session, err := sessionSvc.Get(context.Background(), sessionID)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		result, err := pipeline.ReviewSession(context.Background(), session)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		return ReviewCompleteMsg{ImplSessionID: sessionID, ReviewSessionID: result.SessionID}
-	}
-}
-
 // ResumeSessionCmd resumes an interrupted agent session.
 func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {

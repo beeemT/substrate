@@ -1169,3 +1169,178 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 		t.Errorf("SendMessage should not be called in fallback mode, got %v", msgs)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// reviewLoop decision-logic tests
+// ---------------------------------------------------------------------------
+
+// reviewLoopFixture builds an ImplementationService with just enough wiring
+// for reviewLoop paths that never reach reimplementSubPlan.
+func reviewLoopFixture(t *testing.T, maxCycles int, autoLoop bool) (*ImplementationService, *reviewPipelineFixture) {
+	t.Helper()
+	fix := newReviewPipelineFixture(t, maxCycles)
+
+	cfg := testReviewConfig(maxCycles)
+	cfg.Review.AutoFeedbackLoop = &autoLoop
+
+	svc := &ImplementationService{
+		cfg:            cfg,
+		reviewPipeline: fix.pipeline,
+	}
+	return svc, fix
+}
+
+// TestReviewLoop_PassesFirstReview verifies that when the review pipeline
+// reports no critiques the loop returns Passed on the first cycle.
+func TestReviewLoop_PassesFirstReview(t *testing.T) {
+	svc, fix := reviewLoopFixture(t, 3, true)
+	defer fix.cleanup()
+
+	fix.harness.outputs = []string{"NO_CRITIQUES"}
+	implSession := fix.seedPlanAndSubPlan(t)
+
+	outcome := svc.reviewLoop(
+		context.Background(),
+		implSession,
+		domain.TaskPlan{ID: "sub-plan-1"},
+		&domain.Workspace{},
+		&domain.Plan{},
+		&domain.Session{},
+		"",
+		nil,
+		&ExecutionState{},
+	)
+
+	if !outcome.Passed {
+		t.Errorf("expected Passed=true, got Passed=%v Escalated=%v Failed=%v", outcome.Passed, outcome.Escalated, outcome.Failed)
+	}
+	if outcome.Cycles != 1 {
+		t.Errorf("expected Cycles=1, got %d", outcome.Cycles)
+	}
+}
+
+// TestReviewLoop_ReviewError verifies that when ReviewSession returns an
+// error (e.g., session sub-plan not found) the loop reports Failed.
+func TestReviewLoop_ReviewError(t *testing.T) {
+	svc, fix := reviewLoopFixture(t, 3, true)
+	defer fix.cleanup()
+
+	// Don't seed plan/sub-plan so ReviewSession fails looking them up.
+	implSession := domain.Task{
+		ID:             "session-missing",
+		WorkItemID:     "wi-1",
+		SubPlanID:      "no-such-sub-plan",
+		RepositoryName: "repo-a",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+	}
+
+	outcome := svc.reviewLoop(
+		context.Background(),
+		implSession,
+		domain.TaskPlan{ID: "no-such-sub-plan"},
+		&domain.Workspace{},
+		&domain.Plan{},
+		&domain.Session{},
+		"",
+		nil,
+		&ExecutionState{},
+	)
+
+	if !outcome.Failed {
+		t.Errorf("expected Failed=true, got Passed=%v Escalated=%v Failed=%v", outcome.Passed, outcome.Escalated, outcome.Failed)
+	}
+}
+
+// TestReviewLoop_EscalatedByMaxCycles verifies that when the review pipeline
+// reports Escalated (cycle limit exceeded) the loop returns Escalated.
+func TestReviewLoop_EscalatedByMaxCycles(t *testing.T) {
+	// maxCycles=1: first review sees major critiques, second call (cycle 2)
+	// exceeds the limit → ReviewSession returns Escalated.
+	svc, fix := reviewLoopFixture(t, 1, true)
+	defer fix.cleanup()
+
+	majors := twoMajorCritiquesOutput()
+	fix.harness.outputs = []string{majors}
+	implSession := fix.seedPlanAndSubPlan(t)
+
+	// With maxCycles=1 and major critiques, the first ReviewSession returns
+	// NeedsReimpl=true. But because reimplementSubPlan will fail (nil deps),
+	// the loop should fail. Instead, to get Escalated from ReviewSession
+	// itself, we need cycle >= maxCycles. ReviewSession tracks cycles via its
+	// review repo. After one NeedsReimpl, the second call escalates.
+	// However, reimplementSubPlan will be called first. We can't easily
+	// test escalation via max cycles without hitting reimpl.
+	//
+	// Alternative: use autoLoop=false so NeedsReimpl → escalated without reimpl.
+	// The max-cycles escalation path is tested in phase9_test.go directly.
+	// See TestReviewLoop_NeedsReimplAutoLoopOff below.
+	//
+	// Instead, test escalation when ReviewSession itself returns Escalated
+	// (cycle limit already hit at the pipeline level). We run 1 cycle of
+	// ReviewSession directly to bump the cycle counter, then let reviewLoop
+	// see Escalated on its call.
+
+	// Cycle 1: direct call bumps pipeline's internal cycle counter.
+	_, err := fix.pipeline.ReviewSession(context.Background(), implSession)
+	if err != nil {
+		t.Fatalf("pre-warming ReviewSession: %v", err)
+	}
+
+	// Cycle 2: reviewLoop calls ReviewSession which now returns Escalated.
+	// No harness output needed — escalation triggers before running agent.
+	outcome := svc.reviewLoop(
+		context.Background(),
+		implSession,
+		domain.TaskPlan{ID: "sub-plan-1"},
+		&domain.Workspace{},
+		&domain.Plan{},
+		&domain.Session{},
+		"",
+		nil,
+		&ExecutionState{},
+	)
+
+	if !outcome.Escalated {
+		t.Errorf("expected Escalated=true, got Passed=%v Escalated=%v Failed=%v", outcome.Passed, outcome.Escalated, outcome.Failed)
+	}
+	if outcome.Cycles != 1 {
+		t.Errorf("expected Cycles=1 (one reviewLoop iteration), got %d", outcome.Cycles)
+	}
+}
+
+// TestReviewLoop_NeedsReimplAutoLoopOff verifies that when the review reports
+// NeedsReimpl but auto-feedback-loop is disabled, the loop escalates instead
+// of attempting re-implementation.
+func TestReviewLoop_NeedsReimplAutoLoopOff(t *testing.T) {
+	svc, fix := reviewLoopFixture(t, 3, false) // autoLoop OFF
+	defer fix.cleanup()
+
+	fix.harness.outputs = []string{twoMajorCritiquesOutput()}
+	implSession := fix.seedPlanAndSubPlan(t)
+
+	outcome := svc.reviewLoop(
+		context.Background(),
+		implSession,
+		domain.TaskPlan{ID: "sub-plan-1"},
+		&domain.Workspace{},
+		&domain.Plan{},
+		&domain.Session{},
+		"",
+		nil,
+		&ExecutionState{},
+	)
+
+	if !outcome.Escalated {
+		t.Errorf("expected Escalated=true when autoLoop=false, got Passed=%v Escalated=%v Failed=%v",
+			outcome.Passed, outcome.Escalated, outcome.Failed)
+	}
+	if outcome.Cycles != 1 {
+		t.Errorf("expected Cycles=1, got %d", outcome.Cycles)
+	}
+}
+
+// TODO: TestReviewLoop_NeedsReimplAutoLoopOn_ReimplSucceeds — testing the full
+// auto-reimpl loop requires wiring gitClient, repos, and other dependencies
+// that reimplementSubPlan accesses. Consider an integration-level test or
+// extracting the reimpl call behind an interface for easier mocking.

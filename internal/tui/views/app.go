@@ -106,7 +106,6 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
 	// reviewSessionLogs maps implementation session ID → review agent log path.
-	// Populated when ReviewCompleteMsg arrives with a review session log path.
 	reviewSessionLogs map[string]string
 
 	// Live instance cache for dead-owner detection
@@ -1231,17 +1230,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
-	case ReviewCompleteMsg:
-		// Store the review log path; WorkItemReviewing updateContentFromState will tail it.
-		if msg.ReviewSessionID != "" && a.sessionsDir != "" {
-			a.reviewSessionLogs[msg.ImplSessionID] = filepath.Join(a.sessionsDir, msg.ReviewSessionID+".log")
-		}
-		// Trigger a content refresh so tailing starts immediately if still on reviewing view.
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		return a, tea.Batch(cmds...)
-
 	case SessionDeletedMsg:
 		if plan := a.plans[msg.SessionID]; plan != nil {
 			delete(a.subPlans, plan.ID)
@@ -1652,9 +1640,14 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	}
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
 	if session.Status == domain.AgentSessionFailed {
+		a.content.sessionLog.ClearCompletedSession()
 		a.content.sessionLog.SetFailedSession(session.ID)
+	} else if session.Status == domain.AgentSessionCompleted {
+		a.content.sessionLog.ClearFailedSession()
+		a.content.sessionLog.SetCompletedSession(session.ID)
 	} else {
 		a.content.sessionLog.ClearFailedSession()
+		a.content.sessionLog.ClearCompletedSession()
 	}
 	if !a.tailingSessionIDs[session.ID] {
 		a.tailingSessionIDs[session.ID] = true

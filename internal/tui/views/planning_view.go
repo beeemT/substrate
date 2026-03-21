@@ -44,6 +44,7 @@ type SessionLogModel struct {
 	steerInput      textinput.Model
 	steerActive     bool
 	failedSessionID string // non-empty when viewing a failed session's log
+	completedSessionID string // non-empty when viewing a completed session's log
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -147,6 +148,20 @@ func (m *SessionLogModel) ClearFailedSession() {
 	m.steerInput.Placeholder = "Send steering prompt to agent..."
 }
 
+func (m *SessionLogModel) SetCompletedSession(sessionID string) {
+	m.completedSessionID = sessionID
+	if sessionID != "" {
+		m.steerInput.Placeholder = "Send follow-up to completed session..."
+	} else {
+		m.steerInput.Placeholder = "Send steering prompt to agent..."
+	}
+}
+
+func (m *SessionLogModel) ClearCompletedSession() {
+	m.completedSessionID = ""
+	m.steerInput.Placeholder = "Send steering prompt to agent..."
+}
+
 func (m *SessionLogModel) TailCmd() tea.Cmd {
 	if !m.live || m.logPath == "" {
 		return nil
@@ -179,7 +194,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
-	if m.failedSessionID != "" {
+	if m.failedSessionID != "" || m.completedSessionID != "" {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Follow up"})
 	} else if m.live {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
@@ -222,6 +237,13 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 							return FollowUpFailedSessionMsg{TaskID: fid, Feedback: text}
 						}
 					}
+					if m.completedSessionID != "" {
+						cid := m.completedSessionID
+						m.completedSessionID = ""
+						return m, func() tea.Msg {
+							return FollowUpSessionMsg{TaskID: cid, Feedback: text}
+						}
+					}
 					sid := m.sessionID
 					return m, func() tea.Msg {
 						return SteerSessionMsg{SessionID: sid, Message: text}
@@ -242,7 +264,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "p":
-			if m.live || m.failedSessionID != "" {
+			if m.live || m.failedSessionID != "" || m.completedSessionID != "" {
 				m.steerActive = true
 				m.steerInput.Focus()
 				m.syncViewportSize()

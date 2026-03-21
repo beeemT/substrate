@@ -289,13 +289,6 @@ type ForemanReplyMsg struct {
 	Uncertain   bool
 }
 
-// ReviewCompleteMsg is sent when RunReviewSessionCmd finishes.
-// The TUI uses ReviewSessionID to tail/display the review agent's log.
-type ReviewCompleteMsg struct {
-	ImplSessionID   string // implementation session that was reviewed
-	ReviewSessionID string // review agent session whose log to display
-}
-
 // SteerSessionMsg fires when the user submits a steering prompt for a running session.
 type SteerSessionMsg struct {
 	SessionID string
