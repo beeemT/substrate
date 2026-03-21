@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 )
@@ -63,7 +64,7 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 	t.Parallel()
 
 	repo := &githubArtifactEventRepo{}
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms"}, repo, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms"}, adapter.ReviewArtifactRepos{Events: repo}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/user":
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
@@ -114,7 +115,7 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "acme/engine", Ref: "#9", URL: "https://github.com/acme/engine/pull/9", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
 	}}
 	var requests []string
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms"}, repo, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms"}, adapter.ReviewArtifactRepos{Events: repo}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
 		switch req.URL.Path {
 		case "/user":

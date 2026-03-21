@@ -26,7 +26,6 @@ import (
 	coreadapter "github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/repository"
 )
 
 // commandRunner executes an external command in dir and returns its combined output.
@@ -51,9 +50,11 @@ type branchEntry struct {
 
 // GlabAdapter implements adapter.RepoLifecycleAdapter using the glab CLI.
 type GlabAdapter struct {
-	cfg       config.GlabConfig
-	runner    commandRunner
-	eventRepo repository.EventRepository
+	cfg        config.GlabConfig
+	runner     commandRunner
+	repos     coreadapter.ReviewArtifactRepos
+
+	workspaceID string
 
 	mu      sync.RWMutex
 	tracked map[string][]branchEntry // branch → []branchEntry
@@ -61,21 +62,21 @@ type GlabAdapter struct {
 
 // New creates a GlabAdapter with the given configuration.
 func New(cfg config.GlabConfig) *GlabAdapter {
-	return newWithRunner(cfg, nil, execRunner)
+	return newWithRunner(cfg, coreadapter.ReviewArtifactRepos{}, execRunner)
 }
 
 // NewWithEventRepo creates a GlabAdapter that persists durable MR metadata.
-func NewWithEventRepo(cfg config.GlabConfig, eventRepo repository.EventRepository) *GlabAdapter {
-	return newWithRunner(cfg, eventRepo, execRunner)
+func NewWithEventRepo(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos) *GlabAdapter {
+	return newWithRunner(cfg, repos, execRunner)
 }
 
 // newWithRunner creates a GlabAdapter with an injectable commandRunner (for tests).
-func newWithRunner(cfg config.GlabConfig, eventRepo repository.EventRepository, runner commandRunner) *GlabAdapter {
+func newWithRunner(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos, runner commandRunner) *GlabAdapter {
 	return &GlabAdapter{
-		cfg:       cfg,
-		runner:    runner,
-		eventRepo: eventRepo,
-		tracked:   make(map[string][]branchEntry),
+		cfg:     cfg,
+		runner:  runner,
+		repos:   repos,
+		tracked: make(map[string][]branchEntry),
 	}
 }
 
@@ -139,8 +140,10 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	title := mrTitle(p.WorkItemTitle, p.Branch)
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
 	var artifact *domain.ReviewArtifact
+	var iid int
 	if mr, ok := a.mrView(ctx, p.WorktreePath, p.Branch); ok {
 		slog.Info("glab: MR already exists, skipping create", "branch", p.Branch)
+		iid = mr.IID
 		artifact = &domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
@@ -155,11 +158,15 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	} else if url, err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
 		slog.Warn("glab: mr create failed", "repo", p.Repository, "branch", p.Branch, "error", err)
 	} else {
+		// Try to get the IID of the newly created MR.
+		if created, ok := a.mrView(ctx, p.WorktreePath, p.Branch); ok {
+			iid = created.IID
+		}
 		artifact = &domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
 			RepoName:     p.Repository,
-			Ref:          glabArtifactRef(url, 0),
+			Ref:          glabArtifactRef(url, iid),
 			URL:          url,
 			State:        "draft",
 			Branch:       p.Branch,
@@ -184,7 +191,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	})
 	a.mu.Unlock()
 	if artifact != nil {
-		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, *artifact)
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, *artifact, p.Repository, iid)
 	}
 
 	return nil
@@ -228,7 +235,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 			continue
 		}
 		if mr, ok := a.mrView(ctx, entry.worktreePath, p.Branch); ok {
-			a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 				Provider:     "gitlab",
 				Kind:         "MR",
 				RepoName:     entry.repo,
@@ -238,11 +245,11 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 				Branch:       p.Branch,
 				WorktreePath: entry.worktreePath,
 				UpdatedAt:    time.Now(),
-			})
+			}, entry.repo, mr.IID)
 
 			continue
 		}
-		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
 			RepoName:     entry.repo,
@@ -252,7 +259,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 			Branch:       p.Branch,
 			WorktreePath: entry.worktreePath,
 			UpdatedAt:    time.Now(),
-		})
+		}, entry.repo, 0)
 	}
 
 	return nil
@@ -399,10 +406,10 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 	a.mu.RLock()
 	tracked := append([]branchEntry(nil), a.tracked[p.Branch]...)
 	a.mu.RUnlock()
-	if a.eventRepo == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
+	if a.repos.Events == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
 		return tracked
 	}
-	events, err := a.eventRepo.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
+	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
 	if err != nil {
 		return tracked
 	}
@@ -444,8 +451,8 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 	return entries
 }
 
-func (a *GlabAdapter) recordReviewArtifact(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact) {
-	if err := coreadapter.PersistReviewArtifact(ctx, a.eventRepo, workspaceID, workItemID, artifact); err != nil {
+func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) {
+	if err := coreadapter.PersistGitlabMR(ctx, a.repos, workspaceID, workItemID, artifact, projectPath, iid); err != nil {
 		slog.Warn("glab: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
 	}
 }
@@ -587,4 +594,76 @@ func renderGitLabTrackerRef(ref domain.TrackerReference) string {
 	default:
 		return ""
 	}
+}
+
+
+// StartMRRefresh begins a background goroutine that periodically refreshes
+// non-terminal MR state from GitLab. If no MR repository is configured the
+// call is a no-op (safe for tests).
+func (a *GlabAdapter) StartMRRefresh(ctx context.Context, workspaceID string) {
+	if a.repos.GitlabMRs == nil {
+		return
+	}
+	a.workspaceID = workspaceID
+	go a.refreshMRLoop(ctx)
+}
+
+func (a *GlabAdapter) refreshMRLoop(ctx context.Context) {
+	a.refreshMRs(ctx)
+	ticker := time.NewTicker(120 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.refreshMRs(ctx)
+		}
+	}
+}
+
+func (a *GlabAdapter) refreshMRs(ctx context.Context) {
+	mrs, err := a.repos.GitlabMRs.ListNonTerminal(ctx, a.workspaceID)
+	if err != nil {
+		slog.Warn("glab: refresh mrs list failed", "error", err)
+		return
+	}
+	for _, mr := range mrs {
+		a.refreshSingleMR(ctx, mr)
+	}
+}
+
+func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMergeRequest) {
+	dir := a.findWorktreeDir(mr.SourceBranch)
+	if dir == "" {
+		return
+	}
+	fresh, ok := a.mrView(ctx, dir, mr.SourceBranch)
+	if !ok {
+		return
+	}
+	updated := domain.GitlabMergeRequest{
+		ID:           mr.ID,
+		ProjectPath:  mr.ProjectPath,
+		IID:          fresh.IID,
+		State:        glabArtifactState(fresh),
+		Draft:        fresh.Draft || fresh.WorkInProgress,
+		SourceBranch: mr.SourceBranch,
+		WebURL:       strings.TrimSpace(fresh.WebURL),
+		CreatedAt:    mr.CreatedAt,
+		UpdatedAt:    time.Now(),
+	}
+	if err := a.repos.GitlabMRs.Upsert(ctx, updated); err != nil {
+		slog.Warn("glab: refresh mr upsert failed", "iid", mr.IID, "error", err)
+	}
+}
+
+func (a *GlabAdapter) findWorktreeDir(branch string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	entries := a.tracked[branch]
+	if len(entries) > 0 {
+		return entries[0].worktreePath
+	}
+	return ""
 }

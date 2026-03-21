@@ -16,15 +16,11 @@ Aggregate sessions store `SourceItemIDs` and `tracker_refs` but carry no canonic
 
 ## 2. PR/MR durable persistence
 
-PR/MR data is tracked via event-sourced `ReviewArtifact` records (`review.artifact_recorded` events). This works for rendering and survives restarts, but there is no dedicated indexed table, no background state refresh from provider APIs, and no overview-native PR action buttons.
+~~Completed.~~ PR/MR data now uses provider-specific tables (`github_pull_requests`, `gitlab_merge_requests`) linked to work items via `session_review_artifacts`. Background state refresh polls provider APIs every 120s for non-terminal artifacts. Overview reads from indexed tables with event-replay fallback.
 
-**Implementation requires:**
+**Remaining follow-up:**
 
-- A dedicated `review_artifacts` table or materialized view with proper indexing.
-- Background state refresh polling provider APIs for open/merged/closed transitions.
-- Wiring overview action buttons once PR state is trustworthy.
-
-**Affected areas:** domain model, migrations, provider adapters, `overview.go`, `completed_view.go`.
+- Overview-native PR action buttons (merge, close, mark ready) — deferred until refresh proves trustworthy in practice.
 
 ## 3. Git/worktree health badges
 

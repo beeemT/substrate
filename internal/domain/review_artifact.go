@@ -21,3 +21,42 @@ type ReviewArtifactEventPayload struct {
 	WorkItemID string         `json:"work_item_id"`
 	Artifact   ReviewArtifact `json:"artifact"`
 }
+
+// GithubPullRequest is the durable row for a GitHub PR.
+type GithubPullRequest struct {
+	ID         string
+	Owner      string
+	Repo       string
+	Number     int
+	State      string
+	Draft      bool
+	HeadBranch string
+	HTMLURL    string
+	MergedAt   *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// GitlabMergeRequest is the durable row for a GitLab MR.
+type GitlabMergeRequest struct {
+	ID           string
+	ProjectPath  string
+	IID          int
+	State        string
+	Draft        bool
+	SourceBranch string
+	WebURL       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// SessionReviewArtifact links a work item to a provider-specific PR/MR record.
+type SessionReviewArtifact struct {
+	ID                 string
+	WorkspaceID        string
+	WorkItemID         string
+	Provider           string
+	ProviderArtifactID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}

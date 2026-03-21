@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -12,7 +13,7 @@ func TestBuildRepoLifecycleAdapters_SkipsGithubWhenTokenResolutionFails(t *testi
 	t.Parallel()
 	cfg := &config.Config{}
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", nil)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", adapter.ReviewArtifactRepos{})
 	if adapters != nil {
 		t.Fatalf("expected nil adapters for empty workspace dir, got %d", len(adapters))
 	}
@@ -42,7 +43,7 @@ func TestBuildRepoLifecycleAdapters_IgnoresSentryConfig(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "token"
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, nil)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{})
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want 1", len(adapters))
 	}

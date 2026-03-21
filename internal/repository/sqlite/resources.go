@@ -17,7 +17,10 @@ type Resources struct {
 	Reviews    ReviewRepo
 	Questions  QuestionRepo
 	Events     EventRepo
-	Instances  InstanceRepo
+	Instances              InstanceRepo
+	GithubPRs              GithubPRRepo
+	GitlabMRs              GitlabMRRepo
+	SessionReviewArtifacts SessionReviewArtifactRepo
 }
 
 // ResourcesFactory creates a Resources from a transaction handle.
@@ -36,6 +39,9 @@ func ResourcesFactory(
 		Reviews:    NewReviewRepo(tx),
 		Questions:  NewQuestionRepo(tx),
 		Events:     NewEventRepo(tx),
-		Instances:  NewInstanceRepo(tx),
+		Instances:              NewInstanceRepo(tx),
+		GithubPRs:              NewGithubPRRepo(tx),
+		GitlabMRs:              NewGitlabMRRepo(tx),
+		SessionReviewArtifacts: NewSessionReviewArtifactRepo(tx),
 	}, nil
 }

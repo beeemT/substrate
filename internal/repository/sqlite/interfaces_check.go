@@ -12,5 +12,8 @@ var (
 	_ repository.ReviewRepository    = ReviewRepo{}
 	_ repository.QuestionRepository  = QuestionRepo{}
 	_ repository.EventRepository     = EventRepo{}
-	_ repository.InstanceRepository  = InstanceRepo{}
+	_ repository.InstanceRepository            = InstanceRepo{}
+	_ repository.GithubPullRequestRepository    = GithubPRRepo{}
+	_ repository.GitlabMergeRequestRepository   = GitlabMRRepo{}
+	_ repository.SessionReviewArtifactRepository = SessionReviewArtifactRepo{}
 )

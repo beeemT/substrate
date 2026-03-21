@@ -30,7 +30,7 @@ func jsonResp(t *testing.T, status int, v any) *http.Response {
 
 func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	t.Helper()
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "done": "closed"}}, nil, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "done": "closed"}}, adapter.ReviewArtifactRepos{}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
@@ -40,7 +40,7 @@ func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 
 func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
 	var seenHost, seenPath string
-	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{BaseURL: "https://github.internal/api/v3"}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		seenHost = req.URL.Host
 		seenPath = req.URL.Path
 
@@ -59,7 +59,7 @@ func TestNewWithDeps_UsesConfiguredBaseURL(t *testing.T) {
 
 func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 	resolved := false
-	a, err := newWithDeps(context.Background(), config.GithubConfig{}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/repos/acme/rocket":
 			return jsonResp(t, http.StatusUnauthorized, map[string]any{"message": "nope"}), nil
@@ -90,7 +90,7 @@ func TestTokenFallbackAndDefaultBranchFallback(t *testing.T) {
 func TestCreatedByMeUsesViewerLoginWhenAssigneeConfigured(t *testing.T) {
 	userCalls := 0
 	var issueQuery string
-	a, err := newWithDeps(context.Background(), config.GithubConfig{Assignee: "bob"}, nil, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	a, err := newWithDeps(context.Background(), config.GithubConfig{Assignee: "bob"}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/user":
 			userCalls++

@@ -1540,44 +1540,79 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	for _, ref := range sessionTrackerRefs(wi.Metadata) {
 		external.TrackerRefs = append(external.TrackerRefs, formatTrackerRef(ref))
 	}
-	if a.svcs.Events == nil || wi.WorkspaceID == "" {
+	if wi.WorkspaceID == "" {
 		return external
 	}
-	events, err := a.svcs.Events.ListByWorkspaceID(context.Background(), wi.WorkspaceID, 0)
-	if err != nil {
-		return external
-	}
-	latestByKey := make(map[string]domain.ReviewArtifact)
-	for _, event := range events {
-		if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
-			continue
+	ctx := context.Background()
+	// Query from indexed tables when available.
+	if a.svcs.GithubPRs != nil {
+		if links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID); err == nil {
+			for _, link := range links {
+				switch link.Provider {
+				case "github":
+					if pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID); err == nil {
+						external.Reviews = append(external.Reviews, OverviewReviewRow{
+							Kind:     "PR",
+							RepoName: pr.Owner + "/" + pr.Repo,
+							Ref:      fmt.Sprintf("#%d", pr.Number),
+							URL:      pr.HTMLURL,
+							State:    pr.State,
+							Branch:   pr.HeadBranch,
+						})
+					}
+				case "gitlab":
+					if a.svcs.GitlabMRs != nil {
+						if mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID); err == nil {
+							external.Reviews = append(external.Reviews, OverviewReviewRow{
+								Kind:     "MR",
+								RepoName: mr.ProjectPath,
+								Ref:      fmt.Sprintf("!%d", mr.IID),
+								URL:      mr.WebURL,
+								State:    mr.State,
+								Branch:   mr.SourceBranch,
+							})
+						}
+					}
+				}
+			}
 		}
-		var payload domain.ReviewArtifactEventPayload
-		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
-			continue
+	} else if a.svcs.Events != nil {
+		// Fallback to event replay if repos not available (e.g. tests).
+		events, err := a.svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
+		if err == nil {
+			latestByKey := make(map[string]domain.ReviewArtifact)
+			for _, event := range events {
+				if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
+					continue
+				}
+				var payload domain.ReviewArtifactEventPayload
+				if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+					continue
+				}
+				if payload.WorkItemID != wi.ID {
+					continue
+				}
+				artifact := payload.Artifact
+				if artifact.UpdatedAt.IsZero() {
+					artifact.UpdatedAt = event.CreatedAt
+				}
+				key := strings.Join([]string{strings.TrimSpace(artifact.Provider), strings.TrimSpace(artifact.RepoName), strings.TrimSpace(artifact.Branch)}, ":")
+				if current, ok := latestByKey[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
+					continue
+				}
+				latestByKey[key] = artifact
+			}
+			for _, artifact := range latestByKey {
+				external.Reviews = append(external.Reviews, OverviewReviewRow{
+					Kind:     firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
+					RepoName: artifact.RepoName,
+					Ref:      artifact.Ref,
+					URL:      artifact.URL,
+					State:    artifact.State,
+					Branch:   artifact.Branch,
+				})
+			}
 		}
-		if payload.WorkItemID != wi.ID {
-			continue
-		}
-		artifact := payload.Artifact
-		if artifact.UpdatedAt.IsZero() {
-			artifact.UpdatedAt = event.CreatedAt
-		}
-		key := strings.Join([]string{strings.TrimSpace(artifact.Provider), strings.TrimSpace(artifact.RepoName), strings.TrimSpace(artifact.Branch)}, ":")
-		if current, ok := latestByKey[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
-			continue
-		}
-		latestByKey[key] = artifact
-	}
-	for _, artifact := range latestByKey {
-		external.Reviews = append(external.Reviews, OverviewReviewRow{
-			Kind:     firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
-			RepoName: artifact.RepoName,
-			Ref:      artifact.Ref,
-			URL:      artifact.URL,
-			State:    artifact.State,
-			Branch:   artifact.Branch,
-		})
 	}
 	sort.SliceStable(external.Reviews, func(i, j int) bool {
 		if external.Reviews[i].RepoName != external.Reviews[j].RepoName {
@@ -1586,10 +1621,8 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 		if external.Reviews[i].Branch != external.Reviews[j].Branch {
 			return external.Reviews[i].Branch < external.Reviews[j].Branch
 		}
-
 		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
-
 	return external
 }
 

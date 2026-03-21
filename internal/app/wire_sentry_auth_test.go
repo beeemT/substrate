@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -86,7 +87,7 @@ func TestBuildRepoLifecycleAdapters_StillIgnoresSentryCLIAuth(t *testing.T) {
 	createWorkspaceRepo(t, workspaceDir+"/repo-one", "git@gitlab.com:group/repo.git")
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, nil)
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{})
 	if len(adapters) != 1 || adapters[0].Name() != "glab" {
 		t.Fatalf("repo lifecycle adapters = %#v, want only glab", adapters)
 	}

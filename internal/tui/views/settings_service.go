@@ -108,16 +108,19 @@ func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
 }
 
 type SettingsService struct {
-	workItemRepo  repository.SessionRepository
-	planRepo      repository.PlanRepository
-	subPlanRepo   repository.TaskPlanRepository
-	workspaceRepo repository.WorkspaceRepository
-	sessionRepo   repository.TaskRepository
-	questionRepo  repository.QuestionRepository
-	instanceRepo  repository.InstanceRepository
-	reviewRepo    repository.ReviewRepository
-	eventRepo     repository.EventRepository
-	secretStore   config.SecretStore
+	workItemRepo        repository.SessionRepository
+	planRepo            repository.PlanRepository
+	subPlanRepo         repository.TaskPlanRepository
+	workspaceRepo       repository.WorkspaceRepository
+	sessionRepo         repository.TaskRepository
+	questionRepo        repository.QuestionRepository
+	instanceRepo        repository.InstanceRepository
+	reviewRepo          repository.ReviewRepository
+	eventRepo           repository.EventRepository
+	ghPRRepo            repository.GithubPullRequestRepository
+	glMRRepo            repository.GitlabMergeRequestRepository
+	sessionArtifactRepo repository.SessionReviewArtifactRepository
+	secretStore         config.SecretStore
 }
 
 type viewsServicesReload struct {
@@ -137,19 +140,25 @@ func NewSettingsService(
 	instanceRepo repository.InstanceRepository,
 	reviewRepo repository.ReviewRepository,
 	eventRepo repository.EventRepository,
+	ghPRRepo repository.GithubPullRequestRepository,
+	glMRRepo repository.GitlabMergeRequestRepository,
+	sessionArtifactRepo repository.SessionReviewArtifactRepository,
 	secretStore config.SecretStore,
 ) *SettingsService {
 	return &SettingsService{
-		workItemRepo:  workItemRepo,
-		planRepo:      planRepo,
-		subPlanRepo:   subPlanRepo,
-		workspaceRepo: workspaceRepo,
-		sessionRepo:   sessionRepo,
-		questionRepo:  questionRepo,
-		instanceRepo:  instanceRepo,
-		reviewRepo:    reviewRepo,
-		eventRepo:     eventRepo,
-		secretStore:   secretStore,
+		workItemRepo:        workItemRepo,
+		planRepo:            planRepo,
+		subPlanRepo:         subPlanRepo,
+		workspaceRepo:       workspaceRepo,
+		sessionRepo:         sessionRepo,
+		questionRepo:        questionRepo,
+		instanceRepo:        instanceRepo,
+		reviewRepo:          reviewRepo,
+		eventRepo:           eventRepo,
+		ghPRRepo:            ghPRRepo,
+		glMRRepo:            glMRRepo,
+		sessionArtifactRepo: sessionArtifactRepo,
+		secretStore:         secretStore,
 	}
 }
 
@@ -434,7 +443,12 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	if current.WorkspaceID != "" {
 		adapters = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, s.workItemRepo)
 	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, s.eventRepo)
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, adapter.ReviewArtifactRepos{
+		Events:           s.eventRepo,
+		GithubPRs:        s.ghPRRepo,
+		GitlabMRs:        s.glMRRepo,
+		SessionArtifacts: s.sessionArtifactRepo,
+	})
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {
@@ -456,6 +470,22 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 				_ = a.OnEvent(context.Background(), evt)
 			}
 		}(lifecycleAdapter, sub.C)
+	}
+
+	// Start PR/MR state refresh for lifecycle adapters.
+	for _, la := range repoLifecycleAdapters {
+		type prRefresher interface {
+			StartPRRefresh(ctx context.Context, workspaceID string)
+		}
+		type mrRefresher interface {
+			StartMRRefresh(ctx context.Context, workspaceID string)
+		}
+		if r, ok := la.(prRefresher); ok && current.WorkspaceID != "" {
+			r.StartPRRefresh(ctx, current.WorkspaceID)
+		}
+		if r, ok := la.(mrRefresher); ok && current.WorkspaceID != "" {
+			r.StartMRRefresh(ctx, current.WorkspaceID)
+		}
 	}
 	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
 	harnesses, err := app.BuildAgentHarnesses(cfg, current.WorkspaceDir)
@@ -505,30 +535,33 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		SessionsDir:  sessionsDir,
 		SettingsData: snapshot,
 		Services: Services{
-			Session:         workItemSvc,
-			Plan:            planSvc,
-			TaskPlan:        s.subPlanRepo,
-			Task:            sessionSvc,
-			Question:        questionSvc,
-			Instance:        instanceSvc,
-			Workspace:       workspaceSvc,
-			Review:          reviewSvc,
-			Events:          s.eventRepo,
-			Planning:        planningSvc,
-			Implementation:  implSvc,
-			ReviewPipeline:  reviewPipeline,
-			Resumption:      resumption,
-			Foreman:         foreman,
-			SessionRegistry: registry,
-			Cfg:             cfg,
-			Adapters:        adapters,
-			Harnesses:       harnesses,
-			GitClient:       gitClient,
-			Bus:             bus,
-			InstanceID:      current.InstanceID,
-			WorkspaceID:     current.WorkspaceID,
-			WorkspaceDir:    current.WorkspaceDir,
-			WorkspaceName:   current.WorkspaceName,
+			Session:          workItemSvc,
+			Plan:             planSvc,
+			TaskPlan:         s.subPlanRepo,
+			Task:             sessionSvc,
+			Question:         questionSvc,
+			Instance:         instanceSvc,
+			Workspace:        workspaceSvc,
+			Review:           reviewSvc,
+			Events:           s.eventRepo,
+			GithubPRs:        s.ghPRRepo,
+			GitlabMRs:        s.glMRRepo,
+			SessionArtifacts: s.sessionArtifactRepo,
+			Planning:         planningSvc,
+			Implementation:   implSvc,
+			ReviewPipeline:   reviewPipeline,
+			Resumption:       resumption,
+			Foreman:          foreman,
+			SessionRegistry:  registry,
+			Cfg:              cfg,
+			Adapters:         adapters,
+			Harnesses:        harnesses,
+			GitClient:        gitClient,
+			Bus:              bus,
+			InstanceID:       current.InstanceID,
+			WorkspaceID:      current.WorkspaceID,
+			WorkspaceDir:     current.WorkspaceDir,
+			WorkspaceName:    current.WorkspaceName,
 		},
 	}, nil
 }

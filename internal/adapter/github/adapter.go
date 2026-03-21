@@ -22,7 +22,6 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/repository"
 )
 
 type httpClient interface {
@@ -38,7 +37,7 @@ type GithubAdapter struct {
 	defaultBranch string
 	assignee      string
 	viewer        string
-	eventRepo     repository.EventRepository
+	repos          adapter.ReviewArtifactRepos
 
 	mu      sync.RWMutex
 	tracked map[string]githubPull
@@ -86,9 +85,14 @@ type githubUser struct {
 	Login string `json:"login"`
 }
 type githubPull struct {
-	Number  int    `json:"number"`
-	Draft   bool   `json:"draft"`
-	HTMLURL string `json:"html_url"`
+	Number   int        `json:"number"`
+	Draft    bool       `json:"draft"`
+	HTMLURL  string     `json:"html_url"`
+	State    string     `json:"state"`
+	MergedAt *time.Time `json:"merged_at"`
+	Head     struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
 }
 
 type worktreePayload struct {
@@ -114,17 +118,17 @@ type completedPayload struct {
 const filterAll = "all"
 
 func New(ctx context.Context, cfg config.GithubConfig) (*GithubAdapter, error) {
-	return newWithDeps(ctx, cfg, nil, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
+	return newWithDeps(ctx, cfg, adapter.ReviewArtifactRepos{}, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
 
-func NewRepoLifecycle(ctx context.Context, cfg config.GithubConfig, eventRepo repository.EventRepository) (*GithubAdapter, error) {
-	return newWithDeps(ctx, cfg, eventRepo, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
+func NewRepoLifecycle(ctx context.Context, cfg config.GithubConfig, repos adapter.ReviewArtifactRepos) (*GithubAdapter, error) {
+	return newWithDeps(ctx, cfg, repos, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
 
 func newWithDeps(
 	ctx context.Context,
 	cfg config.GithubConfig,
-	eventRepo repository.EventRepository,
+	repos adapter.ReviewArtifactRepos,
 	client httpClient,
 	resolver tokenResolver,
 ) (*GithubAdapter, error) {
@@ -147,7 +151,7 @@ func newWithDeps(
 		token:         token,
 		tracked:       make(map[string]githubPull),
 		defaultBranch: "main",
-		eventRepo:     eventRepo,
+		repos:         repos,
 	}
 	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
@@ -336,7 +340,7 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 }
 
 func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
-	interval := 60 * time.Second
+	interval := 120 * time.Second
 	if parsed, err := time.ParseDuration(a.cfg.PollInterval); err == nil && parsed > 0 {
 		interval = parsed
 	}
@@ -479,7 +483,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		a.mu.Lock()
 		a.tracked[p.Branch] = *pull
 		a.mu.Unlock()
-		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:  "github",
 			Kind:      "PR",
 			RepoName:  baseOwner + "/" + baseRepo,
@@ -489,7 +493,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 			Branch:    p.Branch,
 			Draft:     pull.Draft,
 			UpdatedAt: time.Now(),
-		})
+		}, baseOwner, baseRepo, pull.Number)
 
 		return nil
 	}
@@ -516,7 +520,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	a.mu.Lock()
 	a.tracked[p.Branch] = created
 	a.mu.Unlock()
-	a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+	a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 		Provider:  "github",
 		Kind:      "PR",
 		RepoName:  baseOwner + "/" + baseRepo,
@@ -526,7 +530,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		Branch:    p.Branch,
 		Draft:     created.Draft,
 		UpdatedAt: time.Now(),
-	})
+	}, baseOwner, baseRepo, created.Number)
 
 	return nil
 }
@@ -630,7 +634,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		artifact.Draft = false
 		artifact.State = "ready"
 		artifact.UpdatedAt = time.Now()
-		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, artifact)
+		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, artifact, owner, repo, prNumber)
 	}
 
 	return nil
@@ -912,10 +916,10 @@ func (a *GithubAdapter) fetchAssignedOpenIssues(ctx context.Context) ([]githubIs
 }
 
 func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedPayload) []domain.ReviewArtifact {
-	if a.eventRepo == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
+	if a.repos.Events == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
 		return nil
 	}
-	events, err := a.eventRepo.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
+	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
 	if err != nil {
 		return nil
 	}
@@ -979,8 +983,8 @@ func parseGitHubPullRef(ref string) (int, error) {
 	return value, nil
 }
 
-func (a *GithubAdapter) recordReviewArtifact(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact) {
-	if err := adapter.PersistReviewArtifact(ctx, a.eventRepo, workspaceID, workItemID, artifact); err != nil {
+func (a *GithubAdapter) recordGithubPR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, owner, repo string, number int) {
+	if err := adapter.PersistGithubPR(ctx, a.repos, workspaceID, workItemID, artifact, owner, repo, number); err != nil {
 		slog.Warn("github: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
 	}
 }
@@ -990,6 +994,19 @@ func githubArtifactState(pull githubPull) string {
 		return "draft"
 	}
 
+	return "ready"
+}
+
+func githubPRState(pull githubPull) string {
+	if pull.MergedAt != nil {
+		return "merged"
+	}
+	if pull.State == "closed" {
+		return "closed"
+	}
+	if pull.Draft {
+		return "draft"
+	}
 	return "ready"
 }
 
@@ -1427,4 +1444,61 @@ func renderGitHubTrackerRef(ref domain.TrackerReference, baseRepo domain.RepoRef
 	default:
 		return ""
 	}
+}
+
+func (a *GithubAdapter) refreshPRs(ctx context.Context, workspaceID string) {
+	if a.repos.GithubPRs == nil {
+		return
+	}
+	prs, err := a.repos.GithubPRs.ListNonTerminal(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("github: refresh prs list failed", "error", err)
+		return
+	}
+	for _, pr := range prs {
+		var freshPull githubPull
+		if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", pr.Owner, pr.Repo, pr.Number), nil, &freshPull); err != nil {
+			slog.Warn("github: refresh pr failed", "pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number), "error", err)
+			continue
+		}
+		updated := domain.GithubPullRequest{
+			ID:         pr.ID,
+			Owner:      pr.Owner,
+			Repo:       pr.Repo,
+			Number:     pr.Number,
+			State:      githubPRState(freshPull),
+			Draft:      freshPull.Draft,
+			HeadBranch: pr.HeadBranch,
+			HTMLURL:    freshPull.HTMLURL,
+			CreatedAt:  pr.CreatedAt,
+			UpdatedAt:  time.Now(),
+		}
+		if err := a.repos.GithubPRs.Upsert(ctx, updated); err != nil {
+			slog.Warn("github: refresh pr upsert failed", "error", err)
+		}
+	}
+}
+
+// StartPRRefresh starts a background goroutine that periodically refreshes
+// non-terminal GitHub pull requests from the API. It runs an immediate refresh
+// on startup and then repeats every 120 seconds.
+func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) {
+	if a.repos.GithubPRs == nil {
+		return
+	}
+	// Immediate refresh on startup.
+	a.refreshPRs(ctx, workspaceID)
+
+	go func() {
+		ticker := time.NewTicker(120 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.refreshPRs(ctx, workspaceID)
+			}
+		}
+	}()
 }

@@ -108,3 +108,28 @@ type InstanceRepository interface {
 	Update(ctx context.Context, inst domain.SubstrateInstance) error
 	Delete(ctx context.Context, id string) error
 }
+
+// GithubPullRequestRepository provides persistence for GitHub pull requests.
+type GithubPullRequestRepository interface {
+	Upsert(ctx context.Context, pr domain.GithubPullRequest) error
+	Get(ctx context.Context, id string) (domain.GithubPullRequest, error)
+	GetByNumber(ctx context.Context, owner, repo string, number int) (domain.GithubPullRequest, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
+	ListNonTerminal(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
+}
+
+// GitlabMergeRequestRepository provides persistence for GitLab merge requests.
+type GitlabMergeRequestRepository interface {
+	Upsert(ctx context.Context, mr domain.GitlabMergeRequest) error
+	Get(ctx context.Context, id string) (domain.GitlabMergeRequest, error)
+	GetByIID(ctx context.Context, projectPath string, iid int) (domain.GitlabMergeRequest, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.GitlabMergeRequest, error)
+	ListNonTerminal(ctx context.Context, workspaceID string) ([]domain.GitlabMergeRequest, error)
+}
+
+// SessionReviewArtifactRepository provides persistence for the link between work items and PR/MR records.
+type SessionReviewArtifactRepository interface {
+	Upsert(ctx context.Context, link domain.SessionReviewArtifact) error
+	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.SessionReviewArtifact, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error)
+}

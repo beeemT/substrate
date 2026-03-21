@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	coreadapter "github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 )
@@ -54,7 +55,7 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 
 	repo := &glabArtifactEventRepo{}
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
-	a := newWithRunner(config.GlabConfig{}, repo, stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: repo}, stub.run)
 	payload := mustJSON(worktreePayload{
 		WorkspaceID:  "ws-1",
 		WorkItemID:   "wi-1",
@@ -89,7 +90,7 @@ func TestExistingDraftMergeRequestRemainsDraft(t *testing.T) {
 
 	repo := &glabArtifactEventRepo{}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/5","draft":true}`)}
-	a := newWithRunner(config.GlabConfig{}, repo, stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: repo}, stub.run)
 	payload := mustJSON(worktreePayload{WorkspaceID: "ws-1", WorkItemID: "wi-1", Repository: "group/repo", Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt"})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
@@ -132,7 +133,7 @@ func TestWorkItemCompletedUsesPersistedArtifactAfterRestart(t *testing.T) {
 		CreatedAt:   now,
 	}}}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/5"}`)}
-	a := newWithRunner(config.GlabConfig{}, repo, stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: repo}, stub.run)
 	payload := mustJSON(completedPayload{WorkspaceID: "ws-1", WorkItemID: "wi-1", Branch: "sub-branch"})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
@@ -163,7 +164,7 @@ func TestClosedDraftMergeRequestRemainsClosed(t *testing.T) {
 
 	repo := &glabArtifactEventRepo{}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"closed","web_url":"https://gitlab.com/org/repo/-/merge_requests/5","draft":true}`)}
-	a := newWithRunner(config.GlabConfig{}, repo, stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: repo}, stub.run)
 	payload := mustJSON(worktreePayload{WorkspaceID: "ws-1", WorkItemID: "wi-1", Repository: "group/repo", Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt"})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)

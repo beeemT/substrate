@@ -133,6 +133,9 @@ func run() error { //nolint:funlen
 	instanceRepo := sqlite.NewInstanceRepo(remote)
 	reviews := sqlite.NewReviewRepo(remote)
 	eventRepo := sqlite.NewEventRepo(remote)
+	ghPRRepo := sqlite.NewGithubPRRepo(remote)
+	glMRRepo := sqlite.NewGitlabMRRepo(remote)
+	sessionArtifactRepo := sqlite.NewSessionReviewArtifactRepo(remote)
 
 	// Build services.
 	workItemSvc := service.NewSessionService(workItemRepo)
@@ -144,7 +147,7 @@ func run() error { //nolint:funlen
 	reviewSvc := service.NewReviewService(reviews)
 
 	settingsSvc := views.NewSettingsService(
-		workItemRepo, planRepo, subPlanRepo, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, config.OSKeychainStore{},
+		workItemRepo, planRepo, subPlanRepo, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
 	)
 
 	// Build event bus.
@@ -196,7 +199,13 @@ func run() error { //nolint:funlen
 	if workspaceID != "" {
 		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemRepo)
 	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, eventRepo)
+	artifactRepos := adapter.ReviewArtifactRepos{
+		Events:           eventRepo,
+		GithubPRs:        ghPRRepo,
+		GitlabMRs:        glMRRepo,
+		SessionArtifacts: sessionArtifactRepo,
+	}
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, artifactRepos)
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {
@@ -222,6 +231,22 @@ func run() error { //nolint:funlen
 				}
 			}
 		}(lifecycleAdapter, sub.C)
+	}
+
+	// Start PR/MR state refresh for lifecycle adapters.
+	for _, la := range repoLifecycleAdapters {
+		type prRefresher interface {
+			StartPRRefresh(ctx context.Context, workspaceID string)
+		}
+		type mrRefresher interface {
+			StartMRRefresh(ctx context.Context, workspaceID string)
+		}
+		if r, ok := la.(prRefresher); ok && workspaceID != "" {
+			r.StartPRRefresh(ctx, workspaceID)
+		}
+		if r, ok := la.(mrRefresher); ok && workspaceID != "" {
+			r.StartMRRefresh(ctx, workspaceID)
+		}
 	}
 
 	// Build gitwork client.
@@ -279,32 +304,35 @@ func run() error { //nolint:funlen
 	}
 
 	svcs := views.Services{
-		Session:         workItemSvc,
-		Plan:            planSvc,
-		TaskPlan:        subPlanRepo,
-		Task:            sessionSvc,
-		Question:        questionSvc,
-		Instance:        instanceSvc,
-		Workspace:       workspaceSvc,
-		Review:          reviewSvc,
-		Events:          eventRepo,
-		Cfg:             cfg,
-		Adapters:        adapters,
-		Harnesses:       harnesses,
-		Settings:        settingsSvc,
-		SettingsData:    settingsData,
-		GitClient:       gitClient,
-		Bus:             bus,
-		InstanceID:      instanceID,
-		WorkspaceID:     workspaceID,
-		WorkspaceName:   workspaceName,
-		WorkspaceDir:    workspaceDir,
-		Planning:        planningSvc,
-		Implementation:  implSvc,
-		ReviewPipeline:  reviewPipeline,
-		Resumption:      resumption,
-		Foreman:         foreman,
-		SessionRegistry: registry,
+		Session:          workItemSvc,
+		Plan:             planSvc,
+		TaskPlan:         subPlanRepo,
+		Task:             sessionSvc,
+		Question:         questionSvc,
+		Instance:         instanceSvc,
+		Workspace:        workspaceSvc,
+		Review:           reviewSvc,
+		Events:           eventRepo,
+		GithubPRs:        ghPRRepo,
+		GitlabMRs:        glMRRepo,
+		SessionArtifacts: sessionArtifactRepo,
+		Cfg:              cfg,
+		Adapters:         adapters,
+		Harnesses:        harnesses,
+		Settings:         settingsSvc,
+		SettingsData:     settingsData,
+		GitClient:        gitClient,
+		Bus:              bus,
+		InstanceID:       instanceID,
+		WorkspaceID:      workspaceID,
+		WorkspaceName:    workspaceName,
+		WorkspaceDir:     workspaceDir,
+		Planning:         planningSvc,
+		Implementation:   implSvc,
+		ReviewPipeline:   reviewPipeline,
+		Resumption:       resumption,
+		Foreman:          foreman,
+		SessionRegistry:  registry,
 	}
 
 	return views.RunTUI(svcs)

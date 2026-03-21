@@ -75,7 +75,7 @@ func BuildRepoLifecycleAdapters(
 	ctx context.Context,
 	cfg *config.Config,
 	workspaceDir string,
-	eventRepo repository.EventRepository,
+	repos adapter.ReviewArtifactRepos,
 ) []adapter.RepoLifecycleAdapter {
 	if workspaceDir == "" {
 		return nil
@@ -91,13 +91,13 @@ func BuildRepoLifecycleAdapters(
 	for _, platform := range platforms {
 		switch platform {
 		case remotedetect.PlatformGitLab:
-			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, eventRepo)})
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, repos)})
 		case remotedetect.PlatformGitHub:
 			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 				slog.Warn("skipping github lifecycle adapter: no github auth configured")
 				continue
 			}
-			githubAdapter, err := githubadapter.NewRepoLifecycle(ctx, cfg.Adapters.GitHub, eventRepo)
+			githubAdapter, err := githubadapter.NewRepoLifecycle(ctx, cfg.Adapters.GitHub, repos)
 			if err != nil {
 				slog.Warn("skipping github lifecycle adapter", "err", err)
 				continue
@@ -123,6 +123,24 @@ func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.Syst
 		return nil
 	}
 	return a.adapter.OnEvent(ctx, evt)
+}
+
+func (a routedRepoLifecycleAdapter) StartPRRefresh(ctx context.Context, workspaceID string) {
+	type refresher interface {
+		StartPRRefresh(ctx context.Context, workspaceID string)
+	}
+	if r, ok := a.adapter.(refresher); ok {
+		r.StartPRRefresh(ctx, workspaceID)
+	}
+}
+
+func (a routedRepoLifecycleAdapter) StartMRRefresh(ctx context.Context, workspaceID string) {
+	type refresher interface {
+		StartMRRefresh(ctx context.Context, workspaceID string)
+	}
+	if r, ok := a.adapter.(refresher); ok {
+		r.StartMRRefresh(ctx, workspaceID)
+	}
 }
 
 func repoLifecycleEventPlatform(evt domain.SystemEvent) (remotedetect.Platform, bool) {

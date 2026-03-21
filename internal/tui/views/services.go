@@ -22,6 +22,9 @@ type Services struct {
 	Workspace *service.WorkspaceService
 	Review    *service.ReviewService
 	Events    repository.EventRepository
+	GithubPRs        repository.GithubPullRequestRepository
+	GitlabMRs        repository.GitlabMergeRequestRepository
+	SessionArtifacts repository.SessionReviewArtifactRepository
 	// Orchestration pipelines backed by the configured agent harnesses.
 	Planning        *orchestrator.PlanningService
 	Implementation  *orchestrator.ImplementationService
