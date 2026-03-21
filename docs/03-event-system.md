@@ -59,6 +59,7 @@ CREATE INDEX idx_events_created ON system_events(created_at);
 const (
 	EventWorktreeCreating EventType = "worktree.creating"
 	EventWorktreeCreated  EventType = "worktree.created"
+	EventWorktreeReused   EventType = "worktree.reused"  // branch already exists, worktree not recreated
 
 	EventWorkItemIngested     EventType = "work_item.ingested"
 	EventWorkItemPlanning     EventType = "work_item.planning"
@@ -129,7 +130,7 @@ These go through `event.Bus.Publish(...)`, so they use the bus's persistence and
 
 | Emitter | Event types |
 |---|---|
-| `ImplementationService.ensureWorktree` | `worktree.creating`, `worktree.created` |
+| `ImplementationService.ensureWorktree` | `worktree.creating`, `worktree.created`, `worktree.reused` |
 | `ImplementationService.forwardEvents` | raw harness event names from `adapter.AgentEvent.Type` |
 | `ReviewPipeline` | `review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started` |
 | `Resumption` | `agent_session.resumed` |
@@ -307,12 +308,14 @@ In practice, current adapters mostly care about:
 Production wiring subscribes lifecycle adapters only to:
 
 - `worktree.created`
+- `worktree.reused`
 - `work_item.completed`
 
 ```go
 sub, _ := bus.Subscribe(
 	"repo-lifecycle-adapter:"+lifecycleAdapter.Name(),
 	string(domain.EventWorktreeCreated),
+	string(domain.EventWorktreeReused),
 	string(domain.EventWorkItemCompleted),
 )
 ```
@@ -374,6 +377,25 @@ Published after checkout:
   "review": { ... }
 }
 ```
+
+### `worktree.reused`
+
+Published by `ensureWorktree` when the target branch already exists and no new worktree is created:
+
+```json
+{
+  "workspace_id": "ws-123",
+  "repository": "repo-a",
+  "branch": "sub-abc-fix-bug",
+  "worktree_path": "/path/to/repo-a/sub-abc-fix-bug",
+  "work_item_title": "Fix bug",
+  "sub_plan": "...markdown...",
+  "tracker_refs": [ ... ],
+  "review": { ... }
+}
+```
+
+This event uses the same `WorktreeCreatedPayload` struct as `worktree.created`. The updated `SubPlan` content reflects any changes from differential re-planning. Repo lifecycle adapters use this event to update existing MR/PR descriptions with the revised sub-plan.
 
 ### `plan.approved`
 

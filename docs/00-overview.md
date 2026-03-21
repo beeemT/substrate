@@ -10,9 +10,10 @@ Substrate is an AI-powered work-item orchestration tool built in Go. It automate
 1. **Ingest** — Create or ingest a work item from a configured provider.
 2. **Plan** — Explore the workspace's `main/` worktrees, gather repo guidance, and generate a cross-repo plan plus per-repo sub-plans.
 3. **Review Plan** — Human reviews, revises, approves, or rejects the plan in the TUI.
-4. **Implement** — Create feature worktrees, run agent sessions per sub-plan, and execute waves in dependency order.
-5. **Oversee** — A Foreman session mediates unresolved questions and a review loop validates the changes.
+4. **Implement** — Create feature worktrees, run agent sessions per sub-plan, and execute waves in dependency order. The orchestrator runs an automated review loop per repo within implementation: implement → review → reimpl → re-review → pass/escalate/fail.
+5. **Oversee** — A Foreman session mediates unresolved questions. Operators can steer running agents mid-stream or follow up on completed/failed repo sessions with additional feedback.
 6. **Complete** — When all sub-plans pass review, event hooks update external trackers and repo hosts, then the workspace is retained for reference.
+7. **Follow Up** — Completed work items can re-enter planning with differential feedback. Only repos whose sub-plans change are re-implemented; unchanged repos are skipped.
 
 ```mermaid
 flowchart TD
@@ -21,9 +22,13 @@ flowchart TD
     C -- Refine --> B
     C -- Approved --> D[Create Feature Worktrees]
     D --> E[Run Agent Sessions]
-    E --> F[Foreman + Review Loop]
+    E --> F[Foreman + Auto Review Loop]
     F -- Critiques --> E
+    F -- Escalated --> H{Human Review}
+    H -- Accept / Resolve --> G
+    H -- Reimplement --> E
     F -- Pass --> G[Completion Hooks]
+    G -- Follow-Up --> B
 ```
 
 ## System Boundaries

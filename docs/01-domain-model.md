@@ -111,6 +111,7 @@ type TaskPlan struct {
 	Content        string
 	Order          int
 	Status         TaskPlanStatus
+	PlanningRound  int
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -132,6 +133,7 @@ Notes:
 - `FAQ` is persisted on the `plans` row as JSON and is appended by the Foreman flow.
 - `TaskPlan.Order` is the execution-group index parsed from the planning YAML block.
 - The domain enum includes `SubPlanInterrupted`, but the current service transition table actively uses `pending -> in_progress -> completed/failed`, with `failed -> pending` for retry. The current SQLite migration also constrains `sub_plans.status` to `pending|in_progress|completed|failed`.
+- `TaskPlan.PlanningRound` tracks which planning round last modified this sub-plan. It is set from `Plan.Version` during `ApplyReviewedPlanOutput`. During differential re-implementation, `BuildWaves` filters out `SubPlanCompleted` sub-plans so only changed repos re-execute.
 
 ### TaskPhase
 
@@ -371,7 +373,9 @@ stateDiagram-v2
     Reviewing --> Completed
     Reviewing --> Implementing
     Reviewing --> Failed
+    Completed --> Planning
     Completed --> [*]
+    Failed --> Implementing
     Failed --> [*]
 ```
 
@@ -382,9 +386,13 @@ Meaning of the main edges:
 - `PlanReview -> Approved`: human approves the plan.
 - `PlanReview -> Planning`: changes requested / re-plan.
 - `Approved -> Implementing`: implementation begins.
-- `Implementing -> Reviewing`: implementation wave set completes and the work item enters review.
+- `Implementing -> Reviewing`: at least one repo escalated during auto-review; needs human decision.
 - `Reviewing -> Implementing`: review found blocking critiques.
-- `Reviewing -> Completed`: human accepts the reviewed result.
+- `Reviewing -> Completed`: human accepts or all escalations resolved.
+- `Completed -> Planning`: follow-up re-planning with differential sub-plans. The operator provides feedback; only changed repos are re-implemented.
+- `Failed -> Implementing`: user-initiated retry of a failed work item.
+
+Note: `reviewing` means human attention is needed (at least one repo escalated after automated review cycles). Automated review runs within `implementing` and does not trigger the `implementing → reviewing` transition unless escalation occurs.
 
 ### Task lifecycle
 
@@ -401,7 +409,9 @@ stateDiagram-v2
     Running --> Failed
     Interrupted --> Running
     Interrupted --> Failed
+    Completed --> Running
     Completed --> [*]
+    Failed --> Running
     Failed --> [*]
 ```
 
@@ -412,6 +422,8 @@ Current interpretation:
 - `WaitingForAnswer` is used while the Foreman / human question path is unresolved.
 - `Interrupted` is used by instance reconciliation and graceful shutdown flows.
 - `Resume` creates a new `Task`; the interrupted task remains interrupted for audit purposes.
+- `Completed -> Running`: follow-up restart for a completed task — creates a new `Task` row; the completed task remains for audit.
+- `Failed -> Running`: follow-up on a failed task — same pattern, creates a new `Task` row; the failed task remains for audit.
 
 ### Review, question, and critique sub-lifecycles
 

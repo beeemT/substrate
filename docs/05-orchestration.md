@@ -103,6 +103,30 @@ stateDiagram-v2
 
 The TUI interaction model for this loop belongs to `06-tui-design.md`; the runtime effect belongs here.
 
+### 2b. Follow-up re-planning
+
+A completed work item can re-enter planning when the operator provides follow-up feedback.
+
+`PlanningService.FollowUpPlan(ctx, workItemID, feedback)` drives this flow:
+
+1. validate that the work item is in the `completed` state
+2. fetch the current approved plan and sub-plans
+3. build a `RepoResultSummary` per repo — status plus the last 50 lines of the session log
+4. render the `followUpPromptTemplate` with: user feedback, repo result summaries, and the current plan
+5. transition the work item `completed → planning`
+6. call `planRun()` — the standard planning pipeline (§1) runs normally
+7. return to plan review (§2) for human approval before re-implementation
+
+**Planning round versioning.** Each sub-plan carries a `PlanningRound int` field, set from `Plan.Version` when the sub-plan is created or modified during `ApplyReviewedPlanOutput`. This tracks which repos were touched in each re-planning wave:
+
+```
+Initial (round 0): repo-a(0), repo-b(0), repo-c(0)
+Follow-up 1 (round 1): repo-a(1), repo-b(0), repo-c(0)    — only repo-a changed
+Follow-up 2 (round 2): repo-a(2), repo-b(2), repo-c(0)    — repo-a + repo-b changed
+```
+
+**Sub-plan reconciliation.** `ApplyReviewedPlanOutput` sets `PlanningRound = plan.Version` on created or updated sub-plans, resets `completed → pending` when sub-plan content changes (signaling re-execution), and leaves unchanged sub-plans untouched (status and `PlanningRound` preserved).
+
 ---
 
 ## 3. Implementation Runtime
@@ -111,13 +135,16 @@ Triggered by `PlanApproved`.
 
 ### 3a. Build execution waves
 
-Sub-plans are grouped by `SubPlan.Order`.
+`BuildWaves` filters out sub-plans in the `completed` status before grouping by `SubPlan.Order`. Only `pending` sub-plans — whether new or reset from a prior round — enter execution.
+
 - equal order => same wave => run in parallel
 - later order => later wave => start only after the previous wave reaches terminal status
 
-This lets the planner express explicit cross-repo dependency order while preserving safe parallelism.
+This lets the planner express explicit cross-repo dependency order while preserving safe parallelism. First-time implementation is unaffected since all sub-plans start as pending.
 
 ### 3b. Per-sub-plan lifecycle
+
+Before wave execution begins, `Implement()` resets any `failed` sub-plans to `pending`, enabling retry without manual intervention.
 
 For each sub-plan in a ready wave:
 1. derive a shared branch name from the work item external ID and title slug
@@ -125,9 +152,8 @@ For each sub-plan in a ready wave:
 3. emit `WorktreeCreating` before checkout and `WorktreeCreated` after checkout
 4. start an implementation harness session in that worktree
 5. stream session events into orchestration state and the TUI
-6. on success, emit `AgentSessionCompleted`
+6. on success, enter the per-repo review loop inline (see §5) — the sub-plan only reaches `completed` status after review passes
 7. on failure, emit `AgentSessionFailed` and pause/escalate per orchestration policy
-
 ### 3c. Idempotency expectations
 
 Implementation must tolerate retries and resume:
@@ -148,6 +174,14 @@ Current operational rule:
 - correction-loop and Foreman-sensitive phases must not assume non-OMP parity unless that parity has been proven
 
 Harness capabilities, maturity, and routing policy live in `04-adapters.md`; rollout status lives in `07-implementation-plan.md`.
+
+### 3e. Worktree reuse
+
+When `ensureWorktree` finds an existing branch, it emits `EventWorktreeReused` instead of creating a new worktree. This triggers adapter updates for MR/PR descriptions with the updated sub-plan content — glab updates via `glab mr update --description`, GitHub updates via the API PATCH endpoint. Both use the same `WorktreeCreatedPayload` struct (includes the updated `SubPlan` content).
+
+Worktree reuse supports two scenarios:
+- **Level 1 re-planning** — changed sub-plans from follow-up re-planning (§2b) reuse existing worktrees
+- **Level 2 follow-up** — resumed sessions on completed repos (§7f) continue in existing worktrees
 
 ---
 
@@ -196,9 +230,11 @@ The question UI belongs to `06-tui-design.md`; the runtime restart behavior belo
 
 ## 5. Review and Re-Implementation
 
-Triggered by `AgentSessionCompleted` for a sub-plan.
+### 5a. Core principle
 
-### 5a. Review session
+The orchestrator owns the full per-repo lifecycle: **implement → review → reimpl → re-review → ... → pass/escalate/fail**. The TUI observes state via events and only intervenes when human input is required (escalation, override-accept). The work item stays in `implementing` for the entire lifecycle; automated review runs within that state.
+
+### 5b. Review session
 
 Substrate starts a review harness session in the same repository worktree, with read-only review-oriented behavior. The review agent explores the worktree relative to `main`, evaluates the result against:
 - the repo sub-plan
@@ -207,7 +243,7 @@ Substrate starts a review harness session in the same repository worktree, with 
 
 The orchestrator does not provide a precomputed diff as the canonical truth; the review session forms its own picture from the worktree.
 
-### 5b. Structured output and correction loop
+### 5c. Structured output and correction loop
 
 Review output must be either:
 - exactly `NO_CRITIQUES`, or
@@ -215,40 +251,85 @@ Review output must be either:
 
 If the output is unparseable, Substrate sends a correction message to the same review session and retries up to `plan.max_parse_retries`.
 
-### 5c. Decision logic
+### 5d. Per-repo review loop
 
-- pass immediately if critiques are absent or below the configured failure threshold
+`reviewLoop` on `ImplementationService` drives the per-repo review cycle:
+
+```
+executeSubPlan completes implementation session
+    │
+    ├─ Failed → mark failed, return
+    │
+    └─ Completed → enter review loop:
+         │
+         ReviewPipeline.ReviewSession(ctx, session)
+         │
+         ├─ Passed → sub-plan passed
+         │
+         ├─ Escalated (max cycles reached) → mark escalated, return
+         │
+         ├─ NeedsReimpl + AutoFeedbackLoop=true:
+         │       build critique feedback, re-run implementation session
+         │       (same worktree, same sub-plan, fresh Task row),
+         │       loop back to ReviewSession()
+         │
+         └─ NeedsReimpl + AutoFeedbackLoop=false → mark escalated for human decision
+```
+
+On error, the sub-plan is marked failed.
+
+Within a wave, each repo runs its full implement+review cycle independently in the errgroup. The wave completes when all repos in it reach a terminal state (passed, escalated, or failed).
+
+### 5e. Decision logic
+
+- pass immediately if critiques are absent or below the configured `PassThreshold`
 - start re-implementation if any critique meets or exceeds the configured blocking severity
-- escalate to human intervention when the review cycle count exceeds `review.max_cycles`
+- escalate to human intervention when the review cycle count exceeds `MaxCycles`
 
-### 5d. Re-implementation
+### 5f. Re-implementation
 
-Re-implementation runs in the same worktree and receives:
+Re-implementation creates a fresh Task row. The implementation session runs in the same worktree and receives:
 - the original sub-plan
 - the cross-repo orchestration context
-- the review critique set
+- the review critique set as feedback
 
-The runtime loop is:
+When the previous session has an OMP session file, the new session resumes from it via `ResumeSessionFile`, preserving full conversation context. When no OMP session file is available, falls back to a fresh session with critiques appended to the system prompt.
 
-`Implement -> Review -> (Pass | Re-implement | Escalate)`
+### 5g. Review configuration
+
+```go
+type ReviewConfig struct {
+    PassThreshold    PassThreshold `yaml:"pass_threshold"`     // default: minor_ok
+    MaxCycles        *int          `yaml:"max_cycles"`         // default: 3
+    Timeout          *string       `yaml:"timeout"`            // default: "1h"
+    AutoFeedbackLoop *bool         `yaml:"auto_feedback_loop"` // default: true
+}
+```
+
+- **PassThreshold** — critiques at or below this severity pass without re-implementation
+- **MaxCycles** — maximum number of review-reimplementation cycles before escalation
+- **Timeout** — parsed via `ReviewTimeout()` helper; governs the per-review-session time limit
+- **AutoFeedbackLoop** — when true, the orchestrator automatically re-implements on critique and loops; when false, any critique requiring re-implementation is escalated for human decision
 
 Threshold values and rollout gates live in `07-implementation-plan.md`.
-
 ---
 
 ## 6. Completion
 
-Triggered when all sub-plans have passed review.
+After all waves complete, the orchestrator evaluates outcomes across sub-plans:
 
-Completion runtime steps:
-1. verify every sub-plan is in a terminal successful state
-2. emit `WorkItemCompleted`
-3. allow subscribed adapters to perform tracker and repo-host side effects
-4. render the completion summary in the TUI
-5. retain the workspace and worktrees for reference until the operator prunes them
+- **All repos passed review** → `CompleteWorkItem` (transition to `completed`), emit `WorkItemCompleted`
+- **Any repo escalated** → `SubmitForReview` (transition to `reviewing`) — human attention needed due to escalation
+- **Any repo hard-failed** → `FailWorkItem` (transition to `failed`)
+
+**Semantic shift:** `reviewing` means "human attention needed due to escalation," not "automated review is running." Automated review runs entirely within the `implementing` state (see §5). Any code that checks for the `reviewing` state to determine whether review is in progress should check per-repo events instead.
+
+On successful completion:
+1. allow subscribed adapters to perform tracker and repo-host side effects
+2. render the completion summary in the TUI
+3. retain the workspace and worktrees for reference until the operator prunes them
 
 This document owns the fact that completion emits the event and ends the runtime workflow. `03-event-system.md` owns event semantics. `04-adapters.md` owns what specific providers and repo hosts do in response.
-
 ---
 
 ## 7. Resume and Recovery
@@ -299,6 +380,37 @@ Session logs are per-agent-session durable output streams used for:
 
 Schema, lock-table ownership, and session-log persistence details are specified in `02-layered-architecture.md` and `07-implementation-plan.md`.
 
+### 7f. Level 2 follow-up on completed sessions
+
+`Resumption.FollowUpSession(ctx, completedTask, feedback, instanceID)` drives follow-up on a completed single-repo session:
+
+1. validate the task is in `completed` state
+2. create a new Task row (the completed task is preserved as audit trail)
+3. build a follow-up system prompt from the sub-plan, the last lines of the session log, and the operator's feedback
+4. start a harness session with `ResumeSessionFile` set (native OMP resume), preserving full conversation context
+5. register in `SessionRegistry` for steering (§8)
+
+The TUI activates follow-up via the `p` key on completed repos in the implementing view. See `06-tui-design.md` for the interaction model.
+
+### 7g. Follow-up on failed sessions
+
+`Resumption.FollowUpFailedSession()` follows the same pattern as §7f but targets failed tasks. It creates a new Task row, optionally resumes the OMP session, and sends the operator's feedback. The work item transitions back to `implementing` and the sub-plan resets to `pending`.
+
+### 7h. Failure recovery
+
+Failed work items can be retried from the TUI. `RetryFailedWorkItem` transitions `failed → implementing`, then `Implement()` resets `failed` sub-plans to `pending` before building waves (see §3a, §3b).
+
+---
+
+## 8. Steering
+
+Real-time interaction with running agent sessions.
+
+`SessionRegistry.Steer(ctx, sessionID, msg)` delegates to `session.Steer()` on the active harness session. Steering interrupts the agent's active streaming turn with the operator's prompt.
+
+- Only supported by the OMP harness; other harnesses return `ErrSteerNotSupported`. See `04-adapters.md` for harness capability details.
+- The TUI `p` key activates steering input for running sessions; the message is delivered via the session registry. See `06-tui-design.md` for the input model.
+
 ---
 
 ## Runtime Responsibility Summary
@@ -307,9 +419,13 @@ Schema, lock-table ownership, and session-log persistence details are specified 
 |---|---|---|
 | Planning flow | yes | `04-adapters.md`, `07-implementation-plan.md` |
 | Plan review runtime | yes | `06-tui-design.md` |
+| Follow-up re-planning | yes | `06-tui-design.md` |
 | Execution waves and retries | yes | `04-adapters.md` |
 | Foreman handling | yes | `04-adapters.md`, `06-tui-design.md` |
 | Review/reimplementation loop | yes | `07-implementation-plan.md` |
+| Steering | yes | `04-adapters.md`, `06-tui-design.md` |
+| Follow-up on completed/failed sessions | yes | `06-tui-design.md` |
+| Failure recovery | yes | `06-tui-design.md` |
 | Event catalog/handler semantics | no | `03-event-system.md` |
 | Provider/harness internals | no | `04-adapters.md` |
 | Schema/DI/persistence | no | `02-layered-architecture.md` |

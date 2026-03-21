@@ -11,7 +11,10 @@ Concrete adapter behavior as implemented under `internal/adapter/` and wired fro
 
 - `WorkItemAdapter`: tracker-style sources used by the new-session flow and by tracker synchronization hooks.
 - `RepoLifecycleAdapter`: repository event handlers used for MR/PR lifecycle work after a worktree exists.
-- `AgentHarness`: execution backends for planning / implementation / review / foreman sessions.
+- `AgentHarness`: execution backends for planning / implementation / review / foreman sessions. `StartSession` returns an `AgentSession` that supports streaming, messaging, and steering. Key session and capability contracts:
+  - `Steer(ctx, msg) error` — interrupts active streaming to inject a steering prompt. Harnesses that lack this capability return `ErrSteerNotSupported` (defined in `internal/adapter/interfaces.go`).
+  - `SessionOpts.ResumeSessionFile` — when set, the harness resumes from an existing session file rather than creating a fresh session.
+  - `HarnessCapabilities.SupportsNativeResume` — advertises whether the harness supports session file resume. Used by the orchestrator to decide between native resume and fresh-session follow-up.
 
 ### Work item contract
 
@@ -421,10 +424,10 @@ TUI and settings tests (`internal/tui/views/*sentry*_test.go`, `app_browse_test.
 Behavior:
 
 - `worktree.created` -> `glab mr create --draft ...`
+- `worktree.reused` -> `glab mr update --description ...` with the updated sub-plan content from the payload. This keeps the MR description in sync after differential re-planning or follow-up.
 - `work_item.completed` -> `glab mr update --draft=false ...`
 - configured reviewers and labels are forwarded to MR creation
 - failures are logged at WARN and do not block the workflow
-
 `BuildRepoLifecycleAdapters(...)` registers `glab` when remote detection says a workspace repo is GitLab.
 
 ### GitHub repo lifecycle
@@ -432,6 +435,12 @@ Behavior:
 GitHub lifecycle handling is implemented by `GithubAdapter` itself rather than a second GitHub-specific repo adapter.
 
 `BuildRepoLifecycleAdapters(...)` wraps it in `routedRepoLifecycleAdapter`, which suppresses events that do not match the detected remote platform. That keeps GitHub PR automation from reacting to GitLab payloads and vice versa.
+
+Behavior:
+
+- `worktree.created` -> create PR via GitHub API with draft status, sub-plan as body, and configured reviewers/labels
+- `worktree.reused` -> update existing PR body via GitHub API PATCH with the updated sub-plan content from the payload. This keeps the PR description in sync after differential re-planning or follow-up.
+- `work_item.completed` -> PR completion handling
 
 ---
 
@@ -492,4 +501,20 @@ Provider login notes:
   - all three harness implementations also support `RunAction(Action="login_provider", Provider="sentry")`
 - self-hosted Sentry login uses `config.SentryCLIEnvironment(...)` so `SENTRY_URL` points at the root host, not `/api/0`
 
-The practical boundary today is messaging support: oh-my-pi is the only harness with verified `SendMessage` capability, while Claude Code and Codex are wired and usable for non-messaging flows but do not yet provide the same interactive correction surface.
+The practical boundary today is messaging and steering support: oh-my-pi is the only harness with verified `SendMessage` and `Steer()` capability, while Claude Code and Codex return `ErrSteerNotSupported` from `Steer()` and are wired and usable for non-messaging flows but do not yet provide the same interactive correction surface.
+
+### OMP-specific capabilities
+
+Beyond basic streaming and messaging, the OMP bridge (`bridge/omp-bridge.ts`) supports:
+
+**Steering**: The bridge accepts `{"type":"steer","text":"..."}` commands and calls `session.prompt(text, { streamingBehavior: "steer" })` to interrupt active streaming. This makes OMP the only harness with verified `Steer()` support. Claude Code and Codex stubs return `ErrSteerNotSupported`.
+
+**Resume**: OMP supports native session resume via `SessionManager.open(filePath)`. When the `SUBSTRATE_RESUME_SESSION_FILE` environment variable is set, the bridge opens the existing session instead of creating a new one. This enables follow-up on completed repos without losing conversation context. `HarnessCapabilities.SupportsNativeResume` is `true` for OMP.
+
+**Session metadata**: After session creation, the bridge emits a `session_meta` event containing `omp_session_id` and `omp_session_file`:
+
+```json
+{"type":"session_meta","omp_session_id":"...","omp_session_file":"..."}
+```
+
+These values are persisted on the `Task` row (`OmpSessionFile`, `OmpSessionID`) for later resume and follow-up. The orchestrator captures them via type assertion on the harness session after completion.

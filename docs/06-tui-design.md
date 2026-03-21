@@ -179,7 +179,20 @@ Used in two cases: (1) when the human selects a task-session row from the `{exte
 
 For a selected task row, this mode tails `~/.substrate/sessions/<task-id>.log` live. The mode label becomes `Task`, and the header metadata includes the task status, harness name when known, and the task session ID. For a historical or remote result, the same surface loads the stored interaction transcript; when no session log exists, it falls back to a static summary instead of showing an empty viewport.
 
-**Keys**: `↑`/`↓` scroll. Global back-navigation still applies from the footer (`←`/`Esc` back to tasks or sessions).
+#### Steering & Follow-Up
+
+The `p` key activates a text input at the bottom of the session interaction view. Its behavior depends on the state of the viewed session:
+
+| Session state | Hint text | Enter action | Effect |
+|---------------|-----------|--------------|--------|
+| Running | `Prompt agent` | Sends a steer message routed through `SessionRegistry.Steer()` | Interrupts the agent's active streaming turn with the operator's guidance |
+| Completed | `Follow up` | Sends a follow-up message for the completed task | Preserves the completed Task row, creates a new Task row, and resumes the OMP session with full conversation context |
+| Failed | `Follow up` | Sends a follow-up message for the failed task | Same as completed follow-up — creates a new Task row and attempts OMP session resume |
+| No session | Disabled | — | `p` is a no-op when no session is active |
+
+The steer/follow-up input is mutually exclusive: only one of the three session-state targets (live, completed, or failed) can be active at a time. `Esc` cancels and returns to normal mode.
+
+**Keys**: `↑`/`↓` scroll, `p` steer or follow up (context-dependent). Global back-navigation still applies from the footer (`←`/`Esc` back to tasks or sessions).
 
 ### 3d. Overview Mode
 
@@ -222,7 +235,8 @@ type SessionOverviewData struct {
 - **Plan review**: bounded plan excerpt plus `Approve` / `Request changes` / `Reject` actions. A `Review plan` overlay shows the full plan document.
 - **Open question**: question text, affected repo/task, Foreman's proposed answer and uncertainty. The human can approve, iterate with the Foreman, or skip — all from the overview.
 - **Interrupted session**: affected repo/task, failure/interruption reason, `Resume` / `Retry` actions.
-- **Under review**: review summary, critique list per repo, `Re-implement` / `Override accept` actions.
+- **Under review**: review summary, critique list per repo, `Override accept` action for human escalation, `Re-implement` action for manual re-trigger when `AutoFeedbackLoop` is disabled. See `05-orchestration.md` for the orchestrator-owned review loop.
+- **Completed**: the `CompletedModel` overlay provides a `f` keybind that opens a feedback textarea for follow-up re-planning. `Enter` submits the feedback and transitions the work item back to `plan_review`, where the existing plan review flow takes over. Success and error feedback display as toasts.
 
 **Source section rules**: for single-source sessions, the root work item title/description is sufficient. For multi-source sessions, the overview shows provider + ref only rather than reverse-parsing merged descriptions. Durable per-source-item summaries are a follow-up (see `future-work.md`).
 
@@ -236,7 +250,7 @@ type SessionOverviewData struct {
 | `approved` through `completed` | Approved/final plan snapshot |
 | `failed` | Last known plan snapshot if any |
 
-**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays.
+**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays, `f` follow-up re-planning (completed work items).
 
 ### 3e. Transcript Rendering
 
@@ -412,6 +426,8 @@ Vim-style primary, arrow keys as aliases.
 | `Tab` | Cycle repos / panels | Implementing mode |
 | `g`/`G` | Top/bottom | Lists |
 | `Enter` | Select / confirm | Lists, overlays |
+| `p` | Steer running agent / follow up on completed or failed session | Session interaction view (context-dependent on session state) |
+| `f` | Open follow-up re-planning feedback | Completed work item overlay |
 
 ### Global Keybinds (handled before delegation)
 
@@ -419,7 +435,7 @@ Vim-style primary, arrow keys as aliases.
 
 ### Input Modes
 
-Two modes: **Normal** (keypresses = commands) and **Input** (keypresses go to textinput widget). Input mode entered by explicit action (feedback, answer, filter). Exited via `Enter` (submit) or `Esc` (cancel).
+Two modes: **Normal** (keypresses = commands) and **Input** (keypresses go to textinput widget). Input mode entered by explicit action (feedback, answer, filter, steer/follow-up). Exited via `Enter` (submit) or `Esc` (cancel).
 
 ```go
 // In any model with input mode:
@@ -441,6 +457,17 @@ if v.inputActive {
 ### Confirmation Dialogs
 
 Destructive actions (delete session/work item, abandon, reject, override) show a modal overlay. Generic `ConfirmDialog` wraps a `tea.Cmd` as `onYes`. `y` confirms, `n`/`Esc` cancels.
+
+### Escalation & Manual Intervention
+
+The orchestrator owns the full per-repo review lifecycle (implement → review → reimpl → re-review → pass/escalate/fail; see `05-orchestration.md`). `ImplementationCompleteMsg` signals that the entire lifecycle — implementation and review — is finished. The TUI does not dispatch review commands.
+
+The TUI intervenes only when human input is required:
+
+- **`Override accept`** — accepts a repo that review escalated (max review cycles reached without passing). Handled via `OverrideAcceptCmd`.
+- **`Re-implement`** — manually triggers reimplementation for a repo when `AutoFeedbackLoop` is disabled and review found issues. Handled via `ReimplementMsg`.
+
+Both actions are available from the overview's "Under review" action card.
 
 ---
 
