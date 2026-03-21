@@ -91,6 +91,7 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 		{domain.AgentSessionWaitingForAnswer, domain.AgentSessionFailed, "waiting_for_answer -> failed"},
 		{domain.AgentSessionInterrupted, domain.AgentSessionRunning, "interrupted -> running"},
 		{domain.AgentSessionInterrupted, domain.AgentSessionFailed, "interrupted -> failed"},
+		{domain.AgentSessionFailed, domain.AgentSessionRunning, "failed -> running"},
 	}
 
 	for _, tc := range validTransitions {
@@ -133,7 +134,6 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 		{domain.AgentSessionCompleted, domain.AgentSessionFailed, "completed -> failed"},
 		{domain.AgentSessionCompleted, domain.AgentSessionPending, "completed -> pending"},
 		{domain.AgentSessionInterrupted, domain.AgentSessionCompleted, "interrupted -> completed"},
-		{domain.AgentSessionFailed, domain.AgentSessionRunning, "failed -> running"},
 		{domain.AgentSessionFailed, domain.AgentSessionPending, "failed -> pending"},
 	}
 

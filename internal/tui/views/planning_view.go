@@ -41,8 +41,9 @@ type SessionLogModel struct {
 	renderedVerbose    bool
 	renderedCollapse   bool
 
-	steerInput  textinput.Model
-	steerActive bool
+	steerInput      textinput.Model
+	steerActive     bool
+	failedSessionID string // non-empty when viewing a failed session's log
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -132,6 +133,20 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.viewport.GotoBottom()
 }
 
+func (m *SessionLogModel) SetFailedSession(sessionID string) {
+	m.failedSessionID = sessionID
+	if sessionID != "" {
+		m.steerInput.Placeholder = "Send follow-up to restart failed session..."
+	} else {
+		m.steerInput.Placeholder = "Send steering prompt to agent..."
+	}
+}
+
+func (m *SessionLogModel) ClearFailedSession() {
+	m.failedSessionID = ""
+	m.steerInput.Placeholder = "Send steering prompt to agent..."
+}
+
 func (m *SessionLogModel) TailCmd() tea.Cmd {
 	if !m.live || m.logPath == "" {
 		return nil
@@ -164,7 +179,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
-	if m.live {
+	if m.failedSessionID != "" {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Follow up"})
+	} else if m.live {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
 	}
 	return hints
@@ -198,6 +215,13 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 				m.steerInput.Blur()
 				m.syncViewportSize()
 				if text != "" {
+					if m.failedSessionID != "" {
+						fid := m.failedSessionID
+						m.failedSessionID = ""
+						return m, func() tea.Msg {
+							return FollowUpFailedSessionMsg{TaskID: fid, Feedback: text}
+						}
+					}
 					sid := m.sessionID
 					return m, func() tea.Msg {
 						return SteerSessionMsg{SessionID: sid, Message: text}
@@ -218,7 +242,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "p":
-			if m.live {
+			if m.live || m.failedSessionID != "" {
 				m.steerActive = true
 				m.steerInput.Focus()
 				m.syncViewportSize()

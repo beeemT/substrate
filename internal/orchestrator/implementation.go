@@ -189,8 +189,11 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	}
 
 	// 7. Transition work item to implementing once non-mutating preflight succeeds.
-	if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
-		return nil, fmt.Errorf("transition work item to implementing: %w", err)
+	// On retry (work item already in implementing after RetryFailedWorkItem), skip.
+	if workItem.State != domain.SessionImplementing {
+		if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
+			return nil, fmt.Errorf("transition work item to implementing: %w", err)
+		}
 	}
 	implementingStarted = true
 

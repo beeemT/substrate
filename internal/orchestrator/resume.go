@@ -251,6 +251,116 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 	}, nil
 }
 
+// FollowUpFailedSession creates a new agent session to retry a failed task with user feedback.
+// The failed task row is preserved as audit trail; a fresh Task row is created for the retry.
+func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domain.Task, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
+	if failedTask.Status != domain.AgentSessionFailed {
+		return FollowUpSessionResult{}, fmt.Errorf("task %s is not failed (status: %s)", failedTask.ID, failedTask.Status)
+	}
+
+	subPlan, err := r.planSvc.GetSubPlan(ctx, failedTask.SubPlanID)
+	if err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan: %w", err)
+	}
+
+	lastLines, err := readLastNLines(failedTask.ID, resumeLogLines)
+	if err != nil {
+		lastLines = "(prior session log unavailable)"
+	}
+
+	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback)
+
+	// Create a fresh task row — the failed task is audit trail and must not be modified.
+	now := time.Now()
+	newTask := domain.Task{
+		ID:              domain.NewID(),
+		WorkItemID:      failedTask.WorkItemID,
+		WorkspaceID:     failedTask.WorkspaceID,
+		Phase:           domain.TaskPhaseImplementation,
+		SubPlanID:       failedTask.SubPlanID,
+		RepositoryName:  failedTask.RepositoryName,
+		WorktreePath:    failedTask.WorktreePath,
+		HarnessName:     r.harness.Name(),
+		Status:          domain.AgentSessionPending,
+		OwnerInstanceID: &currentInstanceID,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := r.sessionSvc.Create(ctx, newTask); err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("create follow-up session for failed task: %w", err)
+	}
+
+	if err := r.sessionSvc.Start(ctx, newTask.ID); err != nil {
+		deleteOrFailPendingSession(ctx, r.sessionSvc, newTask.ID, nil)
+		return FollowUpSessionResult{}, fmt.Errorf("transition follow-up session to running: %w", err)
+	}
+	now = time.Now()
+	newTask.Status = domain.AgentSessionRunning
+	newTask.StartedAt = &now
+	newTask.UpdatedAt = now
+
+	opts := adapter.SessionOpts{
+		SessionID:    newTask.ID,
+		Mode:         adapter.SessionModeAgent,
+		WorkspaceID:  failedTask.WorkspaceID,
+		SubPlanID:    failedTask.SubPlanID,
+		Repository:   failedTask.RepositoryName,
+		WorktreePath: failedTask.WorktreePath,
+		SystemPrompt: systemPrompt,
+		UserPrompt:   "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
+	}
+	if failedTask.OmpSessionFile != "" {
+		opts.ResumeSessionFile = failedTask.OmpSessionFile
+	}
+
+	harnessSession, err := r.harness.StartSession(ctx, opts)
+	if err != nil {
+		if failErr := failSessionDurably(ctx, r.sessionSvc, newTask.ID, nil); failErr != nil {
+			slog.Warn("failed to fail follow-up session after harness start error",
+				"error", failErr,
+				"task_id", newTask.ID)
+		}
+		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
+	}
+
+	// If resuming a native OMP session, deliver feedback as a follow-up message.
+	if failedTask.OmpSessionFile != "" {
+		if sendErr := harnessSession.SendMessage(ctx, feedback); sendErr != nil {
+			slog.Warn("failed to send follow-up feedback to resumed session",
+				"error", sendErr,
+				"task_id", newTask.ID)
+		}
+	}
+
+	if r.eventBus != nil {
+		_ = r.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventAgentSessionResumed),
+			WorkspaceID: failedTask.WorkspaceID,
+			Payload: marshalJSONOrEmpty(map[string]any{
+				"old_session_id": failedTask.ID,
+				"new_session_id": newTask.ID,
+				"sub_plan_id":    failedTask.SubPlanID,
+			}),
+			CreatedAt: time.Now(),
+		})
+	}
+
+	if r.registry != nil {
+		r.registry.Register(newTask.ID, harnessSession)
+		go func() {
+			_ = harnessSession.Wait(context.Background())
+			r.registry.Deregister(newTask.ID)
+		}()
+	}
+
+	return FollowUpSessionResult{
+		Task:           newTask,
+		HarnessSession: harnessSession,
+	}, nil
+}
+
+
 // buildFollowUpSystemPrompt constructs the system prompt for a follow-up agent session.
 func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback string) string {
 	var sb strings.Builder

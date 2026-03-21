@@ -1030,6 +1030,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
 		return a, nil
 
+	case FollowUpFailedSessionMsg:
+		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
+			cmds = append(cmds, FollowUpFailedSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+		}
+		return a, tea.Batch(cmds...)
+
+	case FollowUpFailedSessionSentMsg:
+		a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
+		return a, nil
+
 	case FollowUpPlanMsg:
 		if a.svcs.Planning == nil {
 			return a, nil
@@ -1641,6 +1651,11 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 		resumeOffset = a.content.sessionLog.offset
 	}
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
+	if session.Status == domain.AgentSessionFailed {
+		a.content.sessionLog.SetFailedSession(session.ID)
+	} else {
+		a.content.sessionLog.ClearFailedSession()
+	}
 	if !a.tailingSessionIDs[session.ID] {
 		a.tailingSessionIDs[session.ID] = true
 		return TailSessionLogCmd(logPath, session.ID, resumeOffset)

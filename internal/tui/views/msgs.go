@@ -318,6 +318,17 @@ type FollowUpSessionSentMsg struct {
 	TaskID string
 }
 
+// FollowUpFailedSessionMsg fires when the user submits a follow-up prompt for a failed session.
+type FollowUpFailedSessionMsg struct {
+	TaskID   string
+	Feedback string
+}
+
+// FollowUpFailedSessionSentMsg confirms a follow-up session was started for a failed task.
+type FollowUpFailedSessionSentMsg struct {
+	TaskID string
+}
+
 // FollowUpPlanMsg requests a follow-up re-planning for a completed work item.
 type FollowUpPlanMsg struct {
 	WorkItemID string

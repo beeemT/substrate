@@ -832,6 +832,21 @@ func FollowUpSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskSe
 	}
 }
 
+// FollowUpFailedSessionCmd starts a follow-up agent session on a failed task.
+func FollowUpFailedSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		task, err := svc.Get(ctx, taskID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("get task for failed follow-up: %w", err)}
+		}
+		if _, err := resumption.FollowUpFailedSession(ctx, task, feedback, instanceID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("start failed follow-up session: %w", err)}
+		}
+		return FollowUpFailedSessionSentMsg{TaskID: taskID}
+	}
+}
+
 // FollowUpPlanCmd starts a follow-up re-planning cycle for a completed work item.
 func FollowUpPlanCmd(svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
 	return func() tea.Msg {

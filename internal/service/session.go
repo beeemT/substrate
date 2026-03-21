@@ -31,7 +31,7 @@ var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.AgentSessionWaitingForAnswer: {domain.AgentSessionRunning, domain.AgentSessionFailed},
 	domain.AgentSessionCompleted:        {domain.AgentSessionRunning},
 	domain.AgentSessionInterrupted:      {domain.AgentSessionRunning, domain.AgentSessionFailed},
-	domain.AgentSessionFailed:           {},
+	domain.AgentSessionFailed:           {domain.AgentSessionRunning},
 }
 
 func canTransitionTask(from, to domain.TaskStatus) bool {
