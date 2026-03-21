@@ -470,6 +470,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 	m.question.SetTitle(title)
 	m.interrupted.SetTitle(title)
 	m.completed.SetTitle(title)
+	m.completed.SetWorkItemID(m.data.WorkItemID)
 	m.completed.SetStatusLabel(reviewArtifactOverlayLabel(m.data.State))
 	completedAt := time.Time{}
 	if m.data.State == domain.SessionCompleted {

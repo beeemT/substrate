@@ -17,9 +17,22 @@ func BuildWaves(subPlans []domain.TaskPlan) [][]domain.TaskPlan {
 		return nil
 	}
 
+	// Filter out completed sub-plans — they don't need re-execution.
+	// This supports differential re-implementation where only changed
+	// sub-plans (reset to pending) are executed.
+	var pending []domain.TaskPlan
+	for _, sp := range subPlans {
+		if sp.Status != domain.SubPlanCompleted {
+			pending = append(pending, sp)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
 	// Group sub-plans by order
 	groups := make(map[int][]domain.TaskPlan)
-	for _, sp := range subPlans {
+	for _, sp := range pending {
 		groups[sp.Order] = append(groups[sp.Order], sp)
 	}
 
@@ -78,6 +91,8 @@ type ExecutionState struct {
 }
 
 // NewExecutionState creates a new execution state for a plan.
+// Completed sub-plans are filtered out by BuildWaves, so the execution
+// state only tracks sub-plans that still need work.
 func NewExecutionState(planID string, subPlans []domain.TaskPlan) *ExecutionState {
 	waves := BuildWaves(subPlans)
 

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -66,6 +68,7 @@ type PlanningTemplates struct {
 	planning   *template.Template
 	correction *template.Template
 	revision   *template.Template
+	followUp   *template.Template
 }
 
 // NewPlanningTemplates creates compiled templates.
@@ -85,10 +88,16 @@ func NewPlanningTemplates() (*PlanningTemplates, error) {
 		return nil, fmt.Errorf("parse revision template: %w", err)
 	}
 
+	followUpTmpl, err := template.New("followUp").Parse(followUpPromptTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse follow-up template: %w", err)
+	}
+
 	return &PlanningTemplates{
 		planning:   planningTmpl,
 		correction: correctionTmpl,
 		revision:   revisionTmpl,
+		followUp:   followUpTmpl,
 	}, nil
 }
 
@@ -152,6 +161,116 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	return s.planRun(ctx, workItemID, feedback, currentPlanText)
 }
 
+
+// FollowUpPlan transitions a completed work item back to planning with differential context.
+// It captures the current plan, implementation results, and user feedback to produce an updated plan.
+func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback string) (*domain.PlanningResult, error) {
+	// 1. Verify work item is completed
+	workItem, err := s.workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("get work item: %w", err)
+	}
+	if workItem.State != domain.SessionCompleted {
+		return nil, fmt.Errorf("work item %s is in state %s, expected completed", workItemID, workItem.State)
+	}
+
+	// 2. Find the current approved plan
+	currentPlan, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("get plan for work item: %w", err)
+	}
+	if currentPlan.Status != domain.PlanApproved {
+		return nil, fmt.Errorf("no approved plan found for work item %s (current status: %s)", workItemID, currentPlan.Status)
+	}
+
+	// 3. Capture plan text before transitioning
+	currentPlanText := s.buildPlanText(ctx, currentPlan.ID)
+
+	// 4. Build repo result summaries from session logs
+	repoResults := s.buildRepoResultSummaries(ctx, currentPlan.ID)
+
+	// 5. Render the follow-up prompt
+	var buf bytes.Buffer
+	if err := s.templates.followUp.Execute(&buf, FollowUpData{
+		Feedback:    feedback,
+		CurrentPlan: currentPlanText,
+		RepoResults: repoResults,
+	}); err != nil {
+		return nil, fmt.Errorf("render follow-up template: %w", err)
+	}
+	followUpContext := buf.String()
+
+	// 6. Transition work item completed -> planning
+	if err := s.workItemSvc.Transition(ctx, workItemID, domain.SessionPlanning); err != nil {
+		return nil, fmt.Errorf("transition work item to planning: %w", err)
+	}
+
+	// 7. Run planning with the follow-up context as the revision feedback.
+	// Pass empty currentPlanText to planRun since the follow-up template already
+	// embeds the plan; this avoids double-rendering via the revision template.
+	return s.planRun(ctx, workItemID, followUpContext, "")
+}
+
+// buildRepoResultSummaries collects implementation results for each repo in the plan.
+func (s *PlanningService) buildRepoResultSummaries(ctx context.Context, planID string) []RepoResultSummary {
+	subPlans, err := s.subPlanRepo.ListByPlanID(ctx, planID)
+	if err != nil {
+		slog.Warn("failed to list sub-plans for follow-up summaries", "error", err, "plan_id", planID)
+		return nil
+	}
+
+	var results []RepoResultSummary
+	for _, sp := range subPlans {
+		result := RepoResultSummary{
+			RepoName: sp.RepositoryName,
+			Status:   string(sp.Status),
+		}
+
+		// Try to get the most recent session log for this sub-plan
+		sessions, err := s.sessionSvc.ListBySubPlanID(ctx, sp.ID)
+		if err == nil && len(sessions) > 0 {
+			// Use the most recent session (last in list)
+			latestSession := sessions[len(sessions)-1]
+			logPath := sessionLogPath(latestSession.ID)
+			if logPath != "" {
+				result.LogTail = readLogTail(logPath, 50)
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}
+
+// sessionLogPath derives the log file path for a session. Best-effort.
+func sessionLogPath(sessionID string) string {
+	dir, err := config.SessionsDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, sessionID+".log")
+}
+
+// readLogTail reads the last n lines from a log file. Best-effort.
+func readLogTail(path string, n int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > n {
+			lines = lines[1:]
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
 // buildPlanText reconstructs the full persisted plan document for review revisions.
 // Returns empty string on any error (best-effort; revision can proceed without prior context).
 func (s *PlanningService) buildPlanText(ctx context.Context, planID string) string {

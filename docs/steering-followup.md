@@ -84,44 +84,70 @@ New methods on `TaskService`:
 
 ---
 
-## Level 1 — Whole-Session Differential Re-Planning (Future)
-
-### Concept
-
-After all repos complete, the user can provide session-level feedback. This triggers a new planning pass that produces sub-plans only for repos needing changes, then implements only those.
+## Level 1 — Whole-Session Differential Re-Planning
 
 ### Work Item State Machine
 
-Add transition: `completed → planning` (currently terminal).
+Transition added: `completed → planning`. After this, the existing pipeline runs:
+`planning → plan_review → approved → implementing → reviewing → completed`
 
-### PlanningService
+### Planning Round Versioning
 
-New method: `FollowUpPlan(ctx, workItemID, feedback)`:
-1. Transitions work item `completed → planning`
-2. Captures current plan text and per-repo completion summaries
-3. Builds differential planning prompt:
-   - Original plan context
-   - Per-repo results (last N lines from each session log)
-   - User feedback
-   - Instruction: "Only produce sub-plans for repositories that require changes"
-4. Runs planning session with revision template
-5. Returns differential plan for review
+Each sub-plan carries a `PlanningRound int` field, set from `Plan.Version` when
+created or modified during `ApplyReviewedPlanOutput`. This tracks which repos were
+touched in each re-planning wave:
+```
+Initial (round 0): repo-a(0), repo-b(0), repo-c(0)
+Follow-up 1 (round 1): repo-a(1), repo-b(0), repo-c(0)    — only repo-a changed
+Follow-up 2 (round 2): repo-a(2), repo-b(2), repo-c(0)    — repo-a + repo-b changed
+```
+
+DB: Migration `004_sub_plan_planning_round.sql`:
+```sql
+ALTER TABLE sub_plans ADD COLUMN planning_round INTEGER NOT NULL DEFAULT 0;
+```
+
+### PlanningService.FollowUpPlan()
+
+```go
+func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback string) (*domain.PlanningResult, error)
+```
+
+1. Validates work item is `completed`
+2. Fetches current approved plan + sub-plans
+3. Builds `RepoResultSummary` per repo (status + last 50 lines of session log)
+4. Renders `followUpPromptTemplate` with: user feedback, repo results, current plan
+5. Transitions work item `completed → planning`
+6. Calls `planRun()` with rendered follow-up context
+7. Returns to `plan_review` for user approval before re-implementation
+
+### Sub-Plan Reconciliation
+
+`ApplyReviewedPlanOutput` now:
+- Sets `PlanningRound = plan.Version` on created/updated sub-plans
+- Resets `completed → pending` when sub-plan content changes (signals re-execution)
+- Leaves unchanged sub-plans untouched (status + PlanningRound preserved)
+
+### Differential Implementation
+
+`BuildWaves` filters out `completed` sub-plans before grouping into waves.
+Only `pending` (new or reset) sub-plans enter execution. First-time implementation
+is unaffected (all sub-plans start as pending).
+
+### Worktree Reuse + Lifecycle Adapters
+
+When `ensureWorktree` finds an existing branch, it emits `EventWorktreeReused`
+instead of creating a new worktree. Adapters handle this:
+- **glab**: `onWorktreeReused` updates MR description via `glab mr update --description`
+- **github**: `onWorktreeReused` updates PR body via GitHub API PATCH
+
+Both use the same `WorktreeCreatedPayload` struct (includes updated `SubPlan` content).
+This also fixes Level 2 resume: previously, reused worktrees didn't trigger adapter
+updates for MR/PR descriptions.
 
 ### TUI Entry Point
 
-- `p` key on a completed work item in the session log view (or sidebar)
-- Opens text input for session-level feedback
-- Routes to `FollowUpPlanMsg` → `FollowUpPlanCmd`
-
-### Implementation Flow
-
-After differential plan approval:
-1. Only new/modified sub-plans trigger worktree creation and agent sessions
-2. Existing completed sub-plans are preserved (no re-execution)
-3. Review pipeline runs on the delta set
-
-### Dependencies
-
-- Level 2 must ship first (task state machine, resume infrastructure)
-- Requires `revisionPromptTemplate` (already exists in planning.go) to support differential context
-- May need sub-plan versioning or iteration tracking to avoid ID collisions
+- `CompletedModel` overlay: `f` keybind opens feedback text input
+- Enter submits `FollowUpPlanMsg{WorkItemID, Feedback}` → `FollowUpPlanCmd`
+- Result transitions work item to `plan_review`; existing plan review flow takes over
+- Success/error toasts via `FollowUpPlanResultMsg`

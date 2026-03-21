@@ -803,3 +803,11 @@ func FollowUpSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskSe
 		return FollowUpSessionSentMsg{TaskID: taskID}
 	}
 }
+
+// FollowUpPlanCmd starts a follow-up re-planning cycle for a completed work item.
+func FollowUpPlanCmd(svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := svc.FollowUpPlan(context.Background(), workItemID, feedback)
+		return FollowUpPlanResultMsg{WorkItemID: workItemID, Err: err}
+	}
+}

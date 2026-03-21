@@ -106,6 +106,41 @@ func TestBuildWaves(t *testing.T) {
 	}
 }
 
+// TestBuildWavesSkipsCompletedSubPlans verifies that completed sub-plans are
+// excluded from waves during differential re-implementation.
+func TestBuildWavesSkipsCompletedSubPlans(t *testing.T) {
+	subPlans := []domain.TaskPlan{
+		{ID: "sp1", Order: 0, RepositoryName: "repo1", Status: domain.SubPlanCompleted},
+		{ID: "sp2", Order: 0, RepositoryName: "repo2", Status: domain.SubPlanPending},
+		{ID: "sp3", Order: 1, RepositoryName: "repo3", Status: domain.SubPlanPending},
+		{ID: "sp4", Order: 1, RepositoryName: "repo4", Status: domain.SubPlanCompleted},
+	}
+
+	waves := BuildWaves(subPlans)
+	if len(waves) != 2 {
+		t.Fatalf("got %d waves, want 2", len(waves))
+	}
+	if len(waves[0]) != 1 || waves[0][0].ID != "sp2" {
+		t.Errorf("wave 0: got %v, want [sp2]", waves[0])
+	}
+	if len(waves[1]) != 1 || waves[1][0].ID != "sp3" {
+		t.Errorf("wave 1: got %v, want [sp3]", waves[1])
+	}
+}
+
+// TestBuildWavesAllCompletedReturnsNil verifies that when all sub-plans are
+// completed, BuildWaves returns nil (nothing to execute).
+func TestBuildWavesAllCompletedReturnsNil(t *testing.T) {
+	subPlans := []domain.TaskPlan{
+		{ID: "sp1", Order: 0, Status: domain.SubPlanCompleted},
+		{ID: "sp2", Order: 1, Status: domain.SubPlanCompleted},
+	}
+	waves := BuildWaves(subPlans)
+	if waves != nil {
+		t.Errorf("got %v, want nil", waves)
+	}
+}
+
 // TestBuildWavesOrderPreservation tests that waves are ordered by Order value.
 func TestBuildWavesOrderPreservation(t *testing.T) {
 	// Sub-plans with orders 2, 0, 1 (out of order)

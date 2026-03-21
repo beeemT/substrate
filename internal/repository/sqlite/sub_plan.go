@@ -15,6 +15,7 @@ type subPlanRow struct {
 	RepoName  string `db:"repo_name"`
 	Content   string `db:"content"`
 	ExecOrder int    `db:"exec_order"`
+	PlanningRound int    `db:"planning_round"`
 	Status    string `db:"status"`
 	CreatedAt string `db:"created_at"`
 	UpdatedAt string `db:"updated_at"`
@@ -48,7 +49,8 @@ func rowFromSubPlan(sp domain.TaskPlan) subPlanRow {
 		PlanID:    sp.PlanID,
 		RepoName:  sp.RepositoryName,
 		Content:   sp.Content,
-		ExecOrder: sp.Order,
+		ExecOrder:    sp.Order,
+		PlanningRound: sp.PlanningRound,
 		Status:    string(sp.Status),
 		CreatedAt: formatTime(sp.CreatedAt),
 		UpdatedAt: formatTime(sp.UpdatedAt),
@@ -91,8 +93,8 @@ func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.
 func (r SubPlanRepo) Create(ctx context.Context, sp domain.TaskPlan) error {
 	row := rowFromSubPlan(sp)
 	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO sub_plans (id, plan_id, repo_name, content, exec_order, status, created_at, updated_at)
-		 VALUES (:id, :plan_id, :repo_name, :content, :exec_order, :status, :created_at, :updated_at)`, row)
+		`INSERT INTO sub_plans (id, plan_id, repo_name, content, exec_order, planning_round, status, created_at, updated_at)
+		 VALUES (:id, :plan_id, :repo_name, :content, :exec_order, :planning_round, :status, :created_at, :updated_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create sub-plan %s: %w", sp.ID, err)
 	}
@@ -104,7 +106,7 @@ func (r SubPlanRepo) Update(ctx context.Context, sp domain.TaskPlan) error {
 	row := rowFromSubPlan(sp)
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE sub_plans SET plan_id = :plan_id, repo_name = :repo_name, content = :content,
-		 exec_order = :exec_order, status = :status, updated_at = :updated_at WHERE id = :id`, row)
+		 exec_order = :exec_order, planning_round = :planning_round, status = :status, updated_at = :updated_at WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update sub-plan %s: %w", sp.ID, err)
 	}

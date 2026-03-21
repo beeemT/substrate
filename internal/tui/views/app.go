@@ -1030,6 +1030,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
 		return a, nil
 
+	case FollowUpPlanMsg:
+		if a.svcs.Planning == nil {
+			return a, nil
+		}
+		return a, FollowUpPlanCmd(a.svcs.Planning, msg.WorkItemID, msg.Feedback)
+
+	case FollowUpPlanResultMsg:
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Follow-up planning failed: %v", msg.Err), components.ToastError)
+			return a, nil
+		}
+		a.toasts.AddToast("Follow-up planning started", components.ToastSuccess)
+		return a, nil
+
 	case SkipQuestionMsg:
 		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID))
 		return a, tea.Batch(cmds...)

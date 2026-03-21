@@ -91,6 +91,10 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onWorktreeCreated(ctx, event.Payload); err != nil {
 			slog.Warn("glab: worktree created handler failed", "error", err)
 		}
+	case domain.EventWorktreeReused:
+		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
+			slog.Warn("glab: worktree reused handler failed", "error", err)
+		}
 	case domain.EventWorkItemCompleted:
 		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
 			slog.Warn("glab: work item completed handler failed", "error", err)
@@ -181,6 +185,24 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	a.mu.Unlock()
 	if artifact != nil {
 		a.recordReviewArtifact(ctx, p.WorkspaceID, p.WorkItemID, *artifact)
+	}
+
+	return nil
+}
+
+func (a *GlabAdapter) onWorktreeReused(ctx context.Context, payload string) error {
+	var p worktreePayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return fmt.Errorf("unmarshal worktree reused payload: %w", err)
+	}
+	if p.Branch == "" || p.WorktreePath == "" {
+		return errors.New("worktree reused payload missing branch or worktree_path")
+	}
+
+	// Update MR description with new sub-plan content
+	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
+	if err := a.updateMRDescription(ctx, p.WorktreePath, p.Branch, description); err != nil {
+		slog.Warn("glab: failed to update MR description on reuse", "repo", p.Repository, "branch", p.Branch, "error", err)
 	}
 
 	return nil
@@ -313,6 +335,21 @@ func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error
 	)
 	if err != nil {
 		return fmt.Errorf("glab mr update: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// updateMRDescription updates the description of an existing MR.
+func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, description string) error {
+	out, err := a.runner(ctx, dir, "glab",
+		"mr", "update",
+		"--source-branch", branch,
+		"--description", description,
+		"--yes",
+	)
+	if err != nil {
+		return fmt.Errorf("glab mr update description: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 
 	return nil

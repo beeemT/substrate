@@ -458,7 +458,10 @@ func (s *ImplementationService) executeSubPlan(
 		}
 
 		// Store native OMP session file for follow-up resumes.
-		if omp, ok := harnessSession.(interface{ OmpSessionFile() string; OmpSessionID() string }); ok {
+		if omp, ok := harnessSession.(interface {
+			OmpSessionFile() string
+			OmpSessionID() string
+		}); ok {
 			if file := omp.OmpSessionFile(); file != "" {
 				if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
 					slog.Warn("failed to store omp session file", "error", err, "session_id", sessionID)
@@ -503,19 +506,44 @@ func (s *ImplementationService) ensureWorktree(
 		return "", fmt.Errorf("list worktrees: %w", err)
 	}
 
+	reviewCtx, err := remotedetect.ResolveReviewContext(ctx, repoPath)
+	if err != nil {
+		slog.Warn("failed to resolve review context", "repo", repoName, "error", err)
+		reviewCtx = remotedetect.ReviewContext{}
+	}
+
 	for _, wt := range worktrees {
 		if wt.Branch == branch {
-			slog.Info("worktree already exists, skipping creation",
+			slog.Info("worktree already exists, reusing",
 				"repo", repoName,
 				"branch", branch,
 				"path", wt.Path)
+
+			// Emit WorktreeReused event so lifecycle adapters can update MR/PR descriptions
+			reusedPayload := WorktreeCreatedPayload{
+				WorkspaceID:   workspace.ID,
+				WorkItemID:    workItemID,
+				Repository:    repoName,
+				Branch:        branch,
+				WorktreePath:  wt.Path,
+				WorkItemTitle: workItemTitle,
+				SubPlan:       subPlan,
+				TrackerRefs:   trackerRefs,
+				Review:        reviewCtx.Review,
+			}
+			reusedEvent := domain.SystemEvent{
+				ID:          domain.NewID(),
+				EventType:   string(domain.EventWorktreeReused),
+				WorkspaceID: workspace.ID,
+				Payload:     marshalJSONOrEmpty(reusedPayload),
+				CreatedAt:   time.Now(),
+			}
+			if err := s.eventBus.Publish(ctx, reusedEvent); err != nil {
+				slog.Warn("failed to emit worktree reused event", "error", err)
+			}
+
 			return wt.Path, nil
 		}
-	}
-
-	reviewCtx, err := remotedetect.ResolveReviewContext(ctx, repoPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve review context: %w", err)
 	}
 
 	// Emit WorktreeCreating pre-hook event

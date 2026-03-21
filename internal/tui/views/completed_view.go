@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -32,15 +33,22 @@ type CompletedModel struct {
 	width        int
 	height       int
 	selectedLink int
+	workItemID   string
+	feedbackInput textinput.Model
+	inputActive  bool
 }
 
 func NewCompletedModel(st styles.Styles) CompletedModel {
-	return CompletedModel{styles: st, statusLabel: "Review artifacts"}
+	ti := components.NewTextInput()
+	ti.Placeholder = "Describe what needs to change..."
+	ti.CharLimit = 2000
+	return CompletedModel{styles: st, statusLabel: "Review artifacts", feedbackInput: ti}
 }
 
 func (m *CompletedModel) SetSize(w, h int)            { m.width = w; m.height = h }
 func (m *CompletedModel) SetTitle(t string)           { m.title = t }
 func (m *CompletedModel) SetStatusLabel(label string) { m.statusLabel = label }
+func (m *CompletedModel) SetWorkItemID(id string) { m.workItemID = id }
 
 func (m *CompletedModel) SetData(completedAt time.Time, mrLinks []MRInfo, warnings []string) {
 	m.completedAt = completedAt
@@ -53,8 +61,19 @@ func (m *CompletedModel) SetData(completedAt time.Time, mrLinks []MRInfo, warnin
 	}
 }
 
+func (m CompletedModel) InputCaptured() bool { return m.inputActive }
+
 func (m CompletedModel) KeybindHints() []KeybindHint {
+	if m.inputActive {
+		return []KeybindHint{
+			{Key: "Enter", Label: "Submit"},
+			{Key: "Esc", Label: "Cancel"},
+		}
+	}
 	hints := []KeybindHint{{Key: "Esc", Label: "Close"}}
+	if m.workItemID != "" {
+		hints = append(hints, KeybindHint{Key: "f", Label: "Follow up"})
+	}
 	if len(m.mrLinks) > 0 {
 		hints = append([]KeybindHint{{Key: "↑↓", Label: "Select"}, {Key: "Enter", Label: "Open"}}, hints...)
 	}
@@ -64,6 +83,28 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 
 func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
+		if m.inputActive {
+			switch msg.String() {
+			case "enter":
+				feedback := m.feedbackInput.Value()
+				m.feedbackInput.SetValue("")
+				m.inputActive = false
+				m.feedbackInput.Blur()
+				return m, func() tea.Msg {
+					return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
+				}
+			case "esc":
+				m.feedbackInput.SetValue("")
+				m.inputActive = false
+				m.feedbackInput.Blur()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
+				return m, cmd
+			}
+		}
+
 		switch msg.String() {
 		case "up", "k":
 			if len(m.mrLinks) > 0 && m.selectedLink > 0 {
@@ -78,6 +119,11 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 				url := m.mrLinks[m.selectedLink].MRURL
 
 				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
+			}
+		case "f":
+			if m.workItemID != "" {
+				m.inputActive = true
+				return m, m.feedbackInput.Focus()
 			}
 		}
 	}
@@ -124,6 +170,10 @@ func (m CompletedModel) View() string {
 
 	for _, w := range m.warnings {
 		lines = append(lines, m.styles.Warning.Render("⚠ "+w))
+	}
+
+	if m.inputActive {
+		lines = append(lines, "", components.RenderDivider(m.styles, m.width), m.feedbackInput.View())
 	}
 
 	return fitViewBox(strings.Join(lines, "\n"), m.width, m.height)

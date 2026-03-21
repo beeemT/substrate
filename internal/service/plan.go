@@ -194,6 +194,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 	}
 
 	changed := plan.OrchestratorPlan != rawOutput.Orchestration || len(existingSubPlans) != len(rawOutput.SubPlans)
+	newVersion := plan.Version + 1
 	seen := make(map[string]bool, len(rawOutput.SubPlans))
 	updatedSubPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
 	for _, rawSubPlan := range rawOutput.SubPlans {
@@ -201,8 +202,13 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 		seen[key] = true
 		order := findSubPlanOrder(rawSubPlan.RepoName, rawOutput.ExecutionGroups)
 		if existing, ok := existingByRepo[key]; ok {
-			if existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order {
+			subPlanChanged := existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order
+			if subPlanChanged {
 				changed = true
+				existing.PlanningRound = newVersion
+				if existing.Status == domain.SubPlanCompleted {
+					existing.Status = domain.SubPlanPending
+				}
 			}
 			existing.RepositoryName = rawSubPlan.RepoName
 			existing.Content = rawSubPlan.Content
@@ -222,6 +228,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 			RepositoryName: rawSubPlan.RepoName,
 			Content:        rawSubPlan.Content,
 			Order:          order,
+			PlanningRound:  newVersion,
 			Status:         domain.SubPlanPending,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -244,7 +251,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 		return plan, updatedSubPlans, nil
 	}
 	plan.OrchestratorPlan = rawOutput.Orchestration
-	plan.Version++
+	plan.Version = newVersion
 	plan.UpdatedAt = now
 	if err := s.planRepo.Update(ctx, plan); err != nil {
 		return domain.Plan{}, nil, err

@@ -26,6 +26,10 @@ const (
 
 	// WorktreeCreated is a post-hook event emitted after git-work checkout succeeds.
 	EventWorktreeCreated EventType = "worktree.created"
+
+	// WorktreeReused is a post-hook event emitted when an existing worktree is reused
+	// during differential re-implementation.
+	EventWorktreeReused EventType = "worktree.reused"
 )
 
 // Regular events - persisted first, then dispatched to subscribers

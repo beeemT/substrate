@@ -397,7 +397,6 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 		{domain.SessionImplementing, domain.SessionPlanning, "implementing -> planning"},
 		{domain.SessionReviewing, domain.SessionPlanning, "reviewing -> planning"},
 		{domain.SessionReviewing, domain.SessionApproved, "reviewing -> approved"},
-		{domain.SessionCompleted, domain.SessionPlanning, "completed -> planning"},
 		{domain.SessionCompleted, domain.SessionImplementing, "completed -> implementing"},
 		{domain.SessionFailed, domain.SessionPlanning, "failed -> planning"},
 		{domain.SessionFailed, domain.SessionIngested, "failed -> ingested"},

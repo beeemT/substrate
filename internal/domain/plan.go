@@ -43,6 +43,7 @@ type TaskPlan struct {
 	RepositoryName string
 	Content        string
 	Order          int
+	PlanningRound  int
 	Status         TaskPlanStatus
 	CreatedAt      time.Time
 	UpdatedAt      time.Time

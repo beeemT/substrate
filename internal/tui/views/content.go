@@ -111,6 +111,7 @@ func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 		m.implementing.SetTitle(title)
 		m.reviewing.SetTitle(title)
 		m.completed.SetTitle(title)
+		m.completed.SetWorkItemID(wi.ID)
 		m.failed.SetTitle(title)
 		m.interrupted.SetTitle(title)
 		m.question.SetTitle(title)
@@ -268,6 +269,8 @@ func (m ContentModel) InputCaptured() bool {
 		return m.sessionLog.InputCaptured()
 	case ContentModeImplementing:
 		return m.implementing.InputCaptured()
+	case ContentModeCompleted:
+		return m.completed.InputCaptured()
 	default:
 		return false
 	}

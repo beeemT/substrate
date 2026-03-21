@@ -431,6 +431,14 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		}
 
 		return nil
+
+	case domain.EventWorktreeReused:
+		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
+			slog.Warn("github: worktree reused handler failed", "err", err)
+		}
+
+		return nil
+
 	case domain.EventWorkItemCompleted:
 		externalID := extractExternalID(event.Payload)
 		if externalID != "" {
@@ -519,6 +527,40 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		Draft:     created.Draft,
 		UpdatedAt: time.Now(),
 	})
+
+	return nil
+}
+
+func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) error {
+	var p worktreePayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return fmt.Errorf("unmarshal worktree reused payload: %w", err)
+	}
+	if p.Branch == "" {
+		return errors.New("missing branch in worktree reused payload")
+	}
+	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
+	headOwner := p.Review.HeadRepo.Owner
+	baseBranch := strings.TrimSpace(p.Review.BaseBranch)
+	if baseOwner == "" || baseRepo == "" || headOwner == "" {
+		return errors.New("worktree reused payload missing review repository coordinates")
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, baseBranch, headOwner, p.Branch)
+	if err != nil {
+		return err
+	}
+	if pull == nil {
+		slog.Warn("github: no open PR found for reused worktree", "branch", p.Branch)
+		return nil
+	}
+
+	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
+	if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", baseOwner, baseRepo, pull.Number), map[string]any{"body": description}, nil); err != nil {
+		return fmt.Errorf("update PR description: %w", err)
+	}
 
 	return nil
 }

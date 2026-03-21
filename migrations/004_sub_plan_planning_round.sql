@@ -1,0 +1,1 @@
+ALTER TABLE sub_plans ADD COLUMN planning_round INTEGER NOT NULL DEFAULT 0;

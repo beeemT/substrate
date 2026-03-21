@@ -314,3 +314,15 @@ type FollowUpSessionMsg struct {
 type FollowUpSessionSentMsg struct {
 	TaskID string
 }
+
+// FollowUpPlanMsg requests a follow-up re-planning for a completed work item.
+type FollowUpPlanMsg struct {
+	WorkItemID string
+	Feedback   string
+}
+
+// FollowUpPlanResultMsg is the result of a follow-up planning attempt.
+type FollowUpPlanResultMsg struct {
+	WorkItemID string
+	Err        error
+}

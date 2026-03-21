@@ -29,7 +29,7 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionApproved:     {domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
-	domain.SessionCompleted:    {}, // Terminal state
+	domain.SessionCompleted:    {domain.SessionPlanning},
 	domain.SessionFailed:       {}, // Terminal state
 }
 
@@ -348,6 +348,12 @@ func (s *SessionService) FailWorkItem(ctx context.Context, id string) error {
 
 	return s.Transition(ctx, id, domain.SessionFailed)
 }
+
+// StartFollowUpPlanning transitions a completed work item back to planning for a follow-up round.
+func (s *SessionService) StartFollowUpPlanning(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionPlanning)
+}
+
 
 // Update updates a work item's mutable fields.
 func (s *SessionService) Update(ctx context.Context, item domain.Session) error {
