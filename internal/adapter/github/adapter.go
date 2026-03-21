@@ -37,7 +37,7 @@ type GithubAdapter struct {
 	defaultBranch string
 	assignee      string
 	viewer        string
-	repos          adapter.ReviewArtifactRepos
+	repos         adapter.ReviewArtifactRepos
 
 	mu      sync.RWMutex
 	tracked map[string]githubPull
@@ -1470,6 +1470,7 @@ func (a *GithubAdapter) refreshPRs(ctx context.Context, workspaceID string) {
 			Draft:      freshPull.Draft,
 			HeadBranch: pr.HeadBranch,
 			HTMLURL:    freshPull.HTMLURL,
+			MergedAt:   freshPull.MergedAt,
 			CreatedAt:  pr.CreatedAt,
 			UpdatedAt:  time.Now(),
 		}
@@ -1486,10 +1487,10 @@ func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) 
 	if a.repos.GithubPRs == nil {
 		return
 	}
-	// Immediate refresh on startup.
-	a.refreshPRs(ctx, workspaceID)
-
 	go func() {
+		// Immediate refresh on startup.
+		a.refreshPRs(ctx, workspaceID)
+
 		ticker := time.NewTicker(120 * time.Second)
 		defer ticker.Stop()
 		for {

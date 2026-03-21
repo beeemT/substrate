@@ -10,6 +10,7 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
+
 // ReviewArtifactRepos bundles the repositories needed for dual-write of review artifacts.
 type ReviewArtifactRepos struct {
 	Events           repository.EventRepository
@@ -39,7 +40,6 @@ func PersistReviewArtifact(ctx context.Context, eventRepo repository.EventReposi
 		CreatedAt:   createdAt,
 	})
 }
-
 
 // PersistGithubPR dual-writes a GitHub PR: event (audit trail) + provider table + link table.
 func PersistGithubPR(ctx context.Context, repos ReviewArtifactRepos, workspaceID, workItemID string, artifact domain.ReviewArtifact, owner, repo string, number int) error {
@@ -89,7 +89,7 @@ func PersistGitlabMR(ctx context.Context, repos ReviewArtifactRepos, workspaceID
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
-	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil {
+	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil || iid == 0 {
 		return nil
 	}
 	now := time.Now()

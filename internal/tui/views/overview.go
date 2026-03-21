@@ -1545,7 +1545,7 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	}
 	ctx := context.Background()
 	// Query from indexed tables when available.
-	if a.svcs.GithubPRs != nil {
+	if a.svcs.SessionArtifacts != nil {
 		if links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID); err == nil {
 			for _, link := range links {
 				switch link.Provider {
