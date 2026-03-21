@@ -90,46 +90,33 @@ The footer, not a header, carries workspace context such as `workspace · 2 acti
 
 ### 2c. Content Panel
 
-The content panel re-renders in place based on the selected work item, selected task row, selected source-details row, or selected historical search result. There is no navigation stack.
+The content panel re-renders in place based on the current selection. There is no navigation stack.
 
 | Selection / state | Content panel mode |
 |-------------------|--------------------|
 | nothing selected | Empty |
-| work item `ingested` | Ready to plan |
-| work item `planning` | Planning output |
-| selected `Source details` task row on an implementing work item | Source details |
-| selected task-session row | Session interaction |
-| selected remote or historical search result | Session interaction |
-| work item `plan_review` | Plan review |
-| work item `approved` | Awaiting implementation |
-| work item `implementing` with open question | Question |
-| work item `implementing` with interrupted child session | Interrupted |
-| work item `implementing` otherwise | Implementing |
-| work item `reviewing` | Reviewing |
-| work item `completed` | Completed |
-| work item `failed` | Failed |
+| work item selected (any state) | Overview |
+| selected `Source details` task row | Source details |
+| work item `planning` (planning child session selected) | Planning |
+| selected task-session row or historical search result | Session interaction |
 
-`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModeQuestion` and `ContentModeInterrupted` are live implementation sub-modes selected from current task-session state and take precedence over source-details or repo-output views while they are active.
+The content panel has five modes:
 
 ```go
 type ContentMode int
 
 const (
     ContentModeEmpty              ContentMode = iota // no session selected
-    ContentModeReadyToPlan                           // ingested: work item ready for planning
-    ContentModeSourceDetails                         // implementing: source metadata row selected
-    ContentModePlanning                              // planning: agent running, log tailing
-    ContentModeSessionInteraction                    // selected task log or historical transcript/summary
-    ContentModePlanReview                            // plan_review: awaiting human review
-    ContentModeAwaitingImpl                          // approved: plan approved, awaiting impl start
-    ContentModeImplementing                          // implementing: agents running
-    ContentModeReviewing                             // reviewing: review agent running
-    ContentModeCompleted                             // completed: all repos passed review
-    ContentModeFailed                                // failed: unrecoverable error
-    ContentModeInterrupted                           // live implementation sub-mode
-    ContentModeQuestion                              // waiting for human answer
-}
+    ContentModeOverview                              // canonical root-session overview/control surface
+    ContentModeSourceDetails                         // task-pane source metadata for the selected work item
+    ContentModePlanning                              // planning/task session log tailing
+    ContentModeSessionInteraction                    // historical or task session interaction view
+)
 ```
+
+`ContentModeOverview` is the default when a work item is selected — it handles all root states (ingested, planning, plan_review, approved, implementing, reviewing, completed, failed). When the session is blocked on a human action, the overview surfaces that action inline or through an overlay. The operator never has to navigate to a state-specific page to unblock progress.
+
+`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModePlanning` renders the live planning transcript while a planning child session is active.
 
 ---
 
@@ -194,140 +181,89 @@ For a selected task row, this mode tails `~/.substrate/sessions/<task-id>.log` l
 
 **Keys**: `↑`/`↓` scroll. Global back-navigation still applies from the footer (`←`/`Esc` back to tasks or sessions).
 
-### 3d. Implementing Mode
+### 3d. Overview Mode
 
-Two parts: a repo status row at the top, and the output stream for the currently selected repo below.
+The overview is the canonical root-session control surface. It is rendered when the operator selects a work item in the main `Sessions` sidebar or selects the `Overview` row in the `{externalID} · Tasks` sidebar. Both entry points render the same overview.
 
-```
-│ LIN-FOO-123 · Fix auth flow · Implementing                                        │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ Repos:  ✓ shared-lib   ● backend-api (running)   ◌ frontend (queued)              │
-│                                                                                   │
-│ ─── backend-api ──────────────────────────────────────────────────────────────── │
-│ > Analyzing auth middleware in internal/auth/handler.go...                        │
-│ > Implementing JWT validation...                                                  │
-│ > Running tests... PASS (17/17)                                                   │
-│ > Committing: "fix(auth): add JWT validation middleware"                          │
-│                                                                                   │
-│ [Tab] Cycle repos  [↑↓] Scroll output  [p] Pause/unpause display                 │
-```
+**Page structure** (in order):
 
-**Repo status icons**: `✓` done, `●` running, `◌` queued, `⊘` interrupted, `✗` failed.
+1. **Summary** — external ID, title, state label, last updated, repo progress, blocker badges
+2. **Action required** — only when the session is blocked on the operator (plan approval, open question, interrupted session, review)
+3. **Source** — provider, ref, title, excerpt for source items
+4. **Plan** — bounded plan snapshot (state, version, repo count, excerpt), never the full plan inline
+5. **Tasks** — repo/sub-plan rows with status, harness, last activity, notes
+6. **External lifecycle** — tracker refs and PR/MR rows from `ReviewArtifact` events
+7. **Recent activity** — compact recent-event summary
 
-**Progress bar** in the sidebar entry reflects `done/total` repos.
+**Actionability contract**: if the session needs a human decision to proceed, the overview provides the blocking reason, enough context, and the action itself. Detail views remain useful but are never mandatory to unblock work.
 
-Output for each repo is tailed from `~/.substrate/sessions/<session-id>.log` filtered by repo, or a per-repo log segment. `Tab` cycles focus across repos.
+**Overview vs overlay split**: the overview shows decision summary; overlays show decision evidence. Actions are invokable from either place.
 
-**Model**:
+**View model**:
+
 ```go
-type ImplementingModel struct {
-    repos       []RepoProgress
-    selectedRepo int
-    outputs     map[string]*viewport.Model  // keyed by repo name
-    paused      bool
+type SessionOverviewData struct {
+    WorkItemID string
+    State      domain.SessionState
+    Header     OverviewHeader
+    Actions    []OverviewActionCard
+    Sources    []OverviewSourceItem
+    Plan       OverviewPlan
+    Tasks      []OverviewTaskRow
+    External   OverviewExternalLifecycle
+    Activity   []OverviewActivityItem
 }
 ```
 
-**Keys**: `Tab` cycle repos, `↑`/`↓` scroll output, `p` pause/unpause live tailing.
+`SessionOverviewModel` embeds `PlanReviewModel`, `QuestionModel`, `InterruptedModel`, `CompletedModel`, and `ReviewModel` as overlay sub-models. The overview opens these overlays for deeper inspection and action without forcing a content mode switch.
 
-### 3e. Reviewing Mode
+**Action-required examples**:
 
-Review summaries and critiques post-implementation, grouped by repository tabs at the top. The active repo shows either a success message (`✓ No critiques for this repo.`) or a critique list. The selected critique is indicated inline, and its suggestion is expanded in place rather than in a separate diff pane.
+- **Plan review**: bounded plan excerpt plus `Approve` / `Request changes` / `Reject` actions. A `Review plan` overlay shows the full plan document.
+- **Open question**: question text, affected repo/task, Foreman's proposed answer and uncertainty. The human can approve, iterate with the Foreman, or skip — all from the overview.
+- **Interrupted session**: affected repo/task, failure/interruption reason, `Resume` / `Retry` actions.
+- **Under review**: review summary, critique list per repo, `Re-implement` / `Override accept` actions.
 
-**Model**:
-```go
-type ReviewModel struct {
-    repos      []RepoReviewResult  // each repo carries review cycles and critiques
-    activeRepo int
-    cursor     int                 // critique cursor within the active repo
-}
-```
-`RepoReviewResult` carries the repo name plus accumulated `[]domain.ReviewCycle` and `[]domain.Critique`. Severity styling comes from shared semantic status styles, and the selected critique may show its `Suggestion` inline.
+**Source section rules**: for single-source sessions, the root work item title/description is sufficient. For multi-source sessions, the overview shows provider + ref only rather than reverse-parsing merged descriptions. Durable per-source-item summaries are a follow-up (see `future-work.md`).
 
-**Keys**: `j`/`k` navigate critiques in the active repo, `Tab` switch repo tabs, `r` re-implement, `o` override accept.
+**Plan section behavior by state**:
 
-### 3f. Completed Mode
+| Root state | Plan display |
+|------------|-------------|
+| `ingested` | `No plan yet` |
+| `planning` | `Plan in progress` with bounded draft preview |
+| `plan_review` | Excerpt + version + review actions |
+| `approved` through `completed` | Approved/final plan snapshot |
+| `failed` | Last known plan snapshot if any |
 
-Summary of what was done: repos changed, MR/PR links, any stale documentation warnings.
+**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays.
 
-```
-│ LIN-FOO-100 · Update docs · Completed  ✓ 2h ago                                  │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ Completed 2h ago                                                                  │
-│                                                                                   │
-│ Repos:                                                                            │
-│   ✓ backend-api       MR !142 (open)                                              │
-│   ✓ frontend-app      MR !87  (open)                                              │
-│                                                                                   │
-│ [↑↓] Scroll                                                                       │
-```
+### 3e. Transcript Rendering
 
-### 3g. Interrupted Mode
+Planning mode, session interaction mode, and overview overlays all share one canonical transcript renderer (`RenderTranscript`). The renderer consumes structured `sessionlog.Entry` values end-to-end — there is no string pre-flattening step in the TUI pipeline.
 
-Shown when an agent session exited unexpectedly (substrate closed, process killed, crash). Partial worktree changes may exist.
+The renderer groups raw session-log entries into higher-level blocks:
 
-```
-│ LIN-FOO-099 · Refactor billing · Interrupted                                      │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ ⊘ Session interrupted (substrate closed while agent was running)                 │
-│                                                                                   │
-│ backend-api: partial changes in worktree sub-LIN-FOO-099-refactor-billing         │
-│ Run `git status` in the worktree to inspect state.                                │
-│                                                                                   │
-│ Resume will start a new agent session in the same worktree with context about     │
-│ the interruption and the original sub-plan.                                       │
-│                                                                                   │
-│ [r] Resume  [a] Abandon (mark failed)  [↑↓] Scroll                               │
-```
+- **Assistant prose** — rendered as markdown body text
+- **Thinking** — muted text; collapsed to a single-line preview by default, expandable to full indented markdown
+- **Prompt / feedback / answer** — labeled callout cards
+- **Tool execution** — grouped cards with state-aware chrome
+- **Lifecycle events** — concise muted status lines
+- **Question / Foreman** — warning-styled callout cards
 
-Resuming starts a fresh agent session in the same worktree. The session context instructs the agent to inspect `git diff` and `git status` and continue from where the previous session left off.
+**Tool cards** group adjacent `tool_start`, `tool_output`, and `tool_result` entries into a single block using per-tool-name FIFO queues. Each card shows:
 
-**Keys**: `r` resume, `a` abandon (confirm dialog), `↑`/`↓` scroll.
+- Title/status row: tool name + intent + running/success/error icon
+- Smart args summary: semantically important arguments for known tools (file paths, grep patterns, bash commands, LSP actions)
+- Output preview: first 4 lines in collapsed mode, 12 in verbose mode
+- Overflow marker: `… N more lines` when truncated
+- Result line: shown in verbose mode or when no output exists
 
-### 3h. Waiting for Human Question
+**Tool card states**: running (active accent border), success (neutral border), error (error border/tint).
 
-Surfaced when the Foreman agent escalates to the human (Tier 3). The human sees the sub-agent's question, the Foreman's proposed answer pre-filled (highlighted, read-only), and the Foreman's stated uncertainty. The human may:
-- Press `[A]` to approve the Foreman's answer directly — it is forwarded to the blocked sub-agent and appended to the FAQ.
-- Type a reply and press `[Enter]` — the message is sent to the Foreman session via `SendMessage()`, producing a refined `foreman_proposed` event which updates the pre-filled answer. This loop continues until the human presses `[A]`.
-- Press `[Esc]` to skip — the question is forwarded without an answer; the sub-agent continues and may make its own decision.
+**Interaction model**: `[o] Verbose logs` toggles between collapsed and verbose mode across all blocks. All lines are hard-wrapped or truncated to the available inner width.
 
-```
-│ LIN-FOO-123 · Fix auth flow · Implementing  ◐ Question from backend-api agent    │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ Agent question (backend-api, session 3/3):                                        │
-│                                                                                   │
-│ "The existing auth middleware uses a custom JWT library (github.com/corp/jwtlib)  │
-│  but the task says to use standard library. Should I replace the dependency or    │
-│  wrap it?"                                                                        │
-│                                                                                   │
-│ Context: Sub-plan says 'use standard library JWT validation'. Current code uses   │
-│ github.com/corp/jwtlib v2.3.1 in 4 files.                                        │
-│                                                                                   │
-│ Foreman's proposed answer (uncertain):                                            │
-│ ┌──────────────────────────────────────────────────────────────────────────────┐ │
-│ │ Replace the dependency. The orchestration plan specifies standard library     │ │
-│ │ JWT only. I'm uncertain whether corp/jwtlib has specific behaviour your       │ │
-│ │ team relies on — check with your team if unsure.                             │ │
-│ └──────────────────────────────────────────────────────────────────────────────┘ │
-│                                                                                   │
-│ Your reply (or press [A] to approve Foreman's answer):                            │
-│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │
-│                                                                                   │
-│ [Enter] Send to Foreman  [A] Approve & forward to agent  [Esc] Skip               │
-```
-
-**Model**:
-```go
-type QuestionModel struct {
-    question        domain.Question
-    foremanProposed string          // Foreman's current proposed answer; updated on each foreman_proposed event
-    foremanUncertain bool           // set from foreman_proposed event's `uncertain` field (CONFIDENCE: uncertain marker)
-    input           textinput.Model // human reply input
-    inputActive     bool
-}
-```
-
-**Keys**: `[A]` approve (capital A), `[Enter]` send to Foreman, `[Esc]` skip.
+**Keys**: `↑`/`↓` scroll, `o` toggle verbose mode.
 
 ---
 

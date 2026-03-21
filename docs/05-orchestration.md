@@ -35,6 +35,8 @@ The planning context contains:
 
 The planning harness explores the workspace and writes its plan to the draft path. The draft file, not the final chat response, is the source of truth for plan parsing.
 
+The planning session ID and draft path are exposed to the TUI so the overview can render a live transcript while the planning harness is running.
+
 ### 1c. Parse and validate the draft
 
 The draft must begin with a fenced `substrate-plan` YAML block that defines `execution_groups`, followed by a non-empty orchestration section and one implementation-ready sub-plan section per declared repo.
@@ -58,6 +60,21 @@ On success:
 - retain the session draft directory as audit data
 
 For draft format and implementation-phase validation gates, see `07-implementation-plan.md`.
+
+### 1e. Planning session lifecycle
+
+Planning runs are durable child sessions, not synthetic UI state.
+
+When planning starts:
+1. create an `agent_sessions` row with `phase = planning` and `work_item_id` pointing to the root session
+2. transition the row to `running` before launching the harness
+3. stream session events under that session identity
+4. mark the row `completed` on successful plan generation
+5. mark the row `failed` on unrecoverable planning failure
+
+For plan revisions (`PlanWithFeedback`), each revision creates a **new** planning child session rather than reusing the prior one. Historical planning sessions remain visible in the task sidebar and session history.
+
+Planning sessions share the same `Task` model and status machine as implementation and review sessions. The discriminator is `Task.Phase = planning`. Planning sessions have no `SubPlanID` since they operate at the cross-repo level.
 
 ---
 

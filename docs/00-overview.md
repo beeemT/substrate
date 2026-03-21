@@ -68,6 +68,7 @@ Substrate is organized around a few stable seams:
 - TUI behavior: `06`
 - Phasing/tests/risks: `07`
 - TUI design-system contract and verification guidance: `08`
+- Deferred follow-ups: `future-work.md`
 
 ## Document Map
 
@@ -82,3 +83,4 @@ Substrate is organized around a few stable seams:
 | `06-tui-design.md` | Views, overlays, settings UX, operator interactions | Adapter implementations, DB schema |
 | `07-implementation-plan.md` | Phases, quality gates, test strategy, risks | Canonical runtime behavior |
 | `08-tui-design-system.md` | Design-system ownership boundaries, shared chrome semantics, layout guardrails, verification guidance | Broader TUI workflow behavior |
+| `future-work.md` | Deferred follow-up items with scope/interim/requirements | Implementation timelines, current behavior details |

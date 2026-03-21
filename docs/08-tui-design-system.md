@@ -181,6 +181,18 @@ What remains local to the view:
 - editor integration
 - question and interruption handling
 
+### Transcript rendering
+
+`views/session_transcript.go` owns `RenderTranscript`, the shared transcript renderer. It consumes `[]sessionlog.Entry` values and produces bounded, width-aware output. No string pre-flattening step exists in the TUI pipeline — structured `sessionlog.Entry` values flow end-to-end from the session log through to the final view layer, where `RenderTranscript` is the sole rendering point.
+
+Entries are grouped into display blocks: plain text, assistant markdown, user prompts, tool cards, lifecycle events, questions, thinking blocks, and foreman directives. Grouping is structural, not text-based:
+
+- **Tool cards**: `tool_start`, `tool_output`, and `tool_result` entries are grouped into single tool cards via per-tool FIFO queues. Each card uses state-aware callout chrome — `CalloutRunning` while in progress, `CalloutTool` on success, `CalloutError` on failure. Cards include smart args summaries for known tools (read, grep, find, write, edit, bash, lsp, ast_grep, ast_edit, fetch, web_search, task). Output lines are truncated (4 lines default, 12 verbose) with explicit overflow counts.
+- **Thinking blocks**: rendered as collapsed single-line summaries or expanded muted markdown, controlled by the `collapseThinking` flag.
+- **Callout variants**: tool cards and lifecycle chrome use `components.RenderCallout` with `CalloutRunning`, `CalloutError`, and `CalloutTool` variants.
+
+Semantic styles consumed: `Thinking` for expanded thinking-block text, `Accent` for highlighted tool args, and the callout variant styles from `styles/` for tool-card state chrome.
+
 ### Overlays
 
 Session history search, the unified work browser, help, workspace initialization, confirm dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
@@ -226,6 +238,7 @@ internal/tui/views/
   app.go
   sidebar.go
   statusbar.go
+  session_transcript.go
   planning_view.go
   implementing_view.go
   reviewing_view.go

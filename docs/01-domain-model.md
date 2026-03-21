@@ -133,14 +133,30 @@ Notes:
 - `TaskPlan.Order` is the execution-group index parsed from the planning YAML block.
 - The domain enum includes `SubPlanInterrupted`, but the current service transition table actively uses `pending -> in_progress -> completed/failed`, with `failed -> pending` for retry. The current SQLite migration also constrains `sub_plans.status` to `pending|in_progress|completed|failed`.
 
+### TaskPhase
+
+`TaskPhase` discriminates the kind of child agent session.
+
+```go
+type TaskPhase string
+
+const (
+	TaskPhasePlanning       TaskPhase = "planning"
+	TaskPhaseImplementation TaskPhase = "implementation"
+	TaskPhaseReview         TaskPhase = "review"
+)
+```
+
 ### Task
 
-`Task` replaces the old “agent session” model in the domain narrative. It is one harness invocation against one `TaskPlan` in one repository worktree.
+`Task` replaces the old "agent session" model in the domain narrative. It is one harness invocation against one `TaskPlan` in one repository worktree.
 
 ```go
 type Task struct {
 	ID              string
+	WorkItemID      string
 	WorkspaceID     string
+	Phase           TaskPhase
 	SubPlanID       string
 	RepositoryName  string
 	WorktreePath    string
@@ -154,6 +170,8 @@ type Task struct {
 	OwnerInstanceID *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	OmpSessionFile  string
+	OmpSessionID    string
 }
 
 type TaskStatus string
@@ -169,6 +187,10 @@ const (
 ```
 
 Nuance: the constants still use the historical `AgentSession...` prefix. That is legacy naming on the status enum, not evidence that the persisted aggregate is still named `AgentSession`.
+
+`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `Phase` discriminates the session kind: `planning`, `implementation`, or `review`.
+
+`OmpSessionFile` and `OmpSessionID` are populated when the harness is oh-my-pi and track the external session identity for resume/steering.
 
 ### Question
 
@@ -418,6 +440,7 @@ erDiagram
     Session ||--|| Plan : plans
     Plan ||--o{ TaskPlan : decomposes_into
     Workspace ||--o{ Task : runs
+    Session ||--o{ Task : runs
     TaskPlan ||--o{ Task : executed_by
     Task ||--o{ Question : raises
     Task ||--o{ ReviewCycle : reviewed_by
