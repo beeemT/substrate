@@ -805,6 +805,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+				ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 			)
 		}
 		cmds = append(cmds, WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
@@ -972,6 +973,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StartPlanMsg:
 		if a.svcs.Planning != nil {
 			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItemID))
+		} else {
+			a.toasts.AddToast("Planning service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
+
+	case RestartPlanMsg:
+		if a.svcs.Planning != nil && a.svcs.Session != nil {
+			cmds = append(cmds, RestartPlanningCmd(a.svcs.Session, a.svcs.Planning, msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}

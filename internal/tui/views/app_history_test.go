@@ -1532,14 +1532,14 @@ func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"Action required", "Interrupted task needs recovery", "previous substrate owner stopped heartbeating"} {
+	for _, want := range []string{"Action required", "Planning was interrupted", "previous substrate owner stopped heartbeating"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
 	}
 	hints := app.content.KeybindHints()
-	if len(hints) < 4 || hints[1].Label != "Resume" || hints[2].Label != "Abandon" {
-		t.Fatalf("keybind hints = %#v, want resume/abandon actions", hints)
+	if len(hints) < 4 || hints[1].Label != "Restart planning" || hints[2].Label != "Abandon" {
+		t.Fatalf("keybind hints = %#v, want restart planning/abandon actions", hints)
 	}
 }
 

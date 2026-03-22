@@ -510,7 +510,8 @@ func (m *SessionOverviewModel) syncActionModels() {
 		}
 	case overviewActionInterrupted:
 		if action.Session != nil {
-			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.CanAct)
+			isPlanningPhase := action.Session.Phase == domain.TaskPhasePlanning
+			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.Session.WorkItemID, isPlanningPhase, action.CanAct)
 		}
 	case overviewActionReviewing:
 		m.reviewing.SetRepos(action.ReviewRepos)
@@ -723,7 +724,11 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 	case overviewActionInterrupted:
 		hints := []KeybindHint{{Key: "i", Label: "Inspect"}}
 		if action.CanAct {
-			hints = append([]KeybindHint{{Key: "r", Label: "Resume"}, {Key: "a", Label: "Abandon"}}, hints...)
+			resumeLabel := "Resume"
+			if action.Session != nil && action.Session.Phase == domain.TaskPhasePlanning {
+				resumeLabel = "Restart planning"
+			}
+			hints = append([]KeybindHint{{Key: "r", Label: resumeLabel}, {Key: "a", Label: "Abandon"}}, hints...)
 		}
 
 		return hints
@@ -1403,20 +1408,28 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			}
 		}
 		if session.Status == domain.AgentSessionInterrupted {
-			actions = append(actions, OverviewActionCard{
+			card := OverviewActionCard{
 				Kind:     overviewActionInterrupted,
-				Title:    "Interrupted task needs recovery",
 				Blocked:  firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)),
-				Why:      "This task was interrupted and cannot continue until it is resumed or abandoned.",
 				Affected: []string{firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))},
 				Context: []string{
 					"Last update: " + formatAbsoluteTime(session.UpdatedAt),
 					"Cause: previous substrate owner stopped heartbeating while the agent was running",
-					"Task: " + taskSidebarSessionTitle(&session),
 				},
 				Session: &session,
 				CanAct:  a.canActOnSession(session),
-			})
+			}
+			if session.Phase == domain.TaskPhasePlanning {
+				card.Title = "Planning was interrupted"
+				card.Why = "The planning agent stopped unexpectedly. Restart will begin a fresh planning session."
+				card.Blocked = "Planning"
+				card.Affected = nil
+			} else {
+				card.Title = "Interrupted task needs recovery"
+				card.Why = "This task was interrupted and cannot continue until it is resumed or abandoned."
+				card.Context = append(card.Context, "Task: "+taskSidebarSessionTitle(&session))
+			}
+			actions = append(actions, card)
 		}
 	}
 

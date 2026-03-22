@@ -11,15 +11,17 @@ import (
 
 // InterruptedModel handles the interrupted session display.
 type InterruptedModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	title     string
-	subPlanID string
-	sessionID string
-	worktree  string
-	repoName  string
-	canAct    bool // true if current instance owns or owner is dead
-	styles    styles.Styles
-	width     int
-	height    int
+	title           string
+	subPlanID       string
+	sessionID       string
+	worktree        string
+	repoName        string
+	workItemID      string
+	isPlanningPhase bool
+	canAct          bool // true if current instance owns or owner is dead
+	styles          styles.Styles
+	width           int
+	height          int
 }
 
 func NewInterruptedModel(st styles.Styles) InterruptedModel {
@@ -29,16 +31,24 @@ func NewInterruptedModel(st styles.Styles) InterruptedModel {
 func (m *InterruptedModel) SetSize(w, h int)  { m.width = w; m.height = h }
 func (m *InterruptedModel) SetTitle(t string) { m.title = t }
 
-func (m *InterruptedModel) SetSession(sessionID, subPlanID, repoName, worktree string, canAct bool) {
+func (m *InterruptedModel) SetSession(sessionID, subPlanID, repoName, worktree, workItemID string, isPlanningPhase, canAct bool) {
 	m.sessionID = sessionID
 	m.subPlanID = subPlanID
 	m.repoName = repoName
 	m.worktree = worktree
+	m.workItemID = workItemID
+	m.isPlanningPhase = isPlanningPhase
 	m.canAct = canAct
 }
 
 func (m InterruptedModel) KeybindHints() []KeybindHint {
 	if m.canAct {
+		if m.isPlanningPhase {
+			return []KeybindHint{
+				{Key: "r", Label: "Restart planning"},
+				{Key: "a", Label: "Abandon"},
+			}
+		}
 		return []KeybindHint{
 			{Key: "r", Label: "Resume"},
 			{Key: "a", Label: "Abandon"},
@@ -55,6 +65,14 @@ func (m InterruptedModel) Update(msg tea.Msg) (InterruptedModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "r":
+			if m.isPlanningPhase {
+				wID := m.workItemID
+
+				return m, func() tea.Msg {
+					return RestartPlanMsg{WorkItemID: wID}
+				}
+			}
+
 			sID, spID := m.sessionID, m.subPlanID
 
 			return m, func() tea.Msg {
@@ -77,27 +95,41 @@ func (m InterruptedModel) View() string {
 		return ""
 	}
 	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   m.title + " · Interrupted",
+		Title: m.title + func() string {
+			if m.isPlanningPhase {
+				return " · Planning Interrupted"
+			}
+			return " · Interrupted"
+		}(),
 		Width:   m.width,
 		Divider: true,
 	})
 
 	lines := append(strings.Split(header, "\n"), "")
-	lines = append(lines, m.styles.Interrupted.Render("⊘ Session interrupted (previous substrate owner stopped heartbeating while the agent was running)"), "")
 
-	if m.repoName != "" {
+	if m.isPlanningPhase {
+		lines = append(lines, m.styles.Interrupted.Render("⊘ Planning was interrupted (previous substrate owner stopped heartbeating while planning was in progress)"), "")
 		lines = append(lines,
-			m.styles.Subtitle.Render(m.repoName+": partial changes in worktree "+m.worktree),
-			m.styles.Muted.Render("Run `git status` in the worktree to inspect state."),
+			m.styles.Subtitle.Render("Restart will begin a fresh planning session from the beginning."),
+			"",
+		)
+	} else {
+		lines = append(lines, m.styles.Interrupted.Render("⊘ Session interrupted (previous substrate owner stopped heartbeating while the agent was running)"), "")
+
+		if m.repoName != "" {
+			lines = append(lines,
+				m.styles.Subtitle.Render(m.repoName+": partial changes in worktree "+m.worktree),
+				m.styles.Muted.Render("Run `git status` in the worktree to inspect state."),
+				"",
+			)
+		}
+
+		lines = append(lines,
+			m.styles.Subtitle.Render("Resume will start a new agent session in the same worktree with context about"),
+			m.styles.Subtitle.Render("the interruption and the original sub-plan."),
 			"",
 		)
 	}
-
-	lines = append(lines,
-		m.styles.Subtitle.Render("Resume will start a new agent session in the same worktree with context about"),
-		m.styles.Subtitle.Render("the interruption and the original sub-plan."),
-		"",
-	)
 
 	if !m.canAct {
 		lines = append(lines, m.styles.Muted.Render("(Owned by another instance — take over not yet available)"))

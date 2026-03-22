@@ -123,6 +123,9 @@ type ResumeSessionMsg struct {
 	OldSessionID string
 }
 
+// RestartPlanMsg fires when the user presses [r] on an interrupted planning task.
+type RestartPlanMsg struct{ WorkItemID string }
+
 // AbandonSessionMsg fires when the user confirms abandonment.
 type AbandonSessionMsg struct{ SessionID string }
 
@@ -140,7 +143,6 @@ type RetryFailedMsg struct{ WorkItemID string }
 
 // StartPlanMsg fires when the user presses Enter on a work item in the ready-to-plan state.
 type StartPlanMsg struct{ WorkItemID string }
-
 // OverrideAcceptMsg fires when user overrides and accepts critiques.
 type OverrideAcceptMsg struct{ WorkItemID string }
 

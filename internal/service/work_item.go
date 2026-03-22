@@ -372,6 +372,21 @@ func (s *SessionService) StartFollowUpPlanning(ctx context.Context, id string) e
 	return s.Transition(ctx, id, domain.SessionPlanning)
 }
 
+// RollbackPlanningInterrupt transitions a work item from planning back to ingested
+// when its planning task was interrupted. Idempotent: if the work item is already
+// in a different state (rolled back by a prior call or already advanced), it is a no-op.
+func (s *SessionService) RollbackPlanningInterrupt(ctx context.Context, id string) error {
+	item, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("work item", id)
+	}
+	if item.State != domain.SessionPlanning {
+		// Already rolled back or in a later state — no-op.
+		return nil
+	}
+
+	return s.Transition(ctx, id, domain.SessionIngested)
+}
 
 // Update updates a work item's mutable fields.
 func (s *SessionService) Update(ctx context.Context, item domain.Session) error {

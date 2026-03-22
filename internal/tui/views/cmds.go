@@ -434,6 +434,77 @@ func StartPlanningCmd(svc *orchestrator.PlanningService, workItemID string) tea.
 	}
 }
 
+// ReconcileOrphanedTasksCmd interrupts any running or waiting tasks whose owner
+// instance is absent or has a stale heartbeat (>15s). It is called on workspace
+// initialization to clean up tasks left in a running state by a previous substrate process.
+// Errors are logged but never surfaced to the user — the 2s poll loop picks up the
+// updated task statuses.
+func ReconcileOrphanedTasksCmd(
+	taskSvc *service.TaskService,
+	instanceSvc *service.InstanceService,
+	workspaceID, currentInstanceID string,
+) tea.Cmd {
+	return func() tea.Msg {
+		const staleness = 15 * time.Second
+		ctx := context.Background()
+
+		tasks, err := taskSvc.ListByWorkspaceID(ctx, workspaceID)
+		if err != nil {
+			slog.Warn("reconcile: failed to list tasks", "workspace_id", workspaceID, "error", err)
+			return nil
+		}
+		instances, err := instanceSvc.ListByWorkspaceID(ctx, workspaceID)
+		if err != nil {
+			slog.Warn("reconcile: failed to list instances", "workspace_id", workspaceID, "error", err)
+			return nil
+		}
+
+		liveSet := make(map[string]bool, len(instances))
+		for _, inst := range instances {
+			if time.Since(inst.LastHeartbeat) <= staleness {
+				liveSet[inst.ID] = true
+			}
+		}
+
+		for _, task := range tasks {
+			if task.Status != domain.AgentSessionRunning && task.Status != domain.AgentSessionWaitingForAnswer {
+				continue
+			}
+			// Never interrupt tasks owned by the current instance.
+			if task.OwnerInstanceID != nil && *task.OwnerInstanceID == currentInstanceID {
+				continue
+			}
+			ownerAlive := task.OwnerInstanceID != nil && liveSet[*task.OwnerInstanceID]
+			if ownerAlive {
+				continue
+			}
+			if err := taskSvc.Interrupt(ctx, task.ID); err != nil {
+				slog.Error("reconcile: failed to interrupt orphaned task",
+					"task_id", task.ID, "workspace_id", workspaceID, "error", err)
+			}
+		}
+
+		return nil
+	}
+}
+
+// RestartPlanningCmd rolls a work item back from planning to ingested (if needed)
+// and then re-runs the planning pipeline from the beginning. This handles the case
+// where a planning task was interrupted and the user wants to start fresh.
+func RestartPlanningCmd(workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		if _, err := planningSvc.Plan(ctx, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return ActionDoneMsg{Message: "Planning restarted"}
+	}
+}
+
 // PlanWithFeedbackCmd rejects the old plan and starts a revision session.
 func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, feedback string) tea.Cmd {
 	return func() tea.Msg {
