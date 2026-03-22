@@ -44,11 +44,11 @@ func SentryAuthSource(cfg SentryConfig) string {
 	if strings.TrimSpace(os.Getenv("SENTRY_AUTH_TOKEN")) != "" {
 		return "env token"
 	}
-	if sentryCLIAuthenticated(context.Background(), ResolveSentryContext(cfg)) {
-		return "sentry cli"
-	}
 	if strings.TrimSpace(cfg.TokenRef) != "" {
 		return "keychain"
+	}
+	if HasSentryCLI() {
+		return "sentry cli"
 	}
 	return "unset"
 }
@@ -102,13 +102,15 @@ func ResolveSentryAuth(ctx context.Context, cfg SentryConfig) (ResolvedSentryAut
 		result.Source = "env token"
 		return result, nil
 	}
-	if sentryCLIAuthenticated(ctx, resolved) {
+
+	if strings.TrimSpace(cfg.TokenRef) != "" {
+		result.Source = "keychain"
+	}
+
+	if HasSentryCLI() {
 		result.Source = "sentry cli"
 		result.UseCLI = true
 		return result, nil
-	}
-	if strings.TrimSpace(cfg.TokenRef) != "" {
-		result.Source = "keychain"
 	}
 	return result, nil
 }
@@ -190,24 +192,39 @@ func normalizeSentryProjects(projects []string) []string {
 }
 
 func SentryCLIEnvironment(baseURL string) []string {
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "SENTRY_URL=") {
-			continue
-		}
-		env = append(env, entry)
+	// Allowlist: only pass environment variables the sentry CLI actually needs.
+	// This prevents leaking secrets (API tokens, cloud credentials, etc.) into the child process.
+	allowedPrefixes := []string{
+		"PATH=",
+		"HOME=",
+		"USER=",
+		"SHELL=",
+		"TMPDIR=",
+		"TERM=",
+		"LANG=",
+		"LC_",
+		"SENTRY_AUTH_TOKEN=",
+		"SENTRY_ORG=",
+		"SENTRY_PROJECT=",
+		"XDG_RUNTIME_DIR=",
 	}
+
+	env := make([]string, 0, len(allowedPrefixes)+1)
+	for _, entry := range os.Environ() {
+		for _, prefix := range allowedPrefixes {
+			if strings.HasPrefix(entry, prefix) {
+				// Skip SENTRY_URL — we set it explicitly below if needed.
+				if !strings.HasPrefix(entry, "SENTRY_URL=") {
+					env = append(env, entry)
+				}
+				break
+			}
+		}
+	}
+
 	if root := strings.TrimSpace(SentryRootURL(baseURL)); root != "" && root != defaultSentryRootURL {
 		env = append(env, "SENTRY_URL="+root)
 	}
-	return env
-}
 
-func sentryCLIAuthenticated(ctx context.Context, resolved ResolvedSentryContext) bool {
-	if !HasSentryCLI() {
-		return false
-	}
-	cmd := exec.CommandContext(ctx, "sentry", "auth", "status")
-	cmd.Env = SentryCLIEnvironment(resolved.BaseURL)
-	return cmd.Run() == nil
+	return env
 }

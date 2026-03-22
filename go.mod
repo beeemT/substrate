@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/AlexanderGrooff/mermaid-ascii v0.0.0-20260221123917-b5d02c35decf
-	github.com/beeemT/go-atomic v0.0.0-00010101000000-000000000000
+	github.com/beeemT/go-atomic v0.0.0-20260307162349-4cf2c3bd67f1
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v0.10.0
@@ -96,5 +96,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/beeemT/go-atomic => /Users/bt/go/src/github.com/beeemT/go-atomic

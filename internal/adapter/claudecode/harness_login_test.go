@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,9 +25,8 @@ func writeHarnessExecutable(t *testing.T, dir, name, content string) string {
 func TestRunAction_SentryLoginPassesSelfHostedURL(t *testing.T) {
 	binDir := t.TempDir()
 	seenPath := filepath.Join(binDir, "seen-url.txt")
-	writeHarnessExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"login\" ]; then\n  printf '%s' \"$SENTRY_URL\" > \"$SEEN_PATH\"\n  exit 0\nfi\nexit 1\n")
+	writeHarnessExecutable(t, binDir, "sentry", fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"login\" ]; then\n  printf '%%s' \"$SENTRY_URL\" > %q\n  exit 0\nfi\nexit 1\n", seenPath))
 	t.Setenv("PATH", binDir)
-	t.Setenv("SEEN_PATH", seenPath)
 
 	h := NewHarness(config.ClaudeCodeConfig{})
 	result, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{Action: "login_provider", Provider: "sentry", Inputs: map[string]string{"base_url": "https://sentry.example.com/self-hosted"}})
@@ -63,9 +63,8 @@ func TestRunAction_SentryLoginSurfacesFailure(t *testing.T) {
 func TestRunAction_SentryLoginClearsInheritedURLWhenUnset(t *testing.T) {
 	binDir := t.TempDir()
 	seenPath := filepath.Join(binDir, "seen-empty-url.txt")
-	writeHarnessExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"login\" ]; then\n  printf '%s' \"$SENTRY_URL\" > \"$SEEN_PATH\"\n  exit 0\nfi\nexit 1\n")
+	writeHarnessExecutable(t, binDir, "sentry", fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"login\" ]; then\n  printf '%%s' \"$SENTRY_URL\" > %q\n  exit 0\nfi\nexit 1\n", seenPath))
 	t.Setenv("PATH", binDir)
-	t.Setenv("SEEN_PATH", seenPath)
 	t.Setenv("SENTRY_URL", "https://ambient.example.com")
 
 	h := NewHarness(config.ClaudeCodeConfig{})

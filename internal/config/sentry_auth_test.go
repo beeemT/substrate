@@ -1,9 +1,9 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -22,6 +22,13 @@ func clearSentryEnv(t *testing.T) {
 	for _, key := range []string{"SENTRY_AUTH_TOKEN", "SENTRY_URL", "SENTRY_ORG", "SENTRY_PROJECT"} {
 		t.Setenv(key, "")
 	}
+}
+
+func installFakeSentryCLI(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	writeTestExecutable(t, binDir, "sentry", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
 }
 
 func TestNormalizeSentryBaseURL(t *testing.T) {
@@ -72,24 +79,62 @@ func TestSentryAuthSourceUsesEnvironmentToken(t *testing.T) {
 	}
 }
 
-func TestSentryAuthSourceUsesCLIStatusForSelfHosted(t *testing.T) {
+func TestSentryAuthSourceUsesCLIFallbackWhenPresent(t *testing.T) {
 	clearSentryEnv(t)
-	binDir := t.TempDir()
-	seenEnvPath := filepath.Join(binDir, "seen-env.txt")
-	writeTestExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  printf '%s' \"$SENTRY_URL\" > \"$SEEN_ENV_PATH\"\n  exit 0\nfi\nexit 1\n")
-	t.Setenv("PATH", binDir)
-	t.Setenv("SEEN_ENV_PATH", seenEnvPath)
-
-	cfg := SentryConfig{BaseURL: "https://sentry.example.com/self-hosted/api/0"}
-	if got := SentryAuthSource(cfg); got != "sentry cli" {
+	installFakeSentryCLI(t)
+	if got := SentryAuthSource(SentryConfig{}); got != "sentry cli" {
 		t.Fatalf("SentryAuthSource() = %q, want %q", got, "sentry cli")
 	}
-	seen, err := os.ReadFile(seenEnvPath)
+}
+
+func TestResolveSentryAuthUsesCLIWhenPresent(t *testing.T) {
+	clearSentryEnv(t)
+	installFakeSentryCLI(t)
+	resolved, err := ResolveSentryAuth(context.Background(), SentryConfig{})
 	if err != nil {
-		t.Fatalf("read seen env: %v", err)
+		t.Fatalf("ResolveSentryAuth() error = %v", err)
 	}
-	if strings.TrimSpace(string(seen)) != "https://sentry.example.com/self-hosted" {
-		t.Fatalf("SENTRY_URL = %q, want %q", strings.TrimSpace(string(seen)), "https://sentry.example.com/self-hosted")
+	if resolved.Source != "sentry cli" {
+		t.Fatalf("ResolveSentryAuth() source = %q, want %q", resolved.Source, "sentry cli")
+	}
+	if !resolved.UseCLI {
+		t.Fatal("ResolveSentryAuth().UseCLI = false, want true when CLI is available")
+	}
+	if resolved.Token != "" {
+		t.Fatalf("ResolveSentryAuth() token = %q, want empty when using CLI", resolved.Token)
+	}
+}
+
+func TestResolveSentryAuthPrefersConfigTokenOverCLI(t *testing.T) {
+	clearSentryEnv(t)
+	installFakeSentryCLI(t)
+	resolved, err := ResolveSentryAuth(context.Background(), SentryConfig{Token: "token"})
+	if err != nil {
+		t.Fatalf("ResolveSentryAuth() error = %v", err)
+	}
+	if resolved.Source != "config token" {
+		t.Fatalf("ResolveSentryAuth() source = %q, want %q", resolved.Source, "config token")
+	}
+	if resolved.Token != "token" {
+		t.Fatalf("ResolveSentryAuth() token = %q, want %q", resolved.Token, "token")
+	}
+	if resolved.UseCLI {
+		t.Fatal("ResolveSentryAuth().UseCLI = true, want false when a token is configured")
+	}
+}
+
+func TestResolveSentryAuthReportsKeychainWhenTokenRefSet(t *testing.T) {
+	clearSentryEnv(t)
+
+	resolved, err := ResolveSentryAuth(context.Background(), SentryConfig{TokenRef: "keychain:something"})
+	if err != nil {
+		t.Fatalf("ResolveSentryAuth() error = %v", err)
+	}
+	if resolved.Source != "keychain" {
+		t.Fatalf("ResolveSentryAuth() source = %q, want %q", resolved.Source, "keychain")
+	}
+	if resolved.UseCLI {
+		t.Fatal("ResolveSentryAuth().UseCLI = true, want false when TokenRef is configured")
 	}
 }
 
@@ -112,27 +157,5 @@ func TestResolveSentryContextHonorsExplicitDefaultBaseURL(t *testing.T) {
 	}
 	if !cfg.Adapters.Sentry.BaseURLExplicit {
 		t.Fatal("BaseURLExplicit = false, want true for explicit YAML base_url")
-	}
-}
-
-func TestSentryAuthSourceClearsInheritedURLForDefaultHost(t *testing.T) {
-	clearSentryEnv(t)
-	binDir := t.TempDir()
-	seenEnvPath := filepath.Join(binDir, "seen-default-env.txt")
-	writeTestExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  printf '%s' \"$SENTRY_URL\" > \"$SEEN_ENV_PATH\"\n  exit 0\nfi\nexit 1\n")
-	t.Setenv("PATH", binDir)
-	t.Setenv("SEEN_ENV_PATH", seenEnvPath)
-	t.Setenv("SENTRY_URL", "https://sentry.example.com/self-hosted")
-
-	got := SentryAuthSource(SentryConfig{BaseURL: DefaultSentryBaseURL, BaseURLExplicit: true})
-	if got != "sentry cli" {
-		t.Fatalf("SentryAuthSource() = %q, want %q", got, "sentry cli")
-	}
-	seen, err := os.ReadFile(seenEnvPath)
-	if err != nil {
-		t.Fatalf("read seen env: %v", err)
-	}
-	if strings.TrimSpace(string(seen)) != "" {
-		t.Fatalf("SENTRY_URL = %q, want empty for default host probe", strings.TrimSpace(string(seen)))
 	}
 }

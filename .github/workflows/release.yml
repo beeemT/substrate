@@ -150,6 +150,7 @@ jobs:
               end
             end
             on_linux do
+              depends_on "bubblewrap"
               on_arm do
                 url "${BASE_URL}/substrate_${VERSION_NUM}_linux_arm64.tar.gz"
                 sha256 "${SHA256_LINUX_ARM64}"

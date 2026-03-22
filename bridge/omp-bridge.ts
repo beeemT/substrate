@@ -4,6 +4,7 @@
  * JSON-line protocol over stdio:
  *
  * Go → Bun (stdin):
+ *   - {"type":"init","system_prompt":"..."} — optional init message (must be first if present)
  *   - {"type":"prompt","text":"..."} — initial prompt or continuation
  *   - {"type":"message","text":"..."} — follow-up message (human iteration)
  *   - {"type":"answer","text":"..."} — resolve pending ask_foreman tool call
@@ -17,11 +18,10 @@ import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
 const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL ?? "xhigh";
-const systemPromptEnv = process.env.SUBSTRATE_SYSTEM_PROMPT ?? "";
 const allowPushEnv = process.env.SUBSTRATE_ALLOW_PUSH ?? "false";
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 
-const systemPrompt = systemPromptEnv ? Buffer.from(systemPromptEnv, "base64").toString("utf-8") : undefined;
+let systemPrompt: string | undefined;
 const allowPush = allowPushEnv === "true";
 
 const agentToolNames = mode === "agent"
@@ -257,6 +257,30 @@ async function initSession(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	const rl = createInterface({ input: process.stdin });
+
+	// Read optional init message before starting session.
+	// The Go harness sends {"type":"init",...} as the first line when a system
+	// prompt is configured; otherwise the first line is a regular command.
+	let bufferedLine: string | null = null;
+	const firstLine = await new Promise<string | null>((resolve) => {
+		rl.once("line", resolve);
+		rl.once("close", () => resolve(null));
+	});
+
+	if (firstLine !== null) {
+		try {
+			const parsed = JSON.parse(firstLine);
+			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && parsed.type === "init") {
+				systemPrompt = parsed.system_prompt || undefined;
+			} else {
+				bufferedLine = firstLine;
+			}
+		} catch {
+			bufferedLine = firstLine;
+		}
+	}
+
 	try {
 		await initSession();
 	} catch (err) {
@@ -265,7 +289,9 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const rl = createInterface({ input: process.stdin });
+	if (bufferedLine !== null) {
+		rl.emit("line", bufferedLine);
+	}
 
 	rl.on("line", async (line: string) => {
 		let msg: Record<string, unknown>;

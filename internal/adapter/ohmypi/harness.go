@@ -5,10 +5,11 @@ package omp
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,13 +142,44 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 			cmd = exec.CommandContext(ctx, "sandbox-exec", "-p", profile, bridgeRuntime.Path)
 		}
 	} else {
-		// Linux: use unshare for mount namespace isolation
-		// This is a simplified version; production would need more sophisticated setup
-		// TODO: Implement Linux namespace isolation with unshare --mount
-		if bridgeRuntime.NeedsBun {
-			cmd = exec.CommandContext(ctx, bunPath, "run", bridgeRuntime.Path)
+		// Linux: use bubblewrap for filesystem + PID isolation when available
+		sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
+		if err != nil {
+			return nil, fmt.Errorf("create session temp dir: %w", err)
+		}
+
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("get user home dir: %w", err)
+		}
+		ompDir := filepath.Join(homeDir, ".omp")
+
+		bwrapPath, lookErr := exec.LookPath("bwrap")
+		if lookErr != nil {
+			slog.Warn("bubblewrap (bwrap) not found; running bridge without sandbox", "error", lookErr)
+			if bridgeRuntime.NeedsBun {
+				cmd = exec.CommandContext(ctx, bunPath, "run", bridgeRuntime.Path)
+			} else {
+				cmd = exec.CommandContext(ctx, bridgeRuntime.Path)
+			}
 		} else {
-			cmd = exec.CommandContext(ctx, bridgeRuntime.Path)
+			bwrapArgs := []string{
+				"--ro-bind", "/", "/",
+				"--bind", workDir, workDir,
+				"--bind", sessionTmpDir, sessionTmpDir,
+				"--bind", ompDir, ompDir,
+				"--dev", "/dev",
+				"--proc", "/proc",
+				"--unshare-pid",
+				"--die-with-parent",
+			}
+			if bridgeRuntime.NeedsBun {
+				bwrapArgs = append(bwrapArgs, "--bind", bunCacheDir, bunCacheDir)
+				bwrapArgs = append(bwrapArgs, bunPath, "run", bridgeRuntime.Path)
+			} else {
+				bwrapArgs = append(bwrapArgs, bridgeRuntime.Path)
+			}
+			cmd = exec.CommandContext(ctx, bwrapPath, bwrapArgs...)
 		}
 	}
 
@@ -165,12 +197,6 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 		"SUBSTRATE_WORKTREE_PATH="+workDir,
 		"SUBSTRATE_SESSION_LOG_PATH="+filepath.Join(sessionLogDir, opts.SessionID+".log"),
 	)
-
-	// Encode system prompt as base64 to avoid escaping issues
-	if opts.SystemPrompt != "" {
-		encoded := base64.StdEncoding.EncodeToString([]byte(opts.SystemPrompt))
-		env = append(env, "SUBSTRATE_SYSTEM_PROMPT="+encoded)
-	}
 
 	if opts.ResumeSessionFile != "" {
 		env = append(env, "SUBSTRATE_RESUME_SESSION_FILE="+opts.ResumeSessionFile)
@@ -237,6 +263,22 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	go session.readEvents()
 	go session.readStderr()
 
+	// Send init message with system prompt (avoids exposing prompt in /proc/pid/environ)
+	if opts.SystemPrompt != "" {
+		initMsg := bridgeInitMsg{Type: "init", SystemPrompt: opts.SystemPrompt}
+		data, err := json.Marshal(initMsg)
+		if err != nil {
+			session.Abort(ctx)
+			return nil, fmt.Errorf("marshal init message: %w", err)
+		}
+		session.mu.Lock()
+		_, err = session.stdin.Write(append(data, '\n'))
+		session.mu.Unlock()
+		if err != nil {
+			session.Abort(ctx)
+			return nil, fmt.Errorf("send init message: %w", err)
+		}
+	}
 	// Send initial prompt if provided (agent mode)
 	if opts.Mode == adapter.SessionModeAgent && opts.UserPrompt != "" {
 		if err := session.sendPrompt(opts.UserPrompt); err != nil {
@@ -253,6 +295,12 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 type bridgeMsg struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// bridgeInitMsg is sent before any prompt to configure the session.
+type bridgeInitMsg struct {
+	Type         string `json:"type"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
 }
 
 func resolveBunExecutable(configured string) (string, error) {
