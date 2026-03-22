@@ -391,8 +391,30 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 			} else {
 				resultLabel = st.SectionLabel.Render("Result:")
 			}
-			// "Result: " is 8 visible chars
-			bodyLines = append(bodyLines, resultLabel+" "+ansi.Truncate(singleLine(block.toolResult), max(1, innerW-8), "…"))
+			resultLines := strings.Split(strings.TrimRight(block.toolResult, "\n"), "\n")
+			if len(resultLines) <= 1 {
+				// Single-line result: compact "Result: <value>" format.
+				// "Result: " is 8 visible chars.
+				bodyLines = append(bodyLines, resultLabel+" "+ansi.Truncate(singleLine(block.toolResult), max(1, innerW-8), "…"))
+			} else {
+				// Multi-line result: label on its own line then content lines with
+				// the same 4/12 limit used for tool output.
+				bodyLines = append(bodyLines, resultLabel)
+				limit := 4
+				if verbose {
+					limit = 12
+				}
+				shown := resultLines
+				remaining := 0
+				if len(resultLines) > limit {
+					shown = resultLines[:limit]
+					remaining = len(resultLines) - limit
+				}
+				bodyLines = append(bodyLines, shown...)
+				if remaining > 0 {
+					bodyLines = append(bodyLines, st.Muted.Render(fmt.Sprintf("… %d more lines", remaining)))
+				}
+			}
 		}
 	}
 

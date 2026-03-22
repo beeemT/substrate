@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -326,6 +327,155 @@ func TestRenderTranscriptToolOutputExpandedVerbose(t *testing.T) {
 	// Verbose output should be longer (more content shown) than collapsed
 	if len(verbose) <= len(collapsed) {
 		t.Errorf("expected verbose output longer than collapsed: verbose=%d collapsed=%d", len(verbose), len(collapsed))
+	}
+}
+
+func TestRenderTranscriptToolResultMultilineRendersLines(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// read result with 3 lines: all should appear in the rendered output.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading file"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "1#AA:first line\n2#BB:second line\n3#CC:third line"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "first line") {
+		t.Errorf("multi-line result: expected line 1 present, got: %q", plain)
+	}
+	if !strings.Contains(plain, "second line") {
+		t.Errorf("multi-line result: expected line 2 present, got: %q", plain)
+	}
+	if !strings.Contains(plain, "third line") {
+		t.Errorf("multi-line result: expected line 3 present, got: %q", plain)
+	}
+	// Content must NOT be collapsed to one line: three distinct content-bearing
+	// lines must be present (plus card chrome).
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	contentLines := 0
+	for _, l := range lines {
+		if strings.Contains(ansi.Strip(l), "#") {
+			contentLines++
+		}
+	}
+	if contentLines < 3 {
+		t.Errorf("multi-line result: expected 3 content lines visible, got %d in:\n%s", contentLines, plain)
+	}
+}
+
+func TestRenderTranscriptToolResultMultilineTruncatedCollapsed(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// 7 lines: non-verbose cap is 4, so 3 must be hidden behind overflow indicator.
+	var lines []string
+	for i := range 7 {
+		lines = append(lines, fmt.Sprintf("%d: content line", i+1))
+	}
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: strings.Join(lines, "\n")},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "more lines") {
+		t.Errorf("multi-line result truncated: expected overflow indicator, got: %q", plain)
+	}
+	if strings.Contains(plain, "7: content line") {
+		t.Errorf("multi-line result truncated: line 7 should not be visible in non-verbose mode, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptToolResultMultilineVerboseShows12(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// 13 lines: verbose cap is 12, so the last line is hidden.
+	var lines []string
+	for i := range 13 {
+		lines = append(lines, fmt.Sprintf("%d: verbose line", i+1))
+	}
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: strings.Join(lines, "\n")},
+	}
+	collapsed := RenderTranscript(st, entries, 80, false, true)
+	verbose := RenderTranscript(st, entries, 80, true, true)
+	verbosePlain := ansi.Strip(verbose)
+	// Line 12 visible, line 13 hidden behind overflow indicator.
+	if !strings.Contains(verbosePlain, "12: verbose line") {
+		t.Errorf("verbose multi-line result: expected line 12 visible, got: %q", verbosePlain)
+	}
+	if strings.Contains(verbosePlain, "13: verbose line") {
+		t.Errorf("verbose multi-line result: line 13 should not be visible at cap 12, got: %q", verbosePlain)
+	}
+	// Verbose output longer than collapsed.
+	if len(verbose) <= len(collapsed) {
+		t.Errorf("verbose multi-line result: expected verbose longer than collapsed: verbose=%d collapsed=%d", len(verbose), len(collapsed))
+	}
+}
+
+func TestRenderTranscriptToolResultSingleLineStaysCompact(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// A single-line result must render as "Result: <value>" on one line.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "bash", Intent: "Running"},
+		{Kind: sessionlog.KindToolResult, Tool: "bash", Text: "exit 0"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Result:") {
+		t.Errorf("single-line result: expected 'Result:' label, got: %q", plain)
+	}
+	if !strings.Contains(plain, "exit 0") {
+		t.Errorf("single-line result: expected result text, got: %q", plain)
+	}
+	// 'Result:' and 'exit 0' must be on the same line.
+	for _, l := range strings.Split(output, "\n") {
+		if strings.Contains(ansi.Strip(l), "Result:") {
+			if !strings.Contains(ansi.Strip(l), "exit 0") {
+				t.Errorf("single-line result: 'Result:' and value must be on same line, got line: %q", l)
+			}
+		}
+	}
+}
+
+func TestRenderTranscriptToolResultTrailingNewlineIgnored(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// Result with a trailing newline must not produce a spurious blank line that
+	// triggers the multi-line path with an empty last entry.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "bash"},
+		{Kind: sessionlog.KindToolResult, Tool: "bash", Text: "ok\n"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "ok") {
+		t.Errorf("trailing-newline result: expected 'ok', got: %q", plain)
+	}
+	// Must NOT show an overflow indicator — only one real line of content.
+	if strings.Contains(plain, "more lines") {
+		t.Errorf("trailing-newline result: spurious overflow indicator, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptToolResultMultilineWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 40
+	st := testStyles()
+	// Long lines in a multi-line result must be truncated to fit the card width.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read"},
+		{
+			Kind: sessionlog.KindToolResult, Tool: "read",
+			Text: "short\na very long line that exceeds the forty character card width limit comfortably\nanother line",
+		},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for _, line := range strings.Split(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("multi-line result: line width %d > %d: %q", w, width, line)
+		}
 	}
 }
 
