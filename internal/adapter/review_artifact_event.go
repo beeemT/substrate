@@ -46,7 +46,7 @@ func PersistGithubPR(ctx context.Context, repos ReviewArtifactRepos, workspaceID
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
-	if repos.GithubPRs == nil || repos.SessionArtifacts == nil {
+	if repos.GithubPRs == nil || repos.SessionArtifacts == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
 	now := time.Now()
@@ -89,7 +89,7 @@ func PersistGitlabMR(ctx context.Context, repos ReviewArtifactRepos, workspaceID
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
-	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil || iid == 0 {
+	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil || iid == 0 || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
 	now := time.Now()
