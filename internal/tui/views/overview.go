@@ -1550,15 +1550,17 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 			for _, link := range links {
 				switch link.Provider {
 				case "github":
-					if pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID); err == nil {
-						external.Reviews = append(external.Reviews, OverviewReviewRow{
-							Kind:     "PR",
-							RepoName: pr.Owner + "/" + pr.Repo,
-							Ref:      fmt.Sprintf("#%d", pr.Number),
-							URL:      pr.HTMLURL,
-							State:    pr.State,
-							Branch:   pr.HeadBranch,
-						})
+					if a.svcs.GithubPRs != nil {
+						if pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID); err == nil {
+							external.Reviews = append(external.Reviews, OverviewReviewRow{
+								Kind:     "PR",
+								RepoName: pr.Owner + "/" + pr.Repo,
+								Ref:      fmt.Sprintf("#%d", pr.Number),
+								URL:      pr.HTMLURL,
+								State:    pr.State,
+								Branch:   pr.HeadBranch,
+							})
+						}
 					}
 				case "gitlab":
 					if a.svcs.GitlabMRs != nil {

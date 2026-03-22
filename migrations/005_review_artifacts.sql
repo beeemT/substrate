@@ -86,13 +86,20 @@ WHERE e.event_type = 'review.artifact_recorded'
 ORDER BY e.created_at DESC;
 
 -- Link table: GitHub artifacts
+-- Use a subquery to find the canonical PR row ID (the Upsert above may have
+-- picked a different event's ID than this one).  Also guard against deleted
+-- workspaces / work_items to prevent FK violations (INSERT OR IGNORE only
+-- suppresses UNIQUE / NOT NULL / CHECK, not FK errors).
 INSERT OR IGNORE INTO session_review_artifacts (id, workspace_id, work_item_id, provider, provider_artifact_id, created_at, updated_at)
 SELECT
     e.id || ':link',
     e.workspace_id,
     json_extract(e.payload, '$.work_item_id'),
     'github',
-    e.id,
+    (SELECT gp.id FROM github_pull_requests gp
+     WHERE gp.owner = SUBSTR(json_extract(e.payload, '$.artifact.repo_name'), 1, INSTR(json_extract(e.payload, '$.artifact.repo_name'), '/') - 1)
+       AND gp.repo  = SUBSTR(json_extract(e.payload, '$.artifact.repo_name'), INSTR(json_extract(e.payload, '$.artifact.repo_name'), '/') + 1)
+       AND gp.number = CAST(SUBSTR(json_extract(e.payload, '$.artifact.ref'), 2) AS INTEGER)),
     e.created_at,
     COALESCE(json_extract(e.payload, '$.artifact.updated_at'), e.created_at)
 FROM system_events e
@@ -102,6 +109,8 @@ WHERE e.event_type = 'review.artifact_recorded'
   AND INSTR(json_extract(e.payload, '$.artifact.repo_name'), '/') > 0
   AND e.workspace_id IS NOT NULL
   AND json_extract(e.payload, '$.work_item_id') IS NOT NULL
+  AND e.workspace_id IN (SELECT id FROM workspaces)
+  AND json_extract(e.payload, '$.work_item_id') IN (SELECT id FROM work_items)
 ORDER BY e.created_at DESC;
 
 -- Link table: GitLab artifacts
@@ -111,7 +120,9 @@ SELECT
     e.workspace_id,
     json_extract(e.payload, '$.work_item_id'),
     'gitlab',
-    e.id,
+    (SELECT gm.id FROM gitlab_merge_requests gm
+     WHERE gm.project_path = json_extract(e.payload, '$.artifact.repo_name')
+       AND gm.iid = CAST(SUBSTR(json_extract(e.payload, '$.artifact.ref'), 2) AS INTEGER)),
     e.created_at,
     COALESCE(json_extract(e.payload, '$.artifact.updated_at'), e.created_at)
 FROM system_events e
@@ -120,4 +131,6 @@ WHERE e.event_type = 'review.artifact_recorded'
   AND json_extract(e.payload, '$.artifact.ref') LIKE '!%'
   AND e.workspace_id IS NOT NULL
   AND json_extract(e.payload, '$.work_item_id') IS NOT NULL
+  AND e.workspace_id IN (SELECT id FROM workspaces)
+  AND json_extract(e.payload, '$.work_item_id') IN (SELECT id FROM work_items)
 ORDER BY e.created_at DESC;
