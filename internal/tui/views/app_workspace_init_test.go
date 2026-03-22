@@ -275,3 +275,22 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 		t.Fatalf("sessions = %#v, want current workspace data preserved", updated.sessions)
 	}
 }
+
+func TestApp_InitIncludesReconciliation(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		InstanceID:    "inst-1",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+
+	cmd := app.Init()
+	if cmd == nil {
+		t.Fatal("Init() must return commands when workspace is set (includes reconciliation)")
+	}
+}

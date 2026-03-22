@@ -212,6 +212,8 @@ func (a App) Init() tea.Cmd {
 		cmds = append(cmds,
 			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 			LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
+			LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+			ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 		)
 	}
 

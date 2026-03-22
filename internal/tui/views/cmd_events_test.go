@@ -342,3 +342,55 @@ func runCmdGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %s: %v (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 }
+
+func TestReconcileOrphanedTasksCmd_InterruptsOrphanedRunningSession(t *testing.T) {
+	t.Parallel()
+
+	orphanedSessionID := "sess-orphaned"
+	ownedSessionID := "sess-owned"
+	workspaceID := "ws-1"
+	currentInstanceID := "inst-current"
+
+	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
+		orphanedSessionID: {
+			ID:          orphanedSessionID,
+			WorkspaceID: workspaceID,
+			Status:      domain.AgentSessionRunning,
+			// OwnerInstanceID is nil — orphaned
+		},
+		ownedSessionID: {
+			ID:              ownedSessionID,
+			WorkspaceID:     workspaceID,
+			Status:          domain.AgentSessionRunning,
+			OwnerInstanceID: &currentInstanceID,
+		},
+	}}
+	instanceRepo := &stubInstanceRepo{byID: map[string]domain.SubstrateInstance{
+		currentInstanceID: {
+			ID:            currentInstanceID,
+			WorkspaceID:   workspaceID,
+			LastHeartbeat: time.Now(),
+		},
+	}}
+
+	sessionSvc := service.NewTaskService(sessionRepo)
+	instanceSvc := service.NewInstanceService(instanceRepo)
+
+	cmd := ReconcileOrphanedTasksCmd(sessionSvc, instanceSvc, workspaceID, currentInstanceID)
+	if cmd == nil {
+		t.Fatal("ReconcileOrphanedTasksCmd must return a cmd")
+	}
+	cmd() // Execute the command synchronously.
+
+	// Orphaned session should now be interrupted.
+	orphaned := sessionRepo.sessions[orphanedSessionID]
+	if orphaned.Status != domain.AgentSessionInterrupted {
+		t.Fatalf("orphaned session status = %q, want %q", orphaned.Status, domain.AgentSessionInterrupted)
+	}
+
+	// Owned session should remain running.
+	owned := sessionRepo.sessions[ownedSessionID]
+	if owned.Status != domain.AgentSessionRunning {
+		t.Fatalf("owned session status = %q, want %q (should not be interrupted)", owned.Status, domain.AgentSessionRunning)
+	}
+}
