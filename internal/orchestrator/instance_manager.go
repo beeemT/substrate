@@ -188,7 +188,7 @@ func (m *InstanceManager) publishInterrupted(ctx context.Context, sessionID stri
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionInterrupted),
 		WorkspaceID: m.workspaceID,
-		Payload:     marshalJSONOrEmpty(map[string]any{"session_id": sessionID}),
+		Payload:     marshalJSONOrEmpty(string(domain.EventAgentSessionInterrupted), map[string]any{"session_id": sessionID}),
 		CreatedAt:   time.Now(),
 	})
 }

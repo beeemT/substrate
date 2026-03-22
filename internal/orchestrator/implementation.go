@@ -227,12 +227,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	// Completed sub-plans are left alone — only failed ones need re-execution.
 	for i := range subPlans {
 		if subPlans[i].Status == domain.SubPlanFailed {
-			subPlans[i].Status = domain.SubPlanPending
-			subPlans[i].UpdatedAt = time.Now()
-			if err := s.subPlanRepo.Update(ctx, subPlans[i]); err != nil {
-				slog.Warn("failed to reset failed sub-plan to pending", "error", err,
-					"sub_plan_id", subPlans[i].ID)
-			}
+			s.persistSubPlanStatus(ctx, &subPlans[i], domain.SubPlanPending)
 		}
 	}
 
@@ -386,11 +381,7 @@ func (s *ImplementationService) executeSubPlan(
 	state.StartSubPlan(subPlan.ID, time.Now().UnixNano())
 
 	// Update sub-plan status using the full struct
-	subPlan.Status = domain.SubPlanInProgress
-	subPlan.UpdatedAt = time.Now()
-	if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-		slog.Warn("failed to update sub-plan status", "error", err, "sub_plan_id", subPlan.ID)
-	}
+	s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanInProgress)
 
 	// Look up pre-created worktree path (created by prepareWorktrees before fan-out).
 	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
@@ -542,36 +533,20 @@ func (s *ImplementationService) executeSubPlan(
 
 		if outcome.Passed {
 			state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
-			subPlan.Status = domain.SubPlanCompleted
-			subPlan.UpdatedAt = time.Now()
-			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-				slog.Warn("failed to update sub-plan status to completed", "error", err)
-			}
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
 		} else if outcome.Failed {
 			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
-			subPlan.Status = domain.SubPlanFailed
-			subPlan.UpdatedAt = time.Now()
-			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-				slog.Warn("failed to update sub-plan status to failed", "error", err)
-			}
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		} else if outcome.Escalated {
 			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
-			subPlan.Status = domain.SubPlanFailed
-			subPlan.UpdatedAt = time.Now()
-			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-				slog.Warn("failed to update sub-plan status to failed after escalation", "error", err)
-			}
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		}
 		return result, nil
 	}
 
 	// No review pipeline — mark sub-plan completed immediately.
 	state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
-	subPlan.Status = domain.SubPlanCompleted
-	subPlan.UpdatedAt = time.Now()
-	if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
-		slog.Warn("failed to update sub-plan status to completed", "error", err)
-	}
+	s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
 
 	return result, nil
 }
@@ -851,7 +826,7 @@ func (s *ImplementationService) ensureWorktree(
 				ID:          domain.NewID(),
 				EventType:   string(domain.EventWorktreeReused),
 				WorkspaceID: workspace.ID,
-				Payload:     marshalJSONOrEmpty(reusedPayload),
+				Payload:     marshalJSONOrEmpty(string(domain.EventWorktreeReused), reusedPayload),
 				CreatedAt:   time.Now(),
 			}
 			if err := s.eventBus.Publish(ctx, reusedEvent); err != nil {
@@ -876,7 +851,7 @@ func (s *ImplementationService) ensureWorktree(
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventWorktreeCreating),
 		WorkspaceID: workspace.ID,
-		Payload:     marshalJSONOrEmpty(creatingPayload),
+		Payload:     marshalJSONOrEmpty(string(domain.EventWorktreeCreating), creatingPayload),
 		CreatedAt:   time.Now(),
 	}
 	if err := s.eventBus.Publish(ctx, creatingEvent); err != nil {
@@ -905,7 +880,7 @@ func (s *ImplementationService) ensureWorktree(
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventWorktreeCreated),
 		WorkspaceID: workspace.ID,
-		Payload:     marshalJSONOrEmpty(createdPayload),
+		Payload:     marshalJSONOrEmpty(string(domain.EventWorktreeCreated), createdPayload),
 		CreatedAt:   time.Now(),
 	}
 	if err := s.eventBus.Publish(ctx, createdEvent); err != nil {
@@ -1047,7 +1022,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 				ID:          domain.NewID(),
 				EventType:   evt.Type,
 				WorkspaceID: workspaceID,
-				Payload:     marshalJSONOrEmpty(evt.Payload),
+				Payload:     marshalJSONOrEmpty(evt.Type, evt.Payload),
 				CreatedAt:   time.Now(),
 			}
 			if err := s.eventBus.Publish(ctx, sysEvent); err != nil {
@@ -1122,102 +1097,79 @@ func trackerRefsFromMetadata(metadata map[string]any) []domain.TrackerReference 
 	return refs
 }
 
+// publishEvent constructs a SystemEvent and publishes it to the event bus.
+func (s *ImplementationService) publishEvent(ctx context.Context, eventType domain.EventType, workspaceID string, payload any) error {
+	evt := domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(eventType),
+		WorkspaceID: workspaceID,
+		Payload:     marshalJSONOrEmpty(string(eventType), payload),
+		CreatedAt:   time.Now(),
+	}
+	return s.eventBus.Publish(ctx, evt)
+}
+
+type sessionEventPayload struct {
+	SessionID    string           `json:"session_id"`
+	WorkItemID   string           `json:"work_item_id"`
+	Phase        domain.TaskPhase `json:"phase"`
+	SubPlanID    string           `json:"sub_plan_id"`
+	Repository   string           `json:"repository"`
+	WorktreePath string           `json:"worktree_path"`
+}
+
+func newSessionEventPayload(session *domain.Task) sessionEventPayload {
+	return sessionEventPayload{
+		SessionID:    session.ID,
+		WorkItemID:   session.WorkItemID,
+		Phase:        session.Phase,
+		SubPlanID:    session.SubPlanID,
+		Repository:   session.RepositoryName,
+		WorktreePath: session.WorktreePath,
+	}
+}
+
 func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {
-	payload := struct {
+	return s.publishEvent(ctx, domain.EventImplementationStarted, workspaceID, struct {
 		PlanID   string          `json:"plan_id"`
 		WorkItem *domain.Session `json:"work_item"`
 	}{
 		PlanID:   plan.ID,
 		WorkItem: workItem,
-	}
-	evt := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventImplementationStarted),
-		WorkspaceID: workspaceID,
-		Payload:     marshalJSONOrEmpty(payload),
-		CreatedAt:   time.Now(),
-	}
-	return s.eventBus.Publish(ctx, evt)
+	})
 }
 
 func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	payload := struct {
-		SessionID    string           `json:"session_id"`
-		WorkItemID   string           `json:"work_item_id"`
-		Phase        domain.TaskPhase `json:"phase"`
-		SubPlanID    string           `json:"sub_plan_id"`
-		Repository   string           `json:"repository"`
-		WorktreePath string           `json:"worktree_path"`
-	}{
-		SessionID:    session.ID,
-		WorkItemID:   session.WorkItemID,
-		Phase:        session.Phase,
-		SubPlanID:    session.SubPlanID,
-		Repository:   session.RepositoryName,
-		WorktreePath: session.WorktreePath,
-	}
-	evt := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionStarted),
-		WorkspaceID: workspaceID,
-		Payload:     marshalJSONOrEmpty(payload),
-		CreatedAt:   time.Now(),
-	}
-	return s.eventBus.Publish(ctx, evt)
+	return s.publishEvent(ctx, domain.EventAgentSessionStarted, workspaceID, newSessionEventPayload(session))
 }
 
 func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	payload := struct {
-		SessionID    string           `json:"session_id"`
-		WorkItemID   string           `json:"work_item_id"`
-		Phase        domain.TaskPhase `json:"phase"`
-		SubPlanID    string           `json:"sub_plan_id"`
-		Repository   string           `json:"repository"`
-		WorktreePath string           `json:"worktree_path"`
-	}{
-		SessionID:    session.ID,
-		WorkItemID:   session.WorkItemID,
-		Phase:        session.Phase,
-		SubPlanID:    session.SubPlanID,
-		Repository:   session.RepositoryName,
-		WorktreePath: session.WorktreePath,
-	}
-	evt := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionCompleted),
-		WorkspaceID: workspaceID,
-		Payload:     marshalJSONOrEmpty(payload),
-		CreatedAt:   time.Now(),
-	}
-	return s.eventBus.Publish(ctx, evt)
+	return s.publishEvent(ctx, domain.EventAgentSessionCompleted, workspaceID, newSessionEventPayload(session))
 }
 
 func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
 	payload := struct {
-		SessionID    string           `json:"session_id"`
-		WorkItemID   string           `json:"work_item_id"`
-		Phase        domain.TaskPhase `json:"phase"`
-		SubPlanID    string           `json:"sub_plan_id"`
-		Repository   string           `json:"repository"`
-		WorktreePath string           `json:"worktree_path"`
-		Error        string           `json:"error"`
+		sessionEventPayload
+		Error string `json:"error"`
 	}{
-		SessionID:    session.ID,
-		WorkItemID:   session.WorkItemID,
-		Phase:        session.Phase,
-		SubPlanID:    session.SubPlanID,
-		Repository:   session.RepositoryName,
-		WorktreePath: session.WorktreePath,
-		Error:        errMsg,
+		sessionEventPayload: newSessionEventPayload(session),
+		Error:               errMsg,
 	}
-	evt := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionFailed),
-		WorkspaceID: workspaceID,
-		Payload:     marshalJSONOrEmpty(payload),
-		CreatedAt:   time.Now(),
+	return s.publishEvent(ctx, domain.EventAgentSessionFailed, workspaceID, payload)
+}
+
+// persistSubPlanStatus sets the sub-plan status, timestamps the update, and
+// persists it. Errors are logged as warnings since the in-memory state is
+// already consistent and the next Implement call will reconcile.
+func (s *ImplementationService) persistSubPlanStatus(ctx context.Context, sp *domain.TaskPlan, status domain.TaskPlanStatus) {
+	sp.Status = status
+	sp.UpdatedAt = time.Now()
+	if err := s.subPlanRepo.Update(ctx, *sp); err != nil {
+		slog.Warn("failed to persist sub-plan status",
+			"error", err,
+			"sub_plan_id", sp.ID,
+			"status", status)
 	}
-	return s.eventBus.Publish(ctx, evt)
 }
 
 // Helper functions
@@ -1255,11 +1207,12 @@ func completeSessionDurably(parent context.Context, sessionSvc *service.TaskServ
 	return sessionSvc.Complete(cleanupCtx, sessionID)
 }
 
-func marshalJSONOrEmpty(v any) string {
+func marshalJSONOrEmpty(eventType string, v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		slog.Error("marshalJSONOrEmpty: failed to marshal event payload",
-			"type", fmt.Sprintf("%T", v),
+		slog.Warn("failed to marshal event payload",
+			"event_type", eventType,
+			"payload_type", fmt.Sprintf("%T", v),
 			"error", err)
 		return "{}"
 	}

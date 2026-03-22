@@ -143,7 +143,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventAgentSessionResumed),
 			WorkspaceID: interrupted.WorkspaceID,
-			Payload: marshalJSONOrEmpty(map[string]any{
+			Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
 				"old_session_id": interrupted.ID,
 				"new_session_id": newSession.ID,
 				"sub_plan_id":    interrupted.SubPlanID,
@@ -337,7 +337,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventAgentSessionResumed),
 			WorkspaceID: failedTask.WorkspaceID,
-			Payload: marshalJSONOrEmpty(map[string]any{
+			Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
 				"old_session_id": failedTask.ID,
 				"new_session_id": newTask.ID,
 				"sub_plan_id":    failedTask.SubPlanID,

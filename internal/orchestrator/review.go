@@ -1,12 +1,10 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -150,7 +148,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventReviewStarted),
 			WorkspaceID: session.WorkspaceID,
-			Payload: marshalJSONOrEmpty(map[string]any{
+			Payload: marshalJSONOrEmpty(string(domain.EventReviewStarted), map[string]any{
 				"session_id":   session.ID,
 				"cycle_number": cycleNumber,
 				"cycle_id":     cycle.ID,
@@ -201,7 +199,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 
 	// Emit review outcome events
 	if p.eventBus != nil {
-		payload := marshalJSONOrEmpty(map[string]any{
+		payload := marshalJSONOrEmpty("review.outcome", map[string]any{
 			"session_id":     session.ID,
 			"cycle_number":   cycleNumber,
 			"cycle_id":       cycle.ID,
@@ -555,35 +553,11 @@ func (p *ReviewPipeline) readSessionOutputFromLog(_ context.Context, sessionID s
 	}
 
 	logPath := filepath.Join(globalDir, "sessions", sessionID+".log")
-	if _, err := os.Stat(logPath); err != nil {
-		return "", fmt.Errorf("session log file not found: %w", err)
-	}
 
-	file, err := os.Open(logPath)
+	entries, err := sessionlog.ReadFile(logPath)
 	if err != nil {
-		return "", fmt.Errorf("open session log: %w", err)
-	}
-	defer file.Close()
-
-	var output strings.Builder
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		entry, ok := sessionlog.ParseLine(scanner.Text())
-		if !ok {
-			continue
-		}
-		switch entry.Kind {
-		case sessionlog.KindAssistant:
-			output.WriteString(entry.Text)
-		case sessionlog.KindPlain:
-			output.WriteString(strings.TrimSpace(entry.Text))
-			output.WriteString("\n")
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("read session log: %w", err)
 	}
 
-	return output.String(), nil
+	return sessionlog.FlattenAssistantOutput(entries), nil
 }

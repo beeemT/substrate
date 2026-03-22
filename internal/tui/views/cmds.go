@@ -2,7 +2,6 @@ package views
 
 import (
 	"bufio"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -251,19 +250,7 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 }
 
 func scanSessionInteraction(r io.Reader) ([]sessionlog.Entry, error) {
-	var entries []sessionlog.Entry
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
-	for scanner.Scan() {
-		if entry, ok := sessionlog.ParseLine(scanner.Text()); ok {
-			entries = append(entries, entry)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return entries, nil
+	return sessionlog.ScanEntries(r)
 }
 
 func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
@@ -285,27 +272,7 @@ func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 }
 
 func readSessionInteractionFile(path string) ([]sessionlog.Entry, error) {
-	if strings.HasSuffix(path, ".gz") {
-		file, err := os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("open session log %s: %w", path, err)
-		}
-		defer file.Close()
-		gz, err := gzip.NewReader(file)
-		if err != nil {
-			return nil, fmt.Errorf("open compressed session log %s: %w", path, err)
-		}
-		defer gz.Close()
-
-		return scanSessionInteraction(gz)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open session log %s: %w", path, err)
-	}
-	defer file.Close()
-
-	return scanSessionInteraction(file)
+	return sessionlog.ReadFile(path)
 }
 
 func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
