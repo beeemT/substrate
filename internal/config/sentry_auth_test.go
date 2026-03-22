@@ -125,6 +125,7 @@ func TestResolveSentryAuthPrefersConfigTokenOverCLI(t *testing.T) {
 
 func TestResolveSentryAuthReportsKeychainWhenTokenRefSet(t *testing.T) {
 	clearSentryEnv(t)
+	t.Setenv("PATH", t.TempDir()) // ensure no sentry CLI on PATH
 
 	resolved, err := ResolveSentryAuth(context.Background(), SentryConfig{TokenRef: "keychain:something"})
 	if err != nil {
