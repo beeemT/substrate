@@ -17,7 +17,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -50,9 +52,10 @@ type branchEntry struct {
 
 // GlabAdapter implements adapter.RepoLifecycleAdapter using the glab CLI.
 type GlabAdapter struct {
-	cfg        config.GlabConfig
-	runner     commandRunner
-	repos     coreadapter.ReviewArtifactRepos
+	cfg          config.GlabConfig
+	runner       commandRunner
+	repos        coreadapter.ReviewArtifactRepos
+	workspaceDir string
 
 	workspaceID string
 
@@ -62,21 +65,22 @@ type GlabAdapter struct {
 
 // New creates a GlabAdapter with the given configuration.
 func New(cfg config.GlabConfig) *GlabAdapter {
-	return newWithRunner(cfg, coreadapter.ReviewArtifactRepos{}, execRunner)
+	return newWithRunner(cfg, coreadapter.ReviewArtifactRepos{}, "", execRunner)
 }
 
 // NewWithEventRepo creates a GlabAdapter that persists durable MR metadata.
-func NewWithEventRepo(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos) *GlabAdapter {
-	return newWithRunner(cfg, repos, execRunner)
+func NewWithEventRepo(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos, workspaceDir string) *GlabAdapter {
+	return newWithRunner(cfg, repos, workspaceDir, execRunner)
 }
 
 // newWithRunner creates a GlabAdapter with an injectable commandRunner (for tests).
-func newWithRunner(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos, runner commandRunner) *GlabAdapter {
+func newWithRunner(cfg config.GlabConfig, repos coreadapter.ReviewArtifactRepos, workspaceDir string, runner commandRunner) *GlabAdapter {
 	return &GlabAdapter{
-		cfg:     cfg,
-		runner:  runner,
-		repos:   repos,
-		tracked: make(map[string][]branchEntry),
+		cfg:          cfg,
+		runner:       runner,
+		repos:        repos,
+		workspaceDir: workspaceDir,
+		tracked:      make(map[string][]branchEntry),
 	}
 }
 
@@ -596,7 +600,6 @@ func renderGitLabTrackerRef(ref domain.TrackerReference) string {
 	}
 }
 
-
 // StartMRRefresh begins a background goroutine that periodically refreshes
 // non-terminal MR state from GitLab. If no MR repository is configured the
 // call is a no-op (safe for tests).
@@ -634,11 +637,15 @@ func (a *GlabAdapter) refreshMRs(ctx context.Context) {
 }
 
 func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMergeRequest) {
-	dir := a.findWorktreeDir(mr.SourceBranch)
-	if dir == "" {
+	if a.workspaceDir == "" {
 		return
 	}
-	fresh, ok := a.mrView(ctx, dir, mr.SourceBranch)
+	repoDir := filepath.Join(a.workspaceDir, mr.ProjectPath)
+	if _, err := os.Stat(repoDir); err != nil {
+		slog.Warn("glab: refresh mr repo dir not found", "dir", repoDir, "iid", mr.IID)
+		return
+	}
+	fresh, ok := a.mrView(ctx, repoDir, mr.SourceBranch)
 	if !ok {
 		return
 	}
@@ -656,14 +663,4 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 	if err := a.repos.GitlabMRs.Upsert(ctx, updated); err != nil {
 		slog.Warn("glab: refresh mr upsert failed", "iid", mr.IID, "error", err)
 	}
-}
-
-func (a *GlabAdapter) findWorktreeDir(branch string) string {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	entries := a.tracked[branch]
-	if len(entries) > 0 {
-		return entries[0].worktreePath
-	}
-	return ""
 }

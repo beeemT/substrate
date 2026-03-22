@@ -91,7 +91,7 @@ func BuildRepoLifecycleAdapters(
 	for _, platform := range platforms {
 		switch platform {
 		case remotedetect.PlatformGitLab:
-			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, repos)})
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, repos, workspaceDir)})
 		case remotedetect.PlatformGitHub:
 			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 				slog.Warn("skipping github lifecycle adapter: no github auth configured")
