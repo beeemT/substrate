@@ -837,3 +837,19 @@ func FollowUpPlanCmd(svc *orchestrator.PlanningService, workItemID, feedback str
 		return FollowUpPlanResultMsg{WorkItemID: workItemID, Err: err}
 	}
 }
+
+// WaitForAdapterErrorCmd listens for adapter errors and converts them to TUI messages.
+// It reads one error from the channel and returns it as an AdapterErrorMsg.
+// The caller should re-invoke this command after handling the message to continue listening.
+func WaitForAdapterErrorCmd(ch <-chan AdapterErrorMsg) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return err
+	}
+}

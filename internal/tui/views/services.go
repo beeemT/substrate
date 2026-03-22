@@ -39,6 +39,7 @@ type Services struct {
 	SettingsData    SettingsSnapshot
 	GitClient       *gitwork.Client
 	Bus             *event.Bus
+	AdapterErrors chan AdapterErrorMsg
 	// Instance identity
 	InstanceID    string
 	WorkspaceID   string

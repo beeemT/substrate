@@ -187,7 +187,7 @@ func RunTUI(svcs Services) error {
 func (a App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
-	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd())
+	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
 
 	if a.svcs.WorkspaceID != "" {
 		cmds = append(cmds,
@@ -803,6 +803,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
 			)
 		}
+		cmds = append(cmds, WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceCancelMsg:
@@ -1296,6 +1297,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ErrMsg:
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
+
+	case AdapterErrorMsg:
+		toastMsg := formatAdapterErrorToast(msg)
+		a.toasts.AddToast(toastMsg, components.ToastWarning)
+		return a, WaitForAdapterErrorCmd(a.svcs.AdapterErrors)
 
 	case tea.KeyMsg:
 		return a.handleKeyMsg(msg)
@@ -2339,4 +2345,15 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 		}
 		return persistCreatedWorkItemMsg(svcs, wi)
 	}
+}
+
+
+// formatAdapterErrorToast formats an adapter error for display as a toast.
+// Output is max 4 lines to fit the toast display constraint.
+func formatAdapterErrorToast(msg AdapterErrorMsg) string {
+	errStr := msg.Err.Error()
+	if len(errStr) > 80 {
+		errStr = errStr[:77] + "..."
+	}
+	return fmt.Sprintf("%s: %s failed\n%s\nRetried %dx", msg.Adapter, msg.EventType, errStr, msg.Retries)
 }

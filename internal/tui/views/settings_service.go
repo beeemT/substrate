@@ -452,6 +452,8 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		GitlabMRs:        s.glMRRepo,
 		SessionArtifacts: s.sessionArtifactRepo,
 	})
+	adapterErrors := make(chan AdapterErrorMsg, 16)
+
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {
@@ -459,7 +461,37 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		}
 		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
-				_ = a.OnEvent(context.Background(), evt)
+				var lastErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if err := a.OnEvent(context.Background(), evt); err != nil {
+						lastErr = err
+						if attempt < 2 {
+							time.Sleep(time.Duration(attempt+1) * time.Second)
+						}
+						continue
+					}
+					lastErr = nil
+					break
+				}
+				if lastErr != nil {
+					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
+					_ = bus.Publish(context.Background(), domain.SystemEvent{
+						ID:          domain.NewID(),
+						EventType:   string(domain.EventAdapterError),
+						WorkspaceID: evt.WorkspaceID,
+						Payload:     errPayload,
+						CreatedAt:   time.Now(),
+					})
+					select {
+					case adapterErrors <- AdapterErrorMsg{
+						Adapter:   a.Name(),
+						EventType: evt.EventType,
+						Err:       lastErr,
+						Retries:   2,
+					}:
+					default:
+					}
+				}
 			}
 		}(workItemAdapter, sub.C)
 	}
@@ -470,7 +502,37 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		}
 		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
-				_ = a.OnEvent(context.Background(), evt)
+				var lastErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if err := a.OnEvent(context.Background(), evt); err != nil {
+						lastErr = err
+						if attempt < 2 {
+							time.Sleep(time.Duration(attempt+1) * time.Second)
+						}
+						continue
+					}
+					lastErr = nil
+					break
+				}
+				if lastErr != nil {
+					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
+					_ = bus.Publish(context.Background(), domain.SystemEvent{
+						ID:          domain.NewID(),
+						EventType:   string(domain.EventAdapterError),
+						WorkspaceID: evt.WorkspaceID,
+						Payload:     errPayload,
+						CreatedAt:   time.Now(),
+					})
+					select {
+					case adapterErrors <- AdapterErrorMsg{
+						Adapter:   a.Name(),
+						EventType: evt.EventType,
+						Err:       lastErr,
+						Retries:   2,
+					}:
+					default:
+					}
+				}
 			}
 		}(lifecycleAdapter, sub.C)
 	}
@@ -561,6 +623,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			Harnesses:        harnesses,
 			GitClient:        gitClient,
 			Bus:              bus,
+			AdapterErrors:    adapterErrors,
 			InstanceID:       current.InstanceID,
 			WorkspaceID:      current.WorkspaceID,
 			WorkspaceDir:     current.WorkspaceDir,

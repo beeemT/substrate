@@ -170,6 +170,15 @@ type OpenSessionHistoryMsg struct {
 // ErrMsg wraps an error for display in the TUI.
 type ErrMsg struct{ Err error }
 
+// AdapterErrorMsg reports an adapter handler failure after exhausting retries.
+// The TUI displays this as a warning toast.
+type AdapterErrorMsg struct {
+	Adapter   string // adapter name (e.g. "github", "gitlab")
+	EventType string // original event type that failed
+	Err       error  // underlying error
+	Retries   int    // number of retries attempted
+}
+
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 

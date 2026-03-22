@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
@@ -213,6 +214,8 @@ func run() error { //nolint:funlen
 		SessionArtifacts: sessionArtifactRepo,
 	}
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, artifactRepos)
+	adapterErrors := make(chan views.AdapterErrorMsg, 16)
+
 	for _, workItemAdapter := range adapters {
 		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
 		if subErr != nil {
@@ -220,8 +223,37 @@ func run() error { //nolint:funlen
 		}
 		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
-				if err := a.OnEvent(context.Background(), evt); err != nil {
-					slog.Warn("work item adapter event handler failed", "adapter", a.Name(), "event", evt.EventType, "err", err)
+				var lastErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if err := a.OnEvent(context.Background(), evt); err != nil {
+						lastErr = err
+						if attempt < 2 {
+							time.Sleep(time.Duration(attempt+1) * time.Second)
+						}
+						continue
+					}
+					lastErr = nil
+					break
+				}
+				if lastErr != nil {
+					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
+					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
+					_ = bus.Publish(context.Background(), domain.SystemEvent{
+						ID:          domain.NewID(),
+						EventType:   string(domain.EventAdapterError),
+						WorkspaceID: evt.WorkspaceID,
+						Payload:     errPayload,
+						CreatedAt:   time.Now(),
+					})
+					select {
+					case adapterErrors <- views.AdapterErrorMsg{
+						Adapter:   a.Name(),
+						EventType: evt.EventType,
+						Err:       lastErr,
+						Retries:   2,
+					}:
+					default:
+					}
 				}
 			}
 		}(workItemAdapter, sub.C)
@@ -233,8 +265,37 @@ func run() error { //nolint:funlen
 		}
 		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
-				if err := a.OnEvent(context.Background(), evt); err != nil {
-					slog.Warn("repo lifecycle adapter event handler failed", "adapter", a.Name(), "event", evt.EventType, "err", err)
+				var lastErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if err := a.OnEvent(context.Background(), evt); err != nil {
+						lastErr = err
+						if attempt < 2 {
+							time.Sleep(time.Duration(attempt+1) * time.Second)
+						}
+						continue
+					}
+					lastErr = nil
+					break
+				}
+				if lastErr != nil {
+					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
+					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
+					_ = bus.Publish(context.Background(), domain.SystemEvent{
+						ID:          domain.NewID(),
+						EventType:   string(domain.EventAdapterError),
+						WorkspaceID: evt.WorkspaceID,
+						Payload:     errPayload,
+						CreatedAt:   time.Now(),
+					})
+					select {
+					case adapterErrors <- views.AdapterErrorMsg{
+						Adapter:   a.Name(),
+						EventType: evt.EventType,
+						Err:       lastErr,
+						Retries:   2,
+					}:
+					default:
+					}
 				}
 			}
 		}(lifecycleAdapter, sub.C)
@@ -330,6 +391,7 @@ func run() error { //nolint:funlen
 		SettingsData:     settingsData,
 		GitClient:        gitClient,
 		Bus:              bus,
+		AdapterErrors:    adapterErrors,
 		InstanceID:       instanceID,
 		WorkspaceID:      workspaceID,
 		WorkspaceName:    workspaceName,
