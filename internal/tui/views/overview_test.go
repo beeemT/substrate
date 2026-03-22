@@ -735,3 +735,86 @@ func TestAppOverviewOverlayCentersOnFullWindow(t *testing.T) {
 		t.Fatalf("overlay start col = %d, want centered around %d (width %d)\nline: %q", start, expectedStart, overlayWidth, borderLine)
 	}
 }
+
+func TestOverviewInterruptedPlanningDispatchesRestartPlanMsg(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionOverviewModel(st)
+	m.SetTerminalSize(80, 40)
+	m.SetSize(80, 40)
+	planningSession := domain.Task{
+		ID:          "sess-planning",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-1",
+		Phase:       domain.TaskPhasePlanning,
+		Status:      domain.AgentSessionInterrupted,
+	}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		Actions: []OverviewActionCard{{
+			Kind:    overviewActionInterrupted,
+			Title:   "Planning was interrupted",
+			Session: &planningSession,
+			CanAct:  true,
+		}},
+	})
+
+	// Press 'r' — should dispatch RestartPlanMsg for planning phase.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_ = updated
+	if cmd == nil {
+		t.Fatal("pressing r on interrupted planning session must return a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(RestartPlanMsg); !ok {
+		t.Fatalf("expected RestartPlanMsg, got %T", msg)
+	}
+	if msg.(RestartPlanMsg).WorkItemID != "wi-1" {
+		t.Fatalf("RestartPlanMsg.WorkItemID = %q, want %q", msg.(RestartPlanMsg).WorkItemID, "wi-1")
+	}
+}
+
+func TestOverviewInterruptedImplementationDispatchesResumeSessionMsg(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionOverviewModel(st)
+	m.SetTerminalSize(80, 40)
+	m.SetSize(80, 40)
+	implSession := domain.Task{
+		ID:          "sess-impl",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-1",
+		Phase:       domain.TaskPhaseImplementation,
+		SubPlanID:   "sp-1",
+		Status:      domain.AgentSessionInterrupted,
+	}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		Actions: []OverviewActionCard{{
+			Kind:    overviewActionInterrupted,
+			Title:   "Interrupted task needs recovery",
+			Session: &implSession,
+			CanAct:  true,
+		}},
+	})
+
+	// Press 'r' — should dispatch ResumeSessionMsg for non-planning phase.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_ = updated
+	if cmd == nil {
+		t.Fatal("pressing r on interrupted implementation session must return a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(ResumeSessionMsg); !ok {
+		t.Fatalf("expected ResumeSessionMsg, got %T", msg)
+	}
+	resumeMsg := msg.(ResumeSessionMsg)
+	if resumeMsg.OldSessionID != "sess-impl" {
+		t.Fatalf("ResumeSessionMsg.OldSessionID = %q, want %q", resumeMsg.OldSessionID, "sess-impl")
+	}
+	if resumeMsg.SubPlanID != "sp-1" {
+		t.Fatalf("ResumeSessionMsg.SubPlanID = %q, want %q", resumeMsg.SubPlanID, "sp-1")
+	}
+}

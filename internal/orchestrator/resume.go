@@ -69,10 +69,14 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		return ResumeSessionResult{}, fmt.Errorf("claim interrupted session: %w", err)
 	}
 
-	// Sub-plan provides implementation context for the system prompt.
+	// Sub-plan provides the task assignment for the resumed agent. Without it the
+	// agent has no direction — fail explicitly rather than burning tokens.
+	if interrupted.SubPlanID == "" {
+		return ResumeSessionResult{}, fmt.Errorf("cannot resume session %s: no sub-plan assigned (session may have been interrupted before planning completed)", interrupted.ID)
+	}
 	subPlan, err := r.planSvc.GetSubPlan(ctx, interrupted.SubPlanID)
 	if err != nil {
-		return ResumeSessionResult{}, fmt.Errorf("get sub-plan: %w", err)
+		return ResumeSessionResult{}, fmt.Errorf("get sub-plan %s for session %s: %w", interrupted.SubPlanID, interrupted.ID, err)
 	}
 
 	// Last N lines from the interrupted session's log give the agent orientation.
@@ -194,9 +198,12 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 		return FollowUpSessionResult{}, fmt.Errorf("task %s is not completed (status: %s)", completedTask.ID, completedTask.Status)
 	}
 
+	if completedTask.SubPlanID == "" {
+		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on session %s: no sub-plan assigned", completedTask.ID)
+	}
 	subPlan, err := r.planSvc.GetSubPlan(ctx, completedTask.SubPlanID)
 	if err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan: %w", err)
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for session %s: %w", completedTask.SubPlanID, completedTask.ID, err)
 	}
 
 	lastLines, err := readLastNLines(completedTask.ID, resumeLogLines)
@@ -258,9 +265,12 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		return FollowUpSessionResult{}, fmt.Errorf("task %s is not failed (status: %s)", failedTask.ID, failedTask.Status)
 	}
 
+	if failedTask.SubPlanID == "" {
+		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on failed session %s: no sub-plan assigned", failedTask.ID)
+	}
 	subPlan, err := r.planSvc.GetSubPlan(ctx, failedTask.SubPlanID)
 	if err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan: %w", err)
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for failed session %s: %w", failedTask.SubPlanID, failedTask.ID, err)
 	}
 
 	lastLines, err := readLastNLines(failedTask.ID, resumeLogLines)
@@ -359,7 +369,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		HarnessSession: harnessSession,
 	}, nil
 }
-
 
 // buildFollowUpSystemPrompt constructs the system prompt for a follow-up agent session.
 func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback string) string {

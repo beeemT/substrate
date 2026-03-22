@@ -423,10 +423,15 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					return m, nil
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
+						if action.Session.Phase == domain.TaskPhasePlanning {
+							wID := action.Session.WorkItemID
+							return m, func() tea.Msg { return RestartPlanMsg{WorkItemID: wID} }
+						}
 						oldSessionID := action.Session.ID
 						subPlanID := action.Session.SubPlanID
-
-						return m, func() tea.Msg { return ResumeSessionMsg{OldSessionID: oldSessionID, SubPlanID: subPlanID} }
+						return m, func() tea.Msg {
+							return ResumeSessionMsg{OldSessionID: oldSessionID, SubPlanID: subPlanID}
+						}
 					}
 				case overviewActionReviewing:
 					return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.data.WorkItemID} }
