@@ -119,3 +119,170 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionLogSpinnerStartsWhenAgentActive(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+
+	cmd := m.SetAgentActive(true)
+	if !m.agentActive {
+		t.Fatal("agentActive must be true after SetAgentActive(true)")
+	}
+	if cmd == nil {
+		t.Fatal("SetAgentActive(true) must return a tick cmd")
+	}
+	if m.spinnerFrame != 0 {
+		t.Fatalf("spinnerFrame = %d, want 0", m.spinnerFrame)
+	}
+}
+
+func TestSessionLogSpinnerStopsWhenAgentInactive(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	cmd := m.SetAgentActive(false)
+	if m.agentActive {
+		t.Fatal("agentActive must be false after SetAgentActive(false)")
+	}
+	if cmd != nil {
+		t.Fatal("SetAgentActive(false) must not return a cmd")
+	}
+}
+
+func TestSessionLogSpinnerNoopOnDuplicate(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetAgentActive(true)
+
+	cmd := m.SetAgentActive(true)
+	if cmd != nil {
+		t.Fatal("duplicate SetAgentActive(true) must be a no-op")
+	}
+}
+
+func TestSessionLogSpinnerTickAdvancesFrame(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetAgentActive(true)
+
+	updated, cmd := m.Update(sessionLogSpinnerTickMsg{})
+	if updated.spinnerFrame != 1 {
+		t.Fatalf("spinnerFrame = %d, want 1 after first tick", updated.spinnerFrame)
+	}
+	if cmd == nil {
+		t.Fatal("spinner tick must return a follow-up tick cmd")
+	}
+}
+
+func TestSessionLogSpinnerTickIgnoredWhenInactive(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	// agentActive is false by default
+
+	updated, cmd := m.Update(sessionLogSpinnerTickMsg{})
+	if updated.spinnerFrame != 0 {
+		t.Fatalf("spinnerFrame = %d, want 0 when inactive", updated.spinnerFrame)
+	}
+	if cmd != nil {
+		t.Fatal("spinner tick must not return cmd when agent is inactive")
+	}
+}
+
+func TestSessionLogSpinnerRendersInView(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionLogModel(st)
+	m.SetSize(60, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	view := m.View()
+	// The spinner frame should appear somewhere in the rendered output.
+	// Frame 0 is the first braille character.
+	if !strings.Contains(view, sessionLogSpinnerFrames[0]) {
+		t.Fatalf("view must contain spinner frame %q, got:\n%s", sessionLogSpinnerFrames[0], view)
+	}
+}
+
+func TestSessionLogSpinnerNotRenderedWhenInactive(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetTitle("Test")
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "hello"}})
+
+	view := m.View()
+	for _, frame := range sessionLogSpinnerFrames {
+		if strings.Contains(view, frame) {
+			t.Fatalf("view must not contain spinner frame %q when inactive, got:\n%s", frame, view)
+		}
+	}
+}
+
+func TestSessionLogSpinnerFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionLogModel(st)
+	width := 40
+	m.SetSize(width, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "content line"}})
+	// Re-enable live + spinner after static content (which clears agentActive).
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > width {
+			t.Errorf("line %d width = %d, want <= %d\nline: %q", i+1, got, width, line)
+		}
+	}
+}
+
+func TestSessionLogEmptyBodyShowsWaitingWhenActive(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	view := stripBrowseANSI(m.View())
+	if !strings.Contains(view, "Waiting for agent output") {
+		t.Fatalf("view must show \"Waiting for agent output\" when active with no entries, got:\n%s", view)
+	}
+}
+
+func TestSessionLogStaticContentClearsSpinner(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetAgentActive(true)
+
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "static"}})
+	if m.agentActive {
+		t.Fatal("SetStaticContent must clear agentActive")
+	}
+}

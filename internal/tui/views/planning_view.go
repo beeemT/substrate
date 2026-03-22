@@ -2,6 +2,7 @@ package views
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -11,6 +12,14 @@ import (
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
+
+const sessionLogSpinnerInterval = 100 * time.Millisecond
+
+// sessionLogSpinnerFrames are braille animation frames for the activity spinner.
+var sessionLogSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// sessionLogSpinnerTickMsg drives the activity spinner in SessionLogModel.
+type sessionLogSpinnerTickMsg struct{}
 
 // SessionLogModel renders either a live-tailing session log or a static interaction transcript.
 //
@@ -41,10 +50,14 @@ type SessionLogModel struct {
 	renderedVerbose    bool
 	renderedCollapse   bool
 
-	steerInput      textinput.Model
-	steerActive     bool
-	failedSessionID string // non-empty when viewing a failed session's log
+	steerInput         textinput.Model
+	steerActive        bool
+	failedSessionID    string // non-empty when viewing a failed session's log
 	completedSessionID string // non-empty when viewing a completed session's log
+
+	// Activity spinner: shown when an agent is actively running for this session.
+	agentActive  bool
+	spinnerFrame int
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -129,6 +142,7 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.logPath = ""
 	m.sessionID = ""
 	m.offset = 0
+	m.agentActive = false
 	m.entries = append([]sessionlog.Entry(nil), entries...)
 	m.doRebuildTranscript()
 	m.viewport.GotoBottom()
@@ -160,6 +174,27 @@ func (m *SessionLogModel) SetCompletedSession(sessionID string) {
 func (m *SessionLogModel) ClearCompletedSession() {
 	m.completedSessionID = ""
 	m.steerInput.Placeholder = "Send steering prompt to agent..."
+}
+
+// SetAgentActive controls the activity spinner. It should be set to true when
+// an agent is actively running for the displayed session (based on the session's
+// Task status), independent of the work-item state.
+func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
+	if m.agentActive == active {
+		return nil
+	}
+	m.agentActive = active
+	m.spinnerFrame = 0
+	if active {
+		return sessionLogSpinnerTickCmd()
+	}
+	return nil
+}
+
+func sessionLogSpinnerTickCmd() tea.Cmd {
+	return tea.Tick(sessionLogSpinnerInterval, func(time.Time) tea.Msg {
+		return sessionLogSpinnerTickMsg{}
+	})
 }
 
 func (m *SessionLogModel) TailCmd() tea.Cmd {
@@ -283,6 +318,12 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		default:
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
+	case sessionLogSpinnerTickMsg:
+		if !m.agentActive {
+			return m, nil
+		}
+		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
+		return m, sessionLogSpinnerTickCmd()
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
@@ -320,7 +361,14 @@ func (m SessionLogModel) View() string {
 	header := m.header()
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
-		body = m.styles.Muted.Render("No session output captured.")
+		if m.agentActive {
+			body = m.styles.Muted.Render("Waiting for agent output...")
+		} else {
+			body = m.styles.Muted.Render("No session output captured.")
+		}
+	}
+	if m.agentActive {
+		body = overlaySpinner(body, sessionLogSpinnerFrames[m.spinnerFrame], m.styles, m.width)
 	}
 	parts := append(strings.Split(header, "\n"), body)
 	if m.steerActive {

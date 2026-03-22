@@ -1706,11 +1706,15 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 		a.content.sessionLog.ClearFailedSession()
 		a.content.sessionLog.ClearCompletedSession()
 	}
+	agentActive := session.Status == domain.AgentSessionPending ||
+		session.Status == domain.AgentSessionRunning ||
+		session.Status == domain.AgentSessionWaitingForAnswer
+	spinnerCmd := a.content.sessionLog.SetAgentActive(agentActive)
 	if !a.tailingSessionIDs[session.ID] {
 		a.tailingSessionIDs[session.ID] = true
-		return TailSessionLogCmd(logPath, session.ID, resumeOffset)
+		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, session.ID, resumeOffset))
 	}
-	return nil
+	return spinnerCmd
 }
 
 func (a *App) canActOnSession(s domain.Task) bool {
