@@ -60,6 +60,9 @@ func (m SourceDetailsModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
+	if m.sourceItemsHaveURL() {
+		hints = append(hints, KeybindHint{Key: "o", Label: "Open in browser"})
+	}
 
 	return hints
 }
@@ -69,6 +72,10 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "o":
+			if openCmd := m.openSourceItemsCmd(); openCmd != nil {
+				return m, openCmd
+			}
 		case "up", "down", "j", "k", "pgup", "pgdown", "home", "end":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
@@ -702,4 +709,46 @@ func trackerRefContainer(ref domain.TrackerReference) string {
 	}
 
 	return ""
+}
+
+// sourceItemsHaveURL reports whether at least one source item has a non-empty URL.
+func (m SourceDetailsModel) sourceItemsHaveURL() bool {
+	items := sessionSourceItems(m.session)
+	for _, item := range items {
+		if strings.TrimSpace(item.URL) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// openSourceItemsCmd returns a tea.Cmd that either opens the single source item URL
+// directly or emits an OpenSourceItemsOverlayMsg for multi-item sessions.
+func (m SourceDetailsModel) openSourceItemsCmd() tea.Cmd {
+	items := sessionSourceItems(m.session)
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Collect items that have URLs.
+	var urlItems []domain.SourceSummary
+	for _, item := range items {
+		if strings.TrimSpace(item.URL) != "" {
+			urlItems = append(urlItems, item)
+		}
+	}
+	if len(urlItems) == 0 {
+		return nil
+	}
+
+	// Single URL item: open directly.
+	if len(items) == 1 && len(urlItems) == 1 {
+		url := urlItems[0].URL
+		return func() tea.Msg { return OpenExternalURLMsg{URL: url} }
+	}
+
+	// Multiple source items: open the overlay for multi-select.
+	allItems := append([]domain.SourceSummary(nil), items...)
+	return func() tea.Msg { return OpenSourceItemsOverlayMsg{Items: allItems} }
 }

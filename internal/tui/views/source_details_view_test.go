@@ -217,3 +217,177 @@ func TestSourceDetailsDurableSummariesFitRequestedSize(t *testing.T) {
 		}
 	}
 }
+
+
+func TestSourceDetailsOpenInBrowserSingleItem(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(48, 18)
+	m.SetSession(&domain.Session{
+		ID:            "wi-1",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#42"},
+		Title:         "Fix auth",
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{{
+				Provider: "github",
+				Kind:     "issue",
+				Ref:      "acme/rocket#42",
+				Title:    "Fix auth",
+				URL:      "https://github.com/acme/rocket/issues/42",
+			}},
+		},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	_ = updated
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for single-URL source item")
+	}
+
+	msg := cmd()
+	openMsg, ok := msg.(views.OpenExternalURLMsg)
+	if !ok {
+		t.Fatalf("expected OpenExternalURLMsg, got %T", msg)
+	}
+
+	const wantURL = "https://github.com/acme/rocket/issues/42"
+	if openMsg.URL != wantURL {
+		t.Fatalf("URL = %q, want %q", openMsg.URL, wantURL)
+	}
+}
+
+func TestSourceDetailsOpenInBrowserMultiItem(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(48, 18)
+	m.SetSession(&domain.Session{
+		ID:            "wi-2",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"},
+		Title:         "Fix multiple issues",
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{
+				{
+					Provider: "github",
+					Kind:     "issue",
+					Ref:      "acme/rocket#42",
+					Title:    "Fix auth",
+					URL:      "https://github.com/acme/rocket/issues/42",
+				},
+				{
+					Provider: "github",
+					Kind:     "issue",
+					Ref:      "acme/rocket#43",
+					Title:    "Repair billing",
+					URL:      "https://github.com/acme/rocket/issues/43",
+				},
+			},
+		},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	_ = updated
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for multi-URL source items")
+	}
+
+	msg := cmd()
+	overlayMsg, ok := msg.(views.OpenSourceItemsOverlayMsg)
+	if !ok {
+		t.Fatalf("expected OpenSourceItemsOverlayMsg, got %T", msg)
+	}
+
+	if got := len(overlayMsg.Items); got != 2 {
+		t.Fatalf("Items length = %d, want 2", got)
+	}
+}
+
+func TestSourceDetailsOpenInBrowserNoURL(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(48, 18)
+	m.SetSession(&domain.Session{
+		ID:            "wi-3",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#42"},
+		Title:         "No URL item",
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{{
+				Provider: "github",
+				Kind:     "issue",
+				Ref:      "acme/rocket#42",
+				Title:    "Fix auth",
+			}},
+		},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd != nil {
+		t.Fatal("expected nil cmd when source items have no URL")
+	}
+}
+
+func TestSourceDetailsKeybindHintsIncludeOpenWhenURLAvailable(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(48, 18)
+	m.SetSession(&domain.Session{
+		ID:            "wi-4",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"acme/rocket#42"},
+		Title:         "With URL",
+		Metadata: map[string]any{
+			"source_summaries": []domain.SourceSummary{{
+				Provider: "github",
+				Kind:     "issue",
+				Ref:      "acme/rocket#42",
+				Title:    "Fix auth",
+				URL:      "https://github.com/acme/rocket/issues/42",
+			}},
+		},
+	})
+
+	hints := m.KeybindHints()
+	found := false
+	for _, h := range hints {
+		if h.Key == "o" && h.Label == "Open in browser" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected keybind hint for 'o', got %v", hints)
+	}
+}
+
+func TestSourceDetailsKeybindHintsExcludeOpenWhenNoURL(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSourceDetailsModel(newTestStyles(t))
+	m.SetSize(48, 18)
+	m.SetSession(&domain.Session{
+		ID:          "wi-5",
+		Source:      "github",
+		SourceScope: domain.ScopeIssues,
+		Title:       "No summaries",
+	})
+
+	hints := m.KeybindHints()
+	for _, h := range hints {
+		if h.Key == "o" {
+			t.Fatalf("unexpected keybind hint for 'o' when no URL available: %v", hints)
+		}
+	}
+}

@@ -33,6 +33,7 @@ const (
 	overlaySettings
 	overlayWorkspaceInit
 	overlayHelp
+	overlaySourceItems
 )
 
 type sessionHistoryScope int
@@ -84,13 +85,14 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	statusBar StatusBarModel
 
 	// Overlays
-	activeOverlay  overlayKind
-	newSession     NewSessionOverlay
-	sessionSearch  SessionSearchOverlay
-	settingsPage   SettingsPage
-	workspaceModal WorkspaceInitModal
-	helpOverlay    HelpOverlay
-	hasWorkspace   bool
+	activeOverlay      overlayKind
+	newSession         NewSessionOverlay
+	sessionSearch      SessionSearchOverlay
+	settingsPage       SettingsPage
+	workspaceModal     WorkspaceInitModal
+	helpOverlay        HelpOverlay
+	sourceItemsOverlay SourceItemsOverlay
+	hasWorkspace       bool
 
 	// Toasts
 	toasts components.ToastModel
@@ -155,6 +157,7 @@ func NewApp(svcs Services) App {
 		sessionSearch:                  NewSessionSearchOverlay(st),
 		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
+		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
@@ -773,6 +776,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.newSession.SetSize(msg.Width, msg.Height)
 		a.sessionSearch.SetSize(msg.Width, msg.Height)
 		a.settingsPage.SetSize(msg.Width, msg.Height)
+		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
@@ -814,6 +818,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.newSession.Close()
 		a.sessionSearch.Close()
 		a.settingsPage.Close()
+		a.sourceItemsOverlay.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -1221,6 +1226,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OpenExternalURLMsg:
 		return a, OpenBrowserCmd(msg.URL)
 
+	case OpenSourceItemsOverlayMsg:
+		a.activeOverlay = overlaySourceItems
+		a.sourceItemsOverlay.Open(msg.Items)
+		return a, nil
+
+	case openSourceItemURLsMsg:
+		a.activeOverlay = overlayNone
+		a.sourceItemsOverlay.Close()
+		var browserCmds []tea.Cmd
+		for _, url := range msg.URLs {
+			browserCmds = append(browserCmds, OpenBrowserCmd(url))
+		}
+		return a, tea.Batch(browserCmds...)
+
 	case ImplementationCompleteMsg:
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
 		if a.currentWorkItemID != "" {
@@ -1320,6 +1339,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlaySettings {
 		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlaySourceItems {
+		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
+		cmds = append(cmds, cmd)
 	} else {
 		a.content, cmd = a.content.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1376,6 +1398,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.activeOverlay == overlayHelp {
 		a.activeOverlay = overlayNone
 		return a, nil
+	}
+	if a.activeOverlay == overlaySourceItems {
+		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
+		return a, cmd
 	}
 	previousFocus := a.mainFocus
 	wasOverviewOverlayOpen := a.overviewOverlayOpen()
@@ -1943,6 +1969,9 @@ func (a App) View() string {
 	if a.activeOverlay == overlayHelp {
 		return renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
 	}
+	if a.activeOverlay == overlaySourceItems {
+		return renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
+	}
 	if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
 		return renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
 	}
@@ -2346,7 +2375,6 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 		return persistCreatedWorkItemMsg(svcs, wi)
 	}
 }
-
 
 // formatAdapterErrorToast formats an adapter error for display as a toast.
 // Output is max 4 lines to fit the toast display constraint.

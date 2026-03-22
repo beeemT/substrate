@@ -231,6 +231,15 @@ type ShowSettingsMsg struct{}
 // CloseOverlayMsg closes the active overlay.
 type CloseOverlayMsg struct{}
 
+// OpenSourceItemsOverlayMsg opens the source items overlay for multi-select browsing.
+type OpenSourceItemsOverlayMsg struct {
+	Items []domain.SourceSummary
+}
+
+// openSourceItemURLsMsg is an internal message emitted by the source items overlay
+// when the user confirms opening one or more source item URLs.
+type openSourceItemURLsMsg struct{ URLs []string }
+
 // --- Workspace Init ---
 
 // WorkspaceHealthCheckMsg carries the result of a workspace scan during init.
