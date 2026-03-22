@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"sort"
+	"sync"
 
 	"github.com/beeemT/substrate/internal/domain"
 )
@@ -88,6 +89,7 @@ type ExecutionState struct {
 	CurrentWave int
 	WaveStates  []WaveState
 	Executions  map[string]*SubPlanExecution // sub-plan ID -> execution
+	mu          sync.Mutex
 }
 
 // NewExecutionState creates a new execution state for a plan.
@@ -154,6 +156,9 @@ func (s *ExecutionState) CurrentWaveComplete() bool {
 
 // HasFailed returns true if any wave or sub-plan has failed.
 func (s *ExecutionState) HasFailed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for _, ws := range s.WaveStates {
 		if ws.Status == WaveFailed {
 			return true
@@ -217,6 +222,9 @@ func (s *ExecutionState) FailWave(waveIndex int, endedAt int64) {
 
 // StartSubPlan marks a sub-plan as in progress.
 func (s *ExecutionState) StartSubPlan(subPlanID string, startedAt int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if ex, ok := s.Executions[subPlanID]; ok {
 		ex.Status = domain.SubPlanInProgress
 		ex.StartedAt = startedAt
@@ -225,6 +233,9 @@ func (s *ExecutionState) StartSubPlan(subPlanID string, startedAt int64) {
 
 // CompleteSubPlan marks a sub-plan as completed.
 func (s *ExecutionState) CompleteSubPlan(subPlanID string, completedAt int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if ex, ok := s.Executions[subPlanID]; ok {
 		ex.Status = domain.SubPlanCompleted
 		ex.CompletedAt = completedAt
@@ -233,6 +244,9 @@ func (s *ExecutionState) CompleteSubPlan(subPlanID string, completedAt int64) {
 
 // FailSubPlan marks a sub-plan as failed.
 func (s *ExecutionState) FailSubPlan(subPlanID string, completedAt int64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if ex, ok := s.Executions[subPlanID]; ok {
 		ex.Status = domain.SubPlanFailed
 		ex.CompletedAt = completedAt

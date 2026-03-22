@@ -628,18 +628,17 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 	}
 	sessionRepo := newMockSessionRepo()
 	eventRepo := &implementationEventRepo{}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
 	svc := NewImplementationService(
 		&config.Config{},
 		&mockAgentHarness{},
-		nil,
-		nil,
+		nil, bus,
 		service.NewPlanService(planRepo, subPlanRepo),
 		service.NewSessionService(workItemRepo),
 		service.NewTaskService(sessionRepo),
 		subPlanRepo,
 		sessionRepo,
-		eventRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil,
 		nil,
@@ -1006,7 +1005,6 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		service.NewTaskService(sessionRepo),
 		subPlanRepo,
 		sessionRepo,
-		eventRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil, nil,
 	)
@@ -1105,7 +1103,6 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 		service.NewTaskService(sessionRepo),
 		subPlanRepo,
 		sessionRepo,
-		eventRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil, nil,
 	)

@@ -200,8 +200,8 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 	}
 	followUpContext := buf.String()
 
-	// 6. Transition work item completed -> planning
-	if err := s.workItemSvc.Transition(ctx, workItemID, domain.SessionPlanning); err != nil {
+	// 6. Transition work item to planning for follow-up
+	if err := s.workItemSvc.StartFollowUpPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
 

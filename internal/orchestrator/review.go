@@ -319,8 +319,7 @@ func (p *ReviewPipeline) startReviewAgent(
 				}
 				output, err := p.readSessionOutputFromLog(ctx, reviewSessionID)
 				if err != nil {
-					slog.Warn("failed to read session log, returning NO_CRITIQUES", "error", err)
-					return reviewSession, "NO_CRITIQUES", reviewSessionID, nil
+					return reviewSession, "", reviewSessionID, fmt.Errorf("read review session output: %w", err)
 				}
 				return reviewSession, output, reviewSessionID, nil
 			case "error":

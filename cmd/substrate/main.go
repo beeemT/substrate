@@ -288,7 +288,7 @@ func run() error { //nolint:funlen
 	if harnesses.Implementation != nil {
 		implSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
-			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, eventRepo, workspaceSvc, registry,
+			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, workspaceSvc, registry,
 			reviewPipeline,
 		)
 	}

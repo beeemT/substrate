@@ -507,7 +507,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, s.eventRepo, workspaceSvc, registry, reviewPipeline)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, workspaceSvc, registry, reviewPipeline)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {

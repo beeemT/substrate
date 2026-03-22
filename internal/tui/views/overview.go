@@ -1263,8 +1263,6 @@ func humanTaskPlanStatus(status domain.TaskPlanStatus) string {
 		return statusCompleted
 	case domain.SubPlanFailed:
 		return statusFailed
-	case domain.SubPlanInterrupted:
-		return statusInterrupted
 	default:
 		return string(status)
 	}

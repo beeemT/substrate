@@ -34,7 +34,6 @@ type ImplementationService struct {
 	sessionSvc     *service.TaskService
 	subPlanRepo    repository.TaskPlanRepository
 	sessionRepo    repository.TaskRepository
-	eventRepo      repository.EventRepository
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	reviewPipeline *ReviewPipeline
@@ -64,7 +63,6 @@ func NewImplementationService(
 	sessionSvc *service.TaskService,
 	subPlanRepo repository.TaskPlanRepository,
 	sessionRepo repository.TaskRepository,
-	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	reviewPipeline *ReviewPipeline,
@@ -80,7 +78,6 @@ func NewImplementationService(
 		sessionSvc:     sessionSvc,
 		subPlanRepo:    subPlanRepo,
 		sessionRepo:    sessionRepo,
-		eventRepo:      eventRepo,
 		workspaceSvc:   workspaceSvc,
 		registry:       registry,
 		reviewPipeline: reviewPipeline,
@@ -597,6 +594,14 @@ func (s *ImplementationService) reviewLoop(
 
 	for {
 		outcome.Cycles++
+
+		// Safety bound: the per-session max-cycles check inside ReviewSession
+		// resets after each reimplementation (new session). This outer guard
+		// ensures the total cycle count across all sessions is bounded.
+		if s.cfg.Review.MaxCycles != nil && outcome.Cycles > *s.cfg.Review.MaxCycles {
+			outcome.Escalated = true
+			return outcome
+		}
 
 		reviewResult, err := s.reviewPipeline.ReviewSession(ctx, currentSession)
 		if err != nil {
@@ -1126,7 +1131,7 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventBus.Publish(ctx, evt)
 }
 
 func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
@@ -1152,7 +1157,7 @@ func (s *ImplementationService) emitSessionStarted(ctx context.Context, session 
 		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventBus.Publish(ctx, evt)
 }
 
 func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
@@ -1178,7 +1183,7 @@ func (s *ImplementationService) emitSessionCompleted(ctx context.Context, sessio
 		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventBus.Publish(ctx, evt)
 }
 
 func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
@@ -1206,7 +1211,7 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 		Payload:     marshalJSONOrEmpty(payload),
 		CreatedAt:   time.Now(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventBus.Publish(ctx, evt)
 }
 
 // Helper functions

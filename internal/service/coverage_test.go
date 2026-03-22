@@ -68,10 +68,11 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("UpdatePlanContent", func(t *testing.T) {
-		if err := svc.UpdatePlanContent(ctx, "plan-1", "New content"); err != nil {
+		planRepo.plans["plan-upd"] = domain.Plan{ID: "plan-upd", WorkItemID: "wi-upd", Status: domain.PlanDraft, OrchestratorPlan: "Old"}
+		if err := svc.UpdatePlanContent(ctx, "plan-upd", "New content"); err != nil {
 			t.Fatalf("UpdatePlanContent failed: %v", err)
 		}
-		got, _ := svc.GetPlan(ctx, "plan-1")
+		got, _ := svc.GetPlan(ctx, "plan-upd")
 		if got.OrchestratorPlan != "New content" {
 			t.Errorf("OrchestratorPlan = %q, want %q", got.OrchestratorPlan, "New content")
 		}

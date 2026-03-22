@@ -162,6 +162,10 @@ func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content 
 	if err != nil {
 		return newNotFoundError("plan", id)
 	}
+	if plan.Status != domain.PlanDraft && plan.Status != domain.PlanPendingReview {
+		return newInvalidInputError("can only update content of draft or pending_review plans", "status")
+
+	}
 
 	plan.OrchestratorPlan = content
 	plan.UpdatedAt = time.Now()
@@ -363,6 +367,9 @@ func (s *PlanService) UpdateSubPlanContent(ctx context.Context, id string, conte
 	sp, err := s.subPlanRepo.Get(ctx, id)
 	if err != nil {
 		return newNotFoundError("sub-plan", id)
+	}
+	if sp.Status != domain.SubPlanPending && sp.Status != domain.SubPlanFailed {
+		return newInvalidInputError("can only update content of pending or failed sub-plans", "status")
 	}
 
 	sp.Content = content
