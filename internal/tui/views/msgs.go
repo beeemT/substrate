@@ -126,6 +126,14 @@ type ResumeSessionMsg struct {
 // RestartPlanMsg fires when the user presses [r] on an interrupted planning task.
 type RestartPlanMsg struct{ WorkItemID string }
 
+// SessionResumedMsg is returned by ResumeSessionCmd after the interrupted session
+// has been replaced by a new running session.
+type SessionResumedMsg struct{ Message string }
+
+// PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
+// pipeline has been re-launched from scratch.
+type PlanningRestartedMsg struct{ Message string }
+
 // QuitRequestMsg fires when an OS signal (SIGTERM) requests a graceful quit.
 type QuitRequestMsg struct{}
 

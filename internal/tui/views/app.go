@@ -1001,7 +1001,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RestartPlanMsg:
 		if a.svcs.Planning != nil && a.svcs.Session != nil {
-			cmds = append(cmds, RestartPlanningCmd(a.svcs.Session, a.svcs.Planning, msg.WorkItemID))
+			cmds = append(cmds, RestartPlanningCmd(a.svcs.Session, a.svcs.Planning, a.svcs.Task, msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -1249,6 +1249,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+
+	case SessionResumedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case PlanningRestartedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
 	case ActionDoneMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, nil

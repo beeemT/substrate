@@ -165,6 +165,15 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		}()
 	}
 
+	// Transition the old interrupted session to failed now that its replacement
+	// is durably running. This clears the interrupted action from the overview.
+	if err := r.sessionSvc.Fail(ctx, interrupted.ID, nil); err != nil {
+		slog.Warn("failed to fail superseded interrupted session",
+			"old_session_id", interrupted.ID,
+			"new_session_id", newSession.ID,
+			"error", err)
+	}
+
 	return ResumeSessionResult{
 		NewSession:     newSession,
 		HarnessSession: harnessSession,

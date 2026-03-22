@@ -454,9 +454,9 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 		t.Errorf("new session: expected running, got %q", got)
 	}
 
-	// Old session must remain as interrupted (not touched beyond owner update).
-	if got := fix.getSessionStatus(intID); got != domain.AgentSessionInterrupted {
-		t.Errorf("old session: expected interrupted, got %q", got)
+	// Old session must be transitioned to failed (superseded by the new session).
+	if got := fix.getSessionStatus(intID); got != domain.AgentSessionFailed {
+		t.Errorf("old session: expected failed, got %q", got)
 	}
 
 	// System prompt must contain the log content and the sub-plan.
@@ -482,9 +482,9 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 	}
 }
 
-// TestResumeSession_OldSessionRemainInterrupted is an explicit guard that
-// ResumeSession never changes the interrupted session's status field.
-func TestResumeSession_OldSessionRemainInterrupted(t *testing.T) {
+// TestResumeSession_OldSessionTransitionsToFailed verifies that
+// ResumeSession transitions the superseded interrupted session to failed.
+func TestResumeSession_OldSessionTransitionsToFailed(t *testing.T) {
 	fix := newPhase9bFixture()
 	ctx := context.Background()
 
@@ -505,8 +505,8 @@ func TestResumeSession_OldSessionRemainInterrupted(t *testing.T) {
 		t.Fatalf("ResumeSession: %v", err)
 	}
 
-	if got := fix.getSessionStatus("sess-int2"); got != domain.AgentSessionInterrupted {
-		t.Errorf("old session must remain interrupted; got %q", got)
+	if got := fix.getSessionStatus("sess-int2"); got != domain.AgentSessionFailed {
+		t.Errorf("old session must be failed after resume; got %q", got)
 	}
 }
 
@@ -527,7 +527,6 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
 	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
-
 	interrupted := fix.sessionRepo.sessions["sess-int3"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new3")
 	if err == nil {

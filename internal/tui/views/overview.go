@@ -1382,7 +1382,38 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	if failedAction := a.buildFailedActionCard(wi, subPlans); failedAction != nil {
 		actions = append(actions, *failedAction)
 	}
-	for _, session := range a.sessionsForWorkItem(wi.ID) {
+	// Build a set of sub-plan IDs (or work-item-scoped planning markers)
+	// that have an active (non-interrupted, non-terminal) session, so we
+	// can skip stale interrupted sessions that have been replaced.
+	superseded := make(map[string]bool)
+	wiSessions := a.sessionsForWorkItem(wi.ID)
+	{
+		activeSubPlans := make(map[string]bool)
+		hasPlanningActive := false
+		for _, s := range wiSessions {
+			if s.Status == domain.AgentSessionRunning ||
+				s.Status == domain.AgentSessionPending ||
+				s.Status == domain.AgentSessionCompleted ||
+				s.Status == domain.AgentSessionWaitingForAnswer {
+				if s.Phase == domain.TaskPhasePlanning {
+					hasPlanningActive = true
+				} else if s.SubPlanID != "" {
+					activeSubPlans[s.SubPlanID] = true
+				}
+			}
+		}
+		for _, s := range wiSessions {
+			if s.Status != domain.AgentSessionInterrupted {
+				continue
+			}
+			if s.Phase == domain.TaskPhasePlanning && hasPlanningActive {
+				superseded[s.ID] = true
+			} else if s.SubPlanID != "" && activeSubPlans[s.SubPlanID] {
+				superseded[s.ID] = true
+			}
+		}
+	}
+	for _, session := range wiSessions {
 		if session.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[session.ID] {
 				if question.Status != domain.QuestionEscalated {
@@ -1413,6 +1444,9 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			}
 		}
 		if session.Status == domain.AgentSessionInterrupted {
+			if superseded[session.ID] {
+				continue
+			}
 			card := OverviewActionCard{
 				Kind:     overviewActionInterrupted,
 				Blocked:  firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)),

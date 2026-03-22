@@ -491,17 +491,31 @@ func ReconcileOrphanedTasksCmd(
 // RestartPlanningCmd rolls a work item back from planning to ingested (if needed)
 // and then re-runs the planning pipeline from the beginning. This handles the case
 // where a planning task was interrupted and the user wants to start fresh.
-func RestartPlanningCmd(workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, workItemID string) tea.Cmd {
+func RestartPlanningCmd(workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.TaskService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
+
+		// Fail any interrupted sessions so the overview clears the action card.
+		sessions, listErr := sessionSvc.ListByWorkItemID(ctx, workItemID)
+		if listErr == nil {
+			for _, s := range sessions {
+				if s.Status == domain.AgentSessionInterrupted {
+					if failErr := sessionSvc.Fail(ctx, s.ID, nil); failErr != nil {
+						slog.Warn("failed to fail interrupted session during planning restart",
+							"session_id", s.ID, "error", failErr)
+					}
+				}
+			}
+		}
+
 		if _, err := planningSvc.Plan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
 
-		return ActionDoneMsg{Message: "Planning restarted"}
+		return PlanningRestartedMsg{Message: "Planning restarted"}
 	}
 }
 
@@ -550,7 +564,7 @@ func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.T
 			return ErrMsg{Err: err}
 		}
 
-		return ActionDoneMsg{Message: "Session resumed"}
+		return SessionResumedMsg{Message: "Session resumed"}
 	}
 }
 
