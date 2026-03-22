@@ -168,7 +168,7 @@ func NewSessionOverviewModel(st styles.Styles) SessionOverviewModel {
 
 func (m *SessionOverviewModel) planOverlayInnerSize() (innerWidth, innerHeight int) {
 	frameWidth := min(max(72, m.termWidth-12), 220)
-	innerHeight = max(12, min(m.termHeight-2, 36))
+	innerHeight = max(12, m.termHeight-2)
 	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
 
 	return
@@ -692,7 +692,7 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	innerHeight := max(10, min(height-4, 26))
 	if m.overlay == overviewOverlayPlan {
 		frameWidth = min(max(72, width-12), 220)
-		innerHeight = max(12, min(height-2, 36))
+		innerHeight = max(12, height-2)
 	}
 	innerWidth := m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
 	var body string
