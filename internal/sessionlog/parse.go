@@ -69,8 +69,14 @@ func ParseLine(line string) (Entry, bool) {
 			Intent    string `json:"intent"`
 		} `json:"event"`
 	}
-	if err := json.Unmarshal([]byte(payload), &record); err != nil || record.Type != "event" {
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
 		return Entry{Kind: KindPlain, Text: raw}, true
+	}
+	// Drop internal metadata lines that are not user-visible events.
+	// session_meta carries harness bookkeeping (omp session file/ID) and
+	// should never surface in the transcript.
+	if record.Type != "event" {
+		return Entry{}, false
 	}
 	entry := Entry{
 		Kind:      EntryKind(record.Event.Type),
