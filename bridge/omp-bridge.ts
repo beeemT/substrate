@@ -262,17 +262,108 @@ async function initSession(): Promise<void> {
 	emitLifecycle("started", { message: "Session started" });
 }
 
+/**
+ * LineQueue wraps readline with an explicit pull-based queue.
+ *
+ * Bun's readline drops lines that arrive between removing a `once("line")`
+ * listener and registering a new `on("line")` listener. This queue installs
+ * a single permanent listener at construction time and lets callers pull
+ * lines via `next()`, which returns a promise that resolves with the next
+ * available line (or null on EOF).
+ */
+class LineQueue {
+	#queue: string[] = [];
+	#waiters: ((line: string | null) => void)[] = [];
+	#closed = false;
+
+	constructor(rl: ReturnType<typeof createInterface>) {
+		rl.on("line", (line: string) => {
+			if (this.#waiters.length > 0) {
+				this.#waiters.shift()!(line);
+			} else {
+				this.#queue.push(line);
+			}
+		});
+		rl.on("close", () => {
+			this.#closed = true;
+			// Resolve all pending waiters with null (EOF).
+			for (const waiter of this.#waiters.splice(0)) {
+				waiter(null);
+			}
+		});
+	}
+
+	/** Returns the next line, or null when stdin is closed. */
+	next(): Promise<string | null> {
+		if (this.#queue.length > 0) {
+			return Promise.resolve(this.#queue.shift()!);
+		}
+		if (this.#closed) {
+			return Promise.resolve(null);
+		}
+		return new Promise<string | null>(resolve => {
+			this.#waiters.push(resolve);
+		});
+	}
+}
+
+async function handleLine(line: string): Promise<void> {
+	let msg: Record<string, unknown>;
+	try {
+		msg = JSON.parse(line);
+	} catch {
+		emitLifecycle("failed", { message: `Invalid JSON: ${line}` });
+		return;
+	}
+
+	if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
+		emitLifecycle("failed", { message: `Expected JSON object, got: ${typeof msg}` });
+		return;
+	}
+
+	switch (msg.type) {
+		case "abort":
+			if (pendingAnswerResolve) {
+				pendingAnswerResolve("[Session aborted]");
+				pendingAnswerResolve = null;
+			}
+			process.exit(0);
+			break;
+		case "answer":
+			if (pendingAnswerResolve) {
+				const answer = String(msg.text ?? "");
+				emitInput("answer", answer);
+				pendingAnswerResolve(answer);
+				pendingAnswerResolve = null;
+			}
+			break;
+		case "prompt":
+			await runPrompt(String(msg.text ?? ""), "prompt");
+			break;
+		case "message":
+			await runPrompt(String(msg.text ?? ""), "message");
+			break;
+		case "steer":
+			if (session) {
+				// Fire-and-forget: steer interrupts the agent's active streaming turn.
+				session.prompt(String(msg.text ?? ""), { streamingBehavior: "steer" }).catch((err: unknown) => {
+					const errorMessage = err instanceof Error ? err.message : String(err);
+					emitLifecycle("failed", { message: `Steer failed: ${errorMessage}` });
+				});
+				emitInput("message", String(msg.text ?? ""));
+			}
+			break;
+		default:
+			emitLifecycle("failed", { message: `Unknown message type: ${msg.type}` });
+	}
+}
+
 async function main(): Promise<void> {
 	const rl = createInterface({ input: process.stdin });
+	const lines = new LineQueue(rl);
 
-	// Read optional init message before starting session.
-	// The Go harness sends {"type":"init",...} as the first line when a system
-	// prompt is configured; otherwise the first line is a regular command.
-	let bufferedLine: string | null = null;
-	const firstLine = await new Promise<string | null>((resolve) => {
-		rl.once("line", resolve);
-		rl.once("close", () => resolve(null));
-	});
+	// Read the first line — it may be an init message with the system prompt.
+	const firstLine = await lines.next();
 
 	if (firstLine !== null) {
 		try {
@@ -280,13 +371,23 @@ async function main(): Promise<void> {
 			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && parsed.type === "init") {
 				systemPrompt = parsed.system_prompt || undefined;
 			} else {
-				bufferedLine = firstLine;
+				// Not an init message — process it as a regular command after session starts.
+				await initSessionOrDie();
+				await handleLine(firstLine);
+				return runLineLoop(lines);
 			}
 		} catch {
-			bufferedLine = firstLine;
+			await initSessionOrDie();
+			await handleLine(firstLine);
+			return runLineLoop(lines);
 		}
 	}
 
+	await initSessionOrDie();
+	return runLineLoop(lines);
+}
+
+async function initSessionOrDie(): Promise<void> {
 	try {
 		await initSession();
 	} catch (err) {
@@ -294,74 +395,22 @@ async function main(): Promise<void> {
 		emitLifecycle("failed", { message: `Failed to initialize session: ${errorMessage}` });
 		process.exit(1);
 	}
-
-	if (bufferedLine !== null) {
-		rl.emit("line", bufferedLine);
-	}
-
-	rl.on("line", async (line: string) => {
-		let msg: Record<string, unknown>;
-		try {
-			msg = JSON.parse(line);
-		} catch {
-			emitLifecycle("failed", { message: `Invalid JSON: ${line}` });
-			return;
-		}
-
-		if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
-			emitLifecycle("failed", { message: `Expected JSON object, got: ${typeof msg}` });
-			return;
-		}
-
-		switch (msg.type) {
-			case "abort":
-				if (pendingAnswerResolve) {
-					pendingAnswerResolve("[Session aborted]");
-					pendingAnswerResolve = null;
-				}
-				rl.close();
-				process.exit(0);
-				break;
-			case "answer":
-				if (pendingAnswerResolve) {
-					const answer = String(msg.text ?? "");
-					emitInput("answer", answer);
-					pendingAnswerResolve(answer);
-					pendingAnswerResolve = null;
-				}
-				break;
-			case "prompt":
-				await runPrompt(String(msg.text ?? ""), "prompt");
-				break;
-			case "message":
-				await runPrompt(String(msg.text ?? ""), "message");
-				break;
-			case "steer":
-				if (session) {
-					// Fire-and-forget: steer interrupts the active streaming turn.
-					session.prompt(String(msg.text ?? ""), { streamingBehavior: "steer" }).catch((err: unknown) => {
-						const errorMessage = err instanceof Error ? err.message : String(err);
-						emitLifecycle("failed", { message: `Steer failed: ${errorMessage}` });
-					});
-					emitInput("message", String(msg.text ?? ""));
-				}
-				break;
-			default:
-				emitLifecycle("failed", { message: `Unknown message type: ${msg.type}` });
-		}
-	});
-
-	rl.on("close", () => {
-		process.exit(0);
-	});
-
-	process.on("SIGTERM", () => {
-		process.exit(0);
-	});
-	process.on("SIGINT", () => {
-		process.exit(0);
-	});
 }
+
+async function runLineLoop(lines: LineQueue): Promise<void> {
+	while (true) {
+		const line = await lines.next();
+		if (line === null) break; // stdin closed
+		await handleLine(line);
+	}
+}
+
+process.on("SIGTERM", () => {
+	process.exit(0);
+});
+process.on("SIGINT", () => {
+	process.exit(0);
+});
 
 main().catch(err => {
 	const errorMessage = err instanceof Error ? err.message : String(err);
