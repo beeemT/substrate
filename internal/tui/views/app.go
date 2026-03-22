@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -182,7 +184,21 @@ func NewApp(svcs Services) App {
 func RunTUI(svcs Services) error {
 	app := NewApp(svcs)
 	p := tea.NewProgram(app, tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
+
+	// Intercept SIGTERM so the quit-confirmation modal can run before exit.
+	// SIGINT is delivered by bubbletea as a ctrl+c key event; only SIGTERM needs
+	// explicit handling here.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM)
+	go func() {
+		for range sigs {
+			p.Send(QuitRequestMsg{})
+		}
+	}()
+
 	_, err := p.Run()
+	signal.Stop(sigs)
+	close(sigs)
 	return err
 }
 
@@ -811,6 +827,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
 		return a, tea.Batch(cmds...)
 
+	case QuitRequestMsg:
+		return a.handleQuitRequest()
+
 	case WorkspaceCancelMsg:
 		return a, tea.Quit
 
@@ -1365,7 +1384,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Confirm dialog captures all key input when active.
 	if a.confirmActive {
 		switch msg.String() {
-		case "y", "enter":
+		case "y", "enter", "ctrl+c":
+			// ctrl+c while a confirm is open acts as "yes": if this is the quit
+			// confirm, ctrl+c immediately confirms; for other confirms it prevents
+			// the user from getting stuck needing two ctrl+c presses to exit.
 			onYes := a.confirm.OnYes
 			a.confirm = components.ConfirmDialog{}
 			a.confirmActive = false
@@ -1382,10 +1404,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.String() == "ctrl+c" {
-		if a.svcs.InstanceID != "" {
-			return a, tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
-		}
-		return a, tea.Quit
+		return a.handleQuitRequest()
 	}
 
 	if a.activeOverlay == overlayWorkspaceInit {
@@ -1430,10 +1449,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q":
-		if a.svcs.InstanceID != "" {
-			return a, tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
-		}
-		return a, tea.Quit
+		return a.handleQuitRequest()
 	case "n":
 		return a, a.openNewSession()
 	case "s":
@@ -1721,6 +1737,35 @@ func (a *App) showDeleteSessionConfirm(sessionID string) {
 		"Delete this full session and all related data?",
 		func() tea.Msg { return DeleteSessionMsg{SessionID: sID} },
 	)
+}
+
+// handleQuitRequest checks for running agent sessions and shows a confirmation
+// dialog before quitting. When no sessions are running it quits immediately.
+// This is the single dispatch point for all quit paths (q, ctrl+c, SIGTERM).
+func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
+	n := a.activeSessionCount()
+	if n > 0 {
+		sessionWord := "sessions are"
+		if n == 1 {
+			sessionWord = "session is"
+		}
+		a.showConfirm(
+			"Quit",
+			fmt.Sprintf("%d agent %s running and will be interrupted. Quit anyway?", n, sessionWord),
+			a.quitCmd(),
+		)
+		return a, nil
+	}
+	return a, a.quitCmd()
+}
+
+// quitCmd returns the command that exits the program, cleaning up the instance
+// record when one exists.
+func (a App) quitCmd() tea.Cmd {
+	if a.svcs.InstanceID != "" {
+		return tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
+	}
+	return tea.Quit
 }
 
 func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
