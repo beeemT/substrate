@@ -554,8 +554,14 @@ func (s *ImplementationService) executeSubPlan(
 			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
 				slog.Warn("failed to update sub-plan status to failed", "error", err)
 			}
+		} else if outcome.Escalated {
+			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
+			subPlan.Status = domain.SubPlanFailed
+			subPlan.UpdatedAt = time.Now()
+			if err := s.subPlanRepo.Update(ctx, subPlan); err != nil {
+				slog.Warn("failed to update sub-plan status to failed after escalation", "error", err)
+			}
 		}
-		// Escalated: sub-plan stays in current status (in_progress). Human decides.
 		return result, nil
 	}
 

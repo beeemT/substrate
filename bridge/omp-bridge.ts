@@ -192,6 +192,12 @@ function createAskForemanTool(): unknown {
 			emit({ type: "question", question, context });
 			const answer = await new Promise<string>(resolve => {
 				pendingAnswerResolve = resolve;
+				setTimeout(() => {
+					if (pendingAnswerResolve === resolve) {
+						pendingAnswerResolve = null;
+						resolve("[No answer received within timeout. Proceed with your best judgment.]");
+					}
+				}, 10 * 60 * 1000);
 			});
 			return answer;
 		}
@@ -309,6 +315,10 @@ async function main(): Promise<void> {
 
 		switch (msg.type) {
 			case "abort":
+				if (pendingAnswerResolve) {
+					pendingAnswerResolve("[Session aborted]");
+					pendingAnswerResolve = null;
+				}
 				rl.close();
 				process.exit(0);
 				break;
