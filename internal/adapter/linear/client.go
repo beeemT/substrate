@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
+
+// maxResponseBodyBytes limits HTTP response body reads to prevent OOM.
+const maxResponseBodyBytes = 50 * 1024 * 1024 // 50 MiB
 
 const defaultEndpoint = "https://api.linear.app/graphql"
 
@@ -53,6 +57,7 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 		return fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return ErrRateLimited
 	}
@@ -63,7 +68,7 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 		Data   json.RawMessage `json:"data"`
 		Errors []gqlError      `json:"errors"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+	if err := json.NewDecoder(limitedBody).Decode(&wrapper); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if len(wrapper.Errors) > 0 {

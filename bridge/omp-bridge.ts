@@ -276,6 +276,11 @@ async function main(): Promise<void> {
 			return;
 		}
 
+		if (typeof msg !== "object" || msg === null || Array.isArray(msg)) {
+			emitLifecycle("failed", { message: `Expected JSON object, got: ${typeof msg}` });
+			return;
+		}
+
 		switch (msg.type) {
 			case "abort":
 				rl.close();

@@ -380,8 +380,14 @@ func validate(cfg *Config) error {
 	}
 
 	if cfg.Adapters.GitHub.BaseURL != "" {
-		if _, err := url.ParseRequestURI(cfg.Adapters.GitHub.BaseURL); err != nil {
+		if err := validateHTTPSURL(cfg.Adapters.GitHub.BaseURL); err != nil {
 			return fmt.Errorf("invalid github base_url: %w", err)
+		}
+	}
+
+	if cfg.Adapters.GitLab.BaseURL != "" {
+		if err := validateHTTPSURL(cfg.Adapters.GitLab.BaseURL); err != nil {
+			return fmt.Errorf("invalid gitlab base_url: %w", err)
 		}
 	}
 
@@ -427,4 +433,18 @@ func validateAbsoluteHTTPURL(raw string) error {
 	default:
 		return errors.New("must use http or https")
 	}
+}
+
+func validateHTTPSURL(raw string) error {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return err
+	}
+	if !parsed.IsAbs() || parsed.Host == "" {
+		return errors.New("must be an absolute URL")
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("must use https (bearer tokens must not be sent over plaintext)")
+	}
+	return nil
 }

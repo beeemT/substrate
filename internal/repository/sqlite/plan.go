@@ -133,17 +133,34 @@ func (r PlanRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// AppendFAQ adds a new FAQ entry to the plan's FAQ list.
+// AppendFAQ atomically appends a new FAQ entry to the plan's FAQ list.
+// Uses a single UPDATE with SQLite JSON functions to avoid read-modify-write races.
 func (r PlanRepo) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
-	// Get current plan
-	plan, err := r.Get(ctx, entry.PlanID)
+	entryJSON, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("get plan: %w", err)
+		return fmt.Errorf("marshal faq entry: %w", err)
 	}
 
-	// Append entry to FAQ
-	plan.FAQ = append(plan.FAQ, entry)
+	result, err := r.remote.NamedExecContext(ctx,
+		`UPDATE plans SET
+			faq = json_insert(COALESCE(NULLIF(faq, ''), '[]'), '$[#]', json(:entry)),
+			updated_at = datetime('now')
+		WHERE id = :id`,
+		map[string]any{
+			"entry": string(entryJSON),
+			"id":    entry.PlanID,
+		})
+	if err != nil {
+		return fmt.Errorf("append faq to plan %s: %w", entry.PlanID, err)
+	}
 
-	// Update plan
-	return r.Update(ctx, plan)
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("append faq to plan %s: get rows affected: %w", entry.PlanID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("append faq to plan %s: %w", entry.PlanID, sql.ErrNoRows)
+	}
+
+	return nil
 }

@@ -106,6 +106,12 @@ func run() error { //nolint:funlen
 	}
 	defer db.Close()
 
+	// Harden database file permissions — the file may have been created with
+	// the process umask (often 0644); restrict to owner-only access.
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		slog.Warn("failed to set database permissions", "path", dbPath, "err", err)
+	}
+
 	ctx := context.Background()
 
 	for _, pragma := range []string{

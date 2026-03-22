@@ -109,10 +109,13 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	// Build the command
 	var cmd *exec.Cmd
 
-	// Create session temp directory for sandbox
-	sessionTmpDir := "/tmp/substrate-" + opts.SessionID
-
 	if runtime.GOOS == "darwin" {
+		// Create session temp directory atomically to prevent symlink race on predictable paths
+		sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
+		if err != nil {
+			return nil, fmt.Errorf("create session temp dir: %w", err)
+		}
+
 		// macOS sandbox-exec profile
 		// Escape paths to prevent profile injection
 		escapedWorkDir := escapeSandboxPath(workDir)

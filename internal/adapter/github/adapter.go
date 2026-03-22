@@ -117,6 +117,10 @@ type completedPayload struct {
 
 const filterAll = "all"
 
+// maxResponseBodyBytes limits HTTP response body reads to prevent OOM from
+// a malicious or misconfigured API server.
+const maxResponseBodyBytes = 50 * 1024 * 1024 // 50 MiB
+
 func New(ctx context.Context, cfg config.GithubConfig) (*GithubAdapter, error) {
 	return newWithDeps(ctx, cfg, adapter.ReviewArtifactRepos{}, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
@@ -1067,15 +1071,16 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 		return err
 	}
 	defer resp.Body.Close()
+	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
+		data, _ := io.ReadAll(limitedBody)
 
 		return fmt.Errorf("github api status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if dst == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+	if err := json.NewDecoder(limitedBody).Decode(dst); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 

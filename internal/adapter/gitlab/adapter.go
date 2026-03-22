@@ -23,6 +23,10 @@ import (
 
 const minPollInterval = 30 * time.Second
 
+// maxResponseBodyBytes limits HTTP response body reads to prevent OOM from
+// a malicious or misconfigured API server.
+const maxResponseBodyBytes = 50 * 1024 * 1024 // 50 MiB
+
 const (
 	filterAll         = "all"
 	filterCreatedByMe = "created_by_me"
@@ -600,15 +604,16 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 		return err
 	}
 	defer resp.Body.Close()
+	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
+		data, _ := io.ReadAll(limitedBody)
 
 		return &apiError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if dst == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+	if err := json.NewDecoder(limitedBody).Decode(dst); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 
