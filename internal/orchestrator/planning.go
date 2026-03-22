@@ -161,7 +161,6 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	return s.planRun(ctx, workItemID, feedback, currentPlanText)
 }
 
-
 // FollowUpPlan transitions a completed work item back to planning with differential context.
 // It captures the current plan, implementation results, and user feedback to produce an updated plan.
 func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback string) (*domain.PlanningResult, error) {
@@ -271,6 +270,7 @@ func readLogTail(path string, n int) string {
 
 	return strings.Join(lines, "\n")
 }
+
 // buildPlanText reconstructs the full persisted plan document for review revisions.
 // Returns empty string on any error (best-effort; revision can proceed without prior context).
 func (s *PlanningService) buildPlanText(ctx context.Context, planID string) string {
@@ -456,7 +456,19 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
-	// 13. Transition work item to plan_review.
+	// 13. Transition plan from draft to pending_review.
+	if err := s.planSvc.SubmitForReview(ctx, plan.ID); err != nil {
+		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
+		}
+		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+			slog.Warn("failed to emit plan failed event", "error", emitErr)
+		}
+		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		return nil, fmt.Errorf("transition plan to pending review: %w", err)
+	}
+
+	// 14. Transition work item to plan_review.
 	if err := s.workItemSvc.SubmitPlanForReview(ctx, workItemID); err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
@@ -471,7 +483,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		slog.Warn("failed to complete planning session", "error", completeErr, "session_id", sessionID)
 	}
 
-	// 14. Emit PlanGenerated event.
+	// 15. Emit PlanGenerated event.
 	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, workItemID, plan.Version, workspace.ID); err != nil {
 		slog.Warn("failed to emit plan generated event", "error", err)
 	}
