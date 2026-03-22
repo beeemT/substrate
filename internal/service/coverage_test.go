@@ -14,7 +14,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo)
+	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
 
 	// Setup plan
 	plan := domain.Plan{
@@ -565,7 +565,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo)
+	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
 
 	t.Run("GetPlan not found", func(t *testing.T) {
 		_, err := svc.GetPlan(ctx, "nonexistent")

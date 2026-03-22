@@ -224,7 +224,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanPendingReview, OrchestratorPlan: "Overall plan text"},
 	}}
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}})
+	planSvc := service.NewPlanService(planRepo, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}}, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}}})
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 
@@ -277,7 +277,7 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
 	}}
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
 	sessionSvc := service.NewTaskService(sessionRepo)
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()

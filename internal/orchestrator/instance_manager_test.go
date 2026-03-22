@@ -174,7 +174,7 @@ func newPhase9bFixture() *phase9bFixture {
 	}
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
-	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
 
 	return &phase9bFixture{
 		instanceRepo: instanceRepo,

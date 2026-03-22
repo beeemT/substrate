@@ -10,17 +10,35 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
+// PlanRepoTransacter runs plan + sub-plan operations in a single database transaction.
+type PlanRepoTransacter interface {
+	TransactPlanRepos(ctx context.Context, fn func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error) error
+}
+
+// NoopPlanTransacter executes the function directly using the provided repos.
+// Used in tests where mock repositories don't require real transactions.
+type NoopPlanTransacter struct {
+	PlanRepo    repository.PlanRepository
+	SubPlanRepo repository.TaskPlanRepository
+}
+
+func (t NoopPlanTransacter) TransactPlanRepos(ctx context.Context, fn func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error) error {
+	return fn(ctx, t.PlanRepo, t.SubPlanRepo)
+}
+
 // PlanService provides business logic for plans and sub-plans.
 type PlanService struct {
 	planRepo    repository.PlanRepository
 	subPlanRepo repository.TaskPlanRepository
+	transacter  PlanRepoTransacter
 }
 
 // NewPlanService creates a new PlanService.
-func NewPlanService(planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) *PlanService {
+func NewPlanService(planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository, transacter PlanRepoTransacter) *PlanService {
 	return &PlanService{
 		planRepo:    planRepo,
 		subPlanRepo: subPlanRepo,
+		transacter:  transacter,
 	}
 }
 
@@ -175,93 +193,106 @@ func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content 
 
 // ApplyReviewedPlanOutput updates the persisted orchestration plan and sub-plans from a fully parsed review document.
 func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, rawOutput domain.RawPlanOutput) (domain.Plan, []domain.TaskPlan, error) {
-	plan, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return domain.Plan{}, nil, newNotFoundError("plan", id)
-	}
-	if plan.Status != domain.PlanPendingReview {
-		return domain.Plan{}, nil, newInvalidTransitionError(
-			planStatusName(plan.Status),
-			planStatusName(domain.PlanPendingReview),
-			"plan",
-		)
-	}
-	existingSubPlans, err := s.subPlanRepo.ListByPlanID(ctx, id)
-	if err != nil {
-		return domain.Plan{}, nil, err
-	}
+	var resultPlan domain.Plan
+	var resultSubPlans []domain.TaskPlan
 
-	now := time.Now()
-	existingByRepo := make(map[string]domain.TaskPlan, len(existingSubPlans))
-	for _, sp := range existingSubPlans {
-		existingByRepo[strings.ToLower(sp.RepositoryName)] = sp
-	}
+	err := s.transacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
+		plan, err := planRepo.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		if plan.Status != domain.PlanPendingReview {
+			return newInvalidTransitionError(
+				planStatusName(plan.Status),
+				planStatusName(domain.PlanPendingReview),
+				"plan",
+			)
+		}
+		existingSubPlans, err := subPlanRepo.ListByPlanID(ctx, id)
+		if err != nil {
+			return err
+		}
 
-	changed := plan.OrchestratorPlan != rawOutput.Orchestration || len(existingSubPlans) != len(rawOutput.SubPlans)
-	newVersion := plan.Version + 1
-	seen := make(map[string]bool, len(rawOutput.SubPlans))
-	updatedSubPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
-	for _, rawSubPlan := range rawOutput.SubPlans {
-		key := strings.ToLower(rawSubPlan.RepoName)
-		seen[key] = true
-		order := findSubPlanOrder(rawSubPlan.RepoName, rawOutput.ExecutionGroups)
-		if existing, ok := existingByRepo[key]; ok {
-			subPlanChanged := existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order
-			if subPlanChanged {
-				changed = true
-				existing.PlanningRound = newVersion
-				if existing.Status == domain.SubPlanCompleted {
-					existing.Status = domain.SubPlanPending
+		now := time.Now()
+		existingByRepo := make(map[string]domain.TaskPlan, len(existingSubPlans))
+		for _, sp := range existingSubPlans {
+			existingByRepo[strings.ToLower(sp.RepositoryName)] = sp
+		}
+
+		changed := plan.OrchestratorPlan != rawOutput.Orchestration || len(existingSubPlans) != len(rawOutput.SubPlans)
+		newVersion := plan.Version + 1
+		seen := make(map[string]bool, len(rawOutput.SubPlans))
+		updatedSubPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
+		for _, rawSubPlan := range rawOutput.SubPlans {
+			key := strings.ToLower(rawSubPlan.RepoName)
+			seen[key] = true
+			order := findSubPlanOrder(rawSubPlan.RepoName, rawOutput.ExecutionGroups)
+			if existing, ok := existingByRepo[key]; ok {
+				subPlanChanged := existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order
+				if subPlanChanged {
+					changed = true
+					existing.PlanningRound = newVersion
+					if existing.Status == domain.SubPlanCompleted {
+						existing.Status = domain.SubPlanPending
+					}
 				}
+				existing.RepositoryName = rawSubPlan.RepoName
+				existing.Content = rawSubPlan.Content
+				existing.Order = order
+				existing.UpdatedAt = now
+				if err := subPlanRepo.Update(ctx, existing); err != nil {
+					return err
+				}
+				updatedSubPlans = append(updatedSubPlans, existing)
+				continue
 			}
-			existing.RepositoryName = rawSubPlan.RepoName
-			existing.Content = rawSubPlan.Content
-			existing.Order = order
-			existing.UpdatedAt = now
-			if err := s.subPlanRepo.Update(ctx, existing); err != nil {
-				return domain.Plan{}, nil, err
+			changed = true
+			created := domain.TaskPlan{
+				ID:             domain.NewID(),
+				PlanID:         id,
+				RepositoryName: rawSubPlan.RepoName,
+				Content:        rawSubPlan.Content,
+				Order:          order,
+				PlanningRound:  newVersion,
+				Status:         domain.SubPlanPending,
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			}
-			updatedSubPlans = append(updatedSubPlans, existing)
+			if err := subPlanRepo.Create(ctx, created); err != nil {
+				return err
+			}
+			updatedSubPlans = append(updatedSubPlans, created)
+		}
+		for _, existing := range existingSubPlans {
+			if seen[strings.ToLower(existing.RepositoryName)] {
+				continue
+			}
+			changed = true
+			if err := subPlanRepo.Delete(ctx, existing.ID); err != nil {
+				return err
+			}
+		}
+		if !changed {
+			resultPlan = plan
+			resultSubPlans = updatedSubPlans
+			return nil
+		}
+		plan.OrchestratorPlan = rawOutput.Orchestration
+		plan.Version = newVersion
+		plan.UpdatedAt = now
+		if err := planRepo.Update(ctx, plan); err != nil {
+			return err
+		}
 
-			continue
-		}
-		changed = true
-		created := domain.TaskPlan{
-			ID:             domain.NewID(),
-			PlanID:         id,
-			RepositoryName: rawSubPlan.RepoName,
-			Content:        rawSubPlan.Content,
-			Order:          order,
-			PlanningRound:  newVersion,
-			Status:         domain.SubPlanPending,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		}
-		if err := s.subPlanRepo.Create(ctx, created); err != nil {
-			return domain.Plan{}, nil, err
-		}
-		updatedSubPlans = append(updatedSubPlans, created)
-	}
-	for _, existing := range existingSubPlans {
-		if seen[strings.ToLower(existing.RepositoryName)] {
-			continue
-		}
-		changed = true
-		if err := s.subPlanRepo.Delete(ctx, existing.ID); err != nil {
-			return domain.Plan{}, nil, err
-		}
-	}
-	if !changed {
-		return plan, updatedSubPlans, nil
-	}
-	plan.OrchestratorPlan = rawOutput.Orchestration
-	plan.Version = newVersion
-	plan.UpdatedAt = now
-	if err := s.planRepo.Update(ctx, plan); err != nil {
+		resultPlan = plan
+		resultSubPlans = updatedSubPlans
+		return nil
+	})
+	if err != nil {
 		return domain.Plan{}, nil, err
 	}
 
-	return plan, updatedSubPlans, nil
+	return resultPlan, resultSubPlans, nil
 }
 
 func findSubPlanOrder(repoName string, groups [][]string) int {

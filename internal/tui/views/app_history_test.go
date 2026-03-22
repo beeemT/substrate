@@ -358,7 +358,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
-	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}})
+	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}}, service.NoopPlanTransacter{PlanRepo: &cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, SubPlanRepo: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}}})
 	app := NewApp(Services{
 		Task:          service.NewTaskService(repo),
 		Session:       service.NewSessionService(workItemRepo),
@@ -493,7 +493,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
-	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}})
+	planSvc := service.NewPlanService(&cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}}, service.NoopPlanTransacter{PlanRepo: &cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}}, SubPlanRepo: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}}})
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
 	msg := deleteSessionCmd(Services{

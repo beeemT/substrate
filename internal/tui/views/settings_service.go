@@ -111,6 +111,7 @@ type SettingsService struct {
 	workItemRepo        repository.SessionRepository
 	planRepo            repository.PlanRepository
 	subPlanRepo         repository.TaskPlanRepository
+	planTransacter      service.PlanRepoTransacter
 	workspaceRepo       repository.WorkspaceRepository
 	sessionRepo         repository.TaskRepository
 	questionRepo        repository.QuestionRepository
@@ -134,6 +135,7 @@ func NewSettingsService(
 	workItemRepo repository.SessionRepository,
 	planRepo repository.PlanRepository,
 	subPlanRepo repository.TaskPlanRepository,
+	planTransacter service.PlanRepoTransacter,
 	workspaceRepo repository.WorkspaceRepository,
 	sessionRepo repository.TaskRepository,
 	questionRepo repository.QuestionRepository,
@@ -149,6 +151,7 @@ func NewSettingsService(
 		workItemRepo:        workItemRepo,
 		planRepo:            planRepo,
 		subPlanRepo:         subPlanRepo,
+		planTransacter:      planTransacter,
 		workspaceRepo:       workspaceRepo,
 		sessionRepo:         sessionRepo,
 		questionRepo:        questionRepo,
@@ -428,7 +431,7 @@ func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
 	workItemSvc := service.NewSessionService(s.workItemRepo)
-	planSvc := service.NewPlanService(s.planRepo, s.subPlanRepo)
+	planSvc := service.NewPlanService(s.planRepo, s.subPlanRepo, s.planTransacter)
 	workspaceSvc := service.NewWorkspaceService(s.workspaceRepo)
 	sessionSvc := service.NewTaskService(s.sessionRepo)
 	questionSvc := service.NewQuestionService(s.questionRepo)

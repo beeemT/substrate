@@ -142,10 +142,11 @@ func run() error { //nolint:funlen
 	ghPRRepo := sqlite.NewGithubPRRepo(remote)
 	glMRRepo := sqlite.NewGitlabMRRepo(remote)
 	sessionArtifactRepo := sqlite.NewSessionReviewArtifactRepo(remote)
+	planTransacter := sqlite.NewPlanTransacter(db)
 
 	// Build services.
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, planTransacter)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
 	sessionSvc := service.NewTaskService(sessionRepo)
 	questionSvc := service.NewQuestionService(questionRepo)
@@ -153,7 +154,7 @@ func run() error { //nolint:funlen
 	reviewSvc := service.NewReviewService(reviews)
 
 	settingsSvc := views.NewSettingsService(
-		workItemRepo, planRepo, subPlanRepo, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
+		workItemRepo, planRepo, subPlanRepo, planTransacter, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
 	)
 
 	// Build event bus.

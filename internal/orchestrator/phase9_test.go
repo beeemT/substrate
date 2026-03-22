@@ -553,7 +553,7 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 
 	cfg := testReviewConfig(maxCycles)
 	reviewSvc := service.NewReviewService(reviewRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
 	sessionSvc := service.NewTaskService(sessionRepo)
 	workItemSvc := service.NewSessionService(workItemRepo)
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
