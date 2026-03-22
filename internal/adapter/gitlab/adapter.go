@@ -172,10 +172,6 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 	case domain.ScopeInitiatives:
 		epics, err := a.listEpics(ctx, opts)
 		if err != nil {
-			if errors.Is(err, adapter.ErrBrowseNotSupported) {
-				return nil, err
-			}
-
 			return nil, err
 		}
 		items := make([]adapter.ListItem, 0, len(epics))
@@ -309,7 +305,7 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 					continue
 				}
 				for _, iss := range issues {
-					if len(filter.States) > 0 && !contains(filter.States, iss.State) {
+					if len(filter.States) > 0 && !slices.Contains(filter.States, iss.State) {
 						continue
 					}
 					prev, ok := seen[iss.IID]
@@ -414,11 +410,11 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	return issues, nil
 }
 
-func parseProjectIDFromMetadata(meta map[string]any) int64 {
+func parseIntFromMetadata(meta map[string]any, key string) int64 {
 	if len(meta) == 0 {
 		return 0
 	}
-	switch value := meta["project_id"].(type) {
+	switch value := meta[key].(type) {
 	case int64:
 		return value
 	case int:
@@ -434,24 +430,12 @@ func parseProjectIDFromMetadata(meta map[string]any) int64 {
 	}
 }
 
-func parseGroupIDFromMetadata(meta map[string]any) int64 {
-	if len(meta) == 0 {
-		return 0
-	}
-	switch value := meta["group_id"].(type) {
-	case int64:
-		return value
-	case int:
-		return int64(value)
-	case float64:
-		return int64(value)
-	case string:
-		id, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+func parseProjectIDFromMetadata(meta map[string]any) int64 {
+	return parseIntFromMetadata(meta, "project_id")
+}
 
-		return id
-	default:
-		return 0
-	}
+func parseGroupIDFromMetadata(meta map[string]any) int64 {
+	return parseIntFromMetadata(meta, "group_id")
 }
 
 func resolveSelectionProjectID(sel adapter.Selection) int64 {
@@ -581,17 +565,15 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if query != nil {
 		fullURL.RawQuery = query.Encode()
 	}
-	var reader strings.Reader
+	var bodyReader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("marshal request body: %w", err)
 		}
-		reader = *strings.NewReader(string(payload))
-	} else {
-		reader = *strings.NewReader("")
+		bodyReader = strings.NewReader(string(payload))
 	}
-	req, err := http.NewRequestWithContext(ctx, method, fullURL.String(), &reader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL.String(), bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -909,8 +891,4 @@ func derefTime(t *time.Time) time.Time {
 	}
 
 	return t.UTC()
-}
-
-func contains(values []string, want string) bool {
-	return slices.Contains(values, want)
 }

@@ -62,7 +62,7 @@ func ResolveSentryContext(cfg SentryConfig) ResolvedSentryContext {
 	baseURL = NormalizeSentryBaseURL(baseURL)
 
 	organization := strings.TrimSpace(cfg.Organization)
-	projects := normalizeSentryProjects(cfg.Projects)
+	projects := NormalizeProjects(cfg.Projects)
 
 	projectOrg, project := parseSentryProjectEnv(os.Getenv("SENTRY_PROJECT"))
 	if organization == "" {
@@ -171,7 +171,7 @@ func parseSentryProjectEnv(raw string) (string, string) {
 	return "", trimmed
 }
 
-func normalizeSentryProjects(projects []string) []string {
+func NormalizeProjects(projects []string) []string {
 	if len(projects) == 0 {
 		return nil
 	}

@@ -3,6 +3,7 @@ package sentry
 import (
 	"strings"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 )
 
@@ -24,7 +25,7 @@ func sentrySourceSummaries(issues []sentryIssue) []domain.SourceSummary {
 			Ref:         issueIdentifier(issue),
 			Title:       strings.TrimSpace(issue.Title),
 			Description: strings.TrimSpace(issue.Culprit),
-			Excerpt:     sentrySummaryExcerpt(issue.Culprit + " " + issue.Status),
+			Excerpt:     adapter.SummaryExcerpt(issue.Culprit + " " + issue.Status),
 			State:       strings.TrimSpace(issue.Status),
 			Container:   strings.TrimSpace(issue.Project.Slug),
 			URL:         strings.TrimSpace(issue.Permalink),
@@ -33,15 +34,6 @@ func sentrySourceSummaries(issues []sentryIssue) []domain.SourceSummary {
 	}
 
 	return summaries
-}
-
-func sentrySummaryExcerpt(text string) string {
-	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if len(trimmed) <= 240 {
-		return trimmed
-	}
-
-	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
 func sentryIssueSummaryMetadata(issue sentryIssue) []domain.SourceMetadataField {

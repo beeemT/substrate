@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 )
 
@@ -25,7 +26,7 @@ func gitlabIssueSourceSummaries(issues []issue) []domain.SourceSummary {
 			Ref:         ref,
 			Title:       strings.TrimSpace(issue.Title),
 			Description: strings.TrimSpace(issue.Description),
-			Excerpt:     gitlabSummaryExcerpt(issue.Description),
+			Excerpt:     adapter.SummaryExcerpt(issue.Description),
 			State:       strings.TrimSpace(issue.State),
 			Labels:      gitlabSourceLabels(issue.Labels),
 			Container:   gitlabProjectPath(issue),
@@ -47,7 +48,7 @@ func gitlabMilestoneSourceSummaries(projectID int64, milestones []milestone) []d
 			Ref:         fmt.Sprintf("project %d milestone #%d", projectID, milestone.ID),
 			Title:       strings.TrimSpace(milestone.Title),
 			Description: strings.TrimSpace(milestone.Description),
-			Excerpt:     gitlabSummaryExcerpt(milestone.Description),
+			Excerpt:     adapter.SummaryExcerpt(milestone.Description),
 			State:       strings.TrimSpace(milestone.State),
 			Container:   fmt.Sprintf("project %d", projectID),
 			CreatedAt:   milestone.CreatedAt,
@@ -56,15 +57,6 @@ func gitlabMilestoneSourceSummaries(projectID int64, milestones []milestone) []d
 	}
 
 	return summaries
-}
-
-func gitlabSummaryExcerpt(text string) string {
-	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if len(trimmed) <= 240 {
-		return trimmed
-	}
-
-	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
 func gitlabSourceLabels(labels []string) []string {

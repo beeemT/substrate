@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 )
 
@@ -18,7 +19,7 @@ func githubIssueSourceSummaries(issues []githubIssue) []domain.SourceSummary {
 			Ref:         ref,
 			Title:       strings.TrimSpace(issue.Title),
 			Description: strings.TrimSpace(issue.Body),
-			Excerpt:     summaryExcerpt(issue.Body),
+			Excerpt:     adapter.SummaryExcerpt(issue.Body),
 			State:       strings.TrimSpace(issue.State),
 			Labels:      issueLabels(issue),
 			Container:   githubSourceContainer(owner, repo),
@@ -41,7 +42,7 @@ func githubMilestoneSourceSummaries(owner, repo string, milestones []githubMiles
 			Ref:         ref,
 			Title:       strings.TrimSpace(milestone.Title),
 			Description: strings.TrimSpace(milestone.Description),
-			Excerpt:     summaryExcerpt(milestone.Description),
+			Excerpt:     adapter.SummaryExcerpt(milestone.Description),
 			State:       strings.TrimSpace(milestone.State),
 			Container:   githubSourceContainer(owner, repo),
 			URL:         strings.TrimSpace(milestone.HTMLURL),
@@ -51,15 +52,6 @@ func githubMilestoneSourceSummaries(owner, repo string, milestones []githubMiles
 	}
 
 	return summaries
-}
-
-func summaryExcerpt(text string) string {
-	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if len(trimmed) <= 240 {
-		return trimmed
-	}
-
-	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
 func githubSourceContainer(owner, repo string) string {

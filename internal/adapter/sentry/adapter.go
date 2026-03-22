@@ -77,7 +77,7 @@ func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient
 		baseURL:      strings.TrimRight(strings.TrimSpace(resolved.BaseURL), "/"),
 		token:        token,
 		organization: organization,
-		projects:     normalizeProjects(resolved.Projects),
+		projects:     config.NormalizeProjects(resolved.Projects),
 	}, nil
 }
 
@@ -375,27 +375,6 @@ func issueProjectQuery(projects []string) string {
 	default:
 		return "project:[" + strings.Join(projects, ",") + "]"
 	}
-}
-
-func normalizeProjects(projects []string) []string {
-	if len(projects) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(projects))
-	seen := make(map[string]struct{}, len(projects))
-	for _, project := range projects {
-		project = strings.TrimSpace(project)
-		if project == "" {
-			continue
-		}
-		if _, ok := seen[project]; ok {
-			continue
-		}
-		seen[project] = struct{}{}
-		out = append(out, project)
-	}
-
-	return out
 }
 
 func scopedProjects(allowlist []string, repo string) ([]string, bool) {

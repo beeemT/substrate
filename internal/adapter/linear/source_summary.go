@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 )
 
@@ -16,7 +17,7 @@ func linearIssueSourceSummaries(issues []linearIssue) []domain.SourceSummary {
 			Ref:         strings.TrimSpace(issue.Identifier),
 			Title:       strings.TrimSpace(issue.Title),
 			Description: strings.TrimSpace(issue.Description),
-			Excerpt:     linearSummaryExcerpt(issue.Description),
+			Excerpt:     adapter.SummaryExcerpt(issue.Description),
 			State:       strings.TrimSpace(issue.State.Name),
 			Labels:      labelNames(issue.Labels),
 			Container:   strings.TrimSpace(issue.Team.Key),
@@ -39,22 +40,13 @@ func linearProjectSourceSummaries(projects []linearProject) []domain.SourceSumma
 			Ref:         strings.TrimSpace(project.ID),
 			Title:       strings.TrimSpace(project.Name),
 			Description: strings.TrimSpace(project.Description),
-			Excerpt:     linearSummaryExcerpt(project.Description),
+			Excerpt:     adapter.SummaryExcerpt(project.Description),
 			State:       strings.TrimSpace(project.State),
 			Metadata:    linearProjectSummaryMetadata(project),
 		})
 	}
 
 	return summaries
-}
-
-func linearSummaryExcerpt(text string) string {
-	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if len(trimmed) <= 240 {
-		return trimmed
-	}
-
-	return strings.TrimSpace(trimmed[:237]) + "..."
 }
 
 func linearIssueSummaryMetadata(issue linearIssue) []domain.SourceMetadataField {
