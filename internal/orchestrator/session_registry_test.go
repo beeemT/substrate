@@ -12,6 +12,7 @@ import (
 type registryMockSession struct {
 	id       string
 	sentMsgs []string
+	aborted  bool
 	mu       sync.Mutex
 }
 
@@ -26,7 +27,14 @@ func (m *registryMockSession) SendMessage(_ context.Context, msg string) error {
 	m.sentMsgs = append(m.sentMsgs, msg)
 	return nil
 }
-func (m *registryMockSession) Abort(_ context.Context) error { return nil }
+
+func (m *registryMockSession) Abort(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.aborted = true
+	return nil
+}
+
 func (m *registryMockSession) Steer(_ context.Context, msg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -40,6 +48,12 @@ func (m *registryMockSession) messages() []string {
 	out := make([]string, len(m.sentMsgs))
 	copy(out, m.sentMsgs)
 	return out
+}
+
+func (m *registryMockSession) wasAborted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.aborted
 }
 
 func TestSessionRegistry_RegisterAndSend(t *testing.T) {
@@ -149,4 +163,44 @@ func TestSessionRegistry_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestSessionRegistry_AbortAndDeregister(t *testing.T) {
+	reg := NewSessionRegistry()
+	mock := &registryMockSession{id: "sess-1"}
+
+	reg.Register("sess-1", mock)
+
+	// AbortAndDeregister should call Abort and remove the session.
+	reg.AbortAndDeregister(context.Background(), "sess-1")
+
+	if !mock.wasAborted() {
+		t.Fatal("expected Abort to be called")
+	}
+	if reg.IsRunning("sess-1") {
+		t.Fatal("expected session to be deregistered")
+	}
+}
+
+func TestSessionRegistry_AbortAndDeregister_Unregistered(t *testing.T) {
+	reg := NewSessionRegistry()
+
+	// Should not panic on unregistered session.
+	reg.AbortAndDeregister(context.Background(), "nonexistent")
+}
+
+func TestSessionRegistry_AbortAndDeregister_Idempotent(t *testing.T) {
+	reg := NewSessionRegistry()
+	mock := &registryMockSession{id: "sess-1"}
+
+	reg.Register("sess-1", mock)
+
+	// First call aborts and deregisters.
+	reg.AbortAndDeregister(context.Background(), "sess-1")
+	if !mock.wasAborted() {
+		t.Fatal("expected Abort to be called")
+	}
+
+	// Second call is a no-op (not registered anymore).
+	reg.AbortAndDeregister(context.Background(), "sess-1")
 }

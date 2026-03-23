@@ -142,6 +142,11 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 
 	// Foreman lifecycle
 	foremanPlanID string // plan ID the Foreman was last started for
+
+	// Pipeline cancellation: maps workItemID → cancel func for the running
+	// orchestrator goroutine (implementation/planning). Used to tear down
+	// agent processes when the session is deleted.
+	pipelineCancels map[string]context.CancelFunc
 }
 
 // NewApp creates a new App from the given Services.
@@ -169,6 +174,7 @@ func NewApp(svcs Services) App {
 		liveInstanceIDs:                make(map[string]bool),
 		reviewSessionLogs:              make(map[string]string),
 		taskSessionSelectionByWorkItem: make(map[string]string),
+		pipelineCancels:                make(map[string]context.CancelFunc),
 		sessionsDir:                    sessionsDir,
 		hasWorkspace:                   svcs.WorkspaceID != "",
 	}
@@ -993,7 +999,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StartPlanMsg:
 		if a.svcs.Planning != nil {
-			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.WorkItemID))
+			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -1001,7 +1007,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RestartPlanMsg:
 		if a.svcs.Planning != nil && a.svcs.Session != nil {
-			cmds = append(cmds, RestartPlanningCmd(a.svcs.Session, a.svcs.Planning, a.svcs.Task, msg.WorkItemID))
+			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Session, a.svcs.Planning, a.svcs.Task, msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -1013,7 +1019,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanApprovedMsg:
 		if a.svcs.Implementation != nil {
-			cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, msg.PlanID))
+			cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, msg.PlanID))
 		}
 		if a.svcs.Foreman != nil {
 			a.foremanPlanID = msg.PlanID
@@ -1023,7 +1029,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanRequestChangesMsg:
 		if a.svcs.Planning != nil {
-			cmds = append(cmds, PlanWithFeedbackCmd(a.svcs.Planning, a.currentWorkItemID, msg.PlanID, msg.Feedback))
+			cmds = append(cmds, PlanWithFeedbackCmd(a.registerPipelineCancel(a.currentWorkItemID), a.svcs.Planning, a.currentWorkItemID, msg.PlanID, msg.Feedback))
 		} else {
 			a.toasts.AddToast("Plan revision requested (no planning service)", components.ToastInfo)
 		}
@@ -1079,7 +1085,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Planning == nil {
 			return a, nil
 		}
-		return a, FollowUpPlanCmd(a.svcs.Planning, msg.WorkItemID, msg.Feedback)
+		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID, msg.Feedback)
 
 	case FollowUpPlanResultMsg:
 		if msg.Err != nil {
@@ -1106,13 +1112,38 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case DeleteSessionMsg:
+		// Cancel the orchestrator goroutine (implementation/planning) for this
+		// work item. This cascades through executeWave → executeSubPlan → Wait
+		// → Abort on every running agent session owned by the pipeline.
+		a.cancelPipeline(msg.SessionID)
+
+		// Stop the Foreman if it is running for this work item's plan.
+		if a.svcs.Foreman != nil {
+			if plan := a.plans[msg.SessionID]; plan != nil && plan.ID == a.foremanPlanID {
+				cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+				a.foremanPlanID = ""
+			}
+		}
+
+		// Abort any remaining running sessions via the registry. This covers
+		// resumed and follow-up sessions that use fire-and-forget goroutines
+		// without a stored cancel handle. AbortAndDeregister is idempotent —
+		// sessions already torn down by the context cancel above are a no-op.
+		if a.svcs.SessionRegistry != nil {
+			for _, task := range a.sessions {
+				if task.WorkItemID == msg.SessionID {
+					a.svcs.SessionRegistry.AbortAndDeregister(context.Background(), task.ID)
+				}
+			}
+		}
+
 		cmds = append(cmds, deleteSessionCmd(a.svcs, a.sessionsDir, msg.SessionID, a.reviewSessionLogs))
 		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
 		if a.svcs.Implementation != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
-				cmds = append(cmds, RunImplementationCmd(a.svcs.Implementation, plan.ID))
+				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, plan.ID))
 				if a.svcs.Foreman != nil {
 					a.foremanPlanID = plan.ID
 					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
@@ -1209,7 +1240,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.upsertWorkItem(msg.Session)
 		cmds = append(cmds, a.focusWorkItemOverview(msg.Session.ID))
 		if a.svcs.Planning != nil {
-			cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, msg.Session.ID))
+			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.Session.ID), a.svcs.Planning, msg.Session.ID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -1240,7 +1271,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.upsertWorkItem(existing)
 			cmds = append(cmds, a.focusWorkItemOverview(existing.ID))
 			if a.svcs.Planning != nil {
-				cmds = append(cmds, StartPlanningCmd(a.svcs.Planning, existing.ID))
+				cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(existing.ID), a.svcs.Planning, existing.ID))
 			} else {
 				a.toasts.AddToast("Planning service not configured", components.ToastError)
 			}
@@ -1284,6 +1315,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(browserCmds...)
 
 	case ImplementationCompleteMsg:
+		a.cancelPipeline(msg.WorkItemID)
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -1752,10 +1784,47 @@ func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 
 func (a *App) showDeleteSessionConfirm(sessionID string) {
 	sID := sessionID
-	a.showConfirm("Delete Session",
-		"Delete this full session and all related data?",
+	var running int
+	for _, task := range a.sessions {
+		if task.WorkItemID == sID {
+			switch task.Status {
+			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+				running++
+			}
+		}
+	}
+	msg := "Delete this full session and all related data?"
+	if running > 0 {
+		sessionWord := "sessions"
+		if running == 1 {
+			sessionWord = "session"
+		}
+		msg = fmt.Sprintf("%d agent %s running and will be killed. %s", running, sessionWord, msg)
+	}
+	a.showConfirm("Delete Session", msg,
 		func() tea.Msg { return DeleteSessionMsg{SessionID: sID} },
 	)
+}
+
+// registerPipelineCancel creates a cancellable context for a work item's
+// pipeline goroutine and stores the cancel function. If a previous pipeline
+// context exists for this work item it is cancelled first.
+func (a *App) registerPipelineCancel(workItemID string) context.Context {
+	if cancel, ok := a.pipelineCancels[workItemID]; ok {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.pipelineCancels[workItemID] = cancel
+	return ctx
+}
+
+// cancelPipeline cancels the orchestrator goroutine for a work item and
+// removes the cancel function from the map.
+func (a *App) cancelPipeline(workItemID string) {
+	if cancel, ok := a.pipelineCancels[workItemID]; ok {
+		cancel()
+		delete(a.pipelineCancels, workItemID)
+	}
 }
 
 // handleQuitRequest checks for running agent sessions and shows a confirmation

@@ -424,9 +424,9 @@ func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.
 
 // StartPlanningCmd runs the planning pipeline for a work item in the background.
 // On completion it fires ActionDoneMsg; the 2 s poll loop picks up the new plan_review state.
-func StartPlanningCmd(svc *orchestrator.PlanningService, workItemID string) tea.Cmd {
+func StartPlanningCmd(ctx context.Context, svc *orchestrator.PlanningService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := svc.Plan(context.Background(), workItemID); err != nil {
+		if _, err := svc.Plan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
 
@@ -491,9 +491,8 @@ func ReconcileOrphanedTasksCmd(
 // RestartPlanningCmd rolls a work item back from planning to ingested (if needed)
 // and then re-runs the planning pipeline from the beginning. This handles the case
 // where a planning task was interrupted and the user wants to start fresh.
-func RestartPlanningCmd(workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.TaskService, workItemID string) tea.Cmd {
+func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.TaskService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
 		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -520,9 +519,9 @@ func RestartPlanningCmd(workItemSvc *service.SessionService, planningSvc *orches
 }
 
 // PlanWithFeedbackCmd rejects the old plan and starts a revision session.
-func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, feedback string) tea.Cmd {
+func PlanWithFeedbackCmd(ctx context.Context, svc *orchestrator.PlanningService, workItemID, planID, feedback string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := svc.PlanWithFeedback(context.Background(), workItemID, planID, feedback); err != nil {
+		if _, err := svc.PlanWithFeedback(ctx, workItemID, planID, feedback); err != nil {
 			return ErrMsg{Err: err}
 		}
 
@@ -532,9 +531,9 @@ func PlanWithFeedbackCmd(svc *orchestrator.PlanningService, workItemID, planID, 
 
 // RunImplementationCmd executes the implementation pipeline for an approved plan.
 // On success it returns ImplementationCompleteMsg so the caller can trigger review.
-func RunImplementationCmd(svc *orchestrator.ImplementationService, planID string) tea.Cmd {
+func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationService, planID string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := svc.Implement(context.Background(), planID)
+		result, err := svc.Implement(ctx, planID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -883,9 +882,9 @@ func FollowUpFailedSessionCmd(resumption *orchestrator.Resumption, svc *service.
 }
 
 // FollowUpPlanCmd starts a follow-up re-planning cycle for a completed work item.
-func FollowUpPlanCmd(svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
+func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := svc.FollowUpPlan(context.Background(), workItemID, feedback)
+		_, err := svc.FollowUpPlan(ctx, workItemID, feedback)
 		return FollowUpPlanResultMsg{WorkItemID: workItemID, Err: err}
 	}
 }

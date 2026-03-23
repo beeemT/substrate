@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -60,11 +61,29 @@ func (r *SessionRegistry) Steer(ctx context.Context, sessionID string, msg strin
 	return session.Steer(ctx, msg)
 }
 
-
 // IsRunning reports whether the given session ID is registered.
 func (r *SessionRegistry) IsRunning(sessionID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, ok := r.sessions[sessionID]
 	return ok
+}
+
+// AbortAndDeregister aborts the agent session identified by sessionID and removes
+// it from the registry. If the session is not registered this is a no-op.
+// Abort errors are logged but not returned because the caller's intent is to
+// tear down the session unconditionally.
+func (r *SessionRegistry) AbortAndDeregister(ctx context.Context, sessionID string) {
+	r.mu.Lock()
+	session, ok := r.sessions[sessionID]
+	if ok {
+		delete(r.sessions, sessionID)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return
+	}
+	if err := session.Abort(ctx); err != nil {
+		slog.Warn("session abort during deregister", "session_id", sessionID, "err", err)
+	}
 }
