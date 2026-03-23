@@ -1584,7 +1584,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 				a.content.SetMode(ContentModeSourceDetails)
 				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
-					a.content.sessionLog.SetAgentActive(false)
 				}
 				return nil
 			}
@@ -1599,7 +1598,6 @@ func (a *App) updateContentFromState() tea.Cmd {
 	a.content.SetOverviewData(a.buildOverviewData(wi))
 	if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
 		a.tailingSessionIDs = make(map[string]bool)
-		a.content.sessionLog.SetAgentActive(false)
 	}
 	return nil
 }

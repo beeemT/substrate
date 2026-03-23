@@ -317,3 +317,26 @@ func TestSessionLogSpinnerRestartsAfterDeactivateReactivate(t *testing.T) {
 		t.Fatalf("spinnerFrame = %d, want 0 after reactivation", m.spinnerFrame)
 	}
 }
+
+func TestContentSetModeDeactivatesSpinnerOnPlanningExit(t *testing.T) {
+	t.Parallel()
+
+	cm := NewContentModel(styles.NewStyles(styles.DefaultTheme))
+	cm.SetSize(80, 40)
+	cm.SetMode(ContentModePlanning)
+	cm.sessionLog.SetSize(80, 40)
+	cm.sessionLog.SetAgentActive(true)
+
+	// Transition away from planning.
+	cm.SetMode(ContentModeOverview)
+	if cm.sessionLog.agentActive {
+		t.Fatal("SetMode to overview must deactivate spinner")
+	}
+
+	// Re-entering planning: SetAgentActive(true) must restart the tick chain.
+	cm.SetMode(ContentModePlanning)
+	cmd := cm.sessionLog.SetAgentActive(true)
+	if cmd == nil {
+		t.Fatal("SetAgentActive(true) after mode transition must return tick cmd")
+	}
+}

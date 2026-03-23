@@ -64,8 +64,20 @@ func (m *ContentModel) SetTerminalSize(w, h int) {
 	m.overview.SetTerminalSize(w, h)
 }
 
-func (m *ContentModel) SetMode(mode ContentMode) { m.mode = mode }
-func (m ContentModel) Mode() ContentMode         { return m.mode }
+func (m *ContentModel) SetMode(mode ContentMode) {
+	if m.mode == mode {
+		m.mode = mode
+		return
+	}
+	prev := m.mode
+	m.mode = mode
+	// When leaving planning/session-interaction, kill the spinner tick chain
+	// so that re-entering restarts it cleanly via SetAgentActive(true).
+	if prev == ContentModePlanning || prev == ContentModeSessionInteraction {
+		m.sessionLog.SetAgentActive(false)
+	}
+}
+func (m ContentModel) Mode() ContentMode { return m.mode }
 
 func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 	m.currentWorkItem = wi
