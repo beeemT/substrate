@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -315,6 +316,32 @@ func (s *PlanService) DeletePlan(ctx context.Context, id string) error {
 	}
 
 	return s.planRepo.Delete(ctx, id)
+}
+
+// CreatePlanAtomic atomically deletes the old plan (when replacePlanID is non-empty)
+// and creates the new plan and sub-plans in a single transaction, so the UNIQUE
+// constraint on plans.work_item_id is never violated during a replace.
+func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan domain.Plan, subPlans []domain.TaskPlan) error {
+	return s.transacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
+		// When replacing a prior plan, delete it first so the UNIQUE constraint on
+		// plans.work_item_id is cleared before the INSERT. Sub-plans cascade-delete
+		// automatically. Both operations land in the same transaction so there is
+		// never a window where the work item has no plan row.
+		if replacePlanID != "" {
+			if err := planRepo.Delete(ctx, replacePlanID); err != nil {
+				return fmt.Errorf("delete replaced plan: %w", err)
+			}
+		}
+		if err := planRepo.Create(ctx, plan); err != nil {
+			return fmt.Errorf("create plan: %w", err)
+		}
+		for i := range subPlans {
+			if err := subPlanRepo.Create(ctx, subPlans[i]); err != nil {
+				return fmt.Errorf("create sub-plan for %s: %w", subPlans[i].RepositoryName, err)
+			}
+		}
+		return nil
+	})
 }
 
 // SubPlan operations

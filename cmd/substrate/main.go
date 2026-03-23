@@ -155,7 +155,7 @@ func run() error { //nolint:funlen
 	reviewSvc := service.NewReviewService(reviews)
 
 	settingsSvc := views.NewSettingsService(
-		workItemRepo, planRepo, subPlanRepo, planTransacter, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
+		workItemRepo, planRepo, subPlanRepo, planSvc, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
 	)
 
 	// Build event bus.
@@ -333,7 +333,7 @@ func run() error { //nolint:funlen
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			planSvc, workItemSvc, sessionSvc, planRepo, subPlanRepo, planTransacter, eventRepo, workspaceSvc, registry, cfg,
+			planSvc, workItemSvc, sessionSvc, eventRepo, workspaceSvc, registry, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)

@@ -20,7 +20,7 @@ func TestRenderPlanningPromptIncludesSessionDraftPath(t *testing.T) {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
 	}
 
-	svc := &PlanningService{templates: templates, planTransacter: service.NoopPlanTransacter{}}
+	svc := &PlanningService{templates: templates}
 	draftPath := "/tmp/workspace/.substrate/sessions/plan-123/plan-draft.md"
 	prompt, err := svc.renderPlanningPrompt(&domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
@@ -95,7 +95,6 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
-		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	rawContent, retries, warnings, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -202,7 +201,6 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
-		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	rawContent, retries, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -273,7 +271,6 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 		cfg:       &PlanningConfig{MaxParseRetries: 1, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
-		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -352,7 +349,6 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
-		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -434,7 +430,6 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 		harness:    harness,
 		templates:  templates,
 		sessionSvc: service.NewTaskService(sessionRepo),
-		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -563,6 +558,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
 	transacter := service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, transacter)
 
 	ctx := context.Background()
 
@@ -583,11 +579,9 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 	}
 
 	svc := &PlanningService{
-		planRepo:       planRepo,
-		subPlanRepo:    subPlanRepo,
-		planTransacter: transacter,
-		templates:      templates,
-		cfg:            DefaultPlanningConfig(),
+		planSvc:   planSvc,
+		templates: templates,
+		cfg:       DefaultPlanningConfig(),
 	}
 
 	rawOutput := domain.RawPlanOutput{

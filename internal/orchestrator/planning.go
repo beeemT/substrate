@@ -54,9 +54,6 @@ type PlanningService struct {
 	planSvc      *service.PlanService
 	workItemSvc  *service.SessionService
 	sessionSvc   *service.TaskService
-	planRepo     repository.PlanRepository
-	subPlanRepo  repository.TaskPlanRepository
-	planTransacter service.PlanRepoTransacter
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
 	registry     *SessionRegistry
@@ -110,9 +107,6 @@ func NewPlanningService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.TaskService,
-	planRepo repository.PlanRepository,
-	subPlanRepo repository.TaskPlanRepository,
-	planTransacter service.PlanRepoTransacter,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
@@ -131,9 +125,6 @@ func NewPlanningService(
 		planSvc:      planSvc,
 		workItemSvc:  workItemSvc,
 		sessionSvc:   sessionSvc,
-		planRepo:     planRepo,
-		subPlanRepo:  subPlanRepo,
-		planTransacter: planTransacter,
 		eventRepo:    eventRepo,
 		workspaceSvc: workspaceSvc,
 		registry:     registry,
@@ -248,7 +239,7 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 
 // buildRepoResultSummaries collects implementation results for each repo in the plan.
 func (s *PlanningService) buildRepoResultSummaries(ctx context.Context, planID string) []RepoResultSummary {
-	subPlans, err := s.subPlanRepo.ListByPlanID(ctx, planID)
+	subPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID)
 	if err != nil {
 		slog.Warn("failed to list sub-plans for follow-up summaries", "error", err, "plan_id", planID)
 		return nil
@@ -831,27 +822,7 @@ func (s *PlanningService) buildAndPersistPlan(
 		})
 	}
 
-	err := s.planTransacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
-		// When replacing a prior plan, delete it first so the UNIQUE constraint on
-		// plans.work_item_id is cleared before the INSERT. Sub-plans cascade-delete
-		// automatically. Both operations land in the same transaction so there is
-		// never a window where the work item has no plan row.
-		if replacePlanID != "" {
-			if err := planRepo.Delete(ctx, replacePlanID); err != nil {
-				return fmt.Errorf("delete replaced plan: %w", err)
-			}
-		}
-		if err := planRepo.Create(ctx, *plan); err != nil {
-			return fmt.Errorf("create plan: %w", err)
-		}
-		for i := range subPlans {
-			if err := subPlanRepo.Create(ctx, subPlans[i]); err != nil {
-				return fmt.Errorf("create sub-plan for %s: %w", subPlans[i].RepositoryName, err)
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	if err := s.planSvc.CreatePlanAtomic(ctx, replacePlanID, *plan, subPlans); err != nil {
 		return nil, nil, err
 	}
 

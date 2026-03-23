@@ -186,9 +186,6 @@ func newTestEnv(t *testing.T) *testEnv {
 		planSvc,
 		workItemSvc,
 		sessionSvc,
-		planRepo,
-		subPlanRepo,
-		reposqlite.NewPlanTransacter(db),
 		eventRepo,
 		workspaceSvc,
 		nil, // registry

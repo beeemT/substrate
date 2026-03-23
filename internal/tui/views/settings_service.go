@@ -111,7 +111,7 @@ type SettingsService struct {
 	workItemRepo        repository.SessionRepository
 	planRepo            repository.PlanRepository
 	subPlanRepo         repository.TaskPlanRepository
-	planTransacter      service.PlanRepoTransacter
+	planSvc             *service.PlanService
 	workspaceRepo       repository.WorkspaceRepository
 	sessionRepo         repository.TaskRepository
 	questionRepo        repository.QuestionRepository
@@ -135,7 +135,7 @@ func NewSettingsService(
 	workItemRepo repository.SessionRepository,
 	planRepo repository.PlanRepository,
 	subPlanRepo repository.TaskPlanRepository,
-	planTransacter service.PlanRepoTransacter,
+	planSvc *service.PlanService,
 	workspaceRepo repository.WorkspaceRepository,
 	sessionRepo repository.TaskRepository,
 	questionRepo repository.QuestionRepository,
@@ -151,7 +151,7 @@ func NewSettingsService(
 		workItemRepo:        workItemRepo,
 		planRepo:            planRepo,
 		subPlanRepo:         subPlanRepo,
-		planTransacter:      planTransacter,
+		planSvc:             planSvc,
 		workspaceRepo:       workspaceRepo,
 		sessionRepo:         sessionRepo,
 		questionRepo:        questionRepo,
@@ -431,7 +431,6 @@ func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
 	workItemSvc := service.NewSessionService(s.workItemRepo)
-	planSvc := service.NewPlanService(s.planRepo, s.subPlanRepo, s.planTransacter)
 	workspaceSvc := service.NewWorkspaceService(s.workspaceRepo)
 	sessionSvc := service.NewTaskService(s.sessionRepo)
 	questionSvc := service.NewQuestionService(s.questionRepo)
@@ -561,26 +560,26 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.planTransacter, s.eventRepo, workspaceSvc, registry, cfg)
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, s.planSvc, workItemSvc, sessionSvc, s.eventRepo, workspaceSvc, registry, cfg)
 		if err != nil {
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}
 	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
-		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus, registry)
+		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, s.planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus, registry)
 	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, workspaceSvc, registry, reviewPipeline)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, workspaceSvc, registry, reviewPipeline)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, s.sessionRepo, bus, registry)
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, s.planSvc, s.sessionRepo, bus, registry)
 	}
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, s.planRepo, bus)
+		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, s.planRepo, bus)
 	}
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
@@ -601,7 +600,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		SettingsData: snapshot,
 		Services: Services{
 			Session:          workItemSvc,
-			Plan:             planSvc,
+			Plan:             s.planSvc,
 			TaskPlan:         s.subPlanRepo,
 			Task:             sessionSvc,
 			Question:         questionSvc,
