@@ -1,12 +1,15 @@
 package views
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/orchestrator"
 )
 
 // newQuitTestApp creates a minimal App with the given sessions list.
@@ -14,6 +17,19 @@ func newQuitTestApp(sessions []domain.Task) App {
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
 	app.sessions = sessions
 	return app
+}
+
+// newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
+func newQuitTestAppWithRegistry(sessions []domain.Task) (App, *orchestrator.SessionRegistry) {
+	reg := orchestrator.NewSessionRegistry()
+	app := NewApp(Services{
+		WorkspaceID:     "ws-1",
+		WorkspaceName:   "test",
+		Settings:        &SettingsService{},
+		SessionRegistry: reg,
+	})
+	app.sessions = sessions
+	return app, reg
 }
 
 func runningSessions(n int) []domain.Task {
@@ -151,8 +167,17 @@ func TestQuitConfirmYAccepts(t *testing.T) {
 	if afterConfirm.confirmActive {
 		t.Fatal("confirmActive = true after y, expected dialog to be dismissed")
 	}
-	if !isQuitCmd(cmd) {
-		t.Fatalf("cmd = %v after confirming quit, want tea.Quit", cmd)
+
+	// The confirm returns a cmd that produces QuitConfirmedMsg.
+	msg := cmd()
+	if _, ok := msg.(QuitConfirmedMsg); !ok {
+		t.Fatalf("confirm cmd returned %T, want QuitConfirmedMsg", msg)
+	}
+
+	// Dispatch QuitConfirmedMsg to trigger teardown + quit.
+	_, quitCmd := afterConfirm.Update(msg)
+	if !isQuitCmd(quitCmd) {
+		t.Fatalf("QuitConfirmedMsg did not produce tea.Quit")
 	}
 }
 
@@ -171,8 +196,15 @@ func TestQuitConfirmCtrlCForceQuits(t *testing.T) {
 	if afterConfirm.confirmActive {
 		t.Fatal("confirmActive = true after ctrl+c on confirm, expected force-quit")
 	}
-	if !isQuitCmd(cmd) {
-		t.Fatalf("cmd = %v after ctrl+c on confirm, want tea.Quit", cmd)
+
+	msg := cmd()
+	if _, ok := msg.(QuitConfirmedMsg); !ok {
+		t.Fatalf("confirm cmd returned %T, want QuitConfirmedMsg", msg)
+	}
+
+	_, quitCmd := afterConfirm.Update(msg)
+	if !isQuitCmd(quitCmd) {
+		t.Fatalf("QuitConfirmedMsg did not produce tea.Quit after ctrl+c")
 	}
 }
 
@@ -193,5 +225,84 @@ func TestQuitConfirmEscCancels(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatalf("cmd = %v after esc on confirm, want nil (no quit)", cmd)
+	}
+}
+
+// quitTestMockSession is a minimal adapter.AgentSession that tracks Abort calls.
+type quitTestMockSession struct {
+	id      string
+	aborted bool
+}
+
+func (m *quitTestMockSession) ID() string                                    { return m.id }
+func (m *quitTestMockSession) Wait(_ context.Context) error                  { return nil }
+func (m *quitTestMockSession) Events() <-chan adapter.AgentEvent             { return nil }
+func (m *quitTestMockSession) SendMessage(_ context.Context, _ string) error { return nil }
+func (m *quitTestMockSession) Abort(_ context.Context) error                 { m.aborted = true; return nil }
+func (m *quitTestMockSession) Steer(_ context.Context, _ string) error       { return nil }
+
+// TestQuitConfirmedMsgAbortsRegistrySessions verifies that dispatching
+// QuitConfirmedMsg calls AbortAndDeregister on running sessions and cancels
+// pipeline contexts.
+func TestQuitConfirmedMsgAbortsRegistrySessions(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.Task{
+		{ID: "task-1", WorkItemID: "wi-1", Status: domain.AgentSessionRunning},
+		{ID: "task-2", WorkItemID: "wi-1", Status: domain.AgentSessionCompleted},
+		{ID: "task-3", WorkItemID: "wi-2", Status: domain.AgentSessionRunning},
+	}
+	app, reg := newQuitTestAppWithRegistry(sessions)
+
+	// Register running sessions in the registry.
+	mock1 := &quitTestMockSession{id: "task-1"}
+	mock3 := &quitTestMockSession{id: "task-3"}
+	reg.Register("task-1", mock1)
+	reg.Register("task-3", mock3)
+
+	// Register pipeline cancel contexts.
+	_ = app.registerPipelineCancel("wi-1")
+	_ = app.registerPipelineCancel("wi-2")
+
+	_, cmd := app.Update(QuitConfirmedMsg{})
+	if !isQuitCmd(cmd) {
+		t.Fatal("QuitConfirmedMsg did not produce tea.Quit")
+	}
+
+	// Running sessions should have been aborted.
+	if !mock1.aborted {
+		t.Fatal("task-1 (running) should have been aborted")
+	}
+	if mock3.aborted == false {
+		t.Fatal("task-3 (running) should have been aborted")
+	}
+
+	// Registry should no longer track either session.
+	if reg.IsRunning("task-1") {
+		t.Fatal("task-1 should be deregistered")
+	}
+	if reg.IsRunning("task-3") {
+		t.Fatal("task-3 should be deregistered")
+	}
+}
+
+// TestQuitConfirmedMsgCancelsPipelineContexts verifies that pipeline
+// cancel functions are actually invoked during quit teardown.
+func TestQuitConfirmedMsgCancelsPipelineContexts(t *testing.T) {
+	t.Parallel()
+
+	app := newQuitTestApp(nil)
+	ctx := app.registerPipelineCancel("wi-1")
+
+	// Before quit, context should be alive.
+	if ctx.Err() != nil {
+		t.Fatal("pipeline context cancelled prematurely")
+	}
+
+	app.Update(QuitConfirmedMsg{})
+
+	// After quit, context should be cancelled.
+	if ctx.Err() == nil {
+		t.Fatal("pipeline context was not cancelled by QuitConfirmedMsg")
 	}
 }

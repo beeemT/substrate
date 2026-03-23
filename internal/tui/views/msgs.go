@@ -137,6 +137,10 @@ type PlanningRestartedMsg struct{ Message string }
 // QuitRequestMsg fires when an OS signal (SIGTERM) requests a graceful quit.
 type QuitRequestMsg struct{}
 
+// QuitConfirmedMsg fires when the user confirms the quit dialog. The handler
+// tears down all running pipelines and agent sessions before exiting.
+type QuitConfirmedMsg struct{}
+
 // AbandonSessionMsg fires when the user confirms abandonment.
 type AbandonSessionMsg struct{ SessionID string }
 

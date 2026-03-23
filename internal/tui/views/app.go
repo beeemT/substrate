@@ -838,6 +838,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case QuitRequestMsg:
 		return a.handleQuitRequest()
 
+	case QuitConfirmedMsg:
+		a.teardownAllPipelines()
+		return a, a.quitCmd()
+
 	case WorkspaceCancelMsg:
 		return a, tea.Quit
 
@@ -1827,9 +1831,34 @@ func (a *App) cancelPipeline(workItemID string) {
 	}
 }
 
+// teardownAllPipelines cancels every active pipeline context, stops the
+// Foreman, and aborts all sessions tracked by the registry. This is the
+// shared teardown path for both quit and (potentially) batch-delete.
+func (a *App) teardownAllPipelines() {
+	for id, cancel := range a.pipelineCancels {
+		cancel()
+		delete(a.pipelineCancels, id)
+	}
+
+	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
+		_ = a.svcs.Foreman.Stop(context.Background())
+		a.foremanPlanID = ""
+	}
+
+	if a.svcs.SessionRegistry != nil {
+		for _, task := range a.sessions {
+			switch task.Status {
+			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+				a.svcs.SessionRegistry.AbortAndDeregister(context.Background(), task.ID)
+			}
+		}
+	}
+}
+
 // handleQuitRequest checks for running agent sessions and shows a confirmation
-// dialog before quitting. When no sessions are running it quits immediately.
-// This is the single dispatch point for all quit paths (q, ctrl+c, SIGTERM).
+// dialog before quitting. When no sessions are running it tears down pipelines
+// and quits immediately. Otherwise a confirm dialog is shown; on acceptance
+// QuitConfirmedMsg performs the teardown.
 func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
 	n := a.activeSessionCount()
 	if n > 0 {
@@ -1839,11 +1868,12 @@ func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
 		}
 		a.showConfirm(
 			"Quit",
-			fmt.Sprintf("%d agent %s running and will be interrupted. Quit anyway?", n, sessionWord),
-			a.quitCmd(),
+			fmt.Sprintf("%d agent %s running and will be killed. Quit anyway?", n, sessionWord),
+			func() tea.Msg { return QuitConfirmedMsg{} },
 		)
 		return a, nil
 	}
+	a.teardownAllPipelines()
 	return a, a.quitCmd()
 }
 
