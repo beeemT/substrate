@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,10 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -495,7 +499,7 @@ func validPlanningSubPlan(goal string) string {
 // where buildAndPersistPlan tries to INSERT without first clearing the slot.
 type uniqueWorkItemPlanRepo struct {
 	plans map[string]domain.Plan // planID → Plan
-	taken map[string]string       // workItemID → planID holding the slot
+	taken map[string]string      // workItemID → planID holding the slot
 }
 
 func newUniqueWorkItemPlanRepo() *uniqueWorkItemPlanRepo {
@@ -557,8 +561,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	transacter := service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}
-	planSvc := service.NewPlanService(planRepo, subPlanRepo, transacter)
+	planSvc := service.NewPlanService(service.NoopTransact(planRepo, subPlanRepo))
 
 	ctx := context.Background()
 
@@ -624,4 +627,200 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 	if err2 == nil {
 		t.Error("expected UNIQUE constraint error when creating without replacePlanID; got nil")
 	}
+}
+
+// TestPlan_ReplacesExistingRejectedPlanOnRestart is the integration regression test
+// for the UNIQUE constraint failure on plans.work_item_id.
+//
+// Production failure sequence:
+//  1. User clicked Reject on a plan in the plan_review UI (PlanRejectMsg path).
+//     → plan row stays in DB with status=rejected
+//     → work item transitions plan_review → ingested
+//  2. User triggered re-planning (StartPlanMsg path).
+//     → svc.Plan(ctx, workItemID) called without a replacePlanID
+//     → agent ran successfully and wrote a valid plan draft
+//     → buildAndPersistPlan tried to INSERT a new plan for the same work_item_id
+//     → UNIQUE constraint fired because the rejected plan still occupied the slot
+//     → session failed with exit_code=1; work item returned to ingested
+//     Steps 1-2 repeated three times (sessions 01KMDVM6, 01KME1D5, 01KME3JY).
+//
+// Fix: Plan() now looks up any existing rejected plan and passes its ID as
+// replacePlanID, so CreatePlanAtomic can delete it atomically before inserting.
+func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceRoot := filepath.Join(tmpDir, "workspace")
+
+	// Fake gitwork repo: ScanWorkspace detects .bare/, buildRepoPointer calls
+	// the fake git-work binary to get the main worktree path.
+	repoName := "test-repo"
+	repoDir := filepath.Join(workspaceRoot, repoName)
+	mainDir := filepath.Join(repoDir, "main")
+	for _, d := range []string{filepath.Join(repoDir, ".bare"), mainDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("create dir %s: %v", d, err)
+		}
+	}
+
+	// Fake git-work binary: returns a JSON worktree list with mainDir as the main.
+	wtJSON, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"worktrees": []map[string]any{
+				{"dir": mainDir, "branch": "main", "current": true},
+			},
+		},
+	})
+	fakeGitWork := filepath.Join(tmpDir, "git-work")
+	if err := os.WriteFile(fakeGitWork,
+		[]byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' %q\n", string(wtJSON))), 0o755); err != nil {
+		t.Fatalf("write fake git-work: %v", err)
+	}
+
+	const (
+		workItemID  = "wi-replan-test"
+		workspaceID = "ws-replan-test"
+		oldPlanID   = "plan-rejected-test"
+	)
+
+	// Plan repo with UNIQUE enforcement (mirrors SQLite behaviour).
+	planRepo := newUniqueWorkItemPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	planSvc := service.NewPlanService(service.NoopTransact(planRepo, subPlanRepo))
+
+	// Seed the rejected plan that occupies the unique slot.
+	if err := planRepo.Create(context.Background(), domain.Plan{
+		ID:         oldPlanID,
+		WorkItemID: workItemID,
+		Status:     domain.PlanRejected,
+		Version:    1,
+	}); err != nil {
+		t.Fatalf("seed rejected plan: %v", err)
+	}
+
+	// Work item and workspace repos.
+	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
+	}}
+	workItemSvc := service.NewSessionService(workItemRepo)
+
+	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
+	}}
+	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
+
+	sessionRepo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(sessionRepo)
+
+	eventRepo := &planTestEventRepo{}
+
+	// Discoverer uses the fake binary so buildRepoPointer succeeds for test-repo.
+	gitClient := gitwork.NewClient(fakeGitWork)
+	globalCfg := &config.Config{}
+	globalCfg.Plan.MaxParseRetries = ptrInt(0)
+	discoverer := NewDiscoverer(gitClient, globalCfg)
+
+	// Harness writes a valid plan referencing repoName.
+	planText := validPlanningPlan_withRepo(repoName, "Keep test-repo isolated.", "Implement the resolver.")
+	harness := &planningHarnessSpy{planText: planText}
+
+	pcfg := DefaultPlanningConfig()
+	pcfg.MaxParseRetries = 0
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventRepo, workspaceSvc, nil, globalCfg)
+	if err != nil {
+		t.Fatalf("NewPlanningService: %v", err)
+	}
+
+	// Call Plan() — should atomically replace the rejected plan.
+	result, planErr := svc.Plan(context.Background(), workItemID)
+	if planErr != nil {
+		t.Fatalf("Plan(): %v", planErr)
+	}
+	if result == nil {
+		t.Fatal("Plan() returned nil result")
+	}
+
+	// Old plan must be gone: the unique slot was released and re-taken.
+	if _, exists := planRepo.plans[oldPlanID]; exists {
+		t.Error("old rejected plan still present after Plan(): replacePlanID was not passed to buildAndPersistPlan")
+	}
+
+	// New plan must now occupy the slot.
+	if planRepo.taken[workItemID] == oldPlanID || planRepo.taken[workItemID] == "" {
+		t.Errorf("unique slot not updated: still points to %q", planRepo.taken[workItemID])
+	}
+}
+
+// validPlanningPlan_withRepo returns a complete valid substrate plan for the named repo.
+func validPlanningPlan_withRepo(repoName, orchestration, goal string) string {
+	return "```substrate-plan\nexecution_groups:\n  - [" + repoName + "]\n```\n\n## Orchestration\n" +
+		orchestration + "\n\n## SubPlan: " + repoName + "\n" + validPlanningSubPlan(goal) + "\n"
+}
+
+// planTestWorkItemRepo is a minimal in-memory SessionRepository for planning tests.
+type planTestWorkItemRepo struct {
+	items map[string]domain.Session
+}
+
+func (r *planTestWorkItemRepo) Get(_ context.Context, id string) (domain.Session, error) {
+	if item, ok := r.items[id]; ok {
+		return item, nil
+	}
+	return domain.Session{}, repository.ErrNotFound
+}
+
+func (r *planTestWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
+	return nil, nil
+}
+
+func (r *planTestWorkItemRepo) Create(_ context.Context, item domain.Session) error {
+	r.items[item.ID] = item
+	return nil
+}
+
+func (r *planTestWorkItemRepo) Update(_ context.Context, item domain.Session) error {
+	r.items[item.ID] = item
+	return nil
+}
+
+func (r *planTestWorkItemRepo) Delete(_ context.Context, id string) error {
+	delete(r.items, id)
+	return nil
+}
+
+// planTestWorkspaceRepo is a minimal in-memory WorkspaceRepository for planning tests.
+type planTestWorkspaceRepo struct {
+	workspaces map[string]domain.Workspace
+}
+
+func (r *planTestWorkspaceRepo) Get(_ context.Context, id string) (domain.Workspace, error) {
+	if ws, ok := r.workspaces[id]; ok {
+		return ws, nil
+	}
+	return domain.Workspace{}, repository.ErrNotFound
+}
+
+func (r *planTestWorkspaceRepo) Create(_ context.Context, ws domain.Workspace) error {
+	r.workspaces[ws.ID] = ws
+	return nil
+}
+
+func (r *planTestWorkspaceRepo) Update(_ context.Context, ws domain.Workspace) error {
+	r.workspaces[ws.ID] = ws
+	return nil
+}
+
+func (r *planTestWorkspaceRepo) Delete(_ context.Context, id string) error {
+	delete(r.workspaces, id)
+	return nil
+}
+
+// planTestEventRepo is a no-op EventRepository for planning tests.
+type planTestEventRepo struct{}
+
+func (r *planTestEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (r *planTestEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (r *planTestEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
 }

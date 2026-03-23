@@ -152,7 +152,22 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	return s.planRun(ctx, planRunRequest{workItemID: workItemID})
+	// A hard rejection (PlanRejectMsg path) leaves the plan row in the DB with
+	// status=rejected while transitioning the work item back to ingested. If the
+	// user triggers re-planning from ingested, Plan() is called again and the
+	// INSERT in buildAndPersistPlan would collide with the still-existing rejected
+	// plan row (plans.work_item_id has a UNIQUE constraint). Pass the rejected
+	// plan's ID so CreatePlanAtomic can delete it atomically before inserting the
+	// new plan, satisfying the constraint without a window where the slot is empty.
+	var replacePlanID string
+	if existing, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID); err == nil &&
+		existing.Status == domain.PlanRejected {
+		replacePlanID = existing.ID
+	}
+	return s.planRun(ctx, planRunRequest{
+		workItemID:    workItemID,
+		replacePlanID: replacePlanID,
+	})
 }
 
 // PlanWithFeedback runs a revision planning session for a work item in plan_review state.
