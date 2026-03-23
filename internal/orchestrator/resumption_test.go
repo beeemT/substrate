@@ -174,7 +174,7 @@ func newPhase9bFixture() *phase9bFixture {
 	}
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
-	planSvc := service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	return &phase9bFixture{
 		instanceRepo: instanceRepo,
@@ -237,7 +237,7 @@ func TestAbandonSession_TransitionsToFailed(t *testing.T) {
 	fix := newPhase9bFixture()
 	fix.seedInterruptedSession("sess-abandoned")
 
-	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 
 	if err := r.AbandonSession(context.Background(), "sess-abandoned"); err != nil {
 		t.Fatalf("AbandonSession: %v", err)
@@ -253,7 +253,7 @@ func TestAbandonSession_RejectsNonInterrupted(t *testing.T) {
 	fix := newPhase9bFixture()
 	fix.seedRunningSession("sess-running", "inst-x")
 
-	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 
 	if err := r.AbandonSession(context.Background(), "sess-running"); err == nil {
 		t.Error("expected error when abandoning a non-interrupted session, got nil")
@@ -297,7 +297,7 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 	defer fix.bus.Unsubscribe(sub.ID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 
 	interrupted := fix.sessionRepo.sessions[intID]
 	result, err := resumption.ResumeSession(ctx, interrupted, "inst-new")
@@ -356,7 +356,7 @@ func TestResumeSession_OldSessionTransitionsToFailed(t *testing.T) {
 	// No log file — readLastNLines falls back to "unavailable" gracefully.
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 
 	interrupted := fix.sessionRepo.sessions["sess-int2"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new2")
@@ -385,7 +385,7 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 	interrupted := fix.sessionRepo.sessions["sess-int3"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new3")
 	if err == nil {
@@ -438,7 +438,7 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	}
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.sessionRepo, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
 
 	interrupted := fix.sessionRepo.sessions["sess-int4"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new4")

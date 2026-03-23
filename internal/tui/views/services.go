@@ -15,7 +15,6 @@ import (
 type Services struct {
 	Session   *service.SessionService
 	Plan      *service.PlanService
-	TaskPlan  repository.TaskPlanRepository
 	Task      *service.TaskService
 	Question  *service.QuestionService
 	Instance  *service.InstanceService

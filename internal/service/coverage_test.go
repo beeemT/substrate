@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 // Additional tests to reach >90% coverage
@@ -14,7 +15,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	// Setup plan
 	plan := domain.Plan{
@@ -565,7 +566,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	t.Run("GetPlan not found", func(t *testing.T) {
 		_, err := svc.GetPlan(ctx, "nonexistent")

@@ -156,7 +156,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// --- Services ---
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo, reposqlite.NewPlanTransacter(db))
+	planSvc := service.NewPlanService(reposqlite.NewTransacter(db))
 	sessionSvc := service.NewTaskService(sessionRepo)
 	reviewSvc := service.NewReviewService(reviewRepo)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
@@ -204,10 +204,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		planSvc,
 		workItemSvc,
 		sessionSvc,
-		subPlanRepo,
-		sessionRepo,
-		eventRepo,
 		workspaceSvc,
+		nil, // registry
+		nil, // reviewPipeline
 	)
 
 	// --- Review pipeline ---
@@ -218,9 +217,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		sessionSvc,
 		planSvc,
 		workItemSvc,
-		sessionRepo,
-		planRepo,
 		bus,
+		nil, // registry
 	)
 
 	// --- Resumption ---
@@ -228,8 +226,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		mockHarness,
 		sessionSvc,
 		planSvc,
-		sessionRepo,
 		bus,
+		nil, // registry
 	)
 
 	_ = questionSvc  // used by Foreman; not exercised in these tests

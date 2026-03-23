@@ -109,8 +109,6 @@ func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
 
 type SettingsService struct {
 	workItemRepo        repository.SessionRepository
-	planRepo            repository.PlanRepository
-	subPlanRepo         repository.TaskPlanRepository
 	planSvc             *service.PlanService
 	workspaceRepo       repository.WorkspaceRepository
 	sessionRepo         repository.TaskRepository
@@ -133,8 +131,6 @@ type viewsServicesReload struct {
 
 func NewSettingsService(
 	workItemRepo repository.SessionRepository,
-	planRepo repository.PlanRepository,
-	subPlanRepo repository.TaskPlanRepository,
 	planSvc *service.PlanService,
 	workspaceRepo repository.WorkspaceRepository,
 	sessionRepo repository.TaskRepository,
@@ -149,8 +145,6 @@ func NewSettingsService(
 ) *SettingsService {
 	return &SettingsService{
 		workItemRepo:        workItemRepo,
-		planRepo:            planRepo,
-		subPlanRepo:         subPlanRepo,
 		planSvc:             planSvc,
 		workspaceRepo:       workspaceRepo,
 		sessionRepo:         sessionRepo,
@@ -567,19 +561,19 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	}
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
-		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, s.planSvc, workItemSvc, s.sessionRepo, s.planRepo, bus, registry)
+		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, s.planSvc, workItemSvc, bus, registry)
 	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, s.subPlanRepo, s.sessionRepo, workspaceSvc, registry, reviewPipeline)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, s.planSvc, s.sessionRepo, bus, registry)
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, s.planSvc, bus, registry)
 	}
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, s.planRepo, bus)
+		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, bus)
 	}
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
@@ -601,7 +595,6 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		Services: Services{
 			Session:          workItemSvc,
 			Plan:             s.planSvc,
-			TaskPlan:         s.subPlanRepo,
 			Task:             sessionSvc,
 			Question:         questionSvc,
 			Instance:         instanceSvc,

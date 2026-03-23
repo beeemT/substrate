@@ -1039,12 +1039,12 @@ func TestTransactCommit(t *testing.T) {
 	ctx := context.Background()
 
 	executer := goatomicsqlx.NewExecuter(db)
-	transacter := generic.NewTransacter[generic.SQLXRemote, reposqlite.Resources](
+	transacter := generic.NewTransacter[generic.SQLXRemote, repository.Resources](
 		executer, reposqlite.ResourcesFactory,
 	)
 
 	var wsID string
-	err := transacter.Transact(ctx, func(ctx context.Context, res reposqlite.Resources) error {
+	err := transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		ws := domain.Workspace{
 			ID:        domain.NewID(),
 			Name:      "transact-ws",
@@ -1077,13 +1077,13 @@ func TestTransactRollback(t *testing.T) {
 	ctx := context.Background()
 
 	executer := goatomicsqlx.NewExecuter(db)
-	transacter := generic.NewTransacter[generic.SQLXRemote, reposqlite.Resources](
+	transacter := generic.NewTransacter[generic.SQLXRemote, repository.Resources](
 		executer, reposqlite.ResourcesFactory,
 	)
 
 	deliberateErr := errors.New("deliberate")
 	var wsID string
-	err := transacter.Transact(ctx, func(ctx context.Context, res reposqlite.Resources) error {
+	err := transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		ws := domain.Workspace{
 			ID:        domain.NewID(),
 			Name:      "rollback-ws",

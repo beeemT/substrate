@@ -561,7 +561,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(service.NoopTransact(planRepo, subPlanRepo))
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	ctx := context.Background()
 
@@ -684,7 +684,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	// Plan repo with UNIQUE enforcement (mirrors SQLite behaviour).
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(service.NoopTransact(planRepo, subPlanRepo))
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	// Seed the rejected plan that occupies the unique slot.
 	if err := planRepo.Create(context.Background(), domain.Plan{

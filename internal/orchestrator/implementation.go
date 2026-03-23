@@ -17,7 +17,6 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"golang.org/x/sync/errgroup"
 )
@@ -32,8 +31,6 @@ type ImplementationService struct {
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
 	sessionSvc     *service.TaskService
-	subPlanRepo    repository.TaskPlanRepository
-	sessionRepo    repository.TaskRepository
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	reviewPipeline *ReviewPipeline
@@ -61,8 +58,6 @@ func NewImplementationService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.TaskService,
-	subPlanRepo repository.TaskPlanRepository,
-	sessionRepo repository.TaskRepository,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	reviewPipeline *ReviewPipeline,
@@ -76,8 +71,6 @@ func NewImplementationService(
 		planSvc:        planSvc,
 		workItemSvc:    workItemSvc,
 		sessionSvc:     sessionSvc,
-		subPlanRepo:    subPlanRepo,
-		sessionRepo:    sessionRepo,
 		workspaceSvc:   workspaceSvc,
 		registry:       registry,
 		reviewPipeline: reviewPipeline,
@@ -159,7 +152,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	}
 
 	// 5. Get sub-plans
-	subPlans, err := s.subPlanRepo.ListByPlanID(ctx, planID)
+	subPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID)
 	if err != nil {
 		return nil, fmt.Errorf("get sub-plans: %w", err)
 	}
@@ -1162,14 +1155,15 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 // persists it. Errors are logged as warnings since the in-memory state is
 // already consistent and the next Implement call will reconcile.
 func (s *ImplementationService) persistSubPlanStatus(ctx context.Context, sp *domain.TaskPlan, status domain.TaskPlanStatus) {
-	sp.Status = status
-	sp.UpdatedAt = time.Now()
-	if err := s.subPlanRepo.Update(ctx, *sp); err != nil {
+	if err := s.planSvc.TransitionSubPlan(ctx, sp.ID, status); err != nil {
 		slog.Warn("failed to persist sub-plan status",
 			"error", err,
 			"sub_plan_id", sp.ID,
 			"status", status)
 	}
+	// Always update in-memory state so the orchestrator can continue.
+	sp.Status = status
+	sp.UpdatedAt = time.Now()
 }
 
 // Helper functions

@@ -132,8 +132,6 @@ func run() error { //nolint:funlen
 	// Build repositories.
 	remote := dbRemote{db}
 	workItemRepo := sqlite.NewSessionRepo(remote)
-	planRepo := sqlite.NewPlanRepo(remote)
-	subPlanRepo := sqlite.NewSubPlanRepo(remote)
 	workspaceRepo := sqlite.NewWorkspaceRepo(remote)
 	sessionRepo := sqlite.NewTaskRepo(remote)
 	questionRepo := sqlite.NewQuestionRepo(remote)
@@ -143,11 +141,11 @@ func run() error { //nolint:funlen
 	ghPRRepo := sqlite.NewGithubPRRepo(remote)
 	glMRRepo := sqlite.NewGitlabMRRepo(remote)
 	sessionArtifactRepo := sqlite.NewSessionReviewArtifactRepo(remote)
-	planTransacter := sqlite.NewPlanTransacter(db)
+	transacter := sqlite.NewTransacter(db)
 
 	// Build services.
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo, planTransacter)
+	planSvc := service.NewPlanService(transacter)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
 	sessionSvc := service.NewTaskService(sessionRepo)
 	questionSvc := service.NewQuestionService(questionRepo)
@@ -155,7 +153,7 @@ func run() error { //nolint:funlen
 	reviewSvc := service.NewReviewService(reviews)
 
 	settingsSvc := views.NewSettingsService(
-		workItemRepo, planRepo, subPlanRepo, planSvc, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
+		workItemRepo, planSvc, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
 	)
 
 	// Build event bus.
@@ -343,27 +341,27 @@ func run() error { //nolint:funlen
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(
 			cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
-			sessionRepo, planRepo, bus, registry,
+			bus, registry,
 		)
 	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
 		implSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
-			planSvc, workItemSvc, sessionSvc, subPlanRepo, sessionRepo, workspaceSvc, registry,
+			planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
 			reviewPipeline,
 		)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, sessionSvc, planSvc, sessionRepo, bus, registry,
+			harnesses.Resume, sessionSvc, planSvc, bus, registry,
 		)
 	}
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
 		foreman = orchestrator.NewForeman(
-			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, planRepo, bus,
+			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus,
 		)
 	}
 	settingsData, err := settingsSvc.Snapshot(cfg)
@@ -374,7 +372,6 @@ func run() error { //nolint:funlen
 	svcs := views.Services{
 		Session:          workItemSvc,
 		Plan:             planSvc,
-		TaskPlan:         subPlanRepo,
 		Task:             sessionSvc,
 		Question:         questionSvc,
 		Instance:         instanceSvc,

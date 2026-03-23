@@ -7,40 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
-// PlanRepoTransacter runs plan + sub-plan operations in a single database transaction.
-type PlanRepoTransacter interface {
-	TransactPlanRepos(ctx context.Context, fn func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error) error
-}
-
-// NoopPlanTransacter executes the function directly using the provided repos.
-// Used in tests where mock repositories don't require real transactions.
-type NoopPlanTransacter struct {
-	PlanRepo    repository.PlanRepository
-	SubPlanRepo repository.TaskPlanRepository
-}
-
-func (t NoopPlanTransacter) TransactPlanRepos(ctx context.Context, fn func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error) error {
-	return fn(ctx, t.PlanRepo, t.SubPlanRepo)
-}
-
 // PlanService provides business logic for plans and sub-plans.
 type PlanService struct {
-	planRepo    repository.PlanRepository
-	subPlanRepo repository.TaskPlanRepository
-	transacter  PlanRepoTransacter
+	transacter atomic.Transacter[repository.Resources]
 }
 
 // NewPlanService creates a new PlanService.
-func NewPlanService(planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository, transacter PlanRepoTransacter) *PlanService {
-	return &PlanService{
-		planRepo:    planRepo,
-		subPlanRepo: subPlanRepo,
-		transacter:  transacter,
-	}
+func NewPlanService(transacter atomic.Transacter[repository.Resources]) *PlanService {
+	return &PlanService{transacter: transacter}
 }
 
 // Plan state transitions
@@ -77,22 +56,30 @@ func canTransitionSubPlan(from, to domain.TaskPlanStatus) bool {
 
 // GetPlan retrieves a plan by ID.
 func (s *PlanService) GetPlan(ctx context.Context, id string) (domain.Plan, error) {
-	plan, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return domain.Plan{}, newNotFoundError("plan", id)
-	}
-
-	return plan, nil
+	var result domain.Plan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		result = plan
+		return nil
+	})
+	return result, err
 }
 
 // GetPlanByWorkItemID retrieves a plan by work item ID.
 func (s *PlanService) GetPlanByWorkItemID(ctx context.Context, workItemID string) (domain.Plan, error) {
-	plan, err := s.planRepo.GetByWorkItemID(ctx, workItemID)
-	if err != nil {
-		return domain.Plan{}, newNotFoundError("plan for work item", workItemID)
-	}
-
-	return plan, nil
+	var result domain.Plan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.GetByWorkItemID(ctx, workItemID)
+		if err != nil {
+			return newNotFoundError("plan for work item", workItemID)
+		}
+		result = plan
+		return nil
+	})
+	return result, err
 }
 
 // CreatePlan creates a new plan in draft status.
@@ -113,28 +100,32 @@ func (s *PlanService) CreatePlan(ctx context.Context, plan domain.Plan) error {
 		plan.Version = 1
 	}
 
-	return s.planRepo.Create(ctx, plan)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Plans.Create(ctx, plan)
+	})
 }
 
 // TransitionPlan transitions a plan to a new status.
 func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.PlanStatus) error {
-	plan, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("plan", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
 
-	if !canTransitionPlan(plan.Status, to) {
-		return newInvalidTransitionError(
-			planStatusName(plan.Status),
-			planStatusName(to),
-			"plan",
-		)
-	}
+		if !canTransitionPlan(plan.Status, to) {
+			return newInvalidTransitionError(
+				planStatusName(plan.Status),
+				planStatusName(to),
+				"plan",
+			)
+		}
 
-	plan.Status = to
-	plan.UpdatedAt = time.Now()
+		plan.Status = to
+		plan.UpdatedAt = time.Now()
 
-	return s.planRepo.Update(ctx, plan)
+		return res.Plans.Update(ctx, plan)
+	})
 }
 
 // SubmitForReview transitions a plan from draft to pending_review.
@@ -154,42 +145,45 @@ func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
 
 // RevisePlan transitions a rejected plan back to pending_review and increments version.
 func (s *PlanService) RevisePlan(ctx context.Context, id string, newContent string) error {
-	plan, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("plan", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
 
-	if plan.Status != domain.PlanRejected {
-		return newInvalidTransitionError(
-			planStatusName(plan.Status),
-			planStatusName(domain.PlanPendingReview),
-			"plan",
-		)
-	}
+		if plan.Status != domain.PlanRejected {
+			return newInvalidTransitionError(
+				planStatusName(plan.Status),
+				planStatusName(domain.PlanPendingReview),
+				"plan",
+			)
+		}
 
-	plan.Status = domain.PlanPendingReview
-	plan.OrchestratorPlan = newContent
-	plan.Version++
-	plan.UpdatedAt = time.Now()
+		plan.Status = domain.PlanPendingReview
+		plan.OrchestratorPlan = newContent
+		plan.Version++
+		plan.UpdatedAt = time.Now()
 
-	return s.planRepo.Update(ctx, plan)
+		return res.Plans.Update(ctx, plan)
+	})
 }
 
 // UpdatePlanContent updates the plan content without changing status.
 func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content string) error {
-	plan, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("plan", id)
-	}
-	if plan.Status != domain.PlanDraft && plan.Status != domain.PlanPendingReview {
-		return newInvalidInputError("can only update content of draft or pending_review plans", "status")
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		if plan.Status != domain.PlanDraft && plan.Status != domain.PlanPendingReview {
+			return newInvalidInputError("can only update content of draft or pending_review plans", "status")
+		}
 
-	}
+		plan.OrchestratorPlan = content
+		plan.UpdatedAt = time.Now()
 
-	plan.OrchestratorPlan = content
-	plan.UpdatedAt = time.Now()
-
-	return s.planRepo.Update(ctx, plan)
+		return res.Plans.Update(ctx, plan)
+	})
 }
 
 // ApplyReviewedPlanOutput updates the persisted orchestration plan and sub-plans from a fully parsed review document.
@@ -197,8 +191,8 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 	var resultPlan domain.Plan
 	var resultSubPlans []domain.TaskPlan
 
-	err := s.transacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
-		plan, err := planRepo.Get(ctx, id)
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
@@ -209,7 +203,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				"plan",
 			)
 		}
-		existingSubPlans, err := subPlanRepo.ListByPlanID(ctx, id)
+		existingSubPlans, err := res.SubPlans.ListByPlanID(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -241,7 +235,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				existing.Content = rawSubPlan.Content
 				existing.Order = order
 				existing.UpdatedAt = now
-				if err := subPlanRepo.Update(ctx, existing); err != nil {
+				if err := res.SubPlans.Update(ctx, existing); err != nil {
 					return err
 				}
 				updatedSubPlans = append(updatedSubPlans, existing)
@@ -259,7 +253,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				CreatedAt:      now,
 				UpdatedAt:      now,
 			}
-			if err := subPlanRepo.Create(ctx, created); err != nil {
+			if err := res.SubPlans.Create(ctx, created); err != nil {
 				return err
 			}
 			updatedSubPlans = append(updatedSubPlans, created)
@@ -269,7 +263,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				continue
 			}
 			changed = true
-			if err := subPlanRepo.Delete(ctx, existing.ID); err != nil {
+			if err := res.SubPlans.Delete(ctx, existing.ID); err != nil {
 				return err
 			}
 		}
@@ -281,7 +275,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 		plan.OrchestratorPlan = rawOutput.Orchestration
 		plan.Version = newVersion
 		plan.UpdatedAt = now
-		if err := planRepo.Update(ctx, plan); err != nil {
+		if err := res.Plans.Update(ctx, plan); err != nil {
 			return err
 		}
 
@@ -310,33 +304,42 @@ func findSubPlanOrder(repoName string, groups [][]string) int {
 
 // DeletePlan deletes a plan.
 func (s *PlanService) DeletePlan(ctx context.Context, id string) error {
-	_, err := s.planRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("plan", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		_, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
 
-	return s.planRepo.Delete(ctx, id)
+		return res.Plans.Delete(ctx, id)
+	})
+}
+
+// AppendFAQ adds a question-answer entry to the plan's FAQ.
+func (s *PlanService) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Plans.AppendFAQ(ctx, entry)
+	})
 }
 
 // CreatePlanAtomic atomically deletes the old plan (when replacePlanID is non-empty)
 // and creates the new plan and sub-plans in a single transaction, so the UNIQUE
 // constraint on plans.work_item_id is never violated during a replace.
 func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan domain.Plan, subPlans []domain.TaskPlan) error {
-	return s.transacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		// When replacing a prior plan, delete it first so the UNIQUE constraint on
 		// plans.work_item_id is cleared before the INSERT. Sub-plans cascade-delete
 		// automatically. Both operations land in the same transaction so there is
 		// never a window where the work item has no plan row.
 		if replacePlanID != "" {
-			if err := planRepo.Delete(ctx, replacePlanID); err != nil {
+			if err := res.Plans.Delete(ctx, replacePlanID); err != nil {
 				return fmt.Errorf("delete replaced plan: %w", err)
 			}
 		}
-		if err := planRepo.Create(ctx, plan); err != nil {
+		if err := res.Plans.Create(ctx, plan); err != nil {
 			return fmt.Errorf("create plan: %w", err)
 		}
 		for i := range subPlans {
-			if err := subPlanRepo.Create(ctx, subPlans[i]); err != nil {
+			if err := res.SubPlans.Create(ctx, subPlans[i]); err != nil {
 				return fmt.Errorf("create sub-plan for %s: %w", subPlans[i].RepositoryName, err)
 			}
 		}
@@ -348,17 +351,30 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 
 // GetSubPlan retrieves a sub-plan by ID.
 func (s *PlanService) GetSubPlan(ctx context.Context, id string) (domain.TaskPlan, error) {
-	sp, err := s.subPlanRepo.Get(ctx, id)
-	if err != nil {
-		return domain.TaskPlan{}, newNotFoundError("sub-plan", id)
-	}
-
-	return sp, nil
+	var result domain.TaskPlan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		sp, err := res.SubPlans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("sub-plan", id)
+		}
+		result = sp
+		return nil
+	})
+	return result, err
 }
 
 // ListSubPlansByPlanID retrieves all sub-plans for a plan.
 func (s *PlanService) ListSubPlansByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
-	return s.subPlanRepo.ListByPlanID(ctx, planID)
+	var result []domain.TaskPlan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plans, err := res.SubPlans.ListByPlanID(ctx, planID)
+		if err != nil {
+			return err
+		}
+		result = plans
+		return nil
+	})
+	return result, err
 }
 
 // CreateSubPlan creates a new sub-plan in pending status.
@@ -376,28 +392,32 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) err
 	sp.CreatedAt = now
 	sp.UpdatedAt = now
 
-	return s.subPlanRepo.Create(ctx, sp)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.SubPlans.Create(ctx, sp)
+	})
 }
 
 // TransitionSubPlan transitions a sub-plan to a new status.
 func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
-	sp, err := s.subPlanRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("sub-plan", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		sp, err := res.SubPlans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("sub-plan", id)
+		}
 
-	if !canTransitionSubPlan(sp.Status, to) {
-		return newInvalidTransitionError(
-			subPlanStatusName(sp.Status),
-			subPlanStatusName(to),
-			"sub-plan",
-		)
-	}
+		if !canTransitionSubPlan(sp.Status, to) {
+			return newInvalidTransitionError(
+				subPlanStatusName(sp.Status),
+				subPlanStatusName(to),
+				"sub-plan",
+			)
+		}
 
-	sp.Status = to
-	sp.UpdatedAt = time.Now()
+		sp.Status = to
+		sp.UpdatedAt = time.Now()
 
-	return s.subPlanRepo.Update(ctx, sp)
+		return res.SubPlans.Update(ctx, sp)
+	})
 }
 
 // StartSubPlan transitions a sub-plan from pending to in_progress.
@@ -422,53 +442,74 @@ func (s *PlanService) RetrySubPlan(ctx context.Context, id string) error {
 
 // UpdateSubPlanContent updates the sub-plan content without changing status.
 func (s *PlanService) UpdateSubPlanContent(ctx context.Context, id string, content string) error {
-	sp, err := s.subPlanRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("sub-plan", id)
-	}
-	if sp.Status != domain.SubPlanPending && sp.Status != domain.SubPlanFailed {
-		return newInvalidInputError("can only update content of pending or failed sub-plans", "status")
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		sp, err := res.SubPlans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("sub-plan", id)
+		}
+		if sp.Status != domain.SubPlanPending && sp.Status != domain.SubPlanFailed {
+			return newInvalidInputError("can only update content of pending or failed sub-plans", "status")
+		}
 
-	sp.Content = content
-	sp.UpdatedAt = time.Now()
+		sp.Content = content
+		sp.UpdatedAt = time.Now()
 
-	return s.subPlanRepo.Update(ctx, sp)
+		return res.SubPlans.Update(ctx, sp)
+	})
 }
 
 // DeleteSubPlan deletes a sub-plan.
 func (s *PlanService) DeleteSubPlan(ctx context.Context, id string) error {
-	_, err := s.subPlanRepo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("sub-plan", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		_, err := res.SubPlans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("sub-plan", id)
+		}
 
-	return s.subPlanRepo.Delete(ctx, id)
+		return res.SubPlans.Delete(ctx, id)
+	})
 }
 
 // CreateSubPlansBatch creates multiple sub-plans in a single call.
 func (s *PlanService) CreateSubPlansBatch(ctx context.Context, subPlans []domain.TaskPlan) error {
-	for _, sp := range subPlans {
-		if err := s.CreateSubPlan(ctx, sp); err != nil {
-			return err
+	now := time.Now()
+	for i := range subPlans {
+		if subPlans[i].Status == "" {
+			subPlans[i].Status = domain.SubPlanPending
 		}
+		if subPlans[i].Status != domain.SubPlanPending {
+			return newInvalidInputError("initial status must be pending", "status")
+		}
+		subPlans[i].CreatedAt = now
+		subPlans[i].UpdatedAt = now
 	}
-
-	return nil
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		for i := range subPlans {
+			if err := res.SubPlans.Create(ctx, subPlans[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // AllSubPlansCompleted checks if all sub-plans for a plan are completed.
 func (s *PlanService) AllSubPlansCompleted(ctx context.Context, planID string) (bool, error) {
-	subPlans, err := s.subPlanRepo.ListByPlanID(ctx, planID)
-	if err != nil {
-		return false, err
-	}
-
-	for _, sp := range subPlans {
-		if sp.Status != domain.SubPlanCompleted {
-			return false, nil
+	var result bool
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		subPlans, err := res.SubPlans.ListByPlanID(ctx, planID)
+		if err != nil {
+			return err
 		}
-	}
 
-	return len(subPlans) > 0, nil // Return true only if there are sub-plans and all are completed
+		for _, sp := range subPlans {
+			if sp.Status != domain.SubPlanCompleted {
+				return nil
+			}
+		}
+
+		result = len(subPlans) > 0 // Return true only if there are sub-plans and all are completed
+		return nil
+	})
+	return result, err
 }

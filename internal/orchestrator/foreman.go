@@ -13,7 +13,6 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -31,7 +30,6 @@ type Foreman struct {
 	planSvc     *service.PlanService
 	questionSvc *service.QuestionService
 	sessionSvc  *service.TaskService
-	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
 
 	mu            sync.Mutex
@@ -56,7 +54,6 @@ func NewForeman(
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
 	sessionSvc *service.TaskService,
-	planRepo repository.PlanRepository,
 	eventBus *event.Bus,
 ) *Foreman {
 	return &Foreman{
@@ -65,7 +62,6 @@ func NewForeman(
 		planSvc:       planSvc,
 		questionSvc:   questionSvc,
 		sessionSvc:    sessionSvc,
-		planRepo:      planRepo,
 		eventBus:      eventBus,
 		questionCh:    make(chan pendingQuestion, 100),
 		questionFront: make(chan pendingQuestion, 100),
@@ -91,7 +87,7 @@ func (f *Foreman) Start(ctx context.Context, planID string) error {
 	f.planID = planID
 
 	// Get plan with FAQ
-	plan, err := f.planRepo.Get(ctx, planID)
+	plan, err := f.planSvc.GetPlan(ctx, planID)
 	if err != nil {
 		return fmt.Errorf("get plan: %w", err)
 	}
@@ -244,7 +240,7 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 			AnsweredBy:     "foreman",
 			CreatedAt:      time.Now(),
 		}
-		if err := f.planRepo.AppendFAQ(ctx, faqEntry); err != nil {
+		if err := f.planSvc.AppendFAQ(ctx, faqEntry); err != nil {
 			return fmt.Errorf("append faq: %w", err)
 		}
 
@@ -320,7 +316,7 @@ func (f *Foreman) restartSession(ctx context.Context) error {
 	defer f.mu.Unlock()
 
 	// Get current plan with FAQ
-	plan, err := f.planRepo.Get(ctx, f.planID)
+	plan, err := f.planSvc.GetPlan(ctx, f.planID)
 	if err != nil {
 		return fmt.Errorf("get plan: %w", err)
 	}

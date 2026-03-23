@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 func TestPlanService_CreatePlan(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	t.Run("creates plan with draft status", func(t *testing.T) {
 		plan := domain.Plan{
@@ -71,7 +72,7 @@ func TestPlanService_ValidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 			plan := domain.Plan{
 				ID:               "plan-test",
@@ -117,7 +118,7 @@ func TestPlanService_InvalidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 			plan := domain.Plan{
 				ID:               "plan-test",
@@ -142,7 +143,7 @@ func TestPlanService_RevisePlan(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	// Create rejected plan
 	plan := domain.Plan{
@@ -194,7 +195,7 @@ func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:               "plan-1",
@@ -256,7 +257,7 @@ func TestPlanService_ApplyReviewedPlanOutput_NoOpDoesNotBumpVersion(t *testing.T
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:               "plan-1",
@@ -305,7 +306,7 @@ func TestSubPlanService_ValidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 			sp := domain.TaskPlan{
 				ID:             "sp-test",
@@ -352,7 +353,7 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 			sp := domain.TaskPlan{
 				ID:             "sp-test",
@@ -378,7 +379,7 @@ func TestPlanService_AllSubPlansCompleted(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(planRepo, subPlanRepo, NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 
 	t.Run("returns false when no sub-plans", func(t *testing.T) {
 		done, err := svc.AllSubPlansCompleted(ctx, "plan-1")

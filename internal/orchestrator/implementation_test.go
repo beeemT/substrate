@@ -587,7 +587,7 @@ func (r *implementationEventRepo) ListByWorkspaceID(_ context.Context, workspace
 	return events, nil
 }
 
-func newImplementationServiceForTest(workspaceRoot, repoName string) (*ImplementationService, *implementationWorkItemRepo, *implementationEventRepo) {
+func newImplementationServiceForTest(workspaceRoot, repoName string) (*ImplementationService, *implementationWorkItemRepo, *implementationEventRepo, *mockSessionRepo, *mockSubPlanRepo) {
 	planRepo := newMockPlanRepo()
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:         "plan-1",
@@ -634,22 +634,20 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
 		service.NewSessionService(workItemRepo),
 		service.NewTaskService(sessionRepo),
-		subPlanRepo,
-		sessionRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil,
 		nil,
 	)
 
-	return svc, workItemRepo, eventRepo
+	return svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo
 }
 
 func TestImplement_DiscoverRepoFailureKeepsWorkItemApproved(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "missing")
-	svc, workItemRepo, eventRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+	svc, workItemRepo, eventRepo, _, _ := newImplementationServiceForTest(workspaceRoot, "repo-a")
 
 	_, err := svc.Implement(context.Background(), "plan-1")
 	if err == nil {
@@ -672,7 +670,7 @@ func TestImplement_DiscoverRepoFailureKeepsWorkItemApproved(t *testing.T) {
 }
 
 func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
-	svc, workItemRepo, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc, workItemRepo, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 
 	_, err := svc.Implement(context.Background(), "plan-1")
 	if err == nil {
@@ -698,7 +696,7 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 }
 
 func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.T) {
-	svc, workItemRepo, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc, workItemRepo, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -739,21 +737,13 @@ func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.
 }
 
 func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
-	svc, _, eventRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
-	sessionRepo, ok := svc.sessionRepo.(*mockSessionRepo)
-	if !ok {
-		t.Fatal("expected mock session repo")
-	}
+	svc, _, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	sessionRepo.updateErr = repository.ErrNotFound
 	sessionRepo.updateErrStatus = domain.AgentSessionRunning
 
 	harness := &captureHarness{}
 	svc.harness = harness
 
-	subPlanRepo, ok := svc.subPlanRepo.(*mockSubPlanRepo)
-	if !ok {
-		t.Fatal("expected mock sub-plan repo")
-	}
 	subPlan := subPlanRepo.subPlans["sp-1"]
 	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
 	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
@@ -1000,11 +990,9 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		cfg,
 		harness,
 		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
-		service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
 		service.NewSessionService(workItemRepo),
 		service.NewTaskService(sessionRepo),
-		subPlanRepo,
-		sessionRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil, nil,
 	)
@@ -1098,11 +1086,9 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 		cfg,
 		harness,
 		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
-		service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
 		service.NewSessionService(workItemRepo),
 		service.NewTaskService(sessionRepo),
-		subPlanRepo,
-		sessionRepo,
 		service.NewWorkspaceService(workspaceRepo),
 		nil, nil,
 	)

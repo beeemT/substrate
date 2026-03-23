@@ -553,13 +553,13 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 
 	cfg := testReviewConfig(maxCycles)
 	reviewSvc := service.NewReviewService(reviewRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo, service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
 	sessionSvc := service.NewTaskService(sessionRepo)
 	workItemSvc := service.NewSessionService(workItemRepo)
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
 
-	pipeline := NewReviewPipeline(cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc, sessionRepo, planRepo, bus, nil)
+	pipeline := NewReviewPipeline(cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc, bus, nil)
 
 	return &reviewPipelineFixture{
 		pipeline:    pipeline,

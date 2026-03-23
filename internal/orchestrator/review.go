@@ -14,7 +14,6 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
@@ -27,8 +26,6 @@ type ReviewPipeline struct {
 	sessionSvc  *service.TaskService
 	planSvc     *service.PlanService
 	workItemSvc *service.SessionService
-	sessionRepo repository.TaskRepository
-	planRepo    repository.PlanRepository
 	eventBus    *event.Bus
 	registry      *SessionRegistry
 	reviewTimeout time.Duration
@@ -42,8 +39,6 @@ func NewReviewPipeline(
 	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
-	sessionRepo repository.TaskRepository,
-	planRepo repository.PlanRepository,
 	eventBus *event.Bus,
 	registry *SessionRegistry,
 ) *ReviewPipeline {
@@ -54,8 +49,6 @@ func NewReviewPipeline(
 		sessionSvc:  sessionSvc,
 		planSvc:     planSvc,
 		workItemSvc: workItemSvc,
-		sessionRepo: sessionRepo,
-		planRepo:    planRepo,
 		eventBus:      eventBus,
 		registry:      registry,
 		reviewTimeout: cfg.Review.ReviewTimeout(),
@@ -164,7 +157,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	if err != nil {
 		return nil, fmt.Errorf("get sub-plan: %w", err)
 	}
-	plan, err := p.planRepo.Get(ctx, subPlan.PlanID)
+	plan, err := p.planSvc.GetPlan(ctx, subPlan.PlanID)
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
 	}

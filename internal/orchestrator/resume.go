@@ -14,7 +14,6 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -25,7 +24,6 @@ type Resumption struct {
 	harness     adapter.AgentHarness
 	sessionSvc  *service.TaskService
 	planSvc     *service.PlanService
-	sessionRepo repository.TaskRepository
 	eventBus    *event.Bus
 	registry    *SessionRegistry
 }
@@ -35,7 +33,6 @@ func NewResumption(
 	harness adapter.AgentHarness,
 	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
-	sessionRepo repository.TaskRepository,
 	eventBus *event.Bus,
 	registry *SessionRegistry,
 ) *Resumption {
@@ -43,7 +40,6 @@ func NewResumption(
 		harness:     harness,
 		sessionSvc:  sessionSvc,
 		planSvc:     planSvc,
-		sessionRepo: sessionRepo,
 		eventBus:    eventBus,
 		registry:    registry,
 	}

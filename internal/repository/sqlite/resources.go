@@ -4,41 +4,24 @@ import (
 	"context"
 
 	"github.com/beeemT/go-atomic/generic"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
-// Resources groups all transaction-bound repos. Every field is bound to the
-// same *sqlx.Tx when created via ResourcesFactory inside a Transact call.
-type Resources struct {
-	WorkItems  SessionRepo
-	Plans      PlanRepo
-	SubPlans   SubPlanRepo
-	Workspaces WorkspaceRepo
-	Sessions   TaskRepo
-	Reviews    ReviewRepo
-	Questions  QuestionRepo
-	Events     EventRepo
-	Instances              InstanceRepo
-	GithubPRs              GithubPRRepo
-	GitlabMRs              GitlabMRRepo
-	SessionReviewArtifacts SessionReviewArtifactRepo
-}
-
-// ResourcesFactory creates a Resources from a transaction handle.
-// It is passed to generic.NewTransacter to bind all repos to the same transaction.
+// ResourcesFactory creates transaction-bound repositories from a transaction handle.
 func ResourcesFactory(
 	_ context.Context,
-	_ *generic.Transacter[generic.SQLXRemote, Resources],
+	_ *generic.Transacter[generic.SQLXRemote, repository.Resources],
 	tx generic.SQLXRemote,
-) (Resources, error) {
-	return Resources{
-		WorkItems:  NewSessionRepo(tx),
-		Plans:      NewPlanRepo(tx),
-		SubPlans:   NewSubPlanRepo(tx),
-		Workspaces: NewWorkspaceRepo(tx),
-		Sessions:   NewTaskRepo(tx),
-		Reviews:    NewReviewRepo(tx),
-		Questions:  NewQuestionRepo(tx),
-		Events:     NewEventRepo(tx),
+) (repository.Resources, error) {
+	return repository.Resources{
+		Sessions:               NewSessionRepo(tx),
+		Plans:                  NewPlanRepo(tx),
+		SubPlans:               NewSubPlanRepo(tx),
+		Workspaces:             NewWorkspaceRepo(tx),
+		Tasks:                  NewTaskRepo(tx),
+		Reviews:                NewReviewRepo(tx),
+		Questions:              NewQuestionRepo(tx),
+		Events:                 NewEventRepo(tx),
 		Instances:              NewInstanceRepo(tx),
 		GithubPRs:              NewGithubPRRepo(tx),
 		GitlabMRs:              NewGitlabMRRepo(tx),
