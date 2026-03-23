@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
-// ReviewArtifactRepos bundles the repositories needed for dual-write of review artifacts.
+// ReviewArtifactRepos bundles the services needed for dual-write of review artifacts.
 type ReviewArtifactRepos struct {
-	Events           repository.EventRepository
-	GithubPRs        repository.GithubPullRequestRepository
-	GitlabMRs        repository.GitlabMergeRequestRepository
-	SessionArtifacts repository.SessionReviewArtifactRepository
+	Events           *service.EventService
+	GithubPRs        *service.GithubPRService
+	GitlabMRs        *service.GitlabMRService
+	SessionArtifacts *service.SessionReviewArtifactService
 }
 
-func PersistReviewArtifact(ctx context.Context, eventRepo repository.EventRepository, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {
-	if eventRepo == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
+func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {
+	if eventSvc == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
 	payload, err := json.Marshal(domain.ReviewArtifactEventPayload{WorkItemID: workItemID, Artifact: artifact})
@@ -32,7 +32,7 @@ func PersistReviewArtifact(ctx context.Context, eventRepo repository.EventReposi
 		createdAt = time.Now()
 	}
 
-	return eventRepo.Create(ctx, domain.SystemEvent{
+	return eventSvc.Create(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewArtifactRecorded),
 		WorkspaceID: workspaceID,

@@ -19,22 +19,18 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
-	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 // BuildWorkItemAdapters constructs all available WorkItemAdapters for the given
 // configuration and workspace. The manual adapter is always included. The linear
 // adapter is included when an API key is present in configuration.
-//
-// repo is used to back the ManualAdapter's WorkspaceStore; it is typically a
-// transaction-bound SessionRepository from the enclosing Transact call so that
-// the ID counter and subsequent WorkItem.Create share the same transaction.
 func BuildWorkItemAdapters(
 	cfg *config.Config,
 	workspaceID string,
-	repo repository.SessionRepository,
+	workItemSvc *service.SessionService,
 ) []adapter.WorkItemAdapter {
-	store := manualadapter.NewWorkspaceStore(repo, workspaceID)
+	store := manualadapter.NewWorkspaceStore(workItemSvc, workspaceID)
 	adapters := []adapter.WorkItemAdapter{
 		manualadapter.New(store, workspaceID),
 	}

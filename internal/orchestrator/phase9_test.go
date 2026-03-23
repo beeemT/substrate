@@ -552,10 +552,10 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	harness := &mockAgentHarness{sessionsDir: sessionsDir}
 
 	cfg := testReviewConfig(maxCycles)
-	reviewSvc := service.NewReviewService(reviewRepo)
+	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}})
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
-	sessionSvc := service.NewTaskService(sessionRepo)
-	workItemSvc := service.NewSessionService(workItemRepo)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
 

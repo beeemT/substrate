@@ -61,7 +61,7 @@ func TestInitWorkspaceCmd_RecoversExistingWorkspaceFile(t *testing.T) {
 	}
 
 	repo := &recoveryWorkspaceRepo{workspaces: make(map[string]domain.Workspace)}
-	workspaceSvc := service.NewWorkspaceService(repo)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
 
 	msg := initWorkspaceCmd(cwd, workspaceSvc)()
 	done, ok := msg.(WorkspaceInitDoneMsg)

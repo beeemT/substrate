@@ -10,6 +10,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 type stubWorkspaceInitAdapter struct{ name string }
@@ -110,7 +111,7 @@ func TestInitializeWorkspaceServicesCmd_RebuildsServicesAndRegistersInstance(t *
 	t.Setenv("PATH", t.TempDir())
 	workspaceDir := t.TempDir()
 	instanceRepo := &stubInstanceRepo{}
-	settings := &SettingsService{instanceRepo: instanceRepo}
+	settings := &SettingsService{transacter: repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}}
 	current := Services{
 		Cfg:      newWorkspaceInitHarnessConfig(),
 		Settings: settings,

@@ -131,29 +131,24 @@ func run() error { //nolint:funlen
 
 	// Build repositories.
 	remote := dbRemote{db}
-	workItemRepo := sqlite.NewSessionRepo(remote)
-	workspaceRepo := sqlite.NewWorkspaceRepo(remote)
-	sessionRepo := sqlite.NewTaskRepo(remote)
-	questionRepo := sqlite.NewQuestionRepo(remote)
-	instanceRepo := sqlite.NewInstanceRepo(remote)
-	reviews := sqlite.NewReviewRepo(remote)
 	eventRepo := sqlite.NewEventRepo(remote)
-	ghPRRepo := sqlite.NewGithubPRRepo(remote)
-	glMRRepo := sqlite.NewGitlabMRRepo(remote)
-	sessionArtifactRepo := sqlite.NewSessionReviewArtifactRepo(remote)
 	transacter := sqlite.NewTransacter(db)
 
 	// Build services.
-	workItemSvc := service.NewSessionService(workItemRepo)
+	workItemSvc := service.NewSessionService(transacter)
 	planSvc := service.NewPlanService(transacter)
-	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
-	sessionSvc := service.NewTaskService(sessionRepo)
-	questionSvc := service.NewQuestionService(questionRepo)
-	instanceSvc := service.NewInstanceService(instanceRepo)
-	reviewSvc := service.NewReviewService(reviews)
+	workspaceSvc := service.NewWorkspaceService(transacter)
+	sessionSvc := service.NewTaskService(transacter)
+	questionSvc := service.NewQuestionService(transacter)
+	instanceSvc := service.NewInstanceService(transacter)
+	reviewSvc := service.NewReviewService(transacter)
+	eventSvc := service.NewEventService(transacter)
+	ghPRSvc := service.NewGithubPRService(transacter)
+	glMRSvc := service.NewGitlabMRService(transacter)
+	sessionArtifactSvc := service.NewSessionReviewArtifactService(transacter)
 
 	settingsSvc := views.NewSettingsService(
-		workItemRepo, planSvc, workspaceRepo, sessionRepo, questionRepo, instanceRepo, reviews, eventRepo, ghPRRepo, glMRRepo, sessionArtifactRepo, config.OSKeychainStore{},
+		transacter, planSvc, eventRepo, config.OSKeychainStore{},
 	)
 
 	// Build event bus.
@@ -203,13 +198,13 @@ func run() error { //nolint:funlen
 	// Build adapters.
 	var adapters []adapter.WorkItemAdapter
 	if workspaceID != "" {
-		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemRepo)
+		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemSvc)
 	}
 	artifactRepos := adapter.ReviewArtifactRepos{
-		Events:           eventRepo,
-		GithubPRs:        ghPRRepo,
-		GitlabMRs:        glMRRepo,
-		SessionArtifacts: sessionArtifactRepo,
+		Events:           eventSvc,
+		GithubPRs:        ghPRSvc,
+		GitlabMRs:        glMRSvc,
+		SessionArtifacts: sessionArtifactSvc,
 	}
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, artifactRepos)
 	adapterErrors := make(chan views.AdapterErrorMsg, 16)
@@ -331,7 +326,7 @@ func run() error { //nolint:funlen
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			planSvc, workItemSvc, sessionSvc, eventRepo, workspaceSvc, registry, cfg,
+			planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, registry, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)
@@ -377,10 +372,10 @@ func run() error { //nolint:funlen
 		Instance:         instanceSvc,
 		Workspace:        workspaceSvc,
 		Review:           reviewSvc,
-		Events:           eventRepo,
-		GithubPRs:        ghPRRepo,
-		GitlabMRs:        glMRRepo,
-		SessionArtifacts: sessionArtifactRepo,
+		Events:           eventSvc,
+		GithubPRs:        ghPRSvc,
+		GitlabMRs:        glMRSvc,
+		SessionArtifacts: sessionArtifactSvc,
 		Cfg:              cfg,
 		Adapters:         adapters,
 		Harnesses:        harnesses,

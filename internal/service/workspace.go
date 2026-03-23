@@ -5,18 +5,19 @@ import (
 	"slices"
 	"time"
 
+	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // WorkspaceService provides business logic for workspaces.
 type WorkspaceService struct {
-	repo repository.WorkspaceRepository
+	transacter atomic.Transacter[repository.Resources]
 }
 
 // NewWorkspaceService creates a new WorkspaceService.
-func NewWorkspaceService(repo repository.WorkspaceRepository) *WorkspaceService {
-	return &WorkspaceService{repo: repo}
+func NewWorkspaceService(transacter atomic.Transacter[repository.Resources]) *WorkspaceService {
+	return &WorkspaceService{transacter: transacter}
 }
 
 // Workspace state transitions
@@ -37,12 +38,16 @@ func canTransitionWorkspace(from, to domain.WorkspaceStatus) bool {
 
 // Get retrieves a workspace by ID.
 func (s *WorkspaceService) Get(ctx context.Context, id string) (domain.Workspace, error) {
-	ws, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return domain.Workspace{}, newNotFoundError("workspace", id)
-	}
-
-	return ws, nil
+	var result domain.Workspace
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		ws, err := res.Workspaces.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("workspace", id)
+		}
+		result = ws
+		return nil
+	})
+	return result, err
 }
 
 // Create creates a new workspace in creating status.
@@ -56,28 +61,32 @@ func (s *WorkspaceService) Create(ctx context.Context, ws domain.Workspace) erro
 	ws.CreatedAt = now
 	ws.UpdatedAt = now
 
-	return s.repo.Create(ctx, ws)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Workspaces.Create(ctx, ws)
+	})
 }
 
 // Transition transitions a workspace to a new status.
 func (s *WorkspaceService) Transition(ctx context.Context, id string, to domain.WorkspaceStatus) error {
-	ws, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("workspace", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		ws, err := res.Workspaces.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("workspace", id)
+		}
 
-	if !canTransitionWorkspace(ws.Status, to) {
-		return newInvalidTransitionError(
-			workspaceStatusName(ws.Status),
-			workspaceStatusName(to),
-			"workspace",
-		)
-	}
+		if !canTransitionWorkspace(ws.Status, to) {
+			return newInvalidTransitionError(
+				workspaceStatusName(ws.Status),
+				workspaceStatusName(to),
+				"workspace",
+			)
+		}
 
-	ws.Status = to
-	ws.UpdatedAt = time.Now()
+		ws.Status = to
+		ws.UpdatedAt = time.Now()
 
-	return s.repo.Update(ctx, ws)
+		return res.Workspaces.Update(ctx, ws)
+	})
 }
 
 // MarkReady transitions a workspace from creating to ready.
@@ -102,26 +111,30 @@ func (s *WorkspaceService) Recover(ctx context.Context, id string) error {
 
 // Update updates a workspace's mutable fields.
 func (s *WorkspaceService) Update(ctx context.Context, ws domain.Workspace) error {
-	existing, err := s.repo.Get(ctx, ws.ID)
-	if err != nil {
-		return newNotFoundError("workspace", ws.ID)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		existing, err := res.Workspaces.Get(ctx, ws.ID)
+		if err != nil {
+			return newNotFoundError("workspace", ws.ID)
+		}
 
-	// Preserve immutable fields
-	ws.ID = existing.ID
-	ws.CreatedAt = existing.CreatedAt
-	ws.Status = existing.Status // Status changes must go through Transition
-	ws.UpdatedAt = time.Now()
+		// Preserve immutable fields
+		ws.ID = existing.ID
+		ws.CreatedAt = existing.CreatedAt
+		ws.Status = existing.Status // Status changes must go through Transition
+		ws.UpdatedAt = time.Now()
 
-	return s.repo.Update(ctx, ws)
+		return res.Workspaces.Update(ctx, ws)
+	})
 }
 
 // Delete deletes a workspace.
 func (s *WorkspaceService) Delete(ctx context.Context, id string) error {
-	_, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("workspace", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		_, err := res.Workspaces.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("workspace", id)
+		}
 
-	return s.repo.Delete(ctx, id)
+		return res.Workspaces.Delete(ctx, id)
+	})
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -54,7 +53,7 @@ type PlanningService struct {
 	planSvc      *service.PlanService
 	workItemSvc  *service.SessionService
 	sessionSvc   *service.TaskService
-	eventRepo    repository.EventRepository
+	eventSvc     *service.EventService
 	workspaceSvc *service.WorkspaceService
 	registry     *SessionRegistry
 	globalCfg    *config.Config
@@ -107,7 +106,7 @@ func NewPlanningService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.TaskService,
-	eventRepo repository.EventRepository,
+	eventSvc *service.EventService,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	globalCfg *config.Config,
@@ -125,7 +124,7 @@ func NewPlanningService(
 		planSvc:      planSvc,
 		workItemSvc:  workItemSvc,
 		sessionSvc:   sessionSvc,
-		eventRepo:    eventRepo,
+		eventSvc:     eventSvc,
 		workspaceSvc: workspaceSvc,
 		registry:     registry,
 		globalCfg:    globalCfg,
@@ -853,7 +852,7 @@ func (s *PlanningService) emitPlanningStartedEvent(ctx context.Context, workItem
 		Payload:     fmt.Sprintf(`{"work_item_id":"%s","session_id":"%s"}`, workItemID, sessionID),
 		CreatedAt:   time.Now().UTC(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventSvc.Create(ctx, evt)
 }
 
 // emitPlanGeneratedEvent emits a PlanGenerated event.
@@ -865,7 +864,7 @@ func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, wo
 		Payload:     fmt.Sprintf(`{"plan_id":"%s","work_item_id":"%s","version":%d}`, planID, workItemID, version),
 		CreatedAt:   time.Now().UTC(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventSvc.Create(ctx, evt)
 }
 
 // emitPlanFailedEvent emits a PlanFailed event.
@@ -891,7 +890,7 @@ func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, s
 		Payload:     string(data),
 		CreatedAt:   time.Now().UTC(),
 	}
-	return s.eventRepo.Create(ctx, evt)
+	return s.eventSvc.Create(ctx, evt)
 }
 
 // findOrderForRepo finds the execution order for a repo from the execution groups.

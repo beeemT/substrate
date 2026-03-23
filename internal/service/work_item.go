@@ -7,18 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // SessionService provides business logic for work items.
 type SessionService struct {
-	repo repository.SessionRepository
+	transacter atomic.Transacter[repository.Resources]
 }
 
 // NewSessionService creates a new WorkItemService.
-func NewSessionService(repo repository.SessionRepository) *SessionService {
-	return &SessionService{repo: repo}
+func NewSessionService(transacter atomic.Transacter[repository.Resources]) *SessionService {
+	return &SessionService{transacter: transacter}
 }
 
 // validSessionTransitions defines the allowed state transitions.
@@ -44,17 +45,27 @@ func canTransition(from, to domain.SessionState) bool {
 
 // Get retrieves a work item by ID.
 func (s *SessionService) Get(ctx context.Context, id string) (domain.Session, error) {
-	item, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return domain.Session{}, newNotFoundError("work item", id)
-	}
-
-	return item, nil
+	var result domain.Session
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		item, err := res.Sessions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("work item", id)
+		}
+		result = item
+		return nil
+	})
+	return result, err
 }
 
 // List retrieves work items based on filter.
 func (s *SessionService) List(ctx context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
-	return s.repo.List(ctx, filter)
+	var result []domain.Session
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		result, err = res.Sessions.List(ctx, filter)
+		return err
+	})
+	return result, err
 }
 
 // Create creates a new work item in the ingested state.
@@ -70,35 +81,38 @@ func (s *SessionService) Create(ctx context.Context, item domain.Session) error 
 	if item.State != domain.SessionIngested {
 		return newInvalidInputError("initial state must be ingested", "state")
 	}
-	if strings.TrimSpace(item.ExternalID) != "" && shouldEnforceExternalIDUniqueness(item) {
-		workspaceID := item.WorkspaceID
-		externalID := item.ExternalID
-		existing, err := s.repo.List(ctx, repository.SessionFilter{
-			WorkspaceID: &workspaceID,
-			ExternalID:  &externalID,
-			Limit:       1,
-		})
-		if err != nil {
-			return err
-		}
-		if len(existing) > 0 {
-			return newAlreadyExistsError("work item", existing[0].ExternalID)
-		}
-	}
-	if duplicateID, err := s.duplicateSourceItemID(ctx, item); err != nil {
-		return err
-	} else if duplicateID != "" {
-		return newAlreadyExistsError("work item", duplicateID)
-	}
-	// Set timestamps
-	now := time.Now()
-	item.CreatedAt = now
-	item.UpdatedAt = now
 
-	return s.repo.Create(ctx, item)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		if strings.TrimSpace(item.ExternalID) != "" && shouldEnforceExternalIDUniqueness(item) {
+			workspaceID := item.WorkspaceID
+			externalID := item.ExternalID
+			existing, err := res.Sessions.List(ctx, repository.SessionFilter{
+				WorkspaceID: &workspaceID,
+				ExternalID:  &externalID,
+				Limit:       1,
+			})
+			if err != nil {
+				return err
+			}
+			if len(existing) > 0 {
+				return newAlreadyExistsError("work item", existing[0].ExternalID)
+			}
+		}
+		if duplicateID, err := duplicateSourceItemID(ctx, res.Sessions, item); err != nil {
+			return err
+		} else if duplicateID != "" {
+			return newAlreadyExistsError("work item", duplicateID)
+		}
+		// Set timestamps
+		now := time.Now()
+		item.CreatedAt = now
+		item.UpdatedAt = now
+
+		return res.Sessions.Create(ctx, item)
+	})
 }
 
-func (s *SessionService) duplicateSourceItemID(ctx context.Context, item domain.Session) (string, error) {
+func duplicateSourceItemID(ctx context.Context, sessions repository.SessionRepository, item domain.Session) (string, error) {
 	if strings.TrimSpace(item.Source) == "" || item.SourceScope == "" || len(item.SourceItemIDs) == 0 {
 		return "", nil
 	}
@@ -108,7 +122,7 @@ func (s *SessionService) duplicateSourceItemID(ctx context.Context, item domain.
 	}
 	workspaceID := item.WorkspaceID
 	source := item.Source
-	existing, err := s.repo.List(ctx, repository.SessionFilter{
+	existing, err := sessions.List(ctx, repository.SessionFilter{
 		WorkspaceID: &workspaceID,
 		Source:      &source,
 	})
@@ -272,23 +286,25 @@ func shouldEnforceExternalIDUniqueness(item domain.Session) bool {
 
 // Transition transitions a work item to a new state.
 func (s *SessionService) Transition(ctx context.Context, id string, to domain.SessionState) error {
-	item, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("work item", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		item, err := res.Sessions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("work item", id)
+		}
 
-	if !canTransition(item.State, to) {
-		return newInvalidTransitionError(
-			workItemStateName(item.State),
-			workItemStateName(to),
-			"work item",
-		)
-	}
+		if !canTransition(item.State, to) {
+			return newInvalidTransitionError(
+				workItemStateName(item.State),
+				workItemStateName(to),
+				"work item",
+			)
+		}
 
-	item.State = to
-	item.UpdatedAt = time.Now()
+		item.State = to
+		item.UpdatedAt = time.Now()
 
-	return s.repo.Update(ctx, item)
+		return res.Sessions.Update(ctx, item)
+	})
 }
 
 // StartPlanning transitions a work item from ingested to planning.
@@ -333,7 +349,12 @@ func (s *SessionService) RequestReimplementation(ctx context.Context, id string)
 
 // FailWorkItem transitions a work item to failed from any applicable state.
 func (s *SessionService) FailWorkItem(ctx context.Context, id string) error {
-	item, err := s.repo.Get(ctx, id)
+	var item domain.Session
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		item, err = res.Sessions.Get(ctx, id)
+		return err
+	})
 	if err != nil {
 		return newNotFoundError("work item", id)
 	}
@@ -351,7 +372,12 @@ func (s *SessionService) FailWorkItem(ctx context.Context, id string) error {
 
 // RetryFailedWorkItem transitions a failed work item back to implementing for retry.
 func (s *SessionService) RetryFailedWorkItem(ctx context.Context, id string) error {
-	item, err := s.repo.Get(ctx, id)
+	var item domain.Session
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		item, err = res.Sessions.Get(ctx, id)
+		return err
+	})
 	if err != nil {
 		return newNotFoundError("work item", id)
 	}
@@ -376,7 +402,12 @@ func (s *SessionService) StartFollowUpPlanning(ctx context.Context, id string) e
 // when its planning task was interrupted. Idempotent: if the work item is already
 // in a different state (rolled back by a prior call or already advanced), it is a no-op.
 func (s *SessionService) RollbackPlanningInterrupt(ctx context.Context, id string) error {
-	item, err := s.repo.Get(ctx, id)
+	var item domain.Session
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		item, err = res.Sessions.Get(ctx, id)
+		return err
+	})
 	if err != nil {
 		return newNotFoundError("work item", id)
 	}
@@ -390,28 +421,32 @@ func (s *SessionService) RollbackPlanningInterrupt(ctx context.Context, id strin
 
 // Update updates a work item's mutable fields.
 func (s *SessionService) Update(ctx context.Context, item domain.Session) error {
-	existing, err := s.repo.Get(ctx, item.ID)
-	if err != nil {
-		return newNotFoundError("work item", item.ID)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		existing, err := res.Sessions.Get(ctx, item.ID)
+		if err != nil {
+			return newNotFoundError("work item", item.ID)
+		}
 
-	// Preserve immutable fields
-	item.ID = existing.ID
-	item.WorkspaceID = existing.WorkspaceID
-	item.CreatedAt = existing.CreatedAt
-	item.State = existing.State // State changes must go through Transition
-	item.UpdatedAt = time.Now()
+		// Preserve immutable fields
+		item.ID = existing.ID
+		item.WorkspaceID = existing.WorkspaceID
+		item.CreatedAt = existing.CreatedAt
+		item.State = existing.State // State changes must go through Transition
+		item.UpdatedAt = time.Now()
 
-	return s.repo.Update(ctx, item)
+		return res.Sessions.Update(ctx, item)
+	})
 }
 
 // Delete deletes a work item.
 func (s *SessionService) Delete(ctx context.Context, id string) error {
-	// Verify existence first
-	_, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("work item", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		// Verify existence first
+		_, err := res.Sessions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("work item", id)
+		}
 
-	return s.repo.Delete(ctx, id)
+		return res.Sessions.Delete(ctx, id)
+	})
 }

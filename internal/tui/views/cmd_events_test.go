@@ -223,7 +223,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	planRepo := &cmdPlanRepo{plans: map[string]domain.Plan{
 		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanPendingReview, OrchestratorPlan: "Overall plan text"},
 	}}
-	workItemSvc := service.NewSessionService(workItemRepo)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{
 		Plans:    planRepo,
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}},
@@ -279,12 +279,12 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
 		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
 	}}
-	workItemSvc := service.NewSessionService(workItemRepo)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{
 		Plans:    planRepo,
 		SubPlans: subPlanRepo,
 	}})
-	sessionSvc := service.NewTaskService(sessionRepo)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 
@@ -379,8 +379,8 @@ func TestReconcileOrphanedTasksCmd_InterruptsOrphanedRunningSession(t *testing.T
 		},
 	}}
 
-	sessionSvc := service.NewTaskService(sessionRepo)
-	instanceSvc := service.NewInstanceService(instanceRepo)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	instanceSvc := service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}})
 
 	cmd := ReconcileOrphanedTasksCmd(sessionSvc, instanceSvc, workspaceID, currentInstanceID)
 	if cmd == nil {

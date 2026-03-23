@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 func implTask(id, workItemID, workspaceID, subPlanID string, status domain.TaskStatus) domain.Task {
@@ -24,7 +25,7 @@ func implTask(id, workItemID, workspaceID, subPlanID string, status domain.TaskS
 func TestSessionService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	t.Run("creates session with pending status", func(t *testing.T) {
 		session := implTask("session-1", "wi-1", "ws-1", "sp-1", "")
@@ -97,7 +98,7 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewTaskService(repo)
+			svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
@@ -140,7 +141,7 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewTaskService(repo)
+			svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
@@ -159,7 +160,7 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 func TestSessionService_StartSetsStartedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionPending)
 	repo.sessions["session-1"] = session
@@ -177,7 +178,7 @@ func TestSessionService_StartSetsStartedAt(t *testing.T) {
 func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
@@ -195,7 +196,7 @@ func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
@@ -213,7 +214,7 @@ func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 func TestSessionService_FailSetsExitCode(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
@@ -232,7 +233,7 @@ func TestSessionService_FailSetsExitCode(t *testing.T) {
 func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	repo.sessions["s-1"] = implTask("s-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
 	repo.sessions["s-2"] = implTask("s-2", "wi-2", "ws-1", "sp-1", domain.AgentSessionRunning)
@@ -254,7 +255,7 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	now := time.Now()
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
@@ -277,7 +278,7 @@ func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	repo.sessions["session-1"] = implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 
@@ -290,7 +291,7 @@ func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 func TestSessionService_UpdateOmpSessionFile(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repo)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
 
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session

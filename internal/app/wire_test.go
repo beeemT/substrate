@@ -14,6 +14,7 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 type stubWorkItemRepo struct{}
@@ -43,7 +44,15 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Adapters.GitHub.Token = "token"
 
-	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	adapters := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
@@ -60,7 +69,15 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "token"
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	adapters := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
@@ -171,7 +188,15 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 	writeExecutable(t, binDir, "gh", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'gh-cli-token\\n'\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
-	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	adapters := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}

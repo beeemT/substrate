@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	atomic "github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/adapter"
 	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
 	gitlabadapter "github.com/beeemT/substrate/internal/adapter/gitlab"
@@ -108,18 +109,10 @@ func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
 }
 
 type SettingsService struct {
-	workItemRepo        repository.SessionRepository
-	planSvc             *service.PlanService
-	workspaceRepo       repository.WorkspaceRepository
-	sessionRepo         repository.TaskRepository
-	questionRepo        repository.QuestionRepository
-	instanceRepo        repository.InstanceRepository
-	reviewRepo          repository.ReviewRepository
-	eventRepo           repository.EventRepository
-	ghPRRepo            repository.GithubPullRequestRepository
-	glMRRepo            repository.GitlabMergeRequestRepository
-	sessionArtifactRepo repository.SessionReviewArtifactRepository
-	secretStore         config.SecretStore
+	transacter  atomic.Transacter[repository.Resources]
+	planSvc     *service.PlanService
+	eventRepo   repository.EventRepository
+	secretStore config.SecretStore
 }
 
 type viewsServicesReload struct {
@@ -130,32 +123,16 @@ type viewsServicesReload struct {
 }
 
 func NewSettingsService(
-	workItemRepo repository.SessionRepository,
+	transacter atomic.Transacter[repository.Resources],
 	planSvc *service.PlanService,
-	workspaceRepo repository.WorkspaceRepository,
-	sessionRepo repository.TaskRepository,
-	questionRepo repository.QuestionRepository,
-	instanceRepo repository.InstanceRepository,
-	reviewRepo repository.ReviewRepository,
 	eventRepo repository.EventRepository,
-	ghPRRepo repository.GithubPullRequestRepository,
-	glMRRepo repository.GitlabMergeRequestRepository,
-	sessionArtifactRepo repository.SessionReviewArtifactRepository,
 	secretStore config.SecretStore,
 ) *SettingsService {
 	return &SettingsService{
-		workItemRepo:        workItemRepo,
-		planSvc:             planSvc,
-		workspaceRepo:       workspaceRepo,
-		sessionRepo:         sessionRepo,
-		questionRepo:        questionRepo,
-		instanceRepo:        instanceRepo,
-		reviewRepo:          reviewRepo,
-		eventRepo:           eventRepo,
-		ghPRRepo:            ghPRRepo,
-		glMRRepo:            glMRRepo,
-		sessionArtifactRepo: sessionArtifactRepo,
-		secretStore:         secretStore,
+		transacter:  transacter,
+		planSvc:     planSvc,
+		eventRepo:   eventRepo,
+		secretStore: secretStore,
 	}
 }
 
@@ -424,12 +401,16 @@ func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
 }
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
-	workItemSvc := service.NewSessionService(s.workItemRepo)
-	workspaceSvc := service.NewWorkspaceService(s.workspaceRepo)
-	sessionSvc := service.NewTaskService(s.sessionRepo)
-	questionSvc := service.NewQuestionService(s.questionRepo)
-	instanceSvc := service.NewInstanceService(s.instanceRepo)
-	reviewSvc := service.NewReviewService(s.reviewRepo)
+	workItemSvc := service.NewSessionService(s.transacter)
+	workspaceSvc := service.NewWorkspaceService(s.transacter)
+	sessionSvc := service.NewTaskService(s.transacter)
+	questionSvc := service.NewQuestionService(s.transacter)
+	instanceSvc := service.NewInstanceService(s.transacter)
+	reviewSvc := service.NewReviewService(s.transacter)
+	eventSvc := service.NewEventService(s.transacter)
+	ghPRSvc := service.NewGithubPRService(s.transacter)
+	glMRSvc := service.NewGitlabMRService(s.transacter)
+	sessionArtifactSvc := service.NewSessionReviewArtifactService(s.transacter)
 	bus := event.NewBus(event.BusConfig{EventRepo: s.eventRepo})
 	gitClient := current.GitClient
 	if gitClient == nil {
@@ -437,13 +418,13 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	}
 	var adapters []adapter.WorkItemAdapter
 	if current.WorkspaceID != "" {
-		adapters = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, s.workItemRepo)
+		adapters = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc)
 	}
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, adapter.ReviewArtifactRepos{
-		Events:           s.eventRepo,
-		GithubPRs:        s.ghPRRepo,
-		GitlabMRs:        s.glMRRepo,
-		SessionArtifacts: s.sessionArtifactRepo,
+		Events:           eventSvc,
+		GithubPRs:        ghPRSvc,
+		GitlabMRs:        glMRSvc,
+		SessionArtifacts: sessionArtifactSvc,
 	})
 	adapterErrors := make(chan AdapterErrorMsg, 16)
 
@@ -554,7 +535,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, s.planSvc, workItemSvc, sessionSvc, s.eventRepo, workspaceSvc, registry, cfg)
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, s.planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, registry, cfg)
 		if err != nil {
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}
@@ -600,10 +581,10 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			Instance:         instanceSvc,
 			Workspace:        workspaceSvc,
 			Review:           reviewSvc,
-			Events:           s.eventRepo,
-			GithubPRs:        s.ghPRRepo,
-			GitlabMRs:        s.glMRRepo,
-			SessionArtifacts: s.sessionArtifactRepo,
+			Events:           eventSvc,
+			GithubPRs:        ghPRSvc,
+			GitlabMRs:        glMRSvc,
+			SessionArtifacts: sessionArtifactSvc,
 			Planning:         planningSvc,
 			Implementation:   implSvc,
 			ReviewPipeline:   reviewPipeline,

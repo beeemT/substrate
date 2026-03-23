@@ -8,34 +8,35 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 // ErrNotSupported is returned for operations not supported by the manual adapter.
 var ErrNotSupported = errors.New("operation not supported by manual adapter")
 
 // WorkspaceStore provides the minimal DB access needed by ManualAdapter.
-// It is typically satisfied by a WorkItemRepository from the enclosing Transact call.
+// It is typically satisfied by a SessionService via workItemStoreAdapter.
 type WorkspaceStore interface {
 	// CountManualWorkItems returns the count of work items with source="manual"
 	// and workspace_id matching the provided workspace ID.
 	CountManualWorkItems(ctx context.Context, workspaceID string) (int, error)
 }
 
-// workItemStoreAdapter wraps a SessionRepository to satisfy WorkspaceStore.
+// workItemStoreAdapter wraps a SessionService to satisfy WorkspaceStore.
 type workItemStoreAdapter struct {
-	repo        repository.SessionRepository
+	svc         *service.SessionService
 	workspaceID string
 }
 
-// NewWorkspaceStore constructs a WorkspaceStore backed by a SessionRepository.
-func NewWorkspaceStore(repo repository.SessionRepository, workspaceID string) WorkspaceStore {
-	return &workItemStoreAdapter{repo: repo, workspaceID: workspaceID}
+// NewWorkspaceStore constructs a WorkspaceStore backed by a SessionService.
+func NewWorkspaceStore(svc *service.SessionService, workspaceID string) WorkspaceStore {
+	return &workItemStoreAdapter{svc: svc, workspaceID: workspaceID}
 }
 
 func (s *workItemStoreAdapter) CountManualWorkItems(ctx context.Context, workspaceID string) (int, error) {
 	src := "manual"
 	wsID := workspaceID
-	items, err := s.repo.List(ctx, repository.SessionFilter{
+	items, err := s.svc.List(ctx, repository.SessionFilter{
 		WorkspaceID: &wsID,
 		Source:      &src,
 		Limit:       10000, // safe upper bound for count

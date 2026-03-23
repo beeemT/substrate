@@ -155,12 +155,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	instanceRepo := reposqlite.NewInstanceRepo(dbR)
 
 	// --- Services ---
-	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(reposqlite.NewTransacter(db))
-	sessionSvc := service.NewTaskService(sessionRepo)
-	reviewSvc := service.NewReviewService(reviewRepo)
-	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
-	questionSvc := service.NewQuestionService(questionRepo)
+	transacter := reposqlite.NewTransacter(db)
+	workItemSvc := service.NewSessionService(transacter)
+	planSvc := service.NewPlanService(transacter)
+	sessionSvc := service.NewTaskService(transacter)
+	reviewSvc := service.NewReviewService(transacter)
+	workspaceSvc := service.NewWorkspaceService(transacter)
+	questionSvc := service.NewQuestionService(transacter)
+	eventSvc := service.NewEventService(transacter)
 
 	// --- Event bus ---
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
@@ -186,7 +188,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		planSvc,
 		workItemSvc,
 		sessionSvc,
-		eventRepo,
+		eventSvc,
 		workspaceSvc,
 		nil, // registry
 		cfg,

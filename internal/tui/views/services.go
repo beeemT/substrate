@@ -7,7 +7,6 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -20,10 +19,10 @@ type Services struct {
 	Instance  *service.InstanceService
 	Workspace *service.WorkspaceService
 	Review    *service.ReviewService
-	Events    repository.EventRepository
-	GithubPRs        repository.GithubPullRequestRepository
-	GitlabMRs        repository.GitlabMergeRequestRepository
-	SessionArtifacts repository.SessionReviewArtifactRepository
+	Events    *service.EventService
+	GithubPRs        *service.GithubPRService
+	GitlabMRs        *service.GitlabMRService
+	SessionArtifacts *service.SessionReviewArtifactService
 	// Orchestration pipelines backed by the configured agent harnesses.
 	Planning        *orchestrator.PlanningService
 	Implementation  *orchestrator.ImplementationService

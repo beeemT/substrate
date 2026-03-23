@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 func TestInstanceService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	inst := domain.SubstrateInstance{
 		ID:          "inst-1",
@@ -41,7 +42,7 @@ func TestInstanceService_Create(t *testing.T) {
 func TestInstanceService_Get(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	inst := domain.SubstrateInstance{
 		ID:          "inst-1",
@@ -75,7 +76,7 @@ func TestInstanceService_Get(t *testing.T) {
 func TestInstanceService_ListByWorkspaceID(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	repo.instances["inst-1"] = domain.SubstrateInstance{ID: "inst-1", WorkspaceID: "ws-1"}
 	repo.instances["inst-2"] = domain.SubstrateInstance{ID: "inst-2", WorkspaceID: "ws-1"}
@@ -96,7 +97,7 @@ func TestInstanceService_ListByWorkspaceID(t *testing.T) {
 func TestInstanceService_UpdateHeartbeat(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	inst := domain.SubstrateInstance{
 		ID:            "inst-1",
@@ -122,7 +123,7 @@ func TestInstanceService_UpdateHeartbeat(t *testing.T) {
 func TestInstanceService_Delete(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	inst := domain.SubstrateInstance{
 		ID:          "inst-1",
@@ -156,7 +157,7 @@ func TestInstanceService_Delete(t *testing.T) {
 func TestInstanceService_IsAlive(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	threshold := 15 * time.Second
 
@@ -198,7 +199,7 @@ func TestInstanceService_IsAlive(t *testing.T) {
 func TestInstanceService_FindStaleInstances(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	threshold := 15 * time.Second
 
@@ -220,7 +221,7 @@ func TestInstanceService_FindStaleInstances(t *testing.T) {
 func TestInstanceService_CleanupStaleInstances(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockInstanceRepository()
-	svc := NewInstanceService(repo)
+	svc := NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: repo}})
 
 	threshold := 15 * time.Second
 

@@ -635,9 +635,9 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&mockAgentHarness{},
 		nil, bus,
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(workItemRepo),
-		service.NewTaskService(sessionRepo),
-		service.NewWorkspaceService(workspaceRepo),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil,
 		nil,
 	)
@@ -991,9 +991,9 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		harness,
 		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(workItemRepo),
-		service.NewTaskService(sessionRepo),
-		service.NewWorkspaceService(workspaceRepo),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 	)
 
@@ -1087,9 +1087,9 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 		harness,
 		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(workItemRepo),
-		service.NewTaskService(sessionRepo),
-		service.NewWorkspaceService(workspaceRepo),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 	)
 

@@ -433,7 +433,7 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 		cfg:        &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:    harness,
 		templates:  templates,
-		sessionSvc: service.NewTaskService(sessionRepo),
+		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -700,17 +700,18 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
 	}}
-	workItemSvc := service.NewSessionService(workItemRepo)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
 
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(sessionRepo)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
 
 	eventRepo := &planTestEventRepo{}
+	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
 
 	// Discoverer uses the fake binary so buildRepoPointer succeeds for test-repo.
 	gitClient := gitwork.NewClient(fakeGitWork)
@@ -724,7 +725,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventRepo, workspaceSvc, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}

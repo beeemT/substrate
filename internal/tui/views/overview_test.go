@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -210,7 +212,8 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 		CreatedAt:   now,
 	})
 	repo := &overviewEventRepo{events: noise}
-	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}, Events: repo})
+	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}, Events: eventSvc})
 	app.content.SetSize(100, 40)
 	app.workItems = []domain.Session{{
 		ID:          "wi-1",

@@ -5,18 +5,19 @@ import (
 	"slices"
 	"time"
 
+	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // QuestionService provides business logic for questions.
 type QuestionService struct {
-	repo repository.QuestionRepository
+	transacter atomic.Transacter[repository.Resources]
 }
 
 // NewQuestionService creates a new QuestionService.
-func NewQuestionService(repo repository.QuestionRepository) *QuestionService {
-	return &QuestionService{repo: repo}
+func NewQuestionService(transacter atomic.Transacter[repository.Resources]) *QuestionService {
+	return &QuestionService{transacter: transacter}
 }
 
 // Question state transitions
@@ -36,17 +37,27 @@ func canTransitionQuestion(from, to domain.QuestionStatus) bool {
 
 // Get retrieves a question by ID.
 func (s *QuestionService) Get(ctx context.Context, id string) (domain.Question, error) {
-	q, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return domain.Question{}, newNotFoundError("question", id)
-	}
-
-	return q, nil
+	var result domain.Question
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		q, err := res.Questions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("question", id)
+		}
+		result = q
+		return nil
+	})
+	return result, err
 }
 
 // ListBySessionID retrieves all questions for a session.
 func (s *QuestionService) ListBySessionID(ctx context.Context, sessionID string) ([]domain.Question, error) {
-	return s.repo.ListBySessionID(ctx, sessionID)
+	var result []domain.Question
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		result, err = res.Questions.ListBySessionID(ctx, sessionID)
+		return err
+	})
+	return result, err
 }
 
 // Create creates a new question in pending status.
@@ -63,51 +74,57 @@ func (s *QuestionService) Create(ctx context.Context, q domain.Question) error {
 	now := time.Now()
 	q.CreatedAt = now
 
-	return s.repo.Create(ctx, q)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Questions.Create(ctx, q)
+	})
 }
 
 // Transition transitions a question to a new status.
 func (s *QuestionService) Transition(ctx context.Context, id string, to domain.QuestionStatus) error {
-	q, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("question", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		q, err := res.Questions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("question", id)
+		}
 
-	if !canTransitionQuestion(q.Status, to) {
-		return newInvalidTransitionError(
-			questionStatusName(q.Status),
-			questionStatusName(to),
-			"question",
-		)
-	}
+		if !canTransitionQuestion(q.Status, to) {
+			return newInvalidTransitionError(
+				questionStatusName(q.Status),
+				questionStatusName(to),
+				"question",
+			)
+		}
 
-	q.Status = to
+		q.Status = to
 
-	return s.repo.Update(ctx, q)
+		return res.Questions.Update(ctx, q)
+	})
 }
 
 // Answer transitions a question from pending to answered and records the answer.
 func (s *QuestionService) Answer(ctx context.Context, id string, answer string, answeredBy string) error {
-	q, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("question", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		q, err := res.Questions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("question", id)
+		}
 
-	if !canTransitionQuestion(q.Status, domain.QuestionAnswered) {
-		return newInvalidTransitionError(
-			questionStatusName(q.Status),
-			questionStatusName(domain.QuestionAnswered),
-			"question",
-		)
-	}
+		if !canTransitionQuestion(q.Status, domain.QuestionAnswered) {
+			return newInvalidTransitionError(
+				questionStatusName(q.Status),
+				questionStatusName(domain.QuestionAnswered),
+				"question",
+			)
+		}
 
-	now := time.Now()
-	q.Status = domain.QuestionAnswered
-	q.Answer = answer
-	q.AnsweredBy = answeredBy
-	q.AnsweredAt = &now
+		now := time.Now()
+		q.Status = domain.QuestionAnswered
+		q.Answer = answer
+		q.AnsweredBy = answeredBy
+		q.AnsweredAt = &now
 
-	return s.repo.Update(ctx, q)
+		return res.Questions.Update(ctx, q)
+	})
 }
 
 // Escalate transitions a question from pending to escalated.
@@ -118,37 +135,41 @@ func (s *QuestionService) Escalate(ctx context.Context, id string) error {
 // EscalateWithProposal transitions a question from pending to escalated and records
 // the Foreman's proposed answer so the TUI can pre-fill the human review form.
 func (s *QuestionService) EscalateWithProposal(ctx context.Context, id string, proposedAnswer string) error {
-	q, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("question", id)
-	}
-	if !canTransitionQuestion(q.Status, domain.QuestionEscalated) {
-		return newInvalidTransitionError(
-			questionStatusName(q.Status),
-			questionStatusName(domain.QuestionEscalated),
-			"question",
-		)
-	}
-	q.Status = domain.QuestionEscalated
-	q.ProposedAnswer = proposedAnswer
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		q, err := res.Questions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("question", id)
+		}
+		if !canTransitionQuestion(q.Status, domain.QuestionEscalated) {
+			return newInvalidTransitionError(
+				questionStatusName(q.Status),
+				questionStatusName(domain.QuestionEscalated),
+				"question",
+			)
+		}
+		q.Status = domain.QuestionEscalated
+		q.ProposedAnswer = proposedAnswer
 
-	return s.repo.Update(ctx, q)
+		return res.Questions.Update(ctx, q)
+	})
 }
 
 // UpdateContext updates the context for a pending question.
-func (s *QuestionService) UpdateContext(ctx context.Context, id string, context string) error {
-	q, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return newNotFoundError("question", id)
-	}
+func (s *QuestionService) UpdateContext(ctx context.Context, id string, questionContext string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		q, err := res.Questions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("question", id)
+		}
 
-	if q.Status != domain.QuestionPending {
-		return newConstraintViolationError("cannot update context for non-pending question")
-	}
+		if q.Status != domain.QuestionPending {
+			return newConstraintViolationError("cannot update context for non-pending question")
+		}
 
-	q.Context = context
+		q.Context = questionContext
 
-	return s.repo.Update(ctx, q)
+		return res.Questions.Update(ctx, q)
+	})
 }
 
 // UpdateProposal replaces the Foreman's proposed answer for an already-escalated question.
@@ -156,21 +177,27 @@ func (s *QuestionService) UpdateContext(ctx context.Context, id string, context 
 // ResolveEscalated that already answered the question results in a no-op rather than
 // reverting the row's status back to 'escalated'.
 func (s *QuestionService) UpdateProposal(ctx context.Context, id, proposedAnswer string) error {
-	return s.repo.UpdateProposedAnswer(ctx, id, proposedAnswer)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Questions.UpdateProposedAnswer(ctx, id, proposedAnswer)
+	})
 }
 
 // HasPendingQuestions checks if there are any pending questions for a session.
 func (s *QuestionService) HasPendingQuestions(ctx context.Context, sessionID string) (bool, error) {
-	questions, err := s.repo.ListBySessionID(ctx, sessionID)
-	if err != nil {
-		return false, err
-	}
-
-	for _, q := range questions {
-		if q.Status == domain.QuestionPending {
-			return true, nil
+	var has bool
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		questions, err := res.Questions.ListBySessionID(ctx, sessionID)
+		if err != nil {
+			return err
 		}
-	}
 
-	return false, nil
+		for _, q := range questions {
+			if q.Status == domain.QuestionPending {
+				has = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return has, err
 }

@@ -5,18 +5,19 @@ import (
 	"slices"
 	"time"
 
+	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // ReviewService provides business logic for review cycles and critiques.
 type ReviewService struct {
-	repo repository.ReviewRepository
+	transacter atomic.Transacter[repository.Resources]
 }
 
 // NewReviewService creates a new ReviewService.
-func NewReviewService(repo repository.ReviewRepository) *ReviewService {
-	return &ReviewService{repo: repo}
+func NewReviewService(transacter atomic.Transacter[repository.Resources]) *ReviewService {
+	return &ReviewService{transacter: transacter}
 }
 
 // ReviewCycle state transitions
@@ -54,17 +55,27 @@ func canTransitionCritique(from, to domain.CritiqueStatus) bool {
 
 // GetCycle retrieves a review cycle by ID.
 func (s *ReviewService) GetCycle(ctx context.Context, id string) (domain.ReviewCycle, error) {
-	cycle, err := s.repo.GetCycle(ctx, id)
-	if err != nil {
-		return domain.ReviewCycle{}, newNotFoundError("review cycle", id)
-	}
-
-	return cycle, nil
+	var result domain.ReviewCycle
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		cycle, err := res.Reviews.GetCycle(ctx, id)
+		if err != nil {
+			return newNotFoundError("review cycle", id)
+		}
+		result = cycle
+		return nil
+	})
+	return result, err
 }
 
 // ListCyclesBySessionID retrieves all review cycles for a session.
 func (s *ReviewService) ListCyclesBySessionID(ctx context.Context, sessionID string) ([]domain.ReviewCycle, error) {
-	return s.repo.ListCyclesBySessionID(ctx, sessionID)
+	var result []domain.ReviewCycle
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		result, err = res.Reviews.ListCyclesBySessionID(ctx, sessionID)
+		return err
+	})
+	return result, err
 }
 
 // CreateCycle creates a new review cycle in reviewing status.
@@ -82,28 +93,32 @@ func (s *ReviewService) CreateCycle(ctx context.Context, cycle domain.ReviewCycl
 	cycle.CreatedAt = now
 	cycle.UpdatedAt = now
 
-	return s.repo.CreateCycle(ctx, cycle)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Reviews.CreateCycle(ctx, cycle)
+	})
 }
 
 // TransitionCycle transitions a review cycle to a new status.
 func (s *ReviewService) TransitionCycle(ctx context.Context, id string, to domain.ReviewCycleStatus) error {
-	cycle, err := s.repo.GetCycle(ctx, id)
-	if err != nil {
-		return newNotFoundError("review cycle", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		cycle, err := res.Reviews.GetCycle(ctx, id)
+		if err != nil {
+			return newNotFoundError("review cycle", id)
+		}
 
-	if !canTransitionReviewCycle(cycle.Status, to) {
-		return newInvalidTransitionError(
-			reviewCycleStatusName(cycle.Status),
-			reviewCycleStatusName(to),
-			"review cycle",
-		)
-	}
+		if !canTransitionReviewCycle(cycle.Status, to) {
+			return newInvalidTransitionError(
+				reviewCycleStatusName(cycle.Status),
+				reviewCycleStatusName(to),
+				"review cycle",
+			)
+		}
 
-	cycle.Status = to
-	cycle.UpdatedAt = time.Now()
+		cycle.Status = to
+		cycle.UpdatedAt = time.Now()
 
-	return s.repo.UpdateCycle(ctx, cycle)
+		return res.Reviews.UpdateCycle(ctx, cycle)
+	})
 }
 
 // RecordCritiques transitions a review cycle from reviewing to critiques_found.
@@ -128,50 +143,69 @@ func (s *ReviewService) CompleteReimplementation(ctx context.Context, id string)
 
 // FailReviewCycle transitions a review cycle to failed.
 func (s *ReviewService) FailReviewCycle(ctx context.Context, id string) error {
-	cycle, err := s.repo.GetCycle(ctx, id)
-	if err != nil {
-		return newNotFoundError("review cycle", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		cycle, err := res.Reviews.GetCycle(ctx, id)
+		if err != nil {
+			return newNotFoundError("review cycle", id)
+		}
 
-	if !canTransitionReviewCycle(cycle.Status, domain.ReviewCycleFailed) {
-		return newInvalidTransitionError(
-			reviewCycleStatusName(cycle.Status),
-			reviewCycleStatusName(domain.ReviewCycleFailed),
-			"review cycle",
-		)
-	}
+		if !canTransitionReviewCycle(cycle.Status, domain.ReviewCycleFailed) {
+			return newInvalidTransitionError(
+				reviewCycleStatusName(cycle.Status),
+				reviewCycleStatusName(domain.ReviewCycleFailed),
+				"review cycle",
+			)
+		}
 
-	return s.TransitionCycle(ctx, id, domain.ReviewCycleFailed)
+		// Delegate to TransitionCycle would open a nested transaction;
+		// perform the transition inline instead.
+		cycle.Status = domain.ReviewCycleFailed
+		cycle.UpdatedAt = time.Now()
+
+		return res.Reviews.UpdateCycle(ctx, cycle)
+	})
 }
 
 // UpdateCycleSummary updates the review cycle summary.
 func (s *ReviewService) UpdateCycleSummary(ctx context.Context, id string, summary string) error {
-	cycle, err := s.repo.GetCycle(ctx, id)
-	if err != nil {
-		return newNotFoundError("review cycle", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		cycle, err := res.Reviews.GetCycle(ctx, id)
+		if err != nil {
+			return newNotFoundError("review cycle", id)
+		}
 
-	cycle.Summary = summary
-	cycle.UpdatedAt = time.Now()
+		cycle.Summary = summary
+		cycle.UpdatedAt = time.Now()
 
-	return s.repo.UpdateCycle(ctx, cycle)
+		return res.Reviews.UpdateCycle(ctx, cycle)
+	})
 }
 
 // Critique operations
 
 // GetCritique retrieves a critique by ID.
 func (s *ReviewService) GetCritique(ctx context.Context, id string) (domain.Critique, error) {
-	critique, err := s.repo.GetCritique(ctx, id)
-	if err != nil {
-		return domain.Critique{}, newNotFoundError("critique", id)
-	}
-
-	return critique, nil
+	var result domain.Critique
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		critique, err := res.Reviews.GetCritique(ctx, id)
+		if err != nil {
+			return newNotFoundError("critique", id)
+		}
+		result = critique
+		return nil
+	})
+	return result, err
 }
 
 // ListCritiquesByCycleID retrieves all critiques for a review cycle.
 func (s *ReviewService) ListCritiquesByCycleID(ctx context.Context, cycleID string) ([]domain.Critique, error) {
-	return s.repo.ListCritiquesByReviewCycleID(ctx, cycleID)
+	var result []domain.Critique
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		result, err = res.Reviews.ListCritiquesByReviewCycleID(ctx, cycleID)
+		return err
+	})
+	return result, err
 }
 
 // CreateCritique creates a new critique in open status.
@@ -188,27 +222,31 @@ func (s *ReviewService) CreateCritique(ctx context.Context, critique domain.Crit
 	now := time.Now()
 	critique.CreatedAt = now
 
-	return s.repo.CreateCritique(ctx, critique)
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.Reviews.CreateCritique(ctx, critique)
+	})
 }
 
 // TransitionCritique transitions a critique to a new status.
 func (s *ReviewService) TransitionCritique(ctx context.Context, id string, to domain.CritiqueStatus) error {
-	critique, err := s.repo.GetCritique(ctx, id)
-	if err != nil {
-		return newNotFoundError("critique", id)
-	}
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		critique, err := res.Reviews.GetCritique(ctx, id)
+		if err != nil {
+			return newNotFoundError("critique", id)
+		}
 
-	if !canTransitionCritique(critique.Status, to) {
-		return newInvalidTransitionError(
-			critiqueStatusName(critique.Status),
-			critiqueStatusName(to),
-			"critique",
-		)
-	}
+		if !canTransitionCritique(critique.Status, to) {
+			return newInvalidTransitionError(
+				critiqueStatusName(critique.Status),
+				critiqueStatusName(to),
+				"critique",
+			)
+		}
 
-	critique.Status = to
+		critique.Status = to
 
-	return s.repo.UpdateCritique(ctx, critique)
+		return res.Reviews.UpdateCritique(ctx, critique)
+	})
 }
 
 // ResolveCritique transitions a critique from open to resolved.
@@ -229,33 +267,39 @@ func (s *ReviewService) CreateCritiquesBatch(ctx context.Context, critiques []do
 
 // CountMajorCritiques counts the number of major or critical critiques in a cycle.
 func (s *ReviewService) CountMajorCritiques(ctx context.Context, cycleID string) (int, error) {
-	critiques, err := s.repo.ListCritiquesByReviewCycleID(ctx, cycleID)
-	if err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for _, c := range critiques {
-		if c.Status == domain.CritiqueOpen && (c.Severity == domain.CritiqueMajor || c.Severity == domain.CritiqueCritical) {
-			count++
+	var count int
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		critiques, err := res.Reviews.ListCritiquesByReviewCycleID(ctx, cycleID)
+		if err != nil {
+			return err
 		}
-	}
 
-	return count, nil
+		for _, c := range critiques {
+			if c.Status == domain.CritiqueOpen && (c.Severity == domain.CritiqueMajor || c.Severity == domain.CritiqueCritical) {
+				count++
+			}
+		}
+		return nil
+	})
+	return count, err
 }
 
 // HasUnresolvedCritiques checks if there are any unresolved critiques in a cycle.
 func (s *ReviewService) HasUnresolvedCritiques(ctx context.Context, cycleID string) (bool, error) {
-	critiques, err := s.repo.ListCritiquesByReviewCycleID(ctx, cycleID)
-	if err != nil {
-		return false, err
-	}
-
-	for _, c := range critiques {
-		if c.Status == domain.CritiqueOpen {
-			return true, nil
+	var has bool
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		critiques, err := res.Reviews.ListCritiquesByReviewCycleID(ctx, cycleID)
+		if err != nil {
+			return err
 		}
-	}
 
-	return false, nil
+		for _, c := range critiques {
+			if c.Status == domain.CritiqueOpen {
+				has = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return has, err
 }

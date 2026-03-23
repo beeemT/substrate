@@ -13,7 +13,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("creates item with ingested state", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		item := domain.Session{
 			ID:          "wi-1",
@@ -36,7 +36,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows items without external id", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		first := domain.Session{ID: "wi-no-ext-1", WorkspaceID: "ws-1", Title: "First", Source: "manual"}
 		second := domain.Session{ID: "wi-no-ext-2", WorkspaceID: "ws-1", Title: "Second", Source: "manual"}
@@ -51,7 +51,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects duplicate external id in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		first := domain.Session{ID: "wi-dup-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
 		second := domain.Session{ID: "wi-dup-2", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
@@ -70,7 +70,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects overlapping source item ids in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "wi-existing",
@@ -105,7 +105,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows distinct source item ids in same workspace", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "wi-existing-distinct",
@@ -136,7 +136,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows github milestones with same number in different repos", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "Session-1",
@@ -167,7 +167,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows gitlab milestones with same id in different projects", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "wi-gl-ms-1",
@@ -200,7 +200,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects gitlab milestones with same id in same project", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "wi-gl-ms-same-1",
@@ -235,7 +235,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows gitlab epics with same iid in different groups", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		existing := domain.Session{
 			ID:            "wi-gl-epic-1",
@@ -268,7 +268,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("allows same external id in different workspaces", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		first := domain.Session{ID: "wi-cross-1", WorkspaceID: "ws-1", ExternalID: "EXT-1", Title: "First", Source: "manual"}
 		second := domain.Session{ID: "wi-cross-2", WorkspaceID: "ws-2", ExternalID: "EXT-1", Title: "Second", Source: "manual"}
@@ -283,7 +283,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects missing workspace id", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		item := domain.Session{
 			ID:     "wi-missing-workspace",
@@ -302,7 +302,7 @@ func TestWorkItemService_Create(t *testing.T) {
 
 	t.Run("rejects non-ingested initial state", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repo)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 		item := domain.Session{
 			ID:          "wi-2",
@@ -350,7 +350,7 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkItemRepository()
-			svc := NewSessionService(repo)
+			svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 			// Create item in the 'from' state directly in repo
 			item := domain.Session{
@@ -406,7 +406,7 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkItemRepository()
-			svc := NewSessionService(repo)
+			svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 			item := domain.Session{
 				ID:          "wi-test",
@@ -431,7 +431,7 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 	t.Run("StartPlanning", func(t *testing.T) {
 		repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionIngested}
@@ -536,7 +536,7 @@ func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 func TestSessionService_RetryFailedWorkItem(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 	repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionFailed}
 	if err := svc.RetryFailedWorkItem(ctx, "wi-1"); err != nil {
 		t.Fatalf("RetryFailedWorkItem: %v", err)
@@ -550,7 +550,7 @@ func TestSessionService_RetryFailedWorkItem(t *testing.T) {
 func TestSessionService_RetryFailedWorkItem_NotFailed(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 	repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionImplementing}
 	if err := svc.RetryFailedWorkItem(ctx, "wi-1"); err == nil {
 		t.Fatal("expected error for non-failed work item")
@@ -560,7 +560,7 @@ func TestSessionService_RetryFailedWorkItem_NotFailed(t *testing.T) {
 func TestWorkItemService_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")
@@ -596,7 +596,7 @@ func TestWorkItemService_NotFound(t *testing.T) {
 func TestWorkItemService_List(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 	// Create test items
 	ws1 := "ws-1"
@@ -647,7 +647,7 @@ func TestWorkItemService_List(t *testing.T) {
 func TestWorkItemService_Update(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()
-	svc := NewSessionService(repo)
+	svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
 
 	// Create initial item
 	item := domain.Session{

@@ -9,6 +9,8 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 func clearSentryEnv(t *testing.T) {
@@ -27,7 +29,15 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithEnvToken(t *testing.T) 
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	adapters := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
@@ -46,7 +56,15 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(cfg, "ws-1", repo)
+	adapters := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
@@ -61,7 +79,16 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
-	adapters := BuildWorkItemAdapters(&config.Config{}, "ws-1", stubWorkItemRepo{})
+	repo := stubWorkItemRepo{}
+	adapters := BuildWorkItemAdapters(
+		&config.Config{},
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want manual-only when organization is missing", len(adapters))
 	}

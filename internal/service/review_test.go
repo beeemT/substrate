@@ -5,12 +5,13 @@ import (
 	"testing"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 func TestReviewService_CreateCycle(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockReviewRepository()
-	svc := NewReviewService(repo)
+	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 	t.Run("creates cycle with reviewing status", func(t *testing.T) {
 		cycle := domain.ReviewCycle{
@@ -69,7 +70,7 @@ func TestReviewCycleService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockReviewRepository()
-			svc := NewReviewService(repo)
+			svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 			cycle := domain.ReviewCycle{
 				ID:             "cycle-test",
@@ -115,7 +116,7 @@ func TestReviewCycleService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockReviewRepository()
-			svc := NewReviewService(repo)
+			svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 			cycle := domain.ReviewCycle{
 				ID:             "cycle-test",
@@ -149,7 +150,7 @@ func TestCritiqueService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockReviewRepository()
-			svc := NewReviewService(repo)
+			svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 			critique := domain.Critique{
 				ID:            "critique-test",
@@ -190,7 +191,7 @@ func TestCritiqueService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockReviewRepository()
-			svc := NewReviewService(repo)
+			svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 			critique := domain.Critique{
 				ID:            "critique-test",
@@ -214,7 +215,7 @@ func TestCritiqueService_InvalidTransitions(t *testing.T) {
 func TestReviewService_CountMajorCritiques(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockReviewRepository()
-	svc := NewReviewService(repo)
+	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 	// Create critiques with different severities
 	repo.critiques["c-1"] = domain.Critique{ID: "c-1", ReviewCycleID: "cycle-1", Severity: domain.CritiqueCritical, Status: domain.CritiqueOpen}
@@ -239,7 +240,7 @@ func TestReviewService_HasUnresolvedCritiques(t *testing.T) {
 
 	t.Run("has unresolved", func(t *testing.T) {
 		repo := NewMockReviewRepository()
-		svc := NewReviewService(repo)
+		svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 		repo.critiques["c-1"] = domain.Critique{ID: "c-1", ReviewCycleID: "cycle-1", Status: domain.CritiqueOpen}
 		repo.critiques["c-2"] = domain.Critique{ID: "c-2", ReviewCycleID: "cycle-1", Status: domain.CritiqueResolved}
@@ -256,7 +257,7 @@ func TestReviewService_HasUnresolvedCritiques(t *testing.T) {
 
 	t.Run("all resolved", func(t *testing.T) {
 		repo := NewMockReviewRepository()
-		svc := NewReviewService(repo)
+		svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}})
 
 		repo.critiques["c-1"] = domain.Critique{ID: "c-1", ReviewCycleID: "cycle-2", Status: domain.CritiqueResolved}
 		repo.byCycle["cycle-2"] = []string{"c-1"}
