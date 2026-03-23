@@ -156,7 +156,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// --- Services ---
 	workItemSvc := service.NewSessionService(workItemRepo)
-	planSvc := service.NewPlanService(planRepo, subPlanRepo)
+	planSvc := service.NewPlanService(planRepo, subPlanRepo, reposqlite.NewPlanTransacter(db))
 	sessionSvc := service.NewTaskService(sessionRepo)
 	reviewSvc := service.NewReviewService(reviewRepo)
 	workspaceSvc := service.NewWorkspaceService(workspaceRepo)
@@ -188,8 +188,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		sessionSvc,
 		planRepo,
 		subPlanRepo,
+		reposqlite.NewPlanTransacter(db),
 		eventRepo,
 		workspaceSvc,
+		nil, // registry
 		cfg,
 	)
 	if err != nil {

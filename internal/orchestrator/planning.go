@@ -56,6 +56,7 @@ type PlanningService struct {
 	sessionSvc   *service.TaskService
 	planRepo     repository.PlanRepository
 	subPlanRepo  repository.TaskPlanRepository
+	planTransacter service.PlanRepoTransacter
 	eventRepo    repository.EventRepository
 	workspaceSvc *service.WorkspaceService
 	registry     *SessionRegistry
@@ -111,6 +112,7 @@ func NewPlanningService(
 	sessionSvc *service.TaskService,
 	planRepo repository.PlanRepository,
 	subPlanRepo repository.TaskPlanRepository,
+	planTransacter service.PlanRepoTransacter,
 	eventRepo repository.EventRepository,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
@@ -131,6 +133,7 @@ func NewPlanningService(
 		sessionSvc:   sessionSvc,
 		planRepo:     planRepo,
 		subPlanRepo:  subPlanRepo,
+		planTransacter: planTransacter,
 		eventRepo:    eventRepo,
 		workspaceSvc: workspaceSvc,
 		registry:     registry,
@@ -139,12 +142,26 @@ func NewPlanningService(
 	}, nil
 }
 
+// planRunRequest carries all inputs to planRun. Fields beyond workItemID are
+// empty for initial planning runs.
+type planRunRequest struct {
+	workItemID        string
+	revisionFeedback  string
+	currentPlanText   string
+	resumeSessionFile string
+	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
+	// must atomically replace. The old plan's row is deleted within the same
+	// transaction that inserts the new one, keeping the UNIQUE constraint on
+	// plans.work_item_id satisfied at all times.
+	replacePlanID string
+}
+
 // Plan executes the planning pipeline for a work item in Ingested state.
 func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.PlanningResult, error) {
 	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	return s.planRun(ctx, workItemID, "", "", "")
+	return s.planRun(ctx, planRunRequest{workItemID: workItemID})
 }
 
 // PlanWithFeedback runs a revision planning session for a work item in plan_review state.
@@ -156,18 +173,22 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	resumeFile := s.findPriorPlanningSessionFile(ctx, workItemID)
 	// Capture plan text before rejecting so the revision prompt has context.
 	currentPlanText := s.buildPlanText(ctx, oldPlanID)
+	// Mark the old plan rejected. The row stays in the DB until buildAndPersistPlan
+	// replaces it atomically — during the planning agent run the rejected plan
+	// remains the last-known plan for the work item.
 	if err := s.planSvc.RejectPlan(ctx, oldPlanID); err != nil {
 		return nil, fmt.Errorf("reject old plan: %w", err)
-	}
-	// The plans table has a UNIQUE constraint on work_item_id. Delete the rejected plan so
-	// buildAndPersistPlan can INSERT a fresh one. Sub-plans cascade-delete automatically.
-	if err := s.planRepo.Delete(ctx, oldPlanID); err != nil {
-		return nil, fmt.Errorf("delete old plan before replanning: %w", err)
 	}
 	if err := s.workItemSvc.RejectPlan(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	return s.planRun(ctx, workItemID, feedback, currentPlanText, resumeFile)
+	return s.planRun(ctx, planRunRequest{
+		workItemID:        workItemID,
+		revisionFeedback:  feedback,
+		currentPlanText:   currentPlanText,
+		resumeSessionFile: resumeFile,
+		replacePlanID:     oldPlanID,
+	})
 }
 
 // FollowUpPlan transitions a completed work item back to planning with differential context.
@@ -216,7 +237,13 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 	// 7. Run planning with the follow-up context as the revision feedback.
 	// Pass empty currentPlanText to planRun since the follow-up template already
 	// embeds the plan; this avoids double-rendering via the revision template.
-	return s.planRun(ctx, workItemID, followUpContext, "", "")
+	return s.planRun(ctx, planRunRequest{
+		workItemID:       workItemID,
+		revisionFeedback: followUpContext,
+		// replacePlanID atomically swaps out the old approved plan when the new one
+		// is persisted, satisfying the UNIQUE constraint on plans.work_item_id.
+		replacePlanID: currentPlan.ID,
+	})
 }
 
 // buildRepoResultSummaries collects implementation results for each repo in the plan.
@@ -374,11 +401,11 @@ func (s *PlanningService) UpdateReviewedPlan(ctx context.Context, planID, rawCon
 }
 
 // planRun executes the planning pipeline for a work item already in the planning state.
-// revisionFeedback, currentPlanText, and resumeSessionFile are empty for initial planning.
-// resumeSessionFile enables native OMP resume so the model retains conversation context.
-func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedback, currentPlanText, resumeSessionFile string) (*domain.PlanningResult, error) {
+// req.revisionFeedback, req.currentPlanText, and req.resumeSessionFile are empty for
+// initial planning. req.replacePlanID names an existing plan to atomically replace.
+func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*domain.PlanningResult, error) {
 	// 1. Get the work item
-	workItem, err := s.workItemSvc.Get(ctx, workItemID)
+	workItem, err := s.workItemSvc.Get(ctx, req.workItemID)
 	if err != nil {
 		return nil, fmt.Errorf("get work item: %w", err)
 	}
@@ -420,7 +447,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		Status:      domain.AgentSessionPending,
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("create planning session: %w", err)
 	}
 
@@ -428,14 +455,14 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
 		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 
 	// 8. Transition the planning session to running before launching the harness.
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
 		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("transition planning session to running: %w", err)
 	}
 
@@ -454,13 +481,13 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		SessionID:         sessionID,
 		SessionDraftPath:  sessionDir.DraftPath,
 		MaxParseRetries:   s.cfg.MaxParseRetries,
-		RevisionFeedback:  revisionFeedback,
-		CurrentPlanText:   currentPlanText,
-		ResumeSessionFile: resumeSessionFile,
+		RevisionFeedback:  req.revisionFeedback,
+		CurrentPlanText:   req.currentPlanText,
+		ResumeSessionFile: req.resumeSessionFile,
 	}
 
 	// 10. Emit PlanningStarted event.
-	if err := s.emitPlanningStartedEvent(ctx, workItemID, sessionID, workspace.ID); err != nil {
+	if err := s.emitPlanningStartedEvent(ctx, req.workItemID, sessionID, workspace.ID); err != nil {
 		slog.Warn("failed to emit planning started event", "error", err)
 	}
 
@@ -469,10 +496,10 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
 			ParseErrors: planErr.ParseErrors,
@@ -488,10 +515,10 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
 			ParseErrors: &parseErrors,
@@ -500,15 +527,15 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	}
 
 	// 12. Build and persist plan + sub-plans.
-	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem)
+	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem, req.replacePlanID)
 	if err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
@@ -517,19 +544,19 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
-		_ = s.workItemSvc.Transition(ctx, workItemID, domain.SessionIngested)
+		_ = s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested)
 		return nil, fmt.Errorf("transition plan to pending review: %w", err)
 	}
 
 	// 14. Transition work item to plan_review.
-	if err := s.workItemSvc.SubmitPlanForReview(ctx, workItemID); err != nil {
+	if err := s.workItemSvc.SubmitPlanForReview(ctx, req.workItemID); err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
@@ -540,7 +567,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 	}
 
 	// 15. Emit PlanGenerated event.
-	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, workItemID, plan.Version, workspace.ID); err != nil {
+	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, req.workItemID, plan.Version, workspace.ID); err != nil {
 		slog.Warn("failed to emit plan generated event", "error", err)
 	}
 
@@ -767,16 +794,19 @@ func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (str
 	return buf.String(), nil
 }
 
-// buildAndPersistPlan creates and persists the plan and sub-plans.
+// buildAndPersistPlan creates the plan and sub-plans and persists them atomically.
+// When replacePlanID is non-empty, the identified plan (and its sub-plans, via cascade)
+// is deleted within the same transaction, satisfying the UNIQUE constraint on
+// plans.work_item_id without exposing a window where the work item has no plan.
 func (s *PlanningService) buildAndPersistPlan(
 	ctx context.Context,
 	rawOutput domain.RawPlanOutput,
 	workItem domain.Session,
+	replacePlanID string,
 ) (*domain.Plan, []domain.TaskPlan, error) {
 	now := time.Now().UTC()
 	planID := domain.NewID()
 
-	// Create plan
 	plan := &domain.Plan{
 		ID:               planID,
 		WorkItemID:       workItem.ID,
@@ -787,14 +817,9 @@ func (s *PlanningService) buildAndPersistPlan(
 		UpdatedAt:        now,
 	}
 
-	if err := s.planRepo.Create(ctx, *plan); err != nil {
-		return nil, nil, fmt.Errorf("create plan: %w", err)
-	}
-
-	// Create sub-plans
-	var subPlans []domain.TaskPlan
+	subPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
 	for _, sp := range rawOutput.SubPlans {
-		subPlan := domain.TaskPlan{
+		subPlans = append(subPlans, domain.TaskPlan{
 			ID:             domain.NewID(),
 			PlanID:         planID,
 			RepositoryName: sp.RepoName,
@@ -803,11 +828,31 @@ func (s *PlanningService) buildAndPersistPlan(
 			Status:         domain.SubPlanPending,
 			CreatedAt:      now,
 			UpdatedAt:      now,
+		})
+	}
+
+	err := s.planTransacter.TransactPlanRepos(ctx, func(ctx context.Context, planRepo repository.PlanRepository, subPlanRepo repository.TaskPlanRepository) error {
+		// When replacing a prior plan, delete it first so the UNIQUE constraint on
+		// plans.work_item_id is cleared before the INSERT. Sub-plans cascade-delete
+		// automatically. Both operations land in the same transaction so there is
+		// never a window where the work item has no plan row.
+		if replacePlanID != "" {
+			if err := planRepo.Delete(ctx, replacePlanID); err != nil {
+				return fmt.Errorf("delete replaced plan: %w", err)
+			}
 		}
-		if err := s.subPlanRepo.Create(ctx, subPlan); err != nil {
-			return nil, nil, fmt.Errorf("create sub-plan for %s: %w", sp.RepoName, err)
+		if err := planRepo.Create(ctx, *plan); err != nil {
+			return fmt.Errorf("create plan: %w", err)
 		}
-		subPlans = append(subPlans, subPlan)
+		for i := range subPlans {
+			if err := subPlanRepo.Create(ctx, subPlans[i]); err != nil {
+				return fmt.Errorf("create sub-plan for %s: %w", subPlans[i].RepositoryName, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return plan, subPlans, nil

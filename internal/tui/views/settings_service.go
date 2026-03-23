@@ -561,7 +561,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.eventRepo, workspaceSvc, registry, cfg)
+		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, planSvc, workItemSvc, sessionSvc, s.planRepo, s.subPlanRepo, s.planTransacter, s.eventRepo, workspaceSvc, registry, cfg)
 		if err != nil {
 			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
 		}

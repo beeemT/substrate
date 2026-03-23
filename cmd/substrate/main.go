@@ -333,7 +333,7 @@ func run() error { //nolint:funlen
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			planSvc, workItemSvc, sessionSvc, planRepo, subPlanRepo, eventRepo, workspaceSvc, registry, cfg,
+			planSvc, workItemSvc, sessionSvc, planRepo, subPlanRepo, planTransacter, eventRepo, workspaceSvc, registry, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)

@@ -11,7 +11,6 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -21,7 +20,7 @@ func TestRenderPlanningPromptIncludesSessionDraftPath(t *testing.T) {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
 	}
 
-	svc := &PlanningService{templates: templates}
+	svc := &PlanningService{templates: templates, planTransacter: service.NoopPlanTransacter{}}
 	draftPath := "/tmp/workspace/.substrate/sessions/plan-123/plan-draft.md"
 	prompt, err := svc.renderPlanningPrompt(&domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
@@ -96,6 +95,7 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
+		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	rawContent, retries, warnings, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -202,6 +202,7 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
+		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	rawContent, retries, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -272,6 +273,7 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 		cfg:       &PlanningConfig{MaxParseRetries: 1, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
+		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -350,6 +352,7 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:   harness,
 		templates: templates,
+		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -431,6 +434,7 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 		harness:    harness,
 		templates:  templates,
 		sessionSvc: service.NewTaskService(sessionRepo),
+		planTransacter: service.NoopPlanTransacter{},
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -490,16 +494,13 @@ func validPlanningSubPlan(goal string) string {
 	return "### Goal\n" + goal + "\n\n### Scope\n- internal/repo_a.go\n\n### Changes\n1. Update implementation details.\n2. Add or refresh tests.\n3. Wire the affected callers.\n\n### Validation\n- go test ./...\n\n### Risks\n- Preserve current repo behavior.\n"
 }
 
-// ============================================================
-// uniqueWorkItemPlanRepo: enforces work_item_id uniqueness like SQLite
-// ============================================================
-
-// uniqueWorkItemPlanRepo wraps the in-memory plan mock with a work_item_id UNIQUE
-// constraint, reproducing the SQLite constraint that caused the production failure
-// when PlanWithFeedback tried to INSERT a new plan without first deleting the old one.
+// uniqueWorkItemPlanRepo is an in-memory PlanRepository that enforces the
+// plans.work_item_id UNIQUE constraint, reproducing the SQLite behaviour that
+// caused the production failure. Using it in unit tests catches regressions
+// where buildAndPersistPlan tries to INSERT without first clearing the slot.
 type uniqueWorkItemPlanRepo struct {
 	plans map[string]domain.Plan // planID → Plan
-	taken map[string]string      // workItemID → planID holding the slot
+	taken map[string]string       // workItemID → planID holding the slot
 }
 
 func newUniqueWorkItemPlanRepo() *uniqueWorkItemPlanRepo {
@@ -549,75 +550,32 @@ func (r *uniqueWorkItemPlanRepo) AppendFAQ(_ context.Context, _ domain.FAQEntry)
 	return nil
 }
 
-// errorOnUpdateWorkItemRepo is a minimal work-item repo whose Update always fails.
-// Get returns the pre-seeded item; all other methods are no-ops.
-type errorOnUpdateWorkItemRepo struct {
-	item domain.Session
-}
-
-func (r *errorOnUpdateWorkItemRepo) Get(_ context.Context, _ string) (domain.Session, error) {
-	return r.item, nil
-}
-
-func (r *errorOnUpdateWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
-	return nil, nil
-}
-
-func (r *errorOnUpdateWorkItemRepo) Create(_ context.Context, _ domain.Session) error {
-	return nil
-}
-
-func (r *errorOnUpdateWorkItemRepo) Update(_ context.Context, _ domain.Session) error {
-	return fmt.Errorf("simulated Update error: stopping before planRun")
-}
-
-func (r *errorOnUpdateWorkItemRepo) Delete(_ context.Context, _ string) error {
-	return nil
-}
-
-// ============================================================
-// TestPlanWithFeedbackDeletesOldPlanBeforeReplanning
-// ============================================================
-
-// TestPlanWithFeedbackDeletesOldPlanBeforeReplanning is a regression test for the
-// bug where PlanWithFeedback failed with a SQLite UNIQUE constraint violation on
-// plans.work_item_id. The old rejected plan was not deleted before planRun tried to
-// INSERT a new one, hitting the unique constraint.
-func TestPlanWithFeedbackDeletesOldPlanBeforeReplanning(t *testing.T) {
+// TestBuildAndPersistPlanAtomicReplace is the regression test for the UNIQUE
+// constraint bug. It verifies that buildAndPersistPlan atomically removes the
+// old plan and inserts the new one in the same transaction, so the constraint
+// on plans.work_item_id is never violated.
+func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 	const (
-		workItemID = "wi-feedback-regression"
-		oldPlanID  = "plan-feedback-old"
+		workItemID = "wi-atomic-replace"
+		oldPlanID  = "plan-old"
 	)
 
-	// Plan repo that enforces work_item_id uniqueness like SQLite.
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
+	transacter := service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo}
 
-	// Seed the old plan in pending_review state (the state when a user requests changes).
+	ctx := context.Background()
+
+	// Seed a rejected plan that occupies the unique slot.
 	oldPlan := domain.Plan{
 		ID:         oldPlanID,
 		WorkItemID: workItemID,
-		Status:     domain.PlanPendingReview,
+		Status:     domain.PlanRejected,
 		Version:    1,
 	}
-	if err := planRepo.Create(context.Background(), oldPlan); err != nil {
+	if err := planRepo.Create(ctx, oldPlan); err != nil {
 		t.Fatalf("seed old plan: %v", err)
 	}
-
-	planSvc := service.NewPlanService(
-		planRepo, subPlanRepo,
-		service.NoopPlanTransacter{PlanRepo: planRepo, SubPlanRepo: subPlanRepo},
-	)
-
-	// workItemSvc.RejectPlan must see the work item in plan_review so the state
-	// machine allows the transition. Update fails to stop execution before planRun.
-	workItemSvc := service.NewSessionService(&errorOnUpdateWorkItemRepo{
-		item: domain.Session{
-			ID:          workItemID,
-			WorkspaceID: "ws-1",
-			State:       domain.SessionPlanReview,
-		},
-	})
 
 	templates, err := NewPlanningTemplates()
 	if err != nil {
@@ -625,37 +583,51 @@ func TestPlanWithFeedbackDeletesOldPlanBeforeReplanning(t *testing.T) {
 	}
 
 	svc := &PlanningService{
-		cfg:         DefaultPlanningConfig(),
-		templates:   templates,
-		planSvc:     planSvc,
-		planRepo:    planRepo,
-		workItemSvc: workItemSvc,
-		// sessionSvc nil: findPriorPlanningSessionFile is nil-safe, returns "".
-		// workspaceSvc, discoverer, harness nil: planRun is never reached.
+		planRepo:       planRepo,
+		subPlanRepo:    subPlanRepo,
+		planTransacter: transacter,
+		templates:      templates,
+		cfg:            DefaultPlanningConfig(),
 	}
 
-	_, feedbackErr := svc.PlanWithFeedback(context.Background(), workItemID, oldPlanID, "fix the scope")
+	rawOutput := domain.RawPlanOutput{
+		Orchestration:   "## Goal\ntest\n",
+		SubPlans:        []domain.RawSubPlan{{RepoName: "repo-a", Content: "do stuff"}},
+		ExecutionGroups: [][]string{{"repo-a"}},
+	}
+	workItem := domain.Session{ID: workItemID}
 
-	// We expect exactly the error from workItemSvc.RejectPlan (Update fails).
-	// If we get a different error (e.g., UNIQUE constraint), Delete was not called.
-	if feedbackErr == nil {
-		t.Fatal("expected error from workItemSvc.RejectPlan (Update), got nil")
-	}
-	if !strings.Contains(feedbackErr.Error(), "transition work item to planning") {
-		t.Errorf("unexpected error path: %v\nwant error mentioning \"transition work item to planning\"", feedbackErr)
+	plan, subPlans, err := svc.buildAndPersistPlan(ctx, rawOutput, workItem, oldPlanID)
+	if err != nil {
+		t.Fatalf("buildAndPersistPlan with replacePlanID: %v", err)
 	}
 
-	// The unique slot must be cleared: old plan deleted before workItemSvc.RejectPlan was called.
-	if _, exists := planRepo.taken[workItemID]; exists {
-		t.Error("PlanWithFeedback did not delete the old plan: unique slot still occupied")
-	}
+	// Old plan must be gone — the unique slot was released.
 	if _, exists := planRepo.plans[oldPlanID]; exists {
-		t.Error("PlanWithFeedback did not remove the old plan from the repo")
+		t.Error("old plan still present after atomic replace")
+	}
+	if planRepo.taken[workItemID] == oldPlanID {
+		t.Error("unique slot still points to old plan after atomic replace")
 	}
 
-	// A new Create for the same work item must succeed (the slot is clear).
-	newPlan := domain.Plan{ID: "plan-feedback-new", WorkItemID: workItemID, Status: domain.PlanDraft}
-	if err := planRepo.Create(context.Background(), newPlan); err != nil {
-		t.Errorf("Create after Delete should succeed; got: %v", err)
+	// New plan must occupy the slot.
+	if planRepo.taken[workItemID] != plan.ID {
+		t.Errorf("unique slot = %q, want new plan ID %q", planRepo.taken[workItemID], plan.ID)
+	}
+	if plan.WorkItemID != workItemID {
+		t.Errorf("plan.WorkItemID = %q, want %q", plan.WorkItemID, workItemID)
+	}
+
+	// Sub-plans must be created.
+	if len(subPlans) != 1 {
+		t.Errorf("len(subPlans) = %d, want 1", len(subPlans))
+	} else if subPlans[0].RepositoryName != "repo-a" {
+		t.Errorf("subPlans[0].RepositoryName = %q, want \"repo-a\"", subPlans[0].RepositoryName)
+	}
+
+	// A second call without replacePlanID must fail — the slot is taken.
+	_, _, err2 := svc.buildAndPersistPlan(ctx, rawOutput, workItem, "")
+	if err2 == nil {
+		t.Error("expected UNIQUE constraint error when creating without replacePlanID; got nil")
 	}
 }
