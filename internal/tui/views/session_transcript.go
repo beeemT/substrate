@@ -331,12 +331,14 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 		icon = st.Success.Render("✓")
 	}
 
-	nameAndIntent := block.toolName
-	if block.toolIntent != "" {
-		nameAndIntent = block.toolName + " — " + block.toolIntent
+	nameAndTitle := block.toolName
+	if block.toolArgs != "" {
+		if primary := toolPrimaryArg(block.toolName, block.toolArgs); primary != "" {
+			nameAndTitle = block.toolName + " — " + st.Accent.Render(primary)
+		}
 	}
 	// icon is 1 visual char, " " is 1, so 2 visual chars of overhead
-	titleText := ansi.Truncate(nameAndIntent, max(1, innerW-2), "…")
+	titleText := ansi.Truncate(nameAndTitle, max(1, innerW-2), "…")
 	titleLine := icon + " " + titleText
 
 	var bodyLines []string
@@ -428,6 +430,64 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
 }
 
+// toolPrimaryArg returns the primary single-line label for a tool call,
+// shown in the title after " — ". Returns "" for unknown tools or when no
+// meaningful label can be derived from the args.
+func toolPrimaryArg(toolName, argsJSON string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	stringArg := func(key string) string {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+	switch toolName {
+	case "read", "write", "edit", "ast_edit":
+		return stringArg("path")
+	case "grep":
+		if p := stringArg("pattern"); p != "" {
+			return "/" + p + "/"
+		}
+	case "find":
+		return stringArg("pattern")
+	case "bash":
+		if cmd := stringArg("command"); cmd != "" {
+			return singleLine(cmd)
+		}
+	case "lsp":
+		return stringArg("action")
+	case "ast_grep":
+		if pats, ok := args["pat"]; ok {
+			switch v := pats.(type) {
+			case []any:
+				if len(v) > 0 {
+					if s, ok := v[0].(string); ok {
+						return singleLine(s)
+					}
+				}
+			case string:
+				return singleLine(v)
+			}
+		}
+	case "fetch":
+		return singleLine(stringArg("url"))
+	case "web_search":
+		return singleLine(stringArg("query"))
+	case "task":
+		if tasks, ok := args["tasks"]; ok {
+			if taskSlice, ok := tasks.([]any); ok && len(taskSlice) > 0 {
+				return fmt.Sprintf("%d task(s)", len(taskSlice))
+			}
+		}
+	}
+	return ""
+}
+
 // toolArgsSummary returns a concise, human-readable summary line for the most
 // important arguments of a known tool. Returns "" for unknown tools or when no
 // meaningful fields are found. The summary is styled with accent/label colours
@@ -459,16 +519,13 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		return 0
 	}
 
-	highlight := func(v string) string { return st.Accent.Render(v) }
 	dim := func(v string) string { return st.Muted.Render(v) }
 
 	var parts []string
 
 	switch toolName {
 	case "read":
-		if path := stringArg("path"); path != "" {
-			parts = append(parts, highlight(path))
-		}
+		// path is in the title; show range info only
 		offset, limit := intArg("offset"), intArg("limit")
 		if offset > 0 && limit > 0 {
 			parts = append(parts, dim(fmt.Sprintf("L%d +%d lines", offset, limit)))
@@ -479,9 +536,7 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		}
 
 	case "grep":
-		if pattern := stringArg("pattern"); pattern != "" {
-			parts = append(parts, highlight("/"+pattern+"/"))
-		}
+		// pattern is in the title; show path and glob
 		if path := stringArg("path"); path != "" {
 			parts = append(parts, dim(path))
 		}
@@ -489,25 +544,8 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 			parts = append(parts, dim(glob))
 		}
 
-	case "find":
-		if pattern := stringArg("pattern"); pattern != "" {
-			parts = append(parts, highlight(pattern))
-		}
-
-	case "write", "edit":
-		if path := stringArg("path"); path != "" {
-			parts = append(parts, highlight(path))
-		}
-
-	case "bash":
-		if cmd := stringArg("command"); cmd != "" {
-			parts = append(parts, highlight(singleLine(cmd)))
-		}
-
 	case "lsp":
-		if action := stringArg("action"); action != "" {
-			parts = append(parts, highlight(action))
-		}
+		// action is in the title; show file and symbol
 		if file := stringArg("file"); file != "" {
 			parts = append(parts, dim(file))
 		}
@@ -516,19 +554,10 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		}
 
 	case "ast_grep":
+		// first pattern is in the title; show additional patterns and path
 		if pats, ok := args["pat"]; ok {
-			switch v := pats.(type) {
-			case []any:
-				if len(v) > 0 {
-					if s, ok := v[0].(string); ok {
-						parts = append(parts, highlight(singleLine(s)))
-					}
-					if len(v) > 1 {
-						parts = append(parts, dim(fmt.Sprintf("+%d patterns", len(v)-1)))
-					}
-				}
-			case string:
-				parts = append(parts, highlight(singleLine(v)))
+			if v, ok := pats.([]any); ok && len(v) > 1 {
+				parts = append(parts, dim(fmt.Sprintf("+%d patterns", len(v)-1)))
 			}
 		}
 		if path := stringArg("path"); path != "" {
@@ -536,30 +565,15 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		}
 
 	case "ast_edit":
-		if path := stringArg("path"); path != "" {
-			parts = append(parts, highlight(path))
-		}
+		// path is in the title; show op count
 		if ops, ok := args["ops"]; ok {
 			if opSlice, ok := ops.([]any); ok && len(opSlice) > 0 {
 				parts = append(parts, dim(fmt.Sprintf("%d op(s)", len(opSlice))))
 			}
 		}
 
-	case "fetch", "web_search":
-		key := "url"
-		if toolName == "web_search" {
-			key = "query"
-		}
-		if v := stringArg(key); v != "" {
-			parts = append(parts, highlight(singleLine(v)))
-		}
-
-	case "task":
-		if tasks, ok := args["tasks"]; ok {
-			if taskSlice, ok := tasks.([]any); ok {
-				parts = append(parts, dim(fmt.Sprintf("%d task(s)", len(taskSlice))))
-			}
-		}
+	case "find", "write", "edit", "bash", "fetch", "web_search", "task":
+		// primary arg is in the title; nothing secondary to show
 
 	default:
 		// Unknown tool: show a single-line truncated raw args summary.

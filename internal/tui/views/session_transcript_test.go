@@ -254,19 +254,19 @@ func TestRenderTranscriptNarrowWidth(t *testing.T) {
 	}
 }
 
-func TestRenderTranscriptToolCardContainsNameAndIntent(t *testing.T) {
+func TestRenderTranscriptToolCardContainsPrimaryArg(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
 	entries := []sessionlog.Entry{
-		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading guidance", Text: `{"path":"x"}`},
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "1", Text: `{"path":"x"}`},
 	}
 	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "read") {
 		t.Errorf("expected output to contain tool name %q, got: %q", "read", plain)
 	}
-	if !strings.Contains(plain, "Reading guidance") {
-		t.Errorf("expected output to contain intent %q, got: %q", "Reading guidance", plain)
+	if !strings.Contains(plain, "x") {
+		t.Errorf("expected output to contain path %q in title, got: %q", "x", plain)
 	}
 }
 
@@ -618,9 +618,6 @@ func TestToolArgsSummaryRead(t *testing.T) {
 	args := `{"path":"internal/tui/views/session_transcript.go","offset":100,"limit":50,"_i":"reading file"}`
 	summary := toolArgsSummary(st, "read", args, 80)
 	plain := ansi.Strip(summary)
-	if !strings.Contains(plain, "internal/tui/views/session_transcript.go") {
-		t.Errorf("read summary missing path, got: %q", plain)
-	}
 	if !strings.Contains(plain, "L100") {
 		t.Errorf("read summary missing offset hint, got: %q", plain)
 	}
@@ -635,9 +632,6 @@ func TestToolArgsSummaryGrep(t *testing.T) {
 	args := `{"pattern":"RenderTranscript","path":"internal/tui","glob":"*.go","_i":"searching"}`
 	summary := toolArgsSummary(st, "grep", args, 80)
 	plain := ansi.Strip(summary)
-	if !strings.Contains(plain, "/RenderTranscript/") {
-		t.Errorf("grep summary missing pattern, got: %q", plain)
-	}
 	if !strings.Contains(plain, "internal/tui") {
 		t.Errorf("grep summary missing path, got: %q", plain)
 	}
@@ -651,9 +645,9 @@ func TestToolArgsSummaryBash(t *testing.T) {
 	st := testStyles()
 	args := `{"command":"go test ./...","_i":"running tests"}`
 	summary := toolArgsSummary(st, "bash", args, 80)
-	plain := ansi.Strip(summary)
-	if !strings.Contains(plain, "go test ./...") {
-		t.Errorf("bash summary missing command, got: %q", plain)
+	// command is shown in the title; args summary for bash must be empty
+	if summary != "" {
+		t.Errorf("bash args summary should be empty (command in title), got: %q", ansi.Strip(summary))
 	}
 }
 
@@ -666,6 +660,22 @@ func TestToolArgsSummaryUnknownTool(t *testing.T) {
 	plain := ansi.Strip(summary)
 	if !strings.Contains(plain, "Args:") {
 		t.Errorf("unknown tool should show Args: prefix, got: %q", plain)
+	}
+}
+
+func TestToolPrimaryArgRead(t *testing.T) {
+	t.Parallel()
+	args := `{"path":"internal/tui/views/session_transcript.go","offset":100,"limit":50}`
+	if got := toolPrimaryArg("read", args); got != "internal/tui/views/session_transcript.go" {
+		t.Errorf("read primary arg = %q, want path", got)
+	}
+}
+
+func TestToolPrimaryArgBash(t *testing.T) {
+	t.Parallel()
+	args := `{"command":"go test ./...","_i":"tests"}`
+	if got := toolPrimaryArg("bash", args); got != "go test ./..." {
+		t.Errorf("bash primary arg = %q, want command", got)
 	}
 }
 
