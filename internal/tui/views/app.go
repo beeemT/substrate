@@ -1067,7 +1067,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FollowUpSessionMsg:
 		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
-			cmds = append(cmds, FollowUpSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			ctx := a.pipelineCtxForTask(msg.TaskID)
+			cmds = append(cmds, FollowUpSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1077,7 +1078,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FollowUpFailedSessionMsg:
 		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
-			cmds = append(cmds, FollowUpFailedSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			ctx := a.pipelineCtxForTask(msg.TaskID)
+			cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1105,7 +1107,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResumeSessionMsg:
 		if a.svcs.Resumption != nil {
-			cmds = append(cmds, ResumeSessionCmd(a.svcs.Resumption, a.svcs.Task, msg.OldSessionID, a.svcs.InstanceID))
+			ctx := a.pipelineCtxForTask(msg.OldSessionID)
+			cmds = append(cmds, ResumeSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.OldSessionID, a.svcs.InstanceID))
 		} else {
 			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
 		}
@@ -1829,6 +1832,18 @@ func (a *App) cancelPipeline(workItemID string) {
 		cancel()
 		delete(a.pipelineCancels, workItemID)
 	}
+}
+
+// pipelineCtxForTask looks up the WorkItemID for a task and returns a
+// cancellable pipeline context for it. If the task is not found in the
+// sessions list, returns context.Background() as a safe fallback.
+func (a *App) pipelineCtxForTask(taskID string) context.Context {
+	for _, s := range a.sessions {
+		if s.ID == taskID {
+			return a.registerPipelineCancel(s.WorkItemID)
+		}
+	}
+	return context.Background()
 }
 
 // teardownAllPipelines cancels every active pipeline context, stops the

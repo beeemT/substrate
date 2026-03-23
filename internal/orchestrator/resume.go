@@ -160,7 +160,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	if r.registry != nil {
 		r.registry.Register(newSession.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(context.Background())
+			_ = harnessSession.Wait(ctx)
 			r.registry.Deregister(newSession.ID)
 		}()
 	}
@@ -256,7 +256,7 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 	if r.registry != nil {
 		r.registry.Register(completedTask.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(context.Background())
+			_ = harnessSession.Wait(ctx)
 			r.registry.Deregister(completedTask.ID)
 		}()
 	}
@@ -368,7 +368,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 	if r.registry != nil {
 		r.registry.Register(newTask.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(context.Background())
+			_ = harnessSession.Wait(ctx)
 			r.registry.Deregister(newTask.ID)
 		}()
 	}

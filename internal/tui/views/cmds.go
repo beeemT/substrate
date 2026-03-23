@@ -553,13 +553,13 @@ func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationS
 }
 
 // ResumeSessionCmd resumes an interrupted agent session.
-func ResumeSessionCmd(resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
+func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := sessionSvc.Get(context.Background(), oldSessionID)
+		session, err := sessionSvc.Get(ctx, oldSessionID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		if _, err := resumption.ResumeSession(context.Background(), session, instanceID); err != nil {
+		if _, err := resumption.ResumeSession(ctx, session, instanceID); err != nil {
 			return ErrMsg{Err: err}
 		}
 
@@ -852,9 +852,8 @@ func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message 
 }
 
 // FollowUpSessionCmd starts a follow-up agent session on a completed task.
-func FollowUpSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+func FollowUpSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get task for follow-up: %w", err)}
@@ -867,9 +866,8 @@ func FollowUpSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskSe
 }
 
 // FollowUpFailedSessionCmd starts a follow-up agent session on a failed task.
-func FollowUpFailedSessionCmd(resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get task for failed follow-up: %w", err)}
