@@ -590,9 +590,8 @@ func OverrideAcceptCmd(
 
 // RetryFailedCmd transitions a failed work item back to implementing and re-runs
 // the implementation pipeline for failed sub-plans.
-func RetryFailedCmd(workItemSvc *service.SessionService, implSvc *orchestrator.ImplementationService, planID, workItemID string) tea.Cmd {
+func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, implSvc *orchestrator.ImplementationService, planID, workItemID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
 		if err := workItemSvc.RetryFailedWorkItem(ctx, workItemID); err != nil {
 			return ErrMsg{Err: fmt.Errorf("retry failed work item: %w", err)}
 		}

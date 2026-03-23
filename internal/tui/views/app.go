@@ -1167,7 +1167,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Retrying failed repos...", components.ToastInfo)
 		if a.svcs.Implementation != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
-				cmds = append(cmds, RetryFailedCmd(a.svcs.Session, a.svcs.Implementation, plan.ID, msg.WorkItemID))
+				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Session, a.svcs.Implementation, plan.ID, msg.WorkItemID))
 				if a.svcs.Foreman != nil {
 					a.foremanPlanID = plan.ID
 					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
@@ -1396,6 +1396,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ErrMsg:
+		// Silently drop context cancellations — these fire when a pipeline is
+		// intentionally torn down on session delete or quit, not from real errors.
+		if errors.Is(msg.Err, context.Canceled) || errors.Is(msg.Err, context.DeadlineExceeded) {
+			return a, nil
+		}
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
 
