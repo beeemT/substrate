@@ -144,21 +144,30 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	return s.planRun(ctx, workItemID, "", "")
+	return s.planRun(ctx, workItemID, "", "", "")
 }
 
 // PlanWithFeedback runs a revision planning session for a work item in plan_review state.
-// It rejects the existing plan and re-plans with the human's feedback embedded in the prompt.
+// It rejects the existing plan and re-plans with the human's feedback. When the prior
+// planning session used an OMP harness, the session is resumed natively so the model
+// retains full conversation context of what it planned.
 func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldPlanID, feedback string) (*domain.PlanningResult, error) {
+	// Find the prior planning session's OMP file for native resume (best-effort).
+	resumeFile := s.findPriorPlanningSessionFile(ctx, workItemID)
 	// Capture plan text before rejecting so the revision prompt has context.
 	currentPlanText := s.buildPlanText(ctx, oldPlanID)
 	if err := s.planSvc.RejectPlan(ctx, oldPlanID); err != nil {
 		return nil, fmt.Errorf("reject old plan: %w", err)
 	}
+	// The plans table has a UNIQUE constraint on work_item_id. Delete the rejected plan so
+	// buildAndPersistPlan can INSERT a fresh one. Sub-plans cascade-delete automatically.
+	if err := s.planRepo.Delete(ctx, oldPlanID); err != nil {
+		return nil, fmt.Errorf("delete old plan before replanning: %w", err)
+	}
 	if err := s.workItemSvc.RejectPlan(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	return s.planRun(ctx, workItemID, feedback, currentPlanText)
+	return s.planRun(ctx, workItemID, feedback, currentPlanText, resumeFile)
 }
 
 // FollowUpPlan transitions a completed work item back to planning with differential context.
@@ -207,7 +216,7 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 	// 7. Run planning with the follow-up context as the revision feedback.
 	// Pass empty currentPlanText to planRun since the follow-up template already
 	// embeds the plan; this avoids double-rendering via the revision template.
-	return s.planRun(ctx, workItemID, followUpContext, "")
+	return s.planRun(ctx, workItemID, followUpContext, "", "")
 }
 
 // buildRepoResultSummaries collects implementation results for each repo in the plan.
@@ -285,6 +294,51 @@ func (s *PlanningService) buildPlanText(ctx context.Context, planID string) stri
 	return domain.ComposePlanDocument(plan, subPlans)
 }
 
+// findPriorPlanningSessionFile returns the OMP JSONL session file from the most recently
+// completed planning task for the given work item. Returns empty string if none exists or
+// if the session was run with a non-OMP harness.
+func (s *PlanningService) findPriorPlanningSessionFile(ctx context.Context, workItemID string) string {
+	if s.sessionSvc == nil {
+		return ""
+	}
+	tasks, err := s.sessionSvc.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return ""
+	}
+	// Scan in reverse: tasks are returned in creation order, most-recent last.
+	for i := len(tasks) - 1; i >= 0; i-- {
+		t := tasks[i]
+		if t.Phase == domain.TaskPhasePlanning && t.Status == domain.AgentSessionCompleted && t.OmpSessionFile != "" {
+			return t.OmpSessionFile
+		}
+	}
+	return ""
+}
+
+// storeOmpSessionFile captures the native OMP session file from the harness session and
+// persists it on the task record so future resume operations can continue the conversation.
+// It is a no-op for non-OMP harnesses or when the session file is not yet available.
+func (s *PlanningService) storeOmpSessionFile(ctx context.Context, sessionID string, session adapter.AgentSession) {
+	if s.sessionSvc == nil {
+		return
+	}
+	type ompMetadata interface {
+		OmpSessionFile() string
+		OmpSessionID() string
+	}
+	omp, ok := session.(ompMetadata)
+	if !ok {
+		return
+	}
+	file := omp.OmpSessionFile()
+	if file == "" {
+		return
+	}
+	if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
+		slog.Warn("failed to store omp session file for planning session", "error", err, "session_id", sessionID)
+	}
+}
+
 // UpdateReviewedPlan validates and persists a full reviewed plan document in place.
 func (s *PlanningService) UpdateReviewedPlan(ctx context.Context, planID, rawContent string) (domain.Plan, []domain.TaskPlan, error) {
 	plan, err := s.planSvc.GetPlan(ctx, planID)
@@ -320,8 +374,9 @@ func (s *PlanningService) UpdateReviewedPlan(ctx context.Context, planID, rawCon
 }
 
 // planRun executes the planning pipeline for a work item already in the planning state.
-// revisionFeedback and currentPlanText are empty for initial planning.
-func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedback, currentPlanText string) (*domain.PlanningResult, error) {
+// revisionFeedback, currentPlanText, and resumeSessionFile are empty for initial planning.
+// resumeSessionFile enables native OMP resume so the model retains conversation context.
+func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedback, currentPlanText, resumeSessionFile string) (*domain.PlanningResult, error) {
 	// 1. Get the work item
 	workItem, err := s.workItemSvc.Get(ctx, workItemID)
 	if err != nil {
@@ -401,6 +456,7 @@ func (s *PlanningService) planRun(ctx context.Context, workItemID, revisionFeedb
 		MaxParseRetries:   s.cfg.MaxParseRetries,
 		RevisionFeedback:  revisionFeedback,
 		CurrentPlanText:   currentPlanText,
+		ResumeSessionFile: resumeSessionFile,
 	}
 
 	// 10. Emit PlanningStarted event.
@@ -547,6 +603,12 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		),
 		WorktreePath: "", // Planning uses workspace root
 	}
+	sessionOpts.ResumeSessionFile = planningCtx.ResumeSessionFile
+	if planningCtx.ResumeSessionFile != "" {
+		// Clear user prompt — revision feedback will be sent as a follow-up message
+		// after the session starts, preserving the model's conversation context.
+		sessionOpts.UserPrompt = ""
+	}
 
 	// Apply session timeout — bounds the entire planning session lifetime.
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.cfg.SessionTimeout)
@@ -558,6 +620,18 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		return "", 0, warnings, &PlanningError{Err: fmt.Errorf("start planning session: %w", err)}
 	}
 	defer session.Abort(sessionCtx)
+
+	// Send revision feedback as a follow-up message when resuming a previous session.
+	// This triggers the model's turn while preserving the conversation history.
+	if planningCtx.ResumeSessionFile != "" && planningCtx.RevisionFeedback != "" {
+		triggerMsg := fmt.Sprintf(
+			"The human requested changes to the plan:\n\n%s\n\nWrite your revised plan to %s.",
+			planningCtx.RevisionFeedback, draftPath,
+		)
+		if err := session.SendMessage(sessionCtx, triggerMsg); err != nil {
+			slog.Warn("failed to send revision feedback to resumed planning session", "error", err, "session_id", planningCtx.SessionID)
+		}
+	}
 
 	// Register session for steering.
 	if s.registry != nil {
@@ -598,6 +672,9 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		// Parse and validate the draft.
 		_, parseErrors := parser.ParseAndValidate(string(draftContent), planningCtx.Repos)
 		if !parseErrors.HasErrors() {
+			// Persist the native OMP session file so future resumes (request-changes, follow-up)
+			// can continue the conversation instead of starting fresh.
+			s.storeOmpSessionFile(ctx, planningCtx.SessionID, session)
 			return string(draftContent), attempt, warnings, nil
 		}
 

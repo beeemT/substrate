@@ -50,6 +50,9 @@ type PlanningContext struct {
 	// CurrentPlanText is the previous plan content for revision context.
 	// Empty for initial planning sessions.
 	CurrentPlanText string
+	// ResumeSessionFile is the OMP session JSONL file from the prior planning session.
+	// Set for revision runs when the harness supports native resume. Empty otherwise.
+	ResumeSessionFile string
 }
 
 // RawPlanOutput represents the parsed output from a planning agent.
