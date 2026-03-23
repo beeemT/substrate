@@ -1405,10 +1405,21 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected reopening the planning session row to resume the tail command")
 	}
-	msg := cmd()
-	linesMsg, ok := msg.(SessionLogLinesMsg)
-	if !ok {
-		t.Fatalf("cmd() message = %T, want SessionLogLinesMsg", msg)
+	// The returned cmd is a batch (spinner tick + tail resume); find the tail command.
+	batchMsg := cmd().(tea.BatchMsg)
+	var linesMsg SessionLogLinesMsg
+	foundTail := false
+	for _, batchCmd := range batchMsg {
+		if batchCmd == nil {
+			continue
+		}
+		if lm, ok := batchCmd().(SessionLogLinesMsg); ok {
+			linesMsg = lm
+			foundTail = true
+		}
+	}
+	if !foundTail {
+		t.Fatal("expected batch to contain a tail command returning SessionLogLinesMsg")
 	}
 	if len(linesMsg.Entries) != 0 {
 		t.Fatalf("resumed entries = %v, want no duplicate replay at saved offset", linesMsg.Entries)

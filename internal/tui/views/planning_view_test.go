@@ -286,3 +286,34 @@ func TestSessionLogStaticContentClearsSpinner(t *testing.T) {
 		t.Fatal("SetStaticContent must clear agentActive")
 	}
 }
+
+func TestSessionLogSpinnerRestartsAfterDeactivateReactivate(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+
+	// Start spinner.
+	cmd := m.SetAgentActive(true)
+	if cmd == nil {
+		t.Fatal("first SetAgentActive(true) must return tick cmd")
+	}
+
+	// Simulate navigating away: spinner is deactivated.
+	cmd = m.SetAgentActive(false)
+	if cmd != nil {
+		t.Fatal("SetAgentActive(false) must not return a cmd")
+	}
+	if m.agentActive {
+		t.Fatal("agentActive must be false after deactivation")
+	}
+
+	// Navigate back: reactivation must restart the tick chain.
+	cmd = m.SetAgentActive(true)
+	if cmd == nil {
+		t.Fatal("SetAgentActive(true) after deactivation must return tick cmd to restart spinner")
+	}
+	if m.spinnerFrame != 0 {
+		t.Fatalf("spinnerFrame = %d, want 0 after reactivation", m.spinnerFrame)
+	}
+}
