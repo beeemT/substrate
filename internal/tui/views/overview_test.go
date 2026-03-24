@@ -727,7 +727,7 @@ func TestAppOverviewOverlayCentersOnFullWindow(t *testing.T) {
 	}
 	borderLine := lines[titleLineIndex-1]
 	startByte := strings.LastIndex(borderLine, "╭")
-	endByte := strings.LastIndex(borderLine, "╮")
+	endByte := startByte + strings.Index(borderLine[startByte:], "╮")
 	if startByte < 0 || endByte <= startByte {
 		t.Fatalf("border line = %q, want overlay frame borders", borderLine)
 	}

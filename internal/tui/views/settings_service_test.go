@@ -54,6 +54,8 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 
 func TestSettingsSerialize_ClearsSentryTokenRefWhenSecretFieldBlank(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SENTRY_AUTH_TOKEN", "")
 
 	svc := &SettingsService{}
 	cfg := &config.Config{}
@@ -84,6 +86,8 @@ func TestSettingsSerialize_ClearsSentryTokenRefWhenSecretFieldBlank(t *testing.T
 
 func TestSettingsSerialize_PreservesSentryKeychainRefWithoutPendingSave(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SENTRY_AUTH_TOKEN", "")
 
 	svc := &SettingsService{}
 	cfg := &config.Config{}
@@ -337,7 +341,8 @@ func TestBuildSettingsSections_IncludesSentryProviderSection(t *testing.T) {
 }
 
 func TestBuildProviderStatuses_TracksSentryTokenState(t *testing.T) {
-	t.Parallel()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SENTRY_AUTH_TOKEN", "")
 
 	cfg := &config.Config{}
 	statuses := buildProviderStatuses(cfg)

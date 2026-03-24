@@ -44,11 +44,11 @@ func SentryAuthSource(cfg SentryConfig) string {
 	if strings.TrimSpace(os.Getenv("SENTRY_AUTH_TOKEN")) != "" {
 		return "env token"
 	}
-	if HasSentryCLI() {
-		return "sentry cli"
-	}
 	if strings.TrimSpace(cfg.TokenRef) != "" {
 		return "keychain"
+	}
+	if HasSentryCLI() {
+		return "sentry cli"
 	}
 	return "unset"
 }
@@ -103,15 +103,17 @@ func ResolveSentryAuth(ctx context.Context, cfg SentryConfig) (ResolvedSentryAut
 		return result, nil
 	}
 
+	if strings.TrimSpace(cfg.TokenRef) != "" {
+		result.Source = "keychain"
+		return result, nil
+	}
+
 	if HasSentryCLI() {
 		result.Source = "sentry cli"
 		result.UseCLI = true
 		return result, nil
 	}
 
-	if strings.TrimSpace(cfg.TokenRef) != "" {
-		result.Source = "keychain"
-	}
 	return result, nil
 }
 
