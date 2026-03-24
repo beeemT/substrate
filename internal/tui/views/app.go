@@ -1215,7 +1215,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 			cmds = append(cmds, cmd)
 		}
-		a.toasts.AddToast(msg.Provider+" connection verified", components.ToastSuccess)
+		if msg.Err != nil {
+			slog.Error("provider test failed",
+				"provider", msg.Provider,
+				"error", msg.Err,
+			)
+			a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
+		} else {
+			a.toasts.AddToast(msg.Provider+" connection verified", components.ToastSuccess)
+		}
 		return a, tea.Batch(cmds...)
 	case SettingsLoginCompletedMsg:
 		if a.activeOverlay == overlaySettings {

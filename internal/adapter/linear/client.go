@@ -62,6 +62,15 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 		return ErrRateLimited
 	}
 	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(limitedBody)
+		if len(respBody) > 0 {
+			// Cap the body excerpt to keep log lines reasonable.
+			detail := string(respBody)
+			if len(detail) > 512 {
+				detail = detail[:512] + "…"
+			}
+			return fmt.Errorf("linear API returned status %d: %s", resp.StatusCode, detail)
+		}
 		return fmt.Errorf("linear API returned status %d", resp.StatusCode)
 	}
 	var wrapper struct {

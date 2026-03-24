@@ -52,6 +52,7 @@ type SettingsAppliedMsg struct {
 type SettingsProviderTestedMsg struct {
 	Provider string
 	Status   ProviderStatus
+	Err      error
 }
 
 type SettingsLoginCompletedMsg struct {
@@ -1022,8 +1023,13 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 	case SettingsProviderTestedMsg:
 		m.providerStatus[msg.Provider] = msg.Status
 		m.invalidateMainDocument()
-		m.statusText = msg.Provider + " connection verified"
-		m.errorText = ""
+		if msg.Err != nil {
+			m.statusText = ""
+			m.errorText = msg.Err.Error()
+		} else {
+			m.statusText = msg.Provider + " connection verified"
+			m.errorText = ""
+		}
 	case SettingsLoginCompletedMsg:
 		wasDirty := m.dirty
 		expanded := make(map[string]bool, len(m.expandedSections))
@@ -1077,10 +1083,7 @@ func (m SettingsPage) testProviderCmd() tea.Cmd {
 	}
 	return func() tea.Msg {
 		status, err := m.service.TestProvider(context.Background(), provider, m.sections)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		return SettingsProviderTestedMsg{Provider: provider, Status: status}
+		return SettingsProviderTestedMsg{Provider: provider, Status: status, Err: err}
 	}
 }
 
