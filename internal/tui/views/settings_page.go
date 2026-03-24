@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os/exec"
@@ -1007,7 +1008,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		case "r":
 			m.revealSecrets = !m.revealSecrets
 		case "s":
-			return m.returnWithSyncedMainViewport(m.saveCmd())
+			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
 		case "a":
 			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
 		case "t":
@@ -1095,7 +1096,9 @@ func (m SettingsPage) applyCmd(svcs Services) tea.Cmd {
 func (m SettingsPage) testProviderCmd() tea.Cmd {
 	provider := providerForSection(m.currentSection())
 	if provider == "" {
-		return nil
+		return func() tea.Msg {
+			return ErrMsg{Err: errors.New("select a provider section to test connectivity")}
+		}
 	}
 	return func() tea.Msg {
 		status, err := m.service.TestProvider(context.Background(), provider, m.sections)

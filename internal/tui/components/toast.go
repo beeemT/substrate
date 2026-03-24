@@ -28,13 +28,20 @@ type Toast struct {
 	renderedWidth int
 }
 
+const maxToastContentLines = 4
+
 type ToastModel struct {
-	styles styles.Styles
-	toasts []Toast
+	styles   styles.Styles
+	toasts   []Toast
+	maxWidth int
 }
 
 func NewToastModel(st styles.Styles) ToastModel {
 	return ToastModel{styles: st}
+}
+
+func (m *ToastModel) SetWidth(terminalWidth int) {
+	m.maxWidth = max(terminalWidth*30/100, 10)
 }
 
 func (m *ToastModel) AddToast(msg string, level ToastLevel) {
@@ -43,7 +50,7 @@ func (m *ToastModel) AddToast(msg string, level ToastLevel) {
 		Level:   level,
 		Expires: time.Now().Add(20 * time.Second),
 	}
-	toast.rendered = renderToast(m.styles, toast)
+	toast.rendered = renderToast(m.styles, toast, m.maxWidth)
 	toast.renderedWidth = lipgloss.Width(toast.rendered)
 	m.toasts = append(m.toasts, toast)
 }
@@ -94,7 +101,7 @@ func (m *ToastModel) StackView(pinned ...Toast) string {
 	normalized := make([]string, 0, len(items))
 	for i, toast := range items {
 		if widths[i] < maxWidth {
-			normalized = append(normalized, renderToastAtWidth(m.styles, toast, maxWidth))
+			normalized = append(normalized, renderToastAtWidth(m.styles, toast, maxWidth, m.maxWidth))
 
 			continue
 		}
@@ -108,35 +115,97 @@ func (m *ToastModel) toastRenderData(toast Toast) (string, int) {
 	if toast.rendered != "" && toast.renderedWidth > 0 {
 		return toast.rendered, toast.renderedWidth
 	}
-	rendered := renderToastAtWidth(m.styles, toast, 0)
+	rendered := renderToastAtWidth(m.styles, toast, 0, m.maxWidth)
 
 	return rendered, lipgloss.Width(rendered)
 }
 
-func renderToast(st styles.Styles, t Toast) string {
-	return renderToastAtWidth(st, t, 0)
+func renderToast(st styles.Styles, t Toast, capWidth int) string {
+	return renderToastAtWidth(st, t, 0, capWidth)
 }
 
-func renderToastAtWidth(st styles.Styles, t Toast, width int) string {
+func renderToastAtWidth(st styles.Styles, t Toast, width, capWidth int) string {
 	contentText := prefixForLevel(t.Level) + t.Message
 	contentWidth := lipgloss.Width(contentText)
 	if width <= 0 {
 		width = contentWidth + 4
+	}
+	if capWidth > 0 && width > capWidth {
+		width = capWidth
 	}
 	width = max(width, 4)
 	innerWidth := width - 2
 	innerWidth = max(innerWidth, 2)
 	textWidth := innerWidth - 2
 	textWidth = max(textWidth, 0)
-	padding := strings.Repeat(" ", max(0, textWidth-contentWidth))
+
+	contentLines := wrapToastText(contentText, textWidth, maxToastContentLines)
 
 	borderStyle := lipgloss.NewStyle().Foreground(borderColorForLevel(st, t.Level))
 	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Bold(true)
 	top := borderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
-	middle := borderStyle.Render("│") + contentStyle.Render(" "+contentText+padding+" ") + borderStyle.Render("│")
+	var parts []string
+	parts = append(parts, top)
+	for _, line := range contentLines {
+		lineWidth := lipgloss.Width(line)
+		padding := strings.Repeat(" ", max(0, textWidth-lineWidth))
+		middle := borderStyle.Render("│") + contentStyle.Render(" "+line+padding+" ") + borderStyle.Render("│")
+		parts = append(parts, middle)
+	}
 	bottom := borderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+	parts = append(parts, bottom)
 
-	return strings.Join([]string{top, middle, bottom}, "\n")
+	return strings.Join(parts, "\n")
+}
+
+func wrapToastText(text string, width, maxLines int) []string {
+	if width <= 0 || lipgloss.Width(text) <= width {
+		return []string{text}
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	current := truncateWord(words[0], width)
+
+	for _, word := range words[1:] {
+		candidate := current + " " + word
+		if lipgloss.Width(candidate) <= width {
+			current = candidate
+		} else {
+			lines = append(lines, current)
+			current = truncateWord(word, width)
+			if len(lines) >= maxLines {
+				last := lines[maxLines-1]
+				runes := []rune(last)
+				for lipgloss.Width(string(runes)+"…") > width && len(runes) > 0 {
+					runes = runes[:len(runes)-1]
+				}
+				lines[maxLines-1] = string(runes) + "…"
+				return lines
+			}
+		}
+	}
+
+	if len(lines) < maxLines {
+		lines = append(lines, current)
+	}
+
+	return lines
+}
+
+func truncateWord(word string, width int) string {
+	if lipgloss.Width(word) <= width {
+		return word
+	}
+	runes := []rune(word)
+	for lipgloss.Width(string(runes)+"…") > width && len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "…"
 }
 
 func borderColorForLevel(st styles.Styles, l ToastLevel) lipgloss.TerminalColor {

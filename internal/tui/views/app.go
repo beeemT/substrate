@@ -794,6 +794,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.windowWidth = msg.Width
 		a.windowHeight = msg.Height
+		a.toasts.SetWidth(msg.Width)
 		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome)
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
 		a.sidebar.SetHeight(layout.PaneInnerHeight)
