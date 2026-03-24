@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/atotto/clipboard"
+
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,12 +18,12 @@ import (
 
 // LogsOverlay displays captured slog entries in a scrollable viewport.
 type LogsOverlay struct {
-	st    styles.Styles
-	store *tuilog.Store
-	vp    viewport.Model
-	width int
+	st     styles.Styles
+	store  *tuilog.Store
+	vp     viewport.Model
+	width  int
 	height int
-	ready bool
+	ready  bool
 }
 
 // NewLogsOverlay creates a LogsOverlay backed by the given store.
@@ -64,6 +66,11 @@ func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "c":
+			// Copy plain-text log to clipboard; strip ANSI escape codes so the
+			// receiver gets readable text, not styled terminal output.
+			_ = clipboard.WriteAll(ansi.Strip(l.renderContent()))
+			return l, nil
 		case "esc":
 			return l, func() tea.Msg { return CloseOverlayMsg{} }
 		}
@@ -92,7 +99,7 @@ func (l LogsOverlay) View() string {
 	var sb strings.Builder
 	sb.WriteString(l.st.Title.Render("Logs") + "\n\n")
 	sb.WriteString(l.vp.View())
-	sb.WriteString("\n" + l.st.Muted.Render("↑↓ scroll  Esc close"))
+	sb.WriteString("\n" + l.st.Muted.Render("↑↓ scroll  c copy  Esc close"))
 
 	return l.st.OverlayFrame.Padding(1, 3).Render(sb.String())
 }
