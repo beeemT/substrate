@@ -142,6 +142,23 @@ function mapEvent(e: unknown): object[] {
 		return [{ type: "tool_result", tool: toolName, text, is_error: isError }];
 	}
 
+	if (event.type === "auto_retry_start") {
+		const attempt = Number((event as any).attempt ?? 1);
+		const maxAttempts = Number((event as any).maxAttempts ?? 0);
+		const delayMs = Number((event as any).delayMs ?? 0);
+		const delaySec = Math.round(delayMs / 1000);
+		const attemptStr = maxAttempts > 0 ? `${attempt}/${maxAttempts}` : String(attempt);
+		const msg = `Rate limited — retrying in ${delaySec}s (attempt ${attemptStr})`;
+		return [{ type: "lifecycle", stage: "retry_wait", message: msg }];
+	}
+
+	if (event.type === "auto_retry_end") {
+		if (!(event as any).success) {
+			return [];
+		}
+		return [{ type: "lifecycle", stage: "retry_resumed" }];
+	}
+
 	return [];
 }
 

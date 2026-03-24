@@ -461,6 +461,18 @@ func (s *ohMyPiSession) mapBridgeEvent(raw struct {
 				Timestamp: time.Now(),
 				Payload:   firstNonEmpty(message, summary, "unknown error"),
 			}, nil
+		case "retry_wait":
+			message, _ := eventMap["message"].(string)
+			return &adapter.AgentEvent{
+				Type:      "retry_wait",
+				Timestamp: time.Now(),
+				Payload:   message,
+			}, nil
+		case "retry_resumed":
+			return &adapter.AgentEvent{
+				Type:      "retry_resumed",
+				Timestamp: time.Now(),
+			}, nil
 		default:
 			return nil, nil
 		}

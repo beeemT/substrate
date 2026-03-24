@@ -275,6 +275,14 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		})
 
 	case blockKindLifecycle:
+		// Retry events render with amber warning style; other lifecycle stages use muted text.
+		switch block.stage {
+		case "retry_wait":
+			text := firstNonEmptyTranscript(block.message, "Rate limited — retrying...")
+			return st.Warning.Render(ansi.Truncate("⏸ "+text, width, "…"))
+		case "retry_resumed":
+			return st.Muted.Render(ansi.Truncate("↺ Resumed after rate limit", width, "…"))
+		}
 		var text string
 		switch block.stage {
 		case "started":

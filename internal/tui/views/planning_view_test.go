@@ -1,8 +1,10 @@
 package views
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -338,5 +340,138 @@ func TestContentSetModeDeactivatesSpinnerOnPlanningExit(t *testing.T) {
 	cmd := cm.sessionLog.SetAgentActive(true)
 	if cmd == nil {
 		t.Fatal("SetAgentActive(true) after mode transition must return tick cmd")
+	}
+}
+
+func TestSessionLogSetAgentActiveSetsLastEventAt(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	before := time.Now()
+	m.SetAgentActive(true)
+	after := time.Now()
+	if m.lastEventAt.IsZero() {
+		t.Fatal("lastEventAt must be set when agent becomes active")
+	}
+	if m.lastEventAt.Before(before) || m.lastEventAt.After(after) {
+		t.Fatalf("lastEventAt = %v not in expected range [%v, %v]", m.lastEventAt, before, after)
+	}
+}
+
+func TestSessionLogSilenceNoticeAppearsInView(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	// Simulate threshold crossed.
+	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+	m.silenceNoticeActive = true
+	m.syncViewportSize()
+	view := stripBrowseANSI(m.View())
+	if !strings.Contains(view, "No output for") {
+		t.Fatalf("view must contain silence notice, got:\n%s", view)
+	}
+}
+
+func TestSessionLogSilenceNoticeFitsWidth(t *testing.T) {
+	t.Parallel()
+	for _, width := range []int{20, 40, 80} {
+		width := width
+		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
+			t.Parallel()
+			m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+			m.SetSize(width, 10)
+			m.SetTitle("T")
+			m.SetLogPath("sess-1", "/tmp/sess-1.log")
+			m.SetAgentActive(true)
+			m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+			m.silenceNoticeActive = true
+			m.syncViewportSize()
+			lines := strings.Split(m.View(), "\n")
+			for i, line := range lines {
+				if got := ansi.StringWidth(line); got > width {
+					t.Errorf("line %d width = %d, want <= %d\nline: %q", i+1, got, width, line)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionLogSilenceNoticeReducesViewportHeight(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 15)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	heightWithout := m.viewport.Height
+	// Activate notice.
+	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+	m.silenceNoticeActive = true
+	m.syncViewportSize()
+	heightWith := m.viewport.Height
+	if diff := heightWithout - heightWith; diff != 1 {
+		t.Fatalf("silence notice should reduce viewport height by 1, got diff=%d (without=%d, with=%d)", diff, heightWithout, heightWith)
+	}
+}
+
+func TestSessionLogSilenceNoticeFitsHeight(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(80, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+	m.silenceNoticeActive = true
+	m.syncViewportSize()
+	lines := strings.Split(m.View(), "\n")
+	if got := len(lines); got != 10 {
+		t.Fatalf("line count with silence notice = %d, want 10", got)
+	}
+}
+
+func TestSessionLogSilenceNoticeClearedOnEntries(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+	m.silenceNoticeActive = true
+	m.syncViewportSize()
+	updated, _ := m.Update(SessionLogLinesMsg{
+		SessionID:  "sess-1",
+		Entries:    []sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "output"}},
+		NextOffset: 10,
+	})
+	m = updated
+	if m.silenceNoticeActive {
+		t.Fatal("silenceNoticeActive must be cleared when entries arrive")
+	}
+	if strings.Contains(stripBrowseANSI(m.View()), "No output for") {
+		t.Fatal("silence notice must not appear after entries arrive")
+	}
+}
+
+func TestSessionLogSilenceNoticeClearedOnDeactivate(t *testing.T) {
+	t.Parallel()
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(60, 10)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
+	m.silenceNoticeActive = true
+	m.syncViewportSize()
+	heightWith := m.viewport.Height
+	m.SetAgentActive(false)
+	if m.silenceNoticeActive {
+		t.Fatal("silenceNoticeActive must be cleared when agent deactivates")
+	}
+	if m.viewport.Height <= heightWith {
+		t.Fatalf("viewport height must increase when silence notice is cleared, got %d, was %d", m.viewport.Height, heightWith)
 	}
 }

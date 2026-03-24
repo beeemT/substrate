@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -14,6 +15,8 @@ import (
 )
 
 const sessionLogSpinnerInterval = 100 * time.Millisecond
+
+const sessionLogSilenceThreshold = 30 * time.Second
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.
 var sessionLogSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -58,6 +61,10 @@ type SessionLogModel struct {
 	// Activity spinner: shown when an agent is actively running for this session.
 	agentActive  bool
 	spinnerFrame int
+
+	// Silence detection: track last event arrival to surface no-output warnings.
+	lastEventAt         time.Time
+	silenceNoticeActive bool
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -143,8 +150,14 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.sessionID = ""
 	m.offset = 0
 	m.agentActive = false
+	wasShowingNotice := m.silenceNoticeActive
+	m.silenceNoticeActive = false
+	m.lastEventAt = time.Time{}
 	m.entries = append([]sessionlog.Entry(nil), entries...)
 	m.doRebuildTranscript()
+	if wasShowingNotice {
+		m.syncViewportSize() // recompute header height now notice is gone
+	}
 	m.viewport.GotoBottom()
 }
 
@@ -186,7 +199,13 @@ func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
 	m.agentActive = active
 	m.spinnerFrame = 0
 	if active {
+		m.lastEventAt = time.Now()
+		m.silenceNoticeActive = false
 		return sessionLogSpinnerTickCmd()
+	}
+	if m.silenceNoticeActive {
+		m.silenceNoticeActive = false
+		m.syncViewportSize()
 	}
 	return nil
 }
@@ -248,7 +267,14 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		if len(msg.Entries) > 0 {
 			wasAtBottom := m.viewport.AtBottom()
 			m.entries = append(m.entries, msg.Entries...)
-			m.doRebuildTranscript()
+			m.lastEventAt = time.Now()
+			if m.silenceNoticeActive {
+				// Entries arrived: clear silence warning and recompute header height.
+				m.silenceNoticeActive = false
+				m.syncViewportSize()
+			} else {
+				m.doRebuildTranscript()
+			}
 			if wasAtBottom {
 				m.viewport.GotoBottom()
 			}
@@ -323,6 +349,12 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			return m, nil
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
+		// Surface a warning after prolonged silence while agent is active.
+		shouldWarn := !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) >= sessionLogSilenceThreshold
+		if shouldWarn != m.silenceNoticeActive {
+			m.silenceNoticeActive = shouldWarn
+			m.syncViewportSize()
+		}
 		return m, sessionLogSpinnerTickCmd()
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -342,11 +374,16 @@ func (m SessionLogModel) header() string {
 		Width:   m.width,
 		Divider: true,
 	})
+	out := header
 	if notice := m.noticeView(); notice != "" {
-		return header + "\n" + notice
+		out = out + "\n" + notice
 	}
-
-	return header
+	if m.silenceNoticeActive && !m.lastEventAt.IsZero() {
+		elapsed := time.Since(m.lastEventAt).Round(time.Second)
+		text := "⏸ No output for " + elapsed.String() + " — may be rate limited"
+		out = out + "\n" + m.styles.Warning.Render(ansi.Truncate(text, m.width, "…"))
+	}
+	return out
 }
 
 func (m SessionLogModel) noticeView() string {
