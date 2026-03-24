@@ -1378,6 +1378,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 	}
 	return func() tea.Msg {
 		nextPages := cloneBrowsePages(pages)
+		var errs []error
 		for _, a := range adapters {
 			caps := a.Capabilities()
 			filterCaps, ok := caps.BrowseFilters[scope]
@@ -1418,7 +1419,8 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 			}
 			result, err := a.ListSelectable(context.Background(), opts)
 			if err != nil {
-				return ErrMsg{Err: err}
+				errs = append(errs, fmt.Errorf("%s: %w", a.Name(), err))
+				continue
 			}
 			items := normalizePageItems(result.Items, a.Name())
 			if mode == browseLoadAppend {
@@ -1443,14 +1445,17 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 			page.HasMore = result.HasMore
 			nextPages[a.Name()] = page
 		}
-		return issueListLoadedMsg{requestID: requestID, pages: nextPages}
+		return issueListLoadedMsg{requestID: requestID, pages: nextPages, errs: errs}
 	}
 }
 
 // issueListLoadedMsg is an internal msg carrying fetched list items.
+// errs collects per-adapter errors so partial results are still shown and the
+// overlay always transitions out of the loading state.
 type issueListLoadedMsg struct {
 	requestID int
 	pages     map[string]browsePageState
+	errs      []error
 }
 
 // Update handles incoming messages for the overlay.
@@ -1472,6 +1477,10 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		m.refreshBrowseListItems()
 		m.normalizeBrowseFocus()
 		forceDetailTop = true
+		for _, e := range msg.errs {
+			err := e
+			cmds = append(cmds, func() tea.Msg { return ErrMsg{Err: err} })
+		}
 
 	case tea.MouseMsg:
 		if !m.showManual && msg.Action == tea.MouseActionPress {

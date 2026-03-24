@@ -1803,3 +1803,110 @@ func TestNewSessionOverlayManualShortcutDispatchesManualSession(t *testing.T) {
 		t.Fatalf("title = %q, want Manual task", sessionMsg.Title)
 	}
 }
+
+func TestNewSessionOverlayAdapterErrorClearsLoading(t *testing.T) {
+	t.Parallel()
+
+	failAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me"}},
+		},
+		listSelectable: func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+			return nil, errors.New("linear API returned status 401")
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{failAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	// Simulate the load cycle: reloadItems sets loading=true and returns a cmd.
+	reloadCmd := overlay.reloadItems()
+	if !overlay.loading {
+		t.Fatal("expected loading after reloadItems")
+	}
+
+	msg := reloadCmd()
+
+	loaded, ok := msg.(issueListLoadedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want issueListLoadedMsg even when adapter errors", msg)
+	}
+	if len(loaded.errs) == 0 {
+		t.Fatal("expected adapter errors in issueListLoadedMsg")
+	}
+
+	overlay, retCmd := overlay.Update(loaded)
+	if overlay.loading {
+		t.Fatal("loading should be false after receiving issueListLoadedMsg with errors")
+	}
+
+	// The returned command should produce an ErrMsg for the toast.
+	if retCmd == nil {
+		t.Fatal("expected error command to surface adapter error as toast")
+	}
+	msgs := runOverlayCmd(t, retCmd)
+	foundErr := false
+	for _, m := range msgs {
+		if errMsg, ok := m.(ErrMsg); ok && errMsg.Err != nil {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Fatal("expected ErrMsg in returned commands")
+	}
+}
+
+func TestNewSessionOverlayPartialAdapterErrorShowsSuccessfulResults(t *testing.T) {
+	t.Parallel()
+
+	failAdapter := &browseTestAdapter{
+		name:         "linear",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me"}},
+		},
+		listSelectable: func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+			return nil, errors.New("unauthorized")
+		},
+	}
+	okAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me"}},
+		},
+		listSelectable: func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+			return &adapter.ListResult{
+				Items: []adapter.ListItem{
+					{ID: "gh-1", Provider: "github", Title: "GitHub issue"},
+				},
+			}, nil
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{failAdapter, okAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	cmd := overlay.loadItemsCmd(browseLoadReset, overlay.nextRequestID())
+	msg := cmd()
+
+	loaded := msg.(issueListLoadedMsg)
+	if len(loaded.errs) != 1 {
+		t.Fatalf("errs = %d, want 1 (only linear should fail)", len(loaded.errs))
+	}
+
+	overlay, _ = overlay.Update(loaded)
+	if overlay.loading {
+		t.Fatal("loading should be false")
+	}
+	if len(overlay.allItems) != 1 {
+		t.Fatalf("allItems = %d, want 1 (github results should be present)", len(overlay.allItems))
+	}
+	if overlay.allItems[0].Title != "GitHub issue" {
+		t.Fatalf("item title = %q, want GitHub issue", overlay.allItems[0].Title)
+	}
+}
