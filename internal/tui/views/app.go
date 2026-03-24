@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -1399,10 +1400,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if errors.Is(msg.Err, context.Canceled) || errors.Is(msg.Err, context.DeadlineExceeded) {
 			return a, nil
 		}
+		slog.Error("operation failed", "error", msg.Err)
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
 
 	case AdapterErrorMsg:
+		slog.Error("adapter error",
+			"adapter", msg.Adapter,
+			"event_type", msg.EventType,
+			"error", msg.Err,
+			"retries", msg.Retries,
+		)
 		toastMsg := formatAdapterErrorToast(msg)
 		a.toasts.AddToast(toastMsg, components.ToastWarning)
 		return a, WaitForAdapterErrorCmd(a.svcs.AdapterErrors)

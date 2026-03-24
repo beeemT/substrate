@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -1419,6 +1420,12 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 			}
 			result, err := a.ListSelectable(context.Background(), opts)
 			if err != nil {
+				slog.Error("adapter list failed",
+					"adapter", a.Name(),
+					"scope", scope,
+					"view", view,
+					"error", err,
+				)
 				errs = append(errs, fmt.Errorf("%s: %w", a.Name(), err))
 				continue
 			}
