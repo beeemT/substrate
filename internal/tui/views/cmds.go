@@ -26,6 +26,7 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
+	"github.com/beeemT/substrate/internal/tuilog"
 )
 
 const (
@@ -899,5 +900,33 @@ func WaitForAdapterErrorCmd(ch <-chan AdapterErrorMsg) tea.Cmd {
 			return nil
 		}
 		return err
+	}
+}
+
+// StartupWarningsCmd returns a Cmd that fires a StartupWarningsMsg.
+func StartupWarningsCmd(warnings []string) tea.Cmd {
+	if len(warnings) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		return StartupWarningsMsg{Warnings: warnings}
+	}
+}
+
+// WaitForLogToastCmd listens for slog warn/error entries and converts them to TUI messages.
+// The caller should re-invoke this command after handling the message to continue listening.
+func WaitForLogToastCmd(ch <-chan tuilog.ToastEntry) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		entry, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return LogToastMsg{
+			Level:   entry.Level.String(),
+			Message: entry.Message,
+		}
 	}
 }

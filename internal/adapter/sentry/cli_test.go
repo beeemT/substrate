@@ -3,6 +3,7 @@ package sentry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -94,18 +95,75 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 	}
 }
 
-func TestNewRequiresOrganizationEvenWithSentryCLIAuth(t *testing.T) {
+func TestNewResolvesOrganizationFromCLI(t *testing.T) {
 	clearSentryTestEnv(t)
 	binDir := t.TempDir()
 	writeCLIExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
-	_, err := New(context.Background(), config.SentryConfig{})
-	if err == nil {
-		t.Fatal("New() error = nil, want missing organization error")
+	orgPayload := `[{"slug":"acme","name":"Acme Corp"}]`
+	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "/organizations/") {
+			return []byte("HTTP/2 200\nContent-Type: application/json\n\n" + orgPayload), nil
+		}
+
+		return nil, fmt.Errorf("unexpected args: %v", args)
 	}
-	if !strings.Contains(err.Error(), "sentry organization is required") {
-		t.Fatalf("New() error = %q, want organization requirement", err)
+	a, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected HTTP request: %s", req.URL.String())
+
+		return nil, nil
+	}), runner)
+	if err != nil {
+		t.Fatalf("newWithDeps: %v", err)
+	}
+	if a.organization != "acme" {
+		t.Fatalf("organization = %q, want %q", a.organization, "acme")
+	}
+}
+
+func TestNewRequiresOrganizationWhenCLIReturnsMultiple(t *testing.T) {
+	clearSentryTestEnv(t)
+	binDir := t.TempDir()
+	writeCLIExecutable(t, binDir, "sentry", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	orgPayload := `[{"slug":"acme"},{"slug":"globex"}]`
+	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "api" {
+			return []byte("HTTP/2 200\nContent-Type: application/json\n\n" + orgPayload), nil
+		}
+
+		return nil, fmt.Errorf("unexpected args: %v", args)
+	}
+	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, nil
+	}), runner)
+	if err == nil {
+		t.Fatal("newWithDeps() error = nil, want multiple orgs error")
+	}
+	if !strings.Contains(err.Error(), "multiple sentry organizations") {
+		t.Fatalf("newWithDeps() error = %q, want multiple orgs hint", err)
+	}
+}
+
+func TestNewFallsBackToOrgRequiredWhenCLIFails(t *testing.T) {
+	clearSentryTestEnv(t)
+	binDir := t.TempDir()
+	writeCLIExecutable(t, binDir, "sentry", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+		return []byte("error"), fmt.Errorf("cli failed")
+	}
+	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, nil
+	}), runner)
+	if err == nil {
+		t.Fatal("newWithDeps() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "resolve sentry organization") {
+		t.Fatalf("newWithDeps() error = %q, want resolve org error", err)
 	}
 }
 

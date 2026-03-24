@@ -29,7 +29,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithEnvToken(t *testing.T) 
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(
+	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
 		service.NewSessionService(
@@ -56,7 +56,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(
+	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
 		service.NewSessionService(
@@ -80,7 +80,7 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 	t.Setenv("PATH", binDir)
 
 	repo := stubWorkItemRepo{}
-	adapters := BuildWorkItemAdapters(
+	adapters, warnings := BuildWorkItemAdapters(
 		&config.Config{},
 		"ws-1",
 		service.NewSessionService(
@@ -94,6 +94,9 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 	}
 	if adapters[0].Name() != "manual" {
 		t.Fatalf("adapter = %q, want manual", adapters[0].Name())
+	}
+	if len(warnings) == 0 {
+		t.Fatal("warnings = empty, want sentry warning")
 	}
 }
 

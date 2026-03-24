@@ -8,6 +8,7 @@ import (
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/tuilog"
 )
 
 // Services aggregates all dependencies needed by the TUI.
@@ -38,6 +39,13 @@ type Services struct {
 	GitClient       *gitwork.Client
 	Bus             *event.Bus
 	AdapterErrors chan AdapterErrorMsg
+	// StartupWarnings collects adapter initialisation warnings to surface
+	// as toasts when the TUI starts.
+	StartupWarnings []string
+	// LogStore holds all captured slog entries for the logs overlay.
+	LogStore *tuilog.Store
+	// LogToasts delivers slog warn/error entries for toast display.
+	LogToasts <-chan tuilog.ToastEntry
 	// Instance identity
 	InstanceID    string
 	WorkspaceID   string

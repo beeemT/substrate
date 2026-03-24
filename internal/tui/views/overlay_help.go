@@ -29,6 +29,7 @@ func (h HelpOverlay) View() string {
 	global := []entry{
 		{"n", "New session"},
 		{"s", "Settings"},
+		{"L", "Logs"},
 		{"j / ↓", "Navigate down"},
 		{"k / ↑", "Navigate up"},
 		{"g", "Go to top"},

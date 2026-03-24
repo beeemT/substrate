@@ -40,11 +40,13 @@ func writeExecutable(t *testing.T, dir, name, content string) string {
 }
 
 func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
 	repo := stubWorkItemRepo{}
 	cfg := &config.Config{}
 	cfg.Adapters.GitHub.Token = "token"
 
-	adapters := BuildWorkItemAdapters(
+	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
 		service.NewSessionService(
@@ -69,7 +71,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "token"
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildWorkItemAdapters(
+	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
 		service.NewSessionService(
@@ -188,7 +190,7 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 	writeExecutable(t, binDir, "gh", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'gh-cli-token\\n'\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
-	adapters := BuildWorkItemAdapters(
+	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
 		service.NewSessionService(
@@ -202,5 +204,30 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 	}
 	if adapters[0].Name() != "manual" || adapters[1].Name() != "github" {
 		t.Fatalf("adapter order = [%q %q], want [manual github]", adapters[0].Name(), adapters[1].Name())
+	}
+}
+
+func TestBuildWorkItemAdapters_RegistersGitLabAdapterWithGlabCLI(t *testing.T) {
+	repo := stubWorkItemRepo{}
+	cfg := &config.Config{}
+
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "glab", "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"get\" ] && [ \"$3\" = \"token\" ]; then\n  printf 'glab-cli-token\\n'\n  exit 0\nfi\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	adapters, _ := BuildWorkItemAdapters(
+		cfg,
+		"ws-1",
+		service.NewSessionService(
+			repository.NoopTransacter{
+				Res: repository.Resources{Sessions: repo},
+			},
+		),
+	)
+	if len(adapters) != 2 {
+		t.Fatalf("adapters len = %d, want 2", len(adapters))
+	}
+	if adapters[0].Name() != "manual" || adapters[1].Name() != "gitlab" {
+		t.Fatalf("adapter order = [%q %q], want [manual gitlab]", adapters[0].Name(), adapters[1].Name())
 	}
 }

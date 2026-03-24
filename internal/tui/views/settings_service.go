@@ -400,6 +400,39 @@ func sentryBaseURLFieldValue(cfg config.SentryConfig) string {
 	return baseURL
 }
 
+func sentrySettingsFields(cfg *config.Config) []SettingsField {
+	sentry := cfg.Adapters.Sentry
+	orgField := SettingsField{
+		Section: "adapters.sentry",
+		Key:     "organization",
+		Label:   "Organization",
+		Type:    SettingsFieldString,
+		Value:   sentry.Organization,
+	}
+
+	authSource := config.SentryAuthSource(sentry)
+	if authSource != "unset" && strings.TrimSpace(sentry.Organization) == "" {
+		resolved := config.ResolveSentryContext(sentry)
+		if strings.TrimSpace(resolved.Organization) == "" {
+			orgField.Error = "Organization is required – select one or set SENTRY_ORG"
+		}
+	}
+
+	if authSource == "sentry cli" {
+		if orgs := config.ListSentryCLIOrganizations(sentry); len(orgs) > 0 {
+			orgField.Options = orgs
+			orgField.Error = ""
+		}
+	}
+
+	return []SettingsField{
+		{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(sentry.TokenRef, sentry.Token), Sensitive: true, Status: authSource},
+		{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: sentryBaseURLFieldValue(sentry)},
+		orgField,
+		{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(sentry.Projects, ",")},
+	}
+}
+
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
 	workItemSvc := service.NewSessionService(s.transacter)
 	workspaceSvc := service.NewWorkspaceService(s.transacter)
@@ -418,7 +451,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	}
 	var adapters []adapter.WorkItemAdapter
 	if current.WorkspaceID != "" {
-		adapters = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc)
+		adapters, _ = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc)
 	}
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, adapter.ReviewArtifactRepos{
 		Events:           eventSvc,
@@ -728,12 +761,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			ID:          "provider.sentry",
 			Title:       "Provider · Sentry",
 			Description: "Sentry issue source configuration",
-			Fields: []SettingsField{
-				{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.Sentry.TokenRef, cfg.Adapters.Sentry.Token), Sensitive: true, Status: config.SentryAuthSource(cfg.Adapters.Sentry)},
-				{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: sentryBaseURLFieldValue(cfg.Adapters.Sentry)},
-				{Section: "adapters.sentry", Key: "organization", Label: "Organization", Type: SettingsFieldString, Value: cfg.Adapters.Sentry.Organization},
-				{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Sentry.Projects, ",")},
-			},
+			Fields: sentrySettingsFields(cfg),
 		},
 		{
 			ID:          "provider.github",

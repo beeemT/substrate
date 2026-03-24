@@ -25,20 +25,23 @@ import (
 // BuildWorkItemAdapters constructs all available WorkItemAdapters for the given
 // configuration and workspace. The manual adapter is always included. The linear
 // adapter is included when an API key is present in configuration.
+// The second return value contains human-readable warnings for adapters that
+// were detected but could not be initialised (e.g. missing organisation).
 func BuildWorkItemAdapters(
 	cfg *config.Config,
 	workspaceID string,
 	workItemSvc *service.SessionService,
-) []adapter.WorkItemAdapter {
+) ([]adapter.WorkItemAdapter, []string) {
 	store := manualadapter.NewWorkspaceStore(workItemSvc, workspaceID)
 	adapters := []adapter.WorkItemAdapter{
 		manualadapter.New(store, workspaceID),
 	}
+	var warnings []string
 
 	if cfg.Adapters.Linear.APIKey != "" {
 		adapters = append(adapters, linearadapter.New(cfg.Adapters.Linear))
 	}
-	if cfg.Adapters.GitLab.Token != "" {
+	if config.GitLabAuthConfigured(cfg.Adapters.GitLab) {
 		gitlabAdapter, err := gitlabadapter.New(context.Background(), cfg.Adapters.GitLab)
 		if err != nil {
 			slog.Warn("skipping gitlab work item adapter", "err", err)
@@ -58,12 +61,13 @@ func BuildWorkItemAdapters(
 		sentryAdapter, err := sentryadapter.New(context.Background(), cfg.Adapters.Sentry)
 		if err != nil {
 			slog.Warn("skipping sentry work item adapter", "err", err)
+			warnings = append(warnings, "Sentry: "+err.Error())
 		} else {
 			adapters = append(adapters, sentryAdapter)
 		}
 	}
 
-	return adapters
+	return adapters, warnings
 }
 
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.

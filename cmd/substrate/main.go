@@ -25,6 +25,7 @@ import (
 	"github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/tui/views"
+	"github.com/beeemT/substrate/internal/tuilog"
 	"github.com/beeemT/substrate/migrations"
 )
 
@@ -57,6 +58,14 @@ func run() error { //nolint:funlen
 			return nil
 		}
 	}
+
+	// Install a TUI-aware slog handler that captures log entries into an
+	// in-memory buffer and sends warn/error entries to a channel for toast
+	// display. This replaces the default text handler, which would write to
+	// stderr and corrupt the bubbletea rendering.
+	logStore := tuilog.NewStore()
+	logToasts := make(chan tuilog.ToastEntry, 64)
+	slog.SetDefault(slog.New(tuilog.NewHandler(logStore, logToasts)))
 
 	// Get paths from config package (respects SUBSTRATE_HOME)
 	globalDir, err := config.GlobalDir()
@@ -197,8 +206,9 @@ func run() error { //nolint:funlen
 
 	// Build adapters.
 	var adapters []adapter.WorkItemAdapter
+	var adapterWarnings []string
 	if workspaceID != "" {
-		adapters = app.BuildWorkItemAdapters(cfg, workspaceID, workItemSvc)
+		adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, workspaceID, workItemSvc)
 	}
 	artifactRepos := adapter.ReviewArtifactRepos{
 		Events:           eventSvc,
@@ -384,6 +394,9 @@ func run() error { //nolint:funlen
 		GitClient:        gitClient,
 		Bus:              bus,
 		AdapterErrors:    adapterErrors,
+		StartupWarnings:  adapterWarnings,
+		LogStore:         logStore,
+		LogToasts:        logToasts,
 		InstanceID:       instanceID,
 		WorkspaceID:      workspaceID,
 		WorkspaceName:    workspaceName,

@@ -200,6 +200,10 @@ type AdapterErrorMsg struct {
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }
 
+// StartupWarningsMsg delivers adapter initialisation warnings that should be
+// displayed as toasts when the TUI first appears.
+type StartupWarningsMsg struct{ Warnings []string }
+
 // OpenExternalURLMsg requests opening a durable external artifact URL in the system browser.
 type OpenExternalURLMsg struct{ URL string }
 
@@ -237,6 +241,14 @@ const (
 
 // SessionDuplicateActionMsg resolves the duplicate-session prompt.
 type SessionDuplicateActionMsg struct{ Action SessionDuplicateAction }
+
+// --- Log toasts ---
+
+// LogToastMsg is sent when a slog warn/error entry should be shown as a toast.
+type LogToastMsg struct {
+	Level   string // "WARN" or "ERROR"
+	Message string
+}
 
 // --- Overlay control ---
 

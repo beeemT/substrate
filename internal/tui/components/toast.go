@@ -41,7 +41,7 @@ func (m *ToastModel) AddToast(msg string, level ToastLevel) {
 	toast := Toast{
 		Message: msg,
 		Level:   level,
-		Expires: time.Now().Add(3 * time.Second),
+		Expires: time.Now().Add(5 * time.Second),
 	}
 	toast.rendered = renderToast(m.styles, toast)
 	toast.renderedWidth = lipgloss.Width(toast.rendered)

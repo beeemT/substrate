@@ -2,10 +2,12 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const DefaultSentryBaseURL = "https://sentry.io/api/0"
@@ -205,4 +207,40 @@ func SentryCLIEnvironment(baseURL string) []string {
 		env = append(env, "SENTRY_URL="+root)
 	}
 	return env
+}
+
+// ListSentryCLIOrganizations returns the slugs of all Sentry organizations
+// accessible via the authenticated sentry CLI. Returns nil when the CLI is
+// not available or the call fails.
+func ListSentryCLIOrganizations(cfg SentryConfig) []string {
+	if !HasSentryCLI() {
+		return nil
+	}
+	resolved := ResolveSentryContext(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sentry", "api", "/organizations/", "--include")
+	cmd.Env = SentryCLIEnvironment(resolved.BaseURL)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	raw := strings.ReplaceAll(string(output), "\r\n", "\n")
+	_, body, found := strings.Cut(raw, "\n\n")
+	if !found {
+		return nil
+	}
+	var orgs []struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal([]byte(body), &orgs); err != nil {
+		return nil
+	}
+	slugs := make([]string, 0, len(orgs))
+	for _, org := range orgs {
+		if s := strings.TrimSpace(org.Slug); s != "" {
+			slugs = append(slugs, s)
+		}
+	}
+	return slugs
 }

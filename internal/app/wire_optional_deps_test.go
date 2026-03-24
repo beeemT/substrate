@@ -24,7 +24,7 @@ func TestBuildWorkItemAdapters_ManualOnlyWithoutCompleteOptionalProviders(t *tes
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Token = "token-without-organization"
 
-	adapters := BuildWorkItemAdapters(cfg, "workspace-1", nil)
+	adapters, _ := BuildWorkItemAdapters(cfg, "workspace-1", nil)
 	if len(adapters) != 1 {
 		t.Fatalf("expected only manual adapter, got %d", len(adapters))
 	}

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"path"
 	"slices"
 	"sort"
@@ -36,6 +37,10 @@ const (
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
+
+// tokenResolver resolves a GitLab API token. It is called when the config
+// does not contain a token directly. Mirrors the GitHub adapter pattern.
+type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
 	cfg     config.GitlabConfig
@@ -80,22 +85,63 @@ type epic struct {
 }
 
 func New(ctx context.Context, cfg config.GitlabConfig) (*GitlabAdapter, error) {
-	return newWithClient(ctx, cfg, &http.Client{Timeout: 30 * time.Second})
+	return newWithDeps(ctx, cfg, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
 }
 
-func newWithClient(_ context.Context, cfg config.GitlabConfig, client httpDoer) (*GitlabAdapter, error) {
-	if strings.TrimSpace(cfg.Token) == "" {
-		return nil, errors.New("gitlab token is required")
-	}
+func newWithClient(ctx context.Context, cfg config.GitlabConfig, client httpDoer) (*GitlabAdapter, error) {
+	return newWithDeps(ctx, cfg, client, execTokenResolver)
+}
+
+func newWithDeps(ctx context.Context, cfg config.GitlabConfig, client httpDoer, resolver tokenResolver) (*GitlabAdapter, error) {
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
 		baseURL = "https://gitlab.com"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	token := strings.TrimSpace(cfg.Token)
+	if token == "" {
+		host := hostFromBaseURL(baseURL)
+		var err error
+		token, err = resolver(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve gitlab token: %w", err)
+		}
+	}
+	cfg.Token = token
+
 	a := &GitlabAdapter{cfg: cfg, baseURL: baseURL, client: client}
 
 	return a, nil
+}
+
+// hostFromBaseURL extracts the hostname from a base URL for glab token lookup.
+func hostFromBaseURL(baseURL string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+
+	return parsed.Hostname()
+}
+
+// execTokenResolver retrieves a GitLab token from the glab CLI.
+// It runs: glab config get token --host <host>
+func execTokenResolver(ctx context.Context, host string) (string, error) {
+	args := []string{"config", "get", "token"}
+	if host != "" {
+		args = append(args, "--host", host)
+	}
+	out, err := exec.CommandContext(ctx, "glab", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("glab config get token: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	token := strings.TrimSpace(string(out))
+	if token == "" {
+		return "", errors.New("glab config get token returned empty output")
+	}
+
+	return token, nil
 }
 
 func (a *GitlabAdapter) Name() string { return "gitlab" }

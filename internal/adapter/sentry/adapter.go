@@ -59,7 +59,19 @@ func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient
 		return nil, fmt.Errorf("resolve sentry auth: %w", err)
 	}
 	organization := strings.TrimSpace(resolved.Organization)
+	var cliOrgErr error
+	if organization == "" && resolved.UseCLI {
+		cliOrg, err := resolveOrganizationFromCLI(ctx, resolved.BaseURL, runner)
+		if err != nil {
+			cliOrgErr = err
+		} else {
+			organization = cliOrg
+		}
+	}
 	if organization == "" {
+		if cliOrgErr != nil {
+			return nil, fmt.Errorf("resolve sentry organization: %w", cliOrgErr)
+		}
 		return nil, errors.New("sentry organization is required")
 	}
 	transport := client
@@ -86,6 +98,47 @@ func execCommandRunner(ctx context.Context, name string, args []string, env []st
 	cmd.Env = append([]string(nil), env...)
 
 	return cmd.CombinedOutput()
+}
+
+func resolveOrganizationFromCLI(ctx context.Context, baseURL string, runner commandRunner) (string, error) {
+	endpoint := "/organizations/"
+	output, err := runner(ctx, "sentry", []string{"api", endpoint, "--include"}, config.SentryCLIEnvironment(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("sentry api /organizations/: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://placeholder"+endpoint, http.NoBody)
+	resp, err := parseCLIResponse(req, output)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("sentry api /organizations/: status %d", resp.StatusCode)
+	}
+	var orgs []struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&orgs); err != nil {
+		return "", fmt.Errorf("decode sentry organizations: %w", err)
+	}
+	switch len(orgs) {
+	case 0:
+		return "", errors.New("no sentry organizations found")
+	case 1:
+		slug := strings.TrimSpace(orgs[0].Slug)
+		if slug == "" {
+			return "", errors.New("sentry organization slug is empty")
+		}
+		return slug, nil
+	default:
+		slugs := make([]string, 0, len(orgs))
+		for _, org := range orgs {
+			if s := strings.TrimSpace(org.Slug); s != "" {
+				slugs = append(slugs, s)
+			}
+		}
+		return "", fmt.Errorf("multiple sentry organizations found (%s), set organization explicitly", strings.Join(slugs, ", "))
+	}
 }
 
 func newCLIHTTPClient(baseURL string, runner commandRunner) httpClient {

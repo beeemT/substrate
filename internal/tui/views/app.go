@@ -36,6 +36,7 @@ const (
 	overlayWorkspaceInit
 	overlayHelp
 	overlaySourceItems
+	overlayLogs
 )
 
 type sessionHistoryScope int
@@ -94,6 +95,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	workspaceModal     WorkspaceInitModal
 	helpOverlay        HelpOverlay
 	sourceItemsOverlay SourceItemsOverlay
+	logsOverlay        LogsOverlay
 	hasWorkspace       bool
 
 	// Toasts
@@ -165,6 +167,7 @@ func NewApp(svcs Services) App {
 		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
+		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
@@ -212,7 +215,7 @@ func RunTUI(svcs Services) error {
 func (a App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
-	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
+	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForAdapterErrorCmd(a.svcs.AdapterErrors), WaitForLogToastCmd(a.svcs.LogToasts), StartupWarningsCmd(a.svcs.StartupWarnings))
 
 	if a.svcs.WorkspaceID != "" {
 		cmds = append(cmds,
@@ -801,6 +804,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionSearch.SetSize(msg.Width, msg.Height)
 		a.settingsPage.SetSize(msg.Width, msg.Height)
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
+		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
@@ -1409,6 +1413,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(toastMsg, components.ToastWarning)
 		return a, WaitForAdapterErrorCmd(a.svcs.AdapterErrors)
 
+	case LogToastMsg:
+		level := components.ToastWarning
+		if msg.Level == "ERROR" {
+			level = components.ToastError
+		}
+		a.toasts.AddToast(msg.Message, level)
+		return a, WaitForLogToastCmd(a.svcs.LogToasts)
+
+	case StartupWarningsMsg:
+		for _, warning := range msg.Warnings {
+			a.toasts.AddToast(warning, components.ToastWarning)
+		}
+		return a, nil
+
 	case tea.KeyMsg:
 		return a.handleKeyMsg(msg)
 	}
@@ -1485,6 +1503,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.activeOverlay == overlayHelp {
 		a.activeOverlay = overlayNone
 		return a, nil
+	}
+	if a.activeOverlay == overlayLogs {
+		a.logsOverlay, cmd = a.logsOverlay.Update(msg)
+		return a, cmd
 	}
 	if a.activeOverlay == overlaySourceItems {
 		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
@@ -1569,6 +1591,11 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	case "?":
 		a.activeOverlay = overlayHelp
+		return a, nil
+	case "L":
+		a.logsOverlay.SetSize(a.windowWidth, a.windowHeight)
+		a.logsOverlay.Open()
+		a.activeOverlay = overlayLogs
 		return a, nil
 	}
 
@@ -2163,6 +2190,9 @@ func (a App) View() string {
 	}
 	if a.activeOverlay == overlaySourceItems {
 		return renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
+	}
+	if a.activeOverlay == overlayLogs {
+		return renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
 	}
 	if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
 		return renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
