@@ -71,7 +71,7 @@ func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 			// Copy plain-text log to clipboard; strip ANSI escape codes so the
 			// receiver gets readable text, not styled terminal output.
 			_ = clipboard.WriteAll(ansi.Strip(l.renderContent()))
-			return l, nil
+			return l, func() tea.Msg { return ActionDoneMsg{Message: "Log copied to clipboard"} }
 		case "esc":
 			return l, func() tea.Msg { return CloseOverlayMsg{} }
 		}
