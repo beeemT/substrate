@@ -572,8 +572,28 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 			}
 		}
 
-	case "find", "write", "edit", "bash", "fetch", "web_search", "task":
-		// primary arg is in the title; nothing secondary to show
+	case "write":
+		// path is in the title; show content line count and a first-line preview
+		if content := stringArg("content"); content != "" {
+			lines := strings.Split(content, "\n")
+			n := len(lines)
+			// A trailing \n produces a final empty element — don't count it.
+			if n > 0 && lines[n-1] == "" {
+				n--
+			}
+			if n > 0 {
+				parts = append(parts, dim(fmt.Sprintf("%d lines", n)))
+			}
+			// First non-empty line gives context on what is being written.
+			for _, l := range lines {
+				if trimmed := strings.TrimSpace(l); trimmed != "" {
+					parts = append(parts, dim(singleLine(trimmed)))
+					break
+				}
+			}
+		}
+
+	case "find", "edit", "bash", "fetch", "web_search", "task":
 
 	default:
 		// Unknown tool: show a single-line truncated raw args summary.

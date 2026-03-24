@@ -679,6 +679,57 @@ func TestToolPrimaryArgBash(t *testing.T) {
 	}
 }
 
+func TestToolPrimaryArgWrite(t *testing.T) {
+	t.Parallel()
+	args := `{"path":"src/main.go","content":"package main\n"}`
+	if got := toolPrimaryArg("write", args); got != "src/main.go" {
+		t.Errorf("write primary arg = %q, want path", got)
+	}
+}
+
+func TestToolArgsSummaryWrite(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+
+	// Multi-line content: line count and first non-empty line must appear.
+	args := `{"path":"src/main.go","content":"package main\n\nfunc main() {}\n"}`
+	summary := toolArgsSummary(st, "write", args, 80)
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "3 lines") {
+		t.Errorf("write summary missing line count, got: %q", plain)
+	}
+	if !strings.Contains(plain, "package main") {
+		t.Errorf("write summary missing first-line preview, got: %q", plain)
+	}
+
+	// Empty content: summary must be empty.
+	emptyArgs := `{"path":"src/main.go","content":""}`
+	if got := toolArgsSummary(st, "write", emptyArgs, 80); got != "" {
+		t.Errorf("write empty content: expected empty summary, got: %q", ansi.Strip(got))
+	}
+}
+
+func TestRenderTranscriptWriteToolCardWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 60
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind:   sessionlog.KindToolStart,
+			Tool:   "write",
+			Intent: "Creating file",
+			Text:   `{"path":"internal/tui/views/session_transcript.go","content":"package views\n\nimport \"fmt\"\n\nfunc Foo() { fmt.Println(\"hello\") }\n"}`,
+		},
+		{Kind: sessionlog.KindToolResult, Text: "ok"},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}
+
 func TestRenderTranscriptSmartArgsShownInToolCard(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
