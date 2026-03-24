@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -131,22 +132,37 @@ func (l LogsOverlay) renderContent() string {
 		textW = 20
 	}
 
+	// Gutter sizing matches renderPlanReviewContent: right-aligned line
+	// number, fixed separator, remaining width for wrapped content.
+	numberWidth := max(2, len(strconv.Itoa(len(entries))))
+	const separator = " │ "
+	separatorWidth := ansi.StringWidth(separator)
+	contentWidth := max(1, textW-numberWidth-separatorWidth)
+
 	var sb strings.Builder
-	for _, e := range entries {
+	for index, e := range entries {
 		ts := l.st.Muted.Render(e.Time.Format("15:04:05"))
 		level := l.levelStyle(e.Level).Render(fmt.Sprintf("%-5s", e.Level.String()))
 		msg := e.Message
 		if e.Attrs != "" {
 			msg += " " + l.st.Muted.Render(e.Attrs)
 		}
-
 		line := ts + " " + level + " " + msg
-		// Truncate if wider than available space.
-		if ansi.StringWidth(line) > textW {
-			line = ansi.Truncate(line, textW, "…")
+
+		// ANSI-aware word wrap so escape codes are preserved across breaks.
+		wrapped := ansi.Hardwrap(line, contentWidth, true)
+		segments := strings.Split(wrapped, "\n")
+
+		for segIdx, segment := range segments {
+			gutter := strings.Repeat(" ", numberWidth)
+			if segIdx == 0 {
+				gutter = fmt.Sprintf("%*d", numberWidth, index+1)
+			}
+			// Pad content to a fixed width so continuation lines align with
+			// the first segment under the same gutter column.
+			paddedContent := lipgloss.NewStyle().Width(contentWidth).Render(segment)
+			sb.WriteString(l.st.Muted.Render(gutter+separator) + paddedContent + "\n")
 		}
-		sb.WriteString(line)
-		sb.WriteByte('\n')
 	}
 
 	return strings.TrimRight(sb.String(), "\n")
