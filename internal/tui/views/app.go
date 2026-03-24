@@ -1201,13 +1201,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, createBrowseSessionCmd(a.svcs, msg))
 		return a, tea.Batch(cmds...)
 
-	case SettingsSavedMsg:
-		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		if a.activeOverlay == overlaySettings {
-			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
-			cmds = append(cmds, cmd)
-		}
-		return a, tea.Batch(cmds...)
 	case SettingsAppliedMsg:
 		a.applyServicesReload(msg.Reload)
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)

@@ -44,11 +44,6 @@ type settingsEditOption struct {
 	Value string
 }
 
-type SettingsSavedMsg struct {
-	Raw     string
-	Message string
-}
-
 type SettingsAppliedMsg struct {
 	Reload  viewsServicesReload
 	Message string
@@ -1009,8 +1004,6 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			m.revealSecrets = !m.revealSecrets
 		case "s":
 			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
-		case "a":
-			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
 		case "t":
 			return m.returnWithSyncedMainViewport(m.testProviderCmd())
 		case "g":
@@ -1022,11 +1015,6 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			}
 			return m.returnWithSyncedMainViewport(func() tea.Msg { return CloseOverlayMsg{} })
 		}
-	case SettingsSavedMsg:
-		m.rawContent = msg.Raw
-		m.statusText = msg.Message
-		m.errorText = ""
-		m.dirty = false
 	case SettingsAppliedMsg:
 		m.statusText = msg.Message
 		m.errorText = ""
@@ -1064,19 +1052,6 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		m.errorText = msg.Err.Error()
 	}
 	return m.returnWithSyncedMainViewport(nil)
-}
-
-func (m SettingsPage) saveCmd() tea.Cmd {
-	return func() tea.Msg {
-		raw, _, err := m.service.Serialize(m.sections)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		if err := m.service.SaveRaw(raw); err != nil {
-			return ErrMsg{Err: err}
-		}
-		return SettingsSavedMsg{Raw: raw, Message: "Settings saved"}
-	}
 }
 
 func (m SettingsPage) applyCmd(svcs Services) tea.Cmd {
@@ -1585,16 +1560,16 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 }
 
 func (m SettingsPage) footerText() string {
-	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [r] reveal"
+	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [t] test  [r] reveal"
 	if providerSupportsLogin(providerForSection(m.currentSection())) {
-		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [t] test  [g] login  [r] reveal"
 	}
 	if m.editing {
 		hint = "[enter] save edit  [esc] cancel edit"
 	} else if m.fieldsFocused() {
-		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [r] reveal"
+		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [t] test  [r] reveal"
 		if providerSupportsLogin(providerForSection(m.currentSection())) {
-			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [a] apply  [t] test  [g] login  [r] reveal"
+			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [t] test  [g] login  [r] reveal"
 		}
 	}
 	extras := make([]string, 0, 2)
