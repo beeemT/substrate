@@ -185,7 +185,7 @@ func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) {
 	raw := strings.ReplaceAll(string(output), "\r\n", "\n")
 	headerPart, bodyPart, found := strings.Cut(raw, "\n\n")
-	if !found || !strings.HasPrefix(strings.TrimSpace(headerPart), "HTTP/") {
+	if !found || !strings.HasPrefix(strings.TrimSpace(headerPart), "HTTP") {
 		return nil, fmt.Errorf("parse sentry cli response: unexpected output %q", strings.TrimSpace(raw))
 	}
 	lines := strings.Split(headerPart, "\n")
