@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -17,11 +19,20 @@ import (
 type Discoverer struct {
 	gitClient *gitwork.Client
 	cfg       *config.Config
+	// pullCooldown is the minimum time between consecutive PullMainWorktrees calls.
+	// Sessions started in rapid succession share the same pull, avoiding redundant network I/O.
+	pullCooldown time.Duration
+	lastPullMu   sync.Mutex
+	lastPullAt   time.Time
 }
 
 // NewDiscoverer creates a new Discoverer.
 func NewDiscoverer(gitClient *gitwork.Client, cfg *config.Config) *Discoverer {
-	return &Discoverer{gitClient: gitClient, cfg: cfg}
+	return &Discoverer{
+		gitClient:    gitClient,
+		cfg:          cfg,
+		pullCooldown: 5 * time.Minute,
+	}
 }
 
 // PreflightCheck scans the workspace for health issues.
@@ -42,7 +53,23 @@ func (d *Discoverer) PreflightCheck(ctx context.Context, workspaceDir string) (d
 
 // PullMainWorktrees pulls the main worktree in each git-work repo.
 // Failures are recorded but don't stop the process.
+//
+// Calls within pullCooldown of the previous pull are skipped; this prevents
+// redundant network I/O when multiple sessions start in rapid succession.
 func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) []domain.PullFailure {
+	d.lastPullMu.Lock()
+	if !d.lastPullAt.IsZero() && time.Since(d.lastPullAt) < d.pullCooldown {
+		since := time.Since(d.lastPullAt)
+		d.lastPullMu.Unlock()
+		slog.Debug("skipping pull: within cooldown", "since", since, "cooldown", d.pullCooldown)
+
+		return nil
+	}
+	// Stamp the time optimistically before releasing the lock so that concurrent
+	// callers that arrive while this pull is in-flight also see the cooldown.
+	d.lastPullAt = time.Now()
+	d.lastPullMu.Unlock()
+
 	var failures []domain.PullFailure
 
 	for _, repoPath := range repoPaths {
