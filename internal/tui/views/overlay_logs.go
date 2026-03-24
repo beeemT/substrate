@@ -68,9 +68,8 @@ func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "c":
-			// Copy plain-text log to clipboard; strip ANSI escape codes so the
-			// receiver gets readable text, not styled terminal output.
-			_ = clipboard.WriteAll(ansi.Strip(l.renderContent()))
+			// clipboardContent produces raw unwrapped plain text with no gutter.
+			_ = clipboard.WriteAll(l.clipboardContent())
 			return l, func() tea.Msg { return ActionDoneMsg{Message: "Log copied to clipboard"} }
 		case "esc":
 			return l, func() tea.Msg { return CloseOverlayMsg{} }
@@ -165,6 +164,22 @@ func (l LogsOverlay) renderContent() string {
 		}
 	}
 
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// clipboardContent returns the log entries as raw plain text for clipboard
+// use: one entry per line, no line numbers, no separator, no ANSI codes,
+// and no wrapping — Entry.String() is purpose-built for this.
+func (l LogsOverlay) clipboardContent() string {
+	if l.store == nil {
+		return ""
+	}
+	entries := l.store.Snapshot()
+	var sb strings.Builder
+	for _, e := range entries {
+		sb.WriteString(e.String())
+		sb.WriteByte('\n')
+	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
