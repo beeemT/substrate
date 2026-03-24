@@ -219,21 +219,16 @@ func ListSentryCLIOrganizations(cfg SentryConfig) []string {
 	resolved := ResolveSentryContext(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sentry", "api", "/organizations/", "--include")
+	cmd := exec.CommandContext(ctx, "sentry", "org", "list", "--json")
 	cmd.Env = SentryCLIEnvironment(resolved.BaseURL)
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.Output()
 	if err != nil {
-		return nil
-	}
-	raw := strings.ReplaceAll(string(output), "\r\n", "\n")
-	_, body, found := strings.Cut(raw, "\n\n")
-	if !found {
 		return nil
 	}
 	var orgs []struct {
 		Slug string `json:"slug"`
 	}
-	if err := json.Unmarshal([]byte(body), &orgs); err != nil {
+	if err := json.Unmarshal(output, &orgs); err != nil {
 		return nil
 	}
 	slugs := make([]string, 0, len(orgs))

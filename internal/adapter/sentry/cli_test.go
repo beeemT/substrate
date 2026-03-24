@@ -49,7 +49,7 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 		seenArgs = append([]string(nil), args...)
 		seenEnv = append([]string(nil), env...)
 
-		return []byte("HTTP/2 200\nLink: <https://ignored>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"\nContent-Type: application/json\n\n[" + string(mustJSON(t, issuePayload(issue, 3))) + "]"), nil
+		return []byte("[api] \u2699 < HTTP 200\n[api] \u2699 < Link: <https://ignored>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"\n[api] \u2699 < Content-Type: application/json\n[api] \u2699 <\n[" + string(mustJSON(t, issuePayload(issue, 3))) + "]"), nil
 	}
 
 	a, err := newWithDeps(context.Background(), config.SentryConfig{BaseURL: "https://sentry.example.com/self-hosted/api/0", Organization: "acme", Projects: []string{"web"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -68,8 +68,8 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 	if seenName != "sentry" {
 		t.Fatalf("runner name = %q, want sentry", seenName)
 	}
-	if len(seenArgs) != 3 || seenArgs[0] != "api" || seenArgs[2] != "--include" {
-		t.Fatalf("runner args = %#v, want [api endpoint --include]", seenArgs)
+	if len(seenArgs) != 3 || seenArgs[0] != "api" || seenArgs[2] != "--verbose" {
+		t.Fatalf("runner args = %#v, want [api endpoint --verbose]", seenArgs)
 	}
 	endpoint, err := url.Parse("https://stub" + seenArgs[1])
 	if err != nil {
@@ -103,8 +103,8 @@ func TestNewResolvesOrganizationFromCLI(t *testing.T) {
 
 	orgPayload := `[{"slug":"acme","name":"Acme Corp"}]`
 	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
-		if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "/organizations/") {
-			return []byte("HTTP/2 200\nContent-Type: application/json\n\n" + orgPayload), nil
+		if len(args) >= 3 && args[0] == "org" && args[1] == "list" && args[2] == "--json" {
+			return []byte(orgPayload), nil
 		}
 
 		return nil, fmt.Errorf("unexpected args: %v", args)
@@ -130,8 +130,8 @@ func TestNewRequiresOrganizationWhenCLIReturnsMultiple(t *testing.T) {
 
 	orgPayload := `[{"slug":"acme"},{"slug":"globex"}]`
 	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
-		if len(args) >= 2 && args[0] == "api" {
-			return []byte("HTTP/2 200\nContent-Type: application/json\n\n" + orgPayload), nil
+		if len(args) >= 3 && args[0] == "org" && args[1] == "list" {
+			return []byte(orgPayload), nil
 		}
 
 		return nil, fmt.Errorf("unexpected args: %v", args)

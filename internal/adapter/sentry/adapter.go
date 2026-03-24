@@ -101,24 +101,14 @@ func execCommandRunner(ctx context.Context, name string, args []string, env []st
 }
 
 func resolveOrganizationFromCLI(ctx context.Context, baseURL string, runner commandRunner) (string, error) {
-	endpoint := "/organizations/"
-	output, err := runner(ctx, "sentry", []string{"api", endpoint, "--include"}, config.SentryCLIEnvironment(baseURL))
+	output, err := runner(ctx, "sentry", []string{"org", "list", "--json"}, config.SentryCLIEnvironment(baseURL))
 	if err != nil {
-		return "", fmt.Errorf("sentry api /organizations/: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://placeholder"+endpoint, http.NoBody)
-	resp, err := parseCLIResponse(req, output)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("sentry api /organizations/: status %d", resp.StatusCode)
+		return "", fmt.Errorf("sentry org list: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	var orgs []struct {
 		Slug string `json:"slug"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&orgs); err != nil {
+	if err := json.Unmarshal(output, &orgs); err != nil {
 		return "", fmt.Errorf("decode sentry organizations: %w", err)
 	}
 	switch len(orgs) {
@@ -170,7 +160,7 @@ func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	if req.URL.RawQuery != "" {
 		endpoint += "?" + req.URL.RawQuery
 	}
-	output, err := c.runner(req.Context(), "sentry", []string{"api", endpoint, "--include"}, config.SentryCLIEnvironment(c.rootURL))
+	output, err := c.runner(req.Context(), "sentry", []string{"api", endpoint, "--verbose"}, config.SentryCLIEnvironment(c.rootURL))
 	if err != nil {
 		return nil, fmt.Errorf("sentry api %s: %w: %s", endpointPath, err, strings.TrimSpace(string(output)))
 	}
@@ -182,8 +172,85 @@ func (c *cliHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// parseCLIResponse parses combined output from the sentry CLI into an
+// http.Response. It supports the --verbose format (response metadata on
+// stderr lines prefixed with ⚙) as well as a legacy --include style format
+// (HTTP status line + headers, blank line, body) and plain JSON output.
 func parseCLIResponse(req *http.Request, output []byte) (*http.Response, error) {
 	raw := strings.ReplaceAll(string(output), "\r\n", "\n")
+
+	const verboseMarker = " \u2699 " // ⚙
+
+	if strings.Contains(raw, verboseMarker) {
+		return parseVerboseCLIResponse(req, raw)
+	}
+
+	if strings.HasPrefix(strings.TrimSpace(raw), "HTTP") {
+		return parseLegacyCLIResponse(req, raw)
+	}
+
+	// Plain body with no metadata — assume 200 OK.
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(raw)),
+		Request:    req,
+	}, nil
+}
+
+// parseVerboseCLIResponse handles the --verbose format where stderr debug
+// lines are interleaved with the JSON body on stdout. Verbose lines contain
+// the ⚙ marker; response headers use "⚙ < key: value" and status uses
+// "⚙ < HTTP NNN".
+func parseVerboseCLIResponse(req *http.Request, raw string) (*http.Response, error) {
+	const verboseMarker = " \u2699 " // ⚙
+	responsePrefix := verboseMarker + "<"
+
+	lines := strings.Split(raw, "\n")
+	statusCode := http.StatusOK
+	headers := http.Header{}
+	var bodyLines []string
+
+	for _, line := range lines {
+		if !strings.Contains(line, verboseMarker) {
+			bodyLines = append(bodyLines, line)
+			continue
+		}
+		idx := strings.Index(line, responsePrefix)
+		if idx < 0 {
+			continue
+		}
+		content := strings.TrimSpace(line[idx+len(responsePrefix):])
+		if content == "" {
+			continue
+		}
+		if strings.HasPrefix(content, "HTTP") {
+			for _, f := range strings.Fields(content) {
+				if code, err := strconv.Atoi(f); err == nil {
+					statusCode = code
+					break
+				}
+			}
+			continue
+		}
+		if key, value, ok := strings.Cut(content, ":"); ok {
+			headers.Add(strings.TrimSpace(key), strings.TrimSpace(value))
+		}
+	}
+
+	body := strings.TrimSpace(strings.Join(bodyLines, "\n"))
+
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     headers,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+// parseLegacyCLIResponse handles the legacy --include format: an HTTP status
+// line followed by headers, a blank line, then the response body.
+func parseLegacyCLIResponse(req *http.Request, raw string) (*http.Response, error) {
 	headerPart, bodyPart, found := strings.Cut(raw, "\n\n")
 	if !found || !strings.HasPrefix(strings.TrimSpace(headerPart), "HTTP") {
 		return nil, fmt.Errorf("parse sentry cli response: unexpected output %q", strings.TrimSpace(raw))
