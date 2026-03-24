@@ -5,7 +5,7 @@ package linear
 
 const queryAssignedIssues = `
 query AssignedIssues(
-	$teamId: String!, $assigneeId: String!,
+	$teamId: ID!, $assigneeId: ID!,
 	$first: Int, $after: String, $search: String,
 	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]
 ) {
@@ -33,7 +33,7 @@ query AssignedIssues(
 }`
 
 const queryIssuesByIDs = `
-query IssuesByIDs($ids: [String!]!) {
+query IssuesByIDs($ids: [ID!]!) {
 	issues(filter: { id: { in: $ids } }) {
 		nodes {
 			id identifier title description priority url
@@ -48,8 +48,8 @@ query IssuesByIDs($ids: [String!]!) {
 
 const queryTeamIssues = `
 query TeamIssues(
-	$teamId: String!, $search: String,
-	$assigneeId: String, $creatorId: String, $subscriberId: String,
+	$teamId: ID!, $search: String,
+	$assigneeId: ID, $creatorId: ID, $subscriberId: ID,
 	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
 	$first: Int, $after: String
 ) {
@@ -79,7 +79,7 @@ query TeamIssues(
 }`
 
 const queryProjects = `
-query Projects($teamId: String!, $search: String, $states: [String!], $first: Int, $after: String) {
+query Projects($teamId: ID!, $search: String, $states: [String!], $first: Int, $after: String) {
 	projects(first: $first, after: $after, filter: {
 		accessibleTeams: { id: { eq: $teamId } }
 		name: { containsIgnoreCase: $search }
@@ -102,7 +102,7 @@ query Projects($teamId: String!, $search: String, $states: [String!], $first: In
 }`
 
 const queryProjectWithIssues = `
-query ProjectWithIssues($id: String!) {
+query ProjectWithIssues($id: ID!) {
 	project(id: $id) {
 		id name description state icon color
 		issues(filter: { state: { type: { nin: ["completed", "cancelled"] } } }) {
@@ -145,7 +145,7 @@ query Initiatives($search: String, $statuses: [String!], $first: Int, $after: St
 }`
 
 const querySingleInitiative = `
-query SingleInitiative($id: String!) {
+query SingleInitiative($id: ID!) {
 	initiative(id: $id) {
 		id name description status
 		projects {
@@ -173,14 +173,14 @@ query Viewer {
 }`
 
 const mutationUpdateIssueState = `
-mutation UpdateIssueState($issueId: String!, $stateId: String!) {
+mutation UpdateIssueState($issueId: ID!, $stateId: String!) {
 	issueUpdate(id: $issueId, input: { stateId: $stateId }) {
 		success
 	}
 }`
 
 const mutationAddComment = `
-mutation AddComment($issueId: String!, $body: String!) {
+mutation AddComment($issueId: ID!, $body: String!) {
 	commentCreate(input: { issueId: $issueId, body: $body }) {
 		success
 	}
