@@ -122,7 +122,7 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		"first":      first,
 		"after":      optionalString(opts.Cursor),
 	}
-	query := queryTeamIssues
+	queryName := "TeamIssues"
 	switch opts.View {
 	case "assigned_to_me":
 		assigneeID, err := a.assigneeIDForBrowse(ctx)
@@ -130,27 +130,28 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 			return nil, err
 		}
 		vars["assigneeId"] = assigneeID
-		query = queryAssignedIssues
+		queryName = "AssignedIssues"
 	case "created_by_me":
 		creatorID, err := a.assigneeIDForBrowse(ctx)
 		if err != nil {
 			return nil, err
 		}
 		vars["creatorId"] = creatorID
-		query = queryCreatorIssues
+		queryName = "CreatorIssues"
 	case "subscribed":
 		subscriberID, err := a.assigneeIDForBrowse(ctx)
 		if err != nil {
 			return nil, err
 		}
 		vars["subscriberId"] = subscriberID
-		query = querySubscribedIssues
+		queryName = "SubscribedIssues"
 	case "", filterAll:
 	default:
 		return nil, fmt.Errorf("linear issue view %q is not supported", opts.View)
 	}
+	query := buildIssueQuery(queryName, vars)
 	var resp issuesResponse
-	if err := a.client.do(ctx, query, vars, &resp); err != nil {
+	if err := a.client.do(ctx, query, stripNilVars(vars), &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Issues.Nodes))
@@ -190,13 +191,15 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 		first = 250
 	}
 	var resp projectsResponse
-	if err := a.client.do(ctx, queryProjects, map[string]any{
+	vars := map[string]any{
 		"teamId": optionalString(teamID),
 		"search": optionalString(opts.Search),
 		"states": optionalStrings(linearProjectStates(opts.State)),
 		"first":  first,
 		"after":  optionalString(opts.Cursor),
-	}, &resp); err != nil {
+	}
+	query := buildProjectQuery(vars)
+	if err := a.client.do(ctx, query, stripNilVars(vars), &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Projects.Nodes))
@@ -228,12 +231,14 @@ func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOp
 		first = 250
 	}
 	var resp initiativesResponse
-	if err := a.client.do(ctx, queryInitiatives, map[string]any{
+	vars := map[string]any{
 		"search":   optionalString(opts.Search),
 		"statuses": optionalStrings(linearInitiativeStates(opts.State)),
 		"first":    first,
 		"after":    optionalString(opts.Cursor),
-	}, &resp); err != nil {
+	}
+	query := buildInitiativeQuery(vars)
+	if err := a.client.do(ctx, query, stripNilVars(vars), &resp); err != nil {
 		return nil, err
 	}
 	items := make([]adapter.ListItem, len(resp.Initiatives.Nodes))
@@ -529,11 +534,14 @@ func (a *LinearAdapter) resolveAssigneeID(ctx context.Context) error {
 }
 
 func (a *LinearAdapter) fetchAssignedIssues(ctx context.Context) ([]linearIssue, error) {
-	var resp issuesResponse
-	if err := a.client.do(ctx, queryAssignedIssues, map[string]any{
+	vars := map[string]any{
 		"teamId":     optionalString(a.cfg.TeamID),
 		"assigneeId": a.assigneeID,
-	}, &resp); err != nil {
+		"first":      250,
+	}
+	query := buildIssueQuery("AssignedIssues", vars)
+	var resp issuesResponse
+	if err := a.client.do(ctx, query, stripNilVars(vars), &resp); err != nil {
 		return nil, err
 	}
 

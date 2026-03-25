@@ -124,6 +124,18 @@ func TestListSelectable(t *testing.T) {
 				t.Fatalf("TeamIssues query should not send %s variable, got %v", forbidden, issueReq.Variables[forbidden])
 			}
 		}
+		// Null-valued optional filters must not appear in the request.
+		for _, nilVar := range []string{"search", "labelNames", "stateTypes", "stateNames"} {
+			if v, exists := issueReq.Variables[nilVar]; exists {
+				t.Fatalf("TeamIssues query with no filters should not send %s, got %v", nilVar, v)
+			}
+		}
+		// The generated query must not contain filter clauses for omitted variables.
+		for _, clause := range []string{"containsIgnoreCase", "labelNames", "stateTypes", "stateNames"} {
+			if strings.Contains(issueReq.Query, clause) {
+				t.Fatalf("TeamIssues query should not contain %q when filter is empty", clause)
+			}
+		}
 	})
 
 	t.Run("projects", func(t *testing.T) {
@@ -329,6 +341,12 @@ func TestListSelectableIssuesSupportsViewStateLabelsAndCursor(t *testing.T) {
 	if len(result.Items) != 1 || result.Items[0].Identifier != "FOO-123" || result.Items[0].ContainerRef != "FOO" {
 		t.Fatalf("items = %#v, want identifier/container metadata", result.Items)
 	}
+	// Verify the dynamic query includes all filter clauses when values are provided.
+	for _, clause := range []string{"containsIgnoreCase", "$labelNames", "$stateTypes", "$assigneeId", "$teamId"} {
+		if !strings.Contains(issueReq.Query, clause) {
+			t.Fatalf("query should contain %q when filter values are provided", clause)
+		}
+	}
 }
 
 func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
@@ -394,6 +412,96 @@ func TestListSelectableIssuesSupportsSubscribed(t *testing.T) {
 	}
 	if !strings.Contains(issueReq.Query, "SubscribedIssues") {
 		t.Fatalf("query = %q, want SubscribedIssues", issueReq.Query)
+	}
+}
+
+func TestBuildIssueQueryOmitsNilFilters(t *testing.T) {
+	t.Parallel()
+
+	// When all optional vars are nil, the query should have an empty filter block.
+	vars := map[string]any{
+		"teamId":     nil,
+		"search":     nil,
+		"labelNames": nil,
+		"stateTypes": nil,
+		"stateNames": nil,
+		"first":      50,
+		"after":      nil,
+	}
+	q := buildIssueQuery("TeamIssues", vars)
+	for _, clause := range []string{"containsIgnoreCase", "labelNames", "stateTypes", "stateNames", "eq: $teamId"} {
+		if strings.Contains(q, clause) {
+			t.Errorf("nil-filter query should not contain %q, got:\n%s", clause, q)
+		}
+	}
+	// Must still be a valid query with pagination variables.
+	if !strings.Contains(q, "$first: Int") || !strings.Contains(q, "TeamIssues") {
+		t.Errorf("query missing basic structure:\n%s", q)
+	}
+
+	// When values are provided, clauses must appear.
+	vars["teamId"] = "team1"
+	vars["search"] = "bug"
+	vars["labelNames"] = []string{"backend"}
+	vars["stateTypes"] = []string{"started"}
+	q = buildIssueQuery("TeamIssues", vars)
+	for _, clause := range []string{"eq: $teamId", "containsIgnoreCase: $search", "in: $labelNames", "in: $stateTypes"} {
+		if !strings.Contains(q, clause) {
+			t.Errorf("filtered query should contain %q, got:\n%s", clause, q)
+		}
+	}
+}
+
+func TestBuildProjectQueryOmitsNilFilters(t *testing.T) {
+	t.Parallel()
+
+	vars := map[string]any{
+		"teamId": nil,
+		"search": nil,
+		"states": nil,
+		"first":  50,
+		"after":  nil,
+	}
+	q := buildProjectQuery(vars)
+	for _, clause := range []string{"containsIgnoreCase", "eq: $teamId", "in: $states"} {
+		if strings.Contains(q, clause) {
+			t.Errorf("nil-filter project query should not contain %q, got:\n%s", clause, q)
+		}
+	}
+
+	vars["search"] = "alpha"
+	vars["states"] = []string{"started"}
+	q = buildProjectQuery(vars)
+	for _, clause := range []string{"containsIgnoreCase: $search", "in: $states"} {
+		if !strings.Contains(q, clause) {
+			t.Errorf("filtered project query should contain %q, got:\n%s", clause, q)
+		}
+	}
+}
+
+func TestBuildInitiativeQueryOmitsNilFilters(t *testing.T) {
+	t.Parallel()
+
+	vars := map[string]any{
+		"search":   nil,
+		"statuses": nil,
+		"first":    50,
+		"after":    nil,
+	}
+	q := buildInitiativeQuery(vars)
+	for _, clause := range []string{"containsIgnoreCase", "in: $statuses"} {
+		if strings.Contains(q, clause) {
+			t.Errorf("nil-filter initiative query should not contain %q, got:\n%s", clause, q)
+		}
+	}
+
+	vars["search"] = "beta"
+	vars["statuses"] = []string{"started"}
+	q = buildInitiativeQuery(vars)
+	for _, clause := range []string{"containsIgnoreCase: $search", "in: $statuses"} {
+		if !strings.Contains(q, clause) {
+			t.Errorf("filtered initiative query should contain %q, got:\n%s", clause, q)
+		}
 	}
 }
 

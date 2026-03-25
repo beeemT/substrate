@@ -3,35 +3,6 @@ package linear
 // Issue fields included in all issue queries.
 // Expanded inline in each query below for explicitness.
 
-const queryAssignedIssues = `
-query AssignedIssues(
-	$teamId: ID, $assigneeId: ID!,
-	$first: Int, $after: String, $search: String,
-	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]
-) {
-	issues(first: $first, after: $after, filter: {
-		team: { id: { eq: $teamId } }
-		assignee: { id: { eq: $assigneeId } }
-		title: { containsIgnoreCase: $search }
-		labels: { name: { in: $labelNames } }
-		state: {
-			type: { in: $stateTypes }
-			name: { in: $stateNames }
-		}
-	}) {
-		nodes {
-			id identifier title description priority url
-			state { id name type }
-			labels { nodes { name } }
-			assignee { id name }
-			creator { id name }
-			team { id key }
-			createdAt updatedAt
-		}
-		pageInfo { hasNextPage endCursor }
-	}
-}`
-
 const queryIssuesByIDs = `
 query IssuesByIDs($ids: [ID!]!) {
 	issues(filter: { id: { in: $ids } }) {
@@ -46,21 +17,7 @@ query IssuesByIDs($ids: [ID!]!) {
 	}
 }`
 
-const queryTeamIssues = `
-query TeamIssues(
-	$teamId: ID, $search: String,
-	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
-	$first: Int, $after: String
-) {
-	issues(first: $first, after: $after, filter: {
-		team: { id: { eq: $teamId } }
-		title: { containsIgnoreCase: $search }
-		labels: { name: { in: $labelNames } }
-		state: {
-			type: { in: $stateTypes }
-			name: { in: $stateNames }
-		}
-	}) {
+const issueFields = `
 		nodes {
 			id identifier title description priority url
 			state { id name type }
@@ -71,81 +28,91 @@ query TeamIssues(
 			createdAt updatedAt
 		}
 		pageInfo { hasNextPage endCursor }
-	}
-}`
+`
 
-const queryCreatorIssues = `
-query CreatorIssues(
-	$teamId: ID, $creatorId: ID!,
-	$search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
-	$first: Int, $after: String
-) {
-	issues(first: $first, after: $after, filter: {
-		team: { id: { eq: $teamId } }
-		creator: { id: { eq: $creatorId } }
-		title: { containsIgnoreCase: $search }
-		labels: { name: { in: $labelNames } }
-		state: {
-			type: { in: $stateTypes }
-			name: { in: $stateNames }
-		}
-	}) {
-		nodes {
-			id identifier title description priority url
-			state { id name type }
-			labels { nodes { name } }
-			assignee { id name }
-			creator { id name }
-			team { id key }
-			createdAt updatedAt
-		}
-		pageInfo { hasNextPage endCursor }
-	}
-}`
+// buildIssueQuery constructs a GraphQL issue query with only non-nil filter
+// conditions. Linear interprets null comparator values as "field must be null"
+// rather than "skip this filter", so we must omit conditions entirely when
+// the caller does not intend to filter on them.
+func buildIssueQuery(name string, vars map[string]any) string {
+	// Variable declarations — always include pagination.
+	decls := "$first: Int, $after: String"
+	// Filter conditions — only include when the variable is present and non-nil.
+	var filters string
 
-const querySubscribedIssues = `
-query SubscribedIssues(
-	$teamId: ID, $subscriberId: ID!,
-	$search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
-	$first: Int, $after: String
-) {
-	issues(first: $first, after: $after, filter: {
-		team: { id: { eq: $teamId } }
-		subscribers: { id: { eq: $subscriberId } }
-		title: { containsIgnoreCase: $search }
-		labels: { name: { in: $labelNames } }
-		state: {
-			type: { in: $stateTypes }
-			name: { in: $stateNames }
-		}
-	}) {
-		nodes {
-			id identifier title description priority url
-			state { id name type }
-			labels { nodes { name } }
-			assignee { id name }
-			creator { id name }
-			team { id key }
-			createdAt updatedAt
-		}
-		pageInfo { hasNextPage endCursor }
+	type varFilter struct {
+		varName string
+		decl    string
+		filter  string
 	}
-}`
+	optional := []varFilter{
+		{"teamId", "$teamId: ID", "team: { id: { eq: $teamId } }"},
+		{"assigneeId", "$assigneeId: ID!", "assignee: { id: { eq: $assigneeId } }"},
+		{"creatorId", "$creatorId: ID!", "creator: { id: { eq: $creatorId } }"},
+		{"subscriberId", "$subscriberId: ID!", "subscribers: { id: { eq: $subscriberId } }"},
+		{"search", "$search: String", "title: { containsIgnoreCase: $search }"},
+		{"labelNames", "$labelNames: [String!]", "labels: { name: { in: $labelNames } }"},
+	}
+	for _, vf := range optional {
+		if v, ok := vars[vf.varName]; ok && v != nil {
+			decls += ", " + vf.decl
+			filters += "\n\t\t" + vf.filter
+		}
+	}
 
-const queryProjects = `
-query Projects($teamId: ID, $search: String, $states: [String!], $first: Int, $after: String) {
-	projects(first: $first, after: $after, filter: {
-		accessibleTeams: { id: { eq: $teamId } }
-		name: { containsIgnoreCase: $search }
-		state: { in: $states }
-	}) {
+	// State filter is composite (type + name); include the block only if at least
+	// one sub-condition is present.
+	stateTypes, hasTypes := vars["stateTypes"]
+	stateNames, hasNames := vars["stateNames"]
+	if (hasTypes && stateTypes != nil) || (hasNames && stateNames != nil) {
+		stateInner := ""
+		if hasTypes && stateTypes != nil {
+			decls += ", $stateTypes: [String!]"
+			stateInner += "\n\t\t\ttype: { in: $stateTypes }"
+		}
+		if hasNames && stateNames != nil {
+			decls += ", $stateNames: [String!]"
+			stateInner += "\n\t\t\tname: { in: $stateNames }"
+		}
+		filters += "\n\t\tstate: {" + stateInner + "\n\t\t}"
+	}
+
+	return "query " + name + "(" + decls + ") {\n\tissues(first: $first, after: $after, filter: {" +
+		filters + "\n\t}) {" + issueFields + "\t}\n}"
+}
+
+const projectFields = `
 		nodes {
 			id name description state icon color
 			createdAt updatedAt
 		}
 		pageInfo { hasNextPage endCursor }
+`
+
+func buildProjectQuery(vars map[string]any) string {
+	decls := "$first: Int, $after: String"
+	var filters string
+
+	type varFilter struct {
+		varName string
+		decl    string
+		filter  string
 	}
-}`
+	optional := []varFilter{
+		{"teamId", "$teamId: ID", "accessibleTeams: { id: { eq: $teamId } }"},
+		{"search", "$search: String", "name: { containsIgnoreCase: $search }"},
+		{"states", "$states: [String!]", "state: { in: $states }"},
+	}
+	for _, vf := range optional {
+		if v, ok := vars[vf.varName]; ok && v != nil {
+			decls += ", " + vf.decl
+			filters += "\n\t\t" + vf.filter
+		}
+	}
+
+	return "query Projects(" + decls + ") {\n\tprojects(first: $first, after: $after, filter: {" +
+		filters + "\n\t}) {" + projectFields + "\t}\n}"
+}
 
 const queryProjectWithIssues = `
 query ProjectWithIssues($id: ID!) {
@@ -163,12 +130,7 @@ query ProjectWithIssues($id: ID!) {
 	}
 }`
 
-const queryInitiatives = `
-query Initiatives($search: String, $statuses: [String!], $first: Int, $after: String) {
-	initiatives(first: $first, after: $after, filter: {
-		name: { containsIgnoreCase: $search }
-		status: { in: $statuses }
-	}) {
+const initiativeFields = `
 		nodes {
 			id name description status
 			createdAt updatedAt
@@ -179,8 +141,43 @@ query Initiatives($search: String, $statuses: [String!], $first: Int, $after: St
 			}
 		}
 		pageInfo { hasNextPage endCursor }
+`
+
+func buildInitiativeQuery(vars map[string]any) string {
+	decls := "$first: Int, $after: String"
+	var filters string
+
+	type varFilter struct {
+		varName string
+		decl    string
+		filter  string
 	}
-}`
+	optional := []varFilter{
+		{"search", "$search: String", "name: { containsIgnoreCase: $search }"},
+		{"statuses", "$statuses: [String!]", "status: { in: $statuses }"},
+	}
+	for _, vf := range optional {
+		if v, ok := vars[vf.varName]; ok && v != nil {
+			decls += ", " + vf.decl
+			filters += "\n\t\t" + vf.filter
+		}
+	}
+
+	return "query Initiatives(" + decls + ") {\n\tinitiatives(first: $first, after: $after, filter: {" +
+		filters + "\n\t}) {" + initiativeFields + "\t}\n}"
+}
+
+// stripNilVars removes nil-valued entries from vars so the GraphQL request
+// doesn't include null values for variables that were excluded from the query.
+func stripNilVars(vars map[string]any) map[string]any {
+	clean := make(map[string]any, len(vars))
+	for k, v := range vars {
+		if v != nil {
+			clean[k] = v
+		}
+	}
+	return clean
+}
 
 const querySingleInitiative = `
 query SingleInitiative($id: ID!) {
