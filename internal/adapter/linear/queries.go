@@ -5,7 +5,7 @@ package linear
 
 const queryAssignedIssues = `
 query AssignedIssues(
-	$teamId: ID!, $assigneeId: ID!,
+	$teamId: ID, $assigneeId: ID!,
 	$first: Int, $after: String, $search: String,
 	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!]
 ) {
@@ -48,7 +48,7 @@ query IssuesByIDs($ids: [ID!]!) {
 
 const queryTeamIssues = `
 query TeamIssues(
-	$teamId: ID!, $search: String,
+	$teamId: ID, $search: String,
 	$assigneeId: ID, $creatorId: ID, $subscriberId: ID,
 	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
 	$first: Int, $after: String
@@ -79,7 +79,7 @@ query TeamIssues(
 }`
 
 const queryProjects = `
-query Projects($teamId: ID!, $search: String, $states: [String!], $first: Int, $after: String) {
+query Projects($teamId: ID, $search: String, $states: [String!], $first: Int, $after: String) {
 	projects(first: $first, after: $after, filter: {
 		accessibleTeams: { id: { eq: $teamId } }
 		name: { containsIgnoreCase: $search }

@@ -114,7 +114,7 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		first = 250
 	}
 	vars := map[string]any{
-		"teamId":       teamID,
+		"teamId":       optionalString(teamID),
 		"search":       optionalString(opts.Search),
 		"labelNames":   optionalStrings(opts.Labels),
 		"stateTypes":   optionalStrings(linearIssueStateTypes(opts.State)),
@@ -192,7 +192,7 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 	}
 	var resp projectsResponse
 	if err := a.client.do(ctx, queryProjects, map[string]any{
-		"teamId": teamID,
+		"teamId": optionalString(teamID),
 		"search": optionalString(opts.Search),
 		"states": optionalStrings(linearProjectStates(opts.State)),
 		"first":  first,
@@ -533,7 +533,7 @@ func (a *LinearAdapter) resolveAssigneeID(ctx context.Context) error {
 func (a *LinearAdapter) fetchAssignedIssues(ctx context.Context) ([]linearIssue, error) {
 	var resp issuesResponse
 	if err := a.client.do(ctx, queryAssignedIssues, map[string]any{
-		"teamId":     a.cfg.TeamID,
+		"teamId":     optionalString(a.cfg.TeamID),
 		"assigneeId": a.assigneeID,
 	}, &resp); err != nil {
 		return nil, err
