@@ -209,6 +209,65 @@ func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
 	}
 }
 
+func TestAppView_MultipleTransientToastsStack(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.toasts.AddToast("First toast", components.ToastInfo)
+	app.toasts.AddToast("Second toast", components.ToastSuccess)
+	app.toasts.AddToast("Third toast", components.ToastWarning)
+
+	rendered := app.View()
+	assertAppViewFitsWindow(t, rendered, 80, 16)
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+
+	firstLine := findLineContaining(lines, "First toast")
+	secondLine := findLineContaining(lines, "Second toast")
+	thirdLine := findLineContaining(lines, "Third toast")
+	if firstLine == -1 || secondLine == -1 || thirdLine == -1 {
+		t.Fatalf("view missing stacked toasts (first=%d second=%d third=%d): %q",
+			firstLine, secondLine, thirdLine, strings.Join(lines, "\n"))
+	}
+	// StackView appends newest first, so order top-to-bottom is: Third, Second, First
+	if thirdLine >= secondLine || secondLine >= firstLine {
+		t.Fatalf("toast order = third:%d second:%d first:%d, want newest on top", thirdLine, secondLine, firstLine)
+	}
+}
+
+func TestAppView_ToastRendersOnLogsOverlay(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.logsOverlay.SetSize(80, 16)
+	app.logsOverlay.Open()
+	app.activeOverlay = overlayLogs
+	app.toasts.AddToast("Saved", components.ToastSuccess)
+
+	rendered := app.View()
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+
+	toastLine := findLineContaining(lines, "Saved")
+	if toastLine == -1 {
+		t.Fatalf("toast not visible on logs overlay: %q", strings.Join(lines, "\n"))
+	}
+}
+
+func TestAppView_ToastRendersOnSettingsOverlay(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.activeOverlay = overlaySettings
+	app.toasts.AddToast("Saved", components.ToastSuccess)
+
+	rendered := app.View()
+	lines := strings.Split(stripToastANSI(rendered), "\n")
+
+	toastLine := findLineContaining(lines, "Saved")
+	if toastLine == -1 {
+		t.Fatalf("toast not visible on settings overlay: %q", strings.Join(lines, "\n"))
+	}
+}
+
 func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	t.Parallel()
 

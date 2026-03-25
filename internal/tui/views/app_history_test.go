@@ -536,10 +536,11 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 		t.Fatalf("model after delete warning = %T, want App", model)
 	}
 	toastView := stripToastANSI(updated.toasts.StackView())
-	for _, want := range []string{"Session deleted", deleted.Warning} {
-		if !strings.Contains(toastView, want) {
-			t.Fatalf("toast view = %q, want %q", toastView, want)
-		}
+	if !strings.Contains(toastView, "Session deleted") {
+		t.Fatalf("toast view missing success message: %q", toastView)
+	}
+	if !strings.Contains(toastView, "could not be removed") {
+		t.Fatalf("toast view missing cleanup warning: %q", toastView)
 	}
 }
 

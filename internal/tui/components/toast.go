@@ -78,13 +78,17 @@ func (m *ToastModel) View() string {
 }
 
 func (m *ToastModel) StackView(pinned ...Toast) string {
-	if len(pinned) == 0 {
-		return m.View()
-	}
 	items := make([]Toast, 0, len(pinned)+len(m.toasts))
 	items = append(items, pinned...)
 	for i := len(m.toasts) - 1; i >= 0; i-- {
 		items = append(items, m.toasts[i])
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) == 1 {
+		rendered, _ := m.toastRenderData(items[0])
+		return rendered
 	}
 	views := make([]string, 0, len(items))
 	widths := make([]int, 0, len(items))

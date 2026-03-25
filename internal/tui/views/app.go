@@ -2175,40 +2175,35 @@ func (a App) View() string {
 
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 
-	var toastView string
-	if pinned := a.pinnedToasts(); len(pinned) > 0 {
-		toastView = a.toasts.StackView(pinned...)
-	} else {
-		toastView = a.toasts.View()
+	var result string
+	switch a.activeOverlay {
+	case overlayNewSession:
+		result = renderOverlay(a.newSession.View(), a.windowWidth, a.windowHeight)
+	case overlaySessionSearch:
+		result = renderOverlay(a.sessionSearch.View(), a.windowWidth, a.windowHeight)
+	case overlaySettings:
+		result = a.settingsPage.View()
+	case overlayHelp:
+		result = renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlaySourceItems:
+		result = renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlayLogs:
+		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
+	default:
+		if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
+			result = renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
+		} else {
+			result = base
+		}
 	}
+
+	toastView := a.toasts.StackView(a.pinnedToasts()...)
 	if toastView != "" {
 		placement := styles.ComputeToastPlacement(a.statusBar.styles.Chrome)
-		base = renderTopRightOverlay(base, toastView, a.windowWidth, placement.TopInset, placement.BottomInset)
+		result = renderTopRightOverlay(result, toastView, a.windowWidth, placement.TopInset, placement.BottomInset)
 	}
 
-	if a.activeOverlay == overlayNewSession {
-		return renderOverlay(a.newSession.View(), a.windowWidth, a.windowHeight)
-	}
-	if a.activeOverlay == overlaySessionSearch {
-		return renderOverlay(a.sessionSearch.View(), a.windowWidth, a.windowHeight)
-	}
-	if a.activeOverlay == overlaySettings {
-		return a.settingsPage.View()
-	}
-	if a.activeOverlay == overlayHelp {
-		return renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
-	}
-	if a.activeOverlay == overlaySourceItems {
-		return renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
-	}
-	if a.activeOverlay == overlayLogs {
-		return renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
-	}
-	if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
-		return renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
-	}
-
-	return base
+	return result
 }
 
 func (a App) statusBarText() string {
