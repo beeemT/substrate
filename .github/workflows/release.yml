@@ -9,8 +9,9 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,87 +20,113 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -race -timeout 20m ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            bridge_target: bun-darwin-x64-baseline
+            native_addon: pi_natives.darwin-x64-baseline.node
+          - goos: darwin
+            goarch: arm64
+            bridge_target: bun-darwin-arm64
+            native_addon: pi_natives.darwin-arm64.node
+          - goos: linux
+            goarch: amd64
+            bridge_target: bun-linux-x64-baseline
+            native_addon: pi_natives.linux-x64-baseline.node
+          - goos: linux
+            goarch: arm64
+            bridge_target: bun-linux-arm64
+            native_addon: pi_natives.linux-arm64.node
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.9"
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            bridge/node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bridge/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
-      - name: Run tests
-        run: go test -race ./...
+      - name: Install Bun dependencies
+        run: bun install --cwd bridge --frozen-lockfile
 
-      - name: Build release binaries
+      - name: Build
         env:
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          
+
           VERSION_NUM="${VERSION#v}"
-          mkdir -p dist
-          
-          bun install --cwd bridge --frozen-lockfile
-          
-          # Build for multiple platforms
-          platforms=(
-            "darwin/amd64"
-            "darwin/arm64"
-            "linux/amd64"
-            "linux/arm64"
-          )
-          
-          for platform in "${platforms[@]}"; do
-            GOOS="${platform%%/*}"
-            GOARCH="${platform##*/}"
-            output="dist/substrate_${VERSION_NUM}_${GOOS}_${GOARCH}"
-            package_dir="dist/package_${VERSION_NUM}_${GOOS}_${GOARCH}"
-            
-            case "$platform" in
-              "darwin/amd64")
-                bridge_target="bun-darwin-x64-baseline"
-                native_addon="pi_natives.darwin-x64-baseline.node"
-                ;;
-              "darwin/arm64")
-                bridge_target="bun-darwin-arm64"
-                native_addon="pi_natives.darwin-arm64.node"
-                ;;
-              "linux/amd64")
-                bridge_target="bun-linux-x64-baseline"
-                native_addon="pi_natives.linux-x64-baseline.node"
-                ;;
-              "linux/arm64")
-                bridge_target="bun-linux-arm64"
-                native_addon="pi_natives.linux-arm64.node"
-                ;;
-              *)
-                echo "unsupported platform: $platform"
-                exit 1
-                ;;
-            esac
-            
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
-              -ldflags="-s -w -X main.Version=${VERSION_NUM}" \
-              -o "$output" \
-              ./cmd/substrate
-            
-            rm -rf "$package_dir"
-            mkdir -p "$package_dir/bridge"
-            mv "$output" "$package_dir/substrate"
-            bun build bridge/omp-bridge.ts \
-              --compile \
-              --target "$bridge_target" \
-              --outfile "$package_dir/bridge/omp-bridge"
-            cp "bridge/node_modules/@oh-my-pi/pi-natives/native/$native_addon" "$package_dir/bridge/$native_addon"
-            tar -C "$package_dir" -czf "dist/substrate_${VERSION_NUM}_${GOOS}_${GOARCH}.tar.gz" .
-            rm -rf "$package_dir"
-          done
-          
-          # Generate checksums
+          mkdir -p dist/bridge
+
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="-s -w -X main.Version=${VERSION_NUM}" \
+            -o "dist/substrate" \
+            ./cmd/substrate
+
+          bun build bridge/omp-bridge.ts \
+            --compile \
+            --target "${{ matrix.bridge_target }}" \
+            --outfile "dist/bridge/omp-bridge"
+          cp "bridge/node_modules/@oh-my-pi/pi-natives/native/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
+
+          tar -C dist -czf "substrate_${VERSION_NUM}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" .
+
+          echo "Built artifact:"
+          ls -la *.tar.gz
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: substrate_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: "substrate_*.tar.gz"
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
           cd dist
           sha256sum *.tar.gz > checksums.txt
-          
           echo "Release assets:"
           ls -la
 
