@@ -331,7 +331,7 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 			if err := os.WriteFile(opts.DraftPath, []byte(validPlanningPlan("Revised orchestration.", "Add error handling.")), 0o644); err != nil {
 				return nil, err
 			}
-			events := make(chan adapter.AgentEvent, 1)
+			events := make(chan adapter.AgentEvent, 2)
 			sess := &scriptedPlanningSession{
 				id:     opts.SessionID,
 				events: events,
