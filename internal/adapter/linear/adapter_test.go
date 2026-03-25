@@ -377,8 +377,8 @@ func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
 	if !strings.Contains(issueReq.Query, "CreatorIssues") {
 		t.Fatalf("query = %q, want CreatorIssues", issueReq.Query)
 	}
-	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"completed", "cancelled"}) {
-		t.Fatalf("stateTypes = %#v, want completed/cancelled", got)
+	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"completed", "canceled"}) {
+		t.Fatalf("stateTypes = %#v, want completed/canceled", got)
 	}
 }
 

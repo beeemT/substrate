@@ -118,7 +118,7 @@ const queryProjectWithIssues = `
 query ProjectWithIssues($id: ID!) {
 	project(id: $id) {
 		id name description state icon color
-		issues(filter: { state: { type: { nin: ["completed", "cancelled"] } } }) {
+		issues(filter: { state: { type: { nin: ["completed", "canceled"] } } }) {
 			nodes {
 				id identifier title description
 				state { id name }

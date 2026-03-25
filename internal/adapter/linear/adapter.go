@@ -566,8 +566,10 @@ func linearIssueStateTypes(state string) []string {
 	case "open":
 		return []string{"triage", "backlog", "unstarted", "started"}
 	case "closed":
-		return []string{"completed", "cancelled"}
-	case "triage", "backlog", "unstarted", "started", "completed", "cancelled":
+		return []string{"completed", "canceled"}
+	case "cancelled":
+		return []string{"canceled"}
+	case "triage", "backlog", "unstarted", "started", "completed", "canceled":
 		return []string{state}
 	default:
 		return nil

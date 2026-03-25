@@ -22,7 +22,7 @@ type linearIssue struct {
 type linearState struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Type string `json:"type"` // e.g. "triage","backlog","started","completed","cancelled"
+	Type string `json:"type"` // e.g. "triage","backlog","started","completed","canceled"
 }
 
 type linearLabels struct {
