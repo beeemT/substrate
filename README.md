@@ -2,9 +2,9 @@
 
 # Substrate
 
-**fill all the gaps**
+**A modern ADE - Agentic Development Environment**
 
-*AI-powered work item orchestration for multi-repo development*
+*AI-powered work item orchestration for single or multi-repo development*
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
