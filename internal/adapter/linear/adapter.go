@@ -114,16 +114,13 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		first = 250
 	}
 	vars := map[string]any{
-		"teamId":       optionalString(teamID),
-		"search":       optionalString(opts.Search),
-		"labelNames":   optionalStrings(opts.Labels),
-		"stateTypes":   optionalStrings(linearIssueStateTypes(opts.State)),
-		"stateNames":   optionalStrings(linearIssueStateNames(opts.State)),
-		"first":        first,
-		"after":        optionalString(opts.Cursor),
-		"assigneeId":   nil,
-		"creatorId":    nil,
-		"subscriberId": nil,
+		"teamId":     optionalString(teamID),
+		"search":     optionalString(opts.Search),
+		"labelNames": optionalStrings(opts.Labels),
+		"stateTypes": optionalStrings(linearIssueStateTypes(opts.State)),
+		"stateNames": optionalStrings(linearIssueStateNames(opts.State)),
+		"first":      first,
+		"after":      optionalString(opts.Cursor),
 	}
 	query := queryTeamIssues
 	switch opts.View {
@@ -140,12 +137,14 @@ func (a *LinearAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 			return nil, err
 		}
 		vars["creatorId"] = creatorID
+		query = queryCreatorIssues
 	case "subscribed":
 		subscriberID, err := a.assigneeIDForBrowse(ctx)
 		if err != nil {
 			return nil, err
 		}
 		vars["subscriberId"] = subscriberID
+		query = querySubscribedIssues
 	case "", filterAll:
 	default:
 		return nil, fmt.Errorf("linear issue view %q is not supported", opts.View)

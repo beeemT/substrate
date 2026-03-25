@@ -74,7 +74,11 @@ func testIssueNode(id, identifier, title string, labelNames []string, teamKey st
 func TestListSelectable(t *testing.T) {
 	t.Run("issues", func(t *testing.T) {
 		issue := testIssueNode("abc123", "FOO-123", "Fix bug", []string{"backend"}, "FOO")
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var issueReq capturedRequest
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req testGQLBody
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			issueReq = capturedRequest(req)
 			respondJSON(w, map[string]any{
 				"data": map[string]any{
 					"issues": map[string]any{
@@ -111,6 +115,14 @@ func TestListSelectable(t *testing.T) {
 		}
 		if len(item.Labels) != 1 || item.Labels[0] != "backend" {
 			t.Errorf("Labels: want [backend], got %v", item.Labels)
+		}
+		if !strings.Contains(issueReq.Query, "TeamIssues") {
+			t.Fatalf("query = %q, want TeamIssues (base query without user filters)", issueReq.Query)
+		}
+		for _, forbidden := range []string{"assigneeId", "creatorId", "subscriberId"} {
+			if _, exists := issueReq.Variables[forbidden]; exists {
+				t.Fatalf("TeamIssues query should not send %s variable, got %v", forbidden, issueReq.Variables[forbidden])
+			}
 		}
 	})
 
@@ -344,6 +356,9 @@ func TestListSelectableIssuesSupportsCreatedByMe(t *testing.T) {
 	if got := issueReq.Variables["creatorId"]; got != "user1" {
 		t.Fatalf("creatorId = %v, want user1", got)
 	}
+	if !strings.Contains(issueReq.Query, "CreatorIssues") {
+		t.Fatalf("query = %q, want CreatorIssues", issueReq.Query)
+	}
 	if got := stringSliceFromAny(issueReq.Variables["stateTypes"]); !equalStrings(got, []string{"completed", "cancelled"}) {
 		t.Fatalf("stateTypes = %#v, want completed/cancelled", got)
 	}
@@ -376,6 +391,9 @@ func TestListSelectableIssuesSupportsSubscribed(t *testing.T) {
 	}
 	if !strings.Contains(issueReq.Query, "subscribers") {
 		t.Fatalf("query = %q, want subscribers filter", issueReq.Query)
+	}
+	if !strings.Contains(issueReq.Query, "SubscribedIssues") {
+		t.Fatalf("query = %q, want SubscribedIssues", issueReq.Query)
 	}
 }
 

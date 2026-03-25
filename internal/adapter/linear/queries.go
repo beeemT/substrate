@@ -49,16 +49,70 @@ query IssuesByIDs($ids: [ID!]!) {
 const queryTeamIssues = `
 query TeamIssues(
 	$teamId: ID, $search: String,
-	$assigneeId: ID, $creatorId: ID, $subscriberId: ID,
 	$labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
 	$first: Int, $after: String
 ) {
 	issues(first: $first, after: $after, filter: {
 		team: { id: { eq: $teamId } }
 		title: { containsIgnoreCase: $search }
-		assignee: { id: { eq: $assigneeId } }
+		labels: { name: { in: $labelNames } }
+		state: {
+			type: { in: $stateTypes }
+			name: { in: $stateNames }
+		}
+	}) {
+		nodes {
+			id identifier title description priority url
+			state { id name type }
+			labels { nodes { name } }
+			assignee { id name }
+			creator { id name }
+			team { id key }
+			createdAt updatedAt
+		}
+		pageInfo { hasNextPage endCursor }
+	}
+}`
+
+const queryCreatorIssues = `
+query CreatorIssues(
+	$teamId: ID, $creatorId: ID!,
+	$search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
+	$first: Int, $after: String
+) {
+	issues(first: $first, after: $after, filter: {
+		team: { id: { eq: $teamId } }
 		creator: { id: { eq: $creatorId } }
+		title: { containsIgnoreCase: $search }
+		labels: { name: { in: $labelNames } }
+		state: {
+			type: { in: $stateTypes }
+			name: { in: $stateNames }
+		}
+	}) {
+		nodes {
+			id identifier title description priority url
+			state { id name type }
+			labels { nodes { name } }
+			assignee { id name }
+			creator { id name }
+			team { id key }
+			createdAt updatedAt
+		}
+		pageInfo { hasNextPage endCursor }
+	}
+}`
+
+const querySubscribedIssues = `
+query SubscribedIssues(
+	$teamId: ID, $subscriberId: ID!,
+	$search: String, $labelNames: [String!], $stateTypes: [String!], $stateNames: [String!],
+	$first: Int, $after: String
+) {
+	issues(first: $first, after: $after, filter: {
+		team: { id: { eq: $teamId } }
 		subscribers: { id: { eq: $subscriberId } }
+		title: { containsIgnoreCase: $search }
 		labels: { name: { in: $labelNames } }
 		state: {
 			type: { in: $stateTypes }
