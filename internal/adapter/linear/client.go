@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -28,7 +29,7 @@ func newGQLClient(apiKey, endpoint string) *gqlClient {
 	}
 
 	return &gqlClient{
-		apiKey:   apiKey,
+		apiKey:   strings.TrimSpace(apiKey),
 		endpoint: endpoint,
 		http:     &http.Client{Timeout: 30 * time.Second},
 	}

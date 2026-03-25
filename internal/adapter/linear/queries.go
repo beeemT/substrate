@@ -87,15 +87,7 @@ query Projects($teamId: ID, $search: String, $states: [String!], $first: Int, $a
 	}) {
 		nodes {
 			id name description state icon color
-			issues {
-				nodes {
-					id identifier title description
-					state { id name type }
-					labels { nodes { name } }
-					team { id key }
-					createdAt updatedAt
-				}
-			}
+			createdAt updatedAt
 		}
 		pageInfo { hasNextPage endCursor }
 	}
@@ -125,18 +117,10 @@ query Initiatives($search: String, $statuses: [String!], $first: Int, $after: St
 	}) {
 		nodes {
 			id name description status
+			createdAt updatedAt
 			projects {
 				nodes {
-					id name description state
-					issues {
-						nodes {
-							id identifier title description
-							state { id name type }
-							labels { nodes { name } }
-							team { id key }
-							createdAt updatedAt
-						}
-					}
+					id name
 				}
 			}
 		}

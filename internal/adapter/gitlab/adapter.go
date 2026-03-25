@@ -623,7 +623,7 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.Token))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

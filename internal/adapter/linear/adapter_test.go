@@ -127,7 +127,8 @@ func TestListSelectable(t *testing.T) {
 								"state":       "in_progress",
 								"icon":        "",
 								"color":       "",
-								"issues":      map[string]any{"nodes": []any{testIssueNode("abc123", "FOO-123", "Fix bug", nil, "FOO")}},
+								"createdAt":   "2025-01-01T00:00:00Z",
+								"updatedAt":   "2025-06-01T00:00:00Z",
 							},
 						},
 					},
@@ -160,8 +161,8 @@ func TestListSelectable(t *testing.T) {
 		if item.State != "in_progress" {
 			t.Errorf("State: want %q, got %q", "in_progress", item.State)
 		}
-		if len(item.Labels) != 1 || item.Labels[0] != "FOO-123" {
-			t.Errorf("Labels: want [FOO-123], got %v", item.Labels)
+		if len(item.Labels) != 0 {
+			t.Errorf("Labels: want [], got %v", item.Labels)
 		}
 	})
 

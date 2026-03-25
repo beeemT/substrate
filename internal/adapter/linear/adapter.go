@@ -207,9 +207,8 @@ func (a *LinearAdapter) listProjects(ctx context.Context, opts adapter.ListOpts)
 			Title:       proj.Name,
 			Description: proj.Description,
 			State:       proj.State,
-			Labels:      projectIssueIdentifiers(proj),
-			CreatedAt:   projectCreatedAt(proj),
-			UpdatedAt:   projectUpdatedAt(proj),
+			CreatedAt:   derefTime(proj.CreatedAt),
+			UpdatedAt:   derefTime(proj.UpdatedAt),
 		}
 	}
 
@@ -246,8 +245,8 @@ func (a *LinearAdapter) listInitiatives(ctx context.Context, opts adapter.ListOp
 			Description: init.Description,
 			State:       init.Status,
 			Labels:      initiativeProjectNames(init),
-			CreatedAt:   initiativeCreatedAt(init),
-			UpdatedAt:   initiativeUpdatedAt(init),
+			CreatedAt:   derefTime(init.CreatedAt),
+			UpdatedAt:   derefTime(init.UpdatedAt),
 		}
 	}
 
@@ -609,59 +608,6 @@ func optionalStrings(values []string) any {
 	return values
 }
 
-func projectCreatedAt(proj linearProject) time.Time {
-	var created time.Time
-	for _, issue := range proj.Issues.Nodes {
-		candidate := derefTime(issue.CreatedAt)
-		if candidate.IsZero() {
-			continue
-		}
-		if created.IsZero() || candidate.Before(created) {
-			created = candidate
-		}
-	}
-
-	return created
-}
-
-func projectUpdatedAt(proj linearProject) time.Time {
-	var updated time.Time
-	for _, issue := range proj.Issues.Nodes {
-		candidate := derefTime(issue.UpdatedAt)
-		if candidate.After(updated) {
-			updated = candidate
-		}
-	}
-
-	return updated
-}
-
-func initiativeCreatedAt(init linearInitiative) time.Time {
-	var created time.Time
-	for _, proj := range init.Projects.Nodes {
-		candidate := projectCreatedAt(proj)
-		if candidate.IsZero() {
-			continue
-		}
-		if created.IsZero() || candidate.Before(created) {
-			created = candidate
-		}
-	}
-
-	return created
-}
-
-func initiativeUpdatedAt(init linearInitiative) time.Time {
-	var updated time.Time
-	for _, proj := range init.Projects.Nodes {
-		candidate := projectUpdatedAt(proj)
-		if candidate.After(updated) {
-			updated = candidate
-		}
-	}
-
-	return updated
-}
 
 func (a *LinearAdapter) fetchIssuesByIDs(ctx context.Context, ids []string) ([]linearIssue, error) {
 	if len(ids) == 0 {
@@ -888,20 +834,6 @@ func linearInitiativeMetadata(init linearInitiative, trackerRefs ...domain.Track
 	}
 }
 
-func projectIssueIdentifiers(proj linearProject) []string {
-	ids := make([]string, 0, len(proj.Issues.Nodes))
-	for _, issue := range proj.Issues.Nodes {
-		if issue.Identifier == "" {
-			continue
-		}
-		ids = append(ids, issue.Identifier)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return ids
-}
 
 func initiativeProjectNames(init linearInitiative) []string {
 	names := make([]string, 0, len(init.Projects.Nodes))

@@ -52,6 +52,8 @@ type linearProject struct {
 	State       string          `json:"state"`
 	Icon        string          `json:"icon"`
 	Color       string          `json:"color"`
+	CreatedAt   *time.Time      `json:"createdAt"`
+	UpdatedAt   *time.Time      `json:"updatedAt"`
 	Issues      linearIssueConn `json:"issues"`
 }
 
@@ -68,6 +70,8 @@ type linearInitiative struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Status      string            `json:"status"`
+	CreatedAt   *time.Time        `json:"createdAt"`
+	UpdatedAt   *time.Time        `json:"updatedAt"`
 	Projects    linearProjectConn `json:"projects"`
 }
 
