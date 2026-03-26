@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"math/rand"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -53,9 +54,10 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 	sessionStats SessionStats
 
 	// Bunny blink animation (empty state only).
-	blinkPhase      int  // 0 = eyes open, 1 = eyes closed
-	blinkActive     bool // tick chain is running
-	blinkNeedsStart bool // start tick chain on next Update
+	blinkPhase      int                  // 0 = eyes open, 1 = eyes closed
+	blinkActive     bool                 // tick chain is running
+	blinkNeedsStart bool                 // start tick chain on next Update
+	blinkSide       components.BunnySide // left or right corner; chosen at construction
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
@@ -66,6 +68,7 @@ func NewContentModel(st styles.Styles) ContentModel {
 		sourceDetails:   NewSourceDetailsModel(st),
 		sessionLog:      NewSessionLogModel(st),
 		blinkNeedsStart: true,
+		blinkSide:       components.BunnySide(rand.Intn(2)),
 	}
 }
 
@@ -230,8 +233,14 @@ func (m ContentModel) emptyStateView() string {
 	const minHeightForBunny = 7
 	var placed string
 	if m.height >= minHeightForBunny {
-		bunny := components.RenderBunny(m.blinkPhase)
-		combined := lipgloss.JoinVertical(lipgloss.Left, bunny, container)
+		bunny := components.RenderBunny(m.blinkPhase, m.blinkSide)
+		var align lipgloss.Position
+		if m.blinkSide == components.BunnySideLeft {
+			align = lipgloss.Left
+		} else {
+			align = lipgloss.Right
+		}
+		combined := lipgloss.JoinVertical(align, bunny, container)
 		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
 	} else {
 		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)

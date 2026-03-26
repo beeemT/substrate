@@ -6,6 +6,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// BunnySide determines on which corner of the box the bunny sits.
+// The value is chosen randomly at startup and held for the lifetime of the model.
+type BunnySide int
+
+const (
+	BunnySideLeft  BunnySide = iota // bunny sits on the top-left corner  (╭)
+	BunnySideRight                  // bunny sits on the top-right corner (╮)
+)
+
 // BunnyBlinkMsg is dispatched when the blink animation state should change.
 // Phase 0 = eyes open, phase 1 = eyes closed.
 type BunnyBlinkMsg struct{ Phase int }
@@ -26,17 +35,40 @@ func BunnyCloseCmd() tea.Cmd {
 	})
 }
 
-// bunnyFrames holds the three display lines for each blink phase.
-// Index 0 = eyes open, index 1 = eyes closed.
-var bunnyFrames = [2][3]string{
-	{`  (\(\`, ` ( ^ω^)`, `o_(")(")`},
-	{`  (\(\`, ` ( -ω-)`, `o_(")(")`},
+// bunnyFrames[side][phase] holds the three display lines of the ASCII bunny.
+//
+// Left side (sits at ╭, feet flush-left):
+//
+//	  (\(\
+//	 ( ^ω^)   or   ( -ω-)
+//	o_(")(")
+//
+// Right side (sits at ╮, feet flush-right):
+//
+//	/)/)
+//	(^ω^ )    or   (-ω- )
+//	(")(")_o
+//
+// The right-side lines carry trailing spaces so that lipgloss.JoinVertical
+// with Right alignment produces the same breathing room as the left side:
+//   - ears end 2 columns before the right edge (matching the left's 2 leading spaces)
+//   - face ends 1 column before the right edge (matching the left's 1 leading space)
+var bunnyFrames = [2][2][3]string{
+	BunnySideLeft: {
+		{`  (\(\`, ` ( ^ω^)`, `o_(")(")`}, // phase 0: eyes open
+		{`  (\(\`, ` ( -ω-)`, `o_(")(")`}, // phase 1: eyes closed
+	},
+	BunnySideRight: {
+		{"/)/)  ", "(^ω^ ) ", `(")(")_o`}, // phase 0: eyes open
+		{"/)/)  ", "(-ω- ) ", `(")(")_o`}, // phase 1: eyes closed
+	},
 }
 
-// RenderBunny returns the 3-line ASCII bunny art for the given blink phase.
-// The bottom line is the feet; place it directly above the top border of a box
-// so the bunny appears to sit on the box's top-left corner.
-func RenderBunny(phase int) string {
-	f := bunnyFrames[phase%2]
+// RenderBunny returns the 3-line ASCII bunny art for the given blink phase and
+// corner side. The bottom line is the feet; callers should join this string
+// above a bordered box using the matching lipgloss alignment so the foot
+// character touches the box corner.
+func RenderBunny(phase int, side BunnySide) string {
+	f := bunnyFrames[side][phase%2]
 	return f[0] + "\n" + f[1] + "\n" + f[2]
 }
