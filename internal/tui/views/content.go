@@ -7,6 +7,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/sessionlog"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -50,15 +51,21 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 	currentWorkItem *domain.Session
 
 	sessionStats SessionStats
+
+	// Bunny blink animation (empty state only).
+	blinkPhase      int  // 0 = eyes open, 1 = eyes closed
+	blinkActive     bool // tick chain is running
+	blinkNeedsStart bool // start tick chain on next Update
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
 	return ContentModel{
-		mode:          ContentModeEmpty,
-		styles:        st,
-		overview:      NewSessionOverviewModel(st),
-		sourceDetails: NewSourceDetailsModel(st),
-		sessionLog:    NewSessionLogModel(st),
+		mode:            ContentModeEmpty,
+		styles:          st,
+		overview:        NewSessionOverviewModel(st),
+		sourceDetails:   NewSourceDetailsModel(st),
+		sessionLog:      NewSessionLogModel(st),
+		blinkNeedsStart: true,
 	}
 }
 
@@ -81,6 +88,16 @@ func (m *ContentModel) SetMode(mode ContentMode) {
 	}
 	prev := m.mode
 	m.mode = mode
+
+	// Manage blink animation lifecycle with empty-mode transitions.
+	if mode == ContentModeEmpty && !m.blinkActive {
+		m.blinkPhase = 0
+		m.blinkNeedsStart = true
+	}
+	if mode != ContentModeEmpty {
+		m.blinkActive = false
+		m.blinkNeedsStart = false
+	}
 
 	// When leaving planning/session-interaction, kill the spinner tick chain
 	// so that re-entering restarts it cleanly via SetAgentActive(true).
@@ -124,6 +141,24 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
+	// Start blink tick chain on first Update after entering empty mode.
+	if m.blinkNeedsStart && m.mode == ContentModeEmpty {
+		m.blinkNeedsStart = false
+		m.blinkActive = true
+		cmds = append(cmds, components.BunnyOpenCmd())
+	}
+
+	if msg, ok := msg.(components.BunnyBlinkMsg); ok {
+		if m.mode == ContentModeEmpty && m.blinkActive {
+			m.blinkPhase = msg.Phase
+			if msg.Phase == 1 {
+				cmds = append(cmds, components.BunnyCloseCmd())
+			} else {
+				cmds = append(cmds, components.BunnyOpenCmd())
+			}
+		}
+		return m, tea.Batch(cmds...)
+	}
 	switch m.mode {
 	case ContentModeOverview:
 		m.overview, cmd = m.overview.Update(msg)
@@ -191,7 +226,16 @@ func (m ContentModel) emptyStateView() string {
 
 	message := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	container := m.styles.Border.Padding(1, 2).Width(panelWidth).Render(message)
-	placed := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
+	// Only render bunny if there is room: 3 bunny lines + border (2) + at least 2 content lines.
+	const minHeightForBunny = 7
+	var placed string
+	if m.height >= minHeightForBunny {
+		bunny := components.RenderBunny(m.blinkPhase)
+		combined := lipgloss.JoinVertical(lipgloss.Left, bunny, container)
+		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
+	} else {
+		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
+	}
 	return fitViewHeight(placed, m.height)
 }
 

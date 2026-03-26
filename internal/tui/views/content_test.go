@@ -157,3 +157,22 @@ func TestContentEmptyViewFitsTerminalBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestContentEmptyViewBunnyPresent(t *testing.T) {
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(100, 40)
+	view := m.View()
+	if !strings.Contains(view, `(\(\`) {
+		t.Fatalf("expected bunny ears in empty state view, got: %q", view)
+	}
+}
+
+func TestContentEmptyViewBunnyHiddenWhenShort(t *testing.T) {
+	// Height below minHeightForBunny (7) — must not crash and must not render bunny.
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 4)
+	view := m.View()
+	if strings.Contains(view, `(\(\`) {
+		t.Fatalf("bunny should be hidden at height 4, got: %q", view)
+	}
+}
