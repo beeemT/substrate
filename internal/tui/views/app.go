@@ -2101,7 +2101,9 @@ func (a *App) rebuildSidebar() {
 	}
 	a.sidebarMode = sidebarPaneSessions
 	a.sidebar.SetTitle("Sessions")
-	a.sidebar.SetEntries(a.sessionSidebarEntries())
+	entries := a.sessionSidebarEntries()
+	a.sidebar.SetEntries(entries)
+	a.content.SetSessionStats(a.computeSessionStats(entries))
 	if a.currentWorkItemID == "" {
 		a.sidebar.ClearSelection()
 		return
@@ -2109,6 +2111,20 @@ func (a *App) rebuildSidebar() {
 	if !a.sidebar.SelectWorkItem(a.currentWorkItemID) {
 		a.sidebar.ClearSelection()
 	}
+}
+
+// computeSessionStats derives aggregate counts from sidebar entries.
+func (a App) computeSessionStats(entries []SidebarEntry) SessionStats {
+	stats := SessionStats{TotalSessions: len(entries)}
+	for _, e := range entries {
+		if e.Kind != SidebarEntryWorkItem {
+			continue
+		}
+		if e.State == domain.SessionPlanReview || e.HasOpenQuestion || e.HasInterrupted {
+			stats.ActionNeeded++
+		}
+	}
+	return stats
 }
 
 // View renders the full terminal UI.

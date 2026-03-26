@@ -1,6 +1,8 @@
 package views
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -8,6 +10,12 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// SessionStats holds aggregate session counts for the empty state display.
+type SessionStats struct {
+	TotalSessions int
+	ActionNeeded  int // sessions awaiting human action (plan review, questions, interrupted)
+}
 
 // ContentMode determines which view is rendered in the content panel.
 type ContentMode int
@@ -40,6 +48,8 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 
 	// Current work item being displayed
 	currentWorkItem *domain.Session
+
+	sessionStats SessionStats
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
@@ -71,6 +81,7 @@ func (m *ContentModel) SetMode(mode ContentMode) {
 	}
 	prev := m.mode
 	m.mode = mode
+
 	// When leaving planning/session-interaction, kill the spinner tick chain
 	// so that re-entering restarts it cleanly via SetAgentActive(true).
 	if prev == ContentModePlanning || prev == ContentModeSessionInteraction {
@@ -85,6 +96,11 @@ func (m *ContentModel) SetWorkItem(wi *domain.Session) {
 		m.sessionLog.SetTitle(wi.Title)
 		m.sourceDetails.SetSession(wi)
 	}
+}
+
+// SetSessionStats updates the aggregate session counts shown in the empty state.
+func (m *ContentModel) SetSessionStats(stats SessionStats) {
+	m.sessionStats = stats
 }
 
 func (m *ContentModel) SetOverviewData(data SessionOverviewData) {
@@ -146,20 +162,63 @@ func (m ContentModel) emptyStateView() string {
 	panelWidth := min(max(1, m.width-4), 80)
 	detailWidth := max(1, panelWidth-4)
 
-	title := m.styles.Title.Render("No sessions yet")
-	prompt := m.styles.Subtitle.Render("Press ") +
-		m.styles.KeybindAccent.Render("[n]") +
-		m.styles.Subtitle.Render(" to create your first session, or pick one from the sidebar.")
-	detail := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.styles.Theme.Muted)).
-		Width(detailWidth).
-		Align(lipgloss.Left).
-		Render("Once a session is running, this panel shows plans, agent progress, logs, review output, and searchable history.")
+	var parts []string
+	if m.sessionStats.TotalSessions == 0 {
+		// No sessions yet
+		title := m.styles.Title.Render("No sessions yet")
+		prompt := m.styles.Subtitle.Render("Press ") +
+			m.styles.KeybindAccent.Render("[n]") +
+			m.styles.Subtitle.Render(" to create your first session, or pick one from the sidebar.")
+		detail := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.styles.Theme.Muted)).
+			Width(detailWidth).
+			Align(lipgloss.Left).
+			Render("Once a session is running, this panel shows plans, agent progress, logs, review output, and searchable history.")
 
-	message := lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", detail)
+		parts = append(parts, title, "", prompt, "", detail)
+	} else {
+		// Sessions exist but none selected
+		title := m.styles.Title.Render("Select a session")
+		prompt := m.styles.Subtitle.Render("Use ") +
+			m.styles.KeybindAccent.Render("[↑/↓]") +
+			m.styles.Subtitle.Render(" to browse the sidebar, or press ") +
+			m.styles.KeybindAccent.Render("[n]") +
+			m.styles.Subtitle.Render(" for a new session.")
 
+		summary := m.sessionStatsSummary(detailWidth)
+		parts = append(parts, title, "", prompt, "", summary)
+	}
+
+	message := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	container := m.styles.Border.Padding(1, 2).Width(panelWidth).Render(message)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
+	placed := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
+	return fitViewHeight(placed, m.height)
+}
+
+// sessionStatsSummary renders session count info for the empty state.
+func (m ContentModel) sessionStatsSummary(width int) string {
+	stats := m.sessionStats
+	var line string
+	if stats.ActionNeeded > 0 {
+		line = fmt.Sprintf("%d session%s  ·  %d awaiting action",
+			stats.TotalSessions, pluralS(stats.TotalSessions),
+			stats.ActionNeeded)
+	} else {
+		line = fmt.Sprintf("%d session%s", stats.TotalSessions, pluralS(stats.TotalSessions))
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.styles.Theme.Muted)).
+		Width(width).
+		Align(lipgloss.Left).
+		Render(line)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // KeybindHints returns keybind hints for the active mode (passed to the status bar).

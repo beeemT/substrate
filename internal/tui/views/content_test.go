@@ -119,3 +119,41 @@ func TestContentOverviewKeybindHintsExposeOverviewActions(t *testing.T) {
 		}
 	}
 }
+
+func TestContentEmptyViewWithSessions(t *testing.T) {
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(100, 40)
+	m.SetSessionStats(views.SessionStats{TotalSessions: 5, ActionNeeded: 2})
+
+	view := m.View()
+	if !strings.Contains(view, "Select a session") {
+		t.Fatalf("expected 'Select a session' when sessions exist, got: %q", view)
+	}
+	if !strings.Contains(view, "2 awaiting action") {
+		t.Fatalf("expected action count in view, got: %q", view)
+	}
+	if strings.Contains(view, "No sessions yet") {
+		t.Fatalf("should not show 'No sessions yet' when sessions exist")
+	}
+}
+
+func TestContentEmptyViewFitsTerminalBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{
+		{"standard", 80, 24},
+		{"wide", 120, 40},
+		{"narrow", 50, 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := views.NewContentModel(makeContentStyles())
+			m.SetSize(tc.w, tc.h)
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > tc.h {
+				t.Errorf("rendered %d lines, exceeds height %d", len(lines), tc.h)
+			}
+		})
+	}
+}
