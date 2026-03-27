@@ -96,6 +96,91 @@ func TestRenderBunnySidesAreMirrored(t *testing.T) {
 	}
 }
 
+// --- Crouch frame tests ---
+
+func TestRenderBunnyCrouchAlwaysThreeLines(t *testing.T) {
+	for phase := 0; phase <= 1; phase++ {
+		s := components.RenderBunnyCrouch(phase)
+		lines := strings.Split(s, "\n")
+		if len(lines) != 3 {
+			t.Errorf("phase %d: expected 3 lines, got %d: %q", phase, len(lines), s)
+		}
+	}
+}
+
+func TestRenderBunnyCrouchPhaseWraps(t *testing.T) {
+	if components.RenderBunnyCrouch(2) != components.RenderBunnyCrouch(0) {
+		t.Fatal("crouch phase 2 should produce same output as phase 0")
+	}
+}
+
+func TestRenderBunnyCrouchHasEars(t *testing.T) {
+	s := components.RenderBunnyCrouch(0)
+	if !strings.Contains(s, `(\(\`) {
+		t.Fatalf("crouch frame missing ears: %q", s)
+	}
+}
+
+func TestRenderBunnyCrouchFeetAreSpread(t *testing.T) {
+	// Crouch feet should be wider than hop feet — spread with paw indicators.
+	for phase := 0; phase <= 1; phase++ {
+		feet := strings.Split(components.RenderBunnyCrouch(phase), "\n")[2]
+		if len(feet) == 0 {
+			t.Fatalf("phase %d: empty feet line", phase)
+		}
+		// Crouch feet should be wider than normal with paw indicators on both sides.
+		if !strings.Contains(feet, "o") {
+			t.Errorf("phase %d: crouch feet should have paw indicators (o): %q", phase, feet)
+		}
+	}
+}
+
+func TestRenderBunnyCrouchEyesMatchPhase(t *testing.T) {
+	if !strings.Contains(components.RenderBunnyCrouch(0), "^ω^") {
+		t.Fatal("crouch phase 0: expected open eyes ^ω^")
+	}
+	if !strings.Contains(components.RenderBunnyCrouch(1), "-ω-") {
+		t.Fatal("crouch phase 1: expected closed eyes -ω-")
+	}
+}
+
+// --- Hop frame helper tests ---
+
+func TestHopFrameGap(t *testing.T) {
+	tests := []struct{ frame, want int }{
+		{0, 0}, {1, 1}, {2, 2}, {3, 1}, {4, 0},
+	}
+	for _, tc := range tests {
+		if got := components.HopFrameGap(tc.frame); got != tc.want {
+			t.Errorf("HopFrameGap(%d) = %d, want %d", tc.frame, got, tc.want)
+		}
+	}
+}
+
+func TestHopFrameProgress(t *testing.T) {
+	tests := []struct {
+		frame int
+		want  float64
+	}{
+		{0, 0.0}, {1, 0.25}, {2, 0.55}, {3, 0.82}, {4, 1.0},
+	}
+	for _, tc := range tests {
+		if got := components.HopFrameProgress(tc.frame); got != tc.want {
+			t.Errorf("HopFrameProgress(%d) = %v, want %v", tc.frame, got, tc.want)
+		}
+	}
+}
+
+func TestHopFrameDuration(t *testing.T) {
+	// Just verify they return positive durations without panicking.
+	for frame := 0; frame < components.FramesPerHop; frame++ {
+		d := components.HopFrameDuration(frame)
+		if d <= 0 {
+			t.Errorf("HopFrameDuration(%d) = %v, want positive", frame, d)
+		}
+	}
+}
+
 // --- Hop frame tests ---
 
 func TestRenderBunnyHopAlwaysThreeLines(t *testing.T) {

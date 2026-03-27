@@ -21,10 +21,12 @@ const (
 type BunnyBlinkMsg struct{ Phase int }
 
 // BunnyHopTriggerMsg begins a hop sequence.
-// Hops is the number of mid-air frames (2 or 3), chosen randomly at fire time.
+// Hops is the number of individual hops (2 or 3), chosen randomly at fire time.
+// A 2-hop sequence touches the box once; a 3-hop sequence touches it twice.
 type BunnyHopTriggerMsg struct{ Hops int }
 
-// BunnyHopStepMsg advances the hop by one frame.
+// BunnyHopStepMsg advances the hop animation by one frame.
+// It is reused for both in-hop frame advances and between-hop pauses.
 type BunnyHopStepMsg struct{}
 
 // BunnyOpenCmd schedules the next blink 4 seconds from now.
@@ -53,8 +55,16 @@ func BunnyHopIdleCmd() tea.Cmd {
 	})
 }
 
-// BunnyHopStepCmd advances the hop animation by one frame after 150 ms.
-func BunnyHopStepCmd() tea.Cmd {
+// BunnyHopTick schedules a BunnyHopStepMsg after the given duration.
+func BunnyHopTick(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return BunnyHopStepMsg{}
+	})
+}
+
+// BunnyHopPauseTick schedules a BunnyHopStepMsg after the between-hop pause.
+// This gives the bunny a moment on the box before launching again.
+func BunnyHopPauseTick() tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
 		return BunnyHopStepMsg{}
 	})
@@ -89,7 +99,7 @@ var bunnyFrames = [2][2][3]string{
 	},
 }
 
-// bunnyHopFrames[phase] holds the three lines for the mid-hop pose.
+// bunnyHopFrames[phase] holds the three lines for the airborne pose.
 //
 // The feet line uses two leading spaces instead of o_ / _o to suggest the
 // bunny is airborne; actual horizontal position is handled by the caller.
@@ -97,6 +107,17 @@ var bunnyFrames = [2][2][3]string{
 var bunnyHopFrames = [2][3]string{
 	{`  (\(\`, ` ( ^ω^)`, `  (")(")`}, // phase 0: eyes open
 	{`  (\(\`, ` ( -ω-)`, `  (")(")`}, // phase 1: eyes closed
+}
+
+// bunnyCrouchFrames[phase] holds the three lines for the crouched pose.
+// Used at the start and end of each individual hop to show the bunny
+// compressing on the box before launching and on impact after landing.
+//
+// The face is lowered (2-space indent matching ears) and feet are spread
+// wide with paw indicators (o) on both sides to convey downward pressure.
+var bunnyCrouchFrames = [2][3]string{
+	{`  (\(\`, `  ( ^ω^)`, `o_(")(")`}, // phase 0: eyes open
+	{`  (\(\`, `  ( -ω-)`, `o_(")(")`}, // phase 1: eyes closed
 }
 
 // RenderBunny returns the 3-line ASCII bunny art for the given blink phase and
@@ -108,10 +129,72 @@ func RenderBunny(phase int, side BunnySide) string {
 	return f[0] + "\n" + f[1] + "\n" + f[2]
 }
 
-// RenderBunnyHop returns the 3-line mid-hop bunny art for the given blink phase.
+// RenderBunnyHop returns the 3-line airborne bunny art for the given blink phase.
 // Lines have no intrinsic horizontal position: the caller is responsible for
 // padding each line to the desired offset within the container width.
 func RenderBunnyHop(phase int) string {
 	f := bunnyHopFrames[phase%2]
 	return f[0] + "\n" + f[1] + "\n" + f[2]
+}
+
+// RenderBunnyCrouch returns the 3-line crouched bunny art for the given blink phase.
+// Like RenderBunnyHop, lines have no intrinsic horizontal position.
+func RenderBunnyCrouch(phase int) string {
+	f := bunnyCrouchFrames[phase%2]
+	return f[0] + "\n" + f[1] + "\n" + f[2]
+}
+
+// FramesPerHop is the number of animation frames in a single hop.
+// Frame sequence: crouch(0), rise(1), peak(2), fall(3), land(4).
+const FramesPerHop = 5
+
+// HopFrameGap returns the number of blank lines between the bunny and the box
+// for the given frame index within a hop. This creates the vertical arc:
+// crouch/land on the box (0 gaps), rise/fall at low height (1 gap), peak at max height (2 gaps).
+func HopFrameGap(frame int) int {
+	switch frame {
+	case 0, 4:
+		return 0 // crouch, land — on the box
+	case 1, 3:
+		return 1 // rise, fall — low air
+	case 2:
+		return 2 // peak — max height
+	default:
+		return 0
+	}
+}
+
+// HopFrameProgress returns the horizontal progress (0.0–1.0) through the current
+// individual hop for the given frame. The bunny accelerates during the first half
+// and decelerates during the second half, mimicking a natural parabolic arc.
+func HopFrameProgress(frame int) float64 {
+	switch frame {
+	case 0:
+		return 0.0 // crouch — at hop start
+	case 1:
+		return 0.25 // rise — launching forward
+	case 2:
+		return 0.55 // peak — maximum forward speed
+	case 3:
+		return 0.82 // fall — decelerating
+	case 4:
+		return 1.0 // land — at hop end
+	default:
+		return 0.0
+	}
+}
+
+// HopFrameDuration returns the tick duration for each frame within a hop.
+// Crouch/land are short (impact), rise/fall are medium, peak is longest (apex hang).
+func HopFrameDuration(frame int) time.Duration {
+	switch frame {
+	case 0, 4:
+		return 80 * time.Millisecond // crouch, land
+	case 1, 3:
+		return 100 * time.Millisecond // rise, fall
+	case 2:
+		return 120 * time.Millisecond // peak
+	default:
+		return 100 * time.Millisecond
+	}
 }

@@ -181,24 +181,32 @@ func TestContentEmptyViewBunnyHiddenWhenShort(t *testing.T) {
 }
 
 func TestContentHopRenderingFitsTerminalBounds(t *testing.T) {
-	// Simulate an active hop and verify the rendered output still fits the terminal.
+	// Simulate an active hop at various frames and verify the rendered output fits.
 	for _, tc := range []struct {
-		name          string
-		w, h          int
-		hopStep, hops int
+		name     string
+		w, h     int
+		hopCount int // total hops in sequence
+		hopIndex int // which hop to be in
+		hopFrame int // frame within that hop
 	}{
-		{"standard-2hop-mid", 80, 24, 1, 2},
-		{"standard-3hop-mid", 80, 24, 2, 3},
-		{"wide-hop", 120, 40, 1, 3},
-		{"narrow-hop", 50, 20, 1, 2},
+		{"crouch-2hop", 80, 24, 2, 0, 0},
+		{"rise-2hop", 80, 24, 2, 0, 1},
+		{"peak-2hop", 80, 24, 2, 0, 2},
+		{"fall-2hop", 80, 24, 2, 0, 3},
+		{"land-2hop", 80, 24, 2, 0, 4},
+		{"peak-3hop", 80, 24, 3, 1, 2},
+		{"wide-peak", 120, 40, 2, 0, 2},
+		{"narrow-rise", 50, 20, 3, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := views.NewContentModel(makeContentStyles())
 			m.SetSize(tc.w, tc.h)
-			// Drive model into an active hop state via exported Update interface.
-			// We force the internal fields through a round-trip: trigger then step.
-			_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: tc.hops})
-			for i := 1; i < tc.hopStep; i++ {
+			// Drive model into the desired hop state via Update messages.
+			_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: tc.hopCount})
+			// Advance to the target hop index and frame.
+			// Each hop has FramesPerHop (5) frames, plus a pause between hops.
+			stepsToReach := tc.hopIndex*components.FramesPerHop + tc.hopFrame
+			for i := 0; i < stepsToReach; i++ {
 				m, _ = m.Update(components.BunnyHopStepMsg{})
 			}
 			view := m.View()
@@ -217,18 +225,54 @@ func TestContentHopRenderingFitsTerminalBounds(t *testing.T) {
 
 func TestContentHopLandsOnOppositeSide(t *testing.T) {
 	// After a full 2-hop sequence the bunny should have flipped sides.
-	// We advance Update until the hop completes and then inspect the rendered output.
+	// We advance Update until the hop completes and inspect the rendered output.
 	m := views.NewContentModel(makeContentStyles())
 	m.SetSize(80, 24)
 	// Trigger a 2-hop sequence.
 	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
-	// Advance through all hop steps; one extra step triggers the landing.
-	for i := 0; i < 3; i++ {
+	// Advance through all frames: 2 hops × 5 frames each = 10 steps,
+	// plus 1 pause between hops = 11 steps total.
+	for i := 0; i < 11; i++ {
 		m, _ = m.Update(components.BunnyHopStepMsg{})
 	}
 	// After landing, the bunny should still render (ω present) and not be hopping.
 	view := m.View()
 	if !strings.Contains(view, "ω") {
 		t.Fatalf("expected bunny after hop landing, got: %q", view)
+	}
+}
+
+func TestContentHopContainerStaysFixed(t *testing.T) {
+	// The container (box) must not shift vertically between stationary and any
+	// hop frame. We find the row containing the top-left border corner (╭)
+	// and verify it is identical across all states.
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 24)
+	// Render stationary and find the container's top border row.
+	stationaryView := m.View()
+	stationaryLines := strings.Split(stationaryView, "\n")
+	var stationaryContainerRow int
+	for i, line := range stationaryLines {
+		if strings.Contains(line, "╭") {
+			stationaryContainerRow = i
+			break
+		}
+	}
+	// Now trigger a 2-hop and check every frame.
+	_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
+	for step := 0; step < 11; step++ {
+		view := m.View()
+		lines := strings.Split(view, "\n")
+		var containerRow int
+		for i, line := range lines {
+			if strings.Contains(line, "╭") {
+				containerRow = i
+				break
+			}
+		}
+		if containerRow != stationaryContainerRow {
+			t.Errorf("step %d: container at row %d, expected %d (same as stationary)", step, containerRow, stationaryContainerRow)
+		}
+		m, _ = m.Update(components.BunnyHopStepMsg{})
 	}
 }

@@ -62,8 +62,10 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 
 	// Bunny hop animation (empty state only).
 	hopActive bool // hop sequence is in progress
-	hopStep   int  // current mid-air frame index (1..hopSteps)
-	hopSteps  int  // total mid-air frames for this sequence (2 or 3)
+	hopCount  int  // total individual hops (2 or 3)
+	hopIndex  int  // current hop number (0..hopCount-1)
+	hopFrame  int  // frame within current hop (0..FramesPerHop-1)
+	hopPause  bool // between-hop pause on the box
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
@@ -107,7 +109,10 @@ func (m *ContentModel) SetMode(mode ContentMode) {
 		m.blinkActive = false
 		m.blinkNeedsStart = false
 		m.hopActive = false
-		m.hopStep = 0
+		m.hopCount = 0
+		m.hopIndex = 0
+		m.hopFrame = 0
+		m.hopPause = false
 	}
 
 	// When leaving planning/session-interaction, kill the spinner tick chain
@@ -175,9 +180,11 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	if msg, ok := msg.(components.BunnyHopTriggerMsg); ok {
 		if m.mode == ContentModeEmpty && m.blinkActive && !m.hopActive {
 			m.hopActive = true
-			m.hopStep = 1
-			m.hopSteps = msg.Hops
-			cmds = append(cmds, components.BunnyHopStepCmd())
+			m.hopCount = msg.Hops
+			m.hopIndex = 0
+			m.hopFrame = 0
+			m.hopPause = false
+			cmds = append(cmds, components.BunnyHopTick(components.HopFrameDuration(0)))
 		}
 		// Re-arm idle timer for the next hop regardless of whether this one started.
 		cmds = append(cmds, components.BunnyHopIdleCmd())
@@ -186,14 +193,38 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 
 	if _, ok := msg.(components.BunnyHopStepMsg); ok {
 		if m.mode == ContentModeEmpty && m.hopActive {
-			if m.hopStep >= m.hopSteps {
-				// Landing: flip to opposite corner, end hop.
-				m.blinkSide = 1 - m.blinkSide
-				m.hopActive = false
-				m.hopStep = 0
+			if m.hopPause {
+				// Between-hop pause ended: start next hop or finish sequence.
+				m.hopPause = false
+				m.hopIndex++
+				if m.hopIndex >= m.hopCount {
+					// Final landing: flip to opposite corner, end sequence.
+					m.blinkSide = 1 - m.blinkSide
+					m.hopActive = false
+					m.hopFrame = 0
+				} else {
+					// Start next hop from crouch frame.
+					m.hopFrame = 0
+					cmds = append(cmds, components.BunnyHopTick(components.HopFrameDuration(0)))
+				}
 			} else {
-				m.hopStep++
-				cmds = append(cmds, components.BunnyHopStepCmd())
+				m.hopFrame++
+				if m.hopFrame >= components.FramesPerHop {
+					// Hop complete: land on box.
+					m.hopFrame = components.FramesPerHop - 1
+					if m.hopIndex < m.hopCount-1 {
+						// More hops to go: pause on the box.
+						m.hopPause = true
+						cmds = append(cmds, components.BunnyHopPauseTick())
+					} else {
+						// Final hop complete: flip side and end.
+						m.blinkSide = 1 - m.blinkSide
+						m.hopActive = false
+						m.hopFrame = 0
+					}
+				} else {
+					cmds = append(cmds, components.BunnyHopTick(components.HopFrameDuration(m.hopFrame)))
+				}
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -270,8 +301,6 @@ func (m ContentModel) emptyStateView() string {
 	var placed string
 	if m.height >= minHeightForBunny {
 		if m.hopActive {
-			// Mid-hop: render the airborne frame at a linearly interpolated
-			// horizontal offset, plus one blank gap line above the box.
 			containerWidth := lipgloss.Width(container)
 			const bunnyWidth = 8
 			startOffset := 0
@@ -279,19 +308,76 @@ func (m ContentModel) emptyStateView() string {
 			if m.blinkSide == components.BunnySideRight {
 				startOffset, endOffset = endOffset, startOffset
 			}
-			// Integer linear interpolation: hopStep ranges 1..hopSteps,
-			// denominator hopSteps+1 keeps the bunny out of the far corner
-			// so the snap to normal on landing is always a small jump.
-			delta := endOffset - startOffset
-			currentOffset := startOffset + delta*m.hopStep/(m.hopSteps+1)
-			hopLines := strings.Split(components.RenderBunnyHop(m.blinkPhase), "\n")
-			for i, line := range hopLines {
-				rPad := max(0, containerWidth-currentOffset-lipgloss.Width(line))
-				hopLines[i] = strings.Repeat(" ", currentOffset) + line + strings.Repeat(" ", rPad)
+			// Calculate overall horizontal progress through the entire sequence.
+			// Each hop moves the bunny by 1/hopCount of the total distance.
+			// Within a hop, HopFrameProgress gives 0.0–1.0 for the current frame.
+			hopFraction := float64(m.hopIndex)
+			if !m.hopPause {
+				hopFraction += components.HopFrameProgress(m.hopFrame)
+			} else {
+				// During pause, bunny sits at the landing position of the completed hop.
+				hopFraction = float64(m.hopIndex + 1)
 			}
-			gapLine := strings.Repeat(" ", containerWidth)
-			combined := strings.Join(hopLines, "\n") + "\n" + gapLine + "\n" + container
-			placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
+			overallProgress := hopFraction / float64(m.hopCount)
+			delta := endOffset - startOffset
+			currentOffset := startOffset + int(float64(delta)*overallProgress)
+			// Choose art based on frame: crouch(0) and land(4) use crouch pose,
+			// rise(1), peak(2), fall(3) use airborne pose. During pause, use crouch.
+			var art string
+			if m.hopPause || m.hopFrame == 0 || m.hopFrame == components.FramesPerHop-1 {
+				art = components.RenderBunnyCrouch(m.blinkPhase)
+			} else {
+				art = components.RenderBunnyHop(m.blinkPhase)
+			}
+			bunnyLines := strings.Split(art, "\n")
+			for i, line := range bunnyLines {
+				rPad := max(0, containerWidth-currentOffset-lipgloss.Width(line))
+				bunnyLines[i] = strings.Repeat(" ", currentOffset) + line + strings.Repeat(" ", rPad)
+			}
+			// Vertical positioning: keep the container at the same row as the
+			// stationary layout. Stationary places the container at row
+			// (m.height - (3 + containerHeight)) / 2 + 3. For the hop, the bunny
+			// plus gaps occupy 3 + gapCount rows, so we reduce top padding by
+			// gapCount to keep the container pinned.
+			containerLines := strings.Split(container, "\n")
+			containerHeight := len(containerLines)
+			gapCount := 0
+			if !m.hopPause {
+				gapCount = components.HopFrameGap(m.hopFrame)
+			}
+			stationaryTopPad := (m.height - (3 + containerHeight)) / 2
+			if stationaryTopPad < 0 {
+				stationaryTopPad = 0
+			}
+			hopTopPad := stationaryTopPad - gapCount
+			if hopTopPad < 0 {
+				hopTopPad = 0
+			}
+			// Horizontal centering: match lipgloss.Place(Center) behaviour.
+			hPad := (m.width - containerWidth) / 2
+			if hPad < 0 {
+				hPad = 0
+			}
+			hPadStr := strings.Repeat(" ", hPad)
+			var out []string
+			for i := 0; i < hopTopPad; i++ {
+				out = append(out, "")
+			}
+			for _, line := range bunnyLines {
+				out = append(out, hPadStr+line)
+			}
+			for i := 0; i < gapCount; i++ {
+				out = append(out, "")
+			}
+			for _, cLine := range containerLines {
+				cw := lipgloss.Width(cLine)
+				cpad := max(0, (m.width-cw)/2)
+				out = append(out, strings.Repeat(" ", cpad)+cLine)
+			}
+			for len(out) < m.height {
+				out = append(out, "")
+			}
+			placed = strings.Join(out, "\n")
 		} else {
 			bunny := components.RenderBunny(m.blinkPhase, m.blinkSide)
 			var align lipgloss.Position
