@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,10 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// jsonFlag is the canonical --json flag name for `codex exec`.
+// --experimental-json is an alias; we use the canonical form.
+const jsonFlag = "--json"
+
 // Harness implements adapter.AgentHarness for Codex CLI.
 type Harness struct {
 	cfg config.CodexConfig
@@ -31,9 +36,10 @@ func (h *Harness) Name() string { return "codex" }
 
 func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 	return adapter.HarnessCapabilities{
-		SupportsStreaming: true,
-		SupportsMessaging: false,
-		SupportedTools:    []string{"sandboxed-cli"},
+		SupportsStreaming:    true,
+		SupportsMessaging:    true,
+		SupportsNativeResume: true,
+		SupportedTools:       []string{"sandboxed-cli"},
 	}
 }
 
@@ -48,63 +54,135 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	if binary == "" {
 		binary = "codex"
 	}
-	args := h.buildArgs(opts)
+
+	prompt := buildPrompt(opts.SystemPrompt, opts.UserPrompt)
+	args := buildArgs(opts, h.cfg)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = opts.WorktreePath
 
-	stdout, err := cmd.StdoutPipe()
+	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
-		return nil, fmt.Errorf("create stdout pipe: %w", err)
+		return nil, fmt.Errorf("create codex stdin pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
-		return nil, fmt.Errorf("create stderr pipe: %w", err)
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		return nil, fmt.Errorf("create codex stdout pipe: %w", err)
 	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		return nil, fmt.Errorf("create codex stderr pipe: %w", err)
+	}
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		_ = stderrR.Close()
+		_ = stderrW.Close()
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	// Close the parent's copies of the child-facing ends now that the child
+	// has inherited them. The read ends receive EOF exactly when the child
+	// process exits — no lingering write-end references in the parent.
+	_ = stdinR.Close()
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
 
-	session := &session{
-		id:        opts.SessionID,
-		cmd:       cmd,
-		stdout:    stdout,
-		stderr:    stderr,
-		events:    make(chan adapter.AgentEvent, 256),
-		logPath:   sessionLogPath(opts),
-		completed: make(chan error, 1),
-	}
-	if err := session.openLogFile(); err != nil {
+	// Deliver the prompt via stdin and close the write end. codex exec reads
+	// until EOF when no positional prompt argument is supplied.
+	if _, err := io.WriteString(stdinW, prompt); err != nil {
 		_ = cmd.Process.Kill()
+		return nil, fmt.Errorf("write prompt to codex stdin: %w", err)
+	}
+	if err := stdinW.Close(); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, fmt.Errorf("close codex stdin: %w", err)
+	}
 
+	s := &session{
+		id:            opts.SessionID,
+		binary:        binary,
+		harnessConfig: h.cfg,
+		cmd:           cmd,
+		events:        make(chan adapter.AgentEvent, 256),
+		logPath:       sessionLogPath(opts),
+		completed:     make(chan error, 1),
+		state:         sessionRunning,
+		lastText:      make(map[string]string),
+	}
+	if err := s.openLogFile(); err != nil {
+		_ = cmd.Process.Kill()
 		return nil, err
 	}
-	go session.waitProcess()
-	go session.readStdout()
-	go session.readStderr()
+	var ioWg sync.WaitGroup
+	ioWg.Add(2)
+	go func() { defer ioWg.Done(); s.readStdout(stdoutR) }()
+	go func() { defer ioWg.Done(); s.readStderr(stderrR) }()
+	go s.waitProcess(cmd, &ioWg)
 
-	return session, nil
+	return s, nil
 }
 
-func (h *Harness) buildArgs(opts adapter.SessionOpts) []string {
-	prompt := opts.UserPrompt
-	if strings.TrimSpace(opts.SystemPrompt) != "" {
-		prompt = opts.SystemPrompt + "\n\n" + prompt
+// buildPrompt combines system and user prompts with a blank-line separator when
+// both are non-empty.
+func buildPrompt(system, user string) string {
+	sys := strings.TrimSpace(system)
+	usr := strings.TrimSpace(user)
+	switch {
+	case sys != "" && usr != "":
+		return sys + "\n\n" + usr
+	case sys != "":
+		return sys
+	default:
+		return usr
 	}
-	args := []string{"-w", opts.WorktreePath}
-	if h.cfg.Model != "" {
-		args = append(args, "-m", h.cfg.Model)
+}
+
+// buildArgs constructs the argument list for `codex exec --json ...`.
+// The prompt is NOT included here; it is delivered via stdin in StartSession.
+//
+// Approval-mode mapping (verified against codex-rs/protocol/src/config_types.rs):
+//
+//	FullAuto=true || ApprovalMode="full-auto" → --full-auto
+//	ApprovalMode="auto-edit"                 → --sandbox workspace-write
+//	ApprovalMode="suggest" or empty          → (no sandbox flag; read-only is default)
+//
+// Quiet is silently ignored — there is no equivalent in JSON mode.
+func buildArgs(opts adapter.SessionOpts, cfg config.CodexConfig) []string {
+	args := []string{"exec", jsonFlag}
+
+	if opts.WorktreePath != "" {
+		args = append(args, "--cd", opts.WorktreePath)
 	}
-	if h.cfg.ApprovalMode != "" {
-		args = append(args, "--approval-mode", h.cfg.ApprovalMode)
+	if cfg.Model != "" {
+		args = append(args, "-m", cfg.Model)
 	}
-	if h.cfg.FullAuto {
+
+	switch {
+	case cfg.FullAuto || cfg.ApprovalMode == "full-auto":
 		args = append(args, "--full-auto")
+	case cfg.ApprovalMode == "auto-edit":
+		args = append(args, "--sandbox", "workspace-write")
+	default:
+		// "suggest" and empty both use the default read-only sandbox; no flag needed.
 	}
-	if h.cfg.Quiet {
-		args = append(args, "-q")
+
+	if cfg.Quiet {
+		slog.Debug("codex: Quiet flag is ignored in JSON mode")
 	}
-	if strings.TrimSpace(prompt) != "" {
-		args = append(args, prompt)
+
+	// Resume an existing thread when a thread ID is provided.
+	if opts.CodexThreadID != "" {
+		args = append(args, "resume", opts.CodexThreadID)
 	}
 
 	return args
@@ -119,6 +197,17 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 		}
 		if _, err := exec.LookPath(binary); err != nil {
 			return adapter.HarnessActionResult{}, err
+		}
+
+		// Verify the `exec` subcommand is available. Old codex builds predate it.
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(probeCtx, binary, "exec", "--help").CombinedOutput()
+		if err != nil {
+			return adapter.HarnessActionResult{}, fmt.Errorf(
+				"codex binary found but 'exec' subcommand unavailable (upgrade codex): %w: %s",
+				err, strings.TrimSpace(string(out)),
+			)
 		}
 
 		return adapter.HarnessActionResult{Success: true, Message: "codex binary available", Identity: binary}, nil
@@ -158,29 +247,51 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 	}
 }
 
+// sessionState tracks the lifecycle phase of a codex session.
+// codex exec is single-turn; we manage multi-turn externally via thread resume.
+type sessionState int
+
+const (
+	// sessionRunning: a codex exec process is active.
+	sessionRunning sessionState = iota
+	// sessionTurnDone: the process exited cleanly after turn.completed.
+	// SendMessage may start a new resume process.
+	sessionTurnDone
+	// sessionAborted: the session was terminated via Abort or a fatal error.
+	sessionAborted
+)
+
 type session struct {
-	id        string
-	cmd       *exec.Cmd
-	stdout    io.Reader
-	stderr    io.Reader
+	id            string
+	binary        string
+	harnessConfig config.CodexConfig
+
+	mu        sync.Mutex
+	state     sessionState
+	threadID  string            // set on thread.started; required for resume
+	lastText  map[string]string // item_id → text already streamed (for delta tracking)
+	cmd       *exec.Cmd         // current running process (guarded by mu)
+	logFile   *os.File          // guarded by mu
+	closeOnce sync.Once
+
 	events    chan adapter.AgentEvent
 	logPath   string
-	logFile   *os.File
-	mu        sync.Mutex
-	aborted   bool
-	closeOnce sync.Once
-	completed chan error
+	completed chan error // receives exactly once: when the session is aborted or fails fatally
 }
 
 func (s *session) ID() string                        { return s.id }
 func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
-func (s *session) SendMessage(_ context.Context, _ string) error {
-	return errors.New("codex harness does not support SendMessage")
-}
+
 func (s *session) Steer(_ context.Context, _ string) error {
 	return adapter.ErrSteerNotSupported
 }
 
+// Wait blocks until the session is aborted or a fatal error occurs.
+//
+// Note: unlike single-turn harnesses, Wait does NOT return when a turn
+// completes — it returns only when the session is explicitly Abort()ed or
+// hits an unrecoverable error. Callers that need to react to turn completion
+// should listen for the "done" event on Events().
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -192,56 +303,495 @@ func (s *session) Wait(ctx context.Context) error {
 	}
 }
 
+// SendMessage starts a new `codex exec resume <threadID>` process and delivers
+// msg as stdin. It returns an error if the session is still mid-turn or has
+// been aborted.
+func (s *session) SendMessage(ctx context.Context, msg string) error {
+	s.mu.Lock()
+	state := s.state
+	threadID := s.threadID
+	s.mu.Unlock()
+
+	switch state {
+	case sessionRunning:
+		return errors.New("codex session: cannot send message while a turn is in progress")
+	case sessionAborted:
+		return errors.New("codex session: session has been aborted")
+	}
+	// state == sessionTurnDone
+	if threadID == "" {
+		return errors.New("codex session: no thread ID received; cannot resume")
+	}
+
+	// Build resume invocation.
+	resumeOpts := adapter.SessionOpts{
+		WorktreePath:  s.getWorkDir(),
+		CodexThreadID: threadID,
+	}
+	args := buildArgs(resumeOpts, s.harnessConfig)
+	cmd := exec.CommandContext(ctx, s.binary, args...)
+	cmd.Dir = s.getWorkDir()
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("codex resume stdin pipe: %w", err)
+	}
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		return fmt.Errorf("codex resume stdout pipe: %w", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		return fmt.Errorf("codex resume stderr pipe: %w", err)
+	}
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+	if err := cmd.Start(); err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+		_ = stderrR.Close()
+		_ = stderrW.Close()
+		return fmt.Errorf("codex resume start: %w", err)
+	}
+	_ = stdinR.Close()
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	if _, err := io.WriteString(stdinW, msg); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("write message to codex stdin: %w", err)
+	}
+	if err := stdinW.Close(); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("close codex resume stdin: %w", err)
+	}
+
+	s.mu.Lock()
+	s.cmd = cmd
+	s.state = sessionRunning
+	s.mu.Unlock()
+
+	var ioWg sync.WaitGroup
+	ioWg.Add(2)
+	go func() { defer ioWg.Done(); s.readStdout(stdoutR) }()
+	go func() { defer ioWg.Done(); s.readStderr(stderrR) }()
+	go s.waitProcess(cmd, &ioWg)
+
+	return nil
+}
+
+// getWorkDir returns the working directory for resume processes.
+// It reads cmd.Dir under mu.
+func (s *session) getWorkDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd != nil {
+		return s.cmd.Dir
+	}
+	return ""
+}
+
 func (s *session) Abort(ctx context.Context) error {
 	s.mu.Lock()
-	if s.aborted {
+	if s.state == sessionAborted {
 		s.mu.Unlock()
 
 		return nil
 	}
-	s.aborted = true
+	s.state = sessionAborted
+	cmd := s.cmd
 	s.mu.Unlock()
-	if s.cmd.Process == nil {
+
+	if cmd == nil || cmd.Process == nil {
+		s.terminateSession(nil)
+
 		return nil
 	}
-	if err := s.cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		slog.Debug("codex interrupt failed", "err", err)
 	}
 	select {
-	case err := <-s.completed:
-		return err
+	case <-s.completed:
+		return nil
 	case <-time.After(5 * time.Second):
-		_ = s.cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 
 		return nil
 	case <-ctx.Done():
-		_ = s.cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 
 		return ctx.Err()
 	}
 }
 
-func (s *session) waitProcess() {
-	err := s.cmd.Wait()
+// waitProcess waits for the given cmd to exit and transitions session state.
+// Each turn spawns its own goroutine running waitProcess(cmd).
+func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
+	ioWg.Wait() // drain all stdout/stderr before reaping the process
+	err := cmd.Wait()
+
 	s.mu.Lock()
-	aborted := s.aborted
+	currentState := s.state
 	if s.logFile != nil {
 		_ = s.logFile.Close()
 		s.logFile = nil
 	}
 	s.mu.Unlock()
-	s.closeOnce.Do(func() { close(s.events) })
-	if aborted {
-		s.completed <- nil
 
+	switch currentState {
+	case sessionAborted:
+		// Abort called: close the events channel and deliver nil on completed.
+		s.terminateSession(nil)
+	case sessionRunning:
+		if err != nil {
+			// Process exited non-zero without us aborting: fatal error.
+			s.terminateSession(fmt.Errorf("codex exited: %w", err))
+		} else {
+			// Clean exit without turn.completed already transitioning state means
+			// the process exited before we saw that event — treat as turn done.
+			// (The JSONL parser sets sessionTurnDone on turn.completed; if it got
+			// there first, this branch becomes a no-op on the already-done state.)
+			s.mu.Lock()
+			if s.state == sessionRunning {
+				s.state = sessionTurnDone
+			}
+			s.mu.Unlock()
+		}
+	case sessionTurnDone:
+		// Normal: process exited after turn.completed was already processed.
+		// State is already sessionTurnDone; nothing to do.
+	}
+}
+
+// terminateSession closes the events channel and sends err on completed exactly once.
+func (s *session) terminateSession(err error) {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		if s.logFile != nil {
+			_ = s.logFile.Close()
+			s.logFile = nil
+		}
+		s.mu.Unlock()
+		close(s.events)
+		s.completed <- err
+	})
+}
+
+// ---------------------------------------------------------------------------
+// JSONL event parser
+// ---------------------------------------------------------------------------
+
+// The structs below mirror the codex-rs exec event schema
+// (codex-rs/exec/src/exec_events.rs). They are unexported — callers interact
+// only via adapter.AgentEvent.
+
+type codexEvent struct {
+	Type string `json:"type"`
+	// thread.started
+	ThreadID string `json:"thread_id,omitempty"`
+	// turn.completed
+	Usage *codexUsage `json:"usage,omitempty"`
+	// turn.failed / error
+	Message string `json:"message,omitempty"`
+	Error   *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+	// item.started / item.updated / item.completed
+	Item *codexItem `json:"item,omitempty"`
+}
+
+type codexUsage struct {
+	InputTokens       int64 `json:"input_tokens"`
+	CachedInputTokens int64 `json:"cached_input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
+}
+
+type codexItem struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	// agent_message / reasoning
+	Text string `json:"text,omitempty"`
+	// command_execution
+	Command          string `json:"command,omitempty"`
+	AggregatedOutput string `json:"aggregated_output,omitempty"`
+	ExitCode         *int   `json:"exit_code,omitempty"`
+	Status           string `json:"status,omitempty"`
+	// file_change
+	Changes []codexFileChange `json:"changes,omitempty"`
+	// mcp_tool_call
+	Server string `json:"server,omitempty"`
+	Tool   string `json:"tool,omitempty"`
+	// mcp error field (reuses top-level Error struct shape)
+	McpError *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+	// web_search
+	Query string `json:"query,omitempty"`
+	// error item
+	// (text field already covers message for error items via AgentMessageItem pattern;
+	//  ErrorItem has a "message" field — we capture it separately)
+	ItemMessage string `json:"message,omitempty"`
+}
+
+type codexFileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+func (s *session) readStdout(r io.ReadCloser) {
+	defer r.Close()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.writeLogLine(line)
+		if evt, ok := s.mapCodexEvent(line); ok {
+			select {
+			case s.events <- evt:
+			default:
+				slog.Warn("codex event channel full", "type", evt.Type) //nolint:gosec // G706: evt.Type is a string constant from our event schema, not user input
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("reading codex stdout", "err", err)
+	}
+}
+
+// mapCodexEvent parses one JSONL line and maps it to an adapter.AgentEvent.
+// Returns (event, true) when an event should be emitted, (zero, false) otherwise.
+// Unknown event types are skipped — forward-compatibility for new codex versions.
+func (s *session) mapCodexEvent(line string) (adapter.AgentEvent, bool) {
+	var raw codexEvent
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		slog.Debug("codex: unparseable JSONL line", "line", line, "err", err)
+
+		return adapter.AgentEvent{}, false
+	}
+
+	now := time.Now()
+
+	switch raw.Type {
+	case "thread.started":
+		s.mu.Lock()
+		s.threadID = raw.ThreadID
+		s.mu.Unlock()
+
+		return adapter.AgentEvent{
+			Type:      "started",
+			Timestamp: now,
+			Metadata:  map[string]any{"codex_thread_id": raw.ThreadID},
+		}, true
+
+	case "turn.started":
+		return adapter.AgentEvent{}, false // no-op
+
+	case "item.started":
+		if raw.Item != nil {
+			s.mu.Lock()
+			s.lastText[raw.Item.ID] = ""
+			s.mu.Unlock()
+		}
+
+		return adapter.AgentEvent{}, false
+
+	case "item.updated":
+		if raw.Item == nil || raw.Item.Type != "agent_message" {
+			return adapter.AgentEvent{}, false
+		}
+		return s.streamDelta(raw.Item, now)
+
+	case "item.completed":
+		if raw.Item == nil {
+			return adapter.AgentEvent{}, false
+		}
+		return s.mapItemCompleted(raw.Item, now)
+
+	case "turn.completed":
+		// Mark turn as done so SendMessage can start a resume.
+		s.mu.Lock()
+		if s.state == sessionRunning {
+			s.state = sessionTurnDone
+		}
+		s.mu.Unlock()
+
+		meta := map[string]any{}
+		if raw.Usage != nil {
+			meta["input_tokens"] = raw.Usage.InputTokens
+			meta["cached_input_tokens"] = raw.Usage.CachedInputTokens
+			meta["output_tokens"] = raw.Usage.OutputTokens
+		}
+
+		return adapter.AgentEvent{Type: "done", Timestamp: now, Metadata: meta}, true
+
+	case "turn.failed":
+		msg := ""
+		if raw.Error != nil {
+			msg = raw.Error.Message
+		}
+
+		return adapter.AgentEvent{Type: "error", Timestamp: now, Payload: msg}, true
+
+	case "error":
+		return adapter.AgentEvent{Type: "error", Timestamp: now, Payload: raw.Message}, true
+
+	default:
+		slog.Debug("codex: unknown event type", "type", raw.Type)
+
+		return adapter.AgentEvent{}, false
+	}
+}
+
+// streamDelta emits an incremental text_delta for an agent_message item by
+// computing the new suffix since the last observed text.
+func (s *session) streamDelta(item *codexItem, now time.Time) (adapter.AgentEvent, bool) {
+	s.mu.Lock()
+	prev := s.lastText[item.ID]
+	delta := ""
+	if len(item.Text) > len(prev) {
+		delta = item.Text[len(prev):]
+		s.lastText[item.ID] = item.Text
+	}
+	s.mu.Unlock()
+
+	if delta == "" {
+		return adapter.AgentEvent{}, false
+	}
+
+	return adapter.AgentEvent{
+		Type:      "text_delta",
+		Timestamp: now,
+		Payload:   delta,
+		Metadata:  map[string]any{"item_id": item.ID},
+	}, true
+}
+
+// mapItemCompleted translates a completed item into one adapter.AgentEvent.
+func (s *session) mapItemCompleted(item *codexItem, now time.Time) (adapter.AgentEvent, bool) {
+	switch item.Type {
+	case "agent_message":
+		// Flush any text not yet streamed.
+		s.mu.Lock()
+		prev := s.lastText[item.ID]
+		remainder := ""
+		if len(item.Text) > len(prev) {
+			remainder = item.Text[len(prev):]
+		}
+		delete(s.lastText, item.ID)
+		s.mu.Unlock()
+
+		if remainder == "" {
+			return adapter.AgentEvent{}, false
+		}
+
+		return adapter.AgentEvent{
+			Type:      "text_delta",
+			Timestamp: now,
+			Payload:   remainder,
+			Metadata:  map[string]any{"item_id": item.ID},
+		}, true
+
+	case "command_execution":
+		meta := map[string]any{
+			"output": item.AggregatedOutput,
+			"status": item.Status,
+		}
+		if item.ExitCode != nil {
+			meta["exit_code"] = *item.ExitCode
+		}
+
+		return adapter.AgentEvent{
+			Type:      "tool_result",
+			Timestamp: now,
+			Payload:   item.Command,
+			Metadata:  meta,
+		}, true
+
+	case "file_change":
+		// Encode the change list into a JSON array for the Metadata field.
+		type fileChangeEntry struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		}
+		entries := make([]fileChangeEntry, len(item.Changes))
+		for i, c := range item.Changes {
+			entries[i] = fileChangeEntry(c)
+		}
+		changesJSON, _ := json.Marshal(entries)
+		firstPath := ""
+		if len(item.Changes) > 0 {
+			firstPath = item.Changes[0].Path
+		}
+
+		return adapter.AgentEvent{
+			Type:      "tool_result",
+			Timestamp: now,
+			Payload:   firstPath,
+			Metadata:  map[string]any{"changes": string(changesJSON), "status": item.Status},
+		}, true
+
+	case "mcp_tool_call":
+		meta := map[string]any{"status": item.Status}
+		if item.McpError != nil {
+			meta["error"] = item.McpError.Message
+		}
+
+		return adapter.AgentEvent{
+			Type:      "tool_result",
+			Timestamp: now,
+			Payload:   item.Server + "." + item.Tool,
+			Metadata:  meta,
+		}, true
+
+	case "web_search":
+		return adapter.AgentEvent{
+			Type:      "tool_result",
+			Timestamp: now,
+			Payload:   item.Query,
+			Metadata:  map[string]any{"item_id": item.ID},
+		}, true
+
+	case "error":
+		msg := item.ItemMessage
+		if msg == "" {
+			msg = item.Text
+		}
+
+		return adapter.AgentEvent{Type: "error", Timestamp: now, Payload: msg}, true
+
+	default:
+		// reasoning, todo_list, collab_tool_call — ignored
+		slog.Debug("codex: ignoring completed item", "type", item.Type)
+
+		return adapter.AgentEvent{}, false
+	}
+}
+
+func (s *session) readStderr(r io.ReadCloser) {
+	defer r.Close()
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.writeLogLine(line)
+		slog.Debug("codex stderr", "line", line) //nolint:gosec // G706: log message is static, taint analysis false positive
+	}
+}
+
+func (s *session) writeLogLine(line string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logFile == nil {
 		return
 	}
-	if err != nil {
-		s.completed <- fmt.Errorf("codex exited: %w", err)
-
-		return
-	}
-	s.completed <- nil
+	_, _ = s.logFile.WriteString(line + "\n")
 }
 
 func (s *session) openLogFile() error {
@@ -258,42 +808,6 @@ func (s *session) openLogFile() error {
 	s.logFile = f
 
 	return nil
-}
-
-func (s *session) readStdout() {
-	scanner := bufio.NewScanner(s.stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s.writeLogLine(line)
-		evt := adapter.AgentEvent{Type: "text_delta", Timestamp: time.Now(), Payload: line}
-		select {
-		case s.events <- evt:
-		default:
-			slog.Warn("codex event channel full", "type", evt.Type)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		slog.Warn("reading codex stdout", "err", err)
-	}
-}
-
-func (s *session) readStderr() {
-	scanner := bufio.NewScanner(s.stderr)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s.writeLogLine(line)
-		slog.Debug("codex stderr", "line", line) //nolint:gosec // G706: log message is static, taint analysis false positive
-	}
-}
-
-func (s *session) writeLogLine(line string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.logFile == nil {
-		return
-	}
-	_, _ = s.logFile.WriteString(line + "\n")
 }
 
 func sessionLogPath(opts adapter.SessionOpts) string {

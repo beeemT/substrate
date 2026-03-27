@@ -137,8 +137,10 @@ type SessionOpts struct {
 	UserPrompt           string
 	SessionLogDir        string // Directory for session output logs
 	CommitConfig         CommitConfig
-	AllowPush            bool // Whether agent is allowed to push to remote
+	AllowPush            bool   // Whether agent is allowed to push to remote
 	ResumeSessionFile    string // OMP session JSONL file for native resume
+	CodexThreadID        string // Codex thread ID for native resume via `codex exec resume`
+	ResumeSessionID      string // Claude Agent SDK session UUID for native resume
 }
 
 // CommitConfig contains commit strategy settings.
@@ -158,10 +160,10 @@ type AgentEvent struct {
 
 // HarnessCapabilities describes what an agent harness supports.
 type HarnessCapabilities struct {
-	SupportsStreaming bool     // Supports real-time event streaming
-	SupportsMessaging bool     // Supports SendMessage for iteration
+	SupportsStreaming    bool     // Supports real-time event streaming
+	SupportsMessaging    bool     // Supports SendMessage for iteration
 	SupportsNativeResume bool     // Supports resuming completed sessions natively
-	SupportedTools    []string // List of supported tool names
+	SupportedTools       []string // List of supported tool names
 }
 
 // HarnessActionRequest describes a short-lived control-plane action executed by a harness.
