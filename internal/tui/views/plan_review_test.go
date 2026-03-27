@@ -355,3 +355,57 @@ func TestPlanReviewModel_TableNotDetectedInsideCodeBlock(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanReviewModel_SeparateTablesNotMerged verifies that two GFM tables separated
+// by a blank line are rendered independently rather than merged into one block.
+func TestPlanReviewModel_SeparateTablesNotMerged(t *testing.T) {
+	t.Parallel()
+
+	plan := strings.Join([]string{
+		"| A | B |",
+		"| --- | --- |",
+		"| a1 | b1 |",
+		"",
+		"| X | Y | Z |",
+		"| --- | --- | --- |",
+		"| x1 | y1 | z1 |",
+	}, "\n")
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 30)
+	m.SetTitle("TABLES")
+	m.SetPlanDocument("p1", plan)
+
+	plain := ansi.Strip(m.View())
+
+	// Both tables' content must appear.
+	for _, want := range []string{"a1", "b1", "x1", "y1", "z1"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered = %q, want %q", plain, want)
+		}
+	}
+}
+
+// TestPlanReviewModel_TablePreservesTrailingBlankLine ensures that a blank line
+// after a table is not silently consumed by the table-collection loop.
+func TestPlanReviewModel_TablePreservesTrailingBlankLine(t *testing.T) {
+	t.Parallel()
+
+	plan := strings.Join([]string{
+		"| Col | Val |",
+		"| --- | --- |",
+		"| foo | bar |",
+		"",
+		"Text after table.",
+	}, "\n")
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 30)
+	m.SetTitle("T")
+	m.SetPlanDocument("p1", plan)
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Text after table.") {
+		t.Fatalf("rendered = %q, want 'Text after table.'", plain)
+	}
+}
