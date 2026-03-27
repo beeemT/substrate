@@ -151,6 +151,16 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 	numberWidth := max(2, len(strconv.Itoa(len(rawLines))))
 	separator := " │ "
 	contentWidth := max(1, width-numberWidth-ansi.StringWidth(separator))
+	// formatLine returns a fully formatted output line: right-justified line
+	// number (or blank for continuation lines) + separator + content padded to contentWidth.
+	formatLine := func(lineNum int, showNum bool, content string) string {
+		ln := strings.Repeat(" ", numberWidth)
+		if showNum {
+			ln = fmt.Sprintf("%*d", numberWidth, lineNum)
+		}
+		return st.Muted.Render(ln+separator) + lipgloss.NewStyle().Width(contentWidth).Render(content)
+	}
+
 	rendered := make([]string, 0, len(rawLines))
 	inCodeBlock := false
 	index := 0
@@ -158,23 +168,19 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 		rawLine := rawLines[index]
 		trimmedLine := strings.TrimSpace(rawLine)
 
+		isFence := strings.HasPrefix(trimmedLine, "```")
+
 		// Inside a fenced code block: pass through as-is (no table detection).
-		if inCodeBlock || strings.HasPrefix(trimmedLine, "```") {
+		if inCodeBlock || isFence {
 			segments := wrapPlanReviewCodeLine(rawLine, contentWidth)
 			style := st.SettingsText
-			if strings.HasPrefix(trimmedLine, "```") {
+			if isFence {
 				style = st.Muted
 			}
 			for wrappedIndex, segment := range segments {
-				lineNumber := strings.Repeat(" ", numberWidth)
-				if wrappedIndex == 0 {
-					lineNumber = fmt.Sprintf("%*d", numberWidth, index+1)
-				}
-				renderedSegment := style.Render(segment)
-				renderedSegment = lipgloss.NewStyle().Width(contentWidth).Render(renderedSegment)
-				rendered = append(rendered, st.Muted.Render(lineNumber+separator)+renderedSegment)
+				rendered = append(rendered, formatLine(index+1, wrappedIndex == 0, style.Render(segment)))
 			}
-			if strings.HasPrefix(trimmedLine, "```") {
+			if isFence {
 				inCodeBlock = !inCodeBlock
 			}
 			index++
@@ -202,12 +208,7 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 				tableRendered = tableBlock
 			}
 			for lineIdx, trLine := range strings.Split(tableRendered, "\n") {
-				lineNumber := strings.Repeat(" ", numberWidth)
-				if lineIdx == 0 {
-					lineNumber = fmt.Sprintf("%*d", numberWidth, tableStart+1)
-				}
-				trLine = lipgloss.NewStyle().Width(contentWidth).Render(trLine)
-				rendered = append(rendered, st.Muted.Render(lineNumber+separator)+trLine)
+				rendered = append(rendered, formatLine(tableStart+1, lineIdx == 0, trLine))
 			}
 
 			continue
@@ -227,16 +228,11 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 			segments = wrapPlanReviewPlainTextLine(rawLine, contentWidth)
 		}
 		for wrappedIndex, segment := range segments {
-			lineNumber := strings.Repeat(" ", numberWidth)
-			if wrappedIndex == 0 {
-				lineNumber = fmt.Sprintf("%*d", numberWidth, index+1)
-			}
 			renderedSegment := segment
 			if !renderMarkdown {
 				renderedSegment = style.Render(segment)
 			}
-			renderedSegment = lipgloss.NewStyle().Width(contentWidth).Render(renderedSegment)
-			rendered = append(rendered, st.Muted.Render(lineNumber+separator)+renderedSegment)
+			rendered = append(rendered, formatLine(index+1, wrappedIndex == 0, renderedSegment))
 		}
 		index++
 	}
