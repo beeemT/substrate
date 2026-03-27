@@ -714,7 +714,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Harness · Claude Code",
 			Description: "Claude Code CLI configuration",
 			Fields: []SettingsField{
-				{Section: "adapters.claude_code", Key: "binary_path", Label: "Binary Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BinaryPath},
+				{Section: "adapters.claude_code", Key: "bun_path", Label: "Bun Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BunPath},
+				{Section: "adapters.claude_code", Key: "bridge_path", Label: "Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BridgePath},
 				{Section: "adapters.claude_code", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ClaudeCode.Model},
 				{Section: "adapters.claude_code", Key: "permission_mode", Label: "Permission Mode", Type: SettingsFieldString, Value: cfg.Adapters.ClaudeCode.PermissionMode},
 				{Section: "adapters.claude_code", Key: "max_turns", Label: "Max Turns", Type: SettingsFieldString, Value: strconv.Itoa(cfg.Adapters.ClaudeCode.MaxTurns)},
@@ -946,8 +947,10 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.OhMyPi.BridgePath = value
 	case "adapters.ohmypi.thinking_level":
 		cfg.Adapters.OhMyPi.ThinkingLevel = value
-	case "adapters.claude_code.binary_path":
-		cfg.Adapters.ClaudeCode.BinaryPath = value
+	case "adapters.claude_code.bun_path":
+		cfg.Adapters.ClaudeCode.BunPath = value
+	case "adapters.claude_code.bridge_path":
+		cfg.Adapters.ClaudeCode.BridgePath = value
 	case "adapters.claude_code.model":
 		cfg.Adapters.ClaudeCode.Model = value
 	case "adapters.claude_code.permission_mode":
@@ -1133,8 +1136,10 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Optional override for the oh-my-pi bridge binary or script; leave empty to use the packaged compiled bridge.", "packaged compiled bridge"
 	case "adapters.ohmypi.thinking_level":
 		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", statusEmpty
-	case "adapters.claude_code.binary_path":
-		return "Path to the Claude Code CLI binary.", statusEmpty
+	case "adapters.claude_code.bun_path":
+		return "Path to the bun executable for the claude-agent bridge. Defaults to bun on PATH.", statusEmpty
+	case "adapters.claude_code.bridge_path":
+		return "Path to the claude-agent bridge script or binary. Defaults to the bundled bridge.", statusEmpty
 	case "adapters.claude_code.model":
 		return "Claude model name passed to the CLI for new sessions.", statusEmpty
 	case "adapters.claude_code.permission_mode":

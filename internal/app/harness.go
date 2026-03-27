@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/beeemT/substrate/internal/adapter"
-	claudecode "github.com/beeemT/substrate/internal/adapter/claudecode"
+	claudeagent "github.com/beeemT/substrate/internal/adapter/claudeagent"
 	codexadapter "github.com/beeemT/substrate/internal/adapter/codex"
 	omp "github.com/beeemT/substrate/internal/adapter/ohmypi"
 	"github.com/beeemT/substrate/internal/config"
@@ -118,7 +118,7 @@ func settingsHarnessFailureReason(harness config.HarnessName, message string) st
 	case config.HarnessOhMyPi:
 		return settingsOhMyPiFailureReason(message)
 	case config.HarnessClaudeCode:
-		return settingsBinaryFailureReason("Claude Code", "claude", message)
+		return settingsClaudeAgentFailureReason(message)
 	case config.HarnessCodex:
 		return settingsBinaryFailureReason("Codex", "codex", message)
 	default:
@@ -139,6 +139,22 @@ func settingsOhMyPiFailureReason(message string) string {
 		return "Oh My Pi bridge path unreadable"
 	default:
 		return "Oh My Pi unavailable"
+	}
+}
+
+func settingsClaudeAgentFailureReason(message string) string {
+	detail := strings.TrimSpace(strings.TrimPrefix(message, "claude-agent unavailable:"))
+	switch {
+	case strings.HasPrefix(detail, "resolve claude-agent bridge: no bridge binary or script found"):
+		return "Claude agent bridge not found"
+	case strings.HasPrefix(detail, "resolve bun "):
+		return "Bun not found for Claude agent"
+	case strings.Contains(detail, "claude-agent bridge dependencies missing under "):
+		return "Claude agent bridge dependencies missing"
+	case strings.Contains(detail, "check bridge package metadata"):
+		return "Claude agent bridge path unreadable"
+	default:
+		return "Claude agent unavailable"
 	}
 }
 
@@ -244,14 +260,10 @@ func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRo
 		}
 		return omp.NewHarness(cfg.Adapters.OhMyPi, workspaceRoot), nil
 	case config.HarnessClaudeCode:
-		binary := cfg.Adapters.ClaudeCode.BinaryPath
-		if binary == "" {
-			binary = "claude"
+		if err := claudeagent.ValidateReadiness(cfg.Adapters.ClaudeCode); err != nil {
+			return nil, fmt.Errorf("claude-agent unavailable: %w", err)
 		}
-		if _, err := exec.LookPath(binary); err != nil {
-			return nil, fmt.Errorf("claude-code binary %q not found: %w", binary, err)
-		}
-		return claudecode.NewHarness(cfg.Adapters.ClaudeCode), nil
+		return claudeagent.NewHarness(cfg.Adapters.ClaudeCode, workspaceRoot), nil
 	case config.HarnessCodex:
 		binary := cfg.Adapters.Codex.BinaryPath
 		if binary == "" {

@@ -159,7 +159,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	}
 
 	brokenCfg := newSettingsApplyHarnessConfig()
-	brokenCfg.Adapters.ClaudeCode.BinaryPath = "/definitely/missing/claude"
+	brokenCfg.Adapters.ClaudeCode.BridgePath = "/definitely/missing/claude"
 	brokenRaw := mustSerializeSettingsConfig(t, svc, brokenCfg)
 
 	result, err := svc.Apply(context.Background(), brokenRaw, Services{})
@@ -195,7 +195,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if routing.Status != "warning" {
 		t.Fatalf("routing status = %q, want warning", routing.Status)
 	}
-	if routing.Error != "Planning, Implementation, Review, Foreman: Claude Code binary not found." {
+	if routing.Error != "Planning, Implementation, Review, Foreman: Claude agent bridge not found." {
 		t.Fatalf("routing error = %q, want grouped Claude Code detail", routing.Error)
 	}
 	if strings.Contains(routing.Error, "Binary Path") {
@@ -204,7 +204,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if claude == nil {
 		t.Fatal("expected Claude Code harness section in settings snapshot")
 	}
-	if claude.Error != "Planning, Implementation, Review, Foreman: Claude Code binary not found." {
+	if claude.Error != "Planning, Implementation, Review, Foreman: Claude agent bridge not found." {
 		t.Fatalf("claude section error = %q, want grouped Claude Code detail", claude.Error)
 	}
 
@@ -468,7 +468,7 @@ func newSettingsApplyHarnessConfig() *config.Config {
 	cfg.Harness.Phase.Implementation = config.HarnessClaudeCode
 	cfg.Harness.Phase.Review = config.HarnessClaudeCode
 	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
-	cfg.Adapters.ClaudeCode.BinaryPath = "/bin/sh"
+	cfg.Adapters.ClaudeCode.BridgePath = "/bin/sh"
 
 	return cfg
 }

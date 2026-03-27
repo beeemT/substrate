@@ -172,12 +172,28 @@ type OhMyPiConfig struct {
 	ThinkingLevel string `yaml:"thinking_level"`
 }
 
+// ClaudeCodeConfig configures the claude-agent bridge harness.
 type ClaudeCodeConfig struct {
-	BinaryPath     string  `yaml:"binary_path"`
-	Model          string  `yaml:"model"`
-	PermissionMode string  `yaml:"permission_mode"`
-	MaxTurns       int     `yaml:"max_turns"`
-	MaxBudgetUSD   float64 `yaml:"max_budget_usd"`
+	// BunPath is the path to the bun executable.
+	// Defaults to "bun" resolved via PATH.
+	BunPath string `yaml:"bun_path"`
+
+	// BridgePath overrides the default bridge script location.
+	// Defaults to bridge/claude-agent-bridge.ts next to the substrate binary.
+	BridgePath string `yaml:"bridge_path"`
+
+	// Model is the Claude model name. Empty means use Claude's own default.
+	Model string `yaml:"model"`
+
+	// PermissionMode controls tool permissions. Defaults to "acceptEdits".
+	// Valid: "default", "acceptEdits", "bypassPermissions", "dontAsk".
+	PermissionMode string `yaml:"permission_mode"`
+
+	// MaxTurns caps the agentic turn count (0 = SDK default).
+	MaxTurns int `yaml:"max_turns"`
+
+	// MaxBudgetUSD caps spending per session (0 = unlimited).
+	MaxBudgetUSD float64 `yaml:"max_budget_usd"`
 }
 
 type CodexConfig struct {

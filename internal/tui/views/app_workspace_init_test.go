@@ -101,7 +101,7 @@ func newWorkspaceInitHarnessConfig() *config.Config {
 	cfg.Harness.Phase.Implementation = config.HarnessClaudeCode
 	cfg.Harness.Phase.Review = config.HarnessClaudeCode
 	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
-	cfg.Adapters.ClaudeCode.BinaryPath = "/bin/sh"
+	cfg.Adapters.ClaudeCode.BridgePath = "/bin/sh"
 
 	return cfg
 }
