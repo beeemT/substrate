@@ -188,7 +188,7 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 			tableLines := make([]string, 0, 4)
 			for index < len(rawLines) {
 				tl := strings.TrimSpace(rawLines[index])
-				if !planReviewIsTableLine(tl) && tl != "" {
+				if tl == "" || (!planReviewIsTableLine(tl) && tl != "") {
 					break
 				}
 				if tl != "" {
@@ -267,27 +267,6 @@ func planReviewIsTableLine(trimmedLine string) bool {
 		trimmedLine[0] == '|' &&
 		trimmedLine[len(trimmedLine)-1] == '|' &&
 		strings.Contains(trimmedLine[1:], "|")
-}
-
-// planReviewIsTableSeparator returns true for GFM table separator rows
-// (e.g. | --- | :---: | ---: |).
-func planReviewIsTableSeparator(trimmedLine string) bool {
-	if !planReviewIsTableLine(trimmedLine) {
-		return false
-	}
-	cells := strings.Split(trimmedLine, "|")
-	for _, cell := range cells[1 : len(cells)-1] {
-		trimmed := strings.TrimSpace(cell)
-		if trimmed == "" {
-			continue
-		}
-		for _, c := range trimmed {
-			if c != '-' && c != ':' && c != ' ' {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func renderPlanReviewMarkdownLine(line string, width int) []string {
