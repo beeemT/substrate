@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -58,6 +59,11 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 	blinkActive     bool                 // tick chain is running
 	blinkNeedsStart bool                 // start tick chain on next Update
 	blinkSide       components.BunnySide // left or right corner; chosen at construction
+
+	// Bunny hop animation (empty state only).
+	hopActive bool // hop sequence is in progress
+	hopStep   int  // current mid-air frame index (1..hopSteps)
+	hopSteps  int  // total mid-air frames for this sequence (2 or 3)
 }
 
 func NewContentModel(st styles.Styles) ContentModel {
@@ -100,6 +106,8 @@ func (m *ContentModel) SetMode(mode ContentMode) {
 	if mode != ContentModeEmpty {
 		m.blinkActive = false
 		m.blinkNeedsStart = false
+		m.hopActive = false
+		m.hopStep = 0
 	}
 
 	// When leaving planning/session-interaction, kill the spinner tick chain
@@ -149,6 +157,7 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 		m.blinkNeedsStart = false
 		m.blinkActive = true
 		cmds = append(cmds, components.BunnyOpenCmd())
+		cmds = append(cmds, components.BunnyHopIdleCmd())
 	}
 
 	if msg, ok := msg.(components.BunnyBlinkMsg); ok {
@@ -158,6 +167,33 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 				cmds = append(cmds, components.BunnyCloseCmd())
 			} else {
 				cmds = append(cmds, components.BunnyOpenCmd())
+			}
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	if msg, ok := msg.(components.BunnyHopTriggerMsg); ok {
+		if m.mode == ContentModeEmpty && m.blinkActive && !m.hopActive {
+			m.hopActive = true
+			m.hopStep = 1
+			m.hopSteps = msg.Hops
+			cmds = append(cmds, components.BunnyHopStepCmd())
+		}
+		// Re-arm idle timer for the next hop regardless of whether this one started.
+		cmds = append(cmds, components.BunnyHopIdleCmd())
+		return m, tea.Batch(cmds...)
+	}
+
+	if _, ok := msg.(components.BunnyHopStepMsg); ok {
+		if m.mode == ContentModeEmpty && m.hopActive {
+			if m.hopStep >= m.hopSteps {
+				// Landing: flip to opposite corner, end hop.
+				m.blinkSide = 1 - m.blinkSide
+				m.hopActive = false
+				m.hopStep = 0
+			} else {
+				m.hopStep++
+				cmds = append(cmds, components.BunnyHopStepCmd())
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -233,15 +269,40 @@ func (m ContentModel) emptyStateView() string {
 	const minHeightForBunny = 7
 	var placed string
 	if m.height >= minHeightForBunny {
-		bunny := components.RenderBunny(m.blinkPhase, m.blinkSide)
-		var align lipgloss.Position
-		if m.blinkSide == components.BunnySideLeft {
-			align = lipgloss.Left
+		if m.hopActive {
+			// Mid-hop: render the airborne frame at a linearly interpolated
+			// horizontal offset, plus one blank gap line above the box.
+			containerWidth := lipgloss.Width(container)
+			const bunnyWidth = 8
+			startOffset := 0
+			endOffset := containerWidth - bunnyWidth
+			if m.blinkSide == components.BunnySideRight {
+				startOffset, endOffset = endOffset, startOffset
+			}
+			// Integer linear interpolation: hopStep ranges 1..hopSteps,
+			// denominator hopSteps+1 keeps the bunny out of the far corner
+			// so the snap to normal on landing is always a small jump.
+			delta := endOffset - startOffset
+			currentOffset := startOffset + delta*m.hopStep/(m.hopSteps+1)
+			hopLines := strings.Split(components.RenderBunnyHop(m.blinkPhase), "\n")
+			for i, line := range hopLines {
+				rPad := max(0, containerWidth-currentOffset-lipgloss.Width(line))
+				hopLines[i] = strings.Repeat(" ", currentOffset) + line + strings.Repeat(" ", rPad)
+			}
+			gapLine := strings.Repeat(" ", containerWidth)
+			combined := strings.Join(hopLines, "\n") + "\n" + gapLine + "\n" + container
+			placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
 		} else {
-			align = lipgloss.Right
+			bunny := components.RenderBunny(m.blinkPhase, m.blinkSide)
+			var align lipgloss.Position
+			if m.blinkSide == components.BunnySideLeft {
+				align = lipgloss.Left
+			} else {
+				align = lipgloss.Right
+			}
+			combined := lipgloss.JoinVertical(align, bunny, container)
+			placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
 		}
-		combined := lipgloss.JoinVertical(align, bunny, container)
-		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, combined)
 	} else {
 		placed = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, container)
 	}

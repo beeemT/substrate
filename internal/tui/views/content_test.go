@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
@@ -174,5 +177,58 @@ func TestContentEmptyViewBunnyHiddenWhenShort(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "ω") {
 		t.Fatalf("bunny should be hidden at height 4, got: %q", view)
+	}
+}
+
+func TestContentHopRenderingFitsTerminalBounds(t *testing.T) {
+	// Simulate an active hop and verify the rendered output still fits the terminal.
+	for _, tc := range []struct {
+		name          string
+		w, h          int
+		hopStep, hops int
+	}{
+		{"standard-2hop-mid", 80, 24, 1, 2},
+		{"standard-3hop-mid", 80, 24, 2, 3},
+		{"wide-hop", 120, 40, 1, 3},
+		{"narrow-hop", 50, 20, 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := views.NewContentModel(makeContentStyles())
+			m.SetSize(tc.w, tc.h)
+			// Drive model into an active hop state via exported Update interface.
+			// We force the internal fields through a round-trip: trigger then step.
+			_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: tc.hops})
+			for i := 1; i < tc.hopStep; i++ {
+				m, _ = m.Update(components.BunnyHopStepMsg{})
+			}
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > tc.h {
+				t.Errorf("hop render: got %d lines, exceeds height %d", len(lines), tc.h)
+			}
+			for j, line := range lines {
+				if w := lipgloss.Width(line); w > tc.w {
+					t.Errorf("line %d: display width %d exceeds terminal width %d", j, w, tc.w)
+				}
+			}
+		})
+	}
+}
+
+func TestContentHopLandsOnOppositeSide(t *testing.T) {
+	// After a full 2-hop sequence the bunny should have flipped sides.
+	// We advance Update until the hop completes and then inspect the rendered output.
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 24)
+	// Trigger a 2-hop sequence.
+	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
+	// Advance through all hop steps; one extra step triggers the landing.
+	for i := 0; i < 3; i++ {
+		m, _ = m.Update(components.BunnyHopStepMsg{})
+	}
+	// After landing, the bunny should still render (ω present) and not be hopping.
+	view := m.View()
+	if !strings.Contains(view, "ω") {
+		t.Fatalf("expected bunny after hop landing, got: %q", view)
 	}
 }

@@ -95,3 +95,54 @@ func TestRenderBunnySidesAreMirrored(t *testing.T) {
 		t.Errorf("right feet should end with 'o', got %q", rightFeet)
 	}
 }
+
+// --- Hop frame tests ---
+
+func TestRenderBunnyHopAlwaysThreeLines(t *testing.T) {
+	for phase := 0; phase <= 1; phase++ {
+		s := components.RenderBunnyHop(phase)
+		lines := strings.Split(s, "\n")
+		if len(lines) != 3 {
+			t.Errorf("phase %d: expected 3 lines, got %d: %q", phase, len(lines), s)
+		}
+	}
+}
+
+func TestRenderBunnyHopPhaseWraps(t *testing.T) {
+	if components.RenderBunnyHop(2) != components.RenderBunnyHop(0) {
+		t.Fatal("hop phase 2 should produce same output as phase 0")
+	}
+}
+
+func TestRenderBunnyHopHasEars(t *testing.T) {
+	s := components.RenderBunnyHop(0)
+	if !strings.Contains(s, `(\(\`) {
+		t.Fatalf("hop frame missing ears: %q", s)
+	}
+}
+
+func TestRenderBunnyHopFeetAreAirborne(t *testing.T) {
+	// Hop feet must not start with 'o' (left-side ground contact indicator) or
+	// end with 'o' (right-side ground contact indicator); the bunny is in the air.
+	for phase := 0; phase <= 1; phase++ {
+		feet := strings.Split(components.RenderBunnyHop(phase), "\n")[2]
+		if len(feet) == 0 {
+			t.Fatalf("phase %d: empty feet line", phase)
+		}
+		if feet[0] == 'o' {
+			t.Errorf("phase %d: hop feet must not start with 'o' (would indicate ground contact): %q", phase, feet)
+		}
+		if feet[len(feet)-1] == 'o' {
+			t.Errorf("phase %d: hop feet must not end with 'o' (would indicate ground contact): %q", phase, feet)
+		}
+	}
+}
+
+func TestRenderBunnyHopEyesMatchPhase(t *testing.T) {
+	if !strings.Contains(components.RenderBunnyHop(0), "^ω^") {
+		t.Fatal("hop phase 0: expected open eyes ^ω^")
+	}
+	if !strings.Contains(components.RenderBunnyHop(1), "-ω-") {
+		t.Fatal("hop phase 1: expected closed eyes -ω-")
+	}
+}
