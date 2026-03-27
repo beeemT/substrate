@@ -258,6 +258,7 @@ internal/tui/views/
   question_view.go
   completed_view.go
   interrupted_view.go
+  source_details_view.go
   duplicate_session_dialog.go
   overlay_session_search.go
   overlay_source_items.go

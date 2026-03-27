@@ -33,6 +33,7 @@ type EventRepository interface {
 	Create(ctx context.Context, e domain.SystemEvent) error
 	ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
+}
 ```
 
 Most producers access persistence through `service.EventService`, which wraps the repository in a transaction:

@@ -235,15 +235,15 @@ planningSvc, _ := orchestrator.NewPlanningService(
 	planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, registry, cfg,
 )
 
+reviewPipeline := orchestrator.NewReviewPipeline(
+	cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
+	bus, registry,
+)
+
 implSvc := orchestrator.NewImplementationService(
 	cfg, harnesses.Implementation, gitClient, bus,
 	planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
 	reviewPipeline,
-)
-
-reviewPipeline := orchestrator.NewReviewPipeline(
-	cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
-	bus, registry,
 )
 ```
 
