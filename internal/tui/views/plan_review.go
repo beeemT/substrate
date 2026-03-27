@@ -153,17 +153,71 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 	contentWidth := max(1, width-numberWidth-ansi.StringWidth(separator))
 	rendered := make([]string, 0, len(rawLines))
 	inCodeBlock := false
-	for index, rawLine := range rawLines {
+	index := 0
+	for index < len(rawLines) {
+		rawLine := rawLines[index]
 		trimmedLine := strings.TrimSpace(rawLine)
+
+		// Inside a fenced code block: pass through as-is (no table detection).
+		if inCodeBlock || strings.HasPrefix(trimmedLine, "```") {
+			segments := wrapPlanReviewCodeLine(rawLine, contentWidth)
+			style := st.SettingsText
+			if strings.HasPrefix(trimmedLine, "```") {
+				style = st.Muted
+			}
+			for wrappedIndex, segment := range segments {
+				lineNumber := strings.Repeat(" ", numberWidth)
+				if wrappedIndex == 0 {
+					lineNumber = fmt.Sprintf("%*d", numberWidth, index+1)
+				}
+				renderedSegment := style.Render(segment)
+				renderedSegment = lipgloss.NewStyle().Width(contentWidth).Render(renderedSegment)
+				rendered = append(rendered, st.Muted.Render(lineNumber+separator)+renderedSegment)
+			}
+			if strings.HasPrefix(trimmedLine, "```") {
+				inCodeBlock = !inCodeBlock
+			}
+			index++
+
+			continue
+		}
+
+		// Table block: collect consecutive table lines and render as a unit.
+		if planReviewIsTableLine(trimmedLine) {
+			tableStart := index
+			tableLines := make([]string, 0, 4)
+			for index < len(rawLines) {
+				tl := strings.TrimSpace(rawLines[index])
+				if !planReviewIsTableLine(tl) && tl != "" {
+					break
+				}
+				if tl != "" {
+					tableLines = append(tableLines, rawLines[index])
+				}
+				index++
+			}
+			tableBlock := strings.Join(tableLines, "\n")
+			tableRendered := strings.Trim(renderMarkdownDocument(tableBlock, contentWidth), "\n")
+			if tableRendered == "" {
+				tableRendered = tableBlock
+			}
+			for lineIdx, trLine := range strings.Split(tableRendered, "\n") {
+				lineNumber := strings.Repeat(" ", numberWidth)
+				if lineIdx == 0 {
+					lineNumber = fmt.Sprintf("%*d", numberWidth, tableStart+1)
+				}
+				trLine = lipgloss.NewStyle().Width(contentWidth).Render(trLine)
+				rendered = append(rendered, st.Muted.Render(lineNumber+separator)+trLine)
+			}
+
+			continue
+		}
+
+		// Single-line markdown rendering (headings, lists, bold, links, etc.).
 		var segments []string
 		renderMarkdown := false
 		style := st.SettingsText
 		switch {
-		case inCodeBlock || strings.HasPrefix(trimmedLine, "```"):
-			segments = wrapPlanReviewCodeLine(rawLine, contentWidth)
-			if strings.HasPrefix(trimmedLine, "```") {
-				style = st.Muted
-			}
 		case planReviewLineUsesMarkdown(trimmedLine):
 			segments = renderPlanReviewMarkdownLine(rawLine, contentWidth)
 			renderMarkdown = true
@@ -184,9 +238,7 @@ func renderPlanReviewContent(st styles.Styles, content string, width int) string
 			renderedSegment = lipgloss.NewStyle().Width(contentWidth).Render(renderedSegment)
 			rendered = append(rendered, st.Muted.Render(lineNumber+separator)+renderedSegment)
 		}
-		if strings.HasPrefix(trimmedLine, "```") {
-			inCodeBlock = !inCodeBlock
-		}
+		index++
 	}
 
 	return strings.Join(rendered, "\n")
@@ -206,6 +258,36 @@ func planReviewLineUsesMarkdown(trimmedLine string) bool {
 	}
 
 	return false
+}
+
+// planReviewIsTableLine returns true for well-formed GFM table rows.
+// A table row starts and ends with | and contains at least one more |.
+func planReviewIsTableLine(trimmedLine string) bool {
+	return len(trimmedLine) >= 3 &&
+		trimmedLine[0] == '|' &&
+		trimmedLine[len(trimmedLine)-1] == '|' &&
+		strings.Contains(trimmedLine[1:], "|")
+}
+
+// planReviewIsTableSeparator returns true for GFM table separator rows
+// (e.g. | --- | :---: | ---: |).
+func planReviewIsTableSeparator(trimmedLine string) bool {
+	if !planReviewIsTableLine(trimmedLine) {
+		return false
+	}
+	cells := strings.Split(trimmedLine, "|")
+	for _, cell := range cells[1 : len(cells)-1] {
+		trimmed := strings.TrimSpace(cell)
+		if trimmed == "" {
+			continue
+		}
+		for _, c := range trimmed {
+			if c != '-' && c != ':' && c != ' ' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func renderPlanReviewMarkdownLine(line string, width int) []string {

@@ -256,3 +256,102 @@ func TestPlanReviewFeedbackInputRejectMode(t *testing.T) {
 		t.Errorf("reject capped: plan lines = %d, want %d", got, want)
 	}
 }
+
+// TestPlanReviewModel_RendersMarkdownTable verifies that GFM tables in plan content
+// are rendered via glamour (with box-drawing characters) rather than shown as raw
+// pipe-delimited text.
+func TestPlanReviewModel_RendersMarkdownTable(t *testing.T) {
+	t.Parallel()
+
+	plan := strings.Join([]string{
+		"## Overview",
+		"",
+		"| Component | Status | Notes |",
+		"| --- | --- | --- |",
+		"| Auth service | Done | Migrated to OAuth2 |",
+		"| Payment API | In progress | Blocked on PCI review |",
+		"",
+		"Next steps below.",
+	}, "\n")
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 30)
+	m.SetTitle("PLAN")
+	m.SetPlanDocument("p1", plan)
+	m.SetWorkItemID("wi1")
+
+	v := m.View()
+	if v == "" {
+		t.Fatal("expected non-empty View()")
+	}
+	plain := ansi.Strip(v)
+
+	// Column headers and cell data must appear in the rendered output.
+	for _, want := range []string{
+		"Component", "Status", "Notes",
+		"Auth service", "Done", "Migrated to OAuth2",
+		"Payment API", "In progress", "Blocked on PCI review",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered = %q, want %q", plain, want)
+		}
+	}
+
+	// The non-table content must also still be present.
+	if !strings.Contains(plain, "Next steps below.") {
+		t.Fatalf("rendered = %q, want 'Next steps below.'", plain)
+	}
+}
+
+// TestPlanReviewModel_TableRespectsWidth ensures that table rendering at a narrow
+// terminal width does not produce lines wider than the terminal.
+func TestPlanReviewModel_TableRespectsWidth(t *testing.T) {
+	t.Parallel()
+
+	plan := strings.Join([]string{
+		"| Column A | Column B with a longer header | Column C |",
+		"| --- | --- | --- |",
+		"| aaa | bbbbbbbbbbbbbbbbbbbbbbbb | ccc |",
+	}, "\n")
+
+	const width = 50
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(width, 20)
+	m.SetTitle("W")
+	m.SetPlanDocument("p1", plan)
+
+	rendered := m.View()
+	for i, line := range strings.Split(rendered, "\n") {
+		if got := ansi.StringWidth(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d\nline: %q", i+1, got, width, line)
+		}
+	}
+}
+
+// TestPlanReviewModel_TableNotDetectedInsideCodeBlock ensures that pipe characters
+// inside fenced code blocks are not treated as table rows.
+func TestPlanReviewModel_TableNotDetectedInsideCodeBlock(t *testing.T) {
+	t.Parallel()
+
+	plan := strings.Join([]string{
+		"```bash",
+		"echo hello | grep foo",
+		"cat file.txt | sort | uniq",
+		"```",
+		"",
+		"After the block.",
+	}, "\n")
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 20)
+	m.SetTitle("CODE")
+	m.SetPlanDocument("p1", plan)
+
+	plain := ansi.Strip(m.View())
+	// The pipe commands must appear as-is in the rendered output.
+	for _, want := range []string{"echo hello | grep foo", "cat file.txt | sort | uniq", "After the block."} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered = %q, want %q", plain, want)
+		}
+	}
+}
