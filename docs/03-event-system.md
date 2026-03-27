@@ -1,5 +1,5 @@
 # 03 - Event System
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 Substrate's event model has two parts:
 
@@ -33,7 +33,17 @@ type EventRepository interface {
 	Create(ctx context.Context, e domain.SystemEvent) error
 	ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
-}
+```
+
+Most producers access persistence through `service.EventService`, which wraps the repository in a transaction:
+
+```go
+type EventService struct { transacter atomic.Transacter[repository.Resources] }
+
+func (s *EventService) Create(ctx context.Context, e domain.SystemEvent) error
+func (s *EventService) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
+func (s *EventService) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
+```
 ```
 
 SQLite storage is a thin mapping layer:
@@ -90,6 +100,12 @@ const (
 	EventReviewCompleted         EventType = "review.completed"
 	EventCritiquesFound          EventType = "review.critiques_found"
 	EventReimplementationStarted EventType = "reimplementation.started"
+
+	// Review artifact events
+	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
+
+	// Adapter error events
+	EventAdapterError EventType = "adapter.error"
 )
 ```
 
@@ -101,14 +117,14 @@ Important nuance: the bus and repository are not limited to those constants. `Im
 
 The codebase currently persists events from several places. Not every declared constant is actively emitted.
 
-### Direct repository writes
+### Direct service writes (not through the bus)
 
-These call `eventRepo.Create(...)` directly and do **not** go through `event.Bus`:
+These call `EventService.Create(...)` which persists directly via the repository transaction layer. They do **not** go through `event.Bus` and therefore skip pre/post-hooks and subscriber dispatch:
 
 | Emitter | Event types |
 |---|---|
 | `PlanningService` | `work_item.planning`, `plan.generated`, `plan.failed` |
-| `ImplementationService` | `work_item.implementation_started`, `agent_session.started`, `agent_session.completed`, `agent_session.failed` |
+| `adapter.PersistReviewArtifact` (GitHub/GitLab adapters) | `review.artifact_recorded` |
 
 Representative payload shapes:
 
@@ -120,22 +136,20 @@ Representative payload shapes:
 {"plan_id":"...","work_item_id":"...","version":1}
 ```
 
-```json
-{"session_id":"...","sub_plan_id":"...","repository":"repo-a","worktree_path":"/..."}
-```
-
 ### Bus-published events
 
 These go through `event.Bus.Publish(...)`, so they use the bus's persistence and hook semantics:
 
 | Emitter | Event types |
 |---|---|
+| `ImplementationService` (via `publishEvent`) | `work_item.implementation_started`, `agent_session.started`, `agent_session.completed`, `agent_session.failed` |
 | `ImplementationService.ensureWorktree` | `worktree.creating`, `worktree.created`, `worktree.reused` |
 | `ImplementationService.forwardEvents` | raw harness event names from `adapter.AgentEvent.Type` |
 | `ReviewPipeline` | `review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started` |
 | `Resumption` | `agent_session.resumed` |
 | `InstanceManager` | `agent_session.interrupted` |
 | TUI command helpers (`internal/tui/views/cmds.go`) | `plan.approved`, `work_item.completed` |
+| TUI settings service (adapter dispatch loops) | `adapter.error` |
 
 ### Declared but not currently emitted in the assigned code paths
 
@@ -187,6 +201,7 @@ func (b *Bus) RegisterPreHookType(eventType string)
 func (b *Bus) IsPreHookEvent(eventType string) bool
 func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error
 func (b *Bus) Close() error
+func (b *Bus) SubscriberCount() int
 ```
 
 ### Subscription semantics
@@ -308,14 +323,12 @@ In practice, current adapters mostly care about:
 Production wiring subscribes lifecycle adapters only to:
 
 - `worktree.created`
-- `worktree.reused`
 - `work_item.completed`
 
 ```go
 sub, _ := bus.Subscribe(
-	"repo-lifecycle-adapter:"+lifecycleAdapter.Name(),
+	"repo-lifecycle-adapter:" + lifecycleAdapter.Name(),
 	string(domain.EventWorktreeCreated),
-	string(domain.EventWorktreeReused),
 	string(domain.EventWorkItemCompleted),
 )
 ```
@@ -395,7 +408,7 @@ Published by `ensureWorktree` when the target branch already exists and no new w
 }
 ```
 
-This event uses the same `WorktreeCreatedPayload` struct as `worktree.created`. The updated `SubPlan` content reflects any changes from differential re-planning. Repo lifecycle adapters use this event to update existing MR/PR descriptions with the revised sub-plan.
+This event uses the same `WorktreeCreatedPayload` struct as `worktree.created`. The updated `SubPlan` content reflects any changes from differential re-planning. It is published through the bus but lifecycle adapters do not currently subscribe to this topic.
 
 ### `plan.approved`
 
@@ -437,6 +450,39 @@ Published by `Resumption`:
 }
 ```
 
+### `review.artifact_recorded`
+
+Published by `adapter.PersistReviewArtifact` (called from GitHub and GitLab adapters) when a PR/MR is created or updated. Persisted via `EventService.Create`, not through the bus:
+
+```json
+{
+  "work_item_id": "wi-1",
+  "artifact": {
+    "provider": "github",
+    "kind": "PR",
+    "repo_name": "acme/rocket",
+    "ref": "#7",
+    "url": "https://github.com/acme/rocket/pull/7",
+    "state": "draft",
+    "branch": "sub-branch",
+    "worktree_path": "/path/to/worktree",
+    "draft": true,
+    "updated_at": "2026-01-15T10:00:00Z"
+  }
+}
+```
+
+The payload shape is `domain.ReviewArtifactEventPayload` containing a `WorkItemID` and a `ReviewArtifact` struct.
+
+### `adapter.error`
+
+Published by the TUI settings service adapter dispatch loops when an adapter handler fails after exhausting 3 retries. Published through the bus:
+
+```json
+{"adapter":"github-tracker","event_type":"work_item.completed","error":"POST https://api.github.com/...: 502 Bad Gateway"}
+```
+
+The payload is a flat JSON object with `adapter` (adapter name), `event_type` (the event that failed), and `error` (the last error message).
 ---
 
 ## 8. Event Flow Snapshots
@@ -491,6 +537,6 @@ The current event system is:
 - synchronous pre-hooks for gating
 - asynchronous post-hooks for side effects
 - best-effort fan-out with explicit `ErrRetryLater` / drop-handler behavior
-- partly centralized through `event.Bus`, partly still using direct `EventRepository.Create` writes in planning and implementation code
+- partly centralized through `event.Bus`, with planning and adapter review-artifact code using `EventService.Create` for direct persistence
 
 That last point is intentional to document: “the event system” in HEAD is not a pure all-bus architecture. It is a mixed model, and the docs should describe it that way.

@@ -1,5 +1,5 @@
 # 07 - Implementation Plan
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 Phased build-out of Substrate. This file remains a roadmap, but implemented phases are rewritten to match repository HEAD instead of earlier pre-rename drafts.
 
@@ -12,8 +12,8 @@ internal/
     repository/
         interfaces.go      # repository interfaces
         sqlite/            # SQLite implementations
-    service/               # state machines and domain rules
-    orchestrator/          # planning, implementation, review, foreman, resume, instance management
+    service/               # state machines, domain rules, transacter-wrapped repos
+    orchestrator/          # planning, implementation, review, foreman, resume, session registry
     adapter/
         linear/
         manual/
@@ -29,8 +29,15 @@ internal/
     gitwork/               # git-work integration and workspace helpers
     config/                # YAML config + secret hydration
     tui/                   # Bubble Tea UI
+        views/             # 60+ view and overlay files
+        components/        # bunny, input, confirm, overlay frame, toast, etc.
 bridge/omp-bridge.ts
-migrations/001_initial.sql
+migrations/
+    001_initial.sql
+    002_agent_sessions_canonical.sql
+    003_omp_session_meta.sql
+    004_sub_plan_planning_round.sql
+    005_review_artifacts.sql
 ~/.substrate/state.db
 ```
 
@@ -80,6 +87,10 @@ Current schema details worth preserving:
 - `critiques.suggestion` exists
 - `agent_sessions.owner_instance_id` points at `substrate_instances`
 - `system_events` persists raw `domain.SystemEvent` rows
+- `github_pull_requests` and `gitlab_merge_requests` store provider-native PR/MR records (migration 005)
+- `session_review_artifacts` links work items to provider artifacts with dedup on `(workspace_id, work_item_id, provider, provider_artifact_id)`
+- `sub_plans.planning_round` tracks per-sub-plan retry count (migration 004)
+- `agent_sessions.omp_session_file` and `omp_session_id` track native harness session state (migration 003)
 
 SQLite implementations live in `internal/repository/sqlite/` and accept `generic.SQLXRemote`. `resources.go` still groups transaction-bound repos into a `Resources` bundle for tests / transactional construction.
 
@@ -96,14 +107,17 @@ Current services and names:
 - `QuestionService`
 - `WorkspaceService`
 - `InstanceService`
-
+- `EventService`
+- `GithubPRService`
+- `GitlabMRService`
+- `SessionReviewArtifactService`
 Important current behavior:
 
 - `SessionService` enforces root-session uniqueness and lifecycle transitions
 - `TaskService` owns task lifecycle plus `SearchHistory` / interrupted-owner queries
 - `QuestionService` supports `EscalateWithProposal` and `UpdateProposal`
 - `PlanService` owns sub-plan transitions and `AppendFAQ` through the repo boundary
-- typed service errors (`ErrInvalidTransition`, `ErrNotFound`, `ErrInvalidInput`, `ErrConstraintViolation`) are in place
+- all services use the `atomic.Transacter[repository.Resources]` pattern: every call runs inside `Transact(ctx, func(ctx, res) error { ... })` closures, giving services consistent transaction boundaries and read-after-write consistency
 
 This layer is already using the renamed `Session` / `Task` model; older `WorkItemService` / `AgentSessionService` wording is obsolete.
 
@@ -118,12 +132,11 @@ Current reality:
 - `worktree.creating` is the default pre-hook event type
 - pre-hooks and post-hooks are supported, with default 30s hook timeouts
 - dispatch is non-blocking; full subscriber buffers yield `ErrRetryLater` unless a drop handler is installed
+- adapter `OnEvent` retries up to 3 times before publishing `adapter.error` system events and surfacing best-effort TUI warnings
 - work item adapters subscribe to all events and self-filter in `OnEvent`
 - repo lifecycle adapters subscribe only to `worktree.created` and `work_item.completed`
 
 Also important: not all events currently flow through the bus. Planning and part of implementation still persist some lifecycle events directly through `EventRepository.Create`.
-
-Current adapter contracts are under `internal/adapter/interfaces.go` and use the renamed domain types (`domain.Session`, `domain.Task`, etc.).
 
 ## Phase 4: git-work Integration (Week 3-4)
 
@@ -135,10 +148,10 @@ Current behavior:
 - workspace discovery walks upward from cwd
 - repo discovery looks for direct child directories containing `.bare/`
 - planning preflight warns on plain git clones and failed pulls
+- discoverer pull cooldown (5 minutes) avoids redundant pulls within the same window
+- pull failures are recorded but do not stop discovery
 - planning creates `<workspace>/.substrate/sessions/<planning-session-id>/plan-draft.md`
 - implementation creates feature worktrees through `git-work checkout`
-
-The workspace story is now tied to `internal/gitwork/` plus TUI workspace-init flows, not just the CLI bootstrap described in early drafts.
 
 ## Phase 6: Multi-Harness Agent Integration (Week 4-5)
 
@@ -259,7 +272,7 @@ What exists now:
 - high-confidence answers are persisted immediately and appended to `Plan.FAQ`
 - uncertain answers are escalated with `Question.ProposedAnswer`
 - the TUI can keep iterating with the foreman before calling `ResolveEscalated`
-- `question_timeout` is configurable through `foreman.question_timeout`
+- `question_timeout` is configurable through `foreman.question_timeout`; config default is `"0"` (documented as indefinite, but runtime falls back to 60 s)
 
 ### Review
 
@@ -272,21 +285,36 @@ What exists now:
 - major/critical critiques trigger reimplementation decisions via the review result path
 - review outcome events are published through the bus
 
+### Orchestrator-owned review pipeline
+
+The implementation orchestrator now owns the per-repo review loop:
+
+- `AutoFeedbackLoop` config flag (default `true`) gates automatic reimplementation after critique
+- review critiques are reused as feedback when re-triggering implementation
+- native OMP sessions are resumed via `ResumeSessionFile` for review reimplementation
+- escalated sub-plans are persisted as failed before the work item is routed to reviewing
+- bridge answer timeout is handled through `ohMyPiSession.SendAnswer`
+
 ## Phase 9b: Resume & Recovery (Week 8)
 
 **Shipped.**
 
 Current behavior:
 
-- `InstanceManager` registers the current process, maintains heartbeats, and reconciles stale owners
-- stale or missing owners transition running/waiting tasks to `interrupted`
+- `InstanceService` owns instance CRUD, heartbeat updates, liveness checks, and stale cleanup
+- orphan reconciliation runs on TUI startup via `ReconcileOrphanedTasksCmd` — tasks whose owner instance is absent or stale are transitioned to `interrupted`
 - `Resumption.ResumeSession` creates a new `Task` against the same `TaskPlan` and worktree
 - the interrupted task remains interrupted for audit purposes
 - resume context includes the last 50 log lines from `~/.substrate/sessions/<old-task-id>.log`
 - `AgentSessionResumed` is published through the bus
 - `AbandonSession` terminalizes an interrupted task as failed
+- superseded interrupted sessions are failed once the replacement task is durable
+- `deleteOrFailPendingSession` is the shared cleanup path for failed starts
+- `SessionRegistry.AbortAndDeregister` is the idempotent live-session teardown path
+- `DeleteSessionMsg` cancels pipelines, aborts registry sessions, stops Foreman when needed, then deletes task/work-item rows and artifacts
+- graceful agent abort on quit: `q` / `ctrl+c` / `SIGTERM` trigger a confirmation dialog when agents are running
 
-One important correction versus older drafts: the runtime is based on instance-heartbeat ownership, not PID-only crash detection.
+The old `InstanceManager` has been deleted. Instance reconciliation is now split between `InstanceService` (row ownership and heartbeat liveness) and the TUI startup orphan-reconciliation command.
 
 ## Phase 10: Work Item Browsing and Selection (Week 8)
 
@@ -320,6 +348,16 @@ Current TUI reality to keep in mind:
 - work-item completion and plan approval publish bus events from TUI command helpers
 - settings pages rebuild services and rewire adapters/harnesses dynamically
 - workspace init is a TUI flow, not just a CLI-only concern
+- overview view with action cards, confirm triggers, and superseded-interrupted filtering
+- session transcript view with structured rendering for assistant, prompt, tool, lifecycle, question, thinking, and foreman output
+- log overlay with line numbers, wrapping, scroll, and clipboard copy (`c` key)
+- source items overlay with split list/preview pane
+- empty state with animated ASCII bunny component
+- mouse scroll support (`tea.WithMouseCellMotion`) in overview, log overlay, source items overlay, and settings
+- quit confirmation dialog when agents are running (`q`, `ctrl+c`, `SIGTERM`)
+- duplicate session dialog for choosing between duplicate work items
+- centralized text input/textarea component with macOS-compatible word-movement bindings
+- raw key debug logger (`SUBSTRATE_KEY_DEBUG`)
 
 ## Phase 13: End-to-End Integration (Week 11-12)
 
@@ -356,12 +394,14 @@ The main live risks that still match current architecture are:
 - event-bus partial delivery when `ErrRetryLater` happens after some subscribers already received an event
 - SQLite contention and retry behavior under concurrent writes
 - bridge / CLI output format drift in external tools
+- foreman `question_timeout` config default `"0"` is documented as indefinite but runtime falls back to 60 s
 
 ## Known Gaps
 
 Current gaps that remain accurate to call out:
 
 - event-bus partial-delivery semantics are accepted and require idempotent consumers
+- no dead-letter store for adapter errors; `adapter.error` events are persisted but best-effort TUI warnings can be dropped when the message channel is full
 - pre-hook timeouts cannot kill a misbehaving goroutine that ignores context cancellation
 - Linux sandboxing for the oh-my-pi bridge remains less mature than the macOS path
 - some adapter / harness parity claims are intentionally held back until real-binary verification exists

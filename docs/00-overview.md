@@ -1,5 +1,5 @@
 # 00 - Project Overview
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 ## Mission Statement
 
@@ -35,7 +35,7 @@ flowchart TD
 
 Substrate is organized around a few stable seams:
 
-- **Domain and persistence** — work items, plans, sessions, reviews, and workspace identity (`01-domain-model.md`, `02-layered-architecture.md`)
+- **Domain and persistence** — work items, plans, sessions, reviews, review artifacts, PR/MR persistence, and workspace identity (`01-domain-model.md`, `02-layered-architecture.md`)
 - **Events and hooks** — workflow progression is published as system events; external effects subscribe to those events (`03-event-system.md`)
 - **Adapters and harnesses** — providers, repo hosts, coding harnesses, and Sentry source-adapter behavior sit behind explicit interfaces (`04-adapters.md`)
 - **Runtime orchestration** — planning, execution waves, Foreman handling, review loops, and recovery are runtime workflows (`05-orchestration.md`)
@@ -48,7 +48,7 @@ Substrate is organized around a few stable seams:
 |---|---|---|
 | Language | Go | First-class concurrency for parallel sessions, single-binary distribution, and interface-oriented architecture |
 | TUI | bubbletea + lipgloss + bubbles | Predictable reactive terminal UI with a semantic design system split across `styles/`, reusable `components/`, and composed `views/` |
-| Database | SQLite via sqlx + go-atomic | Local persistence, transactional consistency, and zero service dependency |
+| Database | SQLite via sqlx + go-atomic | Local persistence, transactional consistency via `atomic.Transacter[repository.Resources]`, and zero service dependency |
 | Git integration | git-work + git CLI | Worktree lifecycle stays explicit and machine-readable |
 | Agent harness | Multi-harness subprocess adapters | oh-my-pi via Bun bridge is the default verified interactive harness; Claude Code and Codex are selectable but not yet parity-proven for all interactive flows |
 | Work item trackers | Linear GraphQL + GitHub/GitLab REST adapters | Common work item contract with provider-specific capabilities behind the boundary |
@@ -80,9 +80,9 @@ Substrate is organized around a few stable seams:
 | Doc | Owns | Does not own |
 |---|---|---|
 | `00-overview.md` | Product summary, boundaries, doc map | Detailed runtime logic, adapter specifics, schema |
-| `01-domain-model.md` | Entities, enums, state machines, workspace layout | Service wiring, adapter behavior |
-| `02-layered-architecture.md` | Layer boundaries, dependency injection, persistence/schema | Runtime workflow details |
-| `03-event-system.md` | Event catalog, bus behavior, hook semantics | Concrete provider behavior |
+| `01-domain-model.md` | Entities, enums, state machines, workspace layout, review artifacts, source summaries, PR/MR types | Service wiring, adapter behavior |
+| `02-layered-architecture.md` | Layer boundaries, dependency injection, go-atomic transacter pattern, persistence/schema | Runtime workflow details |
+| `03-event-system.md` | Event catalog (including `review.artifact_recorded`, `adapter.error`), bus behavior, hook semantics | Concrete provider behavior |
 | `04-adapters.md` | Work item adapters, repo lifecycle adapters, harnesses, remote detection, and Sentry-specific auth/config, browse, settings, and verification details | End-to-end workflow sequencing, DB schema, or shared TUI interaction design |
 | `05-orchestration.md` | Planning/execution/review/Foreman handling/recovery runtime flow | Provider internals, schema, full UI design |
 | `06-tui-design.md` | Views, overlays, settings UX, operator interactions | Adapter implementations, DB schema |

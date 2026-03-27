@@ -1,5 +1,5 @@
 # 05 - Orchestration
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
 
@@ -22,6 +22,8 @@ Before planning:
 - re-scan the workspace for git-work repos
 - surface plain git clones as health warnings rather than silently treating them as managed repos
 - read workspace-level guidance (`AGENTS.md`) before the planning session starts
+
+The `Discoverer` enforces a 5-minute pull cooldown on `PullMainWorktrees` — calls within the cooldown window are skipped, preventing redundant network I/O when multiple sessions start in rapid succession. The cooldown timestamp is stamped optimistically before the lock is released so concurrent callers that arrive while a pull is in-flight also skip.
 
 Planning operates on `main/` worktrees only. Feature worktrees from other active items are excluded from planning context.
 
@@ -54,8 +56,11 @@ If validation fails or the draft is missing, Substrate sends a correction messag
 ### 1d. Persist plan
 
 On success:
-- persist the orchestration plan and sub-plans atomically
+- persist the orchestration plan and sub-plans atomically via `PlanService.CreatePlanAtomic`
+- when `replacePlanID` is set (re-planning after rejection or follow-up), the old plan row is deleted within the same transaction before inserting the new one, keeping the UNIQUE constraint on `plans.work_item_id` satisfied at all times
 - assign execution order from the `execution_groups` index
+- transition the plan from `draft` to `pending_review`
+- transition the work item to `plan_review`
 - emit `PlanGenerated`
 - retain the session draft directory as audit data
 
@@ -76,6 +81,14 @@ For plan revisions (`PlanWithFeedback`), each revision creates a **new** plannin
 
 Planning sessions share the same `Task` model and status machine as implementation and review sessions. The discriminator is `Task.Phase = planning`. Planning sessions have no `SubPlanID` since they operate at the cross-repo level.
 
+### 1f. Native resume for planning revisions
+
+`PlanWithFeedback` supports native OMP session resume: when the prior planning session used an OMP harness, the orchestrator locates the stored OMP session file (`findPriorPlanningSessionFile`) and passes it as `ResumeSessionFile` to the new planning harness session. This preserves full conversation context across planning revisions.
+
+### 1g. Recovery for interrupted planning sessions
+
+When a planning session is interrupted (process exit, crash), the user can restart planning via `RestartPlanningCmd`: it rolls the work item back from `planning` to `ingested` (via `RollbackPlanningInterrupt`), fails any interrupted sessions so the overview clears the action card, and re-runs `Plan()` from scratch. If a rejected plan row exists from a prior hard rejection, `Plan()` passes its ID as `replacePlanID` to `CreatePlanAtomic` so the UNIQUE constraint is satisfied.
+
 ---
 
 ## 2. Plan Review Loop
@@ -84,12 +97,12 @@ The plan review loop is the human control point between planning and implementat
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Draft: PlanGenerated
-    Draft --> InReview: presented to human
-    InReview --> Approved: human approves
-    InReview --> Revising: human requests changes
-    InReview --> Rejected: human rejects
-    Revising --> InReview: revised plan parsed and persisted
+    [*] --> PendingReview: PlanGenerated
+    PendingReview --> Draft: presented to human
+    Draft --> Approved: human approves
+    Draft --> Revising: human requests changes
+    Draft --> Rejected: human rejects
+    Revising --> PendingReview: revised plan parsed and persisted
     Rejected --> [*]: work item returns to ingested
     Approved --> [*]: PlanApproved
 ```
@@ -125,7 +138,7 @@ Follow-up 1 (round 1): repo-a(1), repo-b(0), repo-c(0)    — only repo-a change
 Follow-up 2 (round 2): repo-a(2), repo-b(2), repo-c(0)    — repo-a + repo-b changed
 ```
 
-**Sub-plan reconciliation.** `ApplyReviewedPlanOutput` sets `PlanningRound = plan.Version` on created or updated sub-plans, resets `completed → pending` when sub-plan content changes (signaling re-execution), and leaves unchanged sub-plans untouched (status and `PlanningRound` preserved).
+**Sub-plan reconciliation.** `ApplyReviewedPlanOutput` runs inside a database transaction. It sets `PlanningRound = plan.Version` on created or updated sub-plans, resets `completed → pending` when sub-plan content changes (signaling re-execution), and leaves unchanged sub-plans untouched (status and `PlanningRound` preserved). The atomic plan replace via `CreatePlanAtomic` resolves the UNIQUE constraint on `plans.work_item_id` by deleting the old plan row before inserting the new one in the same transaction.
 
 ---
 
@@ -154,7 +167,33 @@ For each sub-plan in a ready wave:
 5. stream session events into orchestration state and the TUI
 6. on success, enter the per-repo review loop inline (see §5) — the sub-plan only reaches `completed` status after review passes
 7. on failure, emit `AgentSessionFailed` and pause/escalate per orchestration policy
-### 3c. Idempotency expectations
+8. on review escalation, mark the sub-plan `failed` (not `escalated`) so the work item can reach the correct terminal state
+
+### 3c. Session deletion and pipeline cancellation
+
+When a session or work item is deleted from the TUI (`DeleteSessionMsg`):
+1. cancel the orchestrator pipeline context for that work item — this cascades through `executeWave` → `executeSubPlan` → `Wait` → harness abort on every running agent session
+2. stop the Foreman if it is running for the work item's plan
+3. abort any remaining running sessions via `SessionRegistry.AbortAndDeregister` — this covers resumed and follow-up sessions that use fire-and-forget goroutines without a stored cancel handle
+4. delete the session and work item from the database
+
+`AbortAndDeregister` is idempotent — sessions already torn down by the context cancel are a no-op.
+
+### 3d. Graceful quit
+
+On quit (`QuitConfirmedMsg`), `teardownAllPipelines` executes the shared teardown path:
+1. cancel every active pipeline context via stored cancel handles
+2. stop the Foreman
+3. abort all running/waiting sessions tracked by the `SessionRegistry`
+4. delete the instance heartbeat row and exit
+
+When agent sessions are running, the quit path shows a confirmation dialog first. `ctrl+c` while the confirmation is open acts as "yes".
+
+### 3e. Retry failed work items
+
+`RetryFailedCmd` transitions a failed work item back to `implementing` (via `RetryFailedWorkItem`), registers a pipeline cancellation handle, and re-runs `Implement()`. `Implement()` resets `failed` sub-plans to `pending` before building waves (see §3a, §3b).
+
+### 3f. Idempotency expectations
 
 Implementation must tolerate retries and resume:
 - worktree creation checks for an existing worktree first
@@ -164,7 +203,7 @@ Implementation must tolerate retries and resume:
 
 Concrete provider and repo-host guards live in `04-adapters.md`.
 
-### 3d. Harness routing at runtime
+### 3g. Harness routing at runtime
 
 The orchestrator chooses a harness per phase through harness routing.
 
@@ -175,7 +214,7 @@ Current operational rule:
 
 Harness capabilities, maturity, and routing policy live in `04-adapters.md`; rollout status lives in `07-implementation-plan.md`.
 
-### 3e. Worktree reuse
+### 3h. Worktree reuse
 
 When `ensureWorktree` finds an existing branch, it emits `EventWorktreeReused` instead of creating a new worktree. This triggers adapter updates for MR/PR descriptions with the updated sub-plan content — glab updates via `glab mr update --description`, GitHub updates via the API PATCH endpoint. Both use the same `WorktreeCreatedPayload` struct (includes the updated `SubPlan` content).
 
@@ -205,7 +244,7 @@ flowchart TD
     Q[Question arrives] --> F[Foreman turn]
     F --> C{Confidence}
     C -->|high| A[Auto-answer + append FAQ]
-    C -->|uncertain| H[Escalate to human]
+    C -->|uncertain| H[Escalate to human with proposal]
     H --> L[Human ↔ Foreman loop]
     L --> P[Human approves answer]
     P --> R[Reply to blocked agent + append FAQ]
@@ -213,13 +252,17 @@ flowchart TD
 
 Runtime policy:
 - if the Foreman returns a high-confidence answer, Substrate auto-answers
-- if the Foreman is uncertain, the human reviews and may iterate with the Foreman before approving
+- if the Foreman is uncertain, the proposed answer is persisted for TUI pre-fill via `EscalateWithProposal`, and the human reviews and may iterate with the Foreman before approving
 - every answered question is appended to the plan FAQ so later sessions and reviews inherit the clarified decision
 
-### 4c. Recovery
+### 4c. Answer timeout
+
+`waitForAnswer` enforces a configurable timeout (default 60s, overridable via `config.Foreman.QuestionTimeout`). If no `foreman_proposed` event arrives within the timeout, the answer is treated as uncertain and escalated to the human.
+
+### 4d. Recovery
 
 If the Foreman session dies while answering a question:
-- re-queue the in-flight question at the front of the queue
+- re-queue the in-flight question at the front of the priority queue
 - restart the Foreman with the current plan + FAQ as context
 - deliver the re-queued question first
 - escalate directly to the human if repeated immediate restarts imply the question no longer fits in the usable context window
@@ -293,7 +336,9 @@ Re-implementation creates a fresh Task row. The implementation session runs in t
 - the cross-repo orchestration context
 - the review critique set as feedback
 
-When the previous session has an OMP session file, the new session resumes from it via `ResumeSessionFile`, preserving full conversation context. When no OMP session file is available, falls back to a fresh session with critiques appended to the system prompt.
+When the previous session has an OMP session file, the new session resumes from it via `ResumeSessionFile`, preserving full conversation context. The critique feedback is sent as a follow-up message rather than being baked into the system prompt, so the model retains its full conversation history. When no OMP session file is available, falls back to a fresh session with critiques appended to the system prompt.
+
+Review sessions register with the `SessionRegistry` for steering (§8) and deregister on completion or timeout.
 
 ### 5g. Review configuration
 
@@ -338,12 +383,14 @@ Substrate must recover from crashes, process exits, and interrupted sessions wit
 
 ### 7a. Startup reconciliation
 
-On startup:
+On startup (`App.Init` and workspace reload):
 - resolve the current workspace from `.substrate-workspace`
 - reconcile moved workspace paths against persisted workspace identity
-- inspect instance heartbeats and session ownership
-- mark abandoned running sessions as `interrupted`
+- load live instances and reconcile orphaned tasks via `ReconcileOrphanedTasksCmd`
+- inspect instance heartbeats and session ownership — tasks owned by absent or stale instances (>15s heartbeat) are interrupted
 - surface interrupted sessions to the TUI for operator action
+
+Instance reconciliation uses `InstanceService` (not the deleted `InstanceManager`). `InstanceService` provides `Get`, `ListByWorkspaceID`, `IsAlive`, `FindStaleInstances`, `CleanupStaleInstances`, and `Delete`.
 
 ### 7b. Resume
 
@@ -361,15 +408,19 @@ When abandoning an interrupted session:
 - mark the session failed
 - leave recovery choices to the operator (manual fix, reset, or worktree removal)
 
-### 7d. Graceful shutdown
+### 7d. Superseded interrupted sessions
 
-On clean shutdown:
-- mark live sessions interrupted
-- record shutdown timestamps
-- terminate harness subprocesses with timeout + kill fallback
-- remove the current instance heartbeat row
+When resuming an interrupted session, the new replacement session first reaches a durable `running` state. Only then is the old interrupted session failed — this ensures there is no window where the sub-plan has no active session. The fail step clears the interrupted action from the overview.
 
-### 7e. Session logs
+### 7e. Graceful shutdown
+
+On clean shutdown (via `teardownAllPipelines`):
+- cancel all active pipeline contexts
+- abort all running/waiting sessions via `SessionRegistry.AbortAndDeregister`
+- stop the Foreman
+- delete the current instance heartbeat row via `InstanceService.Delete`
+
+### 7f. Session logs
 
 Session logs are per-agent-session durable output streams used for:
 - live observation and tailing across instances
@@ -380,7 +431,7 @@ Session logs are per-agent-session durable output streams used for:
 
 Schema, lock-table ownership, and session-log persistence details are specified in `02-layered-architecture.md` and `07-implementation-plan.md`.
 
-### 7f. Level 2 follow-up on completed sessions
+### 7g. Level 2 follow-up on completed sessions
 
 `Resumption.FollowUpSession(ctx, completedTask, feedback, instanceID)` drives follow-up on a completed single-repo session:
 
@@ -392,13 +443,13 @@ Schema, lock-table ownership, and session-log persistence details are specified 
 
 The TUI activates follow-up via the `p` key on completed repos in the implementing view. See `06-tui-design.md` for the interaction model.
 
-### 7g. Follow-up on failed sessions
+### 7h. Follow-up on failed sessions
 
-`Resumption.FollowUpFailedSession()` follows the same pattern as §7f but targets failed tasks. It creates a new Task row, optionally resumes the OMP session, and sends the operator's feedback. The work item transitions back to `implementing` and the sub-plan resets to `pending`.
+`Resumption.FollowUpFailedSession()` follows the same pattern as §7g but targets failed tasks. It creates a new Task row (the failed task is preserved as audit trail), optionally resumes the OMP session, and sends the operator's feedback as a follow-up message. The work item transitions back to `implementing` and the sub-plan resets to `pending`.
 
-### 7h. Failure recovery
+### 7i. Failure recovery
 
-Failed work items can be retried from the TUI. `RetryFailedWorkItem` transitions `failed → implementing`, then `Implement()` resets `failed` sub-plans to `pending` before building waves (see §3a, §3b).
+Failed work items can be retried from the TUI. `RetryFailedCmd` transitions `failed → implementing` (via `RetryFailedWorkItem`), registers a pipeline cancellation handle, and re-runs `Implement()`. `Implement()` resets `failed` sub-plans to `pending` before building waves (see §3a, §3b, §3e).
 
 ---
 
@@ -406,10 +457,21 @@ Failed work items can be retried from the TUI. `RetryFailedWorkItem` transitions
 
 Real-time interaction with running agent sessions.
 
-`SessionRegistry.Steer(ctx, sessionID, msg)` delegates to `session.Steer()` on the active harness session. Steering interrupts the agent's active streaming turn with the operator's prompt.
+`SessionRegistry` (`internal/orchestrator/session_registry.go`) is a concurrent-safe map of session IDs to running `adapter.AgentSession` handles. It is used by the orchestrator, review pipeline, and TUI to interact with live sessions.
+
+API:
+- `Register(sessionID, session)` — add a running session
+- `Deregister(sessionID)` — remove a session (called when the session goroutine's `Wait()` returns)
+- `SendMessage(ctx, sessionID, msg)` — send a follow-up message to a running session
+- `Steer(ctx, sessionID, msg)` — interrupt the agent's active streaming turn with a steering prompt
+- `IsRunning(sessionID)` — check whether a session is registered
+- `AbortAndDeregister(ctx, sessionID)` — abort and remove in one call; idempotent (no-op if not registered)
+
+Returns `ErrSessionNotRunning` when the target session is not in the registry.
 
 - Only supported by the OMP harness; other harnesses return `ErrSteerNotSupported`. See `04-adapters.md` for harness capability details.
 - The TUI `p` key activates steering input for running sessions; the message is delivered via the session registry. See `06-tui-design.md` for the input model.
+- All orchestrator sessions (implementation, review, resumed, follow-up) register with the `SessionRegistry` on start and deregister on completion or abort.
 
 ---
 
@@ -421,11 +483,13 @@ Real-time interaction with running agent sessions.
 | Plan review runtime | yes | `06-tui-design.md` |
 | Follow-up re-planning | yes | `06-tui-design.md` |
 | Execution waves and retries | yes | `04-adapters.md` |
+| Session deletion and pipeline cancellation | yes | `06-tui-design.md` |
 | Foreman handling | yes | `04-adapters.md`, `06-tui-design.md` |
 | Review/reimplementation loop | yes | `07-implementation-plan.md` |
-| Steering | yes | `04-adapters.md`, `06-tui-design.md` |
+| Steering (SessionRegistry) | yes | `04-adapters.md`, `06-tui-design.md` |
 | Follow-up on completed/failed sessions | yes | `06-tui-design.md` |
 | Failure recovery | yes | `06-tui-design.md` |
+| Graceful quit/teardown | yes | `06-tui-design.md` |
 | Event catalog/handler semantics | no | `03-event-system.md` |
 | Provider/harness internals | no | `04-adapters.md` |
 | Schema/DI/persistence | no | `02-layered-architecture.md` |

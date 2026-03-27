@@ -1,5 +1,5 @@
 # 06 - TUI Design
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bridging.
 
@@ -40,7 +40,7 @@ The default sidebar shows work-item overviews. The content pane renders the sele
 │ Refresh docs         ││                                                                │
 │ Completed            ││                                                                │
 ╰──────────────────────╯╰────────────────────────────────────────────────────────────────╯
-[↑/↓] Sessions  [→] Tasks  [/] Search sessions  [n] New session  [c] Settings      workspace · 2 active sessions
+[↑/↓] Sessions  [→] Tasks  [/] Search sessions  [n] New session  [s] Settings      workspace · 2 active sessions
 ```
 
 ### 2b. Sessions Sidebar
@@ -71,7 +71,7 @@ Historical search is separate from the live sidebar list: `/` opens the session-
 - `d` — when a work item, task row, or historical result is selected, confirm deletion of the full work item and its related task/session artifacts
 - `/` — open session-history search
 - `n` — open the Unified Work Browser
-- `c` — open Settings page
+- `s` — open Settings page
 - `?` — open Help
 - `q` — quit
 
@@ -250,11 +250,11 @@ type SessionOverviewData struct {
 | `approved` through `completed` | Approved/final plan snapshot |
 | `failed` | Last known plan snapshot if any |
 
-**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays, `f` follow-up re-planning (completed work items).
+**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays, `f` follow-up re-planning (completed work items), `o` open review artifacts / override accept (under review).
 
 ### 3e. Transcript Rendering
 
-Planning mode, session interaction mode, and overview overlays all share one canonical transcript renderer (`RenderTranscript`). The renderer consumes structured `sessionlog.Entry` values end-to-end — there is no string pre-flattening step in the TUI pipeline.
+Planning mode, session interaction mode, and overview overlays all share one canonical transcript renderer (`RenderTranscript` in `session_transcript.go`). The renderer consumes structured `sessionlog.Entry` values end-to-end — there is no string pre-flattening step in the TUI pipeline. Non-event JSON lines (e.g. `session_meta` harness bookkeeping) are dropped during log parsing and never reach the transcript.
 
 The renderer groups raw session-log entries into higher-level blocks:
 
@@ -267,10 +267,11 @@ The renderer groups raw session-log entries into higher-level blocks:
 
 **Tool cards** group adjacent `tool_start`, `tool_output`, and `tool_result` entries into a single block using per-tool-name FIFO queues. Each card shows:
 
-- Title/status row: tool name + intent + running/success/error icon
+- Title/status row: tool name + primary argument label (file path for read/write/edit, pattern for grep, command for bash) + running/success/error icon
 - Smart args summary: semantically important arguments for known tools (file paths, grep patterns, bash commands, LSP actions)
-- Output preview: first 4 lines in collapsed mode, 12 in verbose mode
+- Output preview: multi-line tool results are split into separate rendered lines; first 4 lines in collapsed mode, 12 in verbose mode
 - Overflow marker: `… N more lines` when truncated
+- Write tool content preview: shows content line count and first-line preview in the args summary
 - Result line: shown in verbose mode or when no output exists
 
 **Tool card states**: running (active accent border), success (neutral border), error (error border/tint).
@@ -312,15 +313,15 @@ Common browser shortcuts: `Tab` / `Shift-Tab` cycle sources, `Ctrl+S` cycles sco
 
 ### 4c. Settings Page
 
-Accessed via `c` from anywhere. The settings UI is a full-screen page with a left navigation tree and a right detail/editor pane. It covers commit, planning, review, Foreman, harness, provider, and repo-lifecycle configuration, with provider status and field descriptions visible alongside editable values.
+Accessed via `s` from anywhere. The settings UI is a full-screen page with a left navigation tree and a right detail/editor pane. It covers commit, planning, review, Foreman, harness, provider, and repo-lifecycle configuration, with provider status and field descriptions visible alongside editable values.
 
 Provider secrets owned by Substrate are stored in the OS keychain, while the config file stores stable secret references such as `api_key_ref` and `token_ref`. Harness-owned credentials are handled through harness actions instead of being written directly by the TUI. oh-my-pi remains the default verified interactive harness; Claude Code and Codex are selectable but are not documented as having full interaction parity for every corrective workflow. Provider-specific Sentry auth, login, and connectivity-test behavior is documented in `04-adapters.md` under `### Sentry`, while this section owns the shared Settings interaction model.
 
-The footer hints are focus-sensitive. In the tree view they expose navigation, expand/collapse, focus transfer, close, save, apply, test, login, and reveal actions. In the field view they expose field navigation, edit, boolean toggle, return-to-groups, save, apply, test, login, and reveal actions. While editing a field, the footer collapses to save/cancel hints only.
+The footer hints are focus-sensitive. In the tree view they expose navigation, expand/collapse, focus transfer, close, save, test, login, and reveal actions. In the field view they expose field navigation, edit, boolean toggle, return-to-groups, save, test, login, and reveal actions. While editing a field, the footer collapses to save/cancel hints only.
 
 **Keys:**
 - Tree focus: `↑`/`↓` navigate, `→` expand/open, `←` collapse/up, `Enter` focus settings, `Esc` close
-- Field focus: `↑`/`↓` settings, `Enter` edit, `Space` toggle bool, `←`/`Esc` back to groups, `s` save, `a` apply, `t` test, `g` login, `r` reveal
+- Field focus: `↑`/`↓` settings, `Enter` edit, `Space` toggle bool, `←`/`Esc` back to groups, `s` save and apply, `t` test, `g` login, `r` reveal
 - Edit mode: `Enter` save edit, `Esc` cancel edit
 
 ### 4d. First-Start Initialization Modal
@@ -370,6 +371,22 @@ Note: Global init is handled automatically by CLI bootstrap before TUI starts. T
 If `[n]` is pressed, Substrate exits cleanly.
 
 **Keys:** `y` / `Enter` confirm, `n` / `Esc` cancel.
+### 4e. Source Items Overlay
+
+Opened from the source details view via `o` (single-item sessions open directly in the browser; multi-item sessions open this overlay for selection). Displays a split-pane overlay listing all source items for the selected work item. Items without URLs are shown in a disabled state and cannot be selected or opened.
+
+The left pane is a list of source items with provider, ref, state, and selection status. The right pane is a scrollable preview showing heading, metadata, description, and an action hint. Multi-select is supported via `Space` — toggling multiple items allows opening them all at once.
+
+**Keys:** `↑`/`↓` navigate list, `←`/`→` or `Tab` cycle focus between list and preview, `Space` toggle multi-select, `Enter`/`o` open selected item(s) in browser, `Esc` close.
+
+### 4f. Logs Overlay
+
+Triggered by `L` from the main shell. Displays captured slog entries in a scrollable viewport. The overlay is sized to 75% of terminal width (minimum 60 chars) and fills available height.
+
+Each log entry shows a right-aligned line number, timestamp, level (color-coded: error red, warning amber, info themed, debug muted), message, and optional attributes. Content is ANSI-aware word-wrapped to fit the overlay width.
+
+**Keys:** `↑`/`↓` or mouse scroll to navigate, `c` copy all log entries to clipboard as raw unwrapped plain text (one entry per line, no ANSI codes), `Esc` close.
+
 ---
 
 ## 5. Layout System
@@ -384,7 +401,7 @@ The main shell footer is a single borderless row. Its left side shows focus-sens
 
 **Toasts**
 
-Toasts render as stacked top-right overlays anchored below the top inset and above the footer. They do not add rows to the main layout.
+Toasts render as stacked top-right overlays anchored below the top inset and above the footer. They do not add rows to the main layout. Toast width is capped at 30% of terminal width. Long messages word-wrap up to 4 lines with ellipsis truncation. Toasts expire after 20 seconds and are pruned on a 1-second tick. Toasts render over all overlays (including modal dialogs) and stack vertically when multiple are active.
 
 ---
 
@@ -425,13 +442,14 @@ Vim-style primary, arrow keys as aliases.
 | `j`/`k` or `↑`/`↓` | Navigate / scroll | Sidebar, lists, viewport |
 | `Tab` | Cycle repos / panels | Implementing mode |
 | `g`/`G` | Top/bottom | Lists |
+| Mouse scroll | Scroll viewports and lists | Overview, overlays, logs |
 | `Enter` | Select / confirm | Lists, overlays |
 | `p` | Steer running agent / follow up on completed or failed session | Session interaction view (context-dependent on session state) |
 | `f` | Open follow-up re-planning feedback | Completed work item overlay |
 
 ### Global Keybinds (handled before delegation)
 
-`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `c` settings page, contextual `d` delete-session shortcut when a work item, task row, or history result is active, `Ctrl+c` force quit.
+`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `s` settings page, `L` logs overlay, contextual `d` delete-session shortcut when a work item, task row, or history result is active, `Ctrl+c` force quit.
 
 ### Input Modes
 
@@ -457,6 +475,8 @@ if v.inputActive {
 ### Confirmation Dialogs
 
 Destructive actions (delete session/work item, abandon, reject, override) show a modal overlay. Generic `ConfirmDialog` wraps a `tea.Cmd` as `onYes`. `y` confirms, `n`/`Esc` cancels.
+
+Quitting while agent sessions are running shows a confirmation dialog listing the count of active sessions that will be killed. `y` confirms quit, `n`/`Esc` cancels. When no sessions are running, `q` quits immediately. SIGTERM is intercepted to route through the same confirmation path.
 
 ### Escalation & Manual Intervention
 

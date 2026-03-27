@@ -1,5 +1,5 @@
 # TUI Design System
-<!-- docs:last-integrated-commit f6b8e6e5f8374bd4c2f467852266f01cc2f323a2 -->
+<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
 
 This document is the living reference for the current TUI design system.
 
@@ -67,11 +67,14 @@ These tests define the minimum acceptable safety net for shared shell and design
 
 - `internal/tui/views/app_layout_test.go`
 - `internal/tui/views/planning_view_test.go`
-- `internal/tui/views/implementing_view_test.go`
 - `internal/tui/views/plan_review_test.go`
 - `internal/tui/views/sidebar_test.go`
 - `internal/tui/views/statusbar_test.go`
 - `internal/tui/views/settings_page_test.go`
+- `internal/tui/views/overview_test.go`
+- `internal/tui/views/session_transcript_test.go`
+- `internal/tui/views/overlay_source_items_test.go`
+- `internal/tui/views/app_toast_test.go`
 
 ---
 
@@ -118,6 +121,8 @@ Owns reusable render primitives such as:
 - overlay shells and split overlay geometry
 - semantic progress bars
 - semantic confirm and toast surfaces
+- shared input constructors (`NewTextInput`, `NewTextArea`) with macOS-compatible key bindings
+- animated bunny art for empty-state decoration
 
 Current primitives under `internal/tui/components/` include:
 
@@ -130,6 +135,8 @@ Current primitives under `internal/tui/components/` include:
 - `progress.go`
 - `toast.go`
 - `confirm.go`
+- `input.go`
+- `bunny.go`
 
 Current contract to preserve:
 
@@ -166,11 +173,11 @@ The design system covers the main TUI surfaces without flattening them into one 
 - `app.go` renders the main panes through shared pane primitives and shared chrome geometry.
 - `sidebar.go` uses shared selection, divider, and progress-bar semantics while keeping its own selection model and work-item-specific entry logic.
 - `statusbar.go` uses shared keybind and label semantics while keeping focus-sensitive hint composition and workspace metadata rendering local.
-- Toasts share the same semantic overlay language and remain anchored without growing the main layout.
+- Toasts share the same semantic overlay language, remain anchored without growing the main layout, cap width at 30% of terminal width with up to 4 wrapped content lines, and support stacking via `StackView`.
 
 ### Workflow views
 
-Workflow surfaces such as planning, implementing, reviewing, plan review, question, completed, failed, and interrupted views consume shared header, hint, tab, callout, pane, and status semantics.
+Workflow surfaces such as planning, reviewing, plan review, question, completed, and interrupted views consume shared header, hint, tab, callout, pane, and status semantics.
 
 What remains local to the view:
 
@@ -195,7 +202,9 @@ Semantic styles consumed: `Thinking` for expanded thinking-block text, `Accent` 
 
 ### Overlays
 
-Session history search, the unified work browser, help, workspace initialization, confirm dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
+Session history search, the unified work browser (source items), help, workspace initialization, log viewer, confirm dialogs, duplicate-session dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
+
+Overlay and modal styling uses **transparent backgrounds** — no `Background()` or `BorderBackground()` on overlay or modal styles. See `internal/tui/AGENTS.md` "Overlay and Modal Styling" for the full rule set covering ANSI-reset propagation and inter-pane separator constraints.
 
 What remains local to the view:
 
@@ -233,21 +242,26 @@ internal/tui/components/
   progress.go
   toast.go
   confirm.go
+  input.go
+  bunny.go
 
 internal/tui/views/
   app.go
+  app_macos_keys.go
   sidebar.go
   statusbar.go
+  overview.go
   session_transcript.go
   planning_view.go
-  implementing_view.go
   reviewing_view.go
   plan_review.go
   question_view.go
   completed_view.go
-  failed_view.go
   interrupted_view.go
+  duplicate_session_dialog.go
   overlay_session_search.go
+  overlay_source_items.go
+  overlay_logs.go
   overlay_new_session.go
   overlay_help.go
   overlay_workspace_init.go
@@ -268,7 +282,7 @@ When touching shared styles, components, or layout helpers:
 
 Useful smoke suites include:
 
-- `go test ./internal/tui/views -run 'TestSessionLogViewRespectsRequestedHeightWithMeta|TestImplementingViewRespectsRequestedHeight|TestPlanReview'`
+- `go test ./internal/tui/views -run 'TestSessionLogViewRespectsRequestedHeightWithMeta|TestPlanReview'`
 - `go test ./internal/tui/views -run 'TestAppViewWithSessionInteractionFitsWindow|TestSidebar|TestStatusBar'`
 - `go test ./internal/tui/views -run 'TestSettingsPage_'`
 
