@@ -6,8 +6,8 @@ import (
 	"unicode"
 )
 
-// Branch naming format: sub-<externalID>-<short-slug>
-// - externalID: WorkItem.ExternalID (e.g., "LIN-FOO-123" or "MAN-001")
+// Branch naming format: sub-<sanitized-externalID>-<short-slug>
+// - externalID: WorkItem.ExternalID (e.g., "LIN-FOO-123" or "gh:issue:owner/repo#42")
 // - short-slug: derived from work item title
 //   - lowercased
 //   - spaces -> dashes
@@ -18,26 +18,47 @@ import (
 
 const maxSlugLength = 30
 
-// slugReplacer is used to replace non-alphanumeric characters with dashes
+// nonAlphaNum and nonBranchSafe are regexps used in slug/ID sanitization.
 var (
-	nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
-	multiDash   = regexp.MustCompile(`-+`)
+	nonAlphaNum   = regexp.MustCompile(`[^a-z0-9]+`)
+	nonBranchSafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+	multiDash     = regexp.MustCompile(`-+`)
 )
 
 // GenerateBranchName creates a branch name from external ID and title.
-// Format: sub-<externalID>-<short-slug>
+// Format: sub-<sanitized-externalID>-<short-slug>
 //
 // Example:
+//
 //   - externalID: "LIN-FOO-123"
+//
 //   - title: "Fix auth flow for OAuth2"
+//
 //   - result: "sub-LIN-FOO-123-fix-auth-flow-for-oauth2"
+//
+//   - externalID: "gh:issue:rtk-ai/rtk#591"
+//
+//   - title: "Add support for Oh My Pi"
+//
+//   - result: "sub-gh-issue-rtk-ai-rtk-591-add-support-for-oh-my-pi"
 func GenerateBranchName(externalID, title string) string {
+	safeID := sanitizeExternalID(externalID)
 	slug := slugFromTitle(title)
 	if slug == "" {
 		slug = "work"
 	}
 
-	return "sub-" + externalID + "-" + slug
+	return "sub-" + safeID + "-" + slug
+}
+
+// sanitizeExternalID replaces characters that are invalid in git branch names
+// (colons, slashes, hashes, etc.) with dashes, then collapses and trims.
+// Uppercase is preserved so IDs like "LIN-FOO-123" remain readable.
+func sanitizeExternalID(id string) string {
+	s := nonBranchSafe.ReplaceAllString(id, "-")
+	s = multiDash.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	return s
 }
 
 // slugFromTitle converts a title to a URL-safe slug.
@@ -74,14 +95,17 @@ func slugFromTitle(title string) string {
 // ValidateBranchName checks if a branch name is valid.
 // A valid branch name:
 // - Starts with "sub-"
-// - Contains no slashes (avoids git ref namespace collisions)
+// - Contains no characters invalid in git ref names (/, :, #)
 // - Has non-empty content after "sub-" with no leading or trailing dash
 func ValidateBranchName(branch string) bool {
 	if !strings.HasPrefix(branch, "sub-") {
 		return false
 	}
-	if strings.Contains(branch, "/") {
-		return false
+	// Reject characters that are invalid in git branch names.
+	for _, c := range []string{"/", ":", "#"} {
+		if strings.Contains(branch, c) {
+			return false
+		}
 	}
 	rest := strings.TrimPrefix(branch, "sub-")
 

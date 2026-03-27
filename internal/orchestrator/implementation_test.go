@@ -323,8 +323,21 @@ func TestGenerateBranchName(t *testing.T) {
 			wantPrefix:   "sub-LIN-UPPER-1-",
 			wantContains: "uppercase-title",
 		},
+		{
+			name:         "github issue externalID",
+			externalID:   "gh:issue:rtk-ai/rtk#591",
+			title:        "Add support for Oh My Pi",
+			wantPrefix:   "sub-gh-issue-rtk-ai-rtk-591-",
+			wantContains: "add-support-for-oh-my-pi",
+		},
+		{
+			name:         "gitlab issue externalID",
+			externalID:   "gl:issue:1234#42",
+			title:        "Fix rendering bug",
+			wantPrefix:   "sub-gl-issue-1234-42-",
+			wantContains: "fix-rendering-bug",
+		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := GenerateBranchName(tt.externalID, tt.title)
@@ -381,8 +394,22 @@ func TestValidateBranchName(t *testing.T) {
 			branch:    "",
 			wantValid: false,
 		},
+		{
+			name:      "contains colon (unsanitized github ID)",
+			branch:    "sub-gh:issue:rtk-ai-rtk-591-fix",
+			wantValid: false,
+		},
+		{
+			name:      "contains hash",
+			branch:    "sub-gh-issue-rtk-ai-rtk#591-fix",
+			wantValid: false,
+		},
+		{
+			name:      "sanitized github ID",
+			branch:    "sub-gh-issue-rtk-ai-rtk-591-fix",
+			wantValid: true,
+		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ValidateBranchName(tt.branch)
