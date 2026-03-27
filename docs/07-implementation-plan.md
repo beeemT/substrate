@@ -136,7 +136,7 @@ Current reality:
 - work item adapters subscribe to all events and self-filter in `OnEvent`
 - repo lifecycle adapters subscribe only to `worktree.created` and `work_item.completed`
 
-Also important: not all events currently flow through the bus. Planning and part of implementation still persist some lifecycle events directly through `EventRepository.Create`.
+Also important: not all events currently flow through the bus. Planning persists lifecycle events directly through `EventService.Create` (not through the bus). Adapters persist review artifact events the same way.
 
 ## Phase 4: git-work Integration (Week 3-4)
 
@@ -256,7 +256,7 @@ Current implementation flow in `ImplementationService`:
 Current event nuance:
 
 - `worktree.creating` and `worktree.created` go through `event.Bus`
-- `work_item.implementation_started` and task start/complete/fail events are still written directly through `EventRepository`
+- `work_item.implementation_started` and task start/complete/fail events go through `event.Bus` via `ImplementationService.publishEvent`
 
 ## Phase 9: Foreman + Review Pipeline (Week 7-8)
 

@@ -44,7 +44,6 @@ func (s *EventService) Create(ctx context.Context, e domain.SystemEvent) error
 func (s *EventService) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
 func (s *EventService) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
 ```
-```
 
 SQLite storage is a thin mapping layer:
 
@@ -147,7 +146,6 @@ These go through `event.Bus.Publish(...)`, so they use the bus's persistence and
 | `ImplementationService.forwardEvents` | raw harness event names from `adapter.AgentEvent.Type` |
 | `ReviewPipeline` | `review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started` |
 | `Resumption` | `agent_session.resumed` |
-| `InstanceManager` | `agent_session.interrupted` |
 | TUI command helpers (`internal/tui/views/cmds.go`) | `plan.approved`, `work_item.completed` |
 | TUI settings service (adapter dispatch loops) | `adapter.error` |
 
@@ -159,6 +157,7 @@ The constants below still exist in `domain`, but the currently assigned sources 
 - `plan.submitted_for_review`
 - `plan.rejected`
 - `plan.revised`
+- `agent_session.interrupted`
 - `agent_question.raised`
 - `agent_question.answered`
 - several intermediate `work_item.*` state constants besides the specific ones listed above

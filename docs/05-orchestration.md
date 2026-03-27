@@ -97,11 +97,11 @@ The plan review loop is the human control point between planning and implementat
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PendingReview: PlanGenerated
-    PendingReview --> Draft: presented to human
-    Draft --> Approved: human approves
-    Draft --> Revising: human requests changes
-    Draft --> Rejected: human rejects
+    [*] --> Draft: PlanCreated
+    Draft --> PendingReview: persisted and submitted for review
+    PendingReview --> Approved: human approves
+    PendingReview --> Revising: human requests changes
+    PendingReview --> Rejected: human rejects
     Revising --> PendingReview: revised plan parsed and persisted
     Rejected --> [*]: work item returns to ingested
     Approved --> [*]: PlanApproved
