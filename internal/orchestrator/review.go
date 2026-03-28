@@ -20,13 +20,13 @@ import (
 
 // ReviewPipeline orchestrates the review process for agent sessions.
 type ReviewPipeline struct {
-	cfg         *config.Config
-	harness     adapter.AgentHarness
-	reviewSvc   *service.ReviewService
-	sessionSvc  *service.TaskService
-	planSvc     *service.PlanService
-	workItemSvc *service.SessionService
-	eventBus    *event.Bus
+	cfg           *config.Config
+	harness       adapter.AgentHarness
+	reviewSvc     *service.ReviewService
+	sessionSvc    *service.TaskService
+	planSvc       *service.PlanService
+	workItemSvc   *service.SessionService
+	eventBus      *event.Bus
 	registry      *SessionRegistry
 	reviewTimeout time.Duration
 }
@@ -43,12 +43,12 @@ func NewReviewPipeline(
 	registry *SessionRegistry,
 ) *ReviewPipeline {
 	return &ReviewPipeline{
-		cfg:         cfg,
-		harness:     harness,
-		reviewSvc:   reviewSvc,
-		sessionSvc:  sessionSvc,
-		planSvc:     planSvc,
-		workItemSvc: workItemSvc,
+		cfg:           cfg,
+		harness:       harness,
+		reviewSvc:     reviewSvc,
+		sessionSvc:    sessionSvc,
+		planSvc:       planSvc,
+		workItemSvc:   workItemSvc,
 		eventBus:      eventBus,
 		registry:      registry,
 		reviewTimeout: cfg.Review.ReviewTimeout(),
@@ -304,7 +304,9 @@ func (p *ReviewPipeline) startReviewAgent(
 				return reviewSession, "", reviewSessionID, errors.New("review session events channel closed unexpectedly")
 			}
 			switch evt.Type {
-			case "done":
+			case "done", "foreman_proposed":
+				// foreman_proposed is the completion signal when the review session runs in
+				// SessionModeForeman (omp-bridge emits foreman_proposed, not lifecycle.completed).
 				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
 					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
 				}
@@ -448,7 +450,7 @@ Original output:
 				if !ok {
 					return "", errors.New("review session ended during correction")
 				}
-				if evt.Type == "done" {
+				if evt.Type == "done" || evt.Type == "foreman_proposed" {
 					// Read new output from session log
 					output, err := p.readSessionOutputFromLog(ctx, reviewSession.ID())
 					if err != nil {

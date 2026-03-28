@@ -688,7 +688,15 @@ func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, col
 	var lines []string
 	lines = append(lines, labelRendered)
 	rendered := strings.Trim(renderMarkdownDocument(block.text, max(1, width-2)), "\n")
-	for line := range strings.SplitSeq(rendered, "\n") {
+	// Split and drop trailing lines that contain no visible characters.
+	// Glamour appends a bare ANSI-reset line after some block types (code
+	// fences in particular), which would otherwise become a "  " (2-space)
+	// orphan at the end of the block while all content lines have 4+ spaces.
+	contentLines := strings.Split(rendered, "\n")
+	for len(contentLines) > 0 && ansi.Strip(contentLines[len(contentLines)-1]) == "" {
+		contentLines = contentLines[:len(contentLines)-1]
+	}
+	for _, line := range contentLines {
 		lines = append(lines, "  "+st.Thinking.Render(line))
 	}
 	return strings.Join(lines, "\n")

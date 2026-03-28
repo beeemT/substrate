@@ -242,6 +242,47 @@ func TestRenderTranscriptThinkingExpandedIsGrey(t *testing.T) {
 	}
 }
 
+func TestRenderTranscriptThinkingCodeBlockLastLineIndented(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// Thinking content ending with a code fence: glamour appends a trailing
+	// ANSI-reset-only line after the closing fence. Without the fix this
+	// becomes a 2-space orphan as the last rendered line while all other
+	// content lines have 4+ spaces of indent.
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindThinking, Text: "Let me check:\n\n```\nfmt.Println(\"hi\")\n```"},
+	}
+	output := RenderTranscript(st, entries, 80, false, false)
+	plain := ansi.Strip(output)
+	lines := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected multiple lines, got %d: %v", len(lines), lines)
+	}
+	// Every content line after the label must have at least 2 spaces of indent.
+	// The last line must not be the degenerate 2-space trailing blank produced
+	// by the ANSI-reset glamour artifact.
+	for i, line := range lines[1:] { // skip label line
+		if strings.TrimSpace(line) == "" {
+			// Internal blank lines (paragraph spacing) are allowed; they just
+			// must not be the LAST non-empty line following actual content.
+			continue
+		}
+		if !strings.HasPrefix(line, "  ") {
+			t.Errorf("content line %d missing 2-space indent: %q", i+1, line)
+		}
+	}
+	// Last non-empty line must contain actual code content, not be blank.
+	lastContent := ""
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" {
+			lastContent = line
+		}
+	}
+	if !strings.Contains(lastContent, "fmt.Println") {
+		t.Errorf("last content line should be the code line, got: %q", lastContent)
+	}
+}
+
 func TestRenderTranscriptNarrowWidth(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
