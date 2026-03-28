@@ -220,7 +220,7 @@ func run() error { //nolint:funlen
 	adapterErrors := make(chan views.AdapterErrorMsg, 16)
 
 	for _, workItemAdapter := range adapters {
-		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted))
 		if subErr != nil {
 			return fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
 		}

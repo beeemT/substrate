@@ -58,7 +58,7 @@ func (f *fakeRepoLifecycleAdapter) OnEvent(_ context.Context, evt domain.SystemE
 
 func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkItemAdapter, repoLifecycleAdapters []adapter.RepoLifecycleAdapter) error {
 	for _, workItemAdapter := range workItemAdapters {
-		sub, err := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+		sub, err := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted))
 		if err != nil {
 			return err
 		}
@@ -115,13 +115,20 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 	if err := bus.Publish(context.Background(), worktreeCreated); err != nil {
 		t.Fatalf("publish worktree created: %v", err)
 	}
-	for range 2 {
-		select {
-		case <-work.events:
-		case <-life.events:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for adapter event fanout")
+	// WorktreeCreated is a repo-lifecycle event, not a work-item event.
+	// The work-item adapter must NOT receive it; only the lifecycle adapter should.
+	select {
+	case evt := <-life.events:
+		if evt.EventType != string(domain.EventWorktreeCreated) {
+			t.Fatalf("lifecycle adapter got %s, want worktree.created", evt.EventType)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle adapter to receive worktree.created")
+	}
+	select {
+	case evt := <-work.events:
+		t.Fatalf("work-item adapter must not receive worktree.created, got %s", evt.EventType)
+	default:
 	}
 }
 

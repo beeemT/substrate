@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -857,6 +858,17 @@ func (s *ImplementationService) ensureWorktree(
 		return "", fmt.Errorf("git-work checkout: %w", err)
 	}
 
+	// Push branch to remote so lifecycle adapters (GitHub, GitLab) can create
+	// a draft PR/MR immediately. The remote must know the branch before the API
+	// will accept it as a PR head. Best-effort: a failed push is logged but does
+	// not abort worktree creation; the PR creation attempt will warn later.
+	if reviewCtx.RemoteName != "" {
+		if pushErr := gitPushBranch(ctx, repoPath, reviewCtx.RemoteName, branch); pushErr != nil {
+			slog.Warn("failed to push branch to remote; draft PR creation may fail",
+				"repo", repoName, "branch", branch, "err", pushErr)
+		}
+	}
+
 	// Emit WorktreeCreated post-hook event
 	createdPayload := WorktreeCreatedPayload{
 		WorkspaceID:   workspace.ID,
@@ -1219,4 +1231,16 @@ func ptrTime(t time.Time) *time.Time {
 
 func ptrInt(i int) *int {
 	return &i
+}
+
+// gitPushBranch pushes branch to remote using plain git. It is used immediately
+// after worktree creation to establish the branch on the remote so that lifecycle
+// adapters (GitHub, GitLab) can create a draft PR/MR without a 422 "head invalid".
+func gitPushBranch(ctx context.Context, repoDir, remote, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", remote, branch)
+	cmd.Dir = repoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push %s %s: %w (output: %s)", remote, branch, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

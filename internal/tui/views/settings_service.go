@@ -462,7 +462,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	adapterErrors := make(chan AdapterErrorMsg, 16)
 
 	for _, workItemAdapter := range adapters {
-		sub, subErr := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted))
 		if subErr != nil {
 			return viewsServicesReload{}, fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
 		}
@@ -762,7 +762,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			ID:          "provider.sentry",
 			Title:       "Provider · Sentry",
 			Description: "Sentry issue source configuration",
-			Fields: sentrySettingsFields(cfg),
+			Fields:      sentrySettingsFields(cfg),
 		},
 		{
 			ID:          "provider.github",
