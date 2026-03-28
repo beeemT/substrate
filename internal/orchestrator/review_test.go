@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestStartReviewAgent_CompletesOnForemanProposed(t *testing.T) {
 	case res := <-done:
 		// The call returned. It may have an error (log file not found in test
 		// environment is fine); what matters is it did NOT block.
-		if res.err != nil && res.err == context.DeadlineExceeded {
+		if res.err != nil && errors.Is(res.err, context.DeadlineExceeded) {
 			t.Fatalf("startReviewAgent returned context.DeadlineExceeded: foreman_proposed not handled")
 		}
 		// A "read review session output" error is expected (no real log file).
