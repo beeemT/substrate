@@ -255,7 +255,7 @@ async function initSession(): Promise<void> {
 	const sessionManager = mode === "foreman"
 		? SessionManager.inMemory()
 		: resumeSessionFile
-			? SessionManager.open(resumeSessionFile)
+				? await SessionManager.open(resumeSessionFile)
 			: SessionManager.create(worktreePath);
 	const customTools = mode === "agent" ? [createAskForemanTool()] : [];
 
