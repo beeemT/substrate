@@ -15,3 +15,9 @@
 - For Bubble Tea and Lip Gloss work under `internal/tui`, follow the detailed rendering rules in `internal/tui/AGENTS.md`.
 - Keep the detailed TUI layout rules in that subtree-local file rather than duplicating them here.
 - For any non-trivial TUI layout change, add tests that assert rendered line width stays within the requested terminal width and rendered line count stays within the requested terminal height, including narrow-size cases.
+
+## Error Handling
+- Errors **MUST** always be handled — never silently discard an `error` return value with `_` or an empty `if err != nil {}` body.
+- Every handled error **MUST** be logged via `slog` (e.g. `slog.Error(...)`, `slog.Warn(...)`). `main.go` sets `slog.SetDefault` to a `tuilog.Handler`, which routes all `slog` entries to the TUI log screen automatically — no separate wiring is needed.
+- Choose the level that matches the severity: `slog.Error` for unexpected or unrecoverable failures, `slog.Warn` for degraded-but-recoverable conditions, `slog.Debug` for transient or low-signal events. Always include the error as a structured attribute (`"error", err`).
+- Preserve the error chain. Do not discard the original error when wrapping with `fmt.Errorf("%w", err)` or equivalent.

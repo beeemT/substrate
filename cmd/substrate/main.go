@@ -246,13 +246,15 @@ func run() error { //nolint:funlen
 				if lastErr != nil {
 					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
 					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					_ = bus.Publish(context.Background(), domain.SystemEvent{
+					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
 						ID:          domain.NewID(),
 						EventType:   string(domain.EventAdapterError),
 						WorkspaceID: evt.WorkspaceID,
 						Payload:     errPayload,
 						CreatedAt:   time.Now(),
-					})
+					}); pubErr != nil {
+						slog.Warn("failed to publish adapter error event", "adapter", a.Name(), "err", pubErr)
+					}
 					select {
 					case adapterErrors <- views.AdapterErrorMsg{
 						Adapter:   a.Name(),
@@ -292,13 +294,15 @@ func run() error { //nolint:funlen
 				if lastErr != nil {
 					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
 					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					_ = bus.Publish(context.Background(), domain.SystemEvent{
+					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
 						ID:          domain.NewID(),
 						EventType:   string(domain.EventAdapterError),
 						WorkspaceID: evt.WorkspaceID,
 						Payload:     errPayload,
 						CreatedAt:   time.Now(),
-					})
+					}); pubErr != nil {
+						slog.Warn("failed to publish adapter error event", "adapter", a.Name(), "err", pubErr)
+					}
 					select {
 					case adapterErrors <- views.AdapterErrorMsg{
 						Adapter:   a.Name(),

@@ -323,7 +323,9 @@ func (f *Foreman) restartSession(ctx context.Context) error {
 
 	// Abort current session if exists
 	if f.session != nil {
-		_ = f.session.Abort(ctx)
+		if abortErr := f.session.Abort(ctx); abortErr != nil {
+			slog.Warn("failed to abort foreman session before restart", "error", abortErr)
+		}
 	}
 
 	// Build system prompt with updated plan

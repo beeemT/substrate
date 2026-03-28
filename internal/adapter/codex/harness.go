@@ -78,7 +78,9 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		lastText:      make(map[string]string),
 	}
 	if err := s.openLogFile(); err != nil {
-		_ = cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			slog.Warn("failed to kill codex process after log open error", "error", killErr)
+		}
 		return nil, err
 	}
 	s.launchProcess(cmd, stdoutR, stderrR)
@@ -250,7 +252,9 @@ func (s *session) Steer(_ context.Context, _ string) error {
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		_ = s.Abort(ctx)
+		if abortErr := s.Abort(ctx); abortErr != nil {
+			slog.Warn("failed to abort codex session on context cancel", "error", abortErr)
+		}
 
 		return ctx.Err()
 	case err := <-s.completed:
@@ -299,7 +303,9 @@ func (s *session) SendMessage(ctx context.Context, msg string) error {
 	s.mu.Unlock()
 
 	if err := s.openLogFile(); err != nil {
-		_ = cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			slog.Warn("failed to kill codex process after log open error", "error", killErr)
+		}
 		return err
 	}
 	s.launchProcess(cmd, stdoutR, stderrR)
@@ -347,11 +353,15 @@ func (s *session) Abort(ctx context.Context) error {
 	case <-s.completed:
 		return nil
 	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			slog.Warn("failed to kill codex process on abort timeout", "error", killErr)
+		}
 
 		return nil
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			slog.Warn("failed to kill codex process on context cancel", "error", killErr)
+		}
 
 		return ctx.Err()
 	}
@@ -411,7 +421,9 @@ func (s *session) terminateSession(err error) {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		if s.logFile != nil {
-			_ = s.logFile.Close()
+			if closeErr := s.logFile.Close(); closeErr != nil {
+				slog.Warn("failed to close session log file", "error", closeErr)
+			}
 			s.logFile = nil
 		}
 		s.mu.Unlock()
@@ -432,46 +444,88 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 	var stdoutR_, stdoutW *os.File
 	stdoutR_, stdoutW, err = os.Pipe()
 	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
+		if err := stdinR.Close(); err != nil {
+			slog.Warn("failed to close stdin read end during cleanup", "error", err)
+		}
+		if err := stdinW.Close(); err != nil {
+			slog.Warn("failed to close stdin write end during cleanup", "error", err)
+		}
 		return nil, nil, fmt.Errorf("create stdout pipe: %w", err)
 	}
 	var stderrR_, stderrW *os.File
 	stderrR_, stderrW, err = os.Pipe()
 	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR_.Close()
-		_ = stdoutW.Close()
+		if err := stdinR.Close(); err != nil {
+			slog.Warn("failed to close stdin read end during cleanup", "error", err)
+		}
+		if err := stdinW.Close(); err != nil {
+			slog.Warn("failed to close stdin write end during cleanup", "error", err)
+		}
+		if err := stdoutR_.Close(); err != nil {
+			slog.Warn("failed to close stdout read end during cleanup", "error", err)
+		}
+		if err := stdoutW.Close(); err != nil {
+			slog.Warn("failed to close stdout write end during cleanup", "error", err)
+		}
 		return nil, nil, fmt.Errorf("create stderr pipe: %w", err)
 	}
 	cmd.Stdin = stdinR
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 	if err = cmd.Start(); err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR_.Close()
-		_ = stdoutW.Close()
-		_ = stderrR_.Close()
-		_ = stderrW.Close()
+		if err := stdinR.Close(); err != nil {
+			slog.Warn("failed to close stdin read end during cleanup", "error", err)
+		}
+		if err := stdinW.Close(); err != nil {
+			slog.Warn("failed to close stdin write end during cleanup", "error", err)
+		}
+		if err := stdoutR_.Close(); err != nil {
+			slog.Warn("failed to close stdout read end during cleanup", "error", err)
+		}
+		if err := stdoutW.Close(); err != nil {
+			slog.Warn("failed to close stdout write end during cleanup", "error", err)
+		}
+		if err := stderrR_.Close(); err != nil {
+			slog.Warn("failed to close stderr read end during cleanup", "error", err)
+		}
+		if err := stderrW.Close(); err != nil {
+			slog.Warn("failed to close stderr write end during cleanup", "error", err)
+		}
 		return nil, nil, fmt.Errorf("start process: %w", err)
 	}
 	// Close the parent's copies of the child-facing ends so the read ends
 	// see EOF exactly when the child exits.
-	_ = stdinR.Close()
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
+	if closeErr := stdinR.Close(); closeErr != nil {
+		slog.Warn("failed to close stdin read end after process start", "error", closeErr)
+	}
+	if closeErr := stdoutW.Close(); closeErr != nil {
+		slog.Warn("failed to close stdout write end after process start", "error", closeErr)
+	}
+	if closeErr := stderrW.Close(); closeErr != nil {
+		slog.Warn("failed to close stderr write end after process start", "error", closeErr)
+	}
 	if _, err = io.WriteString(stdinW, input); err != nil {
-		_ = cmd.Process.Kill()
-		_ = stdoutR_.Close()
-		_ = stderrR_.Close()
+		if err := cmd.Process.Kill(); err != nil {
+			slog.Warn("failed to kill process during cleanup", "error", err)
+		}
+		if err := stdoutR_.Close(); err != nil {
+			slog.Warn("failed to close stdout read end during cleanup", "error", err)
+		}
+		if err := stderrR_.Close(); err != nil {
+			slog.Warn("failed to close stderr read end during cleanup", "error", err)
+		}
 		return nil, nil, fmt.Errorf("write stdin: %w", err)
 	}
 	if err = stdinW.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		_ = stdoutR_.Close()
-		_ = stderrR_.Close()
+		if err := cmd.Process.Kill(); err != nil {
+			slog.Warn("failed to kill process during cleanup", "error", err)
+		}
+		if err := stdoutR_.Close(); err != nil {
+			slog.Warn("failed to close stdout read end during cleanup", "error", err)
+		}
+		if err := stderrR_.Close(); err != nil {
+			slog.Warn("failed to close stderr read end during cleanup", "error", err)
+		}
 		return nil, nil, fmt.Errorf("close stdin: %w", err)
 	}
 	return stdoutR_, stderrR_, nil
@@ -799,7 +853,9 @@ func (s *session) writeLogLine(line string) {
 	if s.logFile == nil {
 		return
 	}
-	_, _ = s.logFile.WriteString(line + "\n")
+	if _, writeErr := s.logFile.WriteString(line + "\n"); writeErr != nil {
+		slog.Warn("failed to write session log line", "error", writeErr)
+	}
 }
 
 func (s *session) openLogFile() error {
@@ -818,7 +874,9 @@ func (s *session) openLogFile() error {
 	s.logFile = f
 	s.mu.Unlock()
 	if old != nil {
-		_ = old.Close()
+		if closeErr := old.Close(); closeErr != nil {
+			slog.Warn("failed to close previous session log file", "error", closeErr)
+		}
 	}
 	return nil
 }

@@ -139,7 +139,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	}
 
 	if r.eventBus != nil {
-		_ = r.eventBus.Publish(ctx, domain.SystemEvent{
+		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventAgentSessionResumed),
 			WorkspaceID: interrupted.WorkspaceID,
@@ -149,14 +149,18 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 				"sub_plan_id":    interrupted.SubPlanID,
 			}),
 			CreatedAt: time.Now(),
-		})
+		}); pubErr != nil {
+			slog.Warn("failed to publish session resumed event", "error", pubErr, "new_session_id", newSession.ID)
+		}
 	}
 
 	// Register session for steering; deregister when the session finishes.
 	if r.registry != nil {
 		r.registry.Register(newSession.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(ctx)
+			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
+				slog.Warn("harness session wait failed", "error", waitErr)
+			}
 			r.registry.Deregister(newSession.ID)
 		}()
 	}
@@ -252,7 +256,9 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 	if r.registry != nil {
 		r.registry.Register(completedTask.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(ctx)
+			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
+				slog.Warn("harness session wait failed", "error", waitErr)
+			}
 			r.registry.Deregister(completedTask.ID)
 		}()
 	}
@@ -348,7 +354,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 	}
 
 	if r.eventBus != nil {
-		_ = r.eventBus.Publish(ctx, domain.SystemEvent{
+		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventAgentSessionResumed),
 			WorkspaceID: failedTask.WorkspaceID,
@@ -358,13 +364,17 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 				"sub_plan_id":    failedTask.SubPlanID,
 			}),
 			CreatedAt: time.Now(),
-		})
+		}); pubErr != nil {
+			slog.Warn("failed to publish session resumed event", "error", pubErr, "new_session_id", newTask.ID)
+		}
 	}
 
 	if r.registry != nil {
 		r.registry.Register(newTask.ID, harnessSession)
 		go func() {
-			_ = harnessSession.Wait(ctx)
+			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
+				slog.Warn("harness session wait failed", "error", waitErr)
+			}
 			r.registry.Deregister(newTask.ID)
 		}()
 	}

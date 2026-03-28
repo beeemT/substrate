@@ -1904,7 +1904,9 @@ func (a *App) teardownAllPipelines() {
 	}
 
 	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
-		_ = a.svcs.Foreman.Stop(context.Background())
+		if stopErr := a.svcs.Foreman.Stop(context.Background()); stopErr != nil {
+			slog.Warn("failed to stop foreman on teardown", "error", stopErr)
+		}
 		a.foremanPlanID = ""
 	}
 

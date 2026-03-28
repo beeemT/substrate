@@ -69,7 +69,9 @@ func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 		switch msg.String() {
 		case "c":
 			// clipboardContent produces raw unwrapped plain text with no gutter.
-			_ = clipboard.WriteAll(l.clipboardContent())
+			if clipErr := clipboard.WriteAll(l.clipboardContent()); clipErr != nil {
+				slog.Warn("failed to copy log to clipboard", "error", clipErr)
+			}
 			return l, func() tea.Msg { return ActionDoneMsg{Message: "Log copied to clipboard"} }
 		case "esc":
 			return l, func() tea.Msg { return CloseOverlayMsg{} }

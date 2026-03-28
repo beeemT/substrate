@@ -450,7 +450,9 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 	case domain.EventWorkItemCompleted:
 		externalID := extractExternalID(event.Payload)
 		if externalID != "" {
-			_ = a.UpdateState(ctx, externalID, domain.TrackerStateDone)
+			if updateErr := a.UpdateState(ctx, externalID, domain.TrackerStateDone); updateErr != nil {
+				slog.Warn("failed to update tracker state to done", "error", updateErr, "external_id", externalID)
+			}
 		}
 		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
 			slog.Warn("github: work item completed handler failed", "err", err)

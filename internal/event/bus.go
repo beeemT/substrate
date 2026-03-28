@@ -399,8 +399,10 @@ func (b *Bus) runPostHooks(event domain.SystemEvent) {
 			ctx, cancel := context.WithTimeout(context.Background(), e.config.Timeout)
 			defer cancel()
 
-			// Post-hook errors are ignored (but could be logged)
-			_ = e.hook(ctx, event)
+			// Post-hook errors are logged at warn level.
+			if hookErr := e.hook(ctx, event); hookErr != nil {
+				slog.Warn("post-hook failed", "hook", e.config.Name, "error", hookErr)
+			}
 		}(entry)
 	}
 	wg.Wait()

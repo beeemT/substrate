@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -965,10 +966,12 @@ func sessionSourceSummaries(metadata map[string]any) []domain.SourceSummary {
 	}
 	payload, err := json.Marshal(raw)
 	if err != nil {
+		slog.Warn("failed to marshal source summaries metadata", "error", err)
 		return nil
 	}
 	var summaries []domain.SourceSummary
 	if err := json.Unmarshal(payload, &summaries); err != nil {
+		slog.Warn("failed to unmarshal source summaries", "error", err)
 		return nil
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"sort"
@@ -175,7 +176,9 @@ func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) 
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.WriteString(raw); err != nil {
-		_ = tmp.Close()
+		if closeErr := tmp.Close(); closeErr != nil {
+			slog.Warn("failed to close temp config file on write error", "error", closeErr)
+		}
 
 		return nil, fmt.Errorf("write temp YAML config: %w", err)
 	}
@@ -225,7 +228,9 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 		return SettingsApplyResult{}, err
 	}
 	if current.Foreman != nil {
-		_ = current.Foreman.Stop(ctx)
+		if stopErr := current.Foreman.Stop(ctx); stopErr != nil {
+			slog.Warn("failed to stop foreman on settings apply", "error", stopErr)
+		}
 	}
 	reloaded.SettingsData.RawYAML = raw
 
@@ -486,13 +491,16 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 				}
 				if lastErr != nil {
 					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					_ = bus.Publish(context.Background(), domain.SystemEvent{
+					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
 						ID:          domain.NewID(),
 						EventType:   string(domain.EventAdapterError),
 						WorkspaceID: evt.WorkspaceID,
 						Payload:     errPayload,
 						CreatedAt:   time.Now(),
-					})
+					}); pubErr != nil {
+						slog.Warn("failed to publish adapter error event", "error", pubErr)
+					}
+
 					select {
 					case adapterErrors <- AdapterErrorMsg{
 						Adapter:   a.Name(),
@@ -531,13 +539,16 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 				}
 				if lastErr != nil {
 					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					_ = bus.Publish(context.Background(), domain.SystemEvent{
+					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
 						ID:          domain.NewID(),
 						EventType:   string(domain.EventAdapterError),
 						WorkspaceID: evt.WorkspaceID,
 						Payload:     errPayload,
 						CreatedAt:   time.Now(),
-					})
+					}); pubErr != nil {
+						slog.Warn("failed to publish adapter error event", "error", pubErr)
+					}
+
 					select {
 					case adapterErrors <- AdapterErrorMsg{
 						Adapter:   a.Name(),
@@ -1057,10 +1068,12 @@ func validateSettingsConfig(cfg *config.Config) error {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-
+		if closeErr := tmp.Close(); closeErr != nil {
+			slog.Warn("failed to close temp file after write error", "error", closeErr)
+		}
 		return err
 	}
+
 	if err := tmp.Close(); err != nil {
 		return err
 	}

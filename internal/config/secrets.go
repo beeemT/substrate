@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -49,6 +50,7 @@ func LoadSecrets(cfg *Config, store SecretStore) error {
 	for field, key := range SecretKeys() {
 		value, err := store.Get(key)
 		if err != nil {
+			slog.Warn("failed to load secret from store", "key", key, "error", err)
 			continue
 		}
 		setSecretField(cfg, field, value)

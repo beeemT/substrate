@@ -184,7 +184,9 @@ func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Forem
 // HeartbeatCmd sends a heartbeat for the current instance.
 func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
-		_ = svc.UpdateHeartbeat(context.Background(), instanceID)
+		if heartbeatErr := svc.UpdateHeartbeat(context.Background(), instanceID); heartbeatErr != nil {
+			slog.Warn("failed to update heartbeat", "error", heartbeatErr, "instance_id", instanceID)
+		}
 
 		return nil
 	}
@@ -193,7 +195,9 @@ func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 // DeleteInstanceCmd removes the instance record on clean shutdown.
 func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
-		_ = svc.Delete(context.Background(), instanceID)
+		if deleteErr := svc.Delete(context.Background(), instanceID); deleteErr != nil {
+			slog.Warn("failed to delete instance record", "error", deleteErr, "instance_id", instanceID)
+		}
 
 		return nil
 	}
@@ -362,7 +366,9 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		if seekErr == nil {
 			newOffset = pos
 		}
-		_ = scanner.Err()
+		if scanErr := scanner.Err(); scanErr != nil {
+			slog.Warn("session log scanner error", "error", scanErr, "session_id", sessionID)
+		}
 
 		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
 	}
@@ -708,6 +714,7 @@ func completionReviewContext(ctx context.Context, planSvc *service.PlanService, 
 			}
 			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, session.WorktreePath)
 			if err != nil {
+				slog.Warn("failed to resolve review context for session", "session_id", session.ID, "worktree", session.WorktreePath, "error", err)
 				continue
 			}
 			branch := strings.TrimSpace(reviewCtx.Review.HeadBranch)

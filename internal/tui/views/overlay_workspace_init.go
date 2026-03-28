@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,9 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 		}
 		if err := workspaceSvc.Create(context.Background(), ws); err != nil {
 			if createdWorkspaceFile {
-				_ = os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName))
+				if removeErr := os.Remove(filepath.Join(cwd, gitwork.WorkspaceFileName)); removeErr != nil {
+					slog.Warn("failed to remove workspace file on rollback", "error", removeErr)
+				}
 			}
 
 			return ErrMsg{Err: err}

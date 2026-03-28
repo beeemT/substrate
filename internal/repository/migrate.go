@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -47,6 +48,7 @@ func Migrate(ctx context.Context, db *sqlx.DB, migrationsFS fs.FS) error {
 		}
 		ver, err := strconv.Atoi(parts[0])
 		if err != nil {
+			slog.Warn("skipping migration file with invalid version prefix", "file", e.Name(), "error", err)
 			continue
 		}
 		migrations = append(migrations, migration{version: ver, filename: e.Name()})
@@ -76,13 +78,17 @@ func Migrate(ctx context.Context, db *sqlx.DB, migrationsFS fs.FS) error {
 		}
 
 		if _, err := tx.ExecContext(ctx, string(sql)); err != nil {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				slog.Warn("failed to rollback migration transaction after exec error", "error", rollbackErr, "migration", m.filename)
+			}
 
 			return fmt.Errorf("applying migration %s: %w", m.filename, err)
 		}
 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				slog.Warn("failed to rollback migration transaction after record error", "error", rollbackErr, "migration", m.filename)
+			}
 
 			return fmt.Errorf("recording migration %d: %w", m.version, err)
 		}
