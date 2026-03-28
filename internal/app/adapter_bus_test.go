@@ -69,7 +69,7 @@ func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkIte
 		}(workItemAdapter, sub.C)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorkItemCompleted))
+		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted))
 		if err != nil {
 			return err
 		}
@@ -128,6 +128,25 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 	select {
 	case evt := <-work.events:
 		t.Fatalf("work-item adapter must not receive worktree.created, got %s", evt.EventType)
+	default:
+	}
+	worktreeReused := domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventWorktreeReused), CreatedAt: time.Now()}
+	if err := bus.Publish(context.Background(), worktreeReused); err != nil {
+		t.Fatalf("publish worktree reused: %v", err)
+	}
+	// WorktreeReused must reach the lifecycle adapter (for PR/MR description updates)
+	// and must NOT reach the work-item adapter.
+	select {
+	case evt := <-life.events:
+		if evt.EventType != string(domain.EventWorktreeReused) {
+			t.Fatalf("lifecycle adapter got %s, want worktree.reused", evt.EventType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle adapter to receive worktree.reused")
+	}
+	select {
+	case evt := <-work.events:
+		t.Fatalf("work-item adapter must not receive worktree.reused, got %s", evt.EventType)
 	default:
 	}
 }

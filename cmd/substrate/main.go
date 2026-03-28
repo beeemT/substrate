@@ -262,7 +262,7 @@ func run() error { //nolint:funlen
 		}(workItemAdapter, sub.C)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorkItemCompleted))
+		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted))
 		if subErr != nil {
 			return fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
 		}
