@@ -394,6 +394,17 @@ Do not fabricate facts about the codebase.
 	return prompt.String()
 }
 
+// SessionID returns the ID of the currently running foreman session.
+// Returns "" if the Foreman has not been started or has been stopped.
+func (f *Foreman) SessionID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.session == nil {
+		return ""
+	}
+	return f.session.ID()
+}
+
 // ErrQuestionNotEscalated is returned by ResolveEscalated and SendUserMessage
 // when no in-flight answer channel exists for the given question ID.
 // This happens if the Foreman was restarted after escalation, or if the question

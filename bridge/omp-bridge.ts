@@ -17,7 +17,7 @@
 import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
-const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL ?? "xhigh";
+const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL || undefined;
 const allowPushEnv = process.env.SUBSTRATE_ALLOW_PUSH ?? "false";
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 
@@ -159,6 +159,23 @@ function mapEvent(e: unknown): object[] {
 		return [{ type: "lifecycle", stage: "retry_resumed" }];
 	}
 
+
+	if (event.type === "auto_compaction_start") {
+		const reason = String((event as any).reason ?? "threshold");
+		const msg = reason === "overflow" ? "Context overflow — compacting…" : "Compacting context…";
+		return [{ type: "lifecycle", stage: "compaction_start", message: msg }];
+	}
+
+	if (event.type === "auto_compaction_end") {
+		// Skipped (no candidates) and aborted (session ended mid-compaction) are benign — no visible event.
+		if ((event as any).skipped || (event as any).aborted) return [];
+		const errorMessage = (event as any).errorMessage;
+		if (errorMessage) {
+			return [{ type: "lifecycle", stage: "compaction_failed", message: String(errorMessage) }];
+		}
+		return [{ type: "lifecycle", stage: "compaction_end" }];
+	}
+
 	return [];
 }
 
@@ -235,7 +252,7 @@ async function initSession(): Promise<void> {
 	const sessionOpts: Parameters<typeof createAgentSession>[0] = {
 		cwd: worktreePath,
 		sessionManager,
-		thinkingLevel: thinkingLevel as any,
+		...(thinkingLevel ? { thinkingLevel: thinkingLevel as any } : {}),
 		toolNames: agentToolNames,
 		spawns: "",
 		enableMCP: false,

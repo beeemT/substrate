@@ -501,6 +501,53 @@ func TestRenderTranscriptLifecycleRendered(t *testing.T) {
 	}
 }
 
+func TestRenderTranscriptCompactionStartRendered(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "compaction_start", Message: "Compacting context…"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Compacting") {
+		t.Errorf("expected compaction_start output to contain 'Compacting', got: %q", plain)
+	}
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("line width %d > 80: %q", w, line)
+		}
+	}
+}
+
+func TestRenderTranscriptCompactionEndRendered(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "compaction_end"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "compacted") {
+		t.Errorf("expected compaction_end output to contain 'compacted', got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptCompactionFailedRendered(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "compaction_failed", Message: "context overflow recovery failed: rate limited"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Compaction failed") {
+		t.Errorf("expected compaction_failed output to contain 'Compaction failed', got: %q", plain)
+	}
+	if !strings.Contains(plain, "rate limited") {
+		t.Errorf("expected compaction_failed output to contain error message, got: %q", plain)
+	}
+}
+
 func TestGroupEntriesLegacyErrorSetsIsError(t *testing.T) {
 	t.Parallel()
 	entries := []sessionlog.Entry{

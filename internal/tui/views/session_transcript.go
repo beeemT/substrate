@@ -282,6 +282,14 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 			return st.Warning.Render(ansi.Truncate("⏸ "+text, width, "…"))
 		case "retry_resumed":
 			return st.Muted.Render(ansi.Truncate("↺ Resumed after rate limit", width, "…"))
+		case "compaction_start":
+			text := firstNonEmptyTranscript(block.message, "Compacting context…")
+			return st.Muted.Render(ansi.Truncate("⟳ "+text, width, "…"))
+		case "compaction_end":
+			return st.Muted.Render(ansi.Truncate("⟳ Context compacted", width, "…"))
+		case "compaction_failed":
+			text := "Compaction failed: " + firstNonEmptyTranscript(block.message, "unknown error")
+			return st.Warning.Render(ansi.Truncate(text, width, "…"))
 		}
 		var text string
 		switch block.stage {
