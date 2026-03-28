@@ -199,6 +199,7 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
 			// Without this the process waits for more stdin and Wait() hangs until
 			// sessTimeout fires, leaving the sub-plan stranded in_progress.
 			process.exit(0);
+		}
 	} catch (err) {
 		const errorMessage = err instanceof Error ? err.message : String(err);
 		emitLifecycle("failed", { message: errorMessage });
