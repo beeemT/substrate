@@ -936,40 +936,29 @@ func TestHasThinkingBlocks(t *testing.T) {
 	}
 }
 
-func TestToolPrimaryArgAskForeman(t *testing.T) {
-	t.Parallel()
-	args := `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`
-	if got := toolPrimaryArg("ask_foreman", args); got != "Should I use a channel or mutex here?" {
-		t.Errorf("ask_foreman primary arg = %q, want question", got)
-	}
-}
+// ask_foreman tool card should be minimal — the question event has its own
+// dedicated yellow callout rendering. The tool card must not duplicate content.
 
-func TestToolPrimaryArgAskForemanMCP(t *testing.T) {
+func TestToolPrimaryArgAskForemanReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	args := `{"question":"Which file owns the DB connection?"}`
-	if got := toolPrimaryArg("mcp__substrate__ask_foreman", args); got != "Which file owns the DB connection?" {
-		t.Errorf("mcp__substrate__ask_foreman primary arg = %q, want question", got)
-	}
-}
-
-func TestToolArgsSummaryAskForemanWithContext(t *testing.T) {
-	t.Parallel()
-	st := testStyles()
-	args := `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`
-	summary := toolArgsSummary(st, "ask_foreman", args, 80)
-	plain := ansi.Strip(summary)
-	if !strings.Contains(plain, "The struct is accessed by multiple goroutines") {
-		t.Errorf("ask_foreman summary missing context, got: %q", plain)
-	}
-}
-
-func TestToolArgsSummaryAskForemanNoContext(t *testing.T) {
-	t.Parallel()
-	st := testStyles()
 	args := `{"question":"Should I use a channel or mutex here?"}`
-	summary := toolArgsSummary(st, "ask_foreman", args, 80)
-	if summary != "" {
-		t.Errorf("ask_foreman no-context summary should be empty, got: %q", ansi.Strip(summary))
+	if got := toolPrimaryArg("ask_foreman", args); got != "" {
+		t.Errorf("ask_foreman primary arg should be empty (question rendered via dedicated question callout), got: %q", got)
+	}
+	if got := toolPrimaryArg("mcp__substrate__ask_foreman", args); got != "" {
+		t.Errorf("mcp__substrate__ask_foreman primary arg should be empty, got: %q", got)
+	}
+}
+
+func TestToolArgsSummaryAskForemanReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`
+	if got := toolArgsSummary(st, "ask_foreman", args, 80); got != "" {
+		t.Errorf("ask_foreman args summary should be empty (question rendered via dedicated question callout), got: %q", ansi.Strip(got))
+	}
+	if got := toolArgsSummary(st, "mcp__substrate__ask_foreman", args, 80); got != "" {
+		t.Errorf("mcp__substrate__ask_foreman args summary should be empty, got: %q", ansi.Strip(got))
 	}
 }
 
@@ -994,21 +983,62 @@ func TestRenderTranscriptAskForemanToolCardWidthBounded(t *testing.T) {
 	}
 }
 
-func TestRenderTranscriptAskForemanMCPToolCard(t *testing.T) {
+func TestRenderTranscriptAskForemanQuestionNotDuplicated(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
+	// Simulate the real event sequence: tool_start, question event, tool_result.
 	entries := []sessionlog.Entry{
 		{
 			Kind:   sessionlog.KindToolStart,
-			Tool:   "mcp__substrate__ask_foreman",
+			Tool:   "ask_foreman",
 			Intent: "Asking foreman",
-			Text:   `{"question":"Which adapter handles Claude?"}`,
+			Text:   `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`,
 		},
-		{Kind: sessionlog.KindToolResult, Text: "The claudeagent adapter."},
+		{
+			Kind:     sessionlog.KindQuestion,
+			Question: "Should I use a channel or mutex here?",
+			Context:  "The struct is accessed by multiple goroutines",
+		},
+		{Kind: sessionlog.KindToolResult, Text: "Use a mutex with a clear critical section."},
 	}
 	output := RenderTranscript(st, entries, 80, false, true)
 	plain := ansi.Strip(output)
-	if !strings.Contains(plain, "Which adapter handles Claude?") {
-		t.Errorf("expected question in tool card, got: %q", plain)
+	// The question must appear in the yellow question callout, not duplicated in the tool card.
+	questionCount := strings.Count(plain, "Should I use a channel or mutex here?")
+	if questionCount != 1 {
+		t.Errorf("question text appeared %d times, expected exactly 1 (no duplication between tool card and question callout)\noutput: %q", questionCount, plain)
+	}
+	// The context must also appear in the question callout (may wrap).
+	if !strings.Contains(plain, "multiple goroutines") {
+		t.Errorf("expected context in question callout, got: %q", plain)
+	}
+	// Must contain the tool name.
+	if !strings.Contains(plain, "ask_foreman") {
+		t.Errorf("expected ask_foreman tool name in output, got: %q", plain)
+	}
+	// The question callout must indicate it is for the foreman.
+	if !strings.Contains(plain, "Foreman Question:") {
+		t.Errorf("expected 'Foreman Question:' label, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptNonForemanQuestion(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	// A question event without a preceding ask_foreman tool_start.
+	entries := []sessionlog.Entry{
+		{
+			Kind:     sessionlog.KindQuestion,
+			Question: "Is this the right approach?",
+			Context:  "Working on the parser refactor",
+		},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Question:") {
+		t.Errorf("expected 'Question:' label, got: %q", plain)
+	}
+	if strings.Contains(plain, "Foreman") {
+		t.Errorf("non-foreman question should not contain 'Foreman', got: %q", plain)
 	}
 }

@@ -39,9 +39,10 @@ type transcriptBlock struct {
 	summary string
 
 	// question
-	question  string
-	ctx       string
-	uncertain bool
+	question    string
+	ctx         string
+	uncertain   bool
+	fromForeman bool // true when the question was emitted by ask_foreman
 
 	// tool
 	toolName    string
@@ -136,11 +137,17 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 			if strings.TrimSpace(e.Question) == "" {
 				continue
 			}
+			// Detect whether this question came from ask_foreman by checking
+			// if there is a pending ask_foreman tool block in the queue.
+			// The question event is emitted synchronously from within the
+			// tool execution, so a pending entry is always present.
+			fromForeman := len(toolQueue["ask_foreman"]) > 0 || len(toolQueue["mcp__substrate__ask_foreman"]) > 0
 			blocks = append(blocks, transcriptBlock{
-				kind:      blockKindQuestion,
-				question:  e.Question,
-				ctx:       e.Context,
-				uncertain: e.Uncertain,
+				kind:        blockKindQuestion,
+				question:    e.Question,
+				ctx:         e.Context,
+				uncertain:   e.Uncertain,
+				fromForeman: fromForeman,
 			})
 
 		case sessionlog.KindForeman:
@@ -305,11 +312,15 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		return st.Muted.Render(ansi.Truncate(text, width, "…"))
 
 	case blockKindQuestion:
+		label := "Question"
+		if block.fromForeman {
+			label = "Foreman Question"
+		}
 		question := block.question
 		if block.uncertain {
 			question = "(uncertain) " + question
 		}
-		body := "Question: " + question
+		body := label + ": " + question
 		if block.ctx != "" {
 			body += " — " + block.ctx
 		}
@@ -494,8 +505,6 @@ func toolPrimaryArg(toolName, argsJSON string) string {
 		return singleLine(stringArg("url"))
 	case "web_search":
 		return singleLine(stringArg("query"))
-	case "ask_foreman", "mcp__substrate__ask_foreman":
-		return singleLine(stringArg("question"))
 	case "task":
 		if tasks, ok := args["tasks"]; ok {
 			if taskSlice, ok := tasks.([]any); ok && len(taskSlice) > 0 {
@@ -611,14 +620,8 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 			}
 		}
 
-	case "find", "edit", "bash", "fetch", "web_search", "task":
-		// no summary — primary arg is sufficient
-
-	case "ask_foreman", "mcp__substrate__ask_foreman":
-		// question is in the title; show context only
-		if ctx := stringArg("context"); ctx != "" {
-			parts = append(parts, dim(singleLine(ctx)))
-		}
+	case "find", "edit", "bash", "fetch", "web_search", "task", "ask_foreman", "mcp__substrate__ask_foreman":
+	// no summary — primary arg or dedicated event rendering is sufficient
 
 	default:
 		// Unknown tool: show a single-line truncated raw args summary.

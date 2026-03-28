@@ -575,7 +575,7 @@ func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) er
 		return err
 	}
 	if pull == nil {
-		slog.Warn("github: no open PR found for reused worktree", "branch", p.Branch)
+		slog.Debug("github: no open PR found for reused worktree; skipping description update", "branch", p.Branch)
 		return nil
 	}
 
