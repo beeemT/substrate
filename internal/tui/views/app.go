@@ -61,7 +61,10 @@ const (
 	sidebarPaneTasks
 )
 
-const taskSidebarSourceDetailsID = "__source_details__"
+const (
+	taskSidebarSourceDetailsID = "__source_details__"
+	taskSidebarForemanID       = "__foreman__"
+)
 
 type mainFocusArea int
 
@@ -1674,6 +1677,15 @@ func (a *App) updateContentFromState() tea.Cmd {
 				}
 				return nil
 			}
+			if taskSessionID == taskSidebarForemanID {
+				if a.svcs.Foreman != nil {
+					if sid := a.svcs.Foreman.SessionID(); sid != "" {
+						return a.showForemanContent(wi, sid)
+					}
+				}
+				// Foreman is not running; let selection fall to overview.
+				a.setSelectedTaskSessionID("")
+			}
 			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
 				return a.showTaskContent(wi, session)
 			}
@@ -1815,6 +1827,36 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	if !a.tailingSessionIDs[session.ID] {
 		a.tailingSessionIDs[session.ID] = true
 		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, session.ID, resumeOffset))
+	}
+	return spinnerCmd
+}
+
+// showForemanContent sets up the content panel to tail the Foreman's session log.
+// sessionID is the active session ID returned by Foreman.SessionID().
+func (a *App) showForemanContent(wi *domain.Session, sessionID string) tea.Cmd {
+	var titlePrefix string
+	if wi != nil {
+		titlePrefix = firstNonEmptyString(wi.ExternalID, wi.ID) + " · "
+	}
+	title := titlePrefix + "Foreman session"
+	meta := strings.Join([]string{"Running", "Foreman"}, " · ")
+	a.content.sessionLog.SetNotice(nil)
+	a.content.SetMode(ContentModeSessionInteraction)
+	a.content.sessionLog.SetTitle(title)
+	a.content.sessionLog.SetModeLabel("Foreman")
+	a.content.sessionLog.SetMeta(meta)
+	a.content.sessionLog.ClearFailedSession()
+	a.content.sessionLog.ClearCompletedSession()
+	logPath := filepath.Join(a.sessionsDir, sessionID+".log")
+	resumeOffset := int64(0)
+	if a.content.sessionLog.live && a.content.sessionLog.sessionID == sessionID && a.content.sessionLog.logPath == logPath {
+		resumeOffset = a.content.sessionLog.offset
+	}
+	a.content.sessionLog.SetLogPath(sessionID, logPath)
+	spinnerCmd := a.content.sessionLog.SetAgentActive(true)
+	if !a.tailingSessionIDs[sessionID] {
+		a.tailingSessionIDs[sessionID] = true
+		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, sessionID, resumeOffset))
 	}
 	return spinnerCmd
 }
@@ -2066,6 +2108,21 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			SubtitleText: sessionSourceSidebarSubtitle(wi),
 			LastActivity: wi.UpdatedAt,
 		})
+	}
+	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
+		if plan := a.plans[workItemID]; plan != nil && plan.ID == a.foremanPlanID {
+			if sid := a.svcs.Foreman.SessionID(); sid != "" {
+				entries = append(entries, SidebarEntry{
+					Kind:           SidebarEntryTaskSession,
+					WorkItemID:     workItemID,
+					SessionID:      taskSidebarForemanID,
+					Title:          "Foreman session",
+					RepositoryName: "Foreman",
+					SessionStatus:  domain.AgentSessionRunning,
+					LastActivity:   wi.UpdatedAt,
+				})
+			}
+		}
 	}
 	for _, session := range a.sessionsForWorkItem(workItemID) {
 		entryRepo := session.RepositoryName
