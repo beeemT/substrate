@@ -260,10 +260,11 @@ func (p *ReviewPipeline) startReviewAgent(
 		return nil, "", "", fmt.Errorf("transition review session to running: %w", err)
 	}
 
-	// Start review session in foreman mode (read-only tools).
+	// Start review session in agent mode so UserPrompt is delivered automatically
+	// by the harness and the bridge emits lifecycle.completed ("done") on finish.
 	opts := adapter.SessionOpts{
 		SessionID:    reviewSessionID,
-		Mode:         adapter.SessionModeForeman,
+		Mode:         adapter.SessionModeAgent,
 		WorkspaceID:  session.WorkspaceID,
 		SubPlanID:    session.SubPlanID,
 		Repository:   session.RepositoryName,
@@ -279,6 +280,8 @@ func (p *ReviewPipeline) startReviewAgent(
 		}
 		return nil, "", "", fmt.Errorf("start review session: %w", err)
 	}
+
+	// In agent mode the harness sends UserPrompt automatically — no manual prompt needed.
 	// Watch for done event instead of calling Wait().
 	// Apply configured review timeout.
 	timeoutCtx, cancel := context.WithTimeout(ctx, p.reviewTimeout)
@@ -305,8 +308,8 @@ func (p *ReviewPipeline) startReviewAgent(
 			}
 			switch evt.Type {
 			case "done", "foreman_proposed":
-				// foreman_proposed is the completion signal when the review session runs in
-				// SessionModeForeman (omp-bridge emits foreman_proposed, not lifecycle.completed).
+				// "done" is the normal agent-mode completion signal (lifecycle.completed).
+				// "foreman_proposed" is kept as a safety net for unexpected foreman-mode fallback.
 				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
 					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
 				}
@@ -332,7 +335,11 @@ func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.TaskPlan, plan domain.
 		fmt.Fprintf(&faqBuilder, "Q: %s\nA: %s\n\n", entry.Question, entry.Answer)
 	}
 
-	prompt := `## Task
+	prompt := `## Role
+
+You are a code reviewer. Your sole responsibility is to review the changes — do NOT edit, fix, or write any code. Produce only the structured output described below.
+
+## Task
 
 Review the changes in this repository against the plan. Compare the feature branch against main. Identify correctness, completeness, and quality issues.
 
