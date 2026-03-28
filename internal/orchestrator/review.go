@@ -163,27 +163,19 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	}
 
 	// Start review agent session - now returns (session, output, sessionID, error)
-	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, session, subPlan, plan, cycle)
+	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, session, subPlan, plan)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
 	defer reviewSession.Abort(ctx) // Abort when done
 
-	// Parse critiques from output
+	// Parse critiques from output. If the output is not parseable, log a warning and
+	// treat it as no critiques — the review agent runs in agent mode (bridge exits after
+	// first response), so multi-turn correction is not possible.
 	critiques, parseErr := p.parseCritiques(reviewOutput)
 	if parseErr != nil {
-		// Correction loop
-		correctedOutput, err := p.runCorrectionLoop(ctx, reviewSession, cycle, reviewOutput)
-		if err != nil {
-			slog.Warn("correction loop failed, treating as zero critiques", "error", err)
-			critiques = []domain.Critique{}
-		} else {
-			critiques, parseErr = p.parseCritiques(correctedOutput)
-			if parseErr != nil {
-				slog.Warn("parse failed after correction, treating as zero critiques")
-				critiques = []domain.Critique{}
-			}
-		}
+		slog.Warn("review output not parseable, treating as no critiques", "error", parseErr, "session_id", reviewSessionID)
+		critiques = []domain.Critique{}
 	}
 
 	// Decision logic
@@ -234,7 +226,6 @@ func (p *ReviewPipeline) startReviewAgent(
 	session domain.Task,
 	subPlan domain.TaskPlan,
 	plan domain.Plan,
-	_ domain.ReviewCycle,
 ) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
@@ -307,9 +298,8 @@ func (p *ReviewPipeline) startReviewAgent(
 				return reviewSession, "", reviewSessionID, errors.New("review session events channel closed unexpectedly")
 			}
 			switch evt.Type {
-			case "done", "foreman_proposed":
+			case "done":
 				// "done" is the normal agent-mode completion signal (lifecycle.completed).
-				// "foreman_proposed" is kept as a safety net for unexpected foreman-mode fallback.
 				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
 					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
 				}
@@ -422,55 +412,6 @@ func (p *ReviewPipeline) parseCritiqueBlock(block string) (domain.Critique, erro
 	}
 
 	return critique, nil
-}
-
-// runCorrectionLoop runs the correction loop for unparsable output.
-func (p *ReviewPipeline) runCorrectionLoop(
-	ctx context.Context,
-	reviewSession adapter.AgentSession,
-	_ domain.ReviewCycle,
-	originalOutput string,
-) (string, error) {
-	maxRetries := *p.cfg.Plan.MaxParseRetries
-
-	for range make([]struct{}, maxRetries) {
-		correctionMsg := `Your output was not parseable. Output either:
-- Exactly "NO_CRITIQUES" if there are no issues requiring fixes, or
-- One or more CRITIQUE / END_CRITIQUE blocks.
-
-Do not include explanatory prose outside these markers.
-
-Original output:
-` + originalOutput
-
-		// Send correction message to review session
-		if err := reviewSession.SendMessage(ctx, correctionMsg); err != nil {
-			return "", fmt.Errorf("send correction message: %w", err)
-		}
-
-		// Wait for next "done" event from the session
-		for {
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case evt, ok := <-reviewSession.Events():
-				if !ok {
-					return "", errors.New("review session ended during correction")
-				}
-				if evt.Type == "done" || evt.Type == "foreman_proposed" {
-					// Read new output from session log
-					output, err := p.readSessionOutputFromLog(ctx, reviewSession.ID())
-					if err != nil {
-						slog.Warn("failed to read session log after correction", "error", err)
-						break // Try another correction
-					}
-					return output, nil
-				}
-			}
-		}
-	}
-
-	return "", errors.New("max correction retries exceeded")
 }
 
 // makeDecision makes the pass/fail decision based on critiques.
