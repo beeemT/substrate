@@ -531,10 +531,11 @@ Current shipped harnesses:
   - native resume: yes (`SupportsNativeResume`)
   - supported tools: `read`, `grep`, `find`, `edit`, `write`, `bash`, `ask_foreman`
   - remains the default harness family in config defaults
-- `internal/adapter/claudecode` (`Name() == "claude-code"`)
+- `internal/adapter/claudeagent` (`Name() == "claude-code")`
   - streaming: yes
-  - messaging: no
-  - supported tools: `Bash`, `Edit`, `Read`, `Glob`, `Grep`
+  - messaging: yes (`SendMessage`, `Steer`)
+  - native resume: yes (`SupportsNativeResume`)
+  - supported tools: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `mcp__substrate__ask_foreman`
 - `internal/adapter/codex` (`Name() == "codex"`)
   - streaming: yes
   - messaging: no

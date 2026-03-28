@@ -426,6 +426,10 @@ async function main(): Promise<void> {
 		const { text, uncertain } = extractConfidence(lastResultText);
 		emit({ type: "foreman_proposed", text, uncertain });
 	}
+	// The SDK query is finite-lifetime. Once it completes, nothing remains.
+	// Exit explicitly — the readline interface on stdin would keep the event loop alive.
+	process.exit(0);
+
 }
 
 // ---------------------------------------------------------------------------

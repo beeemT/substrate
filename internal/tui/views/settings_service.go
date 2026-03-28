@@ -712,7 +712,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		{
 			ID:          "harness.claude",
 			Title:       "Harness · Claude Code",
-			Description: "Claude Code CLI configuration",
+			Description: "Claude Code bridge configuration",
 			Fields: []SettingsField{
 				{Section: "adapters.claude_code", Key: "bun_path", Label: "Bun Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BunPath},
 				{Section: "adapters.claude_code", Key: "bridge_path", Label: "Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BridgePath},

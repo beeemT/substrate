@@ -98,6 +98,12 @@ jobs:
             --compile \
             --target "${{ matrix.bridge_target }}" \
             --outfile "dist/bridge/omp-bridge"
+
+          bun build bridge/claude-agent-bridge.ts \
+            --compile \
+            --target "${{ matrix.bridge_target }}" \
+            --outfile "dist/bridge/claude-agent-bridge"
+
           cp "bridge/node_modules/@oh-my-pi/pi-natives/native/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
 
           tar -C dist -czf "substrate_${VERSION_NUM}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" .
@@ -197,6 +203,7 @@ jobs:
               assert_match "substrate", shell_output("#{bin}/substrate --help 2>&1", 0).downcase
               assert_path_exists pkgshare/"bridge/omp-bridge"
               assert_match "session_ready", pipe_output("#{pkgshare}/bridge/omp-bridge", '{"type":"abort"}\n', 0)
+              assert_path_exists pkgshare/"bridge/claude-agent-bridge"
             end
           end
           FORMULA

@@ -71,7 +71,7 @@ brew tap beeemT/tap
 brew install substrate
 ```
 
-This install path ships the compiled oh-my-pi bridge executable and native addon with Substrate, so the default harness works out of the box without `bun_path` or `bridge_path` configuration.
+This install path ships compiled bridge executables (oh-my-pi and Claude Agent SDK) with Substrate, so both the default harness and Claude Code integration work out of the box without `bun_path` or `bridge_path` configuration.
 
 To upgrade:
 
@@ -93,7 +93,7 @@ Install a specific version:
 go install github.com/beeemT/substrate/cmd/substrate@v1.0.0
 ```
 
-Note: `go install` only installs the Go binary. If you want the default oh-my-pi harness to work out of the box, prefer the Homebrew package or build from a source checkout that includes the `bridge/` assets.
+Note: `go install` only installs the Go binary. If you want harness bridges to work out of the box, prefer the Homebrew package or build from a source checkout that includes the `bridge/` assets.
 
 ### Build from Source
 
@@ -111,9 +111,10 @@ go build -o substrate ./cmd/substrate
 Runtime dependencies:
 
 - **git-work** — [Git worktree manager](https://github.com/beeemT/git-work)
-- **Bun** — Only required for source-checkout builds that run the TypeScript oh-my-pi bridge directly; the Homebrew package ships a compiled bridge executable instead
+- **Bun** — Only required for source-checkout builds that run TypeScript bridges directly; the Homebrew package ships compiled bridge executables instead
 - **gh** — Optional, used for GitHub CLI fallback auth and harness-driven GitHub login actions; when absent, GitHub CLI fallback/login features are disabled rather than crashing Substrate
 - **glab** — Optional, for GitLab MR creation; when absent, GitLab MR lifecycle automation is skipped rather than crashing Substrate
+- **Claude Code** — Required for the Claude Agent SDK harness; [install Claude Code](https://docs.anthropic.com/en/docs/claude-code) and run `claude` once to authenticate before using the Claude Code harness
 ---
 
 ## Quick Start
@@ -182,7 +183,7 @@ The TUI lets you:
 
 ## How to Develop
 
-For local development you are usually running the source bridge (`bridge/omp-bridge.ts`), not the compiled bridge shipped in the Homebrew package. That means Bun and the bridge's Bun dependencies must be present locally.
+For local development you are usually running the source bridges (`bridge/omp-bridge.ts`, `bridge/claude-agent-bridge.ts`), not the compiled bridges shipped in the Homebrew package. That means Bun and the bridges' Bun dependencies must be present locally.
 
 ### Run from a source checkout
 
@@ -194,7 +195,7 @@ go build -o ./substrate ./cmd/substrate
 ./substrate
 ```
 
-Building the binary into the repo root lets Substrate auto-discover `./bridge/omp-bridge.ts`.
+Building the binary into the repo root lets Substrate auto-discover `./bridge/omp-bridge.ts` and `./bridge/claude-agent-bridge.ts`.
 
 ### If you use `go run` or place the binary somewhere else
 
@@ -209,9 +210,9 @@ adapters:
 
 Set `bun_path` only when `bun` is not already on your `PATH`.
 
-### Fixing `Oh My Pi bridge dependencies missing`
+### Fixing `bridge dependencies missing`
 
-That message means Substrate found the TypeScript bridge script, but the Bun packages next to it have not been installed. From the repository root, run:
+That message means Substrate found a TypeScript bridge script, but the Bun packages next to it have not been installed. From the repository root, run:
 
 ```bash
 bun install --cwd bridge
