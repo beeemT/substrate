@@ -1604,3 +1604,184 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 		t.Error("expected EventAgentSessionCompleted event, none emitted")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Two-stage retry model tests
+// ---------------------------------------------------------------------------
+
+// TestLastSessionForSubPlan verifies the two-stage decision helper.
+func TestLastSessionForSubPlan(t *testing.T) {
+	repo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := &ImplementationService{sessionSvc: sessionSvc}
+	ctx := context.Background()
+
+	t.Run("no sessions returns nil", func(t *testing.T) {
+		if got := svc.lastSessionForSubPlan(ctx, "sp-1"); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("returns most recent session regardless of phase or status", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["old-impl"] = domain.Task{
+			ID: "old-impl", SubPlanID: "sp-1", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-2 * time.Hour),
+		}
+		repo.sessions["review"] = domain.Task{
+			ID: "review", SubPlanID: "sp-1", Phase: domain.TaskPhaseReview,
+			Status: domain.AgentSessionFailed, CreatedAt: time.Now().Add(-time.Hour),
+		}
+		repo.mu.Unlock()
+		got := svc.lastSessionForSubPlan(ctx, "sp-1")
+		if got == nil || got.ID != "review" {
+			t.Errorf("expected review session, got %v", got)
+		}
+	})
+
+	t.Run("filters by sub-plan ID", func(t *testing.T) {
+		if got := svc.lastSessionForSubPlan(ctx, "other-sp"); got != nil {
+			t.Fatalf("expected nil for different sub-plan, got %+v", got)
+		}
+	})
+}
+
+// TestLatestCompletedImplSession verifies the review-retry helper that finds
+// the impl session whose output should be reviewed.
+func TestLatestCompletedImplSession(t *testing.T) {
+	repo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := &ImplementationService{sessionSvc: sessionSvc}
+	ctx := context.Background()
+
+	t.Run("no sessions returns nil", func(t *testing.T) {
+		if got := svc.latestCompletedImplSession(ctx, "sp-1"); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("failed impl session is ignored", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["task-1"] = domain.Task{
+			ID: "task-1", SubPlanID: "sp-1", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionFailed,
+		}
+		repo.mu.Unlock()
+		if got := svc.latestCompletedImplSession(ctx, "sp-1"); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("completed review session is ignored", func(t *testing.T) {
+		repo.mu.Lock()
+		delete(repo.sessions, "task-1")
+		repo.sessions["task-review"] = domain.Task{
+			ID: "task-review", SubPlanID: "sp-1", Phase: domain.TaskPhaseReview,
+			Status: domain.AgentSessionCompleted,
+		}
+		repo.mu.Unlock()
+		if got := svc.latestCompletedImplSession(ctx, "sp-1"); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("returns most recent completed impl session", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["task-impl-1"] = domain.Task{
+			ID: "task-impl-1", SubPlanID: "sp-1", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-time.Hour),
+		}
+		repo.sessions["task-impl-2"] = domain.Task{
+			ID: "task-impl-2", SubPlanID: "sp-1", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now(),
+		}
+		repo.mu.Unlock()
+		got := svc.latestCompletedImplSession(ctx, "sp-1")
+		if got == nil {
+			t.Fatal("expected a result, got nil")
+		}
+		if got.ID != "task-impl-2" {
+			t.Errorf("expected task-impl-2, got %s", got.ID)
+		}
+	})
+
+	t.Run("filters by sub-plan ID", func(t *testing.T) {
+		if got := svc.latestCompletedImplSession(ctx, "other-sp"); got != nil {
+			t.Fatalf("expected nil for different sub-plan, got %+v", got)
+		}
+	})
+}
+
+// TestTwoStageRetryModel verifies the retry decision for all session
+// phase combinations.
+func TestTwoStageRetryModel(t *testing.T) {
+	repo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := &ImplementationService{sessionSvc: sessionSvc}
+	ctx := context.Background()
+
+	t.Run("no history → implementation stage", func(t *testing.T) {
+		last := svc.lastSessionForSubPlan(ctx, "sp-1")
+		if last != nil {
+			t.Fatal("expected nil for fresh sub-plan")
+		}
+		// No last session means first run → fall through to implementation.
+	})
+
+	t.Run("failed impl → implementation stage", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["impl"] = domain.Task{
+			ID: "impl", SubPlanID: "sp-2", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionFailed, CreatedAt: time.Now(),
+		}
+		repo.mu.Unlock()
+		last := svc.lastSessionForSubPlan(ctx, "sp-2")
+		if last.Phase != domain.TaskPhaseImplementation {
+			t.Errorf("expected implementation phase, got %s", last.Phase)
+		}
+		// Last session is impl → should fall through to full implementation.
+	})
+
+	t.Run("failed review → review stage", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["impl-ok"] = domain.Task{
+			ID: "impl-ok", SubPlanID: "sp-3", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-time.Hour),
+		}
+		repo.sessions["review-fail"] = domain.Task{
+			ID: "review-fail", SubPlanID: "sp-3", Phase: domain.TaskPhaseReview,
+			Status: domain.AgentSessionFailed, CreatedAt: time.Now(),
+		}
+		repo.mu.Unlock()
+		last := svc.lastSessionForSubPlan(ctx, "sp-3")
+		if last.Phase != domain.TaskPhaseReview {
+			t.Errorf("expected review phase, got %s", last.Phase)
+		}
+		// Last session is review → should skip implementation, retry review.
+	})
+
+	t.Run("failed reimplementation → implementation stage", func(t *testing.T) {
+		repo.mu.Lock()
+		repo.sessions["impl-ok"] = domain.Task{
+			ID: "impl-ok", SubPlanID: "sp-4", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-3 * time.Hour),
+		}
+		repo.sessions["review"] = domain.Task{
+			ID: "review", SubPlanID: "sp-4", Phase: domain.TaskPhaseReview,
+			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-2 * time.Hour),
+		}
+		repo.sessions["reimpl-fail"] = domain.Task{
+			ID: "reimpl-fail", SubPlanID: "sp-4", Phase: domain.TaskPhaseImplementation,
+			Status: domain.AgentSessionFailed, CreatedAt: time.Now().Add(-time.Hour),
+		}
+		repo.mu.Unlock()
+		last := svc.lastSessionForSubPlan(ctx, "sp-4")
+		if last.Phase != domain.TaskPhaseImplementation {
+			t.Errorf("expected implementation phase, got %s", last.Phase)
+		}
+		if last.ID != "reimpl-fail" {
+			t.Errorf("expected reimpl-fail, got %s", last.ID)
+		}
+		// Last session is a failed reimplementation → should fall through to implementation.
+	})
+}

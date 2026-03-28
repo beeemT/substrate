@@ -378,6 +378,45 @@ func (s *ImplementationService) executeSubPlan(
 	// Update sub-plan status using the full struct
 	s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanInProgress)
 
+	// Two-stage retry model: the sub-plan lifecycle is implement → review →
+	// (reimplement → review)*. When retrying, the last session's phase
+	// determines the current stage and thus what to retry.
+	//
+	// 	Last session phase	Meaning				Retry action
+	// 	(none)			First run				Full impl + review
+	// 	implementation		Impl or reimpl failed			Run impl
+	// 	review			Review agent failed			Retry review only
+	if s.reviewPipeline != nil {
+		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.TaskPhaseReview {
+			// Last stage was review → retry review with the existing impl session.
+			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
+			if prevImpl == nil {
+				slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
+					"sub_plan_id", subPlan.ID, "last_session_id", last.ID)
+			} else {
+				slog.Info("skipping implementation, retrying review for sub-plan",
+					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
+				result.Status = domain.AgentSessionCompleted
+				result.SessionID = prevImpl.ID
+				result.WorktreePath = prevImpl.WorktreePath
+				result.Summary = "Retrying review with existing implementation"
+				result.CompletedAt = ptrTime(time.Now())
+				outcome := s.reviewLoop(ctx, *prevImpl, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
+				result.Outcome = outcome
+				if outcome.Passed {
+					state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
+					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+				} else if outcome.Failed {
+					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
+					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+				} else if outcome.Escalated {
+					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
+					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+				}
+				return result, nil
+			}
+		}
+	}
 	// Look up pre-created worktree path (created by prepareWorktrees before fan-out).
 	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
 	if !ok {
@@ -1163,6 +1202,51 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 		Error:               errMsg,
 	}
 	return s.publishEvent(ctx, domain.EventAgentSessionFailed, workspaceID, payload)
+}
+
+// lastSessionForSubPlan returns the most recent session for a sub-plan,
+// regardless of phase or status. Used by the two-stage retry model:
+// the last session's phase determines whether to retry implementation
+// or review.
+func (s *ImplementationService) lastSessionForSubPlan(ctx context.Context, subPlanID string) *domain.Task {
+	tasks, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
+	if err != nil {
+		slog.Warn("failed to list sessions for sub-plan",
+			"error", err, "sub_plan_id", subPlanID)
+		return nil
+	}
+
+	var latest *domain.Task
+	for i := range tasks {
+		if latest == nil || tasks[i].CreatedAt.After(latest.CreatedAt) {
+			t := tasks[i]
+			latest = &t
+		}
+	}
+	return latest
+}
+
+// latestCompletedImplSession returns the most recent completed implementation
+// session for a sub-plan, or nil if none exists. Used by the review-retry
+// path to find the impl session whose output should be reviewed.
+func (s *ImplementationService) latestCompletedImplSession(ctx context.Context, subPlanID string) *domain.Task {
+	tasks, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
+	if err != nil {
+		slog.Warn("failed to list sessions for sub-plan, treating as no completed impl session",
+			"error", err, "sub_plan_id", subPlanID)
+		return nil
+	}
+
+	var latest *domain.Task
+	for i := range tasks {
+		t := tasks[i]
+		if t.Phase == domain.TaskPhaseImplementation && t.Status == domain.AgentSessionCompleted {
+			if latest == nil || t.CreatedAt.After(latest.CreatedAt) {
+				latest = &t
+			}
+		}
+	}
+	return latest
 }
 
 // persistSubPlanStatus sets the sub-plan status, timestamps the update, and
