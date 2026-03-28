@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -50,7 +51,9 @@ func LoadSecrets(cfg *Config, store SecretStore) error {
 	for field, key := range SecretKeys() {
 		value, err := store.Get(key)
 		if err != nil {
-			slog.Warn("failed to load secret from store", "key", key, "error", err)
+			if !errors.Is(err, keyring.ErrNotFound) {
+				slog.Warn("failed to load secret from store", "key", key, "error", err)
+			}
 			continue
 		}
 		setSecretField(cfg, field, value)
