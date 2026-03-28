@@ -236,3 +236,104 @@ func TestSidebarClipsOverflowingEntriesToRequestedHeight(t *testing.T) {
 		t.Fatalf("view = %q, want clipped middle entries removed at full-entry boundaries", view)
 	}
 }
+
+func TestSidebarNavigationSkipsGroupHeaders(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryTaskOverview, WorkItemID: "wi-1"},
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Planning"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2"},
+	})
+
+	m.MoveDown()
+	// First MoveDown from no selection lands on overview (first selectable).
+	if sel := m.Selected(); sel == nil || sel.Kind != views.SidebarEntryTaskOverview {
+		t.Fatalf("first MoveDown should land on overview, got %v", sel)
+	}
+
+	// MoveDown should skip the group header and land on first session.
+	m.MoveDown()
+	sel := m.Selected()
+	if sel == nil || sel.SessionID != "s1" {
+		t.Fatalf("MoveDown from overview should land on s1, got %v", sel)
+	}
+
+	// MoveDown again should land on s2 (not a group header).
+	m.MoveDown()
+	sel = m.Selected()
+	if sel == nil || sel.SessionID != "s2" {
+		t.Fatalf("MoveDown should land on s2, got %v", sel)
+	}
+
+	// MoveUp from s2 should go back to s1.
+	m.MoveUp()
+	sel = m.Selected()
+	if sel == nil || sel.SessionID != "s1" {
+		t.Fatalf("MoveUp should land on s1, got %v", sel)
+	}
+
+	// MoveUp from s1 should go to overview (skipping group header).
+	m.MoveUp()
+	sel = m.Selected()
+	if sel == nil || sel.Kind != views.SidebarEntryTaskOverview {
+		t.Fatalf("MoveUp should land on overview, got %v", sel)
+	}
+}
+
+func TestSidebarGroupHeaderRendersCorrectly(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Planning"},
+	})
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Planning") {
+		t.Fatalf("view should contain group title \"Planning\", got %q", view)
+	}
+	if !strings.Contains(view, "─") {
+		t.Fatalf("view should contain divider characters, got %q", view)
+	}
+}
+
+func TestSidebarMoveDownStaysWhenNothingPastGroupHeader(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryTaskOverview, WorkItemID: "wi-1"},
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Planning"},
+	})
+
+	// MoveDown twice: lands on overview, then cannot skip past group header to find next selectable.
+	m.MoveDown()
+	m.MoveDown()
+	sel := m.Selected()
+	if sel == nil || sel.Kind != views.SidebarEntryTaskOverview {
+		t.Fatalf("cursor should stay on overview when no selectable entry after group header, got %v", sel)
+	}
+}
+
+func TestSidebarGotoTopBottomSkipGroupHeaders(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Planning"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1"},
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Foreman"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2"},
+	})
+
+	m.GotoTop()
+	if sel := m.Selected(); sel == nil || sel.SessionID != "s1" {
+		t.Fatalf("GotoTop should skip group header to s1, got %v", sel)
+	}
+
+	m.GotoBottom()
+	if sel := m.Selected(); sel == nil || sel.SessionID != "s2" {
+		t.Fatalf("GotoBottom should skip group header to s2, got %v", sel)
+	}
+}

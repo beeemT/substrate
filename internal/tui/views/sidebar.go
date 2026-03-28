@@ -23,6 +23,7 @@ const (
 	SidebarEntryTaskOverview
 	SidebarEntryTaskSourceDetails
 	SidebarEntryTaskSession
+	SidebarEntryGroupHeader
 )
 
 // SidebarEntry is one selectable row in the sidebar.
@@ -44,6 +45,7 @@ type SidebarEntry struct {
 	DoneSubPlans    int
 	HasOpenQuestion bool
 	HasInterrupted  bool
+	GroupTitle      string
 }
 
 func (e SidebarEntry) titlePrefix() string {
@@ -261,7 +263,7 @@ func (m *SidebarModel) SetTitle(title string) {
 	m.title = title
 }
 
-// MoveUp moves the cursor up by one entry.
+// MoveUp moves the cursor up by one selectable entry, skipping group headers.
 func (m *SidebarModel) MoveUp() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
@@ -269,16 +271,20 @@ func (m *SidebarModel) MoveUp() {
 		return
 	}
 	if m.cursor < 0 {
-		m.cursor = len(m.entries) - 1
+		m.cursor = lastSelectableIndex(m.entries)
 
 		return
 	}
-	if m.cursor > 0 {
-		m.cursor--
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.entries[i].Kind != SidebarEntryGroupHeader {
+			m.cursor = i
+
+			return
+		}
 	}
 }
 
-// MoveDown moves the cursor down by one entry.
+// MoveDown moves the cursor down by one selectable entry, skipping group headers.
 func (m *SidebarModel) MoveDown() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
@@ -286,33 +292,27 @@ func (m *SidebarModel) MoveDown() {
 		return
 	}
 	if m.cursor < 0 {
-		m.cursor = 0
+		m.cursor = firstSelectableIndex(m.entries)
 
 		return
 	}
-	if m.cursor < len(m.entries)-1 {
-		m.cursor++
+	for i := m.cursor + 1; i < len(m.entries); i++ {
+		if m.entries[i].Kind != SidebarEntryGroupHeader {
+			m.cursor = i
+
+			return
+		}
 	}
 }
 
-// GotoTop moves the cursor to the first entry.
+// GotoTop moves the cursor to the first selectable entry.
 func (m *SidebarModel) GotoTop() {
-	if len(m.entries) == 0 {
-		m.cursor = -1
-
-		return
-	}
-	m.cursor = 0
+	m.cursor = firstSelectableIndex(m.entries)
 }
 
-// GotoBottom moves the cursor to the last entry.
+// GotoBottom moves the cursor to the last selectable entry.
 func (m *SidebarModel) GotoBottom() {
-	if len(m.entries) == 0 {
-		m.cursor = -1
-
-		return
-	}
-	m.cursor = len(m.entries) - 1
+	m.cursor = lastSelectableIndex(m.entries)
 }
 
 // ClearSelection clears the current sidebar selection.
@@ -344,6 +344,9 @@ func (m *SidebarModel) Selected() *SidebarEntry {
 		return nil
 	}
 	entry := m.entries[m.cursor]
+	if entry.Kind == SidebarEntryGroupHeader {
+		return nil
+	}
 
 	return &entry
 }
@@ -367,20 +370,58 @@ func (m SidebarModel) View() string {
 	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
 	lines = append(lines, components.RenderDivider(m.styles, width))
-
-	visibleEntryCount := 0
-	if availableRows := m.height - len(lines); availableRows > 0 {
-		visibleEntryCount = availableRows / 4
-	}
 	start, end := 0, len(m.entries)
-	if visibleEntryCount <= 0 {
+	// Determine visible entries based on row budget.
+	availableRows := m.height - len(lines)
+	if availableRows <= 0 {
 		start, end = 0, 0
-	} else if len(m.entries) > visibleEntryCount {
-		start = min(max(0, m.cursor-visibleEntryCount+1), len(m.entries)-visibleEntryCount)
-		end = start + visibleEntryCount
+	} else {
+		// Count how many entries fit the budget.
+		rowBudget := availableRows
+		visibleRowCount := 0
+		visibleEntryCount := 0
+		for i := range m.entries {
+			rows := entryRowHeight(m.entries[i])
+			if visibleRowCount+rows > rowBudget && visibleRowCount > 0 {
+				break
+			}
+			visibleRowCount += rows
+			visibleEntryCount++
+		}
+		if visibleEntryCount < len(m.entries) {
+			// Need scrolling. Start from cursor and slide upward.
+			start = m.cursor
+			cursorRows := entryRowHeight(m.entries[m.cursor])
+			for start > 0 {
+				prevRows := entryRowHeight(m.entries[start-1])
+				if cursorRows+prevRows > availableRows {
+					break
+				}
+				start--
+				cursorRows += prevRows
+			}
+			end = 0
+			rowUsed := 0
+			for i := start; i < len(m.entries); i++ {
+				r := entryRowHeight(m.entries[i])
+				if rowUsed+r > availableRows {
+					break
+				}
+				rowUsed += r
+				end = i + 1
+			}
+		} else {
+			start = 0
+			end = len(m.entries)
+		}
 	}
 	for i := start; i < end; i++ {
 		entry := m.entries[i]
+		if entry.Kind == SidebarEntryGroupHeader {
+			lines = append(lines, renderGroupHeader(m.styles, entry.GroupTitle, width))
+			lines = append(lines, "")
+			continue
+		}
 		selected := i == m.cursor
 		icon := entry.StatusIcon(m.styles)
 		line1 := truncate(icon+" "+entry.sidebarPrefix(), width)
@@ -447,4 +488,43 @@ func truncate(s string, maxLen int) string {
 	}
 
 	return ansi.Truncate(s, maxLen, "…")
+}
+
+// entryRowHeight returns the number of rendered rows an entry occupies.
+
+// firstSelectableIndex returns the index of the first non-group-header entry, or -1.
+func firstSelectableIndex(entries []SidebarEntry) int {
+	for i, e := range entries {
+		if e.Kind != SidebarEntryGroupHeader {
+			return i
+		}
+	}
+	return -1
+}
+
+// lastSelectableIndex returns the index of the last non-group-header entry, or -1.
+func lastSelectableIndex(entries []SidebarEntry) int {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Kind != SidebarEntryGroupHeader {
+			return i
+		}
+	}
+	return -1
+}
+
+func entryRowHeight(e SidebarEntry) int {
+	if e.Kind == SidebarEntryGroupHeader {
+		return 2 // heading line + blank separator
+	}
+	return 4 // 3 lines + blank separator
+}
+
+// renderGroupHeader renders a group section heading with a trailing divider on one line.
+func renderGroupHeader(st styles.Styles, title string, width int) string {
+	label := st.Muted.Bold(true).Render(title)
+	dividerWidth := max(0, width-ansi.StringWidth(label)-1)
+	if dividerWidth <= 0 {
+		return lipgloss.NewStyle().Width(width).Render(label)
+	}
+	return label + " " + st.Divider.Render(strings.Repeat("─", dividerWidth))
 }

@@ -2109,10 +2109,45 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			LastActivity: wi.UpdatedAt,
 		})
 	}
+
+	sessions := a.sessionsForWorkItem(workItemID)
+
+	// Planning block: all planning sessions in temporal order (oldest first).
+	var planningSessions []domain.Task
+	for _, s := range sessions {
+		if s.Phase == domain.TaskPhasePlanning {
+			planningSessions = append(planningSessions, s)
+		}
+	}
+	sort.SliceStable(planningSessions, func(i, j int) bool {
+		return planningSessions[i].CreatedAt.Before(planningSessions[j].CreatedAt)
+	})
+	if len(planningSessions) > 0 {
+		entries = append(entries, SidebarEntry{
+			Kind:       SidebarEntryGroupHeader,
+			WorkItemID: workItemID,
+			GroupTitle: "Planning",
+		})
+		for _, session := range planningSessions {
+			entries = append(entries, SidebarEntry{
+				Kind:           SidebarEntryTaskSession,
+				WorkItemID:     workItemID,
+				SessionID:      session.ID,
+				Title:          taskSidebarSessionTitle(&session),
+				State:          wi.State,
+				SessionStatus:  session.Status,
+				RepositoryName: "Planning",
+				LastActivity:   session.UpdatedAt,
+			})
+		}
+	}
+
+	// Foreman block.
+	var foremanEntry *SidebarEntry
 	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
 		if plan := a.plans[workItemID]; plan != nil && plan.ID == a.foremanPlanID {
 			if sid := a.svcs.Foreman.SessionID(); sid != "" {
-				entries = append(entries, SidebarEntry{
+				foremanEntry = &SidebarEntry{
 					Kind:           SidebarEntryTaskSession,
 					WorkItemID:     workItemID,
 					SessionID:      taskSidebarForemanID,
@@ -2120,28 +2155,59 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 					RepositoryName: "Foreman",
 					SessionStatus:  domain.AgentSessionRunning,
 					LastActivity:   wi.UpdatedAt,
-				})
+				}
 			}
 		}
 	}
-	for _, session := range a.sessionsForWorkItem(workItemID) {
-		entryRepo := session.RepositoryName
-		switch session.Phase {
-		case domain.TaskPhasePlanning:
-			entryRepo = "Planning"
-		case domain.TaskPhaseReview:
-			entryRepo = firstNonEmptyString(entryRepo, "Review")
-		}
+	if foremanEntry != nil {
 		entries = append(entries, SidebarEntry{
-			Kind:           SidebarEntryTaskSession,
-			WorkItemID:     workItemID,
-			SessionID:      session.ID,
-			Title:          taskSidebarSessionTitle(&session),
-			State:          wi.State,
-			SessionStatus:  session.Status,
-			RepositoryName: entryRepo,
-			LastActivity:   session.UpdatedAt,
+			Kind:       SidebarEntryGroupHeader,
+			WorkItemID: workItemID,
+			GroupTitle: "Foreman",
 		})
+		entries = append(entries, *foremanEntry)
+	}
+
+	// Repository blocks: one group per repo, implementation/review sessions in temporal order (oldest first).
+	repoSessions := make(map[string][]domain.Task)
+	for _, s := range sessions {
+		if s.Phase == domain.TaskPhaseImplementation || s.Phase == domain.TaskPhaseReview {
+			repo := firstNonEmptyString(s.RepositoryName, "Repository")
+			repoSessions[repo] = append(repoSessions[repo], s)
+		}
+	}
+	repoNames := make([]string, 0, len(repoSessions))
+	for name := range repoSessions {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+	for _, repoName := range repoNames {
+		repoItems := repoSessions[repoName]
+		sort.SliceStable(repoItems, func(i, j int) bool {
+			return repoItems[i].CreatedAt.Before(repoItems[j].CreatedAt)
+		})
+		entries = append(entries, SidebarEntry{
+			Kind:       SidebarEntryGroupHeader,
+			WorkItemID: workItemID,
+			GroupTitle: repoName,
+		})
+		for _, session := range repoItems {
+			entryRepo := session.RepositoryName
+			switch session.Phase {
+			case domain.TaskPhaseReview:
+				entryRepo = firstNonEmptyString(entryRepo, "Review")
+			}
+			entries = append(entries, SidebarEntry{
+				Kind:           SidebarEntryTaskSession,
+				WorkItemID:     workItemID,
+				SessionID:      session.ID,
+				Title:          taskSidebarSessionTitle(&session),
+				State:          wi.State,
+				SessionStatus:  session.Status,
+				RepositoryName: entryRepo,
+				LastActivity:   session.UpdatedAt,
+			})
+		}
 	}
 	return entries
 }

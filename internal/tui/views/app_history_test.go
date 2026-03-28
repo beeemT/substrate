@@ -1287,8 +1287,8 @@ func TestPlanningSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	if updated.content.Mode() != ContentModeOverview {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
 	}
-	if got := len(updated.sidebar.entries); got != 3 {
-		t.Fatalf("task sidebar entries = %d, want overview + source details + planning session", got)
+	if got := len(updated.sidebar.entries); got != 4 {
+		t.Fatalf("task sidebar entries = %d, want overview + source details + planning group header + planning session", got)
 	}
 	if cmd != nil {
 		t.Fatal("expected planning drilldown overview to avoid starting a session tail")
@@ -1743,8 +1743,8 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	if sel == nil || sel.Kind != SidebarEntryTaskOverview || sel.SessionID != "" {
 		t.Fatalf("selected entry = %#v, want overview row", sel)
 	}
-	if got := len(updated.sidebar.entries); got != 3 {
-		t.Fatalf("task sidebar entries = %d, want overview + source details + session", got)
+	if got := len(updated.sidebar.entries); got != 4 {
+		t.Fatalf("task sidebar entries = %d, want overview + source details + repo group header + session", got)
 	}
 	if updated.sidebar.entries[1].Kind != SidebarEntryTaskSourceDetails {
 		t.Fatalf("task sidebar second row = %#v, want source-details row", updated.sidebar.entries[1])
@@ -2113,5 +2113,113 @@ func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
 	}
 	if updated.content.Mode() != ContentModeOverview {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
+	}
+}
+
+func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
+	now := time.Now()
+	app := NewApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+	})
+	workItem := domain.Session{
+		ID:          "wi-group",
+		WorkspaceID: "ws-local",
+		ExternalID:  "SUB-GROUP",
+		Source:      "github",
+		Title:       "Group test",
+		State:       domain.SessionImplementing,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	planEarly := domain.Task{
+		ID:         "plan-1",
+		WorkItemID: "wi-group",
+		Phase:      domain.TaskPhasePlanning,
+		Status:     domain.AgentSessionCompleted,
+		CreatedAt:  now.Add(-3 * time.Hour),
+		UpdatedAt:  now.Add(-2 * time.Hour),
+	}
+	planLate := domain.Task{
+		ID:         "plan-2",
+		WorkItemID: "wi-group",
+		Phase:      domain.TaskPhasePlanning,
+		Status:     domain.AgentSessionCompleted,
+		CreatedAt:  now.Add(-1 * time.Hour),
+		UpdatedAt:  now.Add(-30 * time.Minute),
+	}
+	implA := domain.Task{
+		ID:             "impl-a",
+		WorkItemID:     "wi-group",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+		RepositoryName: "repo-alpha",
+		CreatedAt:      now.Add(-90 * time.Minute),
+		UpdatedAt:      now.Add(-45 * time.Minute),
+	}
+	implB := domain.Task{
+		ID:             "impl-b",
+		WorkItemID:     "wi-group",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+		RepositoryName: "repo-beta",
+		CreatedAt:      now.Add(-60 * time.Minute),
+		UpdatedAt:      now.Add(-20 * time.Minute),
+	}
+	implA2 := domain.Task{
+		ID:             "impl-a2",
+		WorkItemID:     "wi-group",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionRunning,
+		RepositoryName: "repo-alpha",
+		CreatedAt:      now.Add(-10 * time.Minute),
+		UpdatedAt:      now.Add(-5 * time.Minute),
+	}
+	app.workItems = []domain.Session{workItem}
+	app.sessions = []domain.Task{planEarly, planLate, implA, implB, implA2}
+	app.content.SetSize(80, 60)
+	app.currentWorkItemID = "wi-group"
+	app.sidebarMode = sidebarPaneTasks
+	app.rebuildSidebar()
+
+	entries := app.sidebar.entries
+	// Expected order: overview, source details, group-header Planning, plan-1, plan-2,
+	// group-header repo-alpha, impl-a, impl-a2, group-header repo-beta, impl-b
+	expectedKinds := []SidebarEntryKind{
+		SidebarEntryTaskOverview,
+		SidebarEntryTaskSourceDetails,
+		SidebarEntryGroupHeader,
+		SidebarEntryTaskSession,
+		SidebarEntryTaskSession,
+		SidebarEntryGroupHeader,
+		SidebarEntryTaskSession,
+		SidebarEntryTaskSession,
+		SidebarEntryGroupHeader,
+		SidebarEntryTaskSession,
+	}
+	if len(entries) != len(expectedKinds) {
+		t.Fatalf("entry count = %d, want %d\nentries: %+v", len(entries), len(expectedKinds), entries)
+	}
+	for i, want := range expectedKinds {
+		if entries[i].Kind != want {
+			t.Fatalf("entry[%d] kind = %v, want %v (%+v)", i, entries[i].Kind, want, entries[i])
+		}
+	}
+	// Planning group: plan-1 (earlier) before plan-2 (later).
+	if entries[3].SessionID != "plan-1" || entries[4].SessionID != "plan-2" {
+		t.Fatalf("planning order wrong: entries[3]=%s, entries[4]=%s", entries[3].SessionID, entries[4].SessionID)
+	}
+	// First repo group is alpha (alphabetically before beta).
+	if entries[5].GroupTitle != "repo-alpha" {
+		t.Fatalf("first repo group title = %q, want \"repo-alpha\"", entries[5].GroupTitle)
+	}
+	// Alpha repo: impl-a (earlier) before impl-a2 (later).
+	if entries[6].SessionID != "impl-a" || entries[7].SessionID != "impl-a2" {
+		t.Fatalf("alpha repo order wrong: entries[6]=%s, entries[7]=%s", entries[6].SessionID, entries[7].SessionID)
+	}
+	// Second repo group is beta.
+	if entries[8].GroupTitle != "repo-beta" {
+		t.Fatalf("second repo group title = %q, want \"repo-beta\"", entries[8].GroupTitle)
 	}
 }
