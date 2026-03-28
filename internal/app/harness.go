@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 
@@ -208,16 +209,23 @@ func BuildAgentHarnesses(cfg *config.Config, workspaceRoot string) (AgentHarness
 		return AgentHarnesses{}, errors.New("config is nil")
 	}
 
-	planning := resolveHarnessPhase(cfg, "planning", cfg.Harness.Phase.Planning, workspaceRoot).harness
-	implementation := resolveHarnessPhase(cfg, "implementation", cfg.Harness.Phase.Implementation, workspaceRoot).harness
-	review := resolveHarnessPhase(cfg, "review", cfg.Harness.Phase.Review, workspaceRoot).harness
-	foreman := resolveHarnessPhase(cfg, "foreman", cfg.Harness.Phase.Foreman, workspaceRoot).harness
+	planning := resolveHarnessPhase(cfg, "planning", cfg.Harness.Phase.Planning, workspaceRoot)
+	implementation := resolveHarnessPhase(cfg, "implementation", cfg.Harness.Phase.Implementation, workspaceRoot)
+	review := resolveHarnessPhase(cfg, "review", cfg.Harness.Phase.Review, workspaceRoot)
+	foreman := resolveHarnessPhase(cfg, "foreman", cfg.Harness.Phase.Foreman, workspaceRoot)
+
+	for _, phase := range []resolvedHarnessPhase{planning, implementation, review, foreman} {
+		for _, f := range phase.diagnostic.Failures {
+			slog.Warn("harness phase unavailable", "phase", phase.diagnostic.Phase, "harness", f.Harness, "error", f.Message)
+		}
+	}
+
 	return AgentHarnesses{
-		Planning:       planning,
-		Implementation: implementation,
-		Review:         review,
-		Foreman:        foreman,
-		Resume:         implementation,
+		Planning:       planning.harness,
+		Implementation: implementation.harness,
+		Review:         review.harness,
+		Foreman:        foreman.harness,
+		Resume:         implementation.harness,
 	}, nil
 }
 
