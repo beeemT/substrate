@@ -494,6 +494,8 @@ func toolPrimaryArg(toolName, argsJSON string) string {
 		return singleLine(stringArg("url"))
 	case "web_search":
 		return singleLine(stringArg("query"))
+	case "ask_foreman", "mcp__substrate__ask_foreman":
+		return singleLine(stringArg("question"))
 	case "task":
 		if tasks, ok := args["tasks"]; ok {
 			if taskSlice, ok := tasks.([]any); ok && len(taskSlice) > 0 {
@@ -610,6 +612,13 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		}
 
 	case "find", "edit", "bash", "fetch", "web_search", "task":
+		// no summary — primary arg is sufficient
+
+	case "ask_foreman", "mcp__substrate__ask_foreman":
+		// question is in the title; show context only
+		if ctx := stringArg("context"); ctx != "" {
+			parts = append(parts, dim(singleLine(ctx)))
+		}
 
 	default:
 		// Unknown tool: show a single-line truncated raw args summary.

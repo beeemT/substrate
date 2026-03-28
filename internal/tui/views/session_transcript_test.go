@@ -935,3 +935,80 @@ func TestHasThinkingBlocks(t *testing.T) {
 		t.Error("entries with thinking: expected true")
 	}
 }
+
+func TestToolPrimaryArgAskForeman(t *testing.T) {
+	t.Parallel()
+	args := `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`
+	if got := toolPrimaryArg("ask_foreman", args); got != "Should I use a channel or mutex here?" {
+		t.Errorf("ask_foreman primary arg = %q, want question", got)
+	}
+}
+
+func TestToolPrimaryArgAskForemanMCP(t *testing.T) {
+	t.Parallel()
+	args := `{"question":"Which file owns the DB connection?"}`
+	if got := toolPrimaryArg("mcp__substrate__ask_foreman", args); got != "Which file owns the DB connection?" {
+		t.Errorf("mcp__substrate__ask_foreman primary arg = %q, want question", got)
+	}
+}
+
+func TestToolArgsSummaryAskForemanWithContext(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"question":"Should I use a channel or mutex here?","context":"The struct is accessed by multiple goroutines"}`
+	summary := toolArgsSummary(st, "ask_foreman", args, 80)
+	plain := ansi.Strip(summary)
+	if !strings.Contains(plain, "The struct is accessed by multiple goroutines") {
+		t.Errorf("ask_foreman summary missing context, got: %q", plain)
+	}
+}
+
+func TestToolArgsSummaryAskForemanNoContext(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	args := `{"question":"Should I use a channel or mutex here?"}`
+	summary := toolArgsSummary(st, "ask_foreman", args, 80)
+	if summary != "" {
+		t.Errorf("ask_foreman no-context summary should be empty, got: %q", ansi.Strip(summary))
+	}
+}
+
+func TestRenderTranscriptAskForemanToolCardWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 60
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind:   sessionlog.KindToolStart,
+			Tool:   "ask_foreman",
+			Intent: "Asking foreman",
+			Text:   `{"question":"Should I refactor this function?","context":"It is 200 lines and has 5 levels of nesting"}`,
+		},
+		{Kind: sessionlog.KindToolResult, Text: "Use a mutex with a clear critical section."},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestRenderTranscriptAskForemanMCPToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind:   sessionlog.KindToolStart,
+			Tool:   "mcp__substrate__ask_foreman",
+			Intent: "Asking foreman",
+			Text:   `{"question":"Which adapter handles Claude?"}`,
+		},
+		{Kind: sessionlog.KindToolResult, Text: "The claudeagent adapter."},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Which adapter handles Claude?") {
+		t.Errorf("expected question in tool card, got: %q", plain)
+	}
+}
