@@ -261,6 +261,36 @@ func TestSessionLogSpinnerFitsWidth(t *testing.T) {
 	}
 }
 
+func TestSessionLogSpinnerAtBottomRightWhenNoContent(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionLogModel(st)
+	m.SetSize(60, 10)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 10 {
+		t.Fatalf("line count = %d, want 10", len(lines))
+	}
+
+	// Spinner must be on the last line (bottom-right corner), not directly under the header.
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, sessionLogSpinnerFrames[0]) {
+		t.Fatalf("spinner must be on last line (bottom-right corner), got last line: %q\nfull view:\n%s", lastLine, view)
+	}
+
+	// All earlier lines must not contain the spinner frame.
+	for i, line := range lines[:len(lines)-1] {
+		if strings.Contains(line, sessionLogSpinnerFrames[0]) {
+			t.Errorf("spinner found on non-last line %d: %q", i+1, line)
+		}
+	}
+}
+
 func TestSessionLogEmptyBodyShowsWaitingWhenActive(t *testing.T) {
 	t.Parallel()
 

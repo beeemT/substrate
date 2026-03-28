@@ -395,7 +395,12 @@ func (m SessionLogModel) View() string {
 	body := m.viewport.View()
 	if strings.TrimSpace(body) == "" {
 		if m.agentActive {
-			body = m.styles.Muted.Render("Waiting for agent output...")
+			// Place the waiting message on the last viewport row so that
+			// overlaySpinner positions the spinner at the bottom-right corner
+			// rather than directly underneath the header.
+			rows := make([]string, max(1, m.viewport.Height))
+			rows[len(rows)-1] = m.styles.Muted.Render("Waiting for agent output...")
+			body = strings.Join(rows, "\n")
 		} else {
 			body = m.styles.Muted.Render("No session output captured.")
 		}
