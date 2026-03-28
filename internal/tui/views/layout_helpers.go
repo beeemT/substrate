@@ -55,7 +55,7 @@ func overlaySpinner(body, frame string, st styles.Styles, width int) string {
 	for idx > 0 && strings.TrimSpace(lines[idx]) == "" {
 		idx--
 	}
-	styledFrame := st.Muted.Render(frame)
+	styledFrame := st.Active.Render(frame)
 	frameWidth := ansi.StringWidth(styledFrame)
 	lineWidth := ansi.StringWidth(lines[idx])
 

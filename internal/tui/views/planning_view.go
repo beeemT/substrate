@@ -405,7 +405,7 @@ func (m SessionLogModel) View() string {
 		}
 	}
 	if m.agentActive {
-		body = overlaySpinner(body, sessionLogSpinnerFrames[m.spinnerFrame], m.styles, m.width)
+		body = overlaySpinner(body, sessionLogSpinnerFrames[m.spinnerFrame]+" working", m.styles, m.width)
 	}
 	parts := append(strings.Split(header, "\n"), body)
 	if m.steerActive {
