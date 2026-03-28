@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1094,6 +1095,89 @@ func (h *completingHarness) StartSession(_ context.Context, opts adapter.Session
 	h.lastSess = s
 	h.mu.Unlock()
 	return s, nil
+}
+
+// failingMockSession is a mock session whose Wait returns an error.
+type failingMockSession struct {
+	id     string
+	events chan adapter.AgentEvent
+	err    error
+}
+
+func (s *failingMockSession) ID() string                   { return s.id }
+func (s *failingMockSession) Wait(_ context.Context) error { return s.err }
+func (s *failingMockSession) Events() <-chan adapter.AgentEvent {
+	close(s.events)
+	return s.events
+}
+func (s *failingMockSession) SendMessage(_ context.Context, _ string) error { return nil }
+func (s *failingMockSession) Steer(_ context.Context, _ string) error       { return nil }
+func (s *failingMockSession) Abort(_ context.Context) error                 { return nil }
+
+// failingHarness returns sessions whose Wait returns a fixed error.
+type failingHarness struct{ err error }
+
+func (h *failingHarness) Name() string { return "failing-mock" }
+func (h *failingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	return &failingMockSession{id: opts.SessionID, events: make(chan adapter.AgentEvent, 1), err: h.err}, nil
+}
+
+// TestExecuteSubPlan_FailedSessionPersistsSubPlanFailed verifies that when the
+// harness session fails (e.g. timeout), the sub-plan is marked SubPlanFailed
+// in the repository — not left stranded as in_progress.
+func TestExecuteSubPlan_FailedSessionPersistsSubPlanFailed(t *testing.T) {
+	svc, _, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc.harness = &failingHarness{err: errors.New("session timed out")}
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workItem := domain.Session{
+		ID:          "wi-1",
+		WorkspaceID: "ws-1",
+		ExternalID:  "MAN-1",
+		Source:      "manual",
+		Title:       "Implement the change",
+		State:       domain.SessionImplementing,
+	}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+
+	result, _ := svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		&workspace,
+		&plan,
+		&workItem,
+		"sub-MAN-1-implement-the-change",
+		map[string]string{"repo-a": t.TempDir()},
+		state,
+	)
+
+	if result.Status != domain.AgentSessionFailed {
+		t.Fatalf("result.Status = %q, want %q", result.Status, domain.AgentSessionFailed)
+	}
+
+	// The sub-plan must be persisted as failed — not left in_progress.
+	got, ok := subPlanRepo.subPlans["sp-1"]
+	if !ok {
+		t.Fatal("sub-plan not found after executeSubPlan")
+	}
+	if got.Status != domain.SubPlanFailed {
+		t.Errorf("sub-plan status = %q after failed session, want %q", got.Status, domain.SubPlanFailed)
+	}
+
+	// Agent session record must also be failed.
+	sessions := sessionRepo.sessions
+	var found bool
+	for _, sess := range sessions {
+		if sess.Status == domain.AgentSessionFailed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no agent_session record found in failed state after executeSubPlan failure")
+	}
 }
 
 // TestReimplementSubPlan_WithOmpSessionFile verifies that reimplementation

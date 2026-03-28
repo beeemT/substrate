@@ -492,6 +492,7 @@ func (s *ImplementationService) executeSubPlan(
 			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
 		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), waitErr)
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		if err := s.emitSessionFailed(ctx, &session, result.Summary, workspace.ID); err != nil {
 			slog.Warn("failed to emit session failed event", "error", err)
 		}

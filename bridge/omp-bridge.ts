@@ -195,7 +195,10 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
 			emit({ type: "foreman_proposed", text: answer, uncertain });
 		} else {
 			emitLifecycle("completed", { summary: "Session complete" });
-		}
+			// Agent sessions are single-use: exit so BridgeSession.Wait() can return.
+			// Without this the process waits for more stdin and Wait() hangs until
+			// sessTimeout fires, leaving the sub-plan stranded in_progress.
+			process.exit(0);
 	} catch (err) {
 		const errorMessage = err instanceof Error ? err.message : String(err);
 		emitLifecycle("failed", { message: errorMessage });
