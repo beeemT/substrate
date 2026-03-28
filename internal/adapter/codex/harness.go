@@ -220,13 +220,13 @@ type session struct {
 	binary        string
 	harnessConfig config.CodexConfig
 
-	mu        sync.Mutex
-	state     sessionState
-	threadID  string            // set on thread.started; required for resume
-	lastText  map[string]string // item_id → text already streamed (for delta tracking)
-	cmd       *exec.Cmd         // current running process (guarded by mu)
-	logFile   *os.File          // guarded by mu
-	closeOnce sync.Once
+	mu             sync.Mutex
+	state          sessionState
+	threadID       string            // set on thread.started; required for resume
+	lastText       map[string]string // item_id → text already streamed (for delta tracking)
+	cmd            *exec.Cmd         // current running process (guarded by mu)
+	logFile        *os.File          // guarded by mu
+	closeOnce      sync.Once
 	pendingTurnErr error
 
 	events    chan adapter.AgentEvent
@@ -336,13 +336,12 @@ func (s *session) Abort(ctx context.Context) error {
 	}
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		slog.Debug("codex interrupt failed", "err", err)
-		// Process is already gone. If cmd.Wait() already returned
-		// (ProcessState non-nil), waitProcess exited via the sessionTurnDone
-		// no-op path and never filled completed. Terminate directly.
-		if cmd.ProcessState != nil {
-			s.terminateSession(nil)
-			return nil
-		}
+		// Signal failed — the process is already gone. Terminate directly;
+		// terminateSession is idempotent via closeOnce so calling it here
+		// is safe even if waitProcess calls it concurrently. Avoid reading
+		// cmd.ProcessState, which races with the cmd.Wait() in waitProcess.
+		s.terminateSession(nil)
+		return nil
 	}
 	select {
 	case <-s.completed:

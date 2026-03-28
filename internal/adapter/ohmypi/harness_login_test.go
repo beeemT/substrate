@@ -84,3 +84,65 @@ func TestRunAction_SentryLoginClearsInheritedURLWhenUnset(t *testing.T) {
 		t.Fatalf("SENTRY_URL = %q, want empty for default host login", strings.TrimSpace(string(seen)))
 	}
 }
+
+
+func TestRunAction_GitHubLogin(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "gh",
+		"#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  echo \"ghs_faketoken123\"\n  exit 0\nfi\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	h := NewHarness(config.OhMyPiConfig{}, t.TempDir())
+	result, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{
+		Action:   "login_provider",
+		Provider: "github",
+	})
+	if err != nil {
+		t.Fatalf("RunAction() error = %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("result.Success = false, want true")
+	}
+	if result.Credentials["token"] != "ghs_faketoken123" {
+		t.Errorf("token = %q, want ghs_faketoken123", result.Credentials["token"])
+	}
+	if !result.NeedsConfirm {
+		t.Error("NeedsConfirm = false, want true")
+	}
+}
+
+func TestRunAction_GitHubLoginEmptyToken(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "gh",
+		"#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  echo \"\"\n  exit 0\nfi\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	h := NewHarness(config.OhMyPiConfig{}, t.TempDir())
+	_, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{
+		Action:   "login_provider",
+		Provider: "github",
+	})
+	if err == nil {
+		t.Fatal("RunAction() error = nil, want error for empty token")
+	}
+}
+
+func TestRunAction_CheckAuth(t *testing.T) {
+	binDir := t.TempDir()
+	bridgePath := writeHarnessExecutable(t, binDir, "omp-bridge",
+		"#!/bin/sh\necho 'ready'\n")
+
+	h := NewHarness(config.OhMyPiConfig{BridgePath: bridgePath}, t.TempDir())
+	result, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{
+		Action: "check_auth",
+	})
+	if err != nil {
+		t.Fatalf("RunAction() error = %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("result.Success = false, want true")
+	}
+	if !strings.Contains(result.Identity, bridgePath) {
+		t.Errorf("Identity = %q, want to contain %q", result.Identity, bridgePath)
+	}
+}
