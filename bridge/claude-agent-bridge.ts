@@ -410,6 +410,7 @@ async function main(): Promise<void> {
 
 	const generator = userTurns(lines);
 
+	let queryFailed = false;
 	try {
 		activeQuery = query({ prompt: generator as any, options: options as any });
 		for await (const msg of activeQuery) {
@@ -418,6 +419,7 @@ async function main(): Promise<void> {
 	} catch (err) {
 		const errorMessage = err instanceof Error ? err.message : String(err);
 		emitLifecycle("failed", { message: errorMessage });
+		queryFailed = true;
 	}
 
 	// After the query loop completes, emit foreman_proposed if in foreman mode.
@@ -428,8 +430,17 @@ async function main(): Promise<void> {
 	}
 	// The SDK query is finite-lifetime. Once it completes, nothing remains.
 	// Exit explicitly — the readline interface on stdin would keep the event loop alive.
-	process.exit(0);
+	// Exit 1 when the catch above fired so Go's cmd.Wait() sees a non-zero code and
+	// treats the subprocess as unexpectedly terminated, not as a clean abort.
+	process.exit(queryFailed ? 1 : 0);
 
+}
+
+// Handle --version before entering the stdin event loop so that the binary
+// can be smoke-tested without auth or an active Claude subscription.
+if (process.argv.includes("--version")) {
+	console.log("claude-agent-bridge");
+	process.exit(0);
 }
 
 // ---------------------------------------------------------------------------

@@ -531,7 +531,7 @@ Current shipped harnesses:
   - native resume: yes (`SupportsNativeResume`)
   - supported tools: `read`, `grep`, `find`, `edit`, `write`, `bash`, `ask_foreman`
   - remains the default harness family in config defaults
-- `internal/adapter/claudeagent` (`Name() == "claude-code")`
+- `internal/adapter/claudeagent` (`Name() == "claude-code"`)
   - streaming: yes
   - messaging: yes (`SendMessage`, `Steer`)
   - native resume: yes (`SupportsNativeResume`)
@@ -555,13 +555,13 @@ Provider login notes:
   - all three harness implementations also support `RunAction(Action="login_provider", Provider="sentry")`
 - self-hosted Sentry login uses `config.SentryCLIEnvironment(...)` so `SENTRY_URL` points at the root host, not `/api/0`
 
-The practical boundary today is messaging and steering support: oh-my-pi is the only harness with verified `SendMessage` and `Steer()` capability, while Claude Code and Codex return `ErrSteerNotSupported` from `Steer()` and are wired and usable for non-messaging flows but do not yet provide the same interactive correction surface.
+The practical boundary today is messaging and steering support: oh-my-pi and claude-agent both expose `SendMessage` and `Steer()` capability. Codex returns `ErrSteerNotSupported` from `Steer()` and is wired and usable for non-messaging flows but does not yet provide the same interactive correction surface.
 
 ### OMP-specific capabilities
 
 Beyond basic streaming and messaging, the OMP bridge (`bridge/omp-bridge.ts`) supports:
 
-**Steering**: The bridge accepts `{"type":"steer","text":"..."}` commands and calls `session.prompt(text, { streamingBehavior: "steer" })` to interrupt active streaming. This makes OMP the only harness with verified `Steer()` support. Claude Code and Codex stubs return `ErrSteerNotSupported`.
+**Steering**: The bridge accepts `{"type":"steer","text":"..."}` commands and calls `session.prompt(text, { streamingBehavior: "steer" })` to interrupt active streaming. Both OMP and the Claude Agent SDK bridges support `Steer()`. Codex stubs return `ErrSteerNotSupported`.
 
 **Resume**: OMP supports native session resume via `SessionManager.open(filePath)`. When the `SUBSTRATE_RESUME_SESSION_FILE` environment variable is set, the bridge opens the existing session instead of creating a new one. This enables follow-up on completed repos without losing conversation context. `HarnessCapabilities.SupportsNativeResume` is `true` for OMP.
 
