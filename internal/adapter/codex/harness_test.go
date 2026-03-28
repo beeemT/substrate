@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,6 +121,31 @@ func TestBuildArgs_ApprovalModeMapping(t *testing.T) {
 				if slices.Contains(args, absent) {
 					t.Fatalf("args must not contain %q: %v", absent, args)
 				}
+			}
+		})
+	}
+}
+
+func TestBuildPrompt(t *testing.T) {
+	tests := []struct {
+		name   string
+		system string
+		user   string
+		want   string
+	}{
+		{name: "both non-empty", system: "sys", user: "usr", want: "sys\n\nusr"},
+		{name: "system only", system: "sys", user: "", want: "sys"},
+		{name: "user only", system: "", user: "usr", want: "usr"},
+		{name: "both empty", system: "", user: "", want: ""},
+		{name: "system whitespace trimmed", system: "  sys  ", user: "", want: "sys"},
+		{name: "user whitespace trimmed", system: "", user: "  usr  ", want: "usr"},
+		{name: "both whitespace only", system: "  ", user: "  ", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPrompt(tc.system, tc.user)
+			if got != tc.want {
+				t.Fatalf("buildPrompt(%q, %q) = %q, want %q", tc.system, tc.user, got, tc.want)
 			}
 		})
 	}
@@ -309,6 +335,121 @@ exit 1
 	}
 }
 
+func TestEventMapping_EdgeCases(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-edge"}\n'
+  # Malformed JSON — should be silently skipped.
+  printf 'not valid json\n'
+  # Unknown event type — should be silently skipped.
+  printf '{"type":"some_future_event","data":42}\n'
+  # turn.started — no-op, should not produce an event.
+  printf '{"type":"turn.started"}\n'
+  # mcp_tool_call with error.
+  printf '{"type":"item.completed","item":{"id":"mc1","type":"mcp_tool_call","server":"github","tool":"search","status":"error","error":{"message":"rate limited"}}}\n'
+  # web_search item.
+  printf '{"type":"item.completed","item":{"id":"ws1","type":"web_search","query":"how to test go code"}}\n'
+  # error item with ItemMessage.
+  printf '{"type":"item.completed","item":{"id":"e1","type":"error","message":"permission denied","text":""}}\n'
+  # top-level error event.
+  printf '{"type":"error","message":"something went wrong"}\n'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-edge",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+
+	evts := collectEventsUntilDone(t, sess, 5*time.Second)
+
+	// Verify malformed JSON and unknown types didn't produce events.
+	// We should see: started, mcp tool_result, web_search tool_result, error item, top-level error, done.
+
+	// mcp_tool_call with error.
+	mcpResult := findEventWhere(evts, "tool_result", func(e adapter.AgentEvent) bool {
+		return e.Payload == "github.search"
+	})
+	if mcpResult == nil {
+		t.Fatal("missing tool_result for mcp_tool_call")
+	}
+	if got, _ := mcpResult.Metadata["error"].(string); got != "rate limited" {
+		t.Fatalf("mcp error = %q, want 'rate limited'", got)
+	}
+
+	// web_search.
+	webResult := findEventWhere(evts, "tool_result", func(e adapter.AgentEvent) bool {
+		return e.Payload == "how to test go code"
+	})
+	if webResult == nil {
+		t.Fatal("missing tool_result for web_search")
+	}
+
+	// error item.
+	errEvt := findEvent(evts, "error")
+	if errEvt == nil {
+		t.Fatal("missing error event")
+	}
+
+	// done event.
+	if findEvent(evts, "done") == nil {
+		t.Fatal("missing done event")
+	}
+}
+
+func TestSessionLog_RecordsOutput(t *testing.T) {
+	logDir := t.TempDir()
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-log"}\n'
+  printf '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"hello from codex"}}\n'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-log",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+		SessionLogDir: logDir,
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	logPath := filepath.Join(logDir, "s-log.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "thread.started") {
+		t.Fatal("log missing thread.started event")
+	}
+	if !strings.Contains(content, "hello from codex") {
+		t.Fatal("log missing item text")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Multi-turn: SendMessage via resume
 // ---------------------------------------------------------------------------
@@ -374,6 +515,64 @@ exit 1
 	raw, _ := os.ReadFile(counterFile)
 	if strings.TrimSpace(string(raw)) != "2" {
 		t.Fatalf("expected 2 binary invocations, counter = %q", string(raw))
+	}
+}
+
+func TestSessionLog_MultiTurnContinuity(t *testing.T) {
+	logDir := t.TempDir()
+	binDir := t.TempDir()
+	counterFile := filepath.Join(binDir, "count-log.txt")
+	writeHarnessExecutable(t, binDir, "codex", fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  COUNT=0
+  if [ -f %q ]; then COUNT=$(cat %q); fi
+  COUNT=$((COUNT+1))
+  printf '%%s' "$COUNT" > %q
+  if [ "$COUNT" = "1" ]; then
+    printf '{"type":"thread.started","thread_id":"tid-log-multi"}\n'
+    printf '{"type":"item.completed","item":{"id":"t1","type":"agent_message","text":"turn one output"}}\n'
+    printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  else
+    printf '{"type":"item.completed","item":{"id":"t2","type":"agent_message","text":"turn two output"}}\n'
+    printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  fi
+  exit 0
+fi
+exit 1
+`,
+		counterFile, counterFile, counterFile))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-log-multi",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "first",
+		SessionLogDir: logDir,
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	if err := sess.SendMessage(context.Background(), "second"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	logPath := filepath.Join(logDir, "s-log-multi.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "turn one output") {
+		t.Fatal("log missing turn 1 output")
+	}
+	if !strings.Contains(content, "turn two output") {
+		t.Fatal("log missing turn 2 output")
 	}
 }
 
@@ -490,6 +689,208 @@ exit 1
 	}
 }
 
+
+// ---------------------------------------------------------------------------
+// Session lifecycle: Abort, Wait, SendMessage guards
+// ---------------------------------------------------------------------------
+
+func TestAbort_Idempotent(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-idem"}
+'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-idem",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("first Abort: %v", err)
+	}
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("second Abort: %v", err)
+	}
+}
+
+func TestAbort_MidTurn_TerminatesSession(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-abort-mid"}
+'
+  sleep 10
+  printf '{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}
+'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-abort-mid",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	// Wait for started event so we know the session is running.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for started event")
+		}
+		for _, e := range drainAvailable(sess) {
+			if e.Type == "started" {
+				goto ready
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+ready:
+	sess.Abort(context.Background())
+
+	waitErr := sess.Wait(context.Background())
+	if waitErr != nil {
+		t.Fatalf("Wait after Abort: %v", waitErr)
+	}
+
+	// Events channel should be closed.
+	_, ok := <-sess.Events()
+	if ok {
+		t.Fatal("events channel should be closed after Wait")
+	}
+}
+
+func TestSendMessage_RejectsAfterAbort(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-aborted"}
+'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-aborted",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	collectEventsUntilDone(t, sess, 5*time.Second)
+	sess.Abort(context.Background())
+
+	err = sess.SendMessage(context.Background(), "should fail")
+	if err == nil {
+		t.Fatal("SendMessage after Abort: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("SendMessage error = %q, want 'aborted' mention", err.Error())
+	}
+}
+
+func TestWait_ContextCancellation(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-ctx"}
+'
+  sleep 10
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-ctx",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	// Wait for started so session is running.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for started event")
+		}
+		for _, e := range drainAvailable(sess) {
+			if e.Type == "started" {
+				goto ready
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+ready:
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	waitErr := sess.Wait(ctx)
+	if waitErr == nil {
+		t.Fatal("Wait with cancelled context: expected error, got nil")
+	}
+	if !errors.Is(waitErr, context.Canceled) {
+		t.Fatalf("Wait error = %v, want context.Canceled", waitErr)
+	}
+}
+
+func TestSteer_NotSupported(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-steer"}
+'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-steer",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+
+	err = sess.Steer(context.Background(), "change direction")
+	if !errors.Is(err, adapter.ErrSteerNotSupported) {
+		t.Fatalf("Steer error = %v, want ErrSteerNotSupported", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // check_auth: rejects missing exec subcommand
 // ---------------------------------------------------------------------------
@@ -512,6 +913,31 @@ exit 0
 	}
 	if !strings.Contains(err.Error(), "exec") {
 		t.Fatalf("error = %q, want mention of 'exec' subcommand", err)
+	}
+}
+
+func TestRunAction_UnsupportedAction(t *testing.T) {
+	h := NewHarness(config.CodexConfig{})
+	_, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{Action: "do_magic"})
+	if err == nil {
+		t.Fatal("RunAction unsupported action: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported codex action") {
+		t.Fatalf("error = %q, want 'unsupported codex action'", err.Error())
+	}
+}
+
+func TestRunAction_UnsupportedProvider(t *testing.T) {
+	h := NewHarness(config.CodexConfig{})
+	_, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{
+		Action:   "login_provider",
+		Provider: "gitlab",
+	})
+	if err == nil {
+		t.Fatal("RunAction unsupported provider: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Fatalf("error = %q, want 'unsupported provider'", err.Error())
 	}
 }
 

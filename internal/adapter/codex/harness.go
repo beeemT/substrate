@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -800,7 +801,7 @@ func (s *session) openLogFile() error {
 	if s.logPath == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepathDir(s.logPath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.logPath), 0o750); err != nil {
 		return fmt.Errorf("create session log dir: %w", err)
 	}
 	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -817,18 +818,5 @@ func sessionLogPath(opts adapter.SessionOpts) string {
 		return ""
 	}
 
-	return filepathJoin(opts.SessionLogDir, opts.SessionID+".log")
-}
-
-func filepathJoin(elem ...string) string {
-	return strings.Join(elem, string(os.PathSeparator))
-}
-
-func filepathDir(path string) string {
-	idx := strings.LastIndex(path, string(os.PathSeparator))
-	if idx <= 0 {
-		return "."
-	}
-
-	return path[:idx]
+	return filepath.Join(opts.SessionLogDir, opts.SessionID+".log")
 }
