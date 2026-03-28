@@ -108,11 +108,12 @@ type worktreePayload struct {
 }
 
 type completedPayload struct {
-	WorkspaceID string           `json:"workspace_id"`
-	WorkItemID  string           `json:"work_item_id"`
-	Branch      string           `json:"branch"`
-	ExternalID  string           `json:"external_id"`
-	Review      domain.ReviewRef `json:"review"`
+	WorkspaceID   string           `json:"workspace_id"`
+	WorkItemID    string           `json:"work_item_id"`
+	Branch        string           `json:"branch"`
+	ExternalID    string           `json:"external_id"`
+	WorkItemTitle string           `json:"work_item_title"`
+	Review        domain.ReviewRef `json:"review"`
 }
 
 const filterAll = "all"
@@ -521,6 +522,15 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		},
 		&created,
 	); err != nil {
+		// GitHub rejects PR creation with 422 when the branch has no commits
+		// beyond the base yet. This is expected at worktree creation time; the
+		// PR will be created (non-draft) lazily when the work item completes
+		// and commits are present on the branch.
+		if strings.Contains(err.Error(), "No commits between") {
+			slog.Debug("github: deferred draft PR creation; branch has no commits yet",
+				"branch", p.Branch, "base", baseBranch)
+			return nil
+		}
 		return err
 	}
 	a.mu.Lock()
@@ -611,6 +621,40 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 			return err
 		}
 		if pull == nil {
+			// No PR was created at worktree time (branch had no commits then).
+			// Create a non-draft PR now that implementation is complete.
+			title := p.WorkItemTitle
+			if title == "" {
+				title = p.Branch
+			}
+			baseBranch := strings.TrimSpace(p.Review.BaseBranch)
+			if baseBranch == "" {
+				baseBranch = "main"
+			}
+			var created githubPull
+			if createErr := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), map[string]any{
+				"title": title,
+				"head":  headOwner + ":" + p.Branch,
+				"base":  baseBranch,
+				"draft": false,
+			}, &created); createErr != nil {
+				slog.Warn("github: failed to create PR at work item completion", "branch", p.Branch, "err", createErr)
+				return nil
+			}
+			a.mu.Lock()
+			a.tracked[p.Branch] = created
+			a.mu.Unlock()
+			a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+				Provider:  "github",
+				Kind:      "PR",
+				RepoName:  baseOwner + "/" + baseRepo,
+				Ref:       fmt.Sprintf("#%d", created.Number),
+				URL:       strings.TrimSpace(created.HTMLURL),
+				State:     githubArtifactState(created),
+				Branch:    p.Branch,
+				Draft:     created.Draft,
+				UpdatedAt: time.Now(),
+			}, baseOwner, baseRepo, created.Number)
 			return nil
 		}
 		artifacts = []domain.ReviewArtifact{{

@@ -658,9 +658,10 @@ func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service
 		return err
 	}
 	payload := map[string]any{
-		"workspace_id": workItem.WorkspaceID,
-		"work_item_id": workItemID,
-		"external_id":  workItem.ExternalID,
+		"workspace_id":    workItem.WorkspaceID,
+		"work_item_id":    workItemID,
+		"external_id":     workItem.ExternalID,
+		"work_item_title": workItem.Title,
 	}
 	if review, branch, err := completionReviewContext(ctx, planSvc, sessionSvc, workItemID); err == nil {
 		if branch != "" {
