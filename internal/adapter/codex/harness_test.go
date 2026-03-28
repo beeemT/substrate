@@ -197,7 +197,7 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `)
-	t.Setenv("PATH", binDir)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	h := NewHarness(config.CodexConfig{})
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
@@ -282,7 +282,7 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `)
-	t.Setenv("PATH", binDir)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	h := NewHarness(config.CodexConfig{})
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
@@ -349,17 +349,7 @@ exit 1
 	defer sess.Abort(context.Background())
 
 	// Wait for the first turn to complete (done event).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for first turn done event")
-		}
-		evts := drainAvailable(sess)
-		if findEvent(evts, "done") != nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	collectEventsUntilDone(t, sess, 5*time.Second)
 
 	// Send the second message; the session should start a resume process.
 	if err := sess.SendMessage(context.Background(), "second prompt"); err != nil {
@@ -432,6 +422,71 @@ ready:
 	}
 	if !strings.Contains(err.Error(), "in progress") {
 		t.Fatalf("error = %q, want 'in progress' mention", err)
+	}
+}
+
+func TestAbort_AfterCleanTurn_DoesNotHang(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-abort"}\n'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-abort",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	// Abort after clean turn must return well under the 5 s kill timeout.
+	start := time.Now()
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Abort took %v after clean turn; expected < 1s (5s timeout indicates bug)", elapsed)
+	}
+}
+
+func TestWait_TurnFailed_PreservesMessage(t *testing.T) {
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-fail"}\n'
+  printf '{"type":"turn.failed","error":{"message":"rate limit exceeded"}}\n'
+  exit 1
+fi
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h := NewHarness(config.CodexConfig{})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-fail",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	waitErr := sess.Wait(context.Background())
+	if waitErr == nil {
+		t.Fatal("Wait: expected error, got nil")
+	}
+	if !strings.Contains(waitErr.Error(), "rate limit exceeded") {
+		t.Fatalf("Wait error = %q; want it to contain 'rate limit exceeded'", waitErr.Error())
 	}
 }
 

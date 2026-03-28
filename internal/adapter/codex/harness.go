@@ -60,52 +60,9 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = opts.WorktreePath
 
-	stdinR, stdinW, err := os.Pipe()
+	stdoutR, stderrR, err := startWithInput(cmd, prompt)
 	if err != nil {
-		return nil, fmt.Errorf("create codex stdin pipe: %w", err)
-	}
-	stdoutR, stdoutW, err := os.Pipe()
-	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		return nil, fmt.Errorf("create codex stdout pipe: %w", err)
-	}
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR.Close()
-		_ = stdoutW.Close()
-		return nil, fmt.Errorf("create codex stderr pipe: %w", err)
-	}
-	cmd.Stdin = stdinR
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
-	if err := cmd.Start(); err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR.Close()
-		_ = stdoutW.Close()
-		_ = stderrR.Close()
-		_ = stderrW.Close()
 		return nil, fmt.Errorf("start codex: %w", err)
-	}
-	// Close the parent's copies of the child-facing ends now that the child
-	// has inherited them. The read ends receive EOF exactly when the child
-	// process exits — no lingering write-end references in the parent.
-	_ = stdinR.Close()
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
-
-	// Deliver the prompt via stdin and close the write end. codex exec reads
-	// until EOF when no positional prompt argument is supplied.
-	if _, err := io.WriteString(stdinW, prompt); err != nil {
-		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("write prompt to codex stdin: %w", err)
-	}
-	if err := stdinW.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("close codex stdin: %w", err)
 	}
 
 	s := &session{
@@ -123,11 +80,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
-	var ioWg sync.WaitGroup
-	ioWg.Add(2)
-	go func() { defer ioWg.Done(); s.readStdout(stdoutR) }()
-	go func() { defer ioWg.Done(); s.readStderr(stderrR) }()
-	go s.waitProcess(cmd, &ioWg)
+	s.launchProcess(cmd, stdoutR, stderrR)
 
 	return s, nil
 }
@@ -273,6 +226,7 @@ type session struct {
 	cmd       *exec.Cmd         // current running process (guarded by mu)
 	logFile   *os.File          // guarded by mu
 	closeOnce sync.Once
+	pendingTurnErr error
 
 	events    chan adapter.AgentEvent
 	logPath   string
@@ -324,54 +278,18 @@ func (s *session) SendMessage(ctx context.Context, msg string) error {
 	}
 
 	// Build resume invocation.
+	workDir := s.getWorkDir()
 	resumeOpts := adapter.SessionOpts{
-		WorktreePath:  s.getWorkDir(),
+		WorktreePath:  workDir,
 		CodexThreadID: threadID,
 	}
 	args := buildArgs(resumeOpts, s.harnessConfig)
 	cmd := exec.CommandContext(ctx, s.binary, args...)
-	cmd.Dir = s.getWorkDir()
+	cmd.Dir = workDir
 
-	stdinR, stdinW, err := os.Pipe()
+	stdoutR, stderrR, err := startWithInput(cmd, msg)
 	if err != nil {
-		return fmt.Errorf("codex resume stdin pipe: %w", err)
-	}
-	stdoutR, stdoutW, err := os.Pipe()
-	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		return fmt.Errorf("codex resume stdout pipe: %w", err)
-	}
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR.Close()
-		_ = stdoutW.Close()
-		return fmt.Errorf("codex resume stderr pipe: %w", err)
-	}
-	cmd.Stdin = stdinR
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
-	if err := cmd.Start(); err != nil {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-		_ = stdoutR.Close()
-		_ = stdoutW.Close()
-		_ = stderrR.Close()
-		_ = stderrW.Close()
-		return fmt.Errorf("codex resume start: %w", err)
-	}
-	_ = stdinR.Close()
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
-	if _, err := io.WriteString(stdinW, msg); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("write message to codex stdin: %w", err)
-	}
-	if err := stdinW.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("close codex resume stdin: %w", err)
+		return fmt.Errorf("resume codex: %w", err)
 	}
 
 	s.mu.Lock()
@@ -379,11 +297,11 @@ func (s *session) SendMessage(ctx context.Context, msg string) error {
 	s.state = sessionRunning
 	s.mu.Unlock()
 
-	var ioWg sync.WaitGroup
-	ioWg.Add(2)
-	go func() { defer ioWg.Done(); s.readStdout(stdoutR) }()
-	go func() { defer ioWg.Done(); s.readStderr(stderrR) }()
-	go s.waitProcess(cmd, &ioWg)
+	if err := s.openLogFile(); err != nil {
+		_ = cmd.Process.Kill()
+		return err
+	}
+	s.launchProcess(cmd, stdoutR, stderrR)
 
 	return nil
 }
@@ -417,6 +335,13 @@ func (s *session) Abort(ctx context.Context) error {
 	}
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		slog.Debug("codex interrupt failed", "err", err)
+		// Process is already gone. If cmd.Wait() already returned
+		// (ProcessState non-nil), waitProcess exited via the sessionTurnDone
+		// no-op path and never filled completed. Terminate directly.
+		if cmd.ProcessState != nil {
+			s.terminateSession(nil)
+			return nil
+		}
 	}
 	select {
 	case <-s.completed:
@@ -440,10 +365,8 @@ func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
 
 	s.mu.Lock()
 	currentState := s.state
-	if s.logFile != nil {
-		_ = s.logFile.Close()
-		s.logFile = nil
-	}
+	pendingErr := s.pendingTurnErr
+	s.pendingTurnErr = nil
 	s.mu.Unlock()
 
 	switch currentState {
@@ -452,8 +375,14 @@ func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
 		s.terminateSession(nil)
 	case sessionRunning:
 		if err != nil {
-			// Process exited non-zero without us aborting: fatal error.
-			s.terminateSession(fmt.Errorf("codex exited: %w", err))
+			// Process exited non-zero without us aborting: use the pending turn
+			// error if available (preserves the original turn.failed message);
+			// otherwise fall back to the raw process exit error.
+			if pendingErr != nil {
+				s.terminateSession(pendingErr)
+			} else {
+				s.terminateSession(fmt.Errorf("codex exited: %w", err))
+			}
 		} else {
 			// Clean exit without turn.completed already transitioning state means
 			// the process exited before we saw that event — treat as turn done.
@@ -483,6 +412,73 @@ func (s *session) terminateSession(err error) {
 		close(s.events)
 		s.completed <- err
 	})
+}
+
+// startWithInput wires up stdin/stdout/stderr pipes, starts cmd, writes input to
+// stdin, then closes stdin so the child sees EOF. On success cmd is running and
+// stdoutR/stderrR are open for reading. On any error all resources are cleaned up
+// and cmd is killed if it was started.
+func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err error) {
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create stdin pipe: %w", err)
+	}
+	var stdoutR_, stdoutW *os.File
+	stdoutR_, stdoutW, err = os.Pipe()
+	if err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		return nil, nil, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	var stderrR_, stderrW *os.File
+	stderrR_, stderrW, err = os.Pipe()
+	if err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR_.Close()
+		_ = stdoutW.Close()
+		return nil, nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+	if err = cmd.Start(); err != nil {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR_.Close()
+		_ = stdoutW.Close()
+		_ = stderrR_.Close()
+		_ = stderrW.Close()
+		return nil, nil, fmt.Errorf("start process: %w", err)
+	}
+	// Close the parent's copies of the child-facing ends so the read ends
+	// see EOF exactly when the child exits.
+	_ = stdinR.Close()
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	if _, err = io.WriteString(stdinW, input); err != nil {
+		_ = cmd.Process.Kill()
+		_ = stdoutR_.Close()
+		_ = stderrR_.Close()
+		return nil, nil, fmt.Errorf("write stdin: %w", err)
+	}
+	if err = stdinW.Close(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = stdoutR_.Close()
+		_ = stderrR_.Close()
+		return nil, nil, fmt.Errorf("close stdin: %w", err)
+	}
+	return stdoutR_, stderrR_, nil
+}
+
+// launchProcess starts the stdout/stderr reader goroutines and the process
+// reaper for cmd. Call after cmd has been started via startWithInput.
+func (s *session) launchProcess(cmd *exec.Cmd, stdoutR, stderrR *os.File) {
+	var ioWg sync.WaitGroup
+	ioWg.Add(2)
+	go func() { defer ioWg.Done(); s.readStdout(stdoutR) }()
+	go func() { defer ioWg.Done(); s.readStderr(stderrR) }()
+	go s.waitProcess(cmd, &ioWg)
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +633,12 @@ func (s *session) mapCodexEvent(line string) (adapter.AgentEvent, bool) {
 		if raw.Error != nil {
 			msg = raw.Error.Message
 		}
+
+		s.mu.Lock()
+		if s.state == sessionRunning {
+			s.pendingTurnErr = fmt.Errorf("turn failed: %s", msg)
+		}
+		s.mu.Unlock()
 
 		return adapter.AgentEvent{Type: "error", Timestamp: now, Payload: msg}, true
 
