@@ -663,18 +663,24 @@ func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service
 		"external_id":     workItem.ExternalID,
 		"work_item_title": workItem.Title,
 	}
-	if review, branch, err := completionReviewContext(ctx, planSvc, sessionSvc, workItemID); err == nil {
+	if review, branch, subPlanContent, err := completionReviewContext(ctx, planSvc, sessionSvc, workItemID); err == nil {
 		if branch != "" {
 			payload["branch"] = branch
 		}
 		if review.BaseRepo.Owner != "" || review.BaseRepo.Repo != "" || review.HeadRepo.Owner != "" || review.HeadRepo.Repo != "" {
 			payload["review"] = review
 		}
+		if subPlanContent != "" {
+			payload["sub_plan"] = subPlanContent
+		}
 	} else {
 		slog.Warn("failed to derive work item completion context", "work_item_id", workItemID, "err", err)
 	}
 	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
 		payload["external_ids"] = externalIDs
+	}
+	if trackerRefs := sessionTrackerRefs(workItem.Metadata); len(trackerRefs) > 0 {
+		payload["tracker_refs"] = trackerRefs
 	}
 
 	return publishSystemEvent(ctx, bus, domain.EventWorkItemCompleted, workItem.WorkspaceID, payload)
@@ -695,19 +701,19 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 	})
 }
 
-func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemID string) (domain.ReviewRef, string, error) {
+func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemID string) (domain.ReviewRef, string, string, error) {
 	plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
 	if err != nil {
-		return domain.ReviewRef{}, "", err
+		return domain.ReviewRef{}, "", "", err
 	}
 	subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
 	if err != nil {
-		return domain.ReviewRef{}, "", err
+		return domain.ReviewRef{}, "", "", err
 	}
 	for _, subPlan := range subPlans {
 		sessions, err := sessionSvc.ListBySubPlanID(ctx, subPlan.ID)
 		if err != nil {
-			return domain.ReviewRef{}, "", err
+			return domain.ReviewRef{}, "", "", err
 		}
 		for _, session := range sessions {
 			if strings.TrimSpace(session.WorktreePath) == "" {
@@ -726,11 +732,11 @@ func completionReviewContext(ctx context.Context, planSvc *service.PlanService, 
 				continue
 			}
 
-			return reviewCtx.Review, branch, nil
+			return reviewCtx.Review, branch, subPlan.Content, nil
 		}
 	}
 
-	return domain.ReviewRef{}, "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
+	return domain.ReviewRef{}, "", "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
 }
 
 func workItemEventExternalIDs(workItem domain.Session) []string {

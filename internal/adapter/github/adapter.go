@@ -108,12 +108,14 @@ type worktreePayload struct {
 }
 
 type completedPayload struct {
-	WorkspaceID   string           `json:"workspace_id"`
-	WorkItemID    string           `json:"work_item_id"`
-	Branch        string           `json:"branch"`
-	ExternalID    string           `json:"external_id"`
-	WorkItemTitle string           `json:"work_item_title"`
-	Review        domain.ReviewRef `json:"review"`
+	WorkspaceID   string                    `json:"workspace_id"`
+	WorkItemID    string                    `json:"work_item_id"`
+	Branch        string                    `json:"branch"`
+	ExternalID    string                    `json:"external_id"`
+	WorkItemTitle string                    `json:"work_item_title"`
+	SubPlan       string                    `json:"sub_plan"`
+	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
+	Review        domain.ReviewRef          `json:"review"`
 }
 
 const filterAll = "all"
@@ -632,11 +634,13 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 				baseBranch = "main"
 			}
 			var created githubPull
+			body := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
 			if createErr := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), map[string]any{
 				"title": title,
 				"head":  headOwner + ":" + p.Branch,
 				"base":  baseBranch,
 				"draft": false,
+				"body":  body,
 			}, &created); createErr != nil {
 				slog.Warn("github: failed to create PR at work item completion", "branch", p.Branch, "err", createErr)
 				return nil
