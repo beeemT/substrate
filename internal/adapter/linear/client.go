@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/beeemT/substrate/internal/adapter"
 )
 
 // maxResponseBodyBytes limits HTTP response body reads to prevent OOM.
@@ -64,13 +66,15 @@ func (c *gqlClient) do(ctx context.Context, query string, variables map[string]a
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(limitedBody)
-		if len(respBody) > 0 {
-			// Cap the body excerpt to keep log lines reasonable.
-			detail := string(respBody)
-			if len(detail) > 512 {
-				detail = detail[:512] + "…"
-			}
-			return fmt.Errorf("linear API returned status %d: %s", resp.StatusCode, detail)
+		body := strings.TrimSpace(string(respBody))
+		if len(body) > 512 {
+			body = body[:512] + "…"
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return &adapter.PermissionError{Adapter: "linear", StatusCode: resp.StatusCode, Body: body}
+		}
+		if body != "" {
+			return fmt.Errorf("linear API returned status %d: %s", resp.StatusCode, body)
 		}
 		return fmt.Errorf("linear API returned status %d", resp.StatusCode)
 	}

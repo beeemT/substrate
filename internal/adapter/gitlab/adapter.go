@@ -528,8 +528,8 @@ func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([
 	applyListOpts(query, opts)
 	var epics []epic
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/groups/%d/epics", groupID), query, &epics); err != nil {
-		var apiErr *apiError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+		var permErr *adapter.PermissionError
+		if errors.As(err, &permErr) && permErr.StatusCode == http.StatusForbidden {
 			return nil, adapter.ErrBrowseNotSupported
 		}
 
@@ -635,8 +635,11 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(limitedBody)
-
-		return &apiError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+		body := strings.TrimSpace(string(data))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return &adapter.PermissionError{Adapter: "gitlab", StatusCode: resp.StatusCode, Body: body}
+		}
+		return &apiError{StatusCode: resp.StatusCode, Body: body}
 	}
 	if dst == nil {
 		return nil

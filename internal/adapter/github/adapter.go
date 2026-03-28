@@ -1074,8 +1074,11 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(limitedBody)
-
-		return fmt.Errorf("github api status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		body := strings.TrimSpace(string(data))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return &adapter.PermissionError{Adapter: "github", StatusCode: resp.StatusCode, Body: body}
+		}
+		return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
 	if dst == nil {
 		return nil

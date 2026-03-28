@@ -473,6 +473,10 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 					if err := a.OnEvent(context.Background(), evt); err != nil {
 						lastErr = err
 						if attempt < 2 {
+							// PermissionError is permanent; retrying will not help.
+							if errors.As(lastErr, new(*adapter.PermissionError)) {
+								break
+							}
 							time.Sleep(time.Duration(attempt+1) * time.Second)
 						}
 						continue
@@ -514,6 +518,10 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 					if err := a.OnEvent(context.Background(), evt); err != nil {
 						lastErr = err
 						if attempt < 2 {
+							// PermissionError is permanent; retrying will not help.
+							if errors.As(lastErr, new(*adapter.PermissionError)) {
+								break
+							}
 							time.Sleep(time.Duration(attempt+1) * time.Second)
 						}
 						continue

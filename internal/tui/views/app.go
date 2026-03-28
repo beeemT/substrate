@@ -2628,6 +2628,12 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 // formatAdapterErrorToast formats an adapter error for display as a toast.
 // Output is max 4 lines to fit the toast display constraint.
 func formatAdapterErrorToast(msg AdapterErrorMsg) string {
+	// Permission failures are permanent and carry a user-actionable cause.
+	// Show a clear, non-technical message instead of the raw API response.
+	var permErr *adapter.PermissionError
+	if errors.As(msg.Err, &permErr) {
+		return fmt.Sprintf("%s: permission denied\nCannot update this issue — check your token has the required scopes.", msg.Adapter)
+	}
 	errStr := msg.Err.Error()
 	if len(errStr) > 80 {
 		errStr = errStr[:77] + "..."
