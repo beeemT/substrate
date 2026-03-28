@@ -7,29 +7,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beeemT/substrate/internal/adapter/bridge"
 	"github.com/beeemT/substrate/internal/config"
 )
 
 func TestBridgeMsgJSONRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
-		msg  bridgeMsg
+		msg  bridge.BridgeMsg
 	}{
 		{
 			name: "prompt message",
-			msg:  bridgeMsg{Type: "prompt", Text: "Hello, agent!"},
+			msg:  bridge.BridgeMsg{Type: "prompt", Text: "Hello, agent!"},
 		},
 		{
 			name: "message without text",
-			msg:  bridgeMsg{Type: "abort"},
+			msg:  bridge.BridgeMsg{Type: "abort"},
 		},
 		{
 			name: "answer message",
-			msg:  bridgeMsg{Type: "answer", Text: "This is the answer to your question."},
+			msg:  bridge.BridgeMsg{Type: "answer", Text: "This is the answer to your question."},
 		},
 		{
 			name: "message type",
-			msg:  bridgeMsg{Type: "message", Text: "Follow-up message"},
+			msg:  bridge.BridgeMsg{Type: "message", Text: "Follow-up message"},
 		},
 	}
 
@@ -42,7 +43,7 @@ func TestBridgeMsgJSONRoundTrip(t *testing.T) {
 			}
 
 			// Unmarshal back
-			var got bridgeMsg
+			var got bridge.BridgeMsg
 			if err := json.Unmarshal(data, &got); err != nil {
 				t.Fatalf("failed to unmarshal: %v", err)
 			}
@@ -153,8 +154,6 @@ func TestMapBridgeEvent(t *testing.T) {
 		},
 	}
 
-	s := &ohMyPiSession{}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := struct {
@@ -165,12 +164,11 @@ func TestMapBridgeEvent(t *testing.T) {
 				Event: json.RawMessage(tt.eventJSON),
 			}
 
-			got, err := s.mapBridgeEvent(raw)
+			got, err := bridge.MapBridgeEvent(raw)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
-
 				return
 			}
 			if err != nil {
@@ -181,7 +179,6 @@ func TestMapBridgeEvent(t *testing.T) {
 				if got != nil {
 					t.Errorf("expected nil, got %+v", got)
 				}
-
 				return
 			}
 
@@ -199,8 +196,6 @@ func TestMapBridgeEvent(t *testing.T) {
 }
 
 func TestMapBridgeEventMetadata(t *testing.T) {
-	s := &ohMyPiSession{}
-
 	// Test question event has context in metadata
 	raw := struct {
 		Type  string          `json:"type"`
@@ -210,7 +205,7 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 		Event: json.RawMessage(`{"type":"question","question":"Q?","context":"some context"}`),
 	}
 
-	got, err := s.mapBridgeEvent(raw)
+	got, err := bridge.MapBridgeEvent(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -235,7 +230,7 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 		Event: json.RawMessage(`{"type":"tool_start","tool":"read","text":"{}","intent":"Inspecting file"}`),
 	}
 
-	got, err = s.mapBridgeEvent(raw)
+	got, err = bridge.MapBridgeEvent(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +253,7 @@ func TestMapBridgeEventMetadata(t *testing.T) {
 		Event: json.RawMessage(`{"type":"foreman_proposed","text":"Answer","uncertain":true}`),
 	}
 
-	got, err = s.mapBridgeEvent(raw)
+	got, err = bridge.MapBridgeEvent(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -294,18 +289,18 @@ func TestResolveBridgeRuntimeFromUsesPackagedBridge(t *testing.T) {
 		t.Fatalf("write bridge: %v", err)
 	}
 
-	runtime, err := resolveBridgeRuntimeFrom("", execPath)
+	rt, err := bridge.ResolveBridgeRuntimeFrom("", execPath, "omp-bridge", "ohmypi bridge")
 	if err != nil {
 		t.Fatalf("resolveBridgeRuntimeFrom() error = %v", err)
 	}
-	if runtime.Path != bridgePath {
-		t.Fatalf("Path = %q, want %q", runtime.Path, bridgePath)
+	if rt.Path != bridgePath {
+		t.Fatalf("Path = %q, want %q", rt.Path, bridgePath)
 	}
-	if runtime.NeedsBun {
+	if rt.NeedsBun {
 		t.Fatal("NeedsBun = true, want false for packaged bridge binary")
 	}
-	if got := runtime.launchDir("/workspace"); got != "/workspace" {
-		t.Fatalf("launchDir() = %q, want /workspace", got)
+	if got := rt.LaunchDir("/workspace"); got != "/workspace" {
+		t.Fatalf("LaunchDir() = %q, want /workspace", got)
 	}
 }
 
@@ -329,18 +324,18 @@ func TestResolveBridgeRuntimeFromHonorsLegacyRelativeOverrideViaPkgshare(t *test
 		t.Fatalf("write bridge: %v", err)
 	}
 
-	runtime, err := resolveBridgeRuntimeFrom("bridge/omp-bridge.ts", execPath)
+	rt, err := bridge.ResolveBridgeRuntimeFrom("bridge/omp-bridge.ts", execPath, "omp-bridge", "ohmypi bridge")
 	if err != nil {
 		t.Fatalf("resolveBridgeRuntimeFrom() error = %v", err)
 	}
-	if runtime.Path != bridgePath {
-		t.Fatalf("Path = %q, want %q", runtime.Path, bridgePath)
+	if rt.Path != bridgePath {
+		t.Fatalf("Path = %q, want %q", rt.Path, bridgePath)
 	}
-	if !runtime.NeedsBun {
+	if !rt.NeedsBun {
 		t.Fatal("NeedsBun = false, want true for source bridge script")
 	}
-	if got := runtime.launchDir("/workspace"); got != filepath.Dir(bridgePath) {
-		t.Fatalf("launchDir() = %q, want %q", got, filepath.Dir(bridgePath))
+	if got := rt.LaunchDir("/workspace"); got != filepath.Dir(bridgePath) {
+		t.Fatalf("LaunchDir() = %q, want %q", got, filepath.Dir(bridgePath))
 	}
 }
 
@@ -357,7 +352,7 @@ func TestEnsureBridgeDependenciesRequiresInstalledNodeModulesForSourceBridge(t *
 		t.Fatalf("write package.json: %v", err)
 	}
 
-	err := ensureBridgeDependencies(bridgeRuntime{Path: bridgePath, NeedsBun: true})
+	err := bridge.EnsureBridgeDependencies(bridge.BridgeRuntime{Path: bridgePath, NeedsBun: true}, "@oh-my-pi/pi-coding-agent", "ohmypi bridge")
 	if err == nil {
 		t.Fatal("ensureBridgeDependencies() error = nil, want missing dependency error")
 	}

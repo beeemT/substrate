@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/adapter/bridge"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -61,14 +62,10 @@ func TestInitMessageSerialization(t *testing.T) {
 	checkStr("mode", "agent")
 	checkStr("system_prompt", "sys")
 	checkStr("model", "claude-3")
-
-	if _, exists := result["binary_path"]; exists {
-		t.Error("unexpected field 'binary_path' in marshaled init message")
-	}
 }
 
 func TestBridgeCandidatesDefault(t *testing.T) {
-	candidates := bridgeCandidates("", "/usr/local/bin/substrate")
+	candidates := bridge.BridgeCandidates("", "/usr/local/bin/substrate", "claude-agent-bridge")
 	found := false
 	for _, c := range candidates {
 		if strings.Contains(c, "claude-agent-bridge") {
@@ -83,13 +80,13 @@ func TestBridgeCandidatesDefault(t *testing.T) {
 
 func TestBridgeCandidatesConfigured(t *testing.T) {
 	// Absolute path is returned as-is.
-	abs := bridgeCandidates("/absolute/path/bridge", "/usr/local/bin/substrate")
+	abs := bridge.BridgeCandidates("/absolute/path/bridge", "/usr/local/bin/substrate", "claude-agent-bridge")
 	if len(abs) != 1 || abs[0] != "/absolute/path/bridge" {
 		t.Errorf("absolute configured path: got %v", abs)
 	}
 
 	// Relative path is resolved against exec dir and share dir.
-	rel := bridgeCandidates("bridge/my-bridge", "/usr/local/bin/substrate")
+	rel := bridge.BridgeCandidates("bridge/my-bridge", "/usr/local/bin/substrate", "claude-agent-bridge")
 	if len(rel) == 0 {
 		t.Error("expected candidates for relative path, got none")
 	}
@@ -132,9 +129,9 @@ func TestResolveBridgeRuntimeFromUsesPackagedBridge(t *testing.T) {
 		t.Fatalf("write bridge: %v", err)
 	}
 
-	rt, err := resolveBridgeRuntimeFrom("", execPath)
+	rt, err := bridge.ResolveBridgeRuntimeFrom("", execPath, "claude-agent-bridge", "claude-agent bridge")
 	if err != nil {
-		t.Fatalf("resolveBridgeRuntimeFrom() error = %v", err)
+		t.Fatalf("ResolveBridgeRuntimeFrom() error = %v", err)
 	}
 	if rt.NeedsBun {
 		t.Error("expected NeedsBun == false for a binary bridge")
@@ -151,8 +148,8 @@ func TestEnsureBridgeDependenciesNoPackageJSON(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rt := bridgeRuntime{Path: scriptPath, NeedsBun: true}
-	if err := ensureBridgeDependencies(rt); err != nil {
+	rt := bridge.BridgeRuntime{Path: scriptPath, NeedsBun: true}
+	if err := bridge.EnsureBridgeDependencies(rt, "@anthropic-ai/claude-agent-sdk", "claude-agent bridge"); err != nil {
 		t.Errorf("expected no error without package.json, got: %v", err)
 	}
 }
@@ -167,8 +164,8 @@ func TestEnsureBridgeDependenciesMissing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rt := bridgeRuntime{Path: scriptPath, NeedsBun: true}
-	err := ensureBridgeDependencies(rt)
+	rt := bridge.BridgeRuntime{Path: scriptPath, NeedsBun: true}
+	err := bridge.EnsureBridgeDependencies(rt, "@anthropic-ai/claude-agent-sdk", "claude-agent bridge")
 	if err == nil {
 		t.Fatal("expected error for missing dependencies, got nil")
 	}

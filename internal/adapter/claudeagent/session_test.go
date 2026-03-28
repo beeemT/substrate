@@ -3,11 +3,12 @@ package claudeagent
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/adapter/bridge"
 )
 
 func TestMapBridgeEvent(t *testing.T) {
-	s := &claudeAgentSession{}
-
 	tests := []struct {
 		name         string
 		rawType      string
@@ -74,6 +75,19 @@ func TestMapBridgeEvent(t *testing.T) {
 				t.Helper()
 				if isErr, _ := meta["is_error"].(bool); !isErr {
 					t.Errorf("is_error = %v, want true", meta["is_error"])
+				}
+			},
+		},
+		{
+			name:         "tool_output",
+			rawType:      "event",
+			eventJSON:    `{"type":"tool_output","tool":"Bash","text":"output here"}`,
+			wantType:     "tool_output",
+			checkPayload: "output here",
+			checkMeta: func(t *testing.T, meta map[string]any) {
+				t.Helper()
+				if tool, _ := meta["tool"].(string); tool != "Bash" {
+					t.Errorf("tool = %v, want Bash", meta["tool"])
 				}
 			},
 		},
@@ -176,7 +190,7 @@ func TestMapBridgeEvent(t *testing.T) {
 				Event: json.RawMessage(tt.eventJSON),
 			}
 
-			got, err := s.mapBridgeEvent(raw)
+			got, err := bridge.MapBridgeEvent(raw)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -211,32 +225,13 @@ func TestMapBridgeEvent(t *testing.T) {
 }
 
 func TestSessionMetaCapture(t *testing.T) {
-	s := &claudeAgentSession{}
+	bs := bridge.NewBridgeSession("test", adapter.SessionModeAgent)
+	s := &claudeAgentSession{bs: bs}
+	bs.ParseSessionMeta = s.sessionMetaCallback
 
-	// Simulate what readEvents does on a session_meta line.
-	line := []byte(`{"type":"session_meta","session_id":"abc-123"}`)
+	bs.ParseSessionMeta([]byte(`{"type":"session_meta","session_id":"abc-123"}`))
 
-	var rawEvent struct {
-		Type  string          `json:"type"`
-		Event json.RawMessage `json:"event"`
-	}
-	if err := json.Unmarshal(line, &rawEvent); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if rawEvent.Type == "session_meta" {
-		var meta struct {
-			SessionID string `json:"session_id"`
-		}
-		if err := json.Unmarshal(line, &meta); err == nil {
-			s.mu.Lock()
-			s.claudeSessionID = meta.SessionID
-			s.mu.Unlock()
-		}
-	}
-
-	got := s.ClaudeSessionID()
-	if got != "abc-123" {
+	if got := s.ClaudeSessionID(); got != "abc-123" {
 		t.Errorf("ClaudeSessionID() = %q, want %q", got, "abc-123")
 	}
 }
@@ -253,9 +248,9 @@ func TestFirstNonEmpty(t *testing.T) {
 		{[]string{"", "", "z"}, "z"},
 	}
 	for _, tt := range tests {
-		got := firstNonEmpty(tt.values...)
+		got := bridge.FirstNonEmpty(tt.values...)
 		if got != tt.want {
-			t.Errorf("firstNonEmpty(%v) = %q, want %q", tt.values, got, tt.want)
+			t.Errorf("FirstNonEmpty(%v) = %q, want %q", tt.values, got, tt.want)
 		}
 	}
 }
