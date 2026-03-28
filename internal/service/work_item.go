@@ -28,7 +28,7 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionPlanning:     {domain.SessionIngested, domain.SessionPlanReview, domain.SessionFailed},
 	domain.SessionPlanReview:   {domain.SessionApproved, domain.SessionPlanning, domain.SessionFailed},
 	domain.SessionApproved:     {domain.SessionImplementing, domain.SessionFailed},
-	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionFailed},
+	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionCompleted, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionCompleted:    {domain.SessionPlanning},
 	domain.SessionFailed:       {domain.SessionImplementing},

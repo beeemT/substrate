@@ -1403,3 +1403,66 @@ func TestReviewLoop_NeedsReimplAutoLoopOff(t *testing.T) {
 // auto-reimpl loop requires wiring gitClient, repos, and other dependencies
 // that reimplementSubPlan accesses. Consider an integration-level test or
 // extracting the reimpl call behind an interface for easier mocking.
+
+// TestExecuteSubPlan_CompletesTaskOnSuccess verifies the happy path: when the
+// harness returns without error, executeSubPlan marks the task as completed in
+// the repository and emits an EventAgentSessionCompleted event.
+func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
+	svc, _, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc.harness = &completingHarness{}
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workItem := domain.Session{
+		ID:          "wi-1",
+		WorkspaceID: "ws-1",
+		ExternalID:  "MAN-1",
+		Source:      "manual",
+		Title:       "Implement the change",
+		State:       domain.SessionImplementing,
+	}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+
+	result, warning := svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		&workspace,
+		&plan,
+		&workItem,
+		"sub-MAN-1-implement-the-change",
+		map[string]string{"repo-a": t.TempDir()},
+		state,
+	)
+
+	if result.Status != domain.AgentSessionCompleted {
+		t.Fatalf("session result status = %q, want %q", result.Status, domain.AgentSessionCompleted)
+	}
+	if warning != nil {
+		t.Fatalf("unexpected warning: %+v", warning)
+	}
+
+	// The task record in the repository must reflect completed status.
+	task, err := sessionRepo.Get(context.Background(), result.SessionID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if task.Status != domain.AgentSessionCompleted {
+		t.Fatalf("task repo status = %q, want %q", task.Status, domain.AgentSessionCompleted)
+	}
+	if task.CompletedAt == nil {
+		t.Fatal("task.CompletedAt must be set after completion")
+	}
+
+	// Verify the completed event was emitted.
+	var found bool
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventAgentSessionCompleted) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected EventAgentSessionCompleted event, none emitted")
+	}
+}
