@@ -893,7 +893,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.workItems = msg.Items
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
-		return a, nil
+		// Load plans for all work items so that actions like retry are available
+		// immediately, regardless of whether TasksLoadedMsg arrives first.
+		for _, wi := range msg.Items {
+			cmds = append(cmds, LoadPlanCmd(a.svcs.Plan, wi.ID))
+		}
+		cmds = append(cmds, a.updateContentFromState())
+		return a, tea.Batch(cmds...)
 
 	case TasksLoadedMsg:
 		if msg.WorkspaceID != a.svcs.WorkspaceID {

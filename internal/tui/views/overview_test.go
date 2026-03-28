@@ -821,3 +821,71 @@ func TestOverviewInterruptedImplementationDispatchesResumeSessionMsg(t *testing.
 		t.Fatalf("ResumeSessionMsg.SubPlanID = %q, want %q", resumeMsg.SubPlanID, "sp-1")
 	}
 }
+
+// TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg verifies that the plan is
+// available when the user presses 'r' for retry from the sessions sidebar focus
+// state, even if SessionsLoadedMsg arrived before TasksLoadedMsg (the race that
+// previously caused a "plan not found" toast).
+func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app.content.SetSize(90, 40)
+
+	failedWI := domain.Session{
+		ID:          "wi-failed",
+		WorkspaceID: "ws-local",
+		Title:       "Auth fix",
+		State:       domain.SessionFailed,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	// Step 1: SessionsLoadedMsg arrives (TasksLoadedMsg has NOT been processed yet).
+	// Before the fix, no LoadPlanCmd was dispatched here, leaving a.plans[wi.ID] nil
+	// until the next poll cycle ~2 seconds later.
+	model, cmds := app.Update(SessionsLoadedMsg{WorkspaceID: "ws-local", Items: []domain.Session{failedWI}})
+	app = model.(App)
+	if cmds == nil {
+		t.Fatal("SessionsLoadedMsg must return at least one command (LoadPlanCmd)")
+	}
+
+	// Step 2: Simulate the PlanLoadedMsg that the dispatched LoadPlanCmd returns.
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-failed", Status: domain.PlanApproved}
+	model, _ = app.Update(PlanLoadedMsg{WorkItemID: "wi-failed", Plan: plan})
+	app = model.(App)
+
+	if got := app.plans["wi-failed"]; got == nil {
+		t.Fatal("plan must be in a.plans after SessionsLoadedMsg + PlanLoadedMsg; got nil")
+	}
+
+	// Step 3: Navigate to the failed session (simulate sidebar selection).
+	app.currentWorkItemID = "wi-failed"
+	app.mainFocus = mainFocusSidebar
+	app.sidebarMode = sidebarPaneSessions
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-failed")
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_, _ = app.Update(cmd().(tea.Msg))
+	}
+
+	if app.content.mode != ContentModeOverview {
+		t.Fatalf("content mode = %v, want ContentModeOverview", app.content.mode)
+	}
+
+	// Step 4: Press 'r' with focus on sessions sidebar.
+	// The key must reach the overview and emit RetryFailedMsg with the correct WorkItemID.
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("pressing 'r' on a failed session must return a command")
+	}
+	msg := cmd()
+	retryMsg, ok := msg.(RetryFailedMsg)
+	if !ok {
+		t.Fatalf("expected RetryFailedMsg, got %T", msg)
+	}
+	if retryMsg.WorkItemID != "wi-failed" {
+		t.Fatalf("RetryFailedMsg.WorkItemID = %q, want %q", retryMsg.WorkItemID, "wi-failed")
+	}
+}
