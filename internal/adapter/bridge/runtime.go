@@ -187,6 +187,7 @@ func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, bunPa
 	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		os.RemoveAll(sessionTmpDir) //nolint:errcheck // best-effort cleanup
 		return nil, "", fmt.Errorf("get user home dir: %w", err)
 	}
 	configDir := filepath.Join(homeDir, homeDirName)
@@ -214,6 +215,7 @@ func buildLinuxSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, bunPat
 	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		os.RemoveAll(sessionTmpDir) //nolint:errcheck // best-effort cleanup
 		return nil, "", fmt.Errorf("get user home dir: %w", err)
 	}
 	configDir := filepath.Join(homeDir, homeDirName)

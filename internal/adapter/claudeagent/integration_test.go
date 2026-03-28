@@ -31,14 +31,8 @@ func TestIntegrationBasicPrompt(t *testing.T) {
 		t.Skip("claude binary not in PATH; skipping integration test")
 	}
 	cfg := config.ClaudeCodeConfig{}
-	rt, err := resolveBridgeRuntime(cfg.BridgePath)
-	if err != nil {
-		t.Skipf("bridge not found: %v", err)
-	}
-	if rt.NeedsBun {
-		if depErr := ensureBridgeDependencies(rt); depErr != nil {
-			t.Skipf("bridge deps not installed: %v", depErr)
-		}
+	if _, _, err := resolveReadyBridgeRuntime(cfg); err != nil {
+		t.Skipf("bridge or dependencies not available: %v", err)
 	}
 
 	h := NewHarness(cfg, t.TempDir())

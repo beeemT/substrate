@@ -62,7 +62,8 @@ type BridgeSession struct {
 	mu        sync.Mutex
 	aborted   bool
 	waitOnce  sync.Once
-	waitDone  chan error
+	waitDone  chan struct{}
+	waitErr   error
 	readDone  chan struct{}
 	closeOnce sync.Once
 }
@@ -85,12 +86,17 @@ func (s *BridgeSession) CloseEvents() {
 }
 
 // startProcessReaper ensures exactly one goroutine calls cmd.Wait().
-// Returns a buffered channel that receives the process exit error.
-func (s *BridgeSession) startProcessReaper() <-chan error {
+// Returns a channel that is closed when the process exits; s.waitErr
+// holds the exit error and is safe to read after receiving from this channel.
+// Multiple callers may all receive from the closed channel without contention.
+func (s *BridgeSession) startProcessReaper() <-chan struct{} {
 	s.waitOnce.Do(func() {
-		ch := make(chan error, 1)
-		go func() { ch <- s.Cmd.Wait() }()
+		ch := make(chan struct{})
 		s.waitDone = ch
+		go func() {
+			s.waitErr = s.Cmd.Wait()
+			close(ch)
+		}()
 	})
 	return s.waitDone
 }
@@ -101,7 +107,8 @@ func (s *BridgeSession) Wait(ctx context.Context) error {
 	case <-ctx.Done():
 		s.Abort(ctx) //nolint:errcheck // best-effort cleanup
 		return ctx.Err()
-	case err := <-s.startProcessReaper():
+	case <-s.startProcessReaper():
+		err := s.waitErr // safe: happens-after close(waitDone)
 		// Wait for readEvents to finish draining before closing events channel.
 		<-s.readDone
 
@@ -516,7 +523,7 @@ func (s *BridgeSession) rotateLogLocked() {
 		rotateSrc = ""
 	}
 
-	newFile, err := os.OpenFile(s.LogPath, os.O_CREATE|os.O_WRONLY, 0o600)
+	newFile, err := os.OpenFile(s.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		slog.Error("failed to open new log file after rotation", "err", err)
 		return
