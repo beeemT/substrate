@@ -12,6 +12,11 @@ type HeaderBlockSpec struct {
 	Meta    string
 	Width   int
 	Divider bool
+	// StatusLine, when non-empty and Divider is true, replaces the ─── divider
+	// row with this pre-rendered string. The header line count is unchanged;
+	// callers can use this to show a transient warning in-place without pushing
+	// subsequent content down.
+	StatusLine string
 }
 
 // RenderDivider renders a full-width semantic divider.
@@ -26,8 +31,11 @@ func RenderHeaderBlock(st styles.Styles, spec HeaderBlockSpec) string {
 		lines = append(lines, st.SectionLabel.Render(spec.Meta))
 	}
 	if spec.Divider {
-		lines = append(lines, RenderDivider(st, spec.Width))
+		if spec.StatusLine != "" {
+			lines = append(lines, spec.StatusLine)
+		} else {
+			lines = append(lines, RenderDivider(st, spec.Width))
+		}
 	}
-
 	return strings.Join(lines, "\n")
 }

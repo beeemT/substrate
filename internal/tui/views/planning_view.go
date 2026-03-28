@@ -16,7 +16,7 @@ import (
 
 const sessionLogSpinnerInterval = 100 * time.Millisecond
 
-const sessionLogSilenceThreshold = 30 * time.Second
+const sessionLogSilenceThreshold = 3 * time.Minute
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.
 var sessionLogSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -150,14 +150,10 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.sessionID = ""
 	m.offset = 0
 	m.agentActive = false
-	wasShowingNotice := m.silenceNoticeActive
 	m.silenceNoticeActive = false
 	m.lastEventAt = time.Time{}
 	m.entries = append([]sessionlog.Entry(nil), entries...)
 	m.doRebuildTranscript()
-	if wasShowingNotice {
-		m.syncViewportSize() // recompute header height now notice is gone
-	}
 	m.viewport.GotoBottom()
 }
 
@@ -203,10 +199,9 @@ func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
 		m.silenceNoticeActive = false
 		return sessionLogSpinnerTickCmd()
 	}
-	if m.silenceNoticeActive {
-		m.silenceNoticeActive = false
-		m.syncViewportSize()
-	}
+	// Warning occupies the divider slot; clearing it does not affect header
+	// line count, so no viewport resize is needed.
+	m.silenceNoticeActive = false
 	return nil
 }
 
@@ -268,13 +263,10 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			wasAtBottom := m.viewport.AtBottom()
 			m.entries = append(m.entries, msg.Entries...)
 			m.lastEventAt = time.Now()
-			if m.silenceNoticeActive {
-				// Entries arrived: clear silence warning and recompute header height.
-				m.silenceNoticeActive = false
-				m.syncViewportSize()
-			} else {
-				m.doRebuildTranscript()
-			}
+			// Clear any silence warning and rebuild transcript. Warning replaces
+			// the divider, so no viewport resize is needed on state change.
+			m.silenceNoticeActive = false
+			m.doRebuildTranscript()
 			if wasAtBottom {
 				m.viewport.GotoBottom()
 			}
@@ -350,11 +342,10 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
 		// Surface a warning after prolonged silence while agent is active.
+		// The warning replaces the divider row in the header, so no viewport
+		// resize is needed when the state changes.
 		shouldWarn := !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) >= sessionLogSilenceThreshold
-		if shouldWarn != m.silenceNoticeActive {
-			m.silenceNoticeActive = shouldWarn
-			m.syncViewportSize()
-		}
+		m.silenceNoticeActive = shouldWarn
 		return m, sessionLogSpinnerTickCmd()
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -368,20 +359,25 @@ func (m SessionLogModel) header() string {
 	if m.modeLabel != "" {
 		headerText += " · " + m.modeLabel
 	}
+	// When rate-limit silence warning is active, render it in-place on the
+	// divider row so the header line count stays constant and the viewport
+	// content below does not shift down.
+	var statusLine string
+	if m.silenceNoticeActive && !m.lastEventAt.IsZero() {
+		elapsed := time.Since(m.lastEventAt).Round(time.Second)
+		text := "⏸ No output for " + elapsed.String() + " — may be rate limited"
+		statusLine = m.styles.Warning.Render(ansi.Truncate(text, m.width, "…"))
+	}
 	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   headerText,
-		Meta:    m.meta,
-		Width:   m.width,
-		Divider: true,
+		Title:      headerText,
+		Meta:       m.meta,
+		Width:      m.width,
+		Divider:    true,
+		StatusLine: statusLine,
 	})
 	out := header
 	if notice := m.noticeView(); notice != "" {
 		out = out + "\n" + notice
-	}
-	if m.silenceNoticeActive && !m.lastEventAt.IsZero() {
-		elapsed := time.Since(m.lastEventAt).Round(time.Second)
-		text := "⏸ No output for " + elapsed.String() + " — may be rate limited"
-		out = out + "\n" + m.styles.Warning.Render(ansi.Truncate(text, m.width, "…"))
 	}
 	return out
 }

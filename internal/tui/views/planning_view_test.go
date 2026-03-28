@@ -400,7 +400,10 @@ func TestSessionLogSilenceNoticeFitsWidth(t *testing.T) {
 	}
 }
 
-func TestSessionLogSilenceNoticeReducesViewportHeight(t *testing.T) {
+// TestSessionLogSilenceNoticeStableViewportHeight verifies that the silence
+// warning occupies the divider slot rather than adding an extra header line,
+// so the viewport height stays the same whether the warning is active or not.
+func TestSessionLogSilenceNoticeStableViewportHeight(t *testing.T) {
 	t.Parallel()
 	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
 	m.SetSize(60, 15)
@@ -413,8 +416,8 @@ func TestSessionLogSilenceNoticeReducesViewportHeight(t *testing.T) {
 	m.silenceNoticeActive = true
 	m.syncViewportSize()
 	heightWith := m.viewport.Height
-	if diff := heightWithout - heightWith; diff != 1 {
-		t.Fatalf("silence notice should reduce viewport height by 1, got diff=%d (without=%d, with=%d)", diff, heightWithout, heightWith)
+	if heightWith != heightWithout {
+		t.Fatalf("silence notice must not change viewport height (warning replaces divider slot), without=%d, with=%d", heightWithout, heightWith)
 	}
 }
 
@@ -461,17 +464,22 @@ func TestSessionLogSilenceNoticeClearedOnDeactivate(t *testing.T) {
 	t.Parallel()
 	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
 	m.SetSize(60, 10)
+	m.SetTitle("Test")
 	m.SetLogPath("sess-1", "/tmp/sess-1.log")
 	m.SetAgentActive(true)
 	m.lastEventAt = time.Now().Add(-sessionLogSilenceThreshold - time.Second)
 	m.silenceNoticeActive = true
 	m.syncViewportSize()
-	heightWith := m.viewport.Height
+	// Warning must be visible before deactivation.
+	if !strings.Contains(stripBrowseANSI(m.View()), "No output for") {
+		t.Fatal("view must contain silence warning before agent deactivation")
+	}
 	m.SetAgentActive(false)
 	if m.silenceNoticeActive {
 		t.Fatal("silenceNoticeActive must be cleared when agent deactivates")
 	}
-	if m.viewport.Height <= heightWith {
-		t.Fatalf("viewport height must increase when silence notice is cleared, got %d, was %d", m.viewport.Height, heightWith)
+	// Warning must no longer appear after deactivation.
+	if strings.Contains(stripBrowseANSI(m.View()), "No output for") {
+		t.Fatal("silence notice must not appear in view after agent deactivates")
 	}
 }
