@@ -469,7 +469,7 @@ API:
 
 Returns `ErrSessionNotRunning` when the target session is not in the registry.
 
-- Only supported by the OMP harness; other harnesses return `ErrSteerNotSupported`. See `04-adapters.md` for harness capability details.
+- Supported by the ohmypi and claude-agent harnesses; other harnesses return `ErrSteerNotSupported`. See `04-adapters.md` for harness capability details.
 - The TUI `p` key activates steering input for running sessions; the message is delivered via the session registry. See `06-tui-design.md` for the input model.
 - All orchestrator sessions (implementation, review, resumed, follow-up) register with the `SessionRegistry` on start and deregister on completion or abort.
 

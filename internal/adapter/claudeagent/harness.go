@@ -89,7 +89,7 @@ type bridgeInitMsg struct {
 }
 
 // StartSession spawns a new agent session with the given options.
-func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_ adapter.AgentSession, err error) {
 	if opts.Mode == "" {
 		opts.Mode = adapter.SessionModeAgent
 	}
@@ -121,6 +121,12 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	if err != nil {
 		return nil, err
 	}
+	// Ensure the sandbox temp dir is cleaned up if StartSession fails after this point.
+	defer func() {
+		if err != nil {
+			os.RemoveAll(sessionTmpDir) //nolint:errcheck // best-effort cleanup
+		}
+	}()
 	cmd.Dir = bridgeRt.LaunchDir(workDir)
 
 	// Build environment.

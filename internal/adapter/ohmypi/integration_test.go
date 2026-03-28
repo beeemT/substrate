@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/adapter/bridge"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -261,8 +262,8 @@ func TestIntegration_LogRotation(t *testing.T) {
 
 	// Test compression function
 	compressedPath := logPath + ".test.gz"
-	if err := compressFile(logPath, compressedPath); err != nil {
-		t.Fatalf("compressFile failed: %v", err)
+	if err := bridge.CompressFile(logPath, compressedPath); err != nil {
+		t.Fatalf("bridge.CompressFile failed: %v", err)
 	}
 
 	// Verify compressed file exists and is smaller

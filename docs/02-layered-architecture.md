@@ -489,7 +489,8 @@ adapters:
     bridge_path: ""
     thinking_level: ""
   claude_code:
-    binary_path: ""
+    bun_path: ""
+    bridge_path: ""
     model: ""
     permission_mode: ""
     max_turns: 0

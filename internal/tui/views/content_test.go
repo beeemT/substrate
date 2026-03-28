@@ -202,10 +202,10 @@ func TestContentHopRenderingFitsTerminalBounds(t *testing.T) {
 			m := views.NewContentModel(makeContentStyles())
 			m.SetSize(tc.w, tc.h)
 			// Drive model into the desired hop state via Update messages.
-			_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: tc.hopCount})
+			m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: tc.hopCount})
 			// Advance to the target hop index and frame.
 			// Each hop has FramesPerHop (5) frames, plus a pause between hops.
-			stepsToReach := tc.hopIndex*components.FramesPerHop + tc.hopFrame
+			stepsToReach := tc.hopIndex*(components.FramesPerHop+1) + tc.hopFrame
 			for i := 0; i < stepsToReach; i++ {
 				m, _ = m.Update(components.BunnyHopStepMsg{})
 			}
@@ -259,7 +259,7 @@ func TestContentHopContainerStaysFixed(t *testing.T) {
 		}
 	}
 	// Now trigger a 2-hop and check every frame.
-	_, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
+	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
 	for step := 0; step < 11; step++ {
 		view := m.View()
 		lines := strings.Split(view, "\n")

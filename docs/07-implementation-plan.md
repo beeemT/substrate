@@ -22,7 +22,7 @@ internal/
         glab/
         sentry/
         ohmypi/
-        claudecode/
+        claudeagent/
         codex/
     app/                   # adapter + harness wiring, remote detection
     event/                 # persisted channel bus
@@ -163,7 +163,7 @@ Current production-quality path:
 
 Currently wired but still parity-limited:
 
-- `claudecode`
+- `claudeagent`
 - `codex`
 
 Current router behavior in `internal/app/harness.go`:

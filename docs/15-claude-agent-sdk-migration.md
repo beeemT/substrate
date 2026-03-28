@@ -4,7 +4,7 @@ Replace the raw `claude` CLI subprocess harness with a bridge-backed harness tha
 `@anthropic-ai/claude-agent-sdk`. This unlocks SendMessage, Steer, session resume,
 richer event types, subagents, hooks, and structured permissions.
 
-**Status:** Decisions resolved. Ready to implement.
+**Status:** Implemented and shipped.
 
 ---
 

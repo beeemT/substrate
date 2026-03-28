@@ -94,6 +94,11 @@ func (s *BridgeSession) startProcessReaper() <-chan struct{} {
 		ch := make(chan struct{})
 		s.waitDone = ch
 		go func() {
+			// Drain stdout completely before reaping the process.
+			// cmd.Wait() closes the read end of StdoutPipe via closeAfterWait,
+			// which would race with the scanner in readEvents. Waiting for readDone
+			// first ensures all output is consumed before the pipe is closed.
+			<-s.readDone
 			s.waitErr = s.Cmd.Wait()
 			close(ch)
 		}()
@@ -120,7 +125,7 @@ func (s *BridgeSession) Wait(ctx context.Context) error {
 			s.LogFile = nil
 
 			compressedPath := s.LogPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
-			go compressFile(s.LogPath, compressedPath) //nolint:errcheck // best-effort async compression
+			go CompressFile(s.LogPath, compressedPath) //nolint:errcheck // best-effort async compression
 		}
 
 		s.CloseEvents()
@@ -339,7 +344,7 @@ func (s *BridgeSession) CloseLogAndCompress() {
 	s.LogFile.Close()
 	s.LogFile = nil
 	compressedPath := s.LogPath + "." + strconv.FormatInt(time.Now().Unix(), 10) + ".gz"
-	go compressFile(s.LogPath, compressedPath) //nolint:errcheck // best-effort async compression
+	go CompressFile(s.LogPath, compressedPath) //nolint:errcheck // best-effort async compression
 }
 
 // MapBridgeEvent maps a bridge event envelope to an adapter.AgentEvent.
@@ -537,7 +542,7 @@ func (s *BridgeSession) rotateLogLocked() {
 	logDir := s.LogDir
 	sessionID := s.ID
 	go func() {
-		if err := compressFile(rotateSrc, compressedPath); err != nil {
+		if err := CompressFile(rotateSrc, compressedPath); err != nil {
 			slog.Warn("failed to compress log segment", "err", err)
 			return
 		}
@@ -545,10 +550,10 @@ func (s *BridgeSession) rotateLogLocked() {
 	}()
 }
 
-// compressFile compresses src to dst using gzip, then removes src.
+// CompressFile compresses src to dst using gzip, then removes src.
 // No defers are used to prevent double-close on the happy path.
 // On failure, dst is removed to avoid leaving incomplete output on disk.
-func compressFile(src, dst string) error {
+func CompressFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err

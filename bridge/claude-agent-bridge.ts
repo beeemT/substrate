@@ -251,7 +251,7 @@ function mapSDKMessage(msg: any): void {
 	}
 
 	if (msg.type === "result" && typeof msg.subtype === "string" && msg.subtype.startsWith("error")) {
-		emitLifecycle("failed", { message: msg.subtype });
+		emitLifecycle("failed", { message: msg.errors?.[0] ?? msg.subtype });
 		return;
 	}
 
@@ -424,7 +424,7 @@ async function main(): Promise<void> {
 
 	// After the query loop completes, emit foreman_proposed if in foreman mode.
 	// lifecycle/completed was already emitted inside mapSDKMessage for result/success.
-	if (mode === "foreman" && lastResultText !== "") {
+	if (mode === "foreman" && lastResultText !== "" && !queryFailed) {
 		const { text, uncertain } = extractConfidence(lastResultText);
 		emit({ type: "foreman_proposed", text, uncertain });
 	}

@@ -381,8 +381,8 @@ func TestCompressFile(t *testing.T) {
 	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := compressFile(src, dst); err != nil {
-		t.Fatalf("compressFile: %v", err)
+	if err := CompressFile(src, dst); err != nil {
+		t.Fatalf("CompressFile: %v", err)
 	}
 	// Source should be removed.
 	if _, err := os.Stat(src); !os.IsNotExist(err) {

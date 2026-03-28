@@ -364,6 +364,12 @@ func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
 	err := cmd.Wait()
 
 	s.mu.Lock()
+	if s.cmd != cmd {
+		// A newer turn has already started and owns s.cmd.
+		// Do not interfere with the new turn's state or close the session.
+		s.mu.Unlock()
+		return
+	}
 	currentState := s.state
 	pendingErr := s.pendingTurnErr
 	s.pendingTurnErr = nil
@@ -807,8 +813,13 @@ func (s *session) openLogFile() error {
 	if err != nil {
 		return fmt.Errorf("open session log: %w", err)
 	}
+	s.mu.Lock()
+	old := s.logFile
 	s.logFile = f
-
+	s.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	return nil
 }
 
