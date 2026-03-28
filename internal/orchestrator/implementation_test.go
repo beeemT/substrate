@@ -998,6 +998,60 @@ func TestBuildWavesSkipsCompletedKeepsFailed(t *testing.T) {
 	}
 }
 
+// TestBuildWavesIncludesInProgress verifies that BuildWaves does not filter out
+// in_progress sub-plans — they were stranded by a crash and must be re-executed.
+func TestBuildWavesIncludesInProgress(t *testing.T) {
+	subPlans := []domain.TaskPlan{
+		{ID: "sp1", Order: 0, RepositoryName: "repo1", Status: domain.SubPlanCompleted},
+		{ID: "sp2", Order: 0, RepositoryName: "repo2", Status: domain.SubPlanInProgress},
+		{ID: "sp3", Order: 1, RepositoryName: "repo3", Status: domain.SubPlanPending},
+	}
+
+	waves := BuildWaves(subPlans)
+	if len(waves) != 2 {
+		t.Fatalf("got %d waves, want 2", len(waves))
+	}
+	// Wave 0: sp2 (in_progress — not filtered, treated like failed/pending)
+	if len(waves[0]) != 1 || waves[0][0].ID != "sp2" {
+		t.Errorf("wave 0: expected [sp2], got %v", waves[0])
+	}
+	// Wave 1: sp3 (pending)
+	if len(waves[1]) != 1 || waves[1][0].ID != "sp3" {
+		t.Errorf("wave 1: expected [sp3], got %v", waves[1])
+	}
+}
+
+// TestPersistSubPlanStatus_CrashRecovery verifies that a sub-plan stranded in
+// in_progress by a process crash can be reset to pending via persistSubPlanStatus.
+// This is the exact path taken by the Implement pre-execution reset loop.
+func TestPersistSubPlanStatus_CrashRecovery(t *testing.T) {
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	// Simulate a stranded sub-plan left in_progress by a previous crashed run.
+	subPlanRepo.subPlans["sp-crashed"] = domain.TaskPlan{
+		ID:             "sp-crashed",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Status:         domain.SubPlanInProgress,
+	}
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+
+	svc := &ImplementationService{
+		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
+	}
+
+	sp := subPlanRepo.subPlans["sp-crashed"]
+	svc.persistSubPlanStatus(context.Background(), &sp, domain.SubPlanPending)
+
+	got, ok := subPlanRepo.subPlans["sp-crashed"]
+	if !ok {
+		t.Fatal("sub-plan not found in repo after reset")
+	}
+	if got.Status != domain.SubPlanPending {
+		t.Errorf("Status = %q after crash recovery reset, want %q", got.Status, domain.SubPlanPending)
+	}
+}
+
 // completingMockSession is a mock session that completes immediately on Wait.
 type completingMockSession struct {
 	id     string

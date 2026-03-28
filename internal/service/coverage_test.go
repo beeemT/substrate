@@ -176,6 +176,19 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 		}
 	})
 
+	// A process crash can strand a sub-plan in in_progress. Verify the state machine
+	// allows in_progress → pending so Implement can reset it on restart.
+	t.Run("ResetInProgressSubPlan", func(t *testing.T) {
+		subPlanRepo.subPlans["sp-crash"] = domain.TaskPlan{ID: "sp-crash", PlanID: "plan-1", Status: domain.SubPlanInProgress}
+		if err := svc.TransitionSubPlan(ctx, "sp-crash", domain.SubPlanPending); err != nil {
+			t.Fatalf("TransitionSubPlan(in_progress→pending) failed: %v", err)
+		}
+		got, _ := svc.GetSubPlan(ctx, "sp-crash")
+		if got.Status != domain.SubPlanPending {
+			t.Errorf("Status = %q, want %q", got.Status, domain.SubPlanPending)
+		}
+	})
+
 	t.Run("UpdateSubPlanContent", func(t *testing.T) {
 		subPlanRepo.subPlans["sp-update"] = domain.TaskPlan{ID: "sp-update", PlanID: "plan-1", Status: domain.SubPlanPending}
 		if err := svc.UpdateSubPlanContent(ctx, "sp-update", "Updated content"); err != nil {

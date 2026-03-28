@@ -342,13 +342,12 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 	}{
 		{domain.SubPlanPending, domain.SubPlanCompleted, "pending -> completed"},
 		{domain.SubPlanPending, domain.SubPlanFailed, "pending -> failed"},
-		{domain.SubPlanInProgress, domain.SubPlanPending, "in_progress -> pending"},
+		// Note: in_progress -> pending is now valid (crash recovery); see validSubPlanTransitions.
 		{domain.SubPlanCompleted, domain.SubPlanInProgress, "completed -> in_progress"},
 		{domain.SubPlanCompleted, domain.SubPlanFailed, "completed -> failed"},
 		{domain.SubPlanFailed, domain.SubPlanCompleted, "failed -> completed"},
 		{domain.SubPlanFailed, domain.SubPlanInProgress, "failed -> in_progress"},
 	}
-
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()

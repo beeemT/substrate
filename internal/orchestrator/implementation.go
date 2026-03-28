@@ -217,10 +217,11 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("prepare worktrees: %w", err)
 	}
 
-	// Reset failed sub-plans to pending so they are picked up by BuildWaves.
-	// Completed sub-plans are left alone — only failed ones need re-execution.
+	// Reset failed and in_progress sub-plans to pending so they are picked up by BuildWaves.
+	// Completed sub-plans are left alone. In_progress ones were left stranded by a process crash
+	// — treat them as needing a fresh execution just like failed ones.
 	for i := range subPlans {
-		if subPlans[i].Status == domain.SubPlanFailed {
+		if subPlans[i].Status == domain.SubPlanFailed || subPlans[i].Status == domain.SubPlanInProgress {
 			s.persistSubPlanStatus(ctx, &subPlans[i], domain.SubPlanPending)
 		}
 	}
