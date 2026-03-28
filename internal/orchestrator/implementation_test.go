@@ -337,6 +337,30 @@ func TestGenerateBranchName(t *testing.T) {
 			wantPrefix:   "sub-gl-issue-1234-42-",
 			wantContains: "fix-rendering-bug",
 		},
+		{
+			name:         "sentry externalID with dot in org",
+			externalID:   "SEN-my.company-1234567890",
+			title:        "Null pointer in checkout",
+			wantPrefix:   "sub-SEN-my-company-1234567890-",
+			wantContains: "null-pointer-in-checkout",
+		},
+		{
+			// Consecutive dots in an external ID must not survive sanitization:
+			// `..` is forbidden by git check-ref-format and rejected by GitHub/GitLab.
+			name:         "externalID with consecutive dots",
+			externalID:   "SEN-my..org-9999",
+			title:        "Crash",
+			wantPrefix:   "sub-SEN-my-org-9999-",
+			wantContains: "crash",
+		},
+		{
+			// Sentry org configured as an FQDN (dots → dashes).
+			name:         "sentry org as fqdn",
+			externalID:   "SEN-sentry.example.com-555",
+			title:        "Out of memory",
+			wantPrefix:   "sub-SEN-sentry-example-com-555-",
+			wantContains: "out-of-memory",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -407,6 +431,31 @@ func TestValidateBranchName(t *testing.T) {
 		{
 			name:      "sanitized github ID",
 			branch:    "sub-gh-issue-rtk-ai-rtk-591-fix",
+			wantValid: true,
+		},
+		{
+			name:      "consecutive dots (invalid git ref)",
+			branch:    "sub-SEN-my..org-1234-crash",
+			wantValid: false,
+		},
+		{
+			name:      "at-brace sequence (invalid git ref)",
+			branch:    "sub-LIN-FOO-123-fix@{auth}",
+			wantValid: false,
+		},
+		{
+			name:      "trailing dot (invalid git ref)",
+			branch:    "sub-MAN-1-work.",
+			wantValid: false,
+		},
+		{
+			name:      "trailing dotlock (invalid git ref)",
+			branch:    "sub-MAN-1-work.lock",
+			wantValid: false,
+		},
+		{
+			name:      "valid sentry branch with dot-sanitized org",
+			branch:    "sub-SEN-my-company-1234567890-null-pointer",
 			wantValid: true,
 		},
 	}

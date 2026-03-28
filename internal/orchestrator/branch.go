@@ -21,7 +21,7 @@ const maxSlugLength = 30
 // nonAlphaNum and nonBranchSafe are regexps used in slug/ID sanitization.
 var (
 	nonAlphaNum   = regexp.MustCompile(`[^a-z0-9]+`)
-	nonBranchSafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+	nonBranchSafe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 	multiDash     = regexp.MustCompile(`-+`)
 )
 
@@ -52,7 +52,7 @@ func GenerateBranchName(externalID, title string) string {
 }
 
 // sanitizeExternalID replaces characters that are invalid in git branch names
-// (colons, slashes, hashes, etc.) with dashes, then collapses and trims.
+// (colons, slashes, hashes, dots, etc.) with dashes, then collapses and trims.
 // Uppercase is preserved so IDs like "LIN-FOO-123" remain readable.
 func sanitizeExternalID(id string) string {
 	s := nonBranchSafe.ReplaceAllString(id, "-")
@@ -92,20 +92,25 @@ func slugFromTitle(title string) string {
 	return s
 }
 
-// ValidateBranchName checks if a branch name is valid.
+// ValidateBranchName checks if a branch name is valid per git check-ref-format rules.
 // A valid branch name:
 // - Starts with "sub-"
-// - Contains no characters invalid in git ref names (/, :, #)
+// - Contains no sequences invalid in git ref names (/, :, #, .., @{)
+// - Does not end with . or .lock
 // - Has non-empty content after "sub-" with no leading or trailing dash
 func ValidateBranchName(branch string) bool {
 	if !strings.HasPrefix(branch, "sub-") {
 		return false
 	}
-	// Reject characters that are invalid in git branch names.
-	for _, c := range []string{"/", ":", "#"} {
-		if strings.Contains(branch, c) {
+	// Reject sequences that are invalid in git ref names.
+	for _, seq := range []string{"/", ":", "#", "..", "@{"} {
+		if strings.Contains(branch, seq) {
 			return false
 		}
+	}
+	// A branch name must not end with a dot or the .lock suffix (git rule).
+	if strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") {
+		return false
 	}
 	rest := strings.TrimPrefix(branch, "sub-")
 
