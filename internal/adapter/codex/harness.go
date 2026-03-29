@@ -252,15 +252,16 @@ func (s *session) SendAnswer(_ context.Context, _ string) error {
 	return adapter.ErrSendAnswerNotSupported
 }
 
+func (s *session) Compact(_ context.Context) error {
+	return adapter.ErrCompactNotSupported
+}
+
 // Wait blocks until the session is aborted or a fatal error occurs.
 //
 // Note: unlike single-turn harnesses, Wait does NOT return when a turn
 // completes — it returns only when the session is explicitly Abort()ed or
 // hits an unrecoverable error. Callers that need to react to turn completion
 // should listen for the "done" event on Events().
-func (s *session) Compact(_ context.Context) error {
-	return adapter.ErrCompactNotSupported
-}
 
 func (s *session) Wait(ctx context.Context) error {
 	select {

@@ -397,17 +397,17 @@ async function handleLine(line: string): Promise<void> {
 				pendingAnswerResolve = null;
 			}
 			break;
-	case "compact":
-		if (!session) break;
-		emit({ type: "lifecycle", stage: "compaction_start", message: "Compacting context…" });
-		try {
-			await session.compact();
-			emit({ type: "lifecycle", stage: "compaction_end" });
-		} catch (err: unknown) {
-			const errorMessage = err instanceof Error ? err.message : String(err);
-			emit({ type: "lifecycle", stage: "compaction_failed", message: errorMessage });
-		}
-		break;
+		case "compact":
+			if (!session) break;
+			emit({ type: "lifecycle", stage: "compaction_start", message: "Compacting context…" });
+			try {
+				await session.compact();
+				emit({ type: "lifecycle", stage: "compaction_end" });
+			} catch (err: unknown) {
+				const errorMessage = err instanceof Error ? err.message : String(err);
+				emit({ type: "lifecycle", stage: "compaction_failed", message: errorMessage });
+			}
+			break;
 		case "prompt":
 			await runPrompt(String(msg.text ?? ""), "prompt");
 			break;
