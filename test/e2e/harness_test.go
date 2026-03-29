@@ -655,6 +655,11 @@ func (s *e2eSession) Abort(_ context.Context) error {
 	s.closeOnce.Do(func() { close(s.eventsCh) })
 	return nil
 }
+
+func (s *e2eSession) Steer(_ context.Context, _ string) error { return adapter.ErrSteerNotSupported }
+
+func (s *e2eSession) SendAnswer(_ context.Context, _ string) error {
 	return adapter.ErrSendAnswerNotSupported
 }
+
 func (s *e2eSession) ResumeInfo() map[string]string { return nil }

@@ -244,8 +244,7 @@ implSvc := orchestrator.NewImplementationService(
 	cfg, harnesses.Implementation, gitClient, bus,
 	planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
 	reviewPipeline,
-)
-	reviewSvc,
+	foreman, questionSvc, reviewSvc,
 ```
 
 Cross-cutting reality today:

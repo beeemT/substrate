@@ -572,7 +572,7 @@ Migrations are applied sequentially from `migrations/`. The initial schema is in
 |-----------|---------|
 | 001 | Initial schema: all core tables |
 | 002 | `agent_sessions` rewritten with `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path` (canonical columns) |
-| 003 | `agent_sessions` adds generic resume metadata storage for harness-specific `ResumeInfo`
+| 003 | `agent_sessions` adds generic resume metadata storage for harness-specific `ResumeInfo` |
 | 004 | `sub_plans` adds `planning_round` column |
 | 005 | Review artifacts: `github_pull_requests`, `gitlab_merge_requests`, `session_review_artifacts` tables with backfill from `system_events` |
 

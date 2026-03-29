@@ -661,6 +661,7 @@ func (s *ImplementationService) runImplementation(
 
 	// Persist harness-specific resume data generically — no harness-specific knowledge here.
 	if info := harnessSession.ResumeInfo(); len(info) > 0 {
+		session.ResumeInfo = info
 		if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
 			slog.Warn("failed to store resume info", "error", err, "session_id", sessionID)
 		}

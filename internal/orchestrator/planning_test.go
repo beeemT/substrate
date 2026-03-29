@@ -411,7 +411,7 @@ type planningHarnessSessionWithResumeInfo struct {
 
 func (s *planningHarnessSessionWithResumeInfo) ResumeInfo() map[string]string { return s.resumeInfo }
 
-func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.T) {
+func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
@@ -426,7 +426,7 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 	harness := &planningHarnessSpy{planText: planText}
 
 	sessionRepo := newMockSessionRepo()
-	// Seed the planning session record so UpdateOmpSessionFile can find it.
+	// Seed the planning session record so UpdateResumeInfo can find it.
 	sessionRepo.sessions["plan-omp-1"] = domain.Task{
 		ID:          "plan-omp-1",
 		WorkItemID:  "wi-1",

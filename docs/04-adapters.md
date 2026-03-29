@@ -565,10 +565,10 @@ Beyond basic streaming and messaging, the OMP bridge (`bridge/omp-bridge.ts`) su
 
 **Resume**: OMP supports native session resume via `SessionManager.open(filePath)`. When the `SUBSTRATE_RESUME_SESSION_FILE` environment variable is set, the bridge opens the existing session instead of creating a new one. This enables follow-up on completed repos without losing conversation context. `HarnessCapabilities.SupportsNativeResume` is `true` for OMP.
 
-**Session metadata**: Each `AgentSession` implementation returns its harness-specific resume data via `ResumeInfo() map[string]string`.
+**Session metadata**: Each `AgentSession` implementation returns its harness-specific resume data via `ResumeInfo() map[string]string`. The Go session captures this from the bridge `session_meta` event (e.g. `omp_session_id`/`omp_session_file` for OMP, `session_id` for Claude) and the orchestrator persists the map generically.
 
 ```json
-{"type":"resume_info","resume_info":{"session_id":"...","thread_id":"..."}}
+{"type":"session_meta","omp_session_id":"...","omp_session_file":"..."}
 ```
 
 The orchestrator persists this generically via `TaskService.UpdateResumeInfo()`, instead of storing harness-specific fields such as separate session file/id columns.
