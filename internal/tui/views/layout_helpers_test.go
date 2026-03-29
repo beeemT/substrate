@@ -69,21 +69,25 @@ func TestOverlaySpinnerZeroWidth(t *testing.T) {
 	}
 }
 
-func TestOverlaySpinnerSkipsTrailingBlankLines(t *testing.T) {
+func TestOverlaySpinnerPlacedOnLastLine(t *testing.T) {
 	t.Parallel()
 
 	st := styles.NewStyles(styles.DefaultTheme)
+	// Body has content followed by trailing blank lines (simulates viewport
+	// padding when content doesn't fill the viewport height).
 	body := "content line\n\n\n"
 	result := overlaySpinner(body, "⠋", st, 40)
 	lines := strings.Split(result, "\n")
 
-	// Spinner should be on the first line (only non-empty one), not on trailing blanks.
-	if !strings.Contains(lines[0], "⠋") {
-		t.Fatalf("spinner should be on first non-empty line, lines: %v", lines)
+	// Spinner must be on the very last line (bottom-right corner of the
+	// viewport window), not on the last non-empty content line.
+	lastIdx := len(lines) - 1
+	if !strings.Contains(lines[lastIdx], "⠋") {
+		t.Fatalf("spinner must be on last line (index %d), got lines: %v", lastIdx, lines)
 	}
-	for i := 1; i < len(lines); i++ {
+	for i := 0; i < lastIdx; i++ {
 		if strings.Contains(lines[i], "⠋") {
-			t.Errorf("line %d = %q, spinner should not be on trailing blank line", i, lines[i])
+			t.Errorf("line %d = %q, spinner should only be on the last line", i, lines[i])
 		}
 	}
 }

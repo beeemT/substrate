@@ -291,6 +291,44 @@ func TestSessionLogSpinnerAtBottomRightWhenNoContent(t *testing.T) {
 	}
 }
 
+func TestSessionLogSpinnerAtBottomRightWithPartialContent(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionLogModel(st)
+	m.SetSize(60, 15)
+	m.SetTitle("Test")
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	// Feed a few lines that don't fill the viewport.
+	updated, _ := m.Update(SessionLogLinesMsg{
+		SessionID:  "sess-1",
+		Entries:    []sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}},
+		NextOffset: 10,
+	})
+	m = updated
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 15 {
+		t.Fatalf("line count = %d, want 15", len(lines))
+	}
+
+	// Spinner must be on the last line (bottom-right corner),
+	// not on the last content line.
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, sessionLogSpinnerFrames[0]) {
+		t.Fatalf("spinner must be on last line (bottom-right corner), got last line: %q\nfull view:\n%s", lastLine, view)
+	}
+
+	for i, line := range lines[:len(lines)-1] {
+		if strings.Contains(line, sessionLogSpinnerFrames[0]) {
+			t.Errorf("spinner found on non-last line %d: %q", i+1, line)
+		}
+	}
+}
+
 func TestSessionLogEmptyBodyShowsWaitingWhenActive(t *testing.T) {
 	t.Parallel()
 

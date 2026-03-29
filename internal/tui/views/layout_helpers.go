@@ -50,11 +50,7 @@ func overlaySpinner(body, frame string, st styles.Styles, width int) string {
 	if len(lines) == 0 {
 		return body
 	}
-	// Find the last non-empty line to place the spinner on.
 	idx := len(lines) - 1
-	for idx > 0 && strings.TrimSpace(lines[idx]) == "" {
-		idx--
-	}
 	styledFrame := st.Active.Render(frame)
 	frameWidth := ansi.StringWidth(styledFrame)
 	lineWidth := ansi.StringWidth(lines[idx])
