@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 )
 
@@ -11,7 +12,7 @@ func TestBuildResumeSystemPrompt(t *testing.T) {
 	t.Parallel()
 
 	plan := domain.TaskPlan{Content: "implement feature X"}
-	result := buildResumeSystemPrompt(plan, "some output")
+	result := buildResumeSystemPrompt(plan, "some output", adapter.CommitConfig{Strategy: "semi-regular"})
 
 	for _, want := range []string{
 		"## Sub-Plan",
@@ -31,7 +32,7 @@ func TestBuildFollowUpSystemPrompt(t *testing.T) {
 	t.Parallel()
 
 	plan := domain.TaskPlan{Content: "fix bug Y"}
-	result := buildFollowUpSystemPrompt(plan, "done", "also update tests")
+	result := buildFollowUpSystemPrompt(plan, "done", "also update tests", adapter.CommitConfig{Strategy: "semi-regular"})
 
 	for _, want := range []string{
 		"## Sub-Plan",

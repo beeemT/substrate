@@ -946,7 +946,7 @@ func (s *ImplementationService) buildSessionOpts(
 		commitConfig.MessageTemplate = s.cfg.Commit.MessageTemplate
 	}
 	// Build system prompt
-	systemPrompt := s.buildSystemPrompt(subPlan, plan, workItem, docContext)
+	systemPrompt := s.buildSystemPrompt(subPlan, plan, workItem, docContext, commitConfig)
 
 	return adapter.SessionOpts{
 		SessionID:            session.ID,
@@ -984,6 +984,7 @@ func (s *ImplementationService) buildSystemPrompt(
 	plan *domain.Plan,
 	workItem *domain.Session,
 	docContext string,
+	commitCfg adapter.CommitConfig,
 ) string {
 	var prompt strings.Builder
 
@@ -1010,11 +1011,37 @@ func (s *ImplementationService) buildSystemPrompt(
 		prompt.WriteString("\n\n")
 	}
 
+	if section := buildCommitSection(commitCfg); section != "" {
+		prompt.WriteString(section)
+		prompt.WriteString("\n\n")
+	}
+
 	prompt.WriteString("## Validation\n")
 	prompt.WriteString("Before marking complete: run all relevant formatters, compilation checks, and unit tests.\n")
 	prompt.WriteString("All must pass. Refer to AGENTS.md in this repo for tooling specifics.\n")
 
 	return prompt.String()
+}
+
+// buildCommitSection returns a prompt section instructing the agent how to commit
+// its work based on the configured strategy. Returns empty string when no
+// meaningful strategy is set.
+func buildCommitSection(cfg adapter.CommitConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Commit Strategy\n\n")
+
+	switch cfg.Strategy {
+	case "granular":
+		sb.WriteString("Commit frequently: after every self-contained change (a function added, a test fixed, a refactor step). Use \x60git add -A && git commit\x60 for each logical unit of work. Write concise, descriptive commit messages summarizing what changed and why. Do not batch unrelated changes into a single commit.")
+	case "semi-regular":
+		sb.WriteString("Commit at meaningful checkpoints: after completing a logical group of related changes (a feature component, a refactored module, a passing test suite). Use \x60git add -A && git commit\x60. Write clear commit messages that describe the group of changes. Do not leave uncommitted work at session end.")
+	case "single":
+		sb.WriteString("Make a single commit at the end of the session containing all your changes. Use \x60git add -A && git commit\x60. Write a comprehensive commit message summarizing the full scope of work.")
+	default:
+		return ""
+	}
+
+	return sb.String()
 }
 
 // forwardEvents forwards agent events to the event bus.

@@ -87,7 +87,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	}
 
 	hasResume := len(interrupted.ResumeInfo) > 0
-	systemPrompt := buildResumeSystemPrompt(subPlan, lastLines)
+	systemPrompt := buildResumeSystemPrompt(subPlan, lastLines, loadGlobalCommitConfig())
 
 	// Create the new session record (pending).
 	now := time.Now()
@@ -242,7 +242,7 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 		lastLines = "(prior session log unavailable)"
 	}
 
-	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback)
+	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
 	if err := r.sessionSvc.FollowUpRestart(ctx, completedTask.ID); err != nil {
 		return FollowUpSessionResult{}, fmt.Errorf("restart task for follow-up: %w", err)
@@ -312,7 +312,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		lastLines = "(prior session log unavailable)"
 	}
 
-	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback)
+	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
 	// Create a fresh task row — the failed task is audit trail and must not be modified.
 	now := time.Now()
@@ -408,7 +408,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 }
 
 // buildFollowUpSystemPrompt constructs the system prompt for a follow-up agent session.
-func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback string) string {
+func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback string, commitCfg adapter.CommitConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Sub-Plan\n\n")
 	sb.WriteString(subPlan.Content)
@@ -421,11 +421,17 @@ func buildFollowUpSystemPrompt(subPlan domain.TaskPlan, lastLogLines, feedback s
 	sb.WriteString(feedback)
 	sb.WriteString("\n\n## Instructions\n\n")
 	sb.WriteString("Review the current worktree state, then apply the requested changes.")
+
+	if section := buildCommitSection(commitCfg); section != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(section)
+	}
+
 	return sb.String()
 }
 
 // buildResumeSystemPrompt constructs the system prompt for a resumed agent session.
-func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) string {
+func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string, commitCfg adapter.CommitConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Sub-Plan\n\n")
 	sb.WriteString(subPlan.Content)
@@ -438,7 +444,30 @@ func buildResumeSystemPrompt(subPlan domain.TaskPlan, lastLogLines string) strin
 	sb.WriteString("You are continuing work on this sub-plan. The worktree may contain partial changes.\n")
 	sb.WriteString("Run `git status` and `git diff` to understand current state, then continue implementing remaining items.")
 
+	if section := buildCommitSection(commitCfg); section != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(section)
+	}
+
 	return sb.String()
+}
+
+// loadGlobalCommitConfig reads the global substrate config and returns the commit
+// configuration. Returns a sensible default when the config cannot be loaded.
+func loadGlobalCommitConfig() adapter.CommitConfig {
+	globalDir, err := config.GlobalDir()
+	if err != nil {
+		return adapter.CommitConfig{Strategy: "semi-regular", MessageFormat: "ai-generated"}
+	}
+	cfg, err := config.Load(filepath.Join(globalDir, "config.yaml"))
+	if err != nil {
+		return adapter.CommitConfig{Strategy: "semi-regular", MessageFormat: "ai-generated"}
+	}
+	return adapter.CommitConfig{
+		Strategy:        string(cfg.Commit.Strategy),
+		MessageFormat:   string(cfg.Commit.MessageFormat),
+		MessageTemplate: cfg.Commit.MessageTemplate,
+	}
 }
 
 // readLastNLines reads the last n lines from a session's JSONL log file.

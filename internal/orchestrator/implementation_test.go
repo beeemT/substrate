@@ -1082,7 +1082,7 @@ func (s *completingMockSession) Steer(_ context.Context, _ string) error      { 
 func (s *completingMockSession) SendAnswer(_ context.Context, _ string) error { return nil }
 func (s *completingMockSession) Abort(_ context.Context) error                { return nil }
 func (s *completingMockSession) ResumeInfo() map[string]string                { return nil }
-func (s *completingMockSession) Compact(_ context.Context) error { return nil }
+func (s *completingMockSession) Compact(_ context.Context) error              { return nil }
 
 // completingHarness returns sessions that complete immediately on Wait.
 type completingHarness struct {
@@ -1091,7 +1091,7 @@ type completingHarness struct {
 }
 
 func (h *completingHarness) SupportsCompact() bool { return true }
-func (h *completingHarness) Name() string { return "completing-mock" }
+func (h *completingHarness) Name() string          { return "completing-mock" }
 func (h *completingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	s := &completingMockSession{
 		id:     opts.SessionID,
@@ -1122,13 +1122,13 @@ func (s *failingMockSession) Steer(_ context.Context, _ string) error       { re
 func (s *failingMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *failingMockSession) Abort(_ context.Context) error                 { return nil }
 func (s *failingMockSession) ResumeInfo() map[string]string                 { return nil }
-func (s *failingMockSession) Compact(_ context.Context) error { return nil }
+func (s *failingMockSession) Compact(_ context.Context) error               { return nil }
 
 // failingHarness returns sessions whose Wait returns a fixed error.
 type failingHarness struct{ err error }
 
 func (h *failingHarness) SupportsCompact() bool { return true }
-func (h *failingHarness) Name() string { return "failing-mock" }
+func (h *failingHarness) Name() string          { return "failing-mock" }
 func (h *failingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	return &failingMockSession{id: opts.SessionID, events: make(chan adapter.AgentEvent, 1), err: h.err}, nil
 }
@@ -1895,5 +1895,52 @@ func TestRunImplementation_NonCanceledError_MarksFailed(t *testing.T) {
 	}
 	if found.Status != domain.AgentSessionFailed {
 		t.Errorf("task status = %q, want %q", found.Status, domain.AgentSessionFailed)
+	}
+}
+
+func TestBuildCommitSection(t *testing.T) {
+	tcases := []struct {
+		name  string
+		cfg   adapter.CommitConfig
+		empty bool
+	}{
+		{name: "granular strategy", cfg: adapter.CommitConfig{Strategy: "granular"}, empty: false},
+		{name: "semi-regular strategy", cfg: adapter.CommitConfig{Strategy: "semi-regular"}, empty: false},
+		{name: "single strategy", cfg: adapter.CommitConfig{Strategy: "single"}, empty: false},
+		{name: "unknown strategy returns empty", cfg: adapter.CommitConfig{Strategy: "unknown"}, empty: true},
+		{name: "empty strategy returns empty", cfg: adapter.CommitConfig{Strategy: ""}, empty: true},
+	}
+
+	for _, tc := range tcases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildCommitSection(tc.cfg)
+			if tc.empty {
+				if got != "" {
+					t.Errorf("expected empty string, got %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, "## Commit Strategy") {
+				t.Errorf("missing section header in output: %q", got)
+			}
+			if !strings.Contains(got, "git add -A && git commit") {
+				t.Errorf("missing git commit instruction in output: %q", got)
+			}
+		})
+	}
+
+	// Verify each strategy has distinct guidance.
+	granular := buildCommitSection(adapter.CommitConfig{Strategy: "granular"})
+	semiRegular := buildCommitSection(adapter.CommitConfig{Strategy: "semi-regular"})
+	single := buildCommitSection(adapter.CommitConfig{Strategy: "single"})
+
+	if granular == semiRegular {
+		t.Error("granular and semi-regular produce identical output")
+	}
+	if semiRegular == single {
+		t.Error("semi-regular and single produce identical output")
+	}
+	if granular == single {
+		t.Error("granular and single produce identical output")
 	}
 }
