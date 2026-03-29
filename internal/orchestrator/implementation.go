@@ -310,9 +310,16 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
 		}
 	default:
-		// All repos passed review (or no review pipeline). Complete.
+		// All repos passed review (or no review pipeline).
+		// Commit any residual changes, push to remote, then complete.
+		s.commitAndPushRepos(cleanupCtx, result.Sessions, repoPaths, branch)
+
 		if completeErr := s.workItemSvc.CompleteWorkItem(cleanupCtx, workItem.ID); completeErr != nil {
 			slog.Warn("failed to transition work item to completed", "error", completeErr)
+		}
+
+		if emitErr := s.emitWorkItemCompleted(cleanupCtx, &workItem, workspace.ID, result.Sessions, repoPaths, branch, subPlans); emitErr != nil {
+			slog.Warn("failed to emit work item completed event", "error", emitErr)
 		}
 	}
 
@@ -1244,6 +1251,168 @@ func newSessionEventPayload(session *domain.Task) sessionEventPayload {
 		Repository:   session.RepositoryName,
 		WorktreePath: session.WorktreePath,
 	}
+}
+
+// commitAndPushRepos ensures all agent changes are committed and pushed to remote.
+// It runs after all repos pass review. For each unique repo, it checks for residual
+// uncommitted changes, commits them as a safety net if present, then pushes the branch.
+// Agent sessions are already completed and deregistered by this point, so we
+// commit directly rather than sending a follow-up message to the agent.
+func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) {
+	seen := make(map[string]bool, len(repoPaths))
+	for _, sess := range sessions {
+		repo := sess.Repository
+		if seen[repo] {
+			continue
+		}
+		seen[repo] = true
+
+		bareRepo, ok := repoPaths[repo]
+		if !ok {
+			slog.Warn("no bare repo path for repository, skipping commit/push", "repo", repo)
+			continue
+		}
+
+		// Resolve review context from the bare repo for remote name.
+		reviewCtx, err := remotedetect.ResolveReviewContext(ctx, bareRepo)
+		if err != nil {
+			slog.Warn("failed to resolve review context for push", "repo", repo, "error", err)
+		}
+
+		// Check for residual uncommitted changes in the worktree.
+		if sess.WorktreePath != "" {
+			if dirty, _ := gitStatusDirty(ctx, sess.WorktreePath); dirty {
+				slog.Warn("agent left uncommitted changes in worktree; committing as safety net",
+					"repo", repo, "worktree", sess.WorktreePath, "session_id", sess.SessionID)
+				if commitErr := gitStageAndCommit(ctx, sess.WorktreePath, "chore: commit residual changes before push"); commitErr != nil {
+					slog.Error("failed to commit residual changes", "repo", repo, "error", commitErr)
+				}
+			}
+		}
+
+		// Push branch to remote.
+		if reviewCtx.RemoteName != "" {
+			if pushErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); pushErr != nil {
+				slog.Warn("failed to push branch to remote after review pass",
+					"repo", repo, "branch", branch, "err", pushErr)
+			}
+		}
+	}
+}
+
+// gitStatusDirty returns true if the working tree at dir has uncommitted changes.
+func gitStatusDirty(ctx context.Context, dir string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status --porcelain: %w", err)
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
+// gitStageAndCommit stages all changes and commits them with the given message.
+func gitStageAndCommit(ctx context.Context, dir, message string) error {
+	// Stage all changes.
+	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
+	addCmd.Dir = dir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add -A: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// Commit.
+	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
+	commitCmd.Dir = dir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// emitWorkItemCompleted publishes a work_item.completed event to the event bus.
+// Adapters use this to transition draft PRs to ready, update tracker state, etc.
+func (s *ImplementationService) emitWorkItemCompleted(
+	ctx context.Context,
+	workItem *domain.Session,
+	workspaceID string,
+	sessions []SessionResult,
+	repoPaths map[string]string,
+	branch string,
+	subPlans []domain.TaskPlan,
+) error {
+	payload := map[string]any{
+		"workspace_id":    workspaceID,
+		"work_item_id":    workItem.ID,
+		"external_id":     workItem.ExternalID,
+		"work_item_title": workItem.Title,
+		"branch":          branch,
+	}
+
+	// Resolve review context from the first session's worktree.
+	for _, sess := range sessions {
+		if sess.WorktreePath == "" {
+			continue
+		}
+		// Use the bare repo path for review context resolution (same as ensureWorktree).
+		if bareRepo, ok := repoPaths[sess.Repository]; ok {
+			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, bareRepo)
+			if err != nil {
+				slog.Warn("failed to resolve review context for completion event", "repo", sess.Repository, "error", err)
+				continue
+			}
+			if reviewCtx.Review.BaseRepo.Owner != "" || reviewCtx.Review.BaseRepo.Repo != "" || reviewCtx.Review.HeadRepo.Owner != "" || reviewCtx.Review.HeadRepo.Repo != "" {
+				payload["review"] = reviewCtx.Review
+			}
+			break
+		}
+	}
+
+	// Include sub-plan content from the first sub-plan.
+	if len(subPlans) > 0 {
+		payload["sub_plan"] = subPlans[0].Content
+	}
+
+	// Include external IDs (source item IDs prefixed by provider).
+	if externalIDs := workItemEventExternalIDs(*workItem); len(externalIDs) > 0 {
+		payload["external_ids"] = externalIDs
+	}
+
+	// Include tracker references.
+	if trackerRefs := trackerRefsFromMetadata(workItem.Metadata); len(trackerRefs) > 0 {
+		payload["tracker_refs"] = trackerRefs
+	}
+
+	return s.publishEvent(ctx, domain.EventWorkItemCompleted, workspaceID, payload)
+}
+
+// workItemEventExternalIDs builds the external_ids list for the completion event payload.
+// It prefixes source item IDs with the provider namespace and deduplicates.
+func workItemEventExternalIDs(workItem domain.Session) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(workItem.SourceItemIDs)+1)
+	appendID := func(id string) {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			return
+		}
+		seen[trimmed] = struct{}{}
+		ids = append(ids, trimmed)
+	}
+	switch {
+	case workItem.Source == "github" && workItem.SourceScope == domain.ScopeIssues:
+		for _, id := range workItem.SourceItemIDs {
+			appendID("gh:issue:" + id)
+		}
+	case workItem.Source == "gitlab" && workItem.SourceScope == domain.ScopeIssues:
+		for _, id := range workItem.SourceItemIDs {
+			appendID("gl:issue:" + id)
+		}
+	}
+	appendID(workItem.ExternalID)
+	return ids
 }
 
 func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {

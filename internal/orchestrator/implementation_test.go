@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1942,5 +1945,340 @@ func TestBuildCommitSection(t *testing.T) {
 	}
 	if granular == single {
 		t.Error("granular and single produce identical output")
+	}
+}
+
+func TestGitStatusDirty(t *testing.T) {
+	t.Run("clean repo returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		initTestRepo(t, dir)
+
+		dirty, err := gitStatusDirty(context.Background(), dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dirty {
+			t.Fatal("expected clean repo")
+		}
+	})
+
+	t.Run("untracked file returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		initTestRepo(t, dir)
+		mustWriteFile(t, filepath.Join(dir, "new.txt"), "content")
+
+		dirty, err := gitStatusDirty(context.Background(), dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !dirty {
+			t.Fatal("expected dirty repo")
+		}
+	})
+
+	t.Run("staged but uncommitted returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		initTestRepo(t, dir)
+		mustWriteFile(t, filepath.Join(dir, "staged.txt"), "content")
+		mustRun(t, dir, "git", "add", "staged.txt")
+
+		dirty, err := gitStatusDirty(context.Background(), dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !dirty {
+			t.Fatal("expected dirty repo")
+		}
+	})
+}
+
+func TestGitStageAndCommit(t *testing.T) {
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+	mustWriteFile(t, filepath.Join(dir, "change.txt"), "new content")
+
+	err := gitStageAndCommit(context.Background(), dir, "chore: test commit")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the commit was created.
+	dirty, err := gitStatusDirty(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dirty {
+		t.Fatal("expected clean repo after commit")
+	}
+}
+
+func TestCommitAndPushRepos_SkipsCleanWorktrees(t *testing.T) {
+	// Create a bare repo and a worktree clone.
+	bareDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	initBareRepo(t, bareDir)
+	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+
+	svc, _, eventRepo, _, _ := newImplementationServiceForTest(bareDir, "repo-a")
+	svc.cfg = &config.Config{}
+
+	sessions := []SessionResult{{
+		Repository:   "repo-a",
+		WorktreePath: worktreeDir,
+		SessionID:    "sess-1",
+	}}
+	repoPaths := map[string]string{"repo-a": bareDir}
+
+	// No remote configured, so push will warn but not fail.
+	// The key assertion: no safety-net commit is attempted on a clean worktree.
+	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+
+	// No work_item.completed event should be emitted (that's a separate method).
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemCompleted) {
+			t.Fatal("commitAndPushRepos should not emit work_item.completed")
+		}
+	}
+}
+
+func TestCommitAndPushRepos_CommitsDirtyWorktree(t *testing.T) {
+	bareDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	initBareRepo(t, bareDir)
+	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+
+	svc, _, _, _, _ := newImplementationServiceForTest(bareDir, "repo-a")
+	svc.cfg = &config.Config{}
+
+	// Add an uncommitted file to the worktree.
+	mustWriteFile(t, filepath.Join(worktreeDir, "residual.txt"), "left behind")
+
+	sessions := []SessionResult{{
+		Repository:   "repo-a",
+		WorktreePath: worktreeDir,
+		SessionID:    "sess-1",
+	}}
+	repoPaths := map[string]string{"repo-a": bareDir}
+
+	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+
+	// Verify the worktree is now clean.
+	dirty, err := gitStatusDirty(context.Background(), worktreeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dirty {
+		t.Fatal("expected worktree to be clean after commitAndPushRepos")
+	}
+}
+
+func TestEmitWorkItemCompleted(t *testing.T) {
+	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	workItem := &domain.Session{
+		ID:          "wi-1",
+		WorkspaceID: "ws-1",
+		ExternalID:  "EXT-1",
+		Title:       "Implement feature",
+		Source:      "manual",
+		Metadata:    map[string]any{},
+	}
+	subPlans := []domain.TaskPlan{{
+		ID:             "sp-1",
+		Content:        "Implement the feature",
+		RepositoryName: "repo-a",
+	}}
+	sessions := []SessionResult{{
+		Repository:   "repo-a",
+		WorktreePath: "", // empty — no review context available
+	}}
+	repoPaths := map[string]string{"repo-a": "/nonexistent"}
+
+	err := svc.emitWorkItemCompleted(context.Background(), workItem, "ws-1", sessions, repoPaths, "feature-branch", subPlans)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the event was published.
+	found := false
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemCompleted) {
+			found = true
+			// Verify payload contains required fields.
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("failed to unmarshal payload: %v", err)
+			}
+			assertPayloadField(t, payload, "workspace_id", "ws-1")
+			assertPayloadField(t, payload, "work_item_id", "wi-1")
+			assertPayloadField(t, payload, "external_id", "EXT-1")
+			assertPayloadField(t, payload, "work_item_title", "Implement feature")
+			assertPayloadField(t, payload, "branch", "feature-branch")
+			assertPayloadField(t, payload, "sub_plan", "Implement the feature")
+			break
+		}
+	}
+	if !found {
+		t.Fatal("work_item.completed event not found")
+	}
+}
+
+func TestEmitWorkItemCompleted_WithTrackerRefs(t *testing.T) {
+	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	workItem := &domain.Session{
+		ID:            "wi-1",
+		WorkspaceID:   "ws-1",
+		ExternalID:    "EXT-1",
+		Title:         "Fix bug",
+		Source:        "github",
+		SourceScope:   domain.ScopeIssues,
+		SourceItemIDs: []string{"123"},
+		Metadata: map[string]any{
+			"tracker_refs": []domain.TrackerReference{{
+				Provider: "linear",
+				Kind:     "issue",
+				ID:       "ENG-42",
+			}},
+		},
+	}
+	subPlans := []domain.TaskPlan{{Content: "Fix the bug"}}
+	err := svc.emitWorkItemCompleted(context.Background(), workItem, "ws-1", nil, nil, "fix-branch", subPlans)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var payload map[string]any
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemCompleted) {
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("failed to unmarshal payload: %v", err)
+			}
+			break
+		}
+	}
+	if payload == nil {
+		t.Fatal("work_item.completed event not found")
+	}
+	assertPayloadField(t, payload, "external_id", "EXT-1")
+	// Verify external_ids includes both the source item ID and the work item external ID.
+	ids, ok := payload["external_ids"].([]any)
+	if !ok || len(ids) == 0 {
+		t.Fatalf("expected external_ids in payload, got %v", payload["external_ids"])
+	}
+	// Verify tracker_refs are present.
+	if _, ok := payload["tracker_refs"]; !ok {
+		t.Fatal("expected tracker_refs in payload")
+	}
+}
+
+func TestWorkItemEventExternalIDs(t *testing.T) {
+	t.Run("github issues source", func(t *testing.T) {
+		wi := domain.Session{
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"42", "99"},
+			ExternalID:    "EXT-1",
+		}
+		ids := workItemEventExternalIDs(wi)
+		expected := map[string]bool{
+			"gh:issue:42": true,
+			"gh:issue:99": true,
+			"EXT-1":       true,
+		}
+		if len(ids) != len(expected) {
+			t.Fatalf("expected %d IDs, got %d: %v", len(expected), len(ids), ids)
+		}
+		for _, id := range ids {
+			if !expected[id] {
+				t.Errorf("unexpected ID %q", id)
+			}
+		}
+	})
+
+	t.Run("manual source has no prefixed IDs", func(t *testing.T) {
+		wi := domain.Session{
+			Source:     "manual",
+			ExternalID: "MAN-1",
+		}
+		ids := workItemEventExternalIDs(wi)
+		if len(ids) != 1 || ids[0] != "MAN-1" {
+			t.Fatalf("expected [MAN-1], got %v", ids)
+		}
+	})
+
+	t.Run("deduplicates IDs", func(t *testing.T) {
+		wi := domain.Session{
+			Source:        "github",
+			SourceScope:   domain.ScopeIssues,
+			SourceItemIDs: []string{"42", "42"},
+			ExternalID:    "42", // same as source item ID
+		}
+		ids := workItemEventExternalIDs(wi)
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 deduplicated IDs, got %d: %v", len(ids), ids)
+		}
+	})
+}
+
+// --- Test helpers ---
+
+// initTestRepo creates a git repo in dir with an initial commit and signing disabled.
+func initTestRepo(t *testing.T, dir string) {
+	t.Helper()
+	mustRun(t, dir, "git", "init")
+	mustRun(t, dir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, dir, "git", "config", "user.name", "Test")
+	mustRun(t, dir, "git", "config", "commit.gpgsign", "false")
+	mustRun(t, dir, "git", "commit", "--allow-empty", "-m", "init")
+}
+
+func initBareRepo(t *testing.T, dir string) {
+	t.Helper()
+	mustRun(t, dir, "git", "init", "--bare")
+}
+
+func cloneAsWorktree(t *testing.T, bareDir, worktreeDir, branch string) {
+	t.Helper()
+	// Create an initial commit on main so the worktree has a base.
+	cloneDir := t.TempDir()
+	mustRun(t, cloneDir, "git", "clone", bareDir, ".")
+	mustRun(t, cloneDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, cloneDir, "git", "config", "user.name", "Test")
+	// Disable commit signing in test repos (1Password agent may not be available).
+	mustRun(t, cloneDir, "git", "config", "commit.gpgsign", "false")
+	mustWriteFile(t, filepath.Join(cloneDir, "README.md"), "init")
+	mustRun(t, cloneDir, "git", "add", "README.md")
+	mustRun(t, cloneDir, "git", "commit", "-m", "init")
+	mustRun(t, cloneDir, "git", "push", "origin", "main")
+
+	// Create worktree with new branch.
+	mustRun(t, cloneDir, "git", "worktree", "add", "-b", branch, worktreeDir)
+}
+
+func mustRun(t *testing.T, dir, cmd string, args ...string) {
+	t.Helper()
+	c := exec.Command(cmd, args...)
+	c.Dir = dir
+	// Disable GPG/signing for test commits (1Password agent may not be available).
+	c.Env = append(os.Environ(), "GPG_TTY=", "GNUPGHOME=")
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("%s %s: %v\n%s", cmd, args, err, out)
+	}
+}
+
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func assertPayloadField(t *testing.T, payload map[string]any, key, expected string) {
+	t.Helper()
+	got, ok := payload[key]
+	if !ok {
+		t.Fatalf("missing key %q in payload", key)
+	}
+	if got != expected {
+		t.Fatalf("payload[%q] = %v, want %v", key, got, expected)
 	}
 }
