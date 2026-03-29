@@ -51,6 +51,8 @@ func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 	}
 }
 
+func (h *Harness) SupportsCompact() bool { return true }
+
 // ValidateReadiness verifies that the claude-agent bridge can run with the configured runtime prerequisites.
 func ValidateReadiness(cfg config.ClaudeCodeConfig) error {
 	_, _, err := resolveReadyBridgeRuntime(cfg)

@@ -30,6 +30,10 @@ func (s *ohMyPiSession) SendAnswer(ctx context.Context, answer string) error {
 	return s.bs.SendAnswer(ctx, answer)
 }
 
+func (s *ohMyPiSession) Compact(ctx context.Context) error {
+	return s.bs.Compact(ctx)
+}
+
 func (s *ohMyPiSession) ResumeInfo() map[string]string {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()

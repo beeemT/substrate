@@ -52,6 +52,8 @@ func (m *registryMockSession) SendAnswer(_ context.Context, answer string) error
 
 func (m *registryMockSession) ResumeInfo() map[string]string { return nil }
 
+func (m *registryMockSession) Compact(_ context.Context) error { return nil }
+
 func (m *registryMockSession) messages() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

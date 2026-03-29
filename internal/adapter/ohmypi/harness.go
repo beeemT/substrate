@@ -49,6 +49,8 @@ func (h *OhMyPiHarness) Capabilities() adapter.HarnessCapabilities {
 	}
 }
 
+func (h *OhMyPiHarness) SupportsCompact() bool { return true }
+
 // ValidateReadiness verifies that the oh-my-pi bridge can run with the configured runtime prerequisites.
 func ValidateReadiness(cfg config.OhMyPiConfig) error {
 	_, _, err := resolveReadyBridgeRuntime(cfg)

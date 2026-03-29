@@ -10,6 +10,7 @@
  *   - {"type":"steer","text":"..."}    — interrupt + new direction
  *   - {"type":"answer","text":"..."}   — resolve pending ask_foreman tool call
  *   - {"type":"abort"}                 — terminate session
+ *   - {"type":"compact"}               — request manual context compaction (/compact slash command)
  *
  * Bun → Go (stdout):
  *   - {"type":"session_meta","session_id":"..."}
@@ -307,6 +308,21 @@ async function* userTurns(lines: LineQueue): AsyncGenerator<any> {
 			continue;
 		}
 
+		if (msg.type === "compact") {
+			emit({ type: "lifecycle", stage: "compaction_start", message: "Compacting context…" });
+			yield {
+				type: "user",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "/compact" }],
+				},
+			};
+			// /compact is processed within the SDK turn; no explicit end event.
+			// The SDK handles compaction internally — auto_compaction events may
+			// fire, which mapSDKMessage already ignores (they're Claude-internal).
+			emit({ type: "lifecycle", stage: "compaction_end" });
+			continue;
+		}
 		if (msg.type === "prompt" || msg.type === "message") {
 			emitInput(msg.type as "prompt" | "message", String(msg.text ?? ""));
 			yield {

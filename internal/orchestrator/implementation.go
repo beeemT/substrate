@@ -611,7 +611,8 @@ func (s *ImplementationService) runImplementation(
 	// as a follow-up message after the harness starts so the model sees it in
 	// conversation context. When not resuming, bake critique into the system prompt.
 	hasResume := prevSession != nil && len(prevSession.ResumeInfo) > 0
-	if hasResume {
+	canCompact := hasResume && s.harness.SupportsCompact()
+	if canCompact {
 		opts.ResumeFromSessionID = prevSession.ID
 		opts.ResumeInfo = prevSession.ResumeInfo
 		opts.UserPrompt = "" // harness resumes; no new prompt turn needed
@@ -628,10 +629,19 @@ func (s *ImplementationService) runImplementation(
 		return domain.Task{}, fmt.Errorf("start agent: %w", err)
 	}
 
+	// Compact the conversation before sending critique so the model starts with
+	// a clean summary of its prior work rather than the full transcript.
+	if canCompact {
+		if err := harnessSession.Compact(ctx); err != nil {
+			slog.Warn("failed to compact resumed session, continuing without compact", "error", err,
+				"session_id", sessionID)
+		}
+	}
+
 	// Send critique feedback as a follow-up message when resuming a prior session.
 	// This preserves the model's conversation history — it knows what it implemented
 	// and can see the critique in context.
-	if hasResume && critiqueFeedback != "" {
+	if canCompact && critiqueFeedback != "" {
 		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
 			slog.Warn("failed to send critique feedback to resumed session", "error", err,
 				"session_id", sessionID)

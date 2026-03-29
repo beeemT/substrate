@@ -242,6 +242,7 @@ func (m *quitTestMockSession) Abort(_ context.Context) error                 { m
 func (m *quitTestMockSession) Steer(_ context.Context, _ string) error       { return nil }
 func (m *quitTestMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (m *quitTestMockSession) ResumeInfo() map[string]string                 { return nil }
+func (m *quitTestMockSession) Compact(_ context.Context) error               { return nil }
 
 // TestQuitConfirmedMsgAbortsRegistrySessions verifies that dispatching
 // QuitConfirmedMsg calls AbortAndDeregister on running sessions and cancels

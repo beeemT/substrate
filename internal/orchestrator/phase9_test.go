@@ -63,6 +63,7 @@ func (s *mockAgentSession) Abort(_ context.Context) error {
 }
 func (s *mockAgentSession) Steer(_ context.Context, _ string) error      { return nil }
 func (s *mockAgentSession) SendAnswer(_ context.Context, _ string) error { return nil }
+func (s *mockAgentSession) Compact(_ context.Context) error { return nil }
 func (s *mockAgentSession) ResumeInfo() map[string]string                { return nil }
 
 // ============================================================
@@ -79,6 +80,7 @@ type mockAgentHarness struct {
 	mu      sync.Mutex
 }
 
+func (h *mockAgentHarness) SupportsCompact() bool { return true }
 func (h *mockAgentHarness) Name() string { return "mock" }
 
 func (h *mockAgentHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {

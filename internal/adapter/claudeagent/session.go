@@ -43,6 +43,10 @@ func (s *claudeAgentSession) SendAnswer(ctx context.Context, answer string) erro
 	return s.bs.SendAnswer(ctx, answer)
 }
 
+func (s *claudeAgentSession) Compact(ctx context.Context) error {
+	return s.bs.Compact(ctx)
+}
+
 // sessionMetaCallback is set as bs.ParseSessionMeta. It parses the session_meta
 // line and stores the Claude SDK session UUID for later resume.
 func (s *claudeAgentSession) sessionMetaCallback(line []byte) {

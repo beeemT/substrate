@@ -65,6 +65,11 @@ type AgentHarness interface {
 	// StartSession spawns a new agent session with the given options.
 	// Returns an AgentSession for interacting with the running agent.
 	StartSession(ctx context.Context, opts SessionOpts) (AgentSession, error)
+
+	// SupportsCompact reports whether the harness supports manual compaction.
+	// Used by the orchestrator to decide whether to resume a native session
+	// (with compact) or start a fresh session for reimplementation.
+	SupportsCompact() bool
 }
 
 // HarnessActionRunner executes structured harness control-plane actions such as login or auth checks.
@@ -100,9 +105,14 @@ type AgentSession interface {
 	// Abort terminates the agent session gracefully.
 	// Returns an error if the session cannot be aborted.
 	Abort(ctx context.Context) error
+
 	// ResumeInfo returns harness-specific resume data to persist after session completion.
 	// Returns nil if the harness does not support or produce resume data.
 	ResumeInfo() map[string]string
+
+	// Compact requests manual context compaction to free up context window space.
+	// Returns ErrCompactNotSupported if the harness does not support compaction.
+	Compact(ctx context.Context) error
 }
 
 // Adapter errors.
@@ -126,6 +136,10 @@ var (
 	// ErrSendAnswerNotSupported is returned when SendAnswer is called
 	// on a harness that doesn't support answering foreman questions.
 	ErrSendAnswerNotSupported = error(sendAnswerNotSupported{})
+
+	// ErrCompactNotSupported is returned when Compact is called
+	// on a harness that doesn't support manual compaction.
+	ErrCompactNotSupported = error(compactNotSupported{})
 )
 
 type (
@@ -134,6 +148,7 @@ type (
 	mutateNotSupported     struct{}
 	steerNotSupported      struct{}
 	sendAnswerNotSupported struct{}
+	compactNotSupported    struct{}
 )
 
 func (browseNotSupported) Error() string     { return "browse not supported by this adapter" }
@@ -141,3 +156,4 @@ func (watchNotSupported) Error() string      { return "watch not supported by th
 func (mutateNotSupported) Error() string     { return "mutation not supported by this adapter" }
 func (steerNotSupported) Error() string      { return "steering not supported by this harness" }
 func (sendAnswerNotSupported) Error() string { return "send answer not supported by this harness" }
+func (compactNotSupported) Error() string    { return "compact not supported by this harness" }

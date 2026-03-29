@@ -47,6 +47,8 @@ func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 	}
 }
 
+func (h *Harness) SupportsCompact() bool { return false }
+
 func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	if opts.Mode == "" {
 		opts.Mode = adapter.SessionModeAgent
@@ -256,6 +258,10 @@ func (s *session) SendAnswer(_ context.Context, _ string) error {
 // completes — it returns only when the session is explicitly Abort()ed or
 // hits an unrecoverable error. Callers that need to react to turn completion
 // should listen for the "done" event on Events().
+func (s *session) Compact(_ context.Context) error {
+	return adapter.ErrCompactNotSupported
+}
+
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():

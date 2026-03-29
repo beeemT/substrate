@@ -19,6 +19,7 @@ type stubHarnessRunner struct {
 
 func (s stubHarnessRunner) Name() string { return "stub" }
 
+func (s stubHarnessRunner) SupportsCompact() bool { return false }
 func (s stubHarnessRunner) StartSession(context.Context, adapter.SessionOpts) (adapter.AgentSession, error) {
 	return nil, nil
 }

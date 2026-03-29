@@ -165,6 +165,12 @@ func (s *BridgeSession) SendAnswer(_ context.Context, answer string) error {
 	return s.SendBridgeMsg("answer", answer)
 }
 
+// Compact requests manual context compaction to free up context window space.
+// Fire-and-forget: writes the compact message and returns immediately.
+func (s *BridgeSession) Compact(_ context.Context) error {
+	return s.SendBridgeMsg("compact", "")
+}
+
 // SendPrompt sends a prompt message to the bridge.
 func (s *BridgeSession) SendPrompt(text string) error {
 	return s.SendBridgeMsg("prompt", text)
@@ -497,6 +503,24 @@ func MapBridgeEvent(raw struct {
 				Type:      "retry_exhausted",
 				Timestamp: time.Now(),
 				Payload:   msg,
+			}, nil
+		case "compaction_start":
+			return &adapter.AgentEvent{
+				Type:      "compaction_start",
+				Timestamp: time.Now(),
+				Payload:   message,
+			}, nil
+		case "compaction_end":
+			return &adapter.AgentEvent{
+				Type:      "compaction_end",
+				Timestamp: time.Now(),
+				Payload:   message,
+			}, nil
+		case "compaction_failed":
+			return &adapter.AgentEvent{
+				Type:      "compaction_failed",
+				Timestamp: time.Now(),
+				Payload:   message,
 			}, nil
 		default:
 			return nil, nil

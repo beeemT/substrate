@@ -53,6 +53,7 @@ type planningHarnessSpy struct {
 	planText string
 }
 
+func (h *planningHarnessSpy) SupportsCompact() bool { return true }
 func (h *planningHarnessSpy) Name() string { return "planning-spy" }
 
 func (h *planningHarnessSpy) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
@@ -89,6 +90,7 @@ func (s *planningHarnessSession) Steer(context.Context, string) error {
 func (s *planningHarnessSession) SendAnswer(context.Context, string) error {
 	return adapter.ErrSendAnswerNotSupported
 }
+func (s *planningHarnessSession) Compact(context.Context) error { return nil }
 func (s *planningHarnessSession) ResumeInfo() map[string]string { return nil }
 
 func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *testing.T) {
@@ -143,6 +145,7 @@ type scriptedPlanningHarness struct {
 	startSession func(adapter.SessionOpts) (adapter.AgentSession, error)
 }
 
+func (h *scriptedPlanningHarness) SupportsCompact() bool { return true }
 func (h *scriptedPlanningHarness) Name() string { return "planning-scripted" }
 
 func (h *scriptedPlanningHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
@@ -175,6 +178,7 @@ func (s *scriptedPlanningSession) Steer(context.Context, string) error {
 func (s *scriptedPlanningSession) SendAnswer(context.Context, string) error {
 	return adapter.ErrSendAnswerNotSupported
 }
+func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
 func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return nil }
 
 func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t *testing.T) {

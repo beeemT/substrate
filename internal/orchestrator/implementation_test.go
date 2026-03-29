@@ -1082,6 +1082,7 @@ func (s *completingMockSession) Steer(_ context.Context, _ string) error      { 
 func (s *completingMockSession) SendAnswer(_ context.Context, _ string) error { return nil }
 func (s *completingMockSession) Abort(_ context.Context) error                { return nil }
 func (s *completingMockSession) ResumeInfo() map[string]string                { return nil }
+func (s *completingMockSession) Compact(_ context.Context) error { return nil }
 
 // completingHarness returns sessions that complete immediately on Wait.
 type completingHarness struct {
@@ -1089,6 +1090,7 @@ type completingHarness struct {
 	lastSess *completingMockSession
 }
 
+func (h *completingHarness) SupportsCompact() bool { return true }
 func (h *completingHarness) Name() string { return "completing-mock" }
 func (h *completingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	s := &completingMockSession{
@@ -1120,10 +1122,12 @@ func (s *failingMockSession) Steer(_ context.Context, _ string) error       { re
 func (s *failingMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *failingMockSession) Abort(_ context.Context) error                 { return nil }
 func (s *failingMockSession) ResumeInfo() map[string]string                 { return nil }
+func (s *failingMockSession) Compact(_ context.Context) error { return nil }
 
 // failingHarness returns sessions whose Wait returns a fixed error.
 type failingHarness struct{ err error }
 
+func (h *failingHarness) SupportsCompact() bool { return true }
 func (h *failingHarness) Name() string { return "failing-mock" }
 func (h *failingHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	return &failingMockSession{id: opts.SessionID, events: make(chan adapter.AgentEvent, 1), err: h.err}, nil
