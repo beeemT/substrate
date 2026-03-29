@@ -432,6 +432,14 @@ func (f *Foreman) SessionID() string {
 	return f.session.ID()
 }
 
+// IsRunning reports whether the Foreman has an active session.
+// Safe for concurrent use.
+func (f *Foreman) IsRunning() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.session != nil
+}
+
 // ErrQuestionNotEscalated is returned by ResolveEscalated and SendUserMessage
 // when no in-flight answer channel exists for the given question ID.
 // This happens if the Foreman was restarted after escalation, or if the question

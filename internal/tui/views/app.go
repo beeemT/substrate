@@ -1343,9 +1343,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
-		if a.svcs.Foreman != nil {
-			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
-		}
+		// Do NOT stop the Foreman here. It remains live so that a subsequent
+		// retry or re-implementation cycle can reuse the session without spawning
+		// a new one. Teardown happens in teardownAllPipelines (quit) or the
+		// DeleteSessionMsg handler.
 		return a, tea.Batch(cmds...)
 
 	case SessionDeletedMsg:
@@ -2369,6 +2370,12 @@ func (a App) activeSessionCount() int {
 		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 			count++
 		}
+	}
+	// The foreman is a live subprocess, not a persisted domain.Task, so it must
+	// be counted separately. This ensures the quit-confirmation dialog fires
+	// and the status bar reflects reality when only the foreman is active.
+	if a.svcs.Foreman != nil && a.svcs.Foreman.IsRunning() {
+		count++
 	}
 	return count
 }
