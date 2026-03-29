@@ -1807,3 +1807,89 @@ func TestTwoStageRetryModel(t *testing.T) {
 		// Last session is a failed reimplementation → should fall through to implementation.
 	})
 }
+
+// TestRunImplementation_ContextCanceled_MarksInterrupted verifies that when the harness
+// session fails with context.Canceled (pipeline cancelled by user quit), the task is
+// marked as interrupted rather than failed.
+func TestRunImplementation_ContextCanceled_MarksInterrupted(t *testing.T) {
+	svc, _, _, sessionRepo, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc.harness = &failingHarness{err: context.Canceled}
+
+	subPlan := domain.TaskPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: t.TempDir()}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+	plan := &domain.Plan{ID: "plan-1"}
+
+	_, err := svc.runImplementation(
+		context.Background(),
+		subPlan, workspace, plan, workItem,
+		t.TempDir(), "", nil,
+	)
+	if err == nil {
+		t.Fatal("expected error from runImplementation, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// The task should be interrupted, not failed.
+	// Find the task — it's the one created during runImplementation.
+	var found *domain.Task
+	for _, task := range sessionRepo.sessions {
+		if task.Phase == domain.TaskPhaseImplementation {
+			t := task
+			found = &t
+		}
+	}
+	if found == nil {
+		t.Fatal("no implementation task found in session repo")
+	}
+	if found.Status != domain.AgentSessionInterrupted {
+		t.Errorf("task status = %q, want %q", found.Status, domain.AgentSessionInterrupted)
+	}
+}
+
+// TestRunImplementation_NonCanceledError_MarksFailed verifies that a non-cancellation
+// error still marks the task as failed.
+func TestRunImplementation_NonCanceledError_MarksFailed(t *testing.T) {
+	svc, _, _, sessionRepo, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc.harness = &failingHarness{err: errors.New("agent crashed")}
+
+	subPlan := domain.TaskPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: t.TempDir()}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+	plan := &domain.Plan{ID: "plan-1"}
+
+	_, err := svc.runImplementation(
+		context.Background(),
+		subPlan, workspace, plan, workItem,
+		t.TempDir(), "", nil,
+	)
+	if err == nil {
+		t.Fatal("expected error from runImplementation, got nil")
+	}
+
+	var found *domain.Task
+	for _, task := range sessionRepo.sessions {
+		if task.Phase == domain.TaskPhaseImplementation {
+			t := task
+			found = &t
+		}
+	}
+	if found == nil {
+		t.Fatal("no implementation task found in session repo")
+	}
+	if found.Status != domain.AgentSessionFailed {
+		t.Errorf("task status = %q, want %q", found.Status, domain.AgentSessionFailed)
+	}
+}

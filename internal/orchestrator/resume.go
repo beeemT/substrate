@@ -79,12 +79,14 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	}
 
 	// Last N lines from the interrupted session's log give the agent orientation.
+	// This is used as fallback context when native resume is unavailable.
 	lastLines, err := readLastNLines(interrupted.ID, resumeLogLines)
 	if err != nil {
 		// Non-fatal: resume without prior log context.
 		lastLines = "(prior session log unavailable)"
 	}
 
+	hasResume := len(interrupted.ResumeInfo) > 0
 	systemPrompt := buildResumeSystemPrompt(subPlan, lastLines)
 
 	// Create the new session record (pending).
@@ -128,7 +130,13 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		Repository:   interrupted.RepositoryName,
 		WorktreePath: interrupted.WorktreePath,
 		SystemPrompt: systemPrompt,
-		UserPrompt:   "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items.",
+	}
+	if hasResume {
+		opts.ResumeFromSessionID = interrupted.ID
+		opts.ResumeInfo = interrupted.ResumeInfo
+		// Harness resumes the native conversation; no synthetic prompt turn needed.
+	} else {
+		opts.UserPrompt = "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items."
 	}
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
@@ -139,6 +147,17 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		}
 
 		return ResumeSessionResult{}, fmt.Errorf("start harness session: %w", err)
+	}
+
+	// When resuming a native session, send orientation as a follow-up message
+	// so the model sees it in conversation context rather than a stale system prompt.
+	if hasResume {
+		resumeMsg := "Your previous session was interrupted. The worktree may contain partial changes. Run `git status` and `git diff` to understand current state, then continue implementing remaining items."
+		if sendErr := harnessSession.SendMessage(ctx, resumeMsg); sendErr != nil {
+			slog.Warn("failed to send orientation to resumed session",
+				"error", sendErr,
+				"session_id", newSession.ID)
+		}
 	}
 
 	if r.eventBus != nil {

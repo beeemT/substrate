@@ -29,7 +29,7 @@ var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 		domain.AgentSessionInterrupted,
 		domain.AgentSessionFailed,
 	},
-	domain.AgentSessionWaitingForAnswer: {domain.AgentSessionRunning, domain.AgentSessionFailed},
+	domain.AgentSessionWaitingForAnswer: {domain.AgentSessionRunning, domain.AgentSessionFailed, domain.AgentSessionInterrupted},
 	domain.AgentSessionCompleted:        {domain.AgentSessionRunning},
 	domain.AgentSessionInterrupted:      {domain.AgentSessionRunning, domain.AgentSessionFailed},
 	domain.AgentSessionFailed:           {domain.AgentSessionRunning},

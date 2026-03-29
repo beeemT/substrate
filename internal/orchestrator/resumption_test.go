@@ -221,6 +221,22 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 	}
 }
 
+// seedInterruptedSessionWithResumeInfo inserts an interrupted session with ResumeInfo.
+func (f *phase9bFixture) seedInterruptedSessionWithResumeInfo(sessionID string, resumeInfo map[string]string) {
+	f.sessionRepo.sessions[sessionID] = domain.Task{
+		ID:             sessionID,
+		WorkItemID:     "wi-1",
+		WorkspaceID:    f.workspaceID,
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      "sub-plan-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   "/tmp/worktrees/repo-a",
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionInterrupted,
+		ResumeInfo:     resumeInfo,
+	}
+}
+
 func (f *phase9bFixture) getSessionStatus(id string) domain.TaskStatus {
 	f.sessionRepo.mu.Lock()
 	defer f.sessionRepo.mu.Unlock()
@@ -461,5 +477,128 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	}
 	if got := fix.getSessionStatus("sess-int4"); got != domain.AgentSessionInterrupted {
 		t.Errorf("old session must remain interrupted; got %q", got)
+	}
+}
+
+// TestResumeSession_WithResumeInfo verifies that when the interrupted session has
+// ResumeInfo, the harness receives ResumeFromSessionID and ResumeInfo in opts,
+// UserPrompt is empty (harness resumes natively), and an orientation message
+// is sent via SendMessage.
+func TestResumeSession_WithResumeInfo(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	intID := "sess-int-resume"
+	fix.seedInterruptedSessionWithResumeInfo(intID, map[string]string{
+		"omp_session_file": "/tmp/sessions/prev.json",
+		"omp_session_id":   "prev-session-id",
+	})
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+
+	interrupted := fix.sessionRepo.sessions[intID]
+	result, err := resumption.ResumeSession(ctx, interrupted, "inst-resume")
+	if err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+
+	// New session must be running.
+	if got := fix.getSessionStatus(result.NewSession.ID); got != domain.AgentSessionRunning {
+		t.Errorf("new session: expected running, got %q", got)
+	}
+
+	// Old session must be failed (superseded).
+	if got := fix.getSessionStatus(intID); got != domain.AgentSessionFailed {
+		t.Errorf("old session: expected failed, got %q", got)
+	}
+
+	// Harness must receive resume opts.
+	opts := harness.lastOpts()
+	if opts.ResumeFromSessionID != intID {
+		t.Errorf("expected ResumeFromSessionID=%q, got %q", intID, opts.ResumeFromSessionID)
+	}
+	if len(opts.ResumeInfo) != 2 {
+		t.Errorf("expected 2 ResumeInfo entries, got %d", len(opts.ResumeInfo))
+	}
+	if opts.ResumeInfo["omp_session_file"] != "/tmp/sessions/prev.json" {
+		t.Errorf("ResumeInfo[omp_session_file] mismatch: %q", opts.ResumeInfo["omp_session_file"])
+	}
+	// UserPrompt must be empty when resuming natively.
+	if opts.UserPrompt != "" {
+		t.Errorf("expected empty UserPrompt when resuming natively, got %q", opts.UserPrompt)
+	}
+
+	// Orientation message must be sent via SendMessage.
+	sess := harness.lastSession
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.messages) != 1 {
+		t.Fatalf("expected 1 SendMessage call, got %d", len(sess.messages))
+	}
+	if !strings.Contains(sess.messages[0], "interrupted") {
+		t.Errorf("orientation message missing 'interrupted'; got: %q", sess.messages[0])
+	}
+}
+
+// TestResumeSession_WithoutResumeInfo verifies the fallback path: when the
+// interrupted session has no ResumeInfo, UserPrompt is set with orientation
+// and no SendMessage is called.
+func TestResumeSession_WithoutResumeInfo(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	intID := "sess-int-no-resume"
+	fix.seedInterruptedSession(intID)
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+
+	interrupted := fix.sessionRepo.sessions[intID]
+	result, err := resumption.ResumeSession(ctx, interrupted, "inst-no-resume")
+	if err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+
+	if got := fix.getSessionStatus(result.NewSession.ID); got != domain.AgentSessionRunning {
+		t.Errorf("new session: expected running, got %q", got)
+	}
+
+	// No resume opts should be set.
+	opts := harness.lastOpts()
+	if opts.ResumeFromSessionID != "" {
+		t.Errorf("expected empty ResumeFromSessionID, got %q", opts.ResumeFromSessionID)
+	}
+	if len(opts.ResumeInfo) != 0 {
+		t.Errorf("expected no ResumeInfo, got %d entries", len(opts.ResumeInfo))
+	}
+	// UserPrompt must be set with orientation (fallback path).
+	if opts.UserPrompt == "" {
+		t.Error("expected non-empty UserPrompt in fallback path")
+	}
+	if !strings.Contains(opts.UserPrompt, "continuing work") {
+		t.Errorf("UserPrompt missing orientation text; got: %q", opts.UserPrompt)
+	}
+
+	// No SendMessage should be called in fallback path.
+	sess := harness.lastSession
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.messages) != 0 {
+		t.Errorf("expected 0 SendMessage calls in fallback path, got %d", len(sess.messages))
 	}
 }

@@ -499,14 +499,22 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 
 	rawContent, retries, warnings, planErr := s.runPlanningWithCorrectionLoop(ctx, planningCtx, workItem.WorkspaceID)
 	if planErr != nil {
-		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
-		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
-			slog.Warn("failed to emit plan failed event", "error", emitErr)
-		}
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to revert work item to ingested after planning error", "error", transErr, "work_item_id", req.workItemID)
+		if errors.Is(planErr, context.Canceled) {
+			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
+			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
+				slog.Warn("failed to interrupt planning session on context cancellation",
+					"error", interruptErr, "session_id", sessionID)
+			}
+		} else {
+			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+				slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
+			}
+			if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
+				slog.Warn("failed to emit plan failed event", "error", emitErr)
+			}
+			if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
+				slog.Warn("failed to revert work item to ingested after planning error", "error", transErr, "work_item_id", req.workItemID)
+			}
 		}
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),

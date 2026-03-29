@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -169,6 +170,11 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	implementingStarted := false
 	defer func() {
 		if err == nil || !implementingStarted {
+			return
+		}
+		// Context cancellation means the user quit — leave the work item in
+		// implementing state so sessions can be resumed on next startup.
+		if errors.Is(err, context.Canceled) {
 			return
 		}
 		cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
@@ -646,11 +652,23 @@ func (s *ImplementationService) runImplementation(
 	waitErr := harnessSession.Wait(sessionCtx)
 
 	if waitErr != nil {
-		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
-		}
-		if err := s.emitSessionFailed(ctx, &session, waitErr.Error(), workspace.ID); err != nil {
-			slog.Warn("failed to emit session failed event", "error", err)
+		if errors.Is(waitErr, context.Canceled) {
+			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
+			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
+				slog.Warn("failed to interrupt session on context cancellation",
+					"error", interruptErr, "session_id", sessionID)
+			}
+			if err := s.emitSessionInterrupted(ctx, &session, workspace.ID); err != nil {
+				slog.Warn("failed to emit session interrupted event",
+					"error", err, "session_id", sessionID)
+			}
+		} else {
+			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
+				slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
+			}
+			if err := s.emitSessionFailed(ctx, &session, waitErr.Error(), workspace.ID); err != nil {
+				slog.Warn("failed to emit session failed event", "error", err, "session_id", sessionID)
+			}
 		}
 		return domain.Task{}, fmt.Errorf("agent session failed: %w", waitErr)
 	}
@@ -1220,6 +1238,10 @@ func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *
 	return s.publishEvent(ctx, domain.EventAgentSessionFailed, workspaceID, payload)
 }
 
+func (s *ImplementationService) emitSessionInterrupted(ctx context.Context, session *domain.Task, workspaceID string) error {
+	return s.publishEvent(ctx, domain.EventAgentSessionInterrupted, workspaceID, newSessionEventPayload(session))
+}
+
 // lastSessionForSubPlan returns the most recent session for a sub-plan,
 // regardless of phase or status. Used by the two-stage retry model:
 // the last session's phase determines whether to retry implementation
@@ -1307,6 +1329,14 @@ func failSessionDurably(parent context.Context, sessionSvc *service.TaskService,
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
+}
+
+// interruptSessionDurably marks a session as interrupted using a context detached from
+// parent cancellation, ensuring the DB write completes even if the pipeline is shutting down.
+func interruptSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string) error {
+	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
+	defer cleanupCancel()
+	return sessionSvc.Interrupt(cleanupCtx, sessionID)
 }
 
 func completeSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string) error {
