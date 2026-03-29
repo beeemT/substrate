@@ -1052,11 +1052,6 @@ func (s *ImplementationService) routeQuestionToForeman(ctx context.Context, evt 
 		return
 	}
 
-	// Transition the session to waiting_for_answer so the TUI surfaces the action-required overlay.
-	if err := s.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
-		slog.Warn("failed to transition session to waiting_for_answer", "error", err, "session_id", sessionID)
-	}
-
 	// Also publish the canonical event so the TUI can display the question.
 	if err := s.eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -1085,11 +1080,6 @@ func (s *ImplementationService) routeQuestionToForeman(ctx context.Context, evt 
 						"error", err, "question_id", q.ID, "session_id", sessionID)
 					return
 				}
-			}
-			// Resume the session from waiting_for_answer so the TUI clears the action-required state.
-			if err := s.sessionSvc.ResumeFromAnswer(ctx, sessionID); err != nil {
-				slog.Warn("failed to resume session from waiting_for_answer",
-					"error", err, "session_id", sessionID)
 			}
 			// Publish the canonical answered event.
 			if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{

@@ -30,6 +30,7 @@ const agentToolNames = mode === "agent"
 
 let pendingAnswerResolve: ((text: string) => void) | null = null;
 let lastAssistantText = "";
+let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
 
 function emit(event: object): void {
@@ -236,12 +237,14 @@ function createAskForemanTool(): unknown {
 			emit({ type: "question", question, context });
 			const answer = await new Promise<string>(resolve => {
 				pendingAnswerResolve = resolve;
-				setTimeout(() => {
-					if (pendingAnswerResolve === resolve) {
-						pendingAnswerResolve = null;
-						resolve("[No answer received within timeout. Proceed with your best judgment.]");
-					}
-				}, 10 * 60 * 1000);
+				if (answerTimeoutMs > 0) {
+					setTimeout(() => {
+						if (pendingAnswerResolve === resolve) {
+							pendingAnswerResolve = null;
+							resolve("[No answer received within timeout. Proceed with your best judgment.]");
+						}
+					}, answerTimeoutMs);
+				}
 			});
 			return answer;
 		}
@@ -414,6 +417,9 @@ async function main(): Promise<void> {
 			const parsed = JSON.parse(firstLine);
 			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && parsed.type === "init") {
 				systemPrompt = parsed.system_prompt || undefined;
+				if (typeof parsed.answer_timeout_ms === "number" && parsed.answer_timeout_ms >= 0) {
+					answerTimeoutMs = parsed.answer_timeout_ms;
+				}
 			} else {
 				// Not an init message — process it as a regular command after session starts.
 				await initSessionOrDie();

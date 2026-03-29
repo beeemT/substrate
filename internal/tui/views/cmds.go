@@ -161,7 +161,8 @@ func ApprovePlanCmd(
 // is unblocked via its answer channel in addition to the DB write.
 // Falls back to direct questionSvc.Answer on ErrQuestionNotEscalated (Foreman was
 // restarted and cleared in-flight channels, or no Foreman is configured).
-func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
+// sessionSvc is used in the fallback path to resume the session from waiting_for_answer.
+func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
 		if foreman != nil {
 			err := foreman.ResolveEscalated(context.Background(), questionID, answer)
@@ -171,6 +172,15 @@ func AnswerQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Forem
 			// If the channel is gone (Foreman restarted), fall through to direct write.
 			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
 				return ErrMsg{Err: err}
+			}
+		}
+		// Foreman was restarted or not configured: resume the session directly so the TUI
+		// clears the action-required state before persisting the answer.
+		if sessionSvc != nil {
+			if q, err := svc.Get(context.Background(), questionID); err == nil && q.AgentSessionID != "" {
+				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
+					slog.Warn("failed to resume session on answer fallback", "error", err, "question_id", questionID)
+				}
 			}
 		}
 		if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
@@ -771,7 +781,8 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 // SkipQuestionCmd marks a question as skipped — the sub-agent continues without an answer.
 // Calls ResolveEscalated with an empty string so the blocked goroutine is unblocked.
 // Falls back to direct questionSvc.Answer when Foreman channels are not available.
-func SkipQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
+// sessionSvc is used in the fallback path to resume the session from waiting_for_answer.
+func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
 	return func() tea.Msg {
 		if foreman != nil {
 			err := foreman.ResolveEscalated(context.Background(), questionID, "")
@@ -780,6 +791,15 @@ func SkipQuestionCmd(svc *service.QuestionService, foreman *orchestrator.Foreman
 			}
 			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
 				return ErrMsg{Err: err}
+			}
+		}
+		// Foreman was restarted or not configured: resume the session directly so the TUI
+		// clears the action-required state before persisting the skip.
+		if sessionSvc != nil {
+			if q, err := svc.Get(context.Background(), questionID); err == nil && q.AgentSessionID != "" {
+				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
+					slog.Warn("failed to resume session on skip fallback", "error", err, "question_id", questionID)
+				}
 			}
 		}
 		if err := svc.Answer(context.Background(), questionID, "", "human"); err != nil {

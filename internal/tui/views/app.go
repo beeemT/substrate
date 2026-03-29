@@ -1059,7 +1059,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
-		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.Foreman, msg.QuestionID, msg.Answer, msg.AnsweredBy))
 		return a, tea.Batch(cmds...)
 
 	case SendToForemanMsg:
@@ -1117,7 +1117,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case SkipQuestionMsg:
-		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Foreman, msg.QuestionID))
+		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.Foreman, msg.QuestionID))
 		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:

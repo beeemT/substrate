@@ -16,6 +16,14 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 )
 
+// escalatedEntry holds the answer channel and the agent session ID for a
+// question that was escalated to a human. Storing the session ID here avoids
+// a round-trip to the DB when ResolveEscalated needs to resume the session.
+type escalatedEntry struct {
+	answerCh       chan<- string
+	agentSessionID string
+}
+
 // pendingQuestion represents a question waiting to be answered.
 type pendingQuestion struct {
 	question    domain.Question
@@ -44,7 +52,7 @@ type Foreman struct {
 	// escalatedChs stores answer channels for questions escalated to humans.
 	// Keyed by question ID. The TUI calls ResolveEscalated to deliver the answer.
 	escalatedMu  sync.Mutex
-	escalatedChs map[string]chan<- string
+	escalatedChs map[string]escalatedEntry
 }
 
 // NewForeman creates a new Foreman instance.
@@ -66,7 +74,7 @@ func NewForeman(
 		questionCh:    make(chan pendingQuestion, 100),
 		questionFront: make(chan pendingQuestion, 100),
 		stopCh:        make(chan struct{}),
-		escalatedChs:  make(map[string]chan<- string),
+		escalatedChs:  make(map[string]escalatedEntry),
 	}
 }
 
@@ -221,8 +229,18 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 			return fmt.Errorf("escalate question: %w", err)
 		}
 		// Register the answer channel so ResolveEscalated can unblock the sub-agent later.
+		// Also transition the session to waiting_for_answer so the TUI surfaces the overlay.
+		if err := f.sessionSvc.WaitForAnswer(ctx, pq.question.AgentSessionID); err != nil {
+			// Log but do not abort: the escalation is persisted; the TUI will still show the
+			// question via DB poll even if the state transition fails.
+			slog.Warn("failed to transition session to waiting_for_answer",
+				"error", err, "session_id", pq.question.AgentSessionID)
+		}
 		f.escalatedMu.Lock()
-		f.escalatedChs[pq.question.ID] = pq.answerCh
+		f.escalatedChs[pq.question.ID] = escalatedEntry{
+			answerCh:       pq.answerCh,
+			agentSessionID: pq.question.AgentSessionID,
+		}
 		f.escalatedMu.Unlock()
 	} else {
 		// Auto-answer: persist, append to FAQ, unblock the sub-agent.
@@ -425,7 +443,7 @@ var ErrQuestionNotEscalated = errors.New("question not in escalated channels")
 // Records the answer in the DB and unblocks the waiting sub-agent.
 func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer string) error {
 	f.escalatedMu.Lock()
-	ch, ok := f.escalatedChs[questionID]
+	entry, ok := f.escalatedChs[questionID]
 	if ok {
 		delete(f.escalatedChs, questionID)
 	}
@@ -440,13 +458,19 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 		return fmt.Errorf("answer escalated question: %w", err)
 	}
 
+	// Transition the session back to running before unblocking the sub-agent so the
+	// TUI clears the action-required state before the agent receives the answer.
+	if err := f.sessionSvc.ResumeFromAnswer(ctx, entry.agentSessionID); err != nil {
+		slog.Warn("failed to resume session from waiting_for_answer",
+			"error", err, "session_id", entry.agentSessionID)
+	}
+
 	// Unblock the sub-agent that was waiting.
-	ch <- answer
+	entry.answerCh <- answer
 
 	return nil
 }
 
-// Stop stops the foreman session.
 // Idempotent: safe to call multiple times (e.g. re-implementation cycles where
 // ImplementationCompleteMsg fires StopForemanCmd each time).
 func (f *Foreman) Stop(ctx context.Context) error {

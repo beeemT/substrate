@@ -30,6 +30,7 @@ let claudeSessionID = "";
 let pendingAnswerResolve: ((text: string) => void) | null = null;
 let activeQuery: ReturnType<typeof query> | null = null;
 let lastResultText = "";
+let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 
 // ---------------------------------------------------------------------------
 // Emit helpers (verbatim from omp-bridge.ts)
@@ -173,14 +174,16 @@ const askForemanTool = tool(
 		emit({ type: "question", question, context: context ?? "" });
 		const answer = await new Promise<string>(resolve => {
 			pendingAnswerResolve = resolve;
-			setTimeout(() => {
-				if (pendingAnswerResolve === resolve) {
-					pendingAnswerResolve = null;
-					resolve(
-						"[No answer received within timeout. Proceed with your best judgment.]",
-					);
-				}
-			}, 10 * 60 * 1000);
+			if (answerTimeoutMs > 0) {
+				setTimeout(() => {
+					if (pendingAnswerResolve === resolve) {
+						pendingAnswerResolve = null;
+						resolve(
+							"[No answer received within timeout. Proceed with your best judgment.]",
+						);
+					}
+				}, answerTimeoutMs);
+			}
 		});
 		return { content: [{ type: "text" as const, text: answer }] };
 	},
@@ -372,6 +375,9 @@ async function main(): Promise<void> {
 		typeof initMsg.max_turns === "number" && initMsg.max_turns > 0
 			? initMsg.max_turns
 			: undefined;
+	if (typeof initMsg.answer_timeout_ms === "number" && initMsg.answer_timeout_ms >= 0) {
+		answerTimeoutMs = initMsg.answer_timeout_ms;
+	}
 	// maxBudgetUSD is not a direct SDK option; not forwarded
 
 	const options: Record<string, unknown> = {
