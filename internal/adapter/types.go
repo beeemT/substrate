@@ -137,9 +137,9 @@ type SessionOpts struct {
 	UserPrompt           string
 	SessionLogDir        string // Directory for session output logs
 	CommitConfig         CommitConfig
-	AllowPush            bool   // Whether agent is allowed to push to remote
-	ResumeFromSessionID string            // Substrate session ID; harness resumes if it can
-	ResumeInfo          map[string]string // Resolved resume data; harness reads its own keys
+	AllowPush            bool              // Whether agent is allowed to push to remote
+	ResumeFromSessionID  string            // Substrate session ID; harness resumes if it can
+	ResumeInfo           map[string]string // Resolved resume data; harness reads its own keys
 	// AnswerTimeoutMs controls how long the bridge waits for a foreman answer before
 	// falling back to a placeholder. 0 means no timeout (wait indefinitely).
 	AnswerTimeoutMs int64

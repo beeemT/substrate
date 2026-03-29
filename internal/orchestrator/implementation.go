@@ -407,10 +407,7 @@ func (s *ImplementationService) executeSubPlan(
 	if s.reviewPipeline != nil {
 		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.TaskPhaseReview {
 			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
-			if prevImpl == nil {
-				slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
-					"sub_plan_id", subPlan.ID, "last_session_id", last.ID)
-			} else {
+			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",
 					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
 				result.Status = domain.AgentSessionCompleted
@@ -418,7 +415,7 @@ func (s *ImplementationService) executeSubPlan(
 				result.WorktreePath = prevImpl.WorktreePath
 				result.Summary = "Retrying review with existing implementation"
 				result.CompletedAt = ptrTime(time.Now())
-				outcome := s.reviewLoop(ctx, *prevImpl, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
+				outcome := s.reviewLoop(ctx, *prevImpl, subPlan, workspace, plan, workItem, worktreePaths)
 				result.Outcome = outcome
 				if outcome.Passed {
 					state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
@@ -427,11 +424,13 @@ func (s *ImplementationService) executeSubPlan(
 					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
 					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 				} else if outcome.Escalated {
-					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s \u2014 requires human intervention", subPlan.RepositoryName))
+					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
 					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 				}
 				return result, nil
 			}
+			slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
+				"sub_plan_id", subPlan.ID, "last_session_id", last.ID)
 		}
 	}
 
@@ -440,7 +439,7 @@ func (s *ImplementationService) executeSubPlan(
 	prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 
 	// Run implementation (fresh or with critique context from prior review).
-	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, branch, worktreePath, critiqueFeedback, prevImpl)
+	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, critiqueFeedback, prevImpl)
 	if err != nil {
 		result.Status = domain.AgentSessionFailed
 		result.Summary = err.Error()
@@ -457,7 +456,7 @@ func (s *ImplementationService) executeSubPlan(
 
 	// Run review loop if pipeline is configured.
 	if s.reviewPipeline != nil {
-		outcome := s.reviewLoop(ctx, implSession, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
+		outcome := s.reviewLoop(ctx, implSession, subPlan, workspace, plan, workItem, worktreePaths)
 		result.Outcome = outcome
 		if outcome.Passed {
 			state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
@@ -489,9 +488,7 @@ func (s *ImplementationService) reviewLoop(
 	workspace *domain.Workspace,
 	plan *domain.Plan,
 	workItem *domain.Session,
-	branch string,
 	worktreePaths map[string]string,
-	state *ExecutionState,
 ) *SubPlanOutcome {
 	outcome := &SubPlanOutcome{
 		SubPlanID:  subPlan.ID,
@@ -546,7 +543,7 @@ func (s *ImplementationService) reviewLoop(
 			outcome.Failed = true
 			return outcome
 		}
-		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, branch, worktreePath, feedback, &currentSession)
+		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, feedback, &currentSession)
 		if err != nil {
 			slog.Warn("reimplementation failed", "error", err,
 				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
@@ -569,7 +566,6 @@ func (s *ImplementationService) runImplementation(
 	workspace *domain.Workspace,
 	plan *domain.Plan,
 	workItem *domain.Session,
-	branch string,
 	worktreePath string,
 	critiqueFeedback string,
 	prevSession *domain.Task,

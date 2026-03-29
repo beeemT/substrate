@@ -718,7 +718,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		nil,
 		nil,
 		nil, nil, // foreman, questionSvc
-		nil,      // reviewSvc
+		nil, // reviewSvc
 	)
 
 	return svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo
@@ -1218,7 +1218,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
-		nil,      // reviewSvc
+		nil, // reviewSvc
 	)
 
 	// Seed a previous completed session with ResumeInfo.
@@ -1248,7 +1248,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, "main", workspaceRoot, "Fix the bug", &prevSession)
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", &prevSession)
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1322,7 +1322,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
-		nil,      // reviewSvc
+		nil, // reviewSvc
 	)
 
 	subPlan := domain.TaskPlan{
@@ -1335,7 +1335,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, "main", workspaceRoot, "Fix the bug", nil)
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", nil)
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1433,9 +1433,7 @@ func TestReviewLoop_PassesFirstReview(t *testing.T) {
 		&domain.Workspace{},
 		&domain.Plan{},
 		&domain.Session{},
-		"",
 		nil,
-		&ExecutionState{},
 	)
 
 	if !outcome.Passed {
@@ -1469,9 +1467,7 @@ func TestReviewLoop_ReviewError(t *testing.T) {
 		&domain.Workspace{},
 		&domain.Plan{},
 		&domain.Session{},
-		"",
 		nil,
-		&ExecutionState{},
 	)
 
 	if !outcome.Failed {
@@ -1523,9 +1519,7 @@ func TestReviewLoop_EscalatedByMaxCycles(t *testing.T) {
 		&domain.Workspace{},
 		&domain.Plan{},
 		&domain.Session{},
-		"",
 		nil,
-		&ExecutionState{},
 	)
 
 	if !outcome.Escalated {
@@ -1553,9 +1547,7 @@ func TestReviewLoop_NeedsReimplAutoLoopOff(t *testing.T) {
 		&domain.Workspace{},
 		&domain.Plan{},
 		&domain.Session{},
-		"",
 		nil,
-		&ExecutionState{},
 	)
 
 	if !outcome.Escalated {

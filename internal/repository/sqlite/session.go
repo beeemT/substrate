@@ -29,7 +29,7 @@ type sessionRow struct {
 	CreatedAt       string  `db:"created_at"`
 	OwnerInstanceID *string `db:"owner_instance_id"`
 	UpdatedAt       string  `db:"updated_at"`
-	ResumeInfo *string `db:"resume_info"` // JSON-encoded map[string]string
+	ResumeInfo      *string `db:"resume_info"` // JSON-encoded map[string]string
 }
 
 type sessionHistoryRow struct {
@@ -125,7 +125,7 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 		OwnerInstanceID: r.OwnerInstanceID,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
-		ResumeInfo: parseResumeInfo(r.ResumeInfo),
+		ResumeInfo:      parseResumeInfo(r.ResumeInfo),
 	}, nil
 }
 
@@ -148,7 +148,7 @@ func rowFromSession(s domain.Task) sessionRow {
 		OwnerInstanceID: s.OwnerInstanceID,
 		CreatedAt:       formatTime(s.CreatedAt),
 		UpdatedAt:       formatTime(s.UpdatedAt),
-		ResumeInfo: marshalResumeInfo(s.ResumeInfo),
+		ResumeInfo:      marshalResumeInfo(s.ResumeInfo),
 	}
 }
 
@@ -361,7 +361,6 @@ func (r TaskRepo) Delete(ctx context.Context, id string) error {
 
 	return nil
 }
-
 
 // parseResumeInfo decodes a nullable JSON string into a map.
 // Returns nil if the column is NULL or the JSON is invalid.
