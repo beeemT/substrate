@@ -529,30 +529,19 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 	if closeErr := stderrWrite.Close(); closeErr != nil {
 		slog.Warn("failed to close stderr write end after process start", "error", closeErr)
 	}
-	if _, err = io.WriteString(stdinW, input); err != nil {
-		if err := cmd.Process.Kill(); err != nil {
-			slog.Warn("failed to kill process during cleanup", "error", err)
+	// Write the prompt to stdin asynchronously. The child may exit before
+	// reading (especially fast-exiting test harnesses or CI environments),
+	// which would cause a broken pipe on a synchronous write. Since the prompt
+	// is already in the OS pipe buffer, the child reads it if it's alive; if
+	// the child has already exited, the write fails harmlessly.
+	go func() {
+		if _, err := io.WriteString(stdinW, input); err != nil {
+			slog.Debug("codex: stdin write failed (child may have exited)", "error", err)
 		}
-		if err := stdoutRead.Close(); err != nil {
-			slog.Warn("failed to close stdout read end during cleanup", "error", err)
+		if err := stdinW.Close(); err != nil {
+			slog.Debug("codex: stdin close failed", "error", err)
 		}
-		if err := stderrRead.Close(); err != nil {
-			slog.Warn("failed to close stderr read end during cleanup", "error", err)
-		}
-		return nil, nil, fmt.Errorf("write stdin: %w", err)
-	}
-	if err = stdinW.Close(); err != nil {
-		if err := cmd.Process.Kill(); err != nil {
-			slog.Warn("failed to kill process during cleanup", "error", err)
-		}
-		if err := stdoutRead.Close(); err != nil {
-			slog.Warn("failed to close stdout read end during cleanup", "error", err)
-		}
-		if err := stderrRead.Close(); err != nil {
-			slog.Warn("failed to close stderr read end during cleanup", "error", err)
-		}
-		return nil, nil, fmt.Errorf("close stdin: %w", err)
-	}
+	}()
 	return stdoutRead, stderrRead, nil
 }
 
