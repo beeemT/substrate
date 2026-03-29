@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
@@ -223,10 +224,13 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	planRepo := &cmdPlanRepo{plans: map[string]domain.Plan{
 		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanPendingReview, OrchestratorPlan: "Overall plan text"},
 	}}
+	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{
+		"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "rocket", Content: "Sub-plan content", Order: 0},
+	}}
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{
 		Plans:    planRepo,
-		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{}},
+		SubPlans: subPlanRepo,
 	}})
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
@@ -236,7 +240,10 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	msg := ApprovePlanCmd(workItemSvc, planSvc, bus, "plan-1", "wi-1")()
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.IssueCommentContent = config.IssueCommentSubPlan
+
+	msg := ApprovePlanCmd(workItemSvc, planSvc, bus, cfg, "plan-1", "wi-1")()
 	if _, ok := msg.(PlanApprovedMsg); !ok {
 		t.Fatalf("msg = %T, want PlanApprovedMsg", msg)
 	}
@@ -254,7 +261,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 		if payload.ExternalID != "gh:issue:acme/rocket#42" {
 			t.Fatalf("external_id = %q", payload.ExternalID)
 		}
-		if payload.CommentBody != "Overall plan text" {
+		if payload.CommentBody != "Sub-plan content" {
 			t.Fatalf("comment_body = %q", payload.CommentBody)
 		}
 		if len(payload.ExternalIDs) != 2 || payload.ExternalIDs[0] != "gh:issue:acme/rocket#42" || payload.ExternalIDs[1] != "gh:issue:acme/rocket#43" {

@@ -356,3 +356,30 @@ review:
 		t.Errorf("AutoFeedbackLoop = %v, want ptr(false)", cfg.Review.AutoFeedbackLoop)
 	}
 }
+
+
+func TestIssueCommentContentDefault(t *testing.T) {
+	path := writeTestConfig(t, "# empty\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Adapters.GitHub.IssueCommentContent != IssueCommentSubPlan {
+		t.Errorf("github issue_comment_content = %q, want %q", cfg.Adapters.GitHub.IssueCommentContent, IssueCommentSubPlan)
+	}
+	if cfg.Adapters.GitLab.IssueCommentContent != IssueCommentSubPlan {
+		t.Errorf("gitlab issue_comment_content = %q, want %q", cfg.Adapters.GitLab.IssueCommentContent, IssueCommentSubPlan)
+	}
+}
+
+func TestIssueCommentContentInvalidRejected(t *testing.T) {
+	path := writeTestConfig(t, `
+adapters:
+  github:
+    issue_comment_content: invalid_value
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() should error on invalid adapters.github.issue_comment_content")
+	}
+}

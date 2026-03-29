@@ -1033,7 +1033,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Bus, a.svcs.Cfg, msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:

@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/app/remotedetect"
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
@@ -138,6 +139,7 @@ func ApprovePlanCmd(
 	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
 	bus *event.Bus,
+	cfg *config.Config,
 	planID, workItemID string,
 ) tea.Cmd {
 	return func() tea.Msg {
@@ -148,7 +150,7 @@ func ApprovePlanCmd(
 		if err := workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
-		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, planID, workItemID); err != nil {
+		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, cfg, planID, workItemID); err != nil {
 			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
 		}
 
@@ -628,7 +630,7 @@ func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, im
 	}
 }
 
-func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, planID, workItemID string) error {
+func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
 	if bus == nil {
 		return nil
 	}
@@ -645,7 +647,13 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 		"work_item_id": workItemID,
 		"external_id":  workItem.ExternalID,
 	}
-	if commentBody := strings.TrimSpace(plan.OrchestratorPlan); commentBody != "" {
+	var commentMode config.IssueCommentContent
+	if cfg != nil {
+		commentMode = cfg.IssueCommentContentForSource(workItem.Source)
+	} else {
+		commentMode = config.IssueCommentSubPlan
+	}
+	if commentBody := buildIssueCommentBody(ctx, planSvc, commentMode, plan); commentBody != "" {
 		payload["comment_body"] = commentBody
 	}
 	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
@@ -653,6 +661,52 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 	}
 
 	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
+}
+
+// buildIssueCommentBody assembles the comment body for plan-approved issue comments
+// according to the configured IssueCommentContent mode. Returns empty string for
+// IssueCommentNone or when the selected content is empty.
+func buildIssueCommentBody(ctx context.Context, planSvc *service.PlanService, mode config.IssueCommentContent, plan domain.Plan) string {
+	switch mode {
+	case config.IssueCommentNone:
+		return ""
+	case config.IssueCommentOrchestratorPlan:
+		return strings.TrimSpace(plan.OrchestratorPlan)
+	case config.IssueCommentSubPlan:
+		subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+		if err != nil {
+			slog.Warn("failed to list sub-plans for issue comment", "plan_id", plan.ID, "err", err)
+			return ""
+		}
+		return domain.ComposeSubPlansContent(subPlans)
+	case config.IssueCommentOrchestratorAndSubPlan:
+		subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+		if err != nil {
+			slog.Warn("failed to list sub-plans for issue comment", "plan_id", plan.ID, "err", err)
+			return strings.TrimSpace(plan.OrchestratorPlan)
+		}
+		orchestration := strings.TrimSpace(plan.OrchestratorPlan)
+		subContent := domain.ComposeSubPlansContent(subPlans)
+		switch {
+		case orchestration == "":
+			return subContent
+		case subContent == "":
+			return orchestration
+		default:
+			return orchestration + "\n\n" + subContent
+		}
+	case config.IssueCommentFullPlan:
+		subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+		if err != nil {
+			slog.Warn("failed to list sub-plans for issue comment", "plan_id", plan.ID, "err", err)
+			return strings.TrimSpace(plan.OrchestratorPlan)
+		}
+		return domain.ComposePlanDocument(plan, subPlans)
+	default:
+		// Unknown mode — treat as none to avoid leaking partial content.
+		slog.Warn("unknown issue_comment_content mode; comment suppressed", "mode", mode)
+		return ""
+	}
 }
 
 func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemSvc *service.SessionService, workItemID string) error {

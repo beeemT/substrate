@@ -42,6 +42,22 @@ const (
 	PassThresholdNoCritiques PassThreshold = "no_critiques"
 )
 
+// IssueCommentContent controls what plan content is posted as a comment on linked issues at plan approval.
+type IssueCommentContent string
+
+const (
+	// IssueCommentNone disables issue comments on plan approval.
+	IssueCommentNone IssueCommentContent = "none"
+	// IssueCommentOrchestratorPlan posts only the top-level orchestration narrative.
+	IssueCommentOrchestratorPlan IssueCommentContent = "orchestrator_plan"
+	// IssueCommentSubPlan posts only the per-repository sub-plan content (default).
+	IssueCommentSubPlan IssueCommentContent = "sub_plan"
+	// IssueCommentOrchestratorAndSubPlan posts the orchestration narrative followed by all sub-plans.
+	IssueCommentOrchestratorAndSubPlan IssueCommentContent = "orchestrator_and_sub_plan"
+	// IssueCommentFullPlan posts the full plan document including the execution-groups fence block.
+	IssueCommentFullPlan IssueCommentContent = "full_plan"
+)
+
 // Config is the top-level configuration loaded from config.yaml.
 type Config struct {
 	Commit   CommitConfig          `yaml:"commit"`
@@ -134,6 +150,7 @@ type GitlabConfig struct {
 	Assignee      string            `yaml:"assignee"`      // username filter for Watch
 	PollInterval  string            `yaml:"poll_interval"` // default: 60s
 	StateMappings map[string]string `yaml:"state_mappings"`
+	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
 }
 
 type GithubConfig struct {
@@ -145,6 +162,7 @@ type GithubConfig struct {
 	Reviewers     []string          `yaml:"reviewers"`
 	Labels        []string          `yaml:"labels"`
 	StateMappings map[string]string `yaml:"state_mappings"`
+	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
 }
 
 type SentryConfig struct {
@@ -353,6 +371,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.GitHub.PollInterval == "" {
 		cfg.Adapters.GitHub.PollInterval = defaultPollInterval
 	}
+	if cfg.Adapters.GitHub.IssueCommentContent == "" {
+		cfg.Adapters.GitHub.IssueCommentContent = IssueCommentSubPlan
+	}
+	if cfg.Adapters.GitLab.IssueCommentContent == "" {
+		cfg.Adapters.GitLab.IssueCommentContent = IssueCommentSubPlan
+	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
 	}
@@ -413,6 +437,20 @@ func validate(cfg *Config) error {
 		}
 	}
 
+	validIssueCommentContent := map[IssueCommentContent]bool{
+		IssueCommentNone:                   true,
+		IssueCommentOrchestratorPlan:       true,
+		IssueCommentSubPlan:                true,
+		IssueCommentOrchestratorAndSubPlan: true,
+		IssueCommentFullPlan:               true,
+	}
+	if !validIssueCommentContent[cfg.Adapters.GitHub.IssueCommentContent] {
+		return fmt.Errorf("invalid adapters.github.issue_comment_content: %q (must be none, orchestrator_plan, sub_plan, orchestrator_and_sub_plan, or full_plan)", cfg.Adapters.GitHub.IssueCommentContent)
+	}
+	if !validIssueCommentContent[cfg.Adapters.GitLab.IssueCommentContent] {
+		return fmt.Errorf("invalid adapters.gitlab.issue_comment_content: %q (must be none, orchestrator_plan, sub_plan, orchestrator_and_sub_plan, or full_plan)", cfg.Adapters.GitLab.IssueCommentContent)
+	}
+
 	validHarnesses := map[HarnessName]bool{
 		HarnessOhMyPi:     true,
 		HarnessClaudeCode: true,
@@ -433,6 +471,20 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// IssueCommentContentForSource returns the IssueCommentContent configured for the given
+// work-item source adapter ("github" or "gitlab"). Falls back to IssueCommentSubPlan
+// for unknown sources.
+func (c *Config) IssueCommentContentForSource(source string) IssueCommentContent {
+	switch source {
+	case "github":
+		return c.Adapters.GitHub.IssueCommentContent
+	case "gitlab":
+		return c.Adapters.GitLab.IssueCommentContent
+	default:
+		return IssueCommentSubPlan
+	}
 }
 
 func validateAbsoluteHTTPURL(raw string) error {

@@ -40,6 +40,30 @@ func ComposePlanDocument(plan Plan, subPlans []TaskPlan) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// ComposeSubPlansContent assembles all sub-plan contents into a single comment-ready string.
+// A single sub-plan is returned as-is (trimmed). Multiple sub-plans are each prefixed with
+// a "## SubPlan: {repo}" heading and separated by a blank line.
+func ComposeSubPlansContent(subPlans []TaskPlan) string {
+	ordered := orderedTaskPlans(subPlans)
+	if len(ordered) == 0 {
+		return ""
+	}
+	if len(ordered) == 1 {
+		return strings.TrimSpace(ordered[0].Content)
+	}
+	var b strings.Builder
+	for i, sp := range ordered {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## SubPlan: ")
+		b.WriteString(sp.RepositoryName)
+		b.WriteString("\n")
+		b.WriteString(strings.TrimSpace(sp.Content))
+	}
+	return b.String()
+}
+
 func orderedTaskPlans(subPlans []TaskPlan) []TaskPlan {
 	ordered := append([]TaskPlan(nil), subPlans...)
 	sort.SliceStable(ordered, func(i, j int) bool {
