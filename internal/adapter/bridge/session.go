@@ -491,6 +491,13 @@ func MapBridgeEvent(raw struct {
 				Type:      "retry_resumed",
 				Timestamp: time.Now(),
 			}, nil
+		case "retry_exhausted":
+			msg, _ := eventMap["message"].(string)
+			return &adapter.AgentEvent{
+				Type:      "retry_exhausted",
+				Timestamp: time.Now(),
+				Payload:   msg,
+			}, nil
 		default:
 			return nil, nil
 		}

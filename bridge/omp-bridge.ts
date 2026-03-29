@@ -34,6 +34,11 @@ let lastAssistantText = "";
 let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 let session: AgentSession | null = null;
 
+// Set when the SDK exhausts all rate-limit retries (auto_retry_end with
+// success: false). prompt() resolves without throwing in this case, so the
+// bridge must check this flag before declaring the session successful.
+let retryExhausted = false;
+
 function emit(event: object): void {
 	process.stdout.write(JSON.stringify({ type: "event", event }) + "\n");
 }
@@ -156,8 +161,11 @@ function mapEvent(e: unknown): object[] {
 
 	if (event.type === "auto_retry_end") {
 		if (!(event as any).success) {
-			return [];
+			retryExhausted = true;
+			const msg = "Rate limit retries exhausted — session produced no work";
+			return [{ type: "lifecycle", stage: "retry_exhausted", message: msg }];
 		}
+		retryExhausted = false; // Successful retry resets the flag.
 		return [{ type: "lifecycle", stage: "retry_resumed" }];
 	}
 
@@ -195,6 +203,9 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
 		if (mode === "foreman") {
 			const { text: answer, uncertain } = extractConfidence(lastAssistantText);
 			emit({ type: "foreman_proposed", text: answer, uncertain });
+		} else if (retryExhausted) {
+			emitLifecycle("failed", { message: "Rate limit retries exhausted — session produced no work" });
+			process.exit(1);
 		} else {
 			emitLifecycle("completed", { summary: "Session complete" });
 			// Agent sessions are single-use: exit so BridgeSession.Wait() can return.

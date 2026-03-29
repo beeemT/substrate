@@ -289,6 +289,9 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 			return st.Warning.Render(ansi.Truncate("⏸ "+text, width, "…"))
 		case "retry_resumed":
 			return st.Muted.Render(ansi.Truncate("↺ Resumed after rate limit", width, "…"))
+		case "retry_exhausted":
+			text := firstNonEmptyTranscript(block.message, "Rate limit retries exhausted")
+			return st.Error.Render(ansi.Truncate("✗ "+text, width, "…"))
 		case "compaction_start":
 			text := firstNonEmptyTranscript(block.message, "Compacting context…")
 			return st.Muted.Render(ansi.Truncate("⟳ "+text, width, "…"))

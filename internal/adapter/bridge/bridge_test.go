@@ -302,6 +302,13 @@ func TestMapBridgeEvent(t *testing.T) {
 			wantType:  "retry_resumed",
 		},
 		{
+			name:         "lifecycle retry_exhausted",
+			rawType:      "event",
+			eventJSON:    `{"type":"lifecycle","stage":"retry_exhausted","message":"Rate limit retries exhausted — session produced no work"}`,
+			wantType:     "retry_exhausted",
+			checkPayload: "Rate limit retries exhausted — session produced no work",
+		},
+		{
 			name:      "unknown event type returns nil",
 			rawType:   "event",
 			eventJSON: `{"type":"bogus"}`,
