@@ -389,10 +389,10 @@ func (f *Foreman) buildSystemPrompt(ctx context.Context, plan domain.Plan) strin
 	subPlans, err := f.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
 	if err != nil {
 		slog.Warn("failed to get sub-plans for system prompt", "error", err)
+		// Continue without sub-plans — the orchestrator plan and FAQ are still useful.
 	} else {
-		for _, sp := range subPlans {
-			fmt.Fprintf(&b, "### Repository: %s\n\n%s\n\n", sp.RepositoryName, sp.Content)
-		}
+		b.WriteString(domain.ComposePlanDocument(plan, subPlans))
+		b.WriteString("\n\n")
 	}
 
 	if len(plan.FAQ) > 0 {
