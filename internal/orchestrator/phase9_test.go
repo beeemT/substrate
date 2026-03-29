@@ -61,7 +61,9 @@ func (s *mockAgentSession) Abort(_ context.Context) error {
 
 	return s.abortErr
 }
-func (s *mockAgentSession) Steer(_ context.Context, _ string) error { return nil }
+func (s *mockAgentSession) Steer(_ context.Context, _ string) error      { return nil }
+func (s *mockAgentSession) SendAnswer(_ context.Context, _ string) error { return nil }
+func (s *mockAgentSession) ResumeInfo() map[string]string                { return nil }
 
 // ============================================================
 // Mock: adapter.AgentHarness

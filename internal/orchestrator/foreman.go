@@ -255,8 +255,9 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 // It looks for foreman_proposed events and extracts the answer text and confidence marker.
 // If no response is received within the timeout, it returns an error.
 func (f *Foreman) waitForAnswer(ctx context.Context, session adapter.AgentSession) (string, bool, error) {
-	// Parse timeout from config (string like "30s", "1m", or "0" for indefinite)
-	timeout := 60 * time.Second // default
+	// Parse timeout from config (string like "30s", "1m", or "0" for indefinite).
+	// Default is 0 (no timeout) — the foreman waits indefinitely for an answer.
+	var timeout time.Duration
 	if f.cfg.Foreman.QuestionTimeout != "" && f.cfg.Foreman.QuestionTimeout != "0" {
 		if d, err := time.ParseDuration(f.cfg.Foreman.QuestionTimeout); err == nil {
 			timeout = d
@@ -352,46 +353,54 @@ func (f *Foreman) restartSession(ctx context.Context) error {
 
 // buildSystemPrompt builds the system prompt for the foreman session.
 func (f *Foreman) buildSystemPrompt(ctx context.Context, plan domain.Plan) string {
-	var prompt strings.Builder
-	prompt.WriteString(`You are the Foreman, a question-answering assistant for the Substrate agent system.
+	var b strings.Builder
 
-Your role is to answer questions from sub-agents based on the plan context and accumulated FAQ.
+	b.WriteString("You are the Foreman. You are the sole arbiter between sub-agent questions and the human operator.\n\n")
+	b.WriteString("Sub-agents are executing the plan in their respective repositories. When they cannot resolve\n")
+	b.WriteString("a question from the codebase or plan alone, they ask you. Your job is to answer them from the\n")
+	b.WriteString("plan and accumulated FAQ so they can keep working — without interrupting the human unless you\n")
+	b.WriteString("have no choice.\n\n")
 
-## Current Plan
+	b.WriteString("## Your authority\n\n")
+	b.WriteString("You hold the complete cross-repo plan (goals, constraints, acceptance criteria, per-repo\n")
+	b.WriteString("work). Treat it as the ground truth for intent. If the answer is clearly derivable from the\n")
+	b.WriteString("plan, derive it. If the same question was already answered in the FAQ, use that answer verbatim.\n\n")
 
-`)
+	b.WriteString("## Current Plan\n\n")
 
-	// Get sub-plans to build the plan content
 	subPlans, err := f.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
 	if err != nil {
 		slog.Warn("failed to get sub-plans for system prompt", "error", err)
 	} else {
 		for _, sp := range subPlans {
-			fmt.Fprintf(&prompt, "### Repository: %s\n\n%s\n\n", sp.RepositoryName, sp.Content)
+			fmt.Fprintf(&b, "### Repository: %s\n\n%s\n\n", sp.RepositoryName, sp.Content)
 		}
 	}
 
-	prompt.WriteString("## FAQ\n\n")
-
-	for _, entry := range plan.FAQ {
-		fmt.Fprintf(&prompt, "Q: %s\nA: %s (answered by %s)\n\n",
-			entry.Question, entry.Answer, entry.AnsweredBy)
+	if len(plan.FAQ) > 0 {
+		b.WriteString("## FAQ (previously answered questions — re-use these answers exactly)\n\n")
+		for _, entry := range plan.FAQ {
+			fmt.Fprintf(&b, "Q: %s\nA: %s (answered by %s)\n\n",
+				entry.Question, entry.Answer, entry.AnsweredBy)
+		}
 	}
 
-	prompt.WriteString(`
-## Instructions
+	b.WriteString("## Instructions\n\n")
+	b.WriteString("Answer the question concisely and precisely. Use only information from the plan and FAQ above.\n\n")
+	b.WriteString("**When to answer with CONFIDENCE: high**\n")
+	b.WriteString("Use this ONLY when the answer is explicitly stated in the plan or is a verbatim FAQ match.\n")
+	b.WriteString("Do not use it for inferences, interpretations, or anything not directly written in the plan.\n\n")
+	b.WriteString("**When to answer with CONFIDENCE: uncertain**\n")
+	b.WriteString("Use this when the answer requires interpretation, the plan is ambiguous, the question touches\n")
+	b.WriteString("something not covered by the plan, or you are not fully certain. In this case the human\n")
+	b.WriteString("operator will review your proposed answer before it reaches the sub-agent.\n\n")
+	b.WriteString("Always end your response with exactly one of:\n")
+	b.WriteString("CONFIDENCE: high\n")
+	b.WriteString("CONFIDENCE: uncertain\n\n")
+	b.WriteString("Do not fabricate facts about the codebase. Do not guess at implementation details\n")
+	b.WriteString("not described in the plan. If in doubt, use CONFIDENCE: uncertain.\n")
 
-Answer questions concisely based on the plan and FAQ context.
-If you can answer with high confidence from the plan and prior Q&A, end your response with:
-CONFIDENCE: high
-
-If you are uncertain or need more information, end your response with:
-CONFIDENCE: uncertain
-
-Do not fabricate facts about the codebase.
-`)
-
-	return prompt.String()
+	return b.String()
 }
 
 // SessionID returns the ID of the currently running foreman session.

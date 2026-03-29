@@ -138,9 +138,11 @@ type SessionOpts struct {
 	SessionLogDir        string // Directory for session output logs
 	CommitConfig         CommitConfig
 	AllowPush            bool   // Whether agent is allowed to push to remote
-	ResumeSessionFile    string // OMP session JSONL file for native resume
-	CodexThreadID        string // Codex thread ID for native resume via `codex exec resume`
-	ResumeSessionID      string // Claude Agent SDK session UUID for native resume
+	ResumeFromSessionID string            // Substrate session ID; harness resumes if it can
+	ResumeInfo          map[string]string // Resolved resume data; harness reads its own keys
+	// AnswerTimeoutMs controls how long the bridge waits for a foreman answer before
+	// falling back to a placeholder. 0 means no timeout (wait indefinitely).
+	AnswerTimeoutMs int64
 }
 
 // CommitConfig contains commit strategy settings.

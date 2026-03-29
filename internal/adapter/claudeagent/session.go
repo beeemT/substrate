@@ -18,13 +18,16 @@ type claudeAgentSession struct {
 
 func (s *claudeAgentSession) ID() string { return s.bs.ID }
 
-// ClaudeSessionID returns the Claude SDK session UUID captured from session_meta.
-func (s *claudeAgentSession) ClaudeSessionID() string {
+func (s *claudeAgentSession) ResumeInfo() map[string]string {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
-	return s.claudeSessionID
+	if s.claudeSessionID == "" {
+		return nil
+	}
+	return map[string]string{
+		"claude_session_id": s.claudeSessionID,
+	}
 }
-
 func (s *claudeAgentSession) Wait(ctx context.Context) error { return s.bs.Wait(ctx) }
 func (s *claudeAgentSession) Events() <-chan adapter.AgentEvent { return s.bs.EventsChan() }
 func (s *claudeAgentSession) SendMessage(ctx context.Context, msg string) error {

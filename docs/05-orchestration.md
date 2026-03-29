@@ -83,7 +83,7 @@ Planning sessions share the same `Task` model and status machine as implementati
 
 ### 1f. Native resume for planning revisions
 
-`PlanWithFeedback` supports native OMP session resume: when the prior planning session used an OMP harness, the orchestrator locates the stored OMP session file (`findPriorPlanningSessionFile`) and passes it as `ResumeSessionFile` to the new planning harness session. This preserves full conversation context across planning revisions.
+`PlanWithFeedback` supports native harness resume: when the prior planning session used a harness that exposes resume data, the orchestrator locates the stored session identifier and resume metadata and passes them to the new planning harness session. This preserves full conversation context across planning revisions.
 
 ### 1g. Recovery for interrupted planning sessions
 
@@ -336,7 +336,7 @@ Re-implementation creates a fresh Task row. The implementation session runs in t
 - the cross-repo orchestration context
 - the review critique set as feedback
 
-When the previous session has an OMP session file, the new session resumes from it via `ResumeSessionFile`, preserving full conversation context. The critique feedback is sent as a follow-up message rather than being baked into the system prompt, so the model retains its full conversation history. When no OMP session file is available, falls back to a fresh session with critiques appended to the system prompt.
+When the previous session exposes resume data, the new session resumes from it via `ResumeFromSessionID` and `ResumeInfo`, preserving full conversation context. The critique feedback is sent as a follow-up message rather than being baked into the system prompt, so the model retains its full conversation history. When no resume data is available, falls back to a fresh session with critiques appended to the system prompt.
 
 Review sessions register with the `SessionRegistry` for steering (§8) and deregister on completion or timeout.
 
@@ -438,14 +438,14 @@ Schema, lock-table ownership, and session-log persistence details are specified 
 1. validate the task is in `completed` state
 2. create a new Task row (the completed task is preserved as audit trail)
 3. build a follow-up system prompt from the sub-plan, the last lines of the session log, and the operator's feedback
-4. start a harness session with `ResumeSessionFile` set (native OMP resume), preserving full conversation context
+4. start a harness session with `ResumeFromSessionID` and `ResumeInfo` set (native harness resume), preserving full conversation context
 5. register in `SessionRegistry` for steering (§8)
 
 The TUI activates follow-up via the `p` key on completed repos in the implementing view. See `06-tui-design.md` for the interaction model.
 
 ### 7h. Follow-up on failed sessions
 
-`Resumption.FollowUpFailedSession()` follows the same pattern as §7g but targets failed tasks. It creates a new Task row (the failed task is preserved as audit trail), optionally resumes the OMP session, and sends the operator's feedback as a follow-up message. The work item transitions back to `implementing` and the sub-plan resets to `pending`.
+`Resumption.FollowUpFailedSession()` follows the same pattern as §7g but targets failed tasks. It creates a new Task row (the failed task is preserved as audit trail), optionally resumes the harness session, and sends the operator's feedback as a follow-up message. The work item transitions back to `implementing` and the sub-plan resets to `pending`.
 
 ### 7i. Failure recovery
 

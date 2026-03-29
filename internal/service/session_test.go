@@ -288,7 +288,7 @@ func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 	}
 }
 
-func TestSessionService_UpdateOmpSessionFile(t *testing.T) {
+func TestSessionService_UpdateResumeInfo(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
@@ -296,17 +296,19 @@ func TestSessionService_UpdateOmpSessionFile(t *testing.T) {
 	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
-	const wantFile = "/home/user/.omp/agent/sessions/repo/1234_abcd.jsonl"
-	const wantID = "abcd1234"
-	if err := svc.UpdateOmpSessionFile(ctx, "session-1", wantFile, wantID); err != nil {
-		t.Fatalf("UpdateOmpSessionFile failed: %v", err)
+	wantInfo := map[string]string{
+		"omp_session_file": "/tmp/x.jsonl",
+		"omp_session_id":   "abc",
+	}
+	if err := svc.UpdateResumeInfo(ctx, "session-1", wantInfo); err != nil {
+		t.Fatalf("UpdateResumeInfo failed: %v", err)
 	}
 
 	got, _ := svc.Get(ctx, "session-1")
-	if got.OmpSessionFile != wantFile {
-		t.Errorf("OmpSessionFile = %q, want %q", got.OmpSessionFile, wantFile)
+	if got.ResumeInfo["omp_session_file"] != wantInfo["omp_session_file"] {
+		t.Errorf("ResumeInfo[omp_session_file] = %q, want %q", got.ResumeInfo["omp_session_file"], wantInfo["omp_session_file"])
 	}
-	if got.OmpSessionID != wantID {
-		t.Errorf("OmpSessionID = %q, want %q", got.OmpSessionID, wantID)
+	if got.ResumeInfo["omp_session_id"] != wantInfo["omp_session_id"] {
+		t.Errorf("ResumeInfo[omp_session_id] = %q, want %q", got.ResumeInfo["omp_session_id"], wantInfo["omp_session_id"])
 	}
 }

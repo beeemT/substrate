@@ -596,17 +596,17 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, s.planSvc, workItemSvc, bus, registry)
 	}
+	var foreman *orchestrator.Foreman
+	if harnesses.Foreman != nil {
+		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, bus)
+	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, s.planSvc, bus, registry)
-	}
-	var foreman *orchestrator.Foreman
-	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, bus)
 	}
 	cfgPath, err := config.ConfigPath()
 	if err != nil {

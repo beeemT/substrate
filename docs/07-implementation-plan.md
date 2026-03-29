@@ -90,7 +90,7 @@ Current schema details worth preserving:
 - `github_pull_requests` and `gitlab_merge_requests` store provider-native PR/MR records (migration 005)
 - `session_review_artifacts` links work items to provider artifacts with dedup on `(workspace_id, work_item_id, provider, provider_artifact_id)`
 - `sub_plans.planning_round` tracks per-sub-plan retry count (migration 004)
-- `agent_sessions.omp_session_file` and `omp_session_id` track native harness session state (migration 003)
+- `agent_sessions.resume_info` tracks native harness session state as generic resume metadata
 
 SQLite implementations live in `internal/repository/sqlite/` and accept `generic.SQLXRemote`. `resources.go` still groups transaction-bound repos into a `Resources` bundle for tests / transactional construction.
 
@@ -291,7 +291,7 @@ The implementation orchestrator now owns the per-repo review loop:
 
 - `AutoFeedbackLoop` config flag (default `true`) gates automatic reimplementation after critique
 - review critiques are reused as feedback when re-triggering implementation
-- native OMP sessions are resumed via `ResumeSessionFile` for review reimplementation
+- native harness sessions are resumed via `ResumeFromSessionID` and `ResumeInfo` for review reimplementation
 - escalated sub-plans are persisted as failed before the work item is routed to reviewing
 - bridge answer timeout is handled through `ohMyPiSession.SendAnswer`
 

@@ -209,6 +209,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		workspaceSvc,
 		nil, // registry
 		nil, // reviewPipeline
+		nil, // foreman
+		nil, // questionSvc
+		nil, // reviewSvc
 	)
 
 	// --- Review pipeline ---
@@ -652,3 +655,6 @@ func (s *e2eSession) Abort(_ context.Context) error {
 	s.closeOnce.Do(func() { close(s.eventsCh) })
 	return nil
 }
+	return adapter.ErrSendAnswerNotSupported
+}
+func (s *e2eSession) ResumeInfo() map[string]string { return nil }

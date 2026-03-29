@@ -12,6 +12,7 @@ import (
 type registryMockSession struct {
 	id       string
 	sentMsgs []string
+	answers  []string
 	aborted  bool
 	mu       sync.Mutex
 }
@@ -42,6 +43,15 @@ func (m *registryMockSession) Steer(_ context.Context, msg string) error {
 	return nil
 }
 
+func (m *registryMockSession) SendAnswer(_ context.Context, answer string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.answers = append(m.answers, answer)
+	return nil
+}
+
+func (m *registryMockSession) ResumeInfo() map[string]string { return nil }
+
 func (m *registryMockSession) messages() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,6 +80,22 @@ func TestSessionRegistry_RegisterAndSend(t *testing.T) {
 	msgs := mock.messages()
 	if len(msgs) != 1 || msgs[0] != "hello" {
 		t.Fatalf("expected [\"hello\"], got %v", msgs)
+	}
+}
+
+func TestSessionRegistry_SendAnswer(t *testing.T) {
+	reg := NewSessionRegistry()
+	mock := &registryMockSession{id: "sess-1"}
+
+	reg.Register("sess-1", mock)
+
+	err := reg.SendAnswer(context.Background(), "sess-1", "the answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(mock.answers) != 1 || mock.answers[0] != "the answer" {
+		t.Fatalf("expected [\"the answer\"], got %v", mock.answers)
 	}
 }
 

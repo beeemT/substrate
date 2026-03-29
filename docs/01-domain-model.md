@@ -261,8 +261,8 @@ type Task struct {
 	OwnerInstanceID *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-	OmpSessionFile  string
-	OmpSessionID    string
+	ResumeInfo map[string]string
+
 }
 
 type TaskStatus string
@@ -281,7 +281,7 @@ Nuance: the constants still use the historical `AgentSession...` prefix. That is
 
 `WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `Phase` discriminates the session kind: `planning`, `implementation`, or `review`.
 
-`OmpSessionFile` and `OmpSessionID` are populated when the harness is oh-my-pi and track the external session identity for resume/steering.
+`ResumeInfo` carries harness-specific resume metadata as a generic string map instead of dedicated harness file/id fields.
 
 ### Question
 
@@ -572,7 +572,7 @@ Migrations are applied sequentially from `migrations/`. The initial schema is in
 |-----------|---------|
 | 001 | Initial schema: all core tables |
 | 002 | `agent_sessions` rewritten with `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path` (canonical columns) |
-| 003 | `agent_sessions` adds `omp_session_file`, `omp_session_id` columns |
+| 003 | `agent_sessions` adds generic resume metadata storage for harness-specific `ResumeInfo`
 | 004 | `sub_plans` adds `planning_round` column |
 | 005 | Review artifacts: `github_pull_requests`, `gitlab_merge_requests`, `session_review_artifacts` tables with backfill from `system_events` |
 
@@ -582,7 +582,7 @@ New tables introduced since initial schema:
 - `gitlab_merge_requests` — durable rows for GitLab MRs with unique index on `(project_path, iid)`.
 - `session_review_artifacts` — link table connecting work items to provider PR/MR records with unique dedup index on `(workspace_id, work_item_id, provider, provider_artifact_id)`.
 
-Migration 002 rewrote `agent_sessions` to add canonical columns (`work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`) and migration 003 added `omp_session_file`/`omp_session_id` for harness identity tracking.
+Migration 002 rewrote `agent_sessions` to add canonical columns (`work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`) and migration 003 added generic resume metadata storage so harnesses can persist `ResumeInfo` without separate harness file/id columns.
 
 ---
 

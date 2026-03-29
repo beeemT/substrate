@@ -717,6 +717,8 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil,
 		nil,
+		nil, nil, // foreman, questionSvc
+		nil,      // reviewSvc
 	)
 
 	return svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo
@@ -848,8 +850,9 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 	if result.Status != domain.AgentSessionFailed {
 		t.Fatalf("session status = %q, want %q", result.Status, domain.AgentSessionFailed)
 	}
-	if warning == nil || warning.Type != "session_start_failed" {
-		t.Fatalf("warning = %#v, want session_start_failed", warning)
+	// runImplementation errors now collapse into a plain result failure; no warning is returned.
+	if warning != nil {
+		t.Fatalf("expected nil warning (no granular session-start type in new design), got %#v", warning)
 	}
 	if len(harness.captured) != 0 {
 		t.Fatalf("expected no harness starts, got %d", len(harness.captured))
@@ -1075,8 +1078,10 @@ func (s *completingMockSession) SendMessage(_ context.Context, msg string) error
 	s.msgs = append(s.msgs, msg)
 	return nil
 }
-func (s *completingMockSession) Steer(_ context.Context, _ string) error { return nil }
-func (s *completingMockSession) Abort(_ context.Context) error           { return nil }
+func (s *completingMockSession) Steer(_ context.Context, _ string) error      { return nil }
+func (s *completingMockSession) SendAnswer(_ context.Context, _ string) error { return nil }
+func (s *completingMockSession) Abort(_ context.Context) error                { return nil }
+func (s *completingMockSession) ResumeInfo() map[string]string                { return nil }
 
 // completingHarness returns sessions that complete immediately on Wait.
 type completingHarness struct {
@@ -1112,7 +1117,9 @@ func (s *failingMockSession) Events() <-chan adapter.AgentEvent {
 }
 func (s *failingMockSession) SendMessage(_ context.Context, _ string) error { return nil }
 func (s *failingMockSession) Steer(_ context.Context, _ string) error       { return nil }
+func (s *failingMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *failingMockSession) Abort(_ context.Context) error                 { return nil }
+func (s *failingMockSession) ResumeInfo() map[string]string                 { return nil }
 
 // failingHarness returns sessions whose Wait returns a fixed error.
 type failingHarness struct{ err error }
@@ -1180,9 +1187,10 @@ func TestExecuteSubPlan_FailedSessionPersistsSubPlanFailed(t *testing.T) {
 	}
 }
 
-// TestReimplementSubPlan_WithOmpSessionFile verifies that reimplementation
-// resumes the previous OMP session and sends critique as a follow-up message.
-func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
+// TestRunImplementation_WithResumeInfo verifies that when prevSession has ResumeInfo,
+// the harness receives ResumeFromSessionID and ResumeInfo in opts, UserPrompt is cleared,
+// and critique is delivered via SendMessage (not baked into the system prompt).
+func TestRunImplementation_WithResumeInfo(t *testing.T) {
 	ctx := context.Background()
 	workspaceRoot := t.TempDir()
 
@@ -1209,9 +1217,11 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
+		nil, nil, // foreman, questionSvc
+		nil,      // reviewSvc
 	)
 
-	// Seed a "previous" completed session with OmpSessionFile.
+	// Seed a previous completed session with ResumeInfo.
 	prevSession := domain.Task{
 		ID:             "prev-session",
 		WorkItemID:     "wi-1",
@@ -1221,8 +1231,10 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		WorktreePath:   workspaceRoot,
 		HarnessName:    "mock",
 		Status:         domain.AgentSessionCompleted,
-		OmpSessionFile: "/tmp/session.jsonl",
-		OmpSessionID:   "omp-123",
+		ResumeInfo: map[string]string{
+			"omp_session_file": "/tmp/session.jsonl",
+			"omp_session_id":   "omp-123",
+		},
 	}
 	sessionRepo.sessions[prevSession.ID] = prevSession
 
@@ -1235,12 +1247,10 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot}
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
-	worktreePaths := map[string]string{"repo-a": workspaceRoot}
-	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
 
-	newSess, err := svc.reimplementSubPlan(ctx, prevSession, subPlan, workspace, plan, workItem, "main", worktreePaths, state, "Fix the bug")
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, "main", workspaceRoot, "Fix the bug", &prevSession)
 	if err != nil {
-		t.Fatalf("reimplementSubPlan: %v", err)
+		t.Fatalf("runImplementation: %v", err)
 	}
 
 	// Verify a new session was created (different ID from previous).
@@ -1253,15 +1263,21 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 		t.Fatalf("new session not found in repo: %v", err)
 	}
 
-	// Verify the harness received ResumeSessionFile in opts.
+	// Verify the harness received ResumeFromSessionID and ResumeInfo in opts.
 	harness.mu.Lock()
 	lastSess := harness.lastSess
 	harness.mu.Unlock()
 	if lastSess == nil {
 		t.Fatal("harness did not create a session")
 	}
-	if lastSess.opts.ResumeSessionFile != "/tmp/session.jsonl" {
-		t.Errorf("ResumeSessionFile = %q, want %q", lastSess.opts.ResumeSessionFile, "/tmp/session.jsonl")
+	if lastSess.opts.ResumeFromSessionID != "prev-session" {
+		t.Errorf("ResumeFromSessionID = %q, want %q", lastSess.opts.ResumeFromSessionID, "prev-session")
+	}
+	if lastSess.opts.ResumeInfo["omp_session_file"] != "/tmp/session.jsonl" {
+		t.Errorf("ResumeInfo[omp_session_file] = %q, want %q", lastSess.opts.ResumeInfo["omp_session_file"], "/tmp/session.jsonl")
+	}
+	if lastSess.opts.UserPrompt != "" {
+		t.Errorf("UserPrompt = %q, want empty (harness resumes; no new prompt turn needed)", lastSess.opts.UserPrompt)
 	}
 
 	// Verify critique feedback was sent as a follow-up message (not in system prompt).
@@ -1276,9 +1292,9 @@ func TestReimplementSubPlan_WithOmpSessionFile(t *testing.T) {
 	}
 }
 
-// TestReimplementSubPlan_WithoutOmpSessionFile verifies fallback behavior
-// when the previous session has no OMP session file (non-OMP harness).
-func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
+// TestRunImplementation_WithoutResumeInfo verifies fallback behavior when prevSession
+// is nil: critique goes into the system prompt.
+func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	ctx := context.Background()
 	workspaceRoot := t.TempDir()
 
@@ -1305,20 +1321,9 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
+		nil, nil, // foreman, questionSvc
+		nil,      // reviewSvc
 	)
-
-	// Seed a "previous" completed session WITHOUT OmpSessionFile.
-	prevSession := domain.Task{
-		ID:             "prev-session",
-		WorkItemID:     "wi-1",
-		WorkspaceID:    "ws-1",
-		SubPlanID:      "sp-1",
-		RepositoryName: "repo-a",
-		WorktreePath:   workspaceRoot,
-		HarnessName:    "mock",
-		Status:         domain.AgentSessionCompleted,
-	}
-	sessionRepo.sessions[prevSession.ID] = prevSession
 
 	subPlan := domain.TaskPlan{
 		ID:             "sp-1",
@@ -1329,33 +1334,31 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot}
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
-	worktreePaths := map[string]string{"repo-a": workspaceRoot}
-	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
 
-	newSess, err := svc.reimplementSubPlan(ctx, prevSession, subPlan, workspace, plan, workItem, "main", worktreePaths, state, "Fix the bug")
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, "main", workspaceRoot, "Fix the bug", nil)
 	if err != nil {
-		t.Fatalf("reimplementSubPlan: %v", err)
+		t.Fatalf("runImplementation: %v", err)
 	}
 
 	// Verify session was created.
-	if newSess.ID == prevSession.ID {
-		t.Error("new session should have a different ID")
+	if newSess.ID == "" {
+		t.Error("new session should have an ID")
 	}
 
-	// Verify no ResumeSessionFile was set (fallback mode).
+	// Verify no ResumeFromSessionID was set (nil prevSession = fresh run).
 	harness.mu.Lock()
 	lastSess := harness.lastSess
 	harness.mu.Unlock()
 	if lastSess == nil {
 		t.Fatal("harness did not create a session")
 	}
-	if lastSess.opts.ResumeSessionFile != "" {
-		t.Errorf("ResumeSessionFile = %q, want empty (no OMP file)", lastSess.opts.ResumeSessionFile)
+	if lastSess.opts.ResumeFromSessionID != "" {
+		t.Errorf("ResumeFromSessionID = %q, want empty (no prev session)", lastSess.opts.ResumeFromSessionID)
 	}
 
-	// Verify critique feedback was baked into SystemPrompt (fallback for non-OMP).
+	// Verify critique feedback was baked into SystemPrompt (fallback for no resume).
 	if !strings.Contains(lastSess.opts.SystemPrompt, "Fix the bug") {
-		t.Error("critique should be in SystemPrompt when no OMP session file is available")
+		t.Error("critique should be in SystemPrompt when no resume info is available")
 	}
 
 	// Verify no SendMessage was called (feedback is in SystemPrompt instead).
@@ -1363,7 +1366,34 @@ func TestReimplementSubPlan_WithoutOmpSessionFile(t *testing.T) {
 	msgs := lastSess.msgs
 	lastSess.mu.Unlock()
 	if len(msgs) != 0 {
-		t.Errorf("SendMessage should not be called in fallback mode, got %v", msgs)
+		t.Errorf("SendMessage should not be called in non-resume mode, got %v", msgs)
+	}
+}
+
+// TestLoadCritiqueFeedback_NoReviewSvc verifies that loadCritiqueFeedback returns
+// empty string when reviewSvc is not configured.
+func TestLoadCritiqueFeedback_NoReviewSvc(t *testing.T) {
+	svc := &ImplementationService{}
+	result := svc.loadCritiqueFeedback(context.Background(), "sp-1")
+	if result != "" {
+		t.Errorf("expected empty string when reviewSvc is nil, got %q", result)
+	}
+}
+
+// TestLoadCritiqueFeedback_NoImplSession verifies that loadCritiqueFeedback returns
+// empty string when there is no prior completed implementation session.
+func TestLoadCritiqueFeedback_NoImplSession(t *testing.T) {
+	repo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(
+		repository.NoopTransacter{Res: repository.Resources{Tasks: repo}},
+	)
+	svc := &ImplementationService{
+		sessionSvc: sessionSvc,
+		reviewSvc:  service.NewReviewService(repository.NoopTransacter{}),
+	}
+	result := svc.loadCritiqueFeedback(context.Background(), "sp-1")
+	if result != "" {
+		t.Errorf("expected empty string when no impl session exists, got %q", result)
 	}
 }
 

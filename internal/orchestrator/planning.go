@@ -138,7 +138,8 @@ type planRunRequest struct {
 	workItemID        string
 	revisionFeedback  string
 	currentPlanText   string
-	resumeSessionFile string
+	priorSessionID   string
+	priorResumeInfo  map[string]string
 	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
 	// must atomically replace. The old plan's row is deleted within the same
 	// transaction that inserts the new one, keeping the UNIQUE constraint on
@@ -171,11 +172,11 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 
 // PlanWithFeedback runs a revision planning session for a work item in plan_review state.
 // It rejects the existing plan and re-plans with the human's feedback. When the prior
-// planning session used an OMP harness, the session is resumed natively so the model
+// planning session produced resume data, the session is resumed natively so the model
 // retains full conversation context of what it planned.
 func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldPlanID, feedback string) (*domain.PlanningResult, error) {
-	// Find the prior planning session's OMP file for native resume (best-effort).
-	resumeFile := s.findPriorPlanningSessionFile(ctx, workItemID)
+	// Find the prior planning session's resume info for native resume (best-effort).
+	priorSessionID, priorResumeInfo := s.findPriorPlanningSessionResumeInfo(ctx, workItemID)
 	// Capture plan text before rejecting so the revision prompt has context.
 	currentPlanText := s.buildPlanText(ctx, oldPlanID)
 	// Mark the old plan rejected. The row stays in the DB until buildAndPersistPlan
@@ -190,8 +191,9 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	return s.planRun(ctx, planRunRequest{
 		workItemID:        workItemID,
 		revisionFeedback:  feedback,
-		currentPlanText:   currentPlanText,
-		resumeSessionFile: resumeFile,
+		currentPlanText:  currentPlanText,
+		priorSessionID:   priorSessionID,
+		priorResumeInfo:  priorResumeInfo,
 		replacePlanID:     oldPlanID,
 	})
 }
@@ -326,48 +328,40 @@ func (s *PlanningService) buildPlanText(ctx context.Context, planID string) stri
 	return domain.ComposePlanDocument(plan, subPlans)
 }
 
-// findPriorPlanningSessionFile returns the OMP JSONL session file from the most recently
-// completed planning task for the given work item. Returns empty string if none exists or
-// if the session was run with a non-OMP harness.
-func (s *PlanningService) findPriorPlanningSessionFile(ctx context.Context, workItemID string) string {
+// findPriorPlanningSessionResumeInfo returns the task ID and harness-specific resume data
+// from the most recently completed planning session for the given work item.
+// Returns ("", nil) if none exists or the prior session produced no resume data.
+func (s *PlanningService) findPriorPlanningSessionResumeInfo(ctx context.Context, workItemID string) (string, map[string]string) {
 	if s.sessionSvc == nil {
-		return ""
+		return "", nil
 	}
 	tasks, err := s.sessionSvc.ListByWorkItemID(ctx, workItemID)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	// Scan in reverse: tasks are returned in creation order, most-recent last.
 	for i := len(tasks) - 1; i >= 0; i-- {
 		t := tasks[i]
-		if t.Phase == domain.TaskPhasePlanning && t.Status == domain.AgentSessionCompleted && t.OmpSessionFile != "" {
-			return t.OmpSessionFile
+		if t.Phase == domain.TaskPhasePlanning && t.Status == domain.AgentSessionCompleted && len(t.ResumeInfo) > 0 {
+			return t.ID, t.ResumeInfo
 		}
 	}
-	return ""
+	return "", nil
 }
 
-// storeOmpSessionFile captures the native OMP session file from the harness session and
-// persists it on the task record so future resume operations can continue the conversation.
-// It is a no-op for non-OMP harnesses or when the session file is not yet available.
-func (s *PlanningService) storeOmpSessionFile(ctx context.Context, sessionID string, session adapter.AgentSession) {
+// storeResumeInfo captures harness-specific resume data from the completed session and
+// persists it for future resume operations.
+// It is a no-op when the harness does not produce resume data.
+func (s *PlanningService) storeResumeInfo(ctx context.Context, sessionID string, session adapter.AgentSession) {
 	if s.sessionSvc == nil {
 		return
 	}
-	type ompMetadata interface {
-		OmpSessionFile() string
-		OmpSessionID() string
-	}
-	omp, ok := session.(ompMetadata)
-	if !ok {
+	info := session.ResumeInfo()
+	if len(info) == 0 {
 		return
 	}
-	file := omp.OmpSessionFile()
-	if file == "" {
-		return
-	}
-	if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
-		slog.Warn("failed to store omp session file for planning session", "error", err, "session_id", sessionID)
+	if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
+		slog.Warn("failed to store resume info for planning session", "error", err, "session_id", sessionID)
 	}
 }
 
@@ -406,7 +400,7 @@ func (s *PlanningService) UpdateReviewedPlan(ctx context.Context, planID, rawCon
 }
 
 // planRun executes the planning pipeline for a work item already in the planning state.
-// req.revisionFeedback, req.currentPlanText, and req.resumeSessionFile are empty for
+// req.revisionFeedback, req.currentPlanText, and req.prior* are empty for
 // initial planning. req.replacePlanID names an existing plan to atomically replace.
 func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*domain.PlanningResult, error) {
 	// 1. Get the work item
@@ -494,7 +488,8 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		MaxParseRetries:   s.cfg.MaxParseRetries,
 		RevisionFeedback:  req.revisionFeedback,
 		CurrentPlanText:   req.currentPlanText,
-		ResumeSessionFile: req.resumeSessionFile,
+		PriorSessionID:    req.priorSessionID,
+		PriorResumeInfo:   req.priorResumeInfo,
 	}
 
 	// 10. Emit PlanningStarted event.
@@ -649,8 +644,9 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		),
 		WorktreePath: "", // Planning uses workspace root
 	}
-	sessionOpts.ResumeSessionFile = planningCtx.ResumeSessionFile
-	if planningCtx.ResumeSessionFile != "" {
+	if len(planningCtx.PriorResumeInfo) > 0 {
+		sessionOpts.ResumeFromSessionID = planningCtx.PriorSessionID
+		sessionOpts.ResumeInfo = planningCtx.PriorResumeInfo
 		// Clear user prompt — revision feedback will be sent as a follow-up message
 		// after the session starts, preserving the model's conversation context.
 		sessionOpts.UserPrompt = ""
@@ -669,7 +665,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 
 	// Send revision feedback as a follow-up message when resuming a previous session.
 	// This triggers the model's turn while preserving the conversation history.
-	if planningCtx.ResumeSessionFile != "" && planningCtx.RevisionFeedback != "" {
+	if len(planningCtx.PriorResumeInfo) > 0 && planningCtx.RevisionFeedback != "" {
 		triggerMsg := fmt.Sprintf(
 			"The human requested changes to the plan:\n\n%s\n\nWrite your revised plan to %s.",
 			planningCtx.RevisionFeedback, draftPath,
@@ -718,9 +714,9 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		// Parse and validate the draft.
 		_, parseErrors := parser.ParseAndValidate(string(draftContent), planningCtx.Repos)
 		if !parseErrors.HasErrors() {
-			// Persist the native OMP session file so future resumes (request-changes, follow-up)
+			// Persist harness-specific resume data so future revisions or follow-ups
 			// can continue the conversation instead of starting fresh.
-			s.storeOmpSessionFile(ctx, planningCtx.SessionID, session)
+			s.storeResumeInfo(ctx, planningCtx.SessionID, session)
 			return string(draftContent), attempt, warnings, nil
 		}
 

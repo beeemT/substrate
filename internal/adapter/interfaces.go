@@ -93,9 +93,16 @@ type AgentSession interface {
 	// Returns ErrSteerNotSupported if the harness does not support mid-stream steering.
 	Steer(ctx context.Context, msg string) error
 
+	// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+	// The answer is delivered to the bridge subprocess via stdin.
+	SendAnswer(ctx context.Context, answer string) error
+
 	// Abort terminates the agent session gracefully.
 	// Returns an error if the session cannot be aborted.
 	Abort(ctx context.Context) error
+	// ResumeInfo returns harness-specific resume data to persist after session completion.
+	// Returns nil if the harness does not support or produce resume data.
+	ResumeInfo() map[string]string
 }
 
 // Adapter errors.
@@ -115,16 +122,22 @@ var (
 	// ErrSteerNotSupported is returned when Steer is called
 	// on a harness that doesn't support mid-stream steering.
 	ErrSteerNotSupported = error(steerNotSupported{})
+
+	// ErrSendAnswerNotSupported is returned when SendAnswer is called
+	// on a harness that doesn't support answering foreman questions.
+	ErrSendAnswerNotSupported = error(sendAnswerNotSupported{})
 )
 
 type (
-	browseNotSupported struct{}
-	watchNotSupported  struct{}
-	mutateNotSupported struct{}
-	steerNotSupported  struct{}
+	browseNotSupported     struct{}
+	watchNotSupported      struct{}
+	mutateNotSupported     struct{}
+	steerNotSupported      struct{}
+	sendAnswerNotSupported struct{}
 )
 
-func (browseNotSupported) Error() string { return "browse not supported by this adapter" }
-func (watchNotSupported) Error() string  { return "watch not supported by this adapter" }
-func (mutateNotSupported) Error() string { return "mutation not supported by this adapter" }
-func (steerNotSupported) Error() string { return "steer not supported by this harness" }
+func (browseNotSupported) Error() string     { return "browse not supported by this adapter" }
+func (watchNotSupported) Error() string      { return "watch not supported by this adapter" }
+func (mutateNotSupported) Error() string     { return "mutation not supported by this adapter" }
+func (steerNotSupported) Error() string      { return "steering not supported by this harness" }
+func (sendAnswerNotSupported) Error() string { return "send answer not supported by this harness" }

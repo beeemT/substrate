@@ -137,8 +137,8 @@ func buildArgs(opts adapter.SessionOpts, cfg config.CodexConfig) []string {
 	}
 
 	// Resume an existing thread when a thread ID is provided.
-	if opts.CodexThreadID != "" {
-		args = append(args, "resume", opts.CodexThreadID)
+	if threadID := opts.ResumeInfo["codex_thread_id"]; threadID != "" {
+		args = append(args, "resume", threadID)
 	}
 
 	return args
@@ -243,6 +243,10 @@ func (s *session) Steer(_ context.Context, _ string) error {
 	return adapter.ErrSteerNotSupported
 }
 
+func (s *session) SendAnswer(_ context.Context, _ string) error {
+	return adapter.ErrSendAnswerNotSupported
+}
+
 // Wait blocks until the session is aborted or a fatal error occurs.
 //
 // Note: unlike single-turn harnesses, Wait does NOT return when a turn
@@ -285,8 +289,8 @@ func (s *session) SendMessage(ctx context.Context, msg string) error {
 	// Build resume invocation.
 	workDir := s.getWorkDir()
 	resumeOpts := adapter.SessionOpts{
-		WorktreePath:  workDir,
-		CodexThreadID: threadID,
+		WorktreePath: workDir,
+		ResumeInfo:   map[string]string{"codex_thread_id": threadID},
 	}
 	args := buildArgs(resumeOpts, s.harnessConfig)
 	cmd := exec.CommandContext(ctx, s.binary, args...)
@@ -364,6 +368,17 @@ func (s *session) Abort(ctx context.Context) error {
 		}
 
 		return ctx.Err()
+	}
+}
+
+func (s *session) ResumeInfo() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.threadID == "" {
+		return nil
+	}
+	return map[string]string{
+		"codex_thread_id": s.threadID,
 	}
 }
 

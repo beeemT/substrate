@@ -13,7 +13,7 @@ Concrete adapter behavior as implemented under `internal/adapter/` and wired fro
 - `RepoLifecycleAdapter`: repository event handlers used for MR/PR lifecycle work after a worktree exists.
 - `AgentHarness`: execution backends for planning / implementation / review / foreman sessions. `StartSession` returns an `AgentSession` that supports streaming, messaging, and steering. Key session and capability contracts:
   - `Steer(ctx, msg) error` — interrupts active streaming to inject a steering prompt. Harnesses that lack this capability return `ErrSteerNotSupported` (defined in `internal/adapter/interfaces.go`).
-  - `SessionOpts.ResumeSessionFile` — when set, the harness resumes from an existing session file rather than creating a fresh session.
+  - `SessionOpts.ResumeFromSessionID` and `SessionOpts.ResumeInfo` — when set, the harness resumes from an existing session identifier and harness-specific resume metadata rather than creating a fresh session.
   - `HarnessCapabilities.SupportsNativeResume` — advertises whether the harness supports session file resume. Used by the orchestrator to decide between native resume and fresh-session follow-up.
   - `HarnessCapabilities.SupportedTools` — lists the tool names a harness exposes to the orchestrator.
 - `HarnessActionRunner`: executes short-lived control-plane actions (login, auth checks) via `RunAction(ctx, HarnessActionRequest)`. Used for provider login flows routed through the harness.
@@ -565,12 +565,12 @@ Beyond basic streaming and messaging, the OMP bridge (`bridge/omp-bridge.ts`) su
 
 **Resume**: OMP supports native session resume via `SessionManager.open(filePath)`. When the `SUBSTRATE_RESUME_SESSION_FILE` environment variable is set, the bridge opens the existing session instead of creating a new one. This enables follow-up on completed repos without losing conversation context. `HarnessCapabilities.SupportsNativeResume` is `true` for OMP.
 
-**Session metadata**: After session creation, the bridge emits a `session_meta` event containing `omp_session_id` and `omp_session_file`:
+**Session metadata**: Each `AgentSession` implementation returns its harness-specific resume data via `ResumeInfo() map[string]string`.
 
 ```json
-{"type":"session_meta","omp_session_id":"...","omp_session_file":"..."}
+{"type":"resume_info","resume_info":{"session_id":"...","thread_id":"..."}}
 ```
 
-These values are persisted on the `Task` row (`OmpSessionFile`, `OmpSessionID`) for later resume and follow-up. The orchestrator captures them via type assertion on the harness session after completion.
+The orchestrator persists this generically via `TaskService.UpdateResumeInfo()`, instead of storing harness-specific fields such as separate session file/id columns.
 
 **Retry events**: The OMP harness emits `retry_wait` (with a `message` payload) when the agent enters a retry wait state, and `retry_resumed` when it resumes from retry. These are surfaced through the standard `AgentEvent` channel alongside `started`, `text_delta`, `tool_start`, `tool_result`, `done`, `error`, `question`, and `foreman_proposed` events.

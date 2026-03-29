@@ -263,9 +263,9 @@ as omp-bridge, but without the async iterable yield path since answers aren't us
 
 1. Bridge emits `session_meta { session_id }` from the `system/init` SDK message.
 2. Go session captures `claudeSessionID` string (like `ompSessionID` on omp session).
-3. On a new `StartSession` with `opts.ResumeSessionID` set, Go passes it in the `init`
-   message as `resume_session_id`.
-4. Bridge passes `resume: resumeSessionId` to `query()` options.
+3. On a new `StartSession` with `opts.ResumeFromSessionID` set and `opts.ResumeInfo` populated, Go passes the resume data in the `init` message.
+
+4. Bridge passes the resume metadata to `query()` options.
 
 The SDK manages the session file location internally; no filesystem path needs to be
 persisted on the Go side — only the UUID.

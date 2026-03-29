@@ -362,24 +362,26 @@ func run() error { //nolint:funlen
 			bus, registry,
 		)
 	}
+	var foreman *orchestrator.Foreman
+	if harnesses.Foreman != nil {
+		foreman = orchestrator.NewForeman(
+			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus,
+		)
+	}
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
 		implSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
 			planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
 			reviewPipeline,
+			foreman, questionSvc,
+			reviewSvc,
 		)
 	}
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
 			harnesses.Resume, sessionSvc, planSvc, bus, registry,
-		)
-	}
-	var foreman *orchestrator.Foreman
-	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(
-			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus,
 		)
 	}
 	settingsData, err := settingsSvc.Snapshot(cfg)

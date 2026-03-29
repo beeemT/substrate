@@ -240,7 +240,8 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 		WorktreePath:      completedTask.WorktreePath,
 		SystemPrompt:      systemPrompt,
 		UserPrompt:        "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
-		ResumeSessionFile: completedTask.OmpSessionFile,
+		ResumeFromSessionID: completedTask.ID,
+		ResumeInfo:          completedTask.ResumeInfo,
 	}
 
 	harnessSession, err := r.harness.StartSession(ctx, opts)
@@ -330,9 +331,8 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		SystemPrompt: systemPrompt,
 		UserPrompt:   "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
 	}
-	if failedTask.OmpSessionFile != "" {
-		opts.ResumeSessionFile = failedTask.OmpSessionFile
-	}
+	opts.ResumeFromSessionID = failedTask.ID
+	opts.ResumeInfo = failedTask.ResumeInfo
 
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
@@ -344,8 +344,8 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-	// If resuming a native OMP session, deliver feedback as a follow-up message.
-	if failedTask.OmpSessionFile != "" {
+	// If resuming a harness-native session, deliver feedback as a follow-up message.
+	if len(failedTask.ResumeInfo) > 0 {
 		if sendErr := harnessSession.SendMessage(ctx, feedback); sendErr != nil {
 			slog.Warn("failed to send follow-up feedback to resumed session",
 				"error", sendErr,

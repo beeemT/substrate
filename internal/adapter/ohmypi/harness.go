@@ -75,8 +75,9 @@ func resolveReadyBridgeRuntime(cfg config.OhMyPiConfig) (bridge.BridgeRuntime, s
 
 // bridgeInitMsg is sent before any prompt to configure the session.
 type bridgeInitMsg struct {
-	Type         string `json:"type"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
+	Type            string `json:"type"`
+	SystemPrompt    string `json:"system_prompt,omitempty"`
+	AnswerTimeoutMs int64  `json:"answer_timeout_ms"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -128,8 +129,8 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 		"SUBSTRATE_WORKTREE_PATH="+workDir,
 		"SUBSTRATE_SESSION_LOG_PATH="+filepath.Join(sessionLogDir, opts.SessionID+".log"),
 	)
-	if opts.ResumeSessionFile != "" {
-		env = append(env, "SUBSTRATE_RESUME_SESSION_FILE="+opts.ResumeSessionFile)
+	if resumeFile := opts.ResumeInfo["omp_session_file"]; resumeFile != "" {
+		env = append(env, "SUBSTRATE_RESUME_SESSION_FILE="+resumeFile)
 	}
 	cmd.Env = env
 
@@ -184,18 +185,21 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 
 	bs.StartReaders()
 
-	// Send init message with system prompt (avoids exposing prompt in /proc/pid/environ).
-	if opts.SystemPrompt != "" {
-		initMsg := bridgeInitMsg{Type: "init", SystemPrompt: opts.SystemPrompt}
-		data, err := json.Marshal(initMsg)
-		if err != nil {
-			session.Abort(ctx) //nolint:errcheck // best-effort cleanup
-			return nil, fmt.Errorf("marshal init message: %w", err)
-		}
-		if err := session.bs.WriteRawMsg(data); err != nil {
-			session.Abort(ctx) //nolint:errcheck // best-effort cleanup
-			return nil, fmt.Errorf("send init message: %w", err)
-		}
+	// Always send an init message — it carries the system prompt and answer timeout.
+	// Using an explicit struct write avoids exposing config in /proc/pid/environ.
+	initMsg := bridgeInitMsg{
+		Type:            "init",
+		SystemPrompt:    opts.SystemPrompt,
+		AnswerTimeoutMs: opts.AnswerTimeoutMs,
+	}
+	data, err := json.Marshal(initMsg)
+	if err != nil {
+		session.Abort(ctx) //nolint:errcheck // best-effort cleanup
+		return nil, fmt.Errorf("marshal init message: %w", err)
+	}
+	if err := session.bs.WriteRawMsg(data); err != nil {
+		session.Abort(ctx) //nolint:errcheck // best-effort cleanup
+		return nil, fmt.Errorf("send init message: %w", err)
 	}
 
 	// Send initial prompt if provided (agent mode).

@@ -61,6 +61,18 @@ func (r *SessionRegistry) Steer(ctx context.Context, sessionID string, msg strin
 	return session.Steer(ctx, msg)
 }
 
+// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+// Returns ErrSessionNotRunning if the session is not registered.
+func (r *SessionRegistry) SendAnswer(ctx context.Context, sessionID string, answer string) error {
+	r.mu.RLock()
+	session, ok := r.sessions[sessionID]
+	r.mu.RUnlock()
+	if !ok {
+		return ErrSessionNotRunning
+	}
+	return session.SendAnswer(ctx, answer)
+}
+
 // IsRunning reports whether the given session ID is registered.
 func (r *SessionRegistry) IsRunning(sessionID string) bool {
 	r.mu.RLock()

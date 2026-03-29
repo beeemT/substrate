@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -28,8 +29,7 @@ type sessionRow struct {
 	CreatedAt       string  `db:"created_at"`
 	OwnerInstanceID *string `db:"owner_instance_id"`
 	UpdatedAt       string  `db:"updated_at"`
-	OmpSessionFile *string `db:"omp_session_file"`
-	OmpSessionID   *string `db:"omp_session_id"`
+	ResumeInfo *string `db:"resume_info"` // JSON-encoded map[string]string
 }
 
 type sessionHistoryRow struct {
@@ -125,8 +125,7 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 		OwnerInstanceID: r.OwnerInstanceID,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
-		OmpSessionFile:  derefStr(r.OmpSessionFile),
-		OmpSessionID:    derefStr(r.OmpSessionID),
+		ResumeInfo: parseResumeInfo(r.ResumeInfo),
 	}, nil
 }
 
@@ -149,8 +148,7 @@ func rowFromSession(s domain.Task) sessionRow {
 		OwnerInstanceID: s.OwnerInstanceID,
 		CreatedAt:       formatTime(s.CreatedAt),
 		UpdatedAt:       formatTime(s.UpdatedAt),
-		OmpSessionFile:  strPtr(s.OmpSessionFile),
-		OmpSessionID:    strPtr(s.OmpSessionID),
+		ResumeInfo: marshalResumeInfo(s.ResumeInfo),
 	}
 }
 
@@ -314,11 +312,11 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 		`INSERT INTO agent_sessions
 		 (id, work_item_id, sub_plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
 		  pid, status, exit_code, started_at, shutdown_at, completed_at, created_at,
-		  owner_instance_id, updated_at, omp_session_file, omp_session_id)
+		  owner_instance_id, updated_at, resume_info)
 		 VALUES
 		 (:id, :work_item_id, :sub_plan_id, :workspace_id, :phase, :repository_name, :harness_name, :worktree_path,
 		  :pid, :status, :exit_code, :started_at, :shutdown_at, :completed_at, :created_at,
-		  :owner_instance_id, :updated_at, :omp_session_file, :omp_session_id)`, row)
+		  :owner_instance_id, :updated_at, :resume_info)`, row)
 	if err != nil {
 		return fmt.Errorf("create session %s: %w", s.ID, err)
 	}
@@ -333,7 +331,7 @@ func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
 		 phase = :phase, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
 		 pid = :pid, status = :status, exit_code = :exit_code, started_at = :started_at,
 		 shutdown_at = :shutdown_at, completed_at = :completed_at, owner_instance_id = :owner_instance_id,
-		 updated_at = :updated_at, omp_session_file = :omp_session_file, omp_session_id = :omp_session_id WHERE id = :id`, row)
+		 updated_at = :updated_at, resume_info = :resume_info WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update session %s: %w", s.ID, err)
 	}
@@ -362,4 +360,32 @@ func (r TaskRepo) Delete(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+
+// parseResumeInfo decodes a nullable JSON string into a map.
+// Returns nil if the column is NULL or the JSON is invalid.
+func parseResumeInfo(s *string) map[string]string {
+	if s == nil || *s == "" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(*s), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// marshalResumeInfo encodes a map to a nullable JSON string.
+// Returns nil when the map is empty or nil.
+func marshalResumeInfo(m map[string]string) *string {
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	s := string(b)
+	return &s
 }

@@ -33,7 +33,9 @@ func (s *doneSession) Wait(_ context.Context) error                  { return ni
 func (s *doneSession) Events() <-chan adapter.AgentEvent             { return s.events }
 func (s *doneSession) SendMessage(_ context.Context, _ string) error { return nil }
 func (s *doneSession) Steer(_ context.Context, _ string) error       { return nil }
+func (s *doneSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *doneSession) Abort(_ context.Context) error                 { return nil }
+func (s *doneSession) ResumeInfo() map[string]string                { return nil }
 
 type doneHarness struct{}
 

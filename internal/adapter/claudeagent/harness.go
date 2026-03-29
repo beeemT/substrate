@@ -86,6 +86,7 @@ type bridgeInitMsg struct {
 	Model           string  `json:"model,omitempty"`
 	MaxTurns        int     `json:"max_turns,omitempty"`
 	MaxBudgetUSD    float64 `json:"max_budget_usd,omitempty"`
+	AnswerTimeoutMs int64   `json:"answer_timeout_ms"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -192,11 +193,12 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		Type:            "init",
 		Mode:            string(opts.Mode),
 		SystemPrompt:    opts.SystemPrompt,
-		ResumeSessionID: opts.ResumeSessionID,
+		ResumeSessionID: opts.ResumeInfo["claude_session_id"],
 		PermissionMode:  h.cfg.PermissionMode,
 		Model:           h.cfg.Model,
 		MaxTurns:        h.cfg.MaxTurns,
 		MaxBudgetUSD:    h.cfg.MaxBudgetUSD,
+		AnswerTimeoutMs: opts.AnswerTimeoutMs,
 	}
 	data, err := json.Marshal(initMsg)
 	if err != nil {

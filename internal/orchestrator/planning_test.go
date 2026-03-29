@@ -86,6 +86,11 @@ func (s *planningHarnessSession) Steer(context.Context, string) error {
 	return adapter.ErrSteerNotSupported
 }
 
+func (s *planningHarnessSession) SendAnswer(context.Context, string) error {
+	return adapter.ErrSendAnswerNotSupported
+}
+func (s *planningHarnessSession) ResumeInfo() map[string]string { return nil }
+
 func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
@@ -166,6 +171,11 @@ func (s *scriptedPlanningSession) Abort(context.Context) error { return nil }
 func (s *scriptedPlanningSession) Steer(context.Context, string) error {
 	return adapter.ErrSteerNotSupported
 }
+
+func (s *scriptedPlanningSession) SendAnswer(context.Context, string) error {
+	return adapter.ErrSendAnswerNotSupported
+}
+func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return nil }
 
 func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -368,7 +378,7 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 		SessionID:         "plan-rev-1",
 		SessionDraftPath:  draftPath,
 		RevisionFeedback:  feedback,
-		ResumeSessionFile: resumeFile,
+		PriorResumeInfo:   map[string]string{"omp_session_file": resumeFile},
 	}, "workspace-1")
 	if planErr != nil {
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
@@ -376,12 +386,12 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 
 	// UserPrompt must be empty when resuming natively.
 	if harness.lastOpts.UserPrompt != "" {
-		t.Errorf("UserPrompt = %q, want empty when ResumeSessionFile is set", harness.lastOpts.UserPrompt)
+		t.Errorf("UserPrompt = %q, want empty when PriorResumeInfo is set", harness.lastOpts.UserPrompt)
 	}
 
-	// ResumeSessionFile must be forwarded to the harness.
-	if harness.lastOpts.ResumeSessionFile != resumeFile {
-		t.Errorf("ResumeSessionFile = %q, want %q", harness.lastOpts.ResumeSessionFile, resumeFile)
+	// PriorResumeInfo must be forwarded to the harness via ResumeInfo.
+	if harness.lastOpts.ResumeInfo["omp_session_file"] != resumeFile {
+		t.Errorf("ResumeInfo[omp_session_file] = %q, want %q", harness.lastOpts.ResumeInfo["omp_session_file"], resumeFile)
 	}
 
 	// Feedback must be sent as a follow-up message.
@@ -393,16 +403,14 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 	}
 }
 
-// planningHarnessSessionWithOmpFile wraps planningHarnessSession and exposes OMP metadata,
-// enabling tests to verify that storeOmpSessionFile is called after a successful plan.
-type planningHarnessSessionWithOmpFile struct {
+// planningHarnessSessionWithResumeInfo wraps planningHarnessSession and returns
+// OMP-specific resume data via the generic ResumeInfo() method.
+type planningHarnessSessionWithResumeInfo struct {
 	*planningHarnessSession
-	ompFile string
-	ompID   string
+	resumeInfo map[string]string
 }
 
-func (s *planningHarnessSessionWithOmpFile) OmpSessionFile() string { return s.ompFile }
-func (s *planningHarnessSessionWithOmpFile) OmpSessionID() string   { return s.ompID }
+func (s *planningHarnessSessionWithResumeInfo) ResumeInfo() map[string]string { return s.resumeInfo }
 
 func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -449,10 +457,12 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
 			close(events)
 			base := &planningHarnessSession{id: opts.SessionID, events: events}
-			return &planningHarnessSessionWithOmpFile{
+			return &planningHarnessSessionWithResumeInfo{
 				planningHarnessSession: base,
-				ompFile:                wantOmpFile,
-				ompID:                  wantOmpID,
+				resumeInfo: map[string]string{
+					"omp_session_file": wantOmpFile,
+					"omp_session_id":   wantOmpID,
+				},
 			}, nil
 		},
 	}
@@ -472,16 +482,16 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
 
-	// Verify that the OMP session file was persisted on the task record.
+	// Verify that resume info was persisted on the task record.
 	updated, err := sessionRepo.Get(context.Background(), "plan-omp-1")
 	if err != nil {
 		t.Fatalf("Get session: %v", err)
 	}
-	if updated.OmpSessionFile != wantOmpFile {
-		t.Errorf("OmpSessionFile = %q, want %q", updated.OmpSessionFile, wantOmpFile)
+	if updated.ResumeInfo["omp_session_file"] != wantOmpFile {
+		t.Errorf("ResumeInfo[omp_session_file] = %q, want %q", updated.ResumeInfo["omp_session_file"], wantOmpFile)
 	}
-	if updated.OmpSessionID != wantOmpID {
-		t.Errorf("OmpSessionID = %q, want %q", updated.OmpSessionID, wantOmpID)
+	if updated.ResumeInfo["omp_session_id"] != wantOmpID {
+		t.Errorf("ResumeInfo[omp_session_id] = %q, want %q", updated.ResumeInfo["omp_session_id"], wantOmpID)
 	}
 }
 

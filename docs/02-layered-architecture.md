@@ -245,6 +245,7 @@ implSvc := orchestrator.NewImplementationService(
 	planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
 	reviewPipeline,
 )
+	reviewSvc,
 ```
 
 Cross-cutting reality today:
@@ -258,7 +259,7 @@ Cross-cutting reality today:
 The canonical base schema is `migrations/001_initial.sql`. Subsequent migrations extend it:
 
 - `002_agent_sessions_canonical.sql` — rewrites `agent_sessions` to add `work_item_id` and `phase` columns, adds indexes
-- `003_omp_session_meta.sql` — adds `omp_session_file` and `omp_session_id` columns to `agent_sessions`
+- `003_resume_info.sql` — adds generic resume metadata storage to `agent_sessions` via a `resume_info` map column
 - `004_sub_plan_planning_round.sql` — adds `planning_round` column to `sub_plans`
 - `005_review_artifacts.sql` — adds `github_pull_requests`, `gitlab_merge_requests`, and `session_review_artifacts` tables with backfill from `system_events`
 
@@ -335,8 +336,8 @@ CREATE TABLE agent_sessions (
     completed_at      TEXT,
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     owner_instance_id TEXT REFERENCES substrate_instances(id) ON DELETE SET NULL,
-    omp_session_file  TEXT,
-    omp_session_id    TEXT,
+    resume_info       TEXT,
+
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

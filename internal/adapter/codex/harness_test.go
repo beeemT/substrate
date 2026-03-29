@@ -50,8 +50,8 @@ func TestBuildArgs_NewSession(t *testing.T) {
 func TestBuildArgs_Resume(t *testing.T) {
 	cfg := config.CodexConfig{}
 	opts := adapter.SessionOpts{
-		WorktreePath:  "/tmp/work",
-		CodexThreadID: "tid-abc123",
+		WorktreePath: "/tmp/work",
+		ResumeInfo:   map[string]string{"codex_thread_id": "tid-abc123"},
 	}
 	args := buildArgs(opts, cfg)
 

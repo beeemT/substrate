@@ -35,6 +35,9 @@ type ImplementationService struct {
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	reviewPipeline *ReviewPipeline
+	foreman        *Foreman
+	questionSvc    *service.QuestionService
+	reviewSvc      *service.ReviewService
 	sessTimeout    time.Duration
 }
 
@@ -50,7 +53,6 @@ func DefaultImplementationConfig() *ImplementationConfig {
 	}
 }
 
-// NewImplementationService creates a new ImplementationService.
 func NewImplementationService(
 	cfg *config.Config,
 	harness adapter.AgentHarness,
@@ -62,6 +64,9 @@ func NewImplementationService(
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	reviewPipeline *ReviewPipeline,
+	foreman *Foreman,
+	questionSvc *service.QuestionService,
+	reviewSvc *service.ReviewService,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
 	return &ImplementationService{
@@ -75,6 +80,9 @@ func NewImplementationService(
 		workspaceSvc:   workspaceSvc,
 		registry:       registry,
 		reviewPipeline: reviewPipeline,
+		foreman:        foreman,
+		questionSvc:    questionSvc,
+		reviewSvc:      reviewSvc,
 		sessTimeout:    implCfg.SessionTimeout,
 	}
 }
@@ -378,17 +386,26 @@ func (s *ImplementationService) executeSubPlan(
 	// Update sub-plan status using the full struct
 	s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanInProgress)
 
-	// Two-stage retry model: the sub-plan lifecycle is implement → review →
-	// (reimplement → review)*. When retrying, the last session's phase
-	// determines the current stage and thus what to retry.
-	//
-	// 	Last session phase	Meaning				Retry action
-	// 	(none)			First run				Full impl + review
-	// 	implementation		Impl or reimpl failed			Run impl
-	// 	review			Review agent failed			Retry review only
+	// Look up pre-created worktree path (created by prepareWorktrees before fan-out).
+	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
+	if !ok {
+		// Defensive: should not happen if prepareWorktrees succeeded.
+		result.Status = domain.AgentSessionFailed
+		result.Summary = fmt.Sprintf("worktree for repository %s not found", subPlan.RepositoryName)
+		result.CompletedAt = ptrTime(time.Now())
+		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("%s", result.Summary))
+		return result, &ImplementationWarning{
+			Type:     "worktree_not_found",
+			Message:  result.Summary,
+			RepoName: subPlan.RepositoryName,
+		}
+	}
+	result.WorktreePath = worktreePath
+
+	// Crash recovery: if the most recent session for this sub-plan is a review session,
+	// the review agent crashed — skip re-implementation and retry the review directly.
 	if s.reviewPipeline != nil {
 		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.TaskPhaseReview {
-			// Last stage was review → retry review with the existing impl session.
 			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 			if prevImpl == nil {
 				slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
@@ -410,162 +427,38 @@ func (s *ImplementationService) executeSubPlan(
 					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
 					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 				} else if outcome.Escalated {
-					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
+					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s \u2014 requires human intervention", subPlan.RepositoryName))
 					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 				}
 				return result, nil
 			}
 		}
 	}
-	// Look up pre-created worktree path (created by prepareWorktrees before fan-out).
-	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
-	if !ok {
-		// Defensive: should not happen if prepareWorktrees succeeded.
-		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("worktree for repository %s not found", subPlan.RepositoryName)
-		result.CompletedAt = ptrTime(time.Now())
-		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("%s", result.Summary))
-		return result, &ImplementationWarning{
-			Type:     "worktree_not_found",
-			Message:  result.Summary,
-			RepoName: subPlan.RepositoryName,
-		}
-	}
-	result.WorktreePath = worktreePath
 
-	// Create agent session record
-	sessionID := domain.NewID()
-	session := domain.Task{
-		ID:             sessionID,
-		WorkItemID:     workItem.ID,
-		WorkspaceID:    workspace.ID,
-		Phase:          domain.TaskPhaseImplementation,
-		SubPlanID:      subPlan.ID,
-		RepositoryName: subPlan.RepositoryName,
-		WorktreePath:   worktreePath,
-		HarnessName:    s.harness.Name(),
-		Status:         domain.AgentSessionPending,
-	}
-	if err := s.sessionSvc.Create(ctx, session); err != nil {
-		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("failed to create session record: %v", err)
-		result.CompletedAt = ptrTime(time.Now())
-		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
-		return result, &ImplementationWarning{
-			Type:      "session_create_failed",
-			Message:   result.Summary,
-			RepoName:  subPlan.RepositoryName,
-			SessionID: sessionID,
-		}
-	}
-	result.SessionID = sessionID
+	// Load any outstanding review critique context (empty for first-time implementations).
+	critiqueFeedback := s.loadCritiqueFeedback(ctx, subPlan.ID)
+	prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 
-	// Transition the session to running before launching the harness so no external
-	// session can exist without a durable running row.
-	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
-		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("failed to transition session to running: %v", err)
-		result.CompletedAt = ptrTime(time.Now())
-		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
-		return result, &ImplementationWarning{
-			Type:      "session_start_failed",
-			Message:   result.Summary,
-			RepoName:  subPlan.RepositoryName,
-			SessionID: sessionID,
-		}
-	}
-	now := time.Now()
-	session.Status = domain.AgentSessionRunning
-	session.StartedAt = &now
-	session.UpdatedAt = now
-
-	// Emit AgentSessionStarted only after the durable running transition succeeds.
-	if err := s.emitSessionStarted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit session started event", "error", err)
-	}
-
-	// Build session options
-	sessionOpts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
-
-	// Start agent session
-	harnessSession, err := s.harness.StartSession(ctx, sessionOpts)
+	// Run implementation (fresh or with critique context from prior review).
+	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, branch, worktreePath, critiqueFeedback, prevImpl)
 	if err != nil {
 		result.Status = domain.AgentSessionFailed
-		result.Summary = fmt.Sprintf("failed to start agent: %v", err)
+		result.Summary = err.Error()
 		result.CompletedAt = ptrTime(time.Now())
-		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail session after harness start error", "error", failErr, "session_id", sessionID)
-		}
 		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), err)
-		return result, &ImplementationWarning{
-			Type:      "harness_start_failed",
-			Message:   result.Summary,
-			RepoName:  subPlan.RepositoryName,
-			SessionID: sessionID,
-		}
-	}
-
-	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
-	defer sessionCancel()
-
-	// Register session for steering before forwarding events.
-	if s.registry != nil {
-		s.registry.Register(sessionID, harnessSession)
-		defer s.registry.Deregister(sessionID)
-	}
-
-	// Forward events to bus while session runs
-	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID)
-
-	// Wait for session completion
-	waitErr := harnessSession.Wait(sessionCtx)
-
-	result.CompletedAt = ptrTime(time.Now())
-
-	if waitErr != nil {
-		result.Status = domain.AgentSessionFailed
-		result.Summary = waitErr.Error()
-		result.ExitCode = ptrInt(1)
-		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
-		}
-		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), waitErr)
 		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
-		if err := s.emitSessionFailed(ctx, &session, result.Summary, workspace.ID); err != nil {
-			slog.Warn("failed to emit session failed event", "error", err)
-		}
 		return result, nil
 	}
 
-	// Implementation succeeded.
+	result.SessionID = implSession.ID
 	result.Status = domain.AgentSessionCompleted
 	result.Summary = "Session completed successfully"
-	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-		slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
-	}
-
-	// Store native OMP session file for follow-up resumes.
-	if omp, ok := harnessSession.(interface {
-		OmpSessionFile() string
-		OmpSessionID() string
-	}); ok {
-		if file := omp.OmpSessionFile(); file != "" {
-			if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
-				slog.Warn("failed to store omp session file", "error", err, "session_id", sessionID)
-			}
-		}
-	}
-
-	if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit session completed event", "error", err)
-	}
+	result.CompletedAt = ptrTime(time.Now())
 
 	// Run review loop if pipeline is configured.
 	if s.reviewPipeline != nil {
-		outcome := s.reviewLoop(ctx, session, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
+		outcome := s.reviewLoop(ctx, implSession, subPlan, workspace, plan, workItem, branch, worktreePaths, state)
 		result.Outcome = outcome
-
 		if outcome.Passed {
 			state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
 			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
@@ -573,7 +466,7 @@ func (s *ImplementationService) executeSubPlan(
 			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
 			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		} else if outcome.Escalated {
-			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
+			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s \u2014 requires human intervention", subPlan.RepositoryName))
 			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		}
 		return result, nil
@@ -646,7 +539,14 @@ func (s *ImplementationService) reviewLoop(
 
 		// Auto-reimpl: resume the previous session with critique feedback.
 		feedback := buildCritiqueFeedback(reviewResult.Critiques)
-		newSession, err := s.reimplementSubPlan(ctx, currentSession, subPlan, workspace, plan, workItem, branch, worktreePaths, state, feedback)
+		worktreePath, ok := worktreePaths[subPlan.RepositoryName]
+		if !ok {
+			slog.Warn("worktree path not found for auto-reimpl",
+				"sub_plan_id", subPlan.ID, "repo", subPlan.RepositoryName)
+			outcome.Failed = true
+			return outcome
+		}
+		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, branch, worktreePath, feedback, &currentSession)
 		if err != nil {
 			slog.Warn("reimplementation failed", "error", err,
 				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
@@ -657,36 +557,23 @@ func (s *ImplementationService) reviewLoop(
 	}
 }
 
-// reimplementSubPlan creates a new implementation session to address review critiques.
-// When the previous session has an OMP session file, the new session resumes from it
-// so the model retains its full conversation context. The critique feedback is sent as
-// a follow-up message rather than being baked into the system prompt.
-// When no OMP session file is available (non-OMP harnesses), falls back to a fresh
-// session with critiques appended to the system prompt.
-func (s *ImplementationService) reimplementSubPlan(
+// runImplementation creates and runs a new agent session for a sub-plan.
+// It handles both fresh implementations and re-implementations with review
+// critique context. When prevSession is non-nil and has ResumeInfo, the harness
+// is asked to resume the previous conversation; critique feedback is then sent
+// as a follow-up message to preserve conversation context. When prevSession is
+// nil or has no ResumeInfo, critique feedback is appended to the system prompt.
+func (s *ImplementationService) runImplementation(
 	ctx context.Context,
-	prevSession domain.Task,
 	subPlan domain.TaskPlan,
 	workspace *domain.Workspace,
 	plan *domain.Plan,
 	workItem *domain.Session,
 	branch string,
-	worktreePaths map[string]string,
-	state *ExecutionState,
+	worktreePath string,
 	critiqueFeedback string,
+	prevSession *domain.Task,
 ) (domain.Task, error) {
-	worktreePath, ok := worktreePaths[subPlan.RepositoryName]
-	if !ok {
-		return domain.Task{}, fmt.Errorf("worktree for repository %s not found", subPlan.RepositoryName)
-	}
-
-	// Resolve the previous session's OMP file for resume. We need to read the
-	// stored record because the in-memory Task may not have it (set after Wait).
-	var resumeFile string
-	if stored, err := s.sessionSvc.Get(ctx, prevSession.ID); err == nil {
-		resumeFile = stored.OmpSessionFile
-	}
-
 	sessionID := domain.NewID()
 	session := domain.Task{
 		ID:             sessionID,
@@ -700,11 +587,11 @@ func (s *ImplementationService) reimplementSubPlan(
 		Status:         domain.AgentSessionPending,
 	}
 	if err := s.sessionSvc.Create(ctx, session); err != nil {
-		return domain.Task{}, fmt.Errorf("create reimpl session: %w", err)
+		return domain.Task{}, fmt.Errorf("create session: %w", err)
 	}
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
 		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		return domain.Task{}, fmt.Errorf("start reimpl session: %w", err)
+		return domain.Task{}, fmt.Errorf("start session: %w", err)
 	}
 	now := time.Now()
 	session.Status = domain.AgentSessionRunning
@@ -712,39 +599,41 @@ func (s *ImplementationService) reimplementSubPlan(
 	session.UpdatedAt = now
 
 	if err := s.emitSessionStarted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit reimpl session started event", "error", err)
+		slog.Warn("failed to emit session started event", "error", err)
 	}
 
-	// Build session options. When we have an OMP session file, set ResumeSessionFile
-	// so the bridge resumes the previous conversation instead of starting fresh.
 	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
-	if resumeFile != "" {
-		opts.ResumeSessionFile = resumeFile
-		// Clear user prompt — the critique feedback will be sent as a follow-up message
-		// after the session starts, preserving the model's conversation context.
-		opts.UserPrompt = ""
+
+	// Decide how to deliver critique feedback.
+	// When resuming a prior session (prevSession has ResumeInfo), send critique
+	// as a follow-up message after the harness starts so the model sees it in
+	// conversation context. When not resuming, bake critique into the system prompt.
+	hasResume := prevSession != nil && len(prevSession.ResumeInfo) > 0
+	if hasResume {
+		opts.ResumeFromSessionID = prevSession.ID
+		opts.ResumeInfo = prevSession.ResumeInfo
+		opts.UserPrompt = "" // harness resumes; no new prompt turn needed
 	} else if critiqueFeedback != "" {
-		// Fallback for non-OMP harnesses: bake critique into the system prompt.
 		opts.SystemPrompt += "\n\n" + critiqueFeedback
 	}
 
 	harnessSession, err := s.harness.StartSession(ctx, opts)
 	if err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail reimpl session after harness start error", "error", failErr)
+			slog.Warn("failed to fail session after harness start error", "error", failErr,
+				"session_id", sessionID)
 		}
-		return domain.Task{}, fmt.Errorf("start reimpl agent: %w", err)
+		return domain.Task{}, fmt.Errorf("start agent: %w", err)
 	}
 
-	// Send critique feedback as a follow-up message when resuming a previous session.
+	// Send critique feedback as a follow-up message when resuming a prior session.
 	// This preserves the model's conversation history — it knows what it implemented
 	// and can see the critique in context.
-	if resumeFile != "" && critiqueFeedback != "" {
+	if hasResume && critiqueFeedback != "" {
 		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
 			slog.Warn("failed to send critique feedback to resumed session", "error", err,
 				"session_id", sessionID)
-			// Non-fatal: session may still work without the critique prompt,
-			// but the model won't know what to fix.
+			// Non-fatal: session continues without the explicit critique prompt.
 		}
 	}
 
@@ -756,38 +645,33 @@ func (s *ImplementationService) reimplementSubPlan(
 		defer s.registry.Deregister(sessionID)
 	}
 
-	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID)
+	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID, sessionID)
 
 	waitErr := harnessSession.Wait(sessionCtx)
 
 	if waitErr != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail reimpl session", "error", failErr)
+			slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
 		}
 		if err := s.emitSessionFailed(ctx, &session, waitErr.Error(), workspace.ID); err != nil {
-			slog.Warn("failed to emit reimpl session failed event", "error", err)
+			slog.Warn("failed to emit session failed event", "error", err)
 		}
-		return domain.Task{}, fmt.Errorf("reimpl session failed: %w", waitErr)
+		return domain.Task{}, fmt.Errorf("agent session failed: %w", waitErr)
 	}
 
 	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-		slog.Warn("failed to complete reimpl session", "error", completeErr)
+		slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
 	}
 
-	// Store native OMP session file for follow-up resumes.
-	if omp, ok := harnessSession.(interface {
-		OmpSessionFile() string
-		OmpSessionID() string
-	}); ok {
-		if file := omp.OmpSessionFile(); file != "" {
-			if err := s.sessionSvc.UpdateOmpSessionFile(ctx, sessionID, file, omp.OmpSessionID()); err != nil {
-				slog.Warn("failed to store omp session file for reimpl", "error", err)
-			}
+	// Persist harness-specific resume data generically — no harness-specific knowledge here.
+	if info := harnessSession.ResumeInfo(); len(info) > 0 {
+		if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
+			slog.Warn("failed to store resume info", "error", err, "session_id", sessionID)
 		}
 	}
 
 	if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit reimpl session completed event", "error", err)
+		slog.Warn("failed to emit session completed event", "error", err)
 	}
 
 	return session, nil
@@ -817,6 +701,47 @@ func buildCritiqueFeedback(critiques []domain.Critique) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// loadCritiqueFeedback looks up outstanding review critiques for a sub-plan
+// and formats them for injection into the next implementation session.
+// Returns "" when no reviewSvc is configured, when no prior implementation
+// session exists, or when no review cycle with critiques is found.
+func (s *ImplementationService) loadCritiqueFeedback(ctx context.Context, subPlanID string) string {
+	if s.reviewSvc == nil {
+		return ""
+	}
+	prev := s.latestCompletedImplSession(ctx, subPlanID)
+	if prev == nil {
+		return ""
+	}
+	cycles, err := s.reviewSvc.ListCyclesBySessionID(ctx, prev.ID)
+	if err != nil {
+		slog.Warn("failed to list review cycles for critique lookup",
+			"error", err, "sub_plan_id", subPlanID)
+		return ""
+	}
+	// Find the latest cycle (highest CycleNumber) with critiques_found or reimplementing status.
+	var latest *domain.ReviewCycle
+	for i := range cycles {
+		c := &cycles[i]
+		if c.Status != domain.ReviewCycleCritiquesFound && c.Status != domain.ReviewCycleReimplementing {
+			continue
+		}
+		if latest == nil || c.CycleNumber > latest.CycleNumber {
+			latest = c
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	critiques, err := s.reviewSvc.ListCritiquesByCycleID(ctx, latest.ID)
+	if err != nil {
+		slog.Warn("failed to list critiques for review cycle",
+			"error", err, "cycle_id", latest.ID)
+		return ""
+	}
+	return buildCritiqueFeedback(critiques)
 }
 
 // ensureWorktree creates a worktree if it doesn't exist, or returns the existing one.
@@ -1011,7 +936,21 @@ func (s *ImplementationService) buildSessionOpts(
 		UserPrompt:           "Begin implementing the sub-plan. Follow the instructions and validate your changes.",
 		CommitConfig:         commitConfig,
 		AllowPush:            false, // Push only after review passes
+		AnswerTimeoutMs:      s.foremanAnswerTimeoutMs(),
 	}
+}
+
+// foremanAnswerTimeoutMs returns the configured foreman question timeout in
+// milliseconds for the bridge's ask_foreman answer wait. Returns 0 when no
+// timeout is configured (0 = wait indefinitely).
+func (s *ImplementationService) foremanAnswerTimeoutMs() int64 {
+	if s.cfg == nil || s.cfg.Foreman.QuestionTimeout == "" || s.cfg.Foreman.QuestionTimeout == "0" {
+		return 0
+	}
+	if d, err := time.ParseDuration(s.cfg.Foreman.QuestionTimeout); err == nil && d > 0 {
+		return d.Milliseconds()
+	}
+	return 0
 }
 
 // buildSystemPrompt builds the system prompt for an agent session.
@@ -1054,7 +993,10 @@ func (s *ImplementationService) buildSystemPrompt(
 }
 
 // forwardEvents forwards agent events to the event bus.
-func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, workspaceID string) {
+// When a "question" event is received and a foreman is available,
+// it routes the question to the foreman and delivers the answer back
+// to the originating agent session.
+func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, workspaceID, sessionID string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1063,6 +1005,13 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			if !ok {
 				return
 			}
+
+			// Route question events to the foreman when available.
+			if evt.Type == "question" && s.foreman != nil {
+				s.routeQuestionToForeman(ctx, evt, sessionID)
+				continue
+			}
+
 			// Convert agent event to system event and publish to bus
 			sysEvent := domain.SystemEvent{
 				ID:          domain.NewID(),
@@ -1076,6 +1025,86 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			}
 		}
 	}
+}
+
+// routeQuestionToForeman persists a question, submits it to the foreman,
+// and delivers the answer back to the originating agent session via SendAnswer.
+func (s *ImplementationService) routeQuestionToForeman(ctx context.Context, evt adapter.AgentEvent, sessionID string) {
+	questionText := evt.Payload
+	questionCtx := ""
+	if evt.Metadata != nil {
+		if c, ok := evt.Metadata["context"].(string); ok {
+			questionCtx = c
+		}
+	}
+
+	q := domain.Question{
+		ID:             domain.NewID(),
+		AgentSessionID: sessionID,
+		Content:        questionText,
+		Context:        questionCtx,
+		Status:         domain.QuestionPending,
+	}
+
+	// Persist the question.
+	if err := s.questionSvc.Create(ctx, q); err != nil {
+		slog.Error("failed to persist question for foreman", "error", err, "session_id", sessionID)
+		return
+	}
+
+	// Transition the session to waiting_for_answer so the TUI surfaces the action-required overlay.
+	if err := s.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
+		slog.Warn("failed to transition session to waiting_for_answer", "error", err, "session_id", sessionID)
+	}
+
+	// Also publish the canonical event so the TUI can display the question.
+	if err := s.eventBus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentQuestionRaised),
+		WorkspaceID: "",
+		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "session_id": sessionID, "question": questionText}),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		slog.Warn("failed to publish question raised event", "error", err)
+	}
+
+	// Submit to the foreman and wait for the answer in a goroutine.
+	// This must not block forwardEvents — other events keep flowing.
+	answerCh := s.foreman.Ask(ctx, q)
+	go func() {
+		select {
+		case answer, ok := <-answerCh:
+			if !ok || answer == "" {
+				slog.Warn("foreman answer channel closed without answer", "question_id", q.ID)
+				return
+			}
+			// Deliver the answer back to the agent session via stdin.
+			if s.registry != nil {
+				if err := s.registry.SendAnswer(ctx, sessionID, answer); err != nil {
+					slog.Error("failed to send foreman answer to agent session",
+						"error", err, "question_id", q.ID, "session_id", sessionID)
+					return
+				}
+			}
+			// Resume the session from waiting_for_answer so the TUI clears the action-required state.
+			if err := s.sessionSvc.ResumeFromAnswer(ctx, sessionID); err != nil {
+				slog.Warn("failed to resume session from waiting_for_answer",
+					"error", err, "session_id", sessionID)
+			}
+			// Publish the canonical answered event.
+			if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+				ID:          domain.NewID(),
+				EventType:   string(domain.EventAgentQuestionAnswered),
+				WorkspaceID: "",
+				Payload:     marshalJSONOrEmpty("agent_question.answered", map[string]string{"id": q.ID, "session_id": sessionID}),
+				CreatedAt:   time.Now(),
+			}); pubErr != nil {
+				slog.Warn("failed to publish question answered event", "error", pubErr)
+			}
+		case <-ctx.Done():
+			slog.Warn("context cancelled while waiting for foreman answer", "question_id", q.ID)
+		}
+	}()
 }
 
 // discoverRepoPaths discovers repo paths in the workspace.

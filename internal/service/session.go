@@ -288,16 +288,16 @@ func (s *TaskService) FollowUpRestart(ctx context.Context, id string) error {
 	})
 }
 
-// UpdateOmpSessionFile stores the native OMP session file path and ID on the task record.
-func (s *TaskService) UpdateOmpSessionFile(ctx context.Context, id, file, ompID string) error {
+// UpdateResumeInfo stores harness-specific resume data on the task record.
+// The info map is harness-defined; callers must not interpret individual keys.
+func (s *TaskService) UpdateResumeInfo(ctx context.Context, id string, info map[string]string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		task, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		task.OmpSessionFile = file
-		task.OmpSessionID = ompID
+		task.ResumeInfo = info
 		task.UpdatedAt = time.Now()
 
 		return res.Tasks.Update(ctx, task)

@@ -19,19 +19,6 @@ type ohMyPiSession struct {
 
 func (s *ohMyPiSession) ID() string { return s.bs.ID }
 
-// OmpSessionFile returns the OMP native session file path captured from session_meta.
-func (s *ohMyPiSession) OmpSessionFile() string {
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-	return s.ompSessionFile
-}
-
-// OmpSessionID returns the OMP native session ID captured from session_meta.
-func (s *ohMyPiSession) OmpSessionID() string {
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-	return s.ompSessionID
-}
 
 func (s *ohMyPiSession) Wait(ctx context.Context) error { return s.bs.Wait(ctx) }
 func (s *ohMyPiSession) Events() <-chan adapter.AgentEvent { return s.bs.EventsChan() }
@@ -42,6 +29,18 @@ func (s *ohMyPiSession) Steer(ctx context.Context, msg string) error { return s.
 func (s *ohMyPiSession) Abort(ctx context.Context) error             { return s.bs.Abort(ctx) }
 func (s *ohMyPiSession) SendAnswer(ctx context.Context, answer string) error {
 	return s.bs.SendAnswer(ctx, answer)
+}
+
+func (s *ohMyPiSession) ResumeInfo() map[string]string {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.ompSessionFile == "" {
+		return nil
+	}
+	return map[string]string{
+		"omp_session_file": s.ompSessionFile,
+		"omp_session_id":   s.ompSessionID,
+	}
 }
 
 // sessionMetaCallback is set as bs.ParseSessionMeta. It parses the session_meta

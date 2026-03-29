@@ -231,8 +231,12 @@ func TestSessionMetaCapture(t *testing.T) {
 
 	bs.ParseSessionMeta([]byte(`{"type":"session_meta","session_id":"abc-123"}`))
 
-	if got := s.ClaudeSessionID(); got != "abc-123" {
-		t.Errorf("ClaudeSessionID() = %q, want %q", got, "abc-123")
+	info := s.ResumeInfo()
+	if info == nil {
+		t.Fatal("ResumeInfo() = nil, want map with claude_session_id")
+	}
+	if got := info["claude_session_id"]; got != "abc-123" {
+		t.Errorf("ResumeInfo()[\"claude_session_id\"] = %q, want %q", got, "abc-123")
 	}
 }
 
