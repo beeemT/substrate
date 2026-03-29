@@ -491,6 +491,17 @@ func (r *mockQuestionRepo) Update(_ context.Context, q domain.Question) error {
 	return nil
 }
 
+func (r *mockQuestionRepo) UpdateProposedAnswer(_ context.Context, id, proposedAnswer string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if q, ok := r.questions[id]; ok {
+		q.ProposedAnswer = proposedAnswer
+		r.questions[id] = q
+	}
+
+	return nil
+}
+
 type mockWorkItemRepo struct{}
 
 func (r *mockWorkItemRepo) Get(_ context.Context, _ string) (domain.Session, error) {
@@ -834,5 +845,70 @@ func TestReviewSession_ThreeRoundsOfMajors_Escalates(t *testing.T) {
 	}
 	if !result.Escalated {
 		t.Errorf("expected Escalated=true after 3 failed cycles, got Passed=%v NeedsReimpl=%v", result.Passed, result.NeedsReimpl)
+	}
+}
+
+// TestResolveEscalated_AppendsFAQ verifies that human-answered escalated questions
+// are appended to the plan's FAQ, not just persisted on the question row.
+func TestResolveEscalated_AppendsFAQ(t *testing.T) {
+	planRepo := newMockPlanRepo()
+	questionRepo := newMockQuestionRepo()
+	sessionRepo := newMockSessionRepo()
+
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	questionRepo.questions["q-1"] = domain.Question{
+		ID:             "q-1",
+		AgentSessionID: "sess-1",
+		Content:        "Which pattern should I use?",
+		Status:         domain.QuestionEscalated,
+	}
+	sessionRepo.sessions["sess-1"] = domain.Task{
+		ID:             "sess-1",
+		RepositoryName: "repo-a",
+	}
+
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo}})
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+
+	answerCh := make(chan string, 1)
+	f := &Foreman{
+		cfg:         testReviewConfig(3),
+		planSvc:     planSvc,
+		questionSvc: questionSvc,
+		sessionSvc:  sessionSvc,
+		escalatedChs: map[string]escalatedEntry{
+			"q-1": {answerCh: answerCh, agentSessionID: "sess-1"},
+		},
+		planID: "plan-1",
+	}
+
+	err := f.ResolveEscalated(context.Background(), "q-1", "Use the repository pattern.")
+	if err != nil {
+		t.Fatalf("ResolveEscalated: %v", err)
+	}
+
+	if len(planRepo.faqAdded) != 1 {
+		t.Fatalf("expected 1 FAQ entry, got %d", len(planRepo.faqAdded))
+	}
+
+	entry := planRepo.faqAdded[0]
+	if entry.PlanID != "plan-1" {
+		t.Errorf("expected PlanID %q, got %q", "plan-1", entry.PlanID)
+	}
+	if entry.AnsweredBy != "human" {
+		t.Errorf("expected AnsweredBy %q, got %q", "human", entry.AnsweredBy)
+	}
+	if entry.Question != "Which pattern should I use?" {
+		t.Errorf("expected Question %q, got %q", "Which pattern should I use?", entry.Question)
+	}
+	if entry.Answer != "Use the repository pattern." {
+		t.Errorf("expected Answer %q, got %q", "Use the repository pattern.", entry.Answer)
+	}
+	if entry.RepoName != "repo-a" {
+		t.Errorf("expected RepoName %q, got %q", "repo-a", entry.RepoName)
+	}
+	if entry.AgentSessionID != "sess-1" {
+		t.Errorf("expected AgentSessionID %q, got %q", "sess-1", entry.AgentSessionID)
 	}
 }

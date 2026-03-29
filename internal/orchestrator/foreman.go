@@ -493,9 +493,34 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 		return fmt.Errorf("%w: %s", ErrQuestionNotEscalated, questionID)
 	}
 
-	// Persist the human-approved answer; also appends to FAQ (AnsweredBy="human").
+	// Persist the human-approved answer.
 	if err := f.questionSvc.Answer(ctx, questionID, answer, "human"); err != nil {
 		return fmt.Errorf("answer escalated question: %w", err)
+	}
+
+	// Append to FAQ so the foreman can reuse human-answered questions.
+	q, err := f.questionSvc.Get(ctx, questionID)
+	if err != nil {
+		slog.Warn("failed to fetch question for FAQ append", "error", err, "question_id", questionID)
+	} else {
+		agentSession, err := f.sessionSvc.Get(ctx, entry.agentSessionID)
+		if err != nil {
+			slog.Warn("failed to fetch agent session for FAQ append", "error", err, "session_id", entry.agentSessionID)
+		} else {
+			faqEntry := domain.FAQEntry{
+				ID:             domain.NewID(),
+				PlanID:         f.planID,
+				AgentSessionID: entry.agentSessionID,
+				RepoName:       agentSession.RepositoryName,
+				Question:       q.Content,
+				Answer:         answer,
+				AnsweredBy:     "human",
+				CreatedAt:      time.Now(),
+			}
+			if err := f.planSvc.AppendFAQ(ctx, faqEntry); err != nil {
+				slog.Warn("failed to append human-answered FAQ", "error", err, "question_id", questionID)
+			}
+		}
 	}
 
 	// Transition the session back to running before unblocking the sub-agent so the
