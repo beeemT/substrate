@@ -1042,7 +1042,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.svcs.Foreman != nil {
 			a.foremanPlanID = msg.PlanID
-			cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, msg.PlanID))
+			cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, msg.PlanID, ""))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1084,6 +1084,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
 			cmds = append(cmds, FollowUpSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1095,6 +1096,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
 			cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1168,7 +1170,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, plan.ID))
 				if a.svcs.Foreman != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
+					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
@@ -1185,7 +1187,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Session, a.svcs.Implementation, plan.ID, msg.WorkItemID))
 				if a.svcs.Foreman != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID))
+					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for retry", components.ToastError)
@@ -1343,10 +1345,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
-		// Do NOT stop the Foreman here. It remains live so that a subsequent
-		// retry or re-implementation cycle can reuse the session without spawning
-		// a new one. Teardown happens in teardownAllPipelines (quit) or the
-		// DeleteSessionMsg handler.
+		// Stop the Foreman — implementation work is done. The foremanPlanID is
+		// intentionally preserved so the sidebar still shows the session log.
+		// If the user starts a follow-up, the foreman is restarted with the
+		// follow-up context.
+		if a.svcs.Foreman != nil && a.foremanPlanID != "" {
+			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+		}
 		return a, tea.Batch(cmds...)
 
 	case SessionDeletedMsg:
@@ -1680,11 +1685,15 @@ func (a *App) updateContentFromState() tea.Cmd {
 			}
 			if taskSessionID == taskSidebarForemanID {
 				if a.svcs.Foreman != nil {
+					// Prefer the live session ID; fall back to the last stopped session.
 					if sid := a.svcs.Foreman.SessionID(); sid != "" {
-						return a.showForemanContent(wi, sid)
+						return a.showForemanContent(wi, sid, true)
+					}
+					if sid := a.svcs.Foreman.LastSessionID(); sid != "" {
+						return a.showForemanContent(wi, sid, false)
 					}
 				}
-				// Foreman is not running; let selection fall to overview.
+				// No foreman session ever ran; fall to overview.
 				a.setSelectedTaskSessionID("")
 			}
 			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
@@ -1832,29 +1841,38 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	return spinnerCmd
 }
 
-// showForemanContent sets up the content panel to tail the Foreman's session log.
-// sessionID is the active session ID returned by Foreman.SessionID().
-func (a *App) showForemanContent(wi *domain.Session, sessionID string) tea.Cmd {
+// showForemanContent sets up the content panel to display the Foreman's session log.
+// When running is true, the spinner is active and meta shows "Running"; when false
+// (stopped foreman), the log is displayed as completed.
+func (a *App) showForemanContent(wi *domain.Session, sessionID string, running bool) tea.Cmd {
 	var titlePrefix string
 	if wi != nil {
 		titlePrefix = firstNonEmptyString(wi.ExternalID, wi.ID) + " · "
 	}
 	title := titlePrefix + "Foreman session"
-	meta := strings.Join([]string{"Running", "Foreman"}, " · ")
+	statusLabel := "Running"
+	if !running {
+		statusLabel = "Stopped"
+	}
+	meta := strings.Join([]string{statusLabel, "Foreman"}, " · ")
 	a.content.sessionLog.SetNotice(nil)
 	a.content.SetMode(ContentModeSessionInteraction)
 	a.content.sessionLog.SetTitle(title)
 	a.content.sessionLog.SetModeLabel("Foreman")
 	a.content.sessionLog.SetMeta(meta)
 	a.content.sessionLog.ClearFailedSession()
-	a.content.sessionLog.ClearCompletedSession()
+	if !running {
+		a.content.sessionLog.SetCompletedSession(sessionID)
+	} else {
+		a.content.sessionLog.ClearCompletedSession()
+	}
 	logPath := filepath.Join(a.sessionsDir, sessionID+".log")
 	resumeOffset := int64(0)
 	if a.content.sessionLog.live && a.content.sessionLog.sessionID == sessionID && a.content.sessionLog.logPath == logPath {
 		resumeOffset = a.content.sessionLog.offset
 	}
 	a.content.sessionLog.SetLogPath(sessionID, logPath)
-	spinnerCmd := a.content.sessionLog.SetAgentActive(true)
+	spinnerCmd := a.content.sessionLog.SetAgentActive(running)
 	if !a.tailingSessionIDs[sessionID] {
 		a.tailingSessionIDs[sessionID] = true
 		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, sessionID, resumeOffset))
@@ -1935,6 +1953,47 @@ func (a *App) pipelineCtxForTask(taskID string) context.Context {
 		}
 	}
 	return context.Background()
+}
+
+// restartForemanForTask stops the current foreman (if running) and starts a
+// fresh one with follow-up context for the task's work item plan. Returns the
+// tea.Cmd slice to append (empty if foreman is not configured or no plan exists).
+func (a *App) restartForemanForTask(taskID, feedback string) []tea.Cmd {
+	if a.svcs.Foreman == nil {
+		return nil
+	}
+	var workItemID string
+	for _, s := range a.sessions {
+		if s.ID == taskID {
+			workItemID = s.WorkItemID
+			break
+		}
+	}
+	if workItemID == "" {
+		return nil
+	}
+	plan := a.plans[workItemID]
+	if plan == nil {
+		return nil
+	}
+
+	a.foremanPlanID = plan.ID
+	foreman := a.svcs.Foreman
+	planID := plan.ID
+	// Stop and start must be sequential — tea.Batch runs cmds concurrently,
+	// so we combine them into a single cmd to avoid a race.
+	cmd := func() tea.Msg {
+		if foreman.IsRunning() {
+			if err := foreman.Stop(context.Background()); err != nil {
+				slog.Warn("foreman stop before follow-up restart", "err", err)
+			}
+		}
+		if err := foreman.Start(context.Background(), planID, feedback); err != nil {
+			return ErrMsg{Err: fmt.Errorf("restart foreman for follow-up: %w", err)}
+		}
+		return ActionDoneMsg{Message: "Foreman restarted for follow-up"}
+	}
+	return []tea.Cmd{cmd}
 }
 
 // teardownAllPipelines cancels every active pipeline context, stops the
@@ -2145,18 +2204,30 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 
 	// Foreman block.
 	var foremanEntry *SidebarEntry
-	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
-		if plan := a.plans[workItemID]; plan != nil && plan.ID == a.foremanPlanID {
-			if sid := a.svcs.Foreman.SessionID(); sid != "" {
-				foremanEntry = &SidebarEntry{
-					Kind:           SidebarEntryTaskSession,
-					WorkItemID:     workItemID,
-					SessionID:      taskSidebarForemanID,
-					Title:          "Foreman session",
-					RepositoryName: "Foreman",
-					SessionStatus:  domain.AgentSessionRunning,
-					LastActivity:   wi.UpdatedAt,
-				}
+	if a.svcs.Foreman != nil {
+		plan := a.plans[workItemID]
+		running := a.svcs.Foreman.SessionID() != ""
+		runningForPlan := running && plan != nil && plan.ID == a.foremanPlanID
+		stoppedForPlan := !running && plan != nil && a.svcs.Foreman.LastPlanID() == plan.ID && a.svcs.Foreman.LastSessionID() != ""
+		if runningForPlan {
+			foremanEntry = &SidebarEntry{
+				Kind:           SidebarEntryTaskSession,
+				WorkItemID:     workItemID,
+				SessionID:      taskSidebarForemanID,
+				Title:          "Foreman session",
+				RepositoryName: "Foreman",
+				SessionStatus:  domain.AgentSessionRunning,
+				LastActivity:   wi.UpdatedAt,
+			}
+		} else if stoppedForPlan {
+			foremanEntry = &SidebarEntry{
+				Kind:           SidebarEntryTaskSession,
+				WorkItemID:     workItemID,
+				SessionID:      taskSidebarForemanID,
+				Title:          "Foreman session",
+				RepositoryName: "Foreman",
+				SessionStatus:  domain.AgentSessionCompleted,
+				LastActivity:   wi.UpdatedAt,
 			}
 		}
 	}

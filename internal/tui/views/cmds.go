@@ -825,9 +825,11 @@ func SendToForemanCmd(foreman *orchestrator.Foreman, questionID, text string) te
 
 // StartForemanCmd starts the Foreman session for a given plan.
 // Uses a background context; Stop() is the proper shutdown mechanism.
-func StartForemanCmd(foreman *orchestrator.Foreman, planID string) tea.Cmd {
+// followUpContext is optional; when non-empty it is forwarded to the foreman's
+// initial prompt so it is aware of follow-up feedback.
+func StartForemanCmd(foreman *orchestrator.Foreman, planID string, followUpContext string) tea.Cmd {
 	return func() tea.Msg {
-		if err := foreman.Start(context.Background(), planID); err != nil {
+		if err := foreman.Start(context.Background(), planID, followUpContext); err != nil {
 			return ErrMsg{Err: err}
 		}
 

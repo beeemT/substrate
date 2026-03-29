@@ -49,6 +49,12 @@ type Foreman struct {
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
 
+	// lastSessionID and lastPlanID preserve the most recent foreman session
+	// coordinates across Stop() so the TUI can still show the session log after
+	// the foreman shuts down (e.g. when all implementation work completes).
+	lastSessionID string
+	lastPlanID    string
+
 	// escalatedChs stores answer channels for questions escalated to humans.
 	// Keyed by question ID. The TUI calls ResolveEscalated to deliver the answer.
 	escalatedMu  sync.Mutex
@@ -78,8 +84,10 @@ func NewForeman(
 	}
 }
 
-// Start begins the foreman session for a plan.
-func (f *Foreman) Start(ctx context.Context, planID string) error {
+// Start begins the foreman session for a plan. If followUpContext is non-empty,
+// it is included in the initial user prompt so the foreman is aware of follow-up
+// feedback from the operator.
+func (f *Foreman) Start(ctx context.Context, planID string, followUpContext string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -93,6 +101,8 @@ func (f *Foreman) Start(ctx context.Context, planID string) error {
 	f.stopCh = make(chan struct{})
 
 	f.planID = planID
+	f.lastSessionID = ""
+	f.lastPlanID = ""
 
 	// Get plan with FAQ
 	plan, err := f.planSvc.GetPlan(ctx, planID)
@@ -103,13 +113,18 @@ func (f *Foreman) Start(ctx context.Context, planID string) error {
 	// Build system prompt with plan and FAQ
 	systemPrompt := f.buildSystemPrompt(ctx, plan)
 
+	userPrompt := "You are the Foreman. Answer questions from sub-agents based on the plan and FAQ context."
+	if followUpContext != "" {
+		userPrompt += "\n\nThe operator has requested a follow-up with this context:\n" + followUpContext
+	}
+
 	// Start foreman session
 	opts := adapter.SessionOpts{
 		SessionID:    domain.NewID(),
 		Mode:         adapter.SessionModeForeman,
 		WorkspaceID:  "", // Foreman doesn't need workspace
 		SystemPrompt: systemPrompt,
-		UserPrompt:   "You are the Foreman. Answer questions from sub-agents based on the plan and FAQ context.",
+		UserPrompt:   userPrompt,
 	}
 
 	session, err := f.harness.StartSession(ctx, opts)
@@ -440,6 +455,23 @@ func (f *Foreman) IsRunning() bool {
 	return f.session != nil
 }
 
+// LastSessionID returns the session ID of the most recently stopped foreman
+// session. This allows the TUI to display the foreman's session log even after
+// the foreman has been stopped. Returns "" if no session has ever run.
+func (f *Foreman) LastSessionID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSessionID
+}
+
+// LastPlanID returns the plan ID associated with the most recently stopped
+// foreman session.
+func (f *Foreman) LastPlanID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPlanID
+}
+
 // ErrQuestionNotEscalated is returned by ResolveEscalated and SendUserMessage
 // when no in-flight answer channel exists for the given question ID.
 // This happens if the Foreman was restarted after escalation, or if the question
@@ -493,6 +525,8 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	}
 	session := f.session
 	stopCh := f.stopCh
+	f.lastSessionID = session.ID()
+	f.lastPlanID = f.planID
 	f.session = nil
 	f.mu.Unlock()
 
