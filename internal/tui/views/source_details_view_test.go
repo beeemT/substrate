@@ -218,7 +218,6 @@ func TestSourceDetailsDurableSummariesFitRequestedSize(t *testing.T) {
 	}
 }
 
-
 func TestSourceDetailsOpenInBrowserSingleItem(t *testing.T) {
 	t.Parallel()
 

@@ -1486,7 +1486,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Confirm dialog captures all key input when active.
 	if a.confirmActive {
 		switch msg.String() {
-		case "y", "enter", "ctrl+c":
+		case "y", keyEnter, "ctrl+c":
 			// ctrl+c while a confirm is open acts as "yes": if this is the quit
 			// confirm, ctrl+c immediately confirms; for other confirms it prevents
 			// the user from getting stuck needing two ctrl+c presses to exit.
@@ -1547,7 +1547,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.content.InputCaptured() {
 		return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 	}
-	if msg.String() == "enter" && a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() != "" {
+	if msg.String() == keyEnter && a.sidebarMode == sidebarPaneTasks && a.selectedTaskSessionID() != "" {
 		if a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			return a, a.jumpFromSourceDetailsToOverview()
 		}
@@ -1569,7 +1569,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.showDeleteSessionConfirm(sessionID)
 			return a, nil
 		}
-	case "esc", "left":
+	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {
 			a.mainFocus = mainFocusSidebar
 			return a, nil
@@ -1593,7 +1593,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.sidebar.MoveUp()
 		cmd = a.onSidebarMove()
 		return a, cmd
-	case "down", "j":
+	case keyDown, "j":
 		if a.mainFocus == mainFocusContent {
 			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
@@ -1820,13 +1820,14 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 		resumeOffset = a.content.sessionLog.offset
 	}
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
-	if session.Status == domain.AgentSessionFailed {
+	switch session.Status {
+	case domain.AgentSessionFailed:
 		a.content.sessionLog.ClearCompletedSession()
 		a.content.sessionLog.SetFailedSession(session.ID)
-	} else if session.Status == domain.AgentSessionCompleted {
+	case domain.AgentSessionCompleted:
 		a.content.sessionLog.ClearFailedSession()
 		a.content.sessionLog.SetCompletedSession(session.ID)
-	} else {
+	default:
 		a.content.sessionLog.ClearFailedSession()
 		a.content.sessionLog.ClearCompletedSession()
 	}
@@ -2265,8 +2266,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		})
 		for _, session := range repoItems {
 			entryRepo := session.RepositoryName
-			switch session.Phase {
-			case domain.TaskPhaseReview:
+			if session.Phase == domain.TaskPhaseReview {
 				entryRepo = firstNonEmptyString(entryRepo, "Review")
 			}
 			entries = append(entries, SidebarEntry{
@@ -2835,7 +2835,7 @@ func formatAdapterErrorToast(msg AdapterErrorMsg) string {
 	// Show a clear, non-technical message instead of the raw API response.
 	var permErr *adapter.PermissionError
 	if errors.As(msg.Err, &permErr) {
-		return fmt.Sprintf("%s: permission denied\nCannot update this issue — check your token has the required scopes.", msg.Adapter)
+		return msg.Adapter + ": permission denied\nCannot update this issue — check your token has the required scopes."
 	}
 	errStr := msg.Err.Error()
 	if len(errStr) > 80 {

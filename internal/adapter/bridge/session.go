@@ -132,7 +132,7 @@ func (s *BridgeSession) Wait(ctx context.Context) error {
 
 		// Clean up sandbox temp directory.
 		if s.TmpDir != "" {
-			os.RemoveAll(s.TmpDir) //nolint:errcheck // best-effort cleanup
+			os.RemoveAll(s.TmpDir)
 		}
 
 		if err != nil {
@@ -219,7 +219,7 @@ func (s *BridgeSession) Abort(_ context.Context) error {
 	if _, writeErr := s.Stdin.Write(append(data, '\n')); writeErr != nil {
 		slog.Debug("failed to send abort message", "err", writeErr)
 	}
-	s.Stdin.Close() //nolint:errcheck // best-effort cleanup
+	s.Stdin.Close()
 	s.mu.Unlock()
 
 	// Give the subprocess time to exit gracefully.
@@ -248,7 +248,7 @@ func (s *BridgeSession) Abort(_ context.Context) error {
 
 	// Clean up sandbox temp directory.
 	if s.TmpDir != "" {
-		os.RemoveAll(s.TmpDir) //nolint:errcheck // best-effort cleanup
+		os.RemoveAll(s.TmpDir)
 	}
 
 	return nil

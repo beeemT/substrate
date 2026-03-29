@@ -13,14 +13,14 @@ import (
 
 // Services aggregates all dependencies needed by the TUI.
 type Services struct {
-	Session   *service.SessionService
-	Plan      *service.PlanService
-	Task      *service.TaskService
-	Question  *service.QuestionService
-	Instance  *service.InstanceService
-	Workspace *service.WorkspaceService
-	Review    *service.ReviewService
-	Events    *service.EventService
+	Session          *service.SessionService
+	Plan             *service.PlanService
+	Task             *service.TaskService
+	Question         *service.QuestionService
+	Instance         *service.InstanceService
+	Workspace        *service.WorkspaceService
+	Review           *service.ReviewService
+	Events           *service.EventService
 	GithubPRs        *service.GithubPRService
 	GitlabMRs        *service.GitlabMRService
 	SessionArtifacts *service.SessionReviewArtifactService
@@ -38,7 +38,7 @@ type Services struct {
 	SettingsData    SettingsSnapshot
 	GitClient       *gitwork.Client
 	Bus             *event.Bus
-	AdapterErrors chan AdapterErrorMsg
+	AdapterErrors   chan AdapterErrorMsg
 	// StartupWarnings collects adapter initialisation warnings to surface
 	// as toasts when the TUI starts.
 	StartupWarnings []string

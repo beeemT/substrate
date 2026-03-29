@@ -10,15 +10,15 @@ import (
 )
 
 type subPlanRow struct {
-	ID        string `db:"id"`
-	PlanID    string `db:"plan_id"`
-	RepoName  string `db:"repo_name"`
-	Content   string `db:"content"`
-	ExecOrder int    `db:"exec_order"`
+	ID            string `db:"id"`
+	PlanID        string `db:"plan_id"`
+	RepoName      string `db:"repo_name"`
+	Content       string `db:"content"`
+	ExecOrder     int    `db:"exec_order"`
 	PlanningRound int    `db:"planning_round"`
-	Status    string `db:"status"`
-	CreatedAt string `db:"created_at"`
-	UpdatedAt string `db:"updated_at"`
+	Status        string `db:"status"`
+	CreatedAt     string `db:"created_at"`
+	UpdatedAt     string `db:"updated_at"`
 }
 
 func (r *subPlanRow) toDomain() (domain.TaskPlan, error) {
@@ -45,15 +45,15 @@ func (r *subPlanRow) toDomain() (domain.TaskPlan, error) {
 
 func rowFromSubPlan(sp domain.TaskPlan) subPlanRow {
 	return subPlanRow{
-		ID:        sp.ID,
-		PlanID:    sp.PlanID,
-		RepoName:  sp.RepositoryName,
-		Content:   sp.Content,
-		ExecOrder:    sp.Order,
+		ID:            sp.ID,
+		PlanID:        sp.PlanID,
+		RepoName:      sp.RepositoryName,
+		Content:       sp.Content,
+		ExecOrder:     sp.Order,
 		PlanningRound: sp.PlanningRound,
-		Status:    string(sp.Status),
-		CreatedAt: formatTime(sp.CreatedAt),
-		UpdatedAt: formatTime(sp.UpdatedAt),
+		Status:        string(sp.Status),
+		CreatedAt:     formatTime(sp.CreatedAt),
+		UpdatedAt:     formatTime(sp.UpdatedAt),
 	}
 }
 

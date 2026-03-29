@@ -18,15 +18,6 @@ func stripToastANSI(s string) string {
 	return toastANSIPattern.ReplaceAllString(s, "")
 }
 
-func lastNonSpaceColumn(line string) int {
-	trimmed := strings.TrimRight(line, " ")
-	if trimmed == "" {
-		return -1
-	}
-
-	return ansi.StringWidth(trimmed) - 1
-}
-
 func visibleColumn(line, needle string) int {
 	before, _, ok := strings.Cut(line, needle)
 	if !ok {

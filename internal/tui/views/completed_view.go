@@ -24,18 +24,18 @@ type MRInfo struct {
 //
 //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type CompletedModel struct {
-	title        string
-	statusLabel  string
-	completedAt  time.Time
-	mrLinks      []MRInfo
-	warnings     []string
-	styles       styles.Styles
-	width        int
-	height       int
-	selectedLink int
-	workItemID   string
+	title         string
+	statusLabel   string
+	completedAt   time.Time
+	mrLinks       []MRInfo
+	warnings      []string
+	styles        styles.Styles
+	width         int
+	height        int
+	selectedLink  int
+	workItemID    string
 	feedbackInput textinput.Model
-	inputActive  bool
+	inputActive   bool
 }
 
 func NewCompletedModel(st styles.Styles) CompletedModel {
@@ -48,7 +48,7 @@ func NewCompletedModel(st styles.Styles) CompletedModel {
 func (m *CompletedModel) SetSize(w, h int)            { m.width = w; m.height = h }
 func (m *CompletedModel) SetTitle(t string)           { m.title = t }
 func (m *CompletedModel) SetStatusLabel(label string) { m.statusLabel = label }
-func (m *CompletedModel) SetWorkItemID(id string) { m.workItemID = id }
+func (m *CompletedModel) SetWorkItemID(id string)     { m.workItemID = id }
 
 func (m *CompletedModel) SetData(completedAt time.Time, mrLinks []MRInfo, warnings []string) {
 	m.completedAt = completedAt

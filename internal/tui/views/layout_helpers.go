@@ -66,10 +66,7 @@ func overlaySpinner(body, frame string, st styles.Styles, width int) string {
 	} else {
 		// Line is too wide: truncate to make room for " " + spinner.
 		truncated := ansi.Truncate(lines[idx], width-frameWidth-1, "")
-		pad := width - ansi.StringWidth(truncated) - frameWidth
-		if pad < 1 {
-			pad = 1
-		}
+		pad := max(1, width-ansi.StringWidth(truncated)-frameWidth)
 		lines[idx] = truncated + strings.Repeat(" ", pad) + styledFrame
 	}
 	return strings.Join(lines, "\n")

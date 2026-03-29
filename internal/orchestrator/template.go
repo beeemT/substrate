@@ -23,7 +23,6 @@ var revisionPromptTemplate = "Your role is still to plan only. The human has req
 	"{{.CurrentPlan}}\n" +
 	"---\n"
 
-
 // RepoResultSummary holds the implementation outcome for a single repository.
 type RepoResultSummary struct {
 	RepoName string
@@ -39,7 +38,8 @@ type FollowUpData struct {
 	NewSessionDraftPath string
 }
 
-var followUpPromptTemplate = `Your role is still to plan only. This work item was previously implemented and the human has requested changes based on the results:
+var followUpPromptTemplate = "Your role is still to plan only. " +
+	"This work item was previously implemented and the human has requested changes based on the results:\n" + `
 
 {{.Feedback}}
 

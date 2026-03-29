@@ -216,16 +216,16 @@ func parseVerboseCLIResponse(req *http.Request, raw string) (*http.Response, err
 			bodyLines = append(bodyLines, line)
 			continue
 		}
-		idx := strings.Index(line, responsePrefix)
-		if idx < 0 {
+		_, after, found := strings.Cut(line, responsePrefix)
+		if !found {
 			continue
 		}
-		content := strings.TrimSpace(line[idx+len(responsePrefix):])
+		content := strings.TrimSpace(after)
 		if content == "" {
 			continue
 		}
 		if strings.HasPrefix(content, "HTTP") {
-			for _, f := range strings.Fields(content) {
+			for f := range strings.FieldsSeq(content) {
 				if code, err := strconv.Atoi(f); err == nil {
 					statusCode = code
 					break

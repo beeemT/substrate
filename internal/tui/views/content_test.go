@@ -206,7 +206,7 @@ func TestContentHopRenderingFitsTerminalBounds(t *testing.T) {
 			// Advance to the target hop index and frame.
 			// Each hop has FramesPerHop (5) frames, plus a pause between hops.
 			stepsToReach := tc.hopIndex*(components.FramesPerHop+1) + tc.hopFrame
-			for i := 0; i < stepsToReach; i++ {
+			for range stepsToReach {
 				m, _ = m.Update(components.BunnyHopStepMsg{})
 			}
 			view := m.View()
@@ -232,7 +232,7 @@ func TestContentHopLandsOnOppositeSide(t *testing.T) {
 	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
 	// Advance through all frames: 2 hops × 5 frames each = 10 steps,
 	// plus 1 pause between hops = 11 steps total.
-	for i := 0; i < 11; i++ {
+	for range 11 {
 		m, _ = m.Update(components.BunnyHopStepMsg{})
 	}
 	// After landing, the bunny should still render (ω present) and not be hopping.
@@ -260,7 +260,7 @@ func TestContentHopContainerStaysFixed(t *testing.T) {
 	}
 	// Now trigger a 2-hop and check every frame.
 	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 2})
-	for step := 0; step < 11; step++ {
+	for step := range 11 {
 		view := m.View()
 		lines := strings.Split(view, "\n")
 		var containerRow int

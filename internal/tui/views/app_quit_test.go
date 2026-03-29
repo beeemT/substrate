@@ -275,7 +275,7 @@ func TestQuitConfirmedMsgAbortsRegistrySessions(t *testing.T) {
 	if !mock1.aborted {
 		t.Fatal("task-1 (running) should have been aborted")
 	}
-	if mock3.aborted == false {
+	if !mock3.aborted {
 		t.Fatal("task-3 (running) should have been aborted")
 	}
 

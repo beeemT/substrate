@@ -14,9 +14,14 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-const sessionLogSpinnerInterval = 100 * time.Millisecond
+const (
+	sessionLogSpinnerInterval  = 100 * time.Millisecond
+	sessionLogSilenceThreshold = 3 * time.Minute
 
-const sessionLogSilenceThreshold = 3 * time.Minute
+	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
+	sessionLogPlaceholderFailed    = "Send follow-up to restart failed session..."
+	sessionLogPlaceholderCompleted = "Send follow-up to completed session..."
+)
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.
 var sessionLogSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -71,7 +76,7 @@ func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	vp := viewport.New(0, 0)
 
 	ti := components.NewTextInput()
-	ti.Placeholder = "Send steering prompt to agent..."
+	ti.Placeholder = sessionLogPlaceholderDefault
 	ti.CharLimit = 2000
 
 	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction", steerInput: ti}
@@ -160,29 +165,29 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 func (m *SessionLogModel) SetFailedSession(sessionID string) {
 	m.failedSessionID = sessionID
 	if sessionID != "" {
-		m.steerInput.Placeholder = "Send follow-up to restart failed session..."
+		m.steerInput.Placeholder = sessionLogPlaceholderFailed
 	} else {
-		m.steerInput.Placeholder = "Send steering prompt to agent..."
+		m.steerInput.Placeholder = sessionLogPlaceholderDefault
 	}
 }
 
 func (m *SessionLogModel) ClearFailedSession() {
 	m.failedSessionID = ""
-	m.steerInput.Placeholder = "Send steering prompt to agent..."
+	m.steerInput.Placeholder = sessionLogPlaceholderDefault
 }
 
 func (m *SessionLogModel) SetCompletedSession(sessionID string) {
 	m.completedSessionID = sessionID
 	if sessionID != "" {
-		m.steerInput.Placeholder = "Send follow-up to completed session..."
+		m.steerInput.Placeholder = sessionLogPlaceholderCompleted
 	} else {
-		m.steerInput.Placeholder = "Send steering prompt to agent..."
+		m.steerInput.Placeholder = sessionLogPlaceholderDefault
 	}
 }
 
 func (m *SessionLogModel) ClearCompletedSession() {
 	m.completedSessionID = ""
-	m.steerInput.Placeholder = "Send steering prompt to agent..."
+	m.steerInput.Placeholder = sessionLogPlaceholderDefault
 }
 
 // SetAgentActive controls the activity spinner. It should be set to true when

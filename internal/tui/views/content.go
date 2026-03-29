@@ -76,7 +76,7 @@ func NewContentModel(st styles.Styles) ContentModel {
 		sourceDetails:   NewSourceDetailsModel(st),
 		sessionLog:      NewSessionLogModel(st),
 		blinkNeedsStart: true,
-		blinkSide:       components.BunnySide(rand.Intn(2)),
+		blinkSide:       components.BunnySide(rand.Intn(2)), //nolint:gosec // UI-only bunny placement; not used for secrets or security decisions.
 	}
 }
 
@@ -345,28 +345,19 @@ func (m ContentModel) emptyStateView() string {
 			if !m.hopPause {
 				gapCount = components.HopFrameGap(m.hopFrame)
 			}
-			stationaryTopPad := (m.height - (3 + containerHeight)) / 2
-			if stationaryTopPad < 0 {
-				stationaryTopPad = 0
-			}
-			hopTopPad := stationaryTopPad - gapCount
-			if hopTopPad < 0 {
-				hopTopPad = 0
-			}
+			stationaryTopPad := max(0, (m.height-(3+containerHeight))/2)
+			hopTopPad := max(0, stationaryTopPad-gapCount)
 			// Horizontal centering: match lipgloss.Place(Center) behaviour.
-			hPad := (m.width - containerWidth) / 2
-			if hPad < 0 {
-				hPad = 0
-			}
+			hPad := max(0, (m.width-containerWidth)/2)
 			hPadStr := strings.Repeat(" ", hPad)
 			var out []string
-			for i := 0; i < hopTopPad; i++ {
+			for range hopTopPad {
 				out = append(out, "")
 			}
 			for _, line := range bunnyLines {
 				out = append(out, hPadStr+line)
 			}
-			for i := 0; i < gapCount; i++ {
+			for range gapCount {
 				out = append(out, "")
 			}
 			for _, cLine := range containerLines {

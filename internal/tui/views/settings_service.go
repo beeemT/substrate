@@ -44,7 +44,9 @@ const (
 const (
 	statusWarning              = "warning"
 	statusEmpty                = "empty"
+	statusUnset                = "unset"
 	hintInheritsHarnessDefault = "inherits harness.default"
+	sentryAuthSourceCLI        = "sentry cli"
 )
 
 type SettingsField struct {
@@ -416,14 +418,14 @@ func sentrySettingsFields(cfg *config.Config) []SettingsField {
 	}
 
 	authSource := config.SentryAuthSource(sentry)
-	if authSource != "unset" && strings.TrimSpace(sentry.Organization) == "" {
+	if authSource != statusUnset && strings.TrimSpace(sentry.Organization) == "" {
 		resolved := config.ResolveSentryContext(sentry)
 		if strings.TrimSpace(resolved.Organization) == "" {
 			orgField.Error = "Organization is required – select one or set SENTRY_ORG"
 		}
 	}
 
-	if authSource == "sentry cli" {
+	if authSource == sentryAuthSourceCLI {
 		if orgs := config.ListSentryCLIOrganizations(sentry); len(orgs) > 0 {
 			orgField.Options = orgs
 			orgField.Error = ""
@@ -474,7 +476,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
 				var lastErr error
-				for attempt := 0; attempt < 3; attempt++ {
+				for attempt := range 3 {
 					if err := a.OnEvent(context.Background(), evt); err != nil {
 						lastErr = err
 						if attempt < 2 {
@@ -522,7 +524,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
 			for evt := range events {
 				var lastErr error
-				for attempt := 0; attempt < 3; attempt++ {
+				for attempt := range 3 {
 					if err := a.OnEvent(context.Background(), evt); err != nil {
 						lastErr = err
 						if attempt < 2 {
@@ -1395,7 +1397,7 @@ func secretStatus(ref, value string) string {
 		return "keychain"
 	}
 
-	return "unset"
+	return statusUnset
 }
 
 func parseRepos(v string) map[string]config.RepoConfig {

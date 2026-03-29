@@ -83,7 +83,6 @@ func TestRunAction_SentryLoginClearsInheritedURLWhenUnset(t *testing.T) {
 	}
 }
 
-
 func TestRunAction_GitHubLogin(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "gh",

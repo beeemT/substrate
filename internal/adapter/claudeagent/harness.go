@@ -125,7 +125,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	// Ensure the sandbox temp dir is cleaned up if StartSession fails after this point.
 	defer func() {
 		if err != nil {
-			os.RemoveAll(sessionTmpDir) //nolint:errcheck // best-effort cleanup
+			os.RemoveAll(sessionTmpDir) // best-effort cleanup
 		}
 	}()
 	cmd.Dir = bridgeRt.LaunchDir(workDir)

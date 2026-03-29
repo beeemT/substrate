@@ -1615,7 +1615,7 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 							})
 						}
 					}
-				case "gitlab":
+				case providerGitlab:
 					if a.svcs.GitlabMRs != nil {
 						if mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID); err == nil {
 							external.Reviews = append(external.Reviews, OverviewReviewRow{

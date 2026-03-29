@@ -471,7 +471,7 @@ func TestRenderTranscriptToolResultSingleLineStaysCompact(t *testing.T) {
 		t.Errorf("single-line result: expected result text, got: %q", plain)
 	}
 	// 'Result:' and 'exit 0' must be on the same line.
-	for _, l := range strings.Split(output, "\n") {
+	for l := range strings.SplitSeq(output, "\n") {
 		if strings.Contains(ansi.Strip(l), "Result:") {
 			if !strings.Contains(ansi.Strip(l), "exit 0") {
 				t.Errorf("single-line result: 'Result:' and value must be on same line, got line: %q", l)
@@ -513,7 +513,7 @@ func TestRenderTranscriptToolResultMultilineWidthBounded(t *testing.T) {
 		},
 	}
 	output := RenderTranscript(st, entries, width, false, true)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("multi-line result: line width %d > %d: %q", w, width, line)
 		}

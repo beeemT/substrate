@@ -417,7 +417,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.syncViewportSize()
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
-		case "up", "k", "down", "j", "pgup", "pgdown": //nolint:goconst
+		case "up", "k", keyDown, "j", "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 	case tea.WindowSizeMsg:

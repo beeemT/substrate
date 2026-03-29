@@ -42,7 +42,14 @@ func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, 
 }
 
 // PersistGithubPR dual-writes a GitHub PR: event (audit trail) + provider table + link table.
-func PersistGithubPR(ctx context.Context, repos ReviewArtifactRepos, workspaceID, workItemID string, artifact domain.ReviewArtifact, owner, repo string, number int) error {
+func PersistGithubPR(
+	ctx context.Context,
+	repos ReviewArtifactRepos,
+	workspaceID, workItemID string,
+	artifact domain.ReviewArtifact,
+	owner, repo string,
+	number int,
+) error {
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
@@ -85,7 +92,14 @@ func PersistGithubPR(ctx context.Context, repos ReviewArtifactRepos, workspaceID
 }
 
 // PersistGitlabMR dual-writes a GitLab MR: event (audit trail) + provider table + link table.
-func PersistGitlabMR(ctx context.Context, repos ReviewArtifactRepos, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) error {
+func PersistGitlabMR(
+	ctx context.Context,
+	repos ReviewArtifactRepos,
+	workspaceID, workItemID string,
+	artifact domain.ReviewArtifact,
+	projectPath string,
+	iid int,
+) error {
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}

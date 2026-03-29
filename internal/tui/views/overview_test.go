@@ -867,7 +867,9 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	app.rebuildSidebar()
 	app.sidebar.SelectWorkItem("wi-failed")
 	if cmd := app.updateContentFromState(); cmd != nil {
-		_, _ = app.Update(cmd().(tea.Msg))
+		if msg := cmd(); msg != nil {
+			_, _ = app.Update(msg)
+		}
 	}
 
 	if app.content.mode != ContentModeOverview {

@@ -85,7 +85,7 @@ func ResolveSentryContext(cfg SentryConfig) ResolvedSentryContext {
 	}
 }
 
-func ResolveSentryAuth(ctx context.Context, cfg SentryConfig) (ResolvedSentryAuth, error) {
+func ResolveSentryAuth(_ context.Context, cfg SentryConfig) (ResolvedSentryAuth, error) {
 	resolved := ResolveSentryContext(cfg)
 	result := ResolvedSentryAuth{
 		BaseURL:      resolved.BaseURL,

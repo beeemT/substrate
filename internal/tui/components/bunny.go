@@ -49,9 +49,9 @@ func BunnyCloseCmd() tea.Cmd {
 // The hop count (2 or 3) is chosen at fire time so that multiple instances
 // started at the same wall-clock second don't all hop in sync.
 func BunnyHopIdleCmd() tea.Cmd {
-	delay := time.Duration(10+rand.Intn(16)) * time.Second
+	delay := time.Duration(10+rand.Intn(16)) * time.Second //nolint:gosec // UI-only hop timing jitter; not used for secrets or security decisions.
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return BunnyHopTriggerMsg{Hops: 2 + rand.Intn(2)}
+		return BunnyHopTriggerMsg{Hops: 2 + rand.Intn(2)} //nolint:gosec // UI-only hop count variation; not used for secrets or security decisions.
 	})
 }
 

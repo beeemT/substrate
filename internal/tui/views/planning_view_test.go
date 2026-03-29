@@ -409,7 +409,6 @@ func TestSessionLogSilenceNoticeAppearsInView(t *testing.T) {
 func TestSessionLogSilenceNoticeFitsWidth(t *testing.T) {
 	t.Parallel()
 	for _, width := range []int{20, 40, 80} {
-		width := width
 		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
 			t.Parallel()
 			m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))

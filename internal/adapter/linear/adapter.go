@@ -617,7 +617,6 @@ func optionalStrings(values []string) any {
 	return values
 }
 
-
 func (a *LinearAdapter) fetchIssuesByIDs(ctx context.Context, ids []string) ([]linearIssue, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -842,7 +841,6 @@ func linearInitiativeMetadata(init linearInitiative, trackerRefs ...domain.Track
 		"tracker_refs":             trackerRefs,
 	}
 }
-
 
 func initiativeProjectNames(init linearInitiative) []string {
 	names := make([]string, 0, len(init.Projects.Nodes))

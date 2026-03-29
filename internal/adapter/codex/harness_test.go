@@ -424,9 +424,9 @@ exit 1
 
 	h := NewHarness(config.CodexConfig{})
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
-		SessionID:    "s-log",
-		WorktreePath: t.TempDir(),
-		UserPrompt:   "test",
+		SessionID:     "s-log",
+		WorktreePath:  t.TempDir(),
+		UserPrompt:    "test",
 		SessionLogDir: logDir,
 	})
 	if err != nil {
@@ -545,9 +545,9 @@ exit 1
 
 	h := NewHarness(config.CodexConfig{})
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
-		SessionID:    "s-log-multi",
-		WorktreePath: t.TempDir(),
-		UserPrompt:   "first",
+		SessionID:     "s-log-multi",
+		WorktreePath:  t.TempDir(),
+		UserPrompt:    "first",
 		SessionLogDir: logDir,
 	})
 	if err != nil {
@@ -688,7 +688,6 @@ exit 1
 		t.Fatalf("Wait error = %q; want it to contain 'rate limit exceeded'", waitErr.Error())
 	}
 }
-
 
 // ---------------------------------------------------------------------------
 // Session lifecycle: Abort, Wait, SendMessage guards

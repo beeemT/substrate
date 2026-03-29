@@ -135,9 +135,9 @@ func NewPlanningService(
 // planRunRequest carries all inputs to planRun. Fields beyond workItemID are
 // empty for initial planning runs.
 type planRunRequest struct {
-	workItemID        string
-	revisionFeedback  string
-	currentPlanText   string
+	workItemID       string
+	revisionFeedback string
+	currentPlanText  string
 	priorSessionID   string
 	priorResumeInfo  map[string]string
 	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
@@ -189,12 +189,12 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
 	return s.planRun(ctx, planRunRequest{
-		workItemID:        workItemID,
-		revisionFeedback:  feedback,
+		workItemID:       workItemID,
+		revisionFeedback: feedback,
 		currentPlanText:  currentPlanText,
 		priorSessionID:   priorSessionID,
 		priorResumeInfo:  priorResumeInfo,
-		replacePlanID:     oldPlanID,
+		replacePlanID:    oldPlanID,
 	})
 }
 

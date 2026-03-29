@@ -17,7 +17,7 @@ func macOSKeyFilter(_ tea.Model, msg tea.Msg) tea.Msg {
 	if os.Getenv("SUBSTRATE_KEY_DEBUG") == "1" {
 		if f, err := os.OpenFile("/tmp/substrate-keys.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 			fmt.Fprintf(f, "%T %+v\n", msg, msg)
-			f.Close() //nolint:errcheck
+			f.Close()
 		}
 	}
 	return msg

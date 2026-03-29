@@ -370,12 +370,10 @@ func (m SidebarModel) View() string {
 	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
 	lines = append(lines, components.RenderDivider(m.styles, width))
-	start, end := 0, len(m.entries)
+	var start, end int
 	// Determine visible entries based on row budget.
 	availableRows := m.height - len(lines)
-	if availableRows <= 0 {
-		start, end = 0, 0
-	} else {
+	if availableRows > 0 {
 		// Count how many entries fit the budget.
 		rowBudget := availableRows
 		visibleRowCount := 0

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	atomic "github.com/beeemT/go-atomic"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 
@@ -47,19 +48,150 @@ func main() {
 
 var Version = "dev"
 
-func run() error { //nolint:funlen
-	args := os.Args[1:]
-	if len(args) > 0 {
-		switch args[0] {
-		case "--help", "-h", "help":
-			printUsage()
-			return nil
-		case "--version", "-v", "version":
-			fmt.Println(Version)
-			return nil
-		}
+type workspaceContext struct {
+	ID   string
+	Name string
+	Dir  string
+}
+
+type coreServices struct {
+	workItem        *service.SessionService
+	plan            *service.PlanService
+	workspace       *service.WorkspaceService
+	task            *service.TaskService
+	question        *service.QuestionService
+	instance        *service.InstanceService
+	review          *service.ReviewService
+	event           *service.EventService
+	githubPR        *service.GithubPRService
+	gitlabMR        *service.GitlabMRService
+	sessionArtifact *service.SessionReviewArtifactService
+	settings        *views.SettingsService
+}
+
+type adapterSetup struct {
+	workItem      []adapter.WorkItemAdapter
+	repoLifecycle []adapter.RepoLifecycleAdapter
+	warnings      []string
+	adapterErrors chan views.AdapterErrorMsg
+}
+
+type orchestrationRuntime struct {
+	gitClient      *gitwork.Client
+	harnesses      app.AgentHarnesses
+	planning       *orchestrator.PlanningService
+	reviewPipeline *orchestrator.ReviewPipeline
+	foreman        *orchestrator.Foreman
+	implementation *orchestrator.ImplementationService
+	resumption     *orchestrator.Resumption
+	registry       *orchestrator.SessionRegistry
+}
+
+func run() error {
+	if handleCLIArgs(os.Args[1:]) {
+		return nil
 	}
 
+	logStore, logToasts := initTUILogging()
+
+	cfg, err := loadRuntimeConfig()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	db, err := openDatabase(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	remote := dbRemote{db}
+	eventRepo := sqlite.NewEventRepo(remote)
+	transacter := sqlite.NewTransacter(db)
+	services := buildCoreServices(transacter, eventRepo)
+
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	workspace, err := detectWorkspace(ctx, services.workspace)
+	if err != nil {
+		return err
+	}
+
+	instanceID := registerInstance(ctx, services.instance, workspace.ID)
+
+	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
+		return fmt.Errorf("load config secrets: %w", err)
+	}
+
+	adapters, err := buildAdapterSetup(ctx, cfg, workspace, services, bus)
+	if err != nil {
+		return err
+	}
+
+	runtime, err := buildOrchestrationRuntime(cfg, workspace.Dir, services, bus)
+	if err != nil {
+		return err
+	}
+
+	settingsData, err := services.settings.Snapshot(cfg)
+	if err != nil {
+		return fmt.Errorf("load settings snapshot: %w", err)
+	}
+
+	return views.RunTUI(views.Services{
+		Session:          services.workItem,
+		Plan:             services.plan,
+		Task:             services.task,
+		Question:         services.question,
+		Instance:         services.instance,
+		Workspace:        services.workspace,
+		Review:           services.review,
+		Events:           services.event,
+		GithubPRs:        services.githubPR,
+		GitlabMRs:        services.gitlabMR,
+		SessionArtifacts: services.sessionArtifact,
+		Cfg:              cfg,
+		Adapters:         adapters.workItem,
+		Harnesses:        runtime.harnesses,
+		Settings:         services.settings,
+		SettingsData:     settingsData,
+		GitClient:        runtime.gitClient,
+		Bus:              bus,
+		AdapterErrors:    adapters.adapterErrors,
+		StartupWarnings:  adapters.warnings,
+		LogStore:         logStore,
+		LogToasts:        logToasts,
+		InstanceID:       instanceID,
+		WorkspaceID:      workspace.ID,
+		WorkspaceName:    workspace.Name,
+		WorkspaceDir:     workspace.Dir,
+		Planning:         runtime.planning,
+		Implementation:   runtime.implementation,
+		ReviewPipeline:   runtime.reviewPipeline,
+		Resumption:       runtime.resumption,
+		Foreman:          runtime.foreman,
+		SessionRegistry:  runtime.registry,
+	})
+}
+
+func handleCLIArgs(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	switch args[0] {
+	case "--help", "-h", "help":
+		printUsage()
+		return true
+	case "--version", "-v", "version":
+		fmt.Println(Version)
+		return true
+	default:
+		return false
+	}
+}
+
+func initTUILogging() (*tuilog.Store, chan tuilog.ToastEntry) {
 	// Install a TUI-aware slog handler that captures log entries into an
 	// in-memory buffer and sends warn/error entries to a channel for toast
 	// display. This replaces the default text handler, which would write to
@@ -68,35 +200,44 @@ func run() error { //nolint:funlen
 	logToasts := make(chan tuilog.ToastEntry, 64)
 	slog.SetDefault(slog.New(tuilog.NewHandler(logStore, logToasts)))
 
-	// Get paths from config package (respects SUBSTRATE_HOME)
+	return logStore, logToasts
+}
+
+func loadRuntimeConfig() (*config.Config, error) {
 	globalDir, err := config.GlobalDir()
 	if err != nil {
-		return fmt.Errorf("getting global directory: %w", err)
+		return nil, fmt.Errorf("getting global directory: %w", err)
 	}
 
-	// Ensure global directory exists
 	if err := os.MkdirAll(globalDir, 0o750); err != nil {
-		return fmt.Errorf("creating global directory: %w", err)
+		return nil, fmt.Errorf("creating global directory: %w", err)
 	}
 
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
-		return fmt.Errorf("getting config path: %w", err)
+		return nil, fmt.Errorf("getting config path: %w", err)
 	}
 
-	// Global self-initialization: create default config if not exists
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		if err := initializeGlobalConfig(cfgPath); err != nil {
-			return fmt.Errorf("initializing global config: %w", err)
+			return nil, fmt.Errorf("initializing global config: %w", err)
 		}
 	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
-	// Ensure sessions directory exists.
+	if err := ensureSessionsDir(); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+func ensureSessionsDir() error {
+	// Ensure sessions directory exists. The TUI tails logs from this location at runtime.
 	sessionsDir, err := config.SessionsDir()
 	if err != nil {
 		return fmt.Errorf("getting sessions directory: %w", err)
@@ -104,18 +245,20 @@ func run() error { //nolint:funlen
 	if err := os.MkdirAll(sessionsDir, 0o750); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
-	_ = sessionsDir // used at runtime by TUI log tailing
 
-	// Open database.
+	return nil
+}
+
+func openDatabase(ctx context.Context) (*sqlx.DB, error) {
 	dbPath, err := config.GlobalDBPath()
 	if err != nil {
-		return fmt.Errorf("getting database path: %w", err)
+		return nil, fmt.Errorf("getting database path: %w", err)
 	}
+
 	db, err := sqlx.Open("sqlite", dbPath)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		return nil, fmt.Errorf("opening database: %w", err)
 	}
-	defer db.Close()
 
 	// Harden database file permissions — the file may have been created with
 	// the process umask (often 0644); restrict to owner-only access.
@@ -123,32 +266,33 @@ func run() error { //nolint:funlen
 		slog.Warn("failed to set database permissions", "path", dbPath, "err", err)
 	}
 
-	ctx := context.Background()
-
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
 	} {
 		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			return fmt.Errorf("set pragma: %w", err)
+			db.Close()
+			return nil, fmt.Errorf("set pragma: %w", err)
 		}
 	}
 
 	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
-		return fmt.Errorf("running migrations: %w", err)
+		db.Close()
+		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Build repositories.
-	remote := dbRemote{db}
-	eventRepo := sqlite.NewEventRepo(remote)
-	transacter := sqlite.NewTransacter(db)
+	return db, nil
+}
 
-	// Build services.
+func buildCoreServices(
+	transacter atomic.Transacter[repository.Resources],
+	eventRepo repository.EventRepository,
+) coreServices {
 	workItemSvc := service.NewSessionService(transacter)
 	planSvc := service.NewPlanService(transacter)
 	workspaceSvc := service.NewWorkspaceService(transacter)
-	sessionSvc := service.NewTaskService(transacter)
+	taskSvc := service.NewTaskService(transacter)
 	questionSvc := service.NewQuestionService(transacter)
 	instanceSvc := service.NewInstanceService(transacter)
 	reviewSvc := service.NewReviewService(transacter)
@@ -157,274 +301,352 @@ func run() error { //nolint:funlen
 	glMRSvc := service.NewGitlabMRService(transacter)
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(transacter)
 
-	settingsSvc := views.NewSettingsService(
-		transacter, planSvc, eventRepo, config.OSKeychainStore{},
-	)
+	return coreServices{
+		workItem:        workItemSvc,
+		plan:            planSvc,
+		workspace:       workspaceSvc,
+		task:            taskSvc,
+		question:        questionSvc,
+		instance:        instanceSvc,
+		review:          reviewSvc,
+		event:           eventSvc,
+		githubPR:        ghPRSvc,
+		gitlabMR:        glMRSvc,
+		sessionArtifact: sessionArtifactSvc,
+		settings: views.NewSettingsService(
+			transacter, planSvc, eventRepo, config.OSKeychainStore{},
+		),
+	}
+}
 
-	// Build event bus.
-	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
-	// Detect workspace from cwd.
+func detectWorkspace(ctx context.Context, workspaceSvc *service.WorkspaceService) (workspaceContext, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
+		return workspaceContext{}, fmt.Errorf("getting working directory: %w", err)
 	}
-	var workspaceID, workspaceName, workspaceDir string
+
 	wsDir, wsFile, wsErr := gitwork.FindWorkspace(cwd)
-	if wsErr == nil {
-		workspaceDir = wsDir
-		workspaceName = wsFile.Name
-		ws, getErr := workspaceSvc.Get(context.Background(), wsFile.ID)
-		if getErr != nil {
-			slog.Warn("workspace file found but not in DB; will prompt init", "id", wsFile.ID, "err", getErr)
-		} else {
-			workspaceID = ws.ID
-			workspaceName = ws.Name
+	if wsErr != nil {
+		if gitwork.IsNotInWorkspace(wsErr) {
+			return workspaceContext{}, nil
 		}
-	} else if !gitwork.IsNotInWorkspace(wsErr) {
-		return fmt.Errorf("detecting workspace: %w", wsErr)
+		return workspaceContext{}, fmt.Errorf("detecting workspace: %w", wsErr)
 	}
 
-	// Register instance if workspace is known.
-	instanceID := ""
-	if workspaceID != "" {
-		host, _ := os.Hostname()
-		inst := domain.SubstrateInstance{
-			ID:          domain.NewID(),
-			WorkspaceID: workspaceID,
-			PID:         os.Getpid(),
-			Hostname:    host,
-		}
-		if err := instanceSvc.Create(context.Background(), inst); err != nil {
-			slog.Warn("failed to register instance", "err", err)
-		} else {
-			instanceID = inst.ID
-		}
+	workspace := workspaceContext{
+		Dir:  wsDir,
+		Name: wsFile.Name,
 	}
 
-	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
-		return fmt.Errorf("load config secrets: %w", err)
+	ws, err := workspaceSvc.Get(ctx, wsFile.ID)
+	if err != nil {
+		slog.Warn("workspace file found but not in DB; will prompt init", "id", wsFile.ID, "err", err)
+		return workspace, nil
 	}
 
-	// Build adapters.
-	var adapters []adapter.WorkItemAdapter
+	workspace.ID = ws.ID
+	workspace.Name = ws.Name
+
+	return workspace, nil
+}
+
+func registerInstance(ctx context.Context, instanceSvc *service.InstanceService, workspaceID string) string {
+	if workspaceID == "" {
+		return ""
+	}
+
+	host, _ := os.Hostname()
+	inst := domain.SubstrateInstance{
+		ID:          domain.NewID(),
+		WorkspaceID: workspaceID,
+		PID:         os.Getpid(),
+		Hostname:    host,
+	}
+
+	if err := instanceSvc.Create(ctx, inst); err != nil {
+		slog.Warn("failed to register instance", "err", err)
+		return ""
+	}
+
+	return inst.ID
+}
+
+func buildAdapterSetup(
+	ctx context.Context,
+	cfg *config.Config,
+	workspace workspaceContext,
+	services coreServices,
+	bus *event.Bus,
+) (adapterSetup, error) {
+	var workItemAdapters []adapter.WorkItemAdapter
 	var adapterWarnings []string
-	if workspaceID != "" {
-		adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, workspaceID, workItemSvc)
+	if workspace.ID != "" {
+		workItemAdapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, workspace.ID, services.workItem)
 	}
-	artifactRepos := adapter.ReviewArtifactRepos{
-		Events:           eventSvc,
-		GithubPRs:        ghPRSvc,
-		GitlabMRs:        glMRSvc,
-		SessionArtifacts: sessionArtifactSvc,
-	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, workspaceDir, artifactRepos)
+
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(
+		ctx,
+		cfg,
+		workspace.Dir,
+		adapter.ReviewArtifactRepos{
+			Events:           services.event,
+			GithubPRs:        services.githubPR,
+			GitlabMRs:        services.gitlabMR,
+			SessionArtifacts: services.sessionArtifact,
+		},
+	)
 	adapterErrors := make(chan views.AdapterErrorMsg, 16)
 
-	for _, workItemAdapter := range adapters {
-		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted))
-		if subErr != nil {
-			return fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
-		}
-		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
-			for evt := range events {
-				var lastErr error
-				for attempt := 0; attempt < 3; attempt++ {
-					if err := a.OnEvent(context.Background(), evt); err != nil {
-						lastErr = err
-						if attempt < 2 {
-							// PermissionError is permanent; retrying will not help.
-							if errors.As(lastErr, new(*adapter.PermissionError)) {
-								break
-							}
-							time.Sleep(time.Duration(attempt+1) * time.Second)
-						}
-						continue
-					}
-					lastErr = nil
-					break
-				}
-				if lastErr != nil {
-					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
-					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
-						ID:          domain.NewID(),
-						EventType:   string(domain.EventAdapterError),
-						WorkspaceID: evt.WorkspaceID,
-						Payload:     errPayload,
-						CreatedAt:   time.Now(),
-					}); pubErr != nil {
-						slog.Warn("failed to publish adapter error event", "adapter", a.Name(), "err", pubErr)
-					}
-					select {
-					case adapterErrors <- views.AdapterErrorMsg{
-						Adapter:   a.Name(),
-						EventType: evt.EventType,
-						Err:       lastErr,
-						Retries:   2,
-					}:
-					default:
-					}
-				}
-			}
-		}(workItemAdapter, sub.C)
+	if err := subscribeWorkItemAdapters(bus, workItemAdapters, adapterErrors); err != nil {
+		return adapterSetup{}, err
 	}
-	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted))
-		if subErr != nil {
-			return fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
-		}
-		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
-			for evt := range events {
-				var lastErr error
-				for attempt := 0; attempt < 3; attempt++ {
-					if err := a.OnEvent(context.Background(), evt); err != nil {
-						lastErr = err
-						if attempt < 2 {
-							// PermissionError is permanent; retrying will not help.
-							if errors.As(lastErr, new(*adapter.PermissionError)) {
-								break
-							}
-							time.Sleep(time.Duration(attempt+1) * time.Second)
-						}
-						continue
-					}
-					lastErr = nil
-					break
-				}
-				if lastErr != nil {
-					slog.Warn("adapter event failed after retries", "adapter", a.Name(), "event", evt.EventType, "err", lastErr, "retries", 2)
-					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
-						ID:          domain.NewID(),
-						EventType:   string(domain.EventAdapterError),
-						WorkspaceID: evt.WorkspaceID,
-						Payload:     errPayload,
-						CreatedAt:   time.Now(),
-					}); pubErr != nil {
-						slog.Warn("failed to publish adapter error event", "adapter", a.Name(), "err", pubErr)
-					}
-					select {
-					case adapterErrors <- views.AdapterErrorMsg{
-						Adapter:   a.Name(),
-						EventType: evt.EventType,
-						Err:       lastErr,
-						Retries:   2,
-					}:
-					default:
-					}
-				}
-			}
-		}(lifecycleAdapter, sub.C)
+	if err := subscribeRepoLifecycleAdapters(bus, repoLifecycleAdapters, adapterErrors); err != nil {
+		return adapterSetup{}, err
 	}
 
-	// Start PR/MR state refresh for lifecycle adapters.
-	for _, la := range repoLifecycleAdapters {
-		type prRefresher interface {
-			StartPRRefresh(ctx context.Context, workspaceID string)
+	startRepoLifecycleRefresh(ctx, repoLifecycleAdapters, workspace.ID)
+
+	return adapterSetup{
+		workItem:      workItemAdapters,
+		repoLifecycle: repoLifecycleAdapters,
+		warnings:      adapterWarnings,
+		adapterErrors: adapterErrors,
+	}, nil
+}
+
+func subscribeWorkItemAdapters(
+	bus *event.Bus,
+	adapters []adapter.WorkItemAdapter,
+	adapterErrors chan<- views.AdapterErrorMsg,
+) error {
+	return subscribeAdapters(
+		bus,
+		"work-item-adapter",
+		[]domain.EventType{domain.EventPlanApproved, domain.EventWorkItemCompleted},
+		adapters,
+		adapterErrors,
+	)
+}
+
+func subscribeRepoLifecycleAdapters(
+	bus *event.Bus,
+	adapters []adapter.RepoLifecycleAdapter,
+	adapterErrors chan<- views.AdapterErrorMsg,
+) error {
+	return subscribeAdapters(
+		bus,
+		"repo-lifecycle-adapter",
+		[]domain.EventType{
+			domain.EventWorktreeCreated,
+			domain.EventWorktreeReused,
+			domain.EventWorkItemCompleted,
+		},
+		adapters,
+		adapterErrors,
+	)
+}
+
+type eventDrivenAdapter interface {
+	Name() string
+	OnEvent(context.Context, domain.SystemEvent) error
+}
+
+func subscribeAdapters[T eventDrivenAdapter](
+	bus *event.Bus,
+	subscriberPrefix string,
+	eventTypes []domain.EventType,
+	adapters []T,
+	adapterErrors chan<- views.AdapterErrorMsg,
+) error {
+	for _, candidate := range adapters {
+		sub, err := bus.Subscribe(
+			subscriberPrefix+":"+candidate.Name(),
+			eventTypeStrings(eventTypes)...,
+		)
+		if err != nil {
+			return fmt.Errorf("subscribe %s %s: %w", subscriberPrefix, candidate.Name(), err)
 		}
-		type mrRefresher interface {
-			StartMRRefresh(ctx context.Context, workspaceID string)
-		}
-		if r, ok := la.(prRefresher); ok && workspaceID != "" {
-			r.StartPRRefresh(ctx, workspaceID)
-		}
-		if r, ok := la.(mrRefresher); ok && workspaceID != "" {
-			r.StartMRRefresh(ctx, workspaceID)
-		}
+
+		go runAdapterEventLoop(candidate, bus, sub.C, adapterErrors)
 	}
 
-	// Build gitwork client.
+	return nil
+}
+
+func eventTypeStrings(eventTypes []domain.EventType) []string {
+	values := make([]string, 0, len(eventTypes))
+	for _, eventType := range eventTypes {
+		values = append(values, string(eventType))
+	}
+
+	return values
+}
+
+func runAdapterEventLoop[T eventDrivenAdapter](
+	adapterInstance T,
+	bus *event.Bus,
+	events <-chan domain.SystemEvent,
+	adapterErrors chan<- views.AdapterErrorMsg,
+) {
+	for evt := range events {
+		if err := handleAdapterEvent(adapterInstance, evt); err != nil {
+			slog.Warn(
+				"adapter event failed after retries",
+				"adapter", adapterInstance.Name(),
+				"event", evt.EventType,
+				"err", err,
+				"retries", 2,
+			)
+			publishAdapterError(context.Background(), bus, adapterInstance.Name(), evt, err)
+			reportAdapterError(adapterErrors, adapterInstance.Name(), evt.EventType, err)
+		}
+	}
+}
+
+func handleAdapterEvent[T eventDrivenAdapter](adapterInstance T, evt domain.SystemEvent) error {
+	var lastErr error
+	for attempt := range 3 {
+		if err := adapterInstance.OnEvent(context.Background(), evt); err != nil {
+			lastErr = err
+			if attempt < 2 {
+				// PermissionError is permanent; retrying will not help.
+				if errors.As(lastErr, new(*adapter.PermissionError)) {
+					break
+				}
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+			}
+			continue
+		}
+		return nil
+	}
+
+	return lastErr
+}
+
+func publishAdapterError(ctx context.Context, bus *event.Bus, adapterName string, evt domain.SystemEvent, err error) {
+	errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, adapterName, evt.EventType, err.Error())
+	if pubErr := bus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAdapterError),
+		WorkspaceID: evt.WorkspaceID,
+		Payload:     errPayload,
+		CreatedAt:   time.Now(),
+	}); pubErr != nil {
+		slog.Warn("failed to publish adapter error event", "adapter", adapterName, "err", pubErr)
+	}
+}
+
+func reportAdapterError(
+	adapterErrors chan<- views.AdapterErrorMsg,
+	adapterName, eventType string,
+	err error,
+) {
+	select {
+	case adapterErrors <- views.AdapterErrorMsg{
+		Adapter:   adapterName,
+		EventType: eventType,
+		Err:       err,
+		Retries:   2,
+	}:
+	default:
+	}
+}
+
+func startRepoLifecycleRefresh(
+	ctx context.Context,
+	adapters []adapter.RepoLifecycleAdapter,
+	workspaceID string,
+) {
+	if workspaceID == "" {
+		return
+	}
+
+	type prRefresher interface {
+		StartPRRefresh(ctx context.Context, workspaceID string)
+	}
+	type mrRefresher interface {
+		StartMRRefresh(ctx context.Context, workspaceID string)
+	}
+
+	for _, lifecycleAdapter := range adapters {
+		if refresher, ok := lifecycleAdapter.(prRefresher); ok {
+			refresher.StartPRRefresh(ctx, workspaceID)
+		}
+		if refresher, ok := lifecycleAdapter.(mrRefresher); ok {
+			refresher.StartMRRefresh(ctx, workspaceID)
+		}
+	}
+}
+
+func buildOrchestrationRuntime(
+	cfg *config.Config,
+	workspaceDir string,
+	services coreServices,
+	bus *event.Bus,
+) (orchestrationRuntime, error) {
 	gitClient := gitwork.NewClient("")
-
-	// Build orchestration services.
-	// planningSvc may be nil if template compilation fails (extremely unlikely).
 	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
 	harnesses, err := app.BuildAgentHarnesses(cfg, workspaceDir)
 	if err != nil {
-		return fmt.Errorf("building agent harnesses: %w", err)
+		return orchestrationRuntime{}, fmt.Errorf("building agent harnesses: %w", err)
 	}
+
 	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
 	registry := orchestrator.NewSessionRegistry()
 	var planningSvc *orchestrator.PlanningService
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, registry, cfg,
+			services.plan, services.workItem, services.task, services.event, services.workspace, registry, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)
 		}
 	}
+
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(
-			cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
+			cfg, harnesses.Review, services.review, services.task, services.plan, services.workItem,
 			bus, registry,
 		)
 	}
+
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
 		foreman = orchestrator.NewForeman(
-			cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus,
+			cfg, harnesses.Foreman, services.plan, services.question, services.task, bus,
 		)
 	}
-	var implSvc *orchestrator.ImplementationService
+
+	var implementationSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(
+		implementationSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
-			planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
+			services.plan, services.workItem, services.task, services.workspace, registry,
 			reviewPipeline,
-			foreman, questionSvc,
-			reviewSvc,
+			foreman, services.question,
+			services.review,
 		)
 	}
+
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, sessionSvc, planSvc, bus, registry,
+			harnesses.Resume, services.task, services.plan, bus, registry,
 		)
 	}
-	settingsData, err := settingsSvc.Snapshot(cfg)
-	if err != nil {
-		return fmt.Errorf("load settings snapshot: %w", err)
-	}
 
-	svcs := views.Services{
-		Session:          workItemSvc,
-		Plan:             planSvc,
-		Task:             sessionSvc,
-		Question:         questionSvc,
-		Instance:         instanceSvc,
-		Workspace:        workspaceSvc,
-		Review:           reviewSvc,
-		Events:           eventSvc,
-		GithubPRs:        ghPRSvc,
-		GitlabMRs:        glMRSvc,
-		SessionArtifacts: sessionArtifactSvc,
-		Cfg:              cfg,
-		Adapters:         adapters,
-		Harnesses:        harnesses,
-		Settings:         settingsSvc,
-		SettingsData:     settingsData,
-		GitClient:        gitClient,
-		Bus:              bus,
-		AdapterErrors:    adapterErrors,
-		StartupWarnings:  adapterWarnings,
-		LogStore:         logStore,
-		LogToasts:        logToasts,
-		InstanceID:       instanceID,
-		WorkspaceID:      workspaceID,
-		WorkspaceName:    workspaceName,
-		WorkspaceDir:     workspaceDir,
-		Planning:         planningSvc,
-		Implementation:   implSvc,
-		ReviewPipeline:   reviewPipeline,
-		Resumption:       resumption,
-		Foreman:          foreman,
-		SessionRegistry:  registry,
-	}
-
-	return views.RunTUI(svcs)
+	return orchestrationRuntime{
+		gitClient:      gitClient,
+		harnesses:      harnesses,
+		planning:       planningSvc,
+		reviewPipeline: reviewPipeline,
+		foreman:        foreman,
+		implementation: implementationSvc,
+		resumption:     resumption,
+		registry:       registry,
+	}, nil
 }
 
 // initializeGlobalConfig creates the default config.yaml file.

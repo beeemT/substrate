@@ -167,7 +167,7 @@ func TestSessionRegistry_DoubleRegister(t *testing.T) {
 	}
 }
 
-func TestSessionRegistry_ConcurrentAccess(t *testing.T) {
+func TestSessionRegistry_ConcurrentAccess(_ *testing.T) {
 	reg := NewSessionRegistry()
 	const n = 50
 
@@ -208,7 +208,7 @@ func TestSessionRegistry_AbortAndDeregister(t *testing.T) {
 	}
 }
 
-func TestSessionRegistry_AbortAndDeregister_Unregistered(t *testing.T) {
+func TestSessionRegistry_AbortAndDeregister_Unregistered(_ *testing.T) {
 	reg := NewSessionRegistry()
 
 	// Should not panic on unregistered session.

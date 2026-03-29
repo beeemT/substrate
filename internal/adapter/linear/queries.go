@@ -1,5 +1,24 @@
 package linear
 
+import "strings"
+
+type queryVarFilter struct {
+	varName string
+	decl    string
+	filter  string
+}
+
+func appendOptionalFilters(vars map[string]any, optional []queryVarFilter, decls, filters *strings.Builder) {
+	for _, vf := range optional {
+		if v, ok := vars[vf.varName]; ok && v != nil {
+			decls.WriteString(", ")
+			decls.WriteString(vf.decl)
+			filters.WriteString("\n\t\t")
+			filters.WriteString(vf.filter)
+		}
+	}
+}
+
 // Issue fields included in all issue queries.
 // Expanded inline in each query below for explicitness.
 
@@ -36,16 +55,12 @@ const issueFields = `
 // the caller does not intend to filter on them.
 func buildIssueQuery(name string, vars map[string]any) string {
 	// Variable declarations — always include pagination.
-	decls := "$first: Int, $after: String"
+	var decls strings.Builder
+	decls.WriteString("$first: Int, $after: String")
 	// Filter conditions — only include when the variable is present and non-nil.
-	var filters string
+	var filters strings.Builder
 
-	type varFilter struct {
-		varName string
-		decl    string
-		filter  string
-	}
-	optional := []varFilter{
+	optional := []queryVarFilter{
 		{"teamId", "$teamId: ID", "team: { id: { eq: $teamId } }"},
 		{"assigneeId", "$assigneeId: ID!", "assignee: { id: { eq: $assigneeId } }"},
 		{"creatorId", "$creatorId: ID!", "creator: { id: { eq: $creatorId } }"},
@@ -53,32 +68,29 @@ func buildIssueQuery(name string, vars map[string]any) string {
 		{"search", "$search: String", "title: { containsIgnoreCase: $search }"},
 		{"labelNames", "$labelNames: [String!]", "labels: { name: { in: $labelNames } }"},
 	}
-	for _, vf := range optional {
-		if v, ok := vars[vf.varName]; ok && v != nil {
-			decls += ", " + vf.decl
-			filters += "\n\t\t" + vf.filter
-		}
-	}
+	appendOptionalFilters(vars, optional, &decls, &filters)
 
 	// State filter is composite (type + name); include the block only if at least
 	// one sub-condition is present.
 	stateTypes, hasTypes := vars["stateTypes"]
 	stateNames, hasNames := vars["stateNames"]
 	if (hasTypes && stateTypes != nil) || (hasNames && stateNames != nil) {
-		stateInner := ""
+		var stateInner strings.Builder
 		if hasTypes && stateTypes != nil {
-			decls += ", $stateTypes: [String!]"
-			stateInner += "\n\t\t\ttype: { in: $stateTypes }"
+			decls.WriteString(", $stateTypes: [String!]")
+			stateInner.WriteString("\n\t\t\ttype: { in: $stateTypes }")
 		}
 		if hasNames && stateNames != nil {
-			decls += ", $stateNames: [String!]"
-			stateInner += "\n\t\t\tname: { in: $stateNames }"
+			decls.WriteString(", $stateNames: [String!]")
+			stateInner.WriteString("\n\t\t\tname: { in: $stateNames }")
 		}
-		filters += "\n\t\tstate: {" + stateInner + "\n\t\t}"
+		filters.WriteString("\n\t\tstate: {")
+		filters.WriteString(stateInner.String())
+		filters.WriteString("\n\t\t}")
 	}
 
-	return "query " + name + "(" + decls + ") {\n\tissues(first: $first, after: $after, filter: {" +
-		filters + "\n\t}) {" + issueFields + "\t}\n}"
+	return "query " + name + "(" + decls.String() + ") {\n\tissues(first: $first, after: $after, filter: {" +
+		filters.String() + "\n\t}) {" + issueFields + "\t}\n}"
 }
 
 const projectFields = `
@@ -90,28 +102,19 @@ const projectFields = `
 `
 
 func buildProjectQuery(vars map[string]any) string {
-	decls := "$first: Int, $after: String"
-	var filters string
+	var decls strings.Builder
+	decls.WriteString("$first: Int, $after: String")
+	var filters strings.Builder
 
-	type varFilter struct {
-		varName string
-		decl    string
-		filter  string
-	}
-	optional := []varFilter{
+	optional := []queryVarFilter{
 		{"teamId", "$teamId: ID", "accessibleTeams: { id: { eq: $teamId } }"},
 		{"search", "$search: String", "name: { containsIgnoreCase: $search }"},
 		{"states", "$states: [String!]", "state: { in: $states }"},
 	}
-	for _, vf := range optional {
-		if v, ok := vars[vf.varName]; ok && v != nil {
-			decls += ", " + vf.decl
-			filters += "\n\t\t" + vf.filter
-		}
-	}
+	appendOptionalFilters(vars, optional, &decls, &filters)
 
-	return "query Projects(" + decls + ") {\n\tprojects(first: $first, after: $after, filter: {" +
-		filters + "\n\t}) {" + projectFields + "\t}\n}"
+	return "query Projects(" + decls.String() + ") {\n\tprojects(first: $first, after: $after, filter: {" +
+		filters.String() + "\n\t}) {" + projectFields + "\t}\n}"
 }
 
 const queryProjectWithIssues = `
@@ -144,27 +147,18 @@ const initiativeFields = `
 `
 
 func buildInitiativeQuery(vars map[string]any) string {
-	decls := "$first: Int, $after: String"
-	var filters string
+	var decls strings.Builder
+	decls.WriteString("$first: Int, $after: String")
+	var filters strings.Builder
 
-	type varFilter struct {
-		varName string
-		decl    string
-		filter  string
-	}
-	optional := []varFilter{
+	optional := []queryVarFilter{
 		{"search", "$search: String", "name: { containsIgnoreCase: $search }"},
 		{"statuses", "$statuses: [String!]", "status: { in: $statuses }"},
 	}
-	for _, vf := range optional {
-		if v, ok := vars[vf.varName]; ok && v != nil {
-			decls += ", " + vf.decl
-			filters += "\n\t\t" + vf.filter
-		}
-	}
+	appendOptionalFilters(vars, optional, &decls, &filters)
 
-	return "query Initiatives(" + decls + ") {\n\tinitiatives(first: $first, after: $after, filter: {" +
-		filters + "\n\t}) {" + initiativeFields + "\t}\n}"
+	return "query Initiatives(" + decls.String() + ") {\n\tinitiatives(first: $first, after: $after, filter: {" +
+		filters.String() + "\n\t}) {" + initiativeFields + "\t}\n}"
 }
 
 // stripNilVars removes nil-valued entries from vars so the GraphQL request

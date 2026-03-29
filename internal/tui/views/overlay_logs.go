@@ -46,14 +46,8 @@ func (l *LogsOverlay) Open() {
 	// Overlay frame border/padding adds 4 more (top/bottom padding 1 each + border 1 each).
 	const chromeRows = 4
 	const frameRows = 4
-	maxH := l.height - frameRows
-	if maxH < chromeRows+3 {
-		maxH = chromeRows + 3
-	}
-	vpH := maxH - chromeRows
-	if vpH < 1 {
-		vpH = 1
-	}
+	maxH := max(chromeRows+3, l.height-frameRows)
+	vpH := max(1, maxH-chromeRows)
 
 	innerW := l.overlayInnerWidth()
 	l.vp = viewport.New(innerW, vpH)
@@ -63,7 +57,7 @@ func (l *LogsOverlay) Open() {
 }
 
 // Update handles key/mouse events while the overlay is active.
-func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
+func (l *LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -72,28 +66,28 @@ func (l LogsOverlay) Update(msg tea.Msg) (LogsOverlay, tea.Cmd) {
 			if clipErr := clipboard.WriteAll(l.clipboardContent()); clipErr != nil {
 				slog.Warn("failed to copy log to clipboard", "error", clipErr)
 			}
-			return l, func() tea.Msg { return ActionDoneMsg{Message: "Log copied to clipboard"} }
-		case "esc":
-			return l, func() tea.Msg { return CloseOverlayMsg{} }
+			return *l, func() tea.Msg { return ActionDoneMsg{Message: "Log copied to clipboard"} }
+		case keyEsc:
+			return *l, func() tea.Msg { return CloseOverlayMsg{} }
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			if msg.Action == tea.MouseActionPress {
 				var cmd tea.Cmd
 				l.vp, cmd = l.vp.Update(msg)
-				return l, cmd
+				return *l, cmd
 			}
 		}
-		return l, nil
+		return *l, nil
 	}
 
 	var cmd tea.Cmd
 	l.vp, cmd = l.vp.Update(msg)
-	return l, cmd
+	return *l, cmd
 }
 
 // View renders the logs overlay.
-func (l LogsOverlay) View() string {
+func (l *LogsOverlay) View() string {
 	if !l.ready {
 		return ""
 	}
@@ -106,18 +100,12 @@ func (l LogsOverlay) View() string {
 	return l.st.OverlayFrame.Padding(1, 3).Render(sb.String())
 }
 
-func (l LogsOverlay) overlayInnerWidth() int {
-	w := l.width * 3 / 4
-	if w < 60 {
-		w = 60
-	}
-	if w > l.width-4 {
-		w = l.width - 4
-	}
+func (l *LogsOverlay) overlayInnerWidth() int {
+	w := min(l.width-4, max(60, l.width*3/4))
 	return w
 }
 
-func (l LogsOverlay) renderContent() string {
+func (l *LogsOverlay) renderContent() string {
 	if l.store == nil {
 		return "(no log store)"
 	}
@@ -128,10 +116,7 @@ func (l LogsOverlay) renderContent() string {
 
 	innerW := l.overlayInnerWidth()
 	// Account for padding inside OverlayFrame (3 left + 3 right = 6).
-	textW := innerW - 6
-	if textW < 20 {
-		textW = 20
-	}
+	textW := max(20, innerW-6)
 
 	// Gutter sizing matches renderPlanReviewContent: right-aligned line
 	// number, fixed separator, remaining width for wrapped content.
@@ -172,7 +157,7 @@ func (l LogsOverlay) renderContent() string {
 // clipboardContent returns the log entries as raw plain text for clipboard
 // use: one entry per line, no line numbers, no separator, no ANSI codes,
 // and no wrapping — Entry.String() is purpose-built for this.
-func (l LogsOverlay) clipboardContent() string {
+func (l *LogsOverlay) clipboardContent() string {
 	if l.store == nil {
 		return ""
 	}
@@ -185,7 +170,7 @@ func (l LogsOverlay) clipboardContent() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func (l LogsOverlay) levelStyle(level slog.Level) lipgloss.Style {
+func (l *LogsOverlay) levelStyle(level slog.Level) lipgloss.Style {
 	switch {
 	case level >= slog.LevelError:
 		return l.st.Error

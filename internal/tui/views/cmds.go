@@ -264,10 +264,6 @@ func WorkspaceHealthCheckCmd(dir string) tea.Cmd {
 	}
 }
 
-func scanSessionInteraction(r io.Reader) ([]sessionlog.Entry, error) {
-	return sessionlog.ScanEntries(r)
-}
-
 func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 	pattern := filepath.Join(sessionsDir, sessionID+".log.*.gz")
 	compressed, err := filepath.Glob(pattern)

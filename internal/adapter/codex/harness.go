@@ -22,7 +22,10 @@ import (
 
 // jsonFlag is the canonical --json flag name for `codex exec`.
 // --experimental-json is an alias; we use the canonical form.
-const jsonFlag = "--json"
+const (
+	jsonFlag    = "--json"
+	codexBinary = "codex"
+)
 
 // Harness implements adapter.AgentHarness for Codex CLI.
 type Harness struct {
@@ -33,7 +36,7 @@ func NewHarness(cfg config.CodexConfig) *Harness {
 	return &Harness{cfg: cfg}
 }
 
-func (h *Harness) Name() string { return "codex" }
+func (h *Harness) Name() string { return codexBinary }
 
 func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 	return adapter.HarnessCapabilities{
@@ -53,7 +56,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	}
 	binary := h.cfg.BinaryPath
 	if binary == "" {
-		binary = "codex"
+		binary = codexBinary
 	}
 
 	prompt := buildPrompt(opts.SystemPrompt, opts.UserPrompt)
@@ -149,7 +152,7 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 	case "check_auth":
 		binary := h.cfg.BinaryPath
 		if binary == "" {
-			binary = "codex"
+			binary = codexBinary
 		}
 		if _, err := exec.LookPath(binary); err != nil {
 			return adapter.HarnessActionResult{}, err
@@ -456,8 +459,8 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 	if err != nil {
 		return nil, nil, fmt.Errorf("create stdin pipe: %w", err)
 	}
-	var stdoutR_, stdoutW *os.File
-	stdoutR_, stdoutW, err = os.Pipe()
+	var stdoutRead, stdoutWrite *os.File
+	stdoutRead, stdoutWrite, err = os.Pipe()
 	if err != nil {
 		if err := stdinR.Close(); err != nil {
 			slog.Warn("failed to close stdin read end during cleanup", "error", err)
@@ -467,8 +470,8 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 		}
 		return nil, nil, fmt.Errorf("create stdout pipe: %w", err)
 	}
-	var stderrR_, stderrW *os.File
-	stderrR_, stderrW, err = os.Pipe()
+	var stderrRead, stderrWrite *os.File
+	stderrRead, stderrWrite, err = os.Pipe()
 	if err != nil {
 		if err := stdinR.Close(); err != nil {
 			slog.Warn("failed to close stdin read end during cleanup", "error", err)
@@ -476,17 +479,17 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 		if err := stdinW.Close(); err != nil {
 			slog.Warn("failed to close stdin write end during cleanup", "error", err)
 		}
-		if err := stdoutR_.Close(); err != nil {
+		if err := stdoutRead.Close(); err != nil {
 			slog.Warn("failed to close stdout read end during cleanup", "error", err)
 		}
-		if err := stdoutW.Close(); err != nil {
+		if err := stdoutWrite.Close(); err != nil {
 			slog.Warn("failed to close stdout write end during cleanup", "error", err)
 		}
 		return nil, nil, fmt.Errorf("create stderr pipe: %w", err)
 	}
 	cmd.Stdin = stdinR
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
+	cmd.Stdout = stdoutWrite
+	cmd.Stderr = stderrWrite
 	if err = cmd.Start(); err != nil {
 		if err := stdinR.Close(); err != nil {
 			slog.Warn("failed to close stdin read end during cleanup", "error", err)
@@ -494,16 +497,16 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 		if err := stdinW.Close(); err != nil {
 			slog.Warn("failed to close stdin write end during cleanup", "error", err)
 		}
-		if err := stdoutR_.Close(); err != nil {
+		if err := stdoutRead.Close(); err != nil {
 			slog.Warn("failed to close stdout read end during cleanup", "error", err)
 		}
-		if err := stdoutW.Close(); err != nil {
+		if err := stdoutWrite.Close(); err != nil {
 			slog.Warn("failed to close stdout write end during cleanup", "error", err)
 		}
-		if err := stderrR_.Close(); err != nil {
+		if err := stderrRead.Close(); err != nil {
 			slog.Warn("failed to close stderr read end during cleanup", "error", err)
 		}
-		if err := stderrW.Close(); err != nil {
+		if err := stderrWrite.Close(); err != nil {
 			slog.Warn("failed to close stderr write end during cleanup", "error", err)
 		}
 		return nil, nil, fmt.Errorf("start process: %w", err)
@@ -513,20 +516,20 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 	if closeErr := stdinR.Close(); closeErr != nil {
 		slog.Warn("failed to close stdin read end after process start", "error", closeErr)
 	}
-	if closeErr := stdoutW.Close(); closeErr != nil {
+	if closeErr := stdoutWrite.Close(); closeErr != nil {
 		slog.Warn("failed to close stdout write end after process start", "error", closeErr)
 	}
-	if closeErr := stderrW.Close(); closeErr != nil {
+	if closeErr := stderrWrite.Close(); closeErr != nil {
 		slog.Warn("failed to close stderr write end after process start", "error", closeErr)
 	}
 	if _, err = io.WriteString(stdinW, input); err != nil {
 		if err := cmd.Process.Kill(); err != nil {
 			slog.Warn("failed to kill process during cleanup", "error", err)
 		}
-		if err := stdoutR_.Close(); err != nil {
+		if err := stdoutRead.Close(); err != nil {
 			slog.Warn("failed to close stdout read end during cleanup", "error", err)
 		}
-		if err := stderrR_.Close(); err != nil {
+		if err := stderrRead.Close(); err != nil {
 			slog.Warn("failed to close stderr read end during cleanup", "error", err)
 		}
 		return nil, nil, fmt.Errorf("write stdin: %w", err)
@@ -535,15 +538,15 @@ func startWithInput(cmd *exec.Cmd, input string) (stdoutR, stderrR *os.File, err
 		if err := cmd.Process.Kill(); err != nil {
 			slog.Warn("failed to kill process during cleanup", "error", err)
 		}
-		if err := stdoutR_.Close(); err != nil {
+		if err := stdoutRead.Close(); err != nil {
 			slog.Warn("failed to close stdout read end during cleanup", "error", err)
 		}
-		if err := stderrR_.Close(); err != nil {
+		if err := stderrRead.Close(); err != nil {
 			slog.Warn("failed to close stderr read end during cleanup", "error", err)
 		}
 		return nil, nil, fmt.Errorf("close stdin: %w", err)
 	}
-	return stdoutR_, stderrR_, nil
+	return stdoutRead, stderrRead, nil
 }
 
 // launchProcess starts the stdout/stderr reader goroutines and the process

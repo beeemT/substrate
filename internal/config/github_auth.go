@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const githubAuthSourceUnset = "unset"
+
 func GitHubAuthConfigured(cfg GithubConfig) bool {
 	return strings.TrimSpace(cfg.Token) != "" || strings.TrimSpace(cfg.TokenRef) != "" || HasGitHubCLI()
 }
@@ -17,7 +19,7 @@ func GitHubAuthSource(cfg GithubConfig) string {
 		return "gh cli"
 	}
 
-	return "unset"
+	return githubAuthSourceUnset
 }
 
 func HasGitHubCLI() bool {

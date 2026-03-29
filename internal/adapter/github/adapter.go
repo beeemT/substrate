@@ -118,7 +118,11 @@ type completedPayload struct {
 	Review        domain.ReviewRef          `json:"review"`
 }
 
-const filterAll = "all"
+const (
+	filterAll         = "all"
+	defaultBranchMain = "main"
+	stateClosed       = "closed"
+)
 
 // maxResponseBodyBytes limits HTTP response body reads to prevent OOM from
 // a malicious or misconfigured API server.
@@ -157,7 +161,7 @@ func newWithDeps(
 		baseURL:       baseURL,
 		token:         token,
 		tracked:       make(map[string]githubPull),
-		defaultBranch: "main",
+		defaultBranch: defaultBranchMain,
 		repos:         repos,
 	}
 	viewer, _ := a.viewerLogin(ctx)
@@ -217,7 +221,7 @@ func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
 		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
 				Views:          []string{"assigned_to_me", "created_by_me", "mentioned", "subscribed", filterAll},
-				States:         []string{"open", "closed", filterAll},
+				States:         []string{"open", stateClosed, filterAll},
 				SupportsLabels: true,
 				SupportsSearch: true,
 				SupportsOffset: true,
@@ -482,7 +486,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		return errors.New("worktree payload missing review repository coordinates")
 	}
 	if baseBranch == "" {
-		baseBranch = "main"
+		baseBranch = defaultBranchMain
 	}
 	pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, baseBranch, headOwner, p.Branch)
 	if err != nil {
@@ -568,7 +572,7 @@ func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) er
 		return errors.New("worktree reused payload missing review repository coordinates")
 	}
 	if baseBranch == "" {
-		baseBranch = "main"
+		baseBranch = defaultBranchMain
 	}
 	pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, baseBranch, headOwner, p.Branch)
 	if err != nil {
@@ -631,7 +635,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 			}
 			baseBranch := strings.TrimSpace(p.Review.BaseBranch)
 			if baseBranch == "" {
-				baseBranch = "main"
+				baseBranch = defaultBranchMain
 			}
 			var created githubPull
 			body := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
@@ -849,8 +853,8 @@ func githubIssueStateValue(state string) (string, error) {
 	switch strings.TrimSpace(state) {
 	case "", "open":
 		return "open", nil
-	case "closed":
-		return "closed", nil
+	case stateClosed:
+		return stateClosed, nil
 	case filterAll:
 		return filterAll, nil
 	default:
@@ -1055,8 +1059,8 @@ func githubPRState(pull githubPull) string {
 	if pull.MergedAt != nil {
 		return "merged"
 	}
-	if pull.State == "closed" {
-		return "closed"
+	if pull.State == stateClosed {
+		return stateClosed
 	}
 	if pull.Draft {
 		return "draft"

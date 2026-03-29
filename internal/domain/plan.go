@@ -53,8 +53,8 @@ type TaskPlan struct {
 type TaskPlanStatus string
 
 const (
-	SubPlanPending     TaskPlanStatus = "pending"
-	SubPlanInProgress  TaskPlanStatus = "in_progress"
-	SubPlanCompleted   TaskPlanStatus = "completed"
-	SubPlanFailed      TaskPlanStatus = "failed"
+	SubPlanPending    TaskPlanStatus = "pending"
+	SubPlanInProgress TaskPlanStatus = "in_progress"
+	SubPlanCompleted  TaskPlanStatus = "completed"
+	SubPlanFailed     TaskPlanStatus = "failed"
 )

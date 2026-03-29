@@ -148,7 +148,7 @@ func renderToastAtWidth(st styles.Styles, t Toast, width, capWidth int) string {
 	borderStyle := lipgloss.NewStyle().Foreground(borderColorForLevel(st, t.Level))
 	contentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Bold(true)
 	top := borderStyle.Render("╭" + strings.Repeat("─", innerWidth) + "╮")
-	var parts []string
+	parts := make([]string, 0, len(contentLines)+2)
 	parts = append(parts, top)
 	for _, line := range contentLines {
 		lineWidth := lipgloss.Width(line)

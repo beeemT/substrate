@@ -28,7 +28,7 @@ func (s *claudeAgentSession) ResumeInfo() map[string]string {
 		"claude_session_id": s.claudeSessionID,
 	}
 }
-func (s *claudeAgentSession) Wait(ctx context.Context) error { return s.bs.Wait(ctx) }
+func (s *claudeAgentSession) Wait(ctx context.Context) error    { return s.bs.Wait(ctx) }
 func (s *claudeAgentSession) Events() <-chan adapter.AgentEvent { return s.bs.EventsChan() }
 func (s *claudeAgentSession) SendMessage(ctx context.Context, msg string) error {
 	return s.bs.SendMessage(ctx, msg)

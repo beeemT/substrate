@@ -21,11 +21,11 @@ const resumeLogLines = 50
 
 // Resumption handles Resume and Abandon workflows for interrupted agent sessions.
 type Resumption struct {
-	harness     adapter.AgentHarness
-	sessionSvc  *service.TaskService
-	planSvc     *service.PlanService
-	eventBus    *event.Bus
-	registry    *SessionRegistry
+	harness    adapter.AgentHarness
+	sessionSvc *service.TaskService
+	planSvc    *service.PlanService
+	eventBus   *event.Bus
+	registry   *SessionRegistry
 }
 
 // NewResumption creates a Resumption instance.
@@ -37,11 +37,11 @@ func NewResumption(
 	registry *SessionRegistry,
 ) *Resumption {
 	return &Resumption{
-		harness:     harness,
-		sessionSvc:  sessionSvc,
-		planSvc:     planSvc,
-		eventBus:    eventBus,
-		registry:    registry,
+		harness:    harness,
+		sessionSvc: sessionSvc,
+		planSvc:    planSvc,
+		eventBus:   eventBus,
+		registry:   registry,
 	}
 }
 
@@ -68,7 +68,10 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	// Sub-plan provides the task assignment for the resumed agent. Without it the
 	// agent has no direction — fail explicitly rather than burning tokens.
 	if interrupted.SubPlanID == "" {
-		return ResumeSessionResult{}, fmt.Errorf("cannot resume session %s: no sub-plan assigned (session may have been interrupted before planning completed)", interrupted.ID)
+		return ResumeSessionResult{}, fmt.Errorf(
+			"cannot resume session %s: no sub-plan assigned (session may have been interrupted before planning completed)",
+			interrupted.ID,
+		)
 	}
 	subPlan, err := r.planSvc.GetSubPlan(ctx, interrupted.SubPlanID)
 	if err != nil {
@@ -202,7 +205,7 @@ type FollowUpSessionResult struct {
 // FollowUpSession restarts a completed task with a user follow-up message.
 // Reuses the same Task row (same ID/log file), transitions completed → running,
 // and resumes the native OMP session if available.
-func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.Task, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
+func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.Task, feedback, _ string) (FollowUpSessionResult, error) {
 	if completedTask.Status != domain.AgentSessionCompleted {
 		return FollowUpSessionResult{}, fmt.Errorf("task %s is not completed (status: %s)", completedTask.ID, completedTask.Status)
 	}
@@ -232,14 +235,14 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 	completedTask.UpdatedAt = now
 
 	opts := adapter.SessionOpts{
-		SessionID:         completedTask.ID,
-		Mode:              adapter.SessionModeAgent,
-		WorkspaceID:       completedTask.WorkspaceID,
-		SubPlanID:         completedTask.SubPlanID,
-		Repository:        completedTask.RepositoryName,
-		WorktreePath:      completedTask.WorktreePath,
-		SystemPrompt:      systemPrompt,
-		UserPrompt:        "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
+		SessionID:           completedTask.ID,
+		Mode:                adapter.SessionModeAgent,
+		WorkspaceID:         completedTask.WorkspaceID,
+		SubPlanID:           completedTask.SubPlanID,
+		Repository:          completedTask.RepositoryName,
+		WorktreePath:        completedTask.WorktreePath,
+		SystemPrompt:        systemPrompt,
+		UserPrompt:          "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
 		ResumeFromSessionID: completedTask.ID,
 		ResumeInfo:          completedTask.ResumeInfo,
 	}

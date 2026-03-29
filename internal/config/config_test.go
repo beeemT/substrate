@@ -311,7 +311,6 @@ func TestGlobalDBPath(t *testing.T) {
 	}
 }
 
-
 func TestReviewTimeout(t *testing.T) {
 	tests := []struct {
 		name    string

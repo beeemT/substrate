@@ -3,6 +3,7 @@ package sentry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -136,7 +137,7 @@ func TestNewRequiresOrganizationWhenCLIReturnsMultiple(t *testing.T) {
 
 		return nil, fmt.Errorf("unexpected args: %v", args)
 	}
-	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return nil, nil
 	}), runner)
 	if err == nil {
@@ -154,9 +155,9 @@ func TestNewFallsBackToOrgRequiredWhenCLIFails(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
-		return []byte("error"), fmt.Errorf("cli failed")
+		return []byte("error"), errors.New("cli failed")
 	}
-	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return nil, nil
 	}), runner)
 	if err == nil {

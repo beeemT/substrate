@@ -289,7 +289,7 @@ func (m *SettingsPage) updateFieldEditor(msg tea.KeyMsg) tea.Cmd {
 		case "up", "k", "shift+tab", "left", "h":
 			m.cycleEditOption(-1)
 			return nil
-		case "down", "j", "tab", "right", "l":
+		case keyDown, "j", "tab", "right", "l":
 			m.cycleEditOption(1)
 			return nil
 		case keyEnter:

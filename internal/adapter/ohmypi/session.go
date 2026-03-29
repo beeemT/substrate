@@ -19,8 +19,7 @@ type ohMyPiSession struct {
 
 func (s *ohMyPiSession) ID() string { return s.bs.ID }
 
-
-func (s *ohMyPiSession) Wait(ctx context.Context) error { return s.bs.Wait(ctx) }
+func (s *ohMyPiSession) Wait(ctx context.Context) error    { return s.bs.Wait(ctx) }
 func (s *ohMyPiSession) Events() <-chan adapter.AgentEvent { return s.bs.EventsChan() }
 func (s *ohMyPiSession) SendMessage(ctx context.Context, msg string) error {
 	return s.bs.SendMessage(ctx, msg)

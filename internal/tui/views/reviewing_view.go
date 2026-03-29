@@ -72,7 +72,7 @@ func critiqueSeverityStyle(sev domain.CritiqueSeverity, st styles.Styles) lipglo
 func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
-		case "j", "down":
+		case "j", keyDown:
 			if len(m.repos) > m.activeRepo {
 				crits := m.repos[m.activeRepo].Critiques
 				if m.cursor < len(crits)-1 {

@@ -40,7 +40,7 @@ func TestRenderBunnyClosedEyes(t *testing.T) {
 
 func TestRenderBunnyAlwaysThreeLines(t *testing.T) {
 	for side, sname := range sideNames {
-		for phase := 0; phase <= 1; phase++ {
+		for phase := range 2 {
 			s := components.RenderBunny(phase, side)
 			lines := strings.Split(s, "\n")
 			if len(lines) != 3 {
@@ -61,7 +61,7 @@ func TestRenderBunnyPhaseWraps(t *testing.T) {
 }
 
 func TestRenderBunnyLeftEarsAndFeet(t *testing.T) {
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		s := components.RenderBunny(phase, components.BunnySideLeft)
 		if !strings.Contains(s, `(\(\`) {
 			t.Errorf("left phase %d: missing ears (\\(\\, got: %q", phase, s)
@@ -73,7 +73,7 @@ func TestRenderBunnyLeftEarsAndFeet(t *testing.T) {
 }
 
 func TestRenderBunnyRightEarsAndFeet(t *testing.T) {
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		s := components.RenderBunny(phase, components.BunnySideRight)
 		if !strings.Contains(s, `/)/)`) {
 			t.Errorf("right phase %d: missing ears /)/)): got: %q", phase, s)
@@ -99,7 +99,7 @@ func TestRenderBunnySidesAreMirrored(t *testing.T) {
 // --- Crouch frame tests ---
 
 func TestRenderBunnyCrouchAlwaysThreeLines(t *testing.T) {
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		s := components.RenderBunnyCrouch(phase)
 		lines := strings.Split(s, "\n")
 		if len(lines) != 3 {
@@ -123,7 +123,7 @@ func TestRenderBunnyCrouchHasEars(t *testing.T) {
 
 func TestRenderBunnyCrouchFeetAreSpread(t *testing.T) {
 	// Crouch feet should be wider than hop feet — spread with paw indicators.
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		feet := strings.Split(components.RenderBunnyCrouch(phase), "\n")[2]
 		if len(feet) == 0 {
 			t.Fatalf("phase %d: empty feet line", phase)
@@ -173,7 +173,7 @@ func TestHopFrameProgress(t *testing.T) {
 
 func TestHopFrameDuration(t *testing.T) {
 	// Just verify they return positive durations without panicking.
-	for frame := 0; frame < components.FramesPerHop; frame++ {
+	for frame := range components.FramesPerHop {
 		d := components.HopFrameDuration(frame)
 		if d <= 0 {
 			t.Errorf("HopFrameDuration(%d) = %v, want positive", frame, d)
@@ -184,7 +184,7 @@ func TestHopFrameDuration(t *testing.T) {
 // --- Hop frame tests ---
 
 func TestRenderBunnyHopAlwaysThreeLines(t *testing.T) {
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		s := components.RenderBunnyHop(phase)
 		lines := strings.Split(s, "\n")
 		if len(lines) != 3 {
@@ -209,7 +209,7 @@ func TestRenderBunnyHopHasEars(t *testing.T) {
 func TestRenderBunnyHopFeetAreAirborne(t *testing.T) {
 	// Hop feet must not start with 'o' (left-side ground contact indicator) or
 	// end with 'o' (right-side ground contact indicator); the bunny is in the air.
-	for phase := 0; phase <= 1; phase++ {
+	for phase := range 2 {
 		feet := strings.Split(components.RenderBunnyHop(phase), "\n")[2]
 		if len(feet) == 0 {
 			t.Fatalf("phase %d: empty feet line", phase)

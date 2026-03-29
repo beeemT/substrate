@@ -365,7 +365,7 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 		templates: templates,
 	}
 
-	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
+	if _, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
 			Title:      "Native resume test",
 			ExternalID: "ISSUE-999",
@@ -375,12 +375,11 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 			Language: "go",
 			MainDir:  filepath.Join(tmpDir, "repo-a", "main"),
 		}},
-		SessionID:         "plan-rev-1",
-		SessionDraftPath:  draftPath,
-		RevisionFeedback:  feedback,
-		PriorResumeInfo:   map[string]string{"omp_session_file": resumeFile},
-	}, "workspace-1")
-	if planErr != nil {
+		SessionID:        "plan-rev-1",
+		SessionDraftPath: draftPath,
+		RevisionFeedback: feedback,
+		PriorResumeInfo:  map[string]string{"omp_session_file": resumeFile},
+	}, "workspace-1"); planErr != nil {
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
 
@@ -468,7 +467,7 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 	}
 	svc.harness = ompHarness
 
-	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
+	if _, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{Title: "OMP file capture test", ExternalID: "ISSUE-42"},
 		Repos: []domain.RepoPointer{{
 			Name:     "repo-a",
@@ -477,8 +476,7 @@ func TestRunPlanningWithCorrectionLoop_StoresOmpSessionFileOnSuccess(t *testing.
 		}},
 		SessionID:        "plan-omp-1",
 		SessionDraftPath: draftPath,
-	}, "ws-1")
-	if planErr != nil {
+	}, "ws-1"); planErr != nil {
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
 
@@ -680,8 +678,11 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 		},
 	})
 	fakeGitWork := filepath.Join(tmpDir, "git-work")
-	if err := os.WriteFile(fakeGitWork,
-		[]byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' %q\n", string(wtJSON))), 0o755); err != nil {
+	if err := os.WriteFile(
+		fakeGitWork,
+		fmt.Appendf(nil, "#!/bin/sh\nprintf '%%s\\n' %q\n", string(wtJSON)),
+		0o755,
+	); err != nil {
 		t.Fatalf("write fake git-work: %v", err)
 	}
 
@@ -730,7 +731,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	discoverer := NewDiscoverer(gitClient, globalCfg)
 
 	// Harness writes a valid plan referencing repoName.
-	planText := validPlanningPlan_withRepo(repoName, "Keep test-repo isolated.", "Implement the resolver.")
+	planText := validPlanningPlanWithRepo(repoName, "Keep test-repo isolated.", "Implement the resolver.")
 	harness := &planningHarnessSpy{planText: planText}
 
 	pcfg := DefaultPlanningConfig()
@@ -760,8 +761,8 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	}
 }
 
-// validPlanningPlan_withRepo returns a complete valid substrate plan for the named repo.
-func validPlanningPlan_withRepo(repoName, orchestration, goal string) string {
+// validPlanningPlanWithRepo returns a complete valid substrate plan for the named repo.
+func validPlanningPlanWithRepo(repoName, orchestration, goal string) string {
 	return "```substrate-plan\nexecution_groups:\n  - [" + repoName + "]\n```\n\n## Orchestration\n" +
 		orchestration + "\n\n## SubPlan: " + repoName + "\n" + validPlanningSubPlan(goal) + "\n"
 }
