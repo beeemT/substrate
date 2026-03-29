@@ -30,7 +30,7 @@ func jsonResp(t *testing.T, status int, v any) *http.Response {
 
 func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	t.Helper()
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "done": "closed"}}, adapter.ReviewArtifactRepos{}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"}}, adapter.ReviewArtifactRepos{}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
@@ -455,5 +455,43 @@ func TestListIssuesFiltersByLabels(t *testing.T) {
 	}
 	if len(res.Items) != 1 || res.Items[0].ID != "other/engine#7" {
 		t.Fatalf("items = %+v, want only bug+backend issue", res.Items)
+	}
+}
+
+
+func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
+	var patchBody []byte
+	patchFired := false
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket":
+			return jsonResp(t, http.StatusOK, map[string]any{"default_branch": "main"}), nil
+		case req.URL.Path == "/repos/acme/rocket/issues/42" && req.Method == http.MethodPatch:
+			patchFired = true
+			var err error
+			patchBody, err = io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("reading patch body: %v", err)
+			}
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 42}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	completePayload := `{"external_id":"gh:issue:acme/rocket#42"}`
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if !patchFired {
+		t.Fatal("expected PATCH /repos/acme/rocket/issues/42 to fire, but it did not")
+	}
+	body := string(patchBody)
+	if !strings.Contains(body, "open") {
+		t.Fatalf("patch body = %q, want to contain \"open\" (in_review mapping)", body)
+	}
+	if strings.Contains(body, "closed") {
+		t.Fatalf("patch body = %q, must not contain \"closed\" (done mapping)", body)
 	}
 }

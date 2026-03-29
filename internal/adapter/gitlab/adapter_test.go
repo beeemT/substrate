@@ -31,7 +31,7 @@ func jsonResponse(t *testing.T, status int, v any) *http.Response {
 
 func makeAdapter(t *testing.T, fn roundTripFunc) *GitlabAdapter {
 	t.Helper()
-	a, err := newWithClient(context.Background(), config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "done": "close"}}, fn)
+	a, err := newWithClient(context.Background(), config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, fn)
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
@@ -420,5 +420,38 @@ func TestListSelectableIssuesRejectsUnsupportedView(t *testing.T) {
 	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "mentioned"})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("err = %v, want unsupported view error", err)
+	}
+}
+
+func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
+	var capturedBody string
+	var puts int
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", StateMappings: map[string]string{"in_review": "reopen", "done": "close"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v4/projects/1234":
+			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 1, "kind": "group"}}), nil
+		case req.Method == http.MethodPut && req.URL.Path == "/api/v4/projects/1234/issues/42":
+			puts++
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			capturedBody = string(body)
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42, "state": "opened"}), nil
+		default:
+			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: `{"external_id":"gl:issue:1234#42"}`}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if puts != 1 {
+		t.Fatalf("PUT count = %d, want 1", puts)
+	}
+	if !strings.Contains(capturedBody, "reopen") {
+		t.Fatalf("body = %q, want to contain reopen (in_review mapped value)", capturedBody)
+	}
+	if strings.Contains(capturedBody, "close") {
+		t.Fatalf("body = %q, must not contain close (that would be done, not in_review)", capturedBody)
 	}
 }

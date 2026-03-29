@@ -423,7 +423,7 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 			return nil
 		}
 
-		return a.UpdateState(ctx, externalID, domain.TrackerStateDone)
+		return a.UpdateState(ctx, externalID, domain.TrackerStateInReview)
 	default:
 		return nil
 	}
