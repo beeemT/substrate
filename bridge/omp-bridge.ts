@@ -15,6 +15,7 @@
  */
 
 import { createInterface } from "readline";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
 const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL || undefined;
@@ -31,7 +32,7 @@ const agentToolNames = mode === "agent"
 let pendingAnswerResolve: ((text: string) => void) | null = null;
 let lastAssistantText = "";
 let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
-let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
+let session: AgentSession | null = null;
 
 function emit(event: object): void {
 	process.stdout.write(JSON.stringify({ type: "event", event }) + "\n");
@@ -213,7 +214,7 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
 	}
 }
 
-function createAskForemanTool(): unknown {
+function createAskForemanTool(): any {
 	return {
 		name: "ask_foreman",
 		description: "Ask the foreman a question you cannot resolve from the plan or codebase.",
@@ -262,7 +263,7 @@ async function initSession(): Promise<void> {
 			: SessionManager.create(worktreePath);
 	const customTools = mode === "agent" ? [createAskForemanTool()] : [];
 
-	const sessionOpts: Parameters<typeof createAgentSession>[0] = {
+	const sessionOpts: NonNullable<Parameters<typeof createAgentSession>[0]> = {
 		cwd: worktreePath,
 		sessionManager,
 		...(thinkingLevel ? { thinkingLevel: thinkingLevel as any } : {}),

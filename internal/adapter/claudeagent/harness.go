@@ -155,12 +155,12 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		return nil, fmt.Errorf("create stderr pipe: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start bridge: %w", err)
 	}
 
 	sessionLogPath := filepath.Join(sessionLogDir, opts.SessionID+".log")
-	if err := os.MkdirAll(sessionLogDir, 0o750); err != nil {
+	if err = os.MkdirAll(sessionLogDir, 0o750); err != nil {
 		cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
 		cmd.Wait()         //nolint:errcheck // best-effort cleanup
 		return nil, fmt.Errorf("create session log dir: %w", err)
