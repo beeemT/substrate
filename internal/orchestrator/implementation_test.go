@@ -2311,7 +2311,7 @@ func cloneAsWorktree(t *testing.T, bareDir, worktreeDir, branch string) {
 	mustWriteFile(t, filepath.Join(cloneDir, "README.md"), "init")
 	mustRun(t, cloneDir, "git", "add", "README.md")
 	mustRun(t, cloneDir, "git", "commit", "-m", "init")
-	mustRun(t, cloneDir, "git", "push", "origin", "main")
+	mustRun(t, cloneDir, "git", "push", "origin", "HEAD")
 
 	// Create worktree with new branch.
 	mustRun(t, cloneDir, "git", "worktree", "add", "-b", branch, worktreeDir)
