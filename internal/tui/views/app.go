@@ -2348,6 +2348,16 @@ func (a App) View() string {
 		return renderOverlay(a.duplicateSessionDialogView(), a.windowWidth, a.windowHeight)
 	}
 
+	// Skip the expensive base view rendering when an overview overlay is
+	// active. The overlay covers nearly the entire screen, so the composited
+	// sidebar + content + status bar underneath is invisible. This avoids the
+	// full base render and the per-line ANSI surgery in renderCenteredOverlay,
+	// which is the main source of scroll stutter in plan review.
+	if a.activeOverlay == overlayNone && a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
+		overlay := a.content.overview.overlayView(a.windowWidth, a.windowHeight)
+		return a.applyToasts(renderOverlay(overlay, a.windowWidth, a.windowHeight))
+	}
+
 	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
 	overlayActive := a.overviewOverlayOpen()
 
@@ -2409,19 +2419,21 @@ func (a App) View() string {
 	case overlayLogs:
 		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
 	default:
-		if a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
-			result = renderCenteredOverlay(base, a.content.overview.overlayView(a.windowWidth, a.windowHeight), a.windowWidth, a.windowHeight)
-		} else {
-			result = base
-		}
+		result = base
 	}
 
+	return a.applyToasts(result)
+}
+
+// applyToasts renders the toast stack (if any) into the top-right corner of
+// the given frame. Extracted so both the base and overlay-early-return paths
+// share identical toast handling.
+func (a App) applyToasts(result string) string {
 	toastView := a.toasts.StackView(a.pinnedToasts()...)
 	if toastView != "" {
 		placement := styles.ComputeToastPlacement(a.statusBar.styles.Chrome)
 		result = renderTopRightOverlay(result, toastView, a.windowWidth, placement.TopInset, placement.BottomInset)
 	}
-
 	return result
 }
 
