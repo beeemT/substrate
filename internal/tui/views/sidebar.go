@@ -204,17 +204,27 @@ func (e SidebarEntry) Subtitle() string {
 
 // SidebarModel manages the session list sidebar.
 type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
-	entries []SidebarEntry
-	cursor  int
-	title   string
-	styles  styles.Styles
-	width   int
-	height  int
+	entries    []SidebarEntry
+	cursor    int
+	title     string
+	styles    styles.Styles
+	width     int
+	height    int
+	cachedView *string // render cache; pointer survives value-receiver copies
+	viewDirty  *bool   // true when state changed since last View()
 }
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
 func NewSidebarModel(st styles.Styles) SidebarModel {
-	return SidebarModel{styles: st, width: SidebarWidth, title: "Sessions", cursor: -1}
+	dirty := true
+	return SidebarModel{
+		styles:     st,
+		width:      SidebarWidth,
+		title:      "Sessions",
+		cursor:     -1,
+		cachedView: new(string),
+		viewDirty:  &dirty,
+	}
 }
 
 // SetEntries replaces the sidebar entries and preserves selection when possible.
@@ -228,6 +238,7 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 		hadSelection = true
 	}
 	m.entries = entries
+	*m.viewDirty = true
 	if len(m.entries) == 0 {
 		m.cursor = -1
 
@@ -253,31 +264,36 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 // SetWidth sets the available render width.
 func (m *SidebarModel) SetWidth(w int) {
 	m.width = max(0, w)
+	*m.viewDirty = true
 }
 
 // SetHeight sets the available render height.
-func (m *SidebarModel) SetHeight(h int) { m.height = h }
+func (m *SidebarModel) SetHeight(h int) { m.height = h; *m.viewDirty = true }
 
 // SetTitle sets the sidebar header title.
 func (m *SidebarModel) SetTitle(title string) {
 	m.title = title
+	*m.viewDirty = true
 }
 
 // MoveUp moves the cursor up by one selectable entry, skipping group headers.
 func (m *SidebarModel) MoveUp() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+		*m.viewDirty = true
 
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = lastSelectableIndex(m.entries)
+		*m.viewDirty = true
 
 		return
 	}
 	for i := m.cursor - 1; i >= 0; i-- {
 		if m.entries[i].Kind != SidebarEntryGroupHeader {
 			m.cursor = i
+			*m.viewDirty = true
 
 			return
 		}
@@ -288,17 +304,20 @@ func (m *SidebarModel) MoveUp() {
 func (m *SidebarModel) MoveDown() {
 	if len(m.entries) == 0 {
 		m.cursor = -1
+		*m.viewDirty = true
 
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = firstSelectableIndex(m.entries)
+		*m.viewDirty = true
 
 		return
 	}
 	for i := m.cursor + 1; i < len(m.entries); i++ {
 		if m.entries[i].Kind != SidebarEntryGroupHeader {
 			m.cursor = i
+			*m.viewDirty = true
 
 			return
 		}
@@ -308,16 +327,19 @@ func (m *SidebarModel) MoveDown() {
 // GotoTop moves the cursor to the first selectable entry.
 func (m *SidebarModel) GotoTop() {
 	m.cursor = firstSelectableIndex(m.entries)
+	*m.viewDirty = true
 }
 
 // GotoBottom moves the cursor to the last selectable entry.
 func (m *SidebarModel) GotoBottom() {
 	m.cursor = lastSelectableIndex(m.entries)
+	*m.viewDirty = true
 }
 
 // ClearSelection clears the current sidebar selection.
 func (m *SidebarModel) ClearSelection() {
 	m.cursor = -1
+	*m.viewDirty = true
 }
 
 // SelectEntry moves the cursor to the matching work-item/session pair when present.
@@ -325,6 +347,7 @@ func (m *SidebarModel) SelectEntry(workItemID, sessionID string) bool {
 	for i, entry := range m.entries {
 		if entry.WorkItemID == workItemID && entry.SessionID == sessionID {
 			m.cursor = i
+			*m.viewDirty = true
 
 			return true
 		}
@@ -354,7 +377,13 @@ func (m *SidebarModel) Selected() *SidebarEntry {
 // View renders the full sidebar.
 func (m SidebarModel) View() string {
 	if m.height <= 0 {
+		*m.cachedView = ""
+		*m.viewDirty = false
+
 		return ""
+	}
+	if !*m.viewDirty && *m.cachedView != "" {
+		return *m.cachedView
 	}
 	width := m.width
 	if width <= 0 {
@@ -443,7 +472,11 @@ func (m SidebarModel) View() string {
 		lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
 	}
 
-	return fitViewBox(strings.Join(lines, "\n"), width, m.height)
+	result := fitViewBox(strings.Join(lines, "\n"), width, m.height)
+	*m.cachedView = result
+	*m.viewDirty = false
+
+	return result
 }
 
 func sessionStatusLabel(status domain.TaskStatus) string {

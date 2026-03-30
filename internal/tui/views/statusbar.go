@@ -16,17 +16,34 @@ const statusBarHeight = 1
 // StatusBarModel renders the footer content at the bottom.
 type StatusBarModel struct {
 	styles styles.Styles
+
+	// Render cache; pointer fields survive Bubble Tea's value-receiver copies.
+	cachedView  *string
+	cachedHints *string // fingerprint of last hints slice
+	cachedText  *string
+	cachedWidth *int
 }
 
 // NewStatusBarModel creates a StatusBarModel with the given styles.
 func NewStatusBarModel(st styles.Styles) StatusBarModel {
-	return StatusBarModel{styles: st}
+	return StatusBarModel{
+		styles:      st,
+		cachedView:  new(string),
+		cachedHints: new(string),
+		cachedText:  new(string),
+		cachedWidth: new(int),
+	}
 }
 
 // View renders the keybind hints and right-aligned metadata within one footer row.
 func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) string {
 	if width <= 0 {
 		return ""
+	}
+
+	hintsFP := statusBarHintsFingerprint(hints)
+	if *s.cachedView != "" && hintsFP == *s.cachedHints && rightText == *s.cachedText && width == *s.cachedWidth {
+		return *s.cachedView
 	}
 
 	horizontalPadding := 0
@@ -83,7 +100,14 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	line := left + strings.Repeat(" ", gapLen) + right
 	lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
 
-	return lineStyle.Render(line)
+	result := lineStyle.Render(line)
+
+	*s.cachedView = result
+	*s.cachedHints = hintsFP
+	*s.cachedText = rightText
+	*s.cachedWidth = width
+
+	return result
 }
 
 type statusBarHintPart struct {
@@ -194,4 +218,16 @@ func DefaultHints() []KeybindHint {
 		{Key: "?", Label: "Help"},
 		{Key: "q", Label: "Quit"},
 	}
+}
+
+// statusBarHintsFingerprint builds a cheap string fingerprint for cache comparison.
+func statusBarHintsFingerprint(hints []KeybindHint) string {
+	var b strings.Builder
+	for _, h := range hints {
+		b.WriteString(h.Key)
+		b.WriteByte('\x00')
+		b.WriteString(h.Label)
+		b.WriteByte('\x00')
+	}
+	return b.String()
 }

@@ -2374,10 +2374,13 @@ func (a App) View() string {
 	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
 	overlayActive := a.overviewOverlayOpen()
 
+	// Each sub-model's View() already produces output sized to (width, height)
+	// via internal fitViewBox / lipgloss.Place. The outer lipgloss wrapper
+	// handles padding and acts as a size safety net for RenderPane.
 	sidebarContent := lipgloss.NewStyle().
 		Width(layout.SidebarInnerWidth).
 		Height(layout.PaneInnerHeight).
-		Render(fitViewBox(a.sidebar.View(), layout.SidebarInnerWidth, layout.PaneInnerHeight))
+		Render(a.sidebar.View())
 	sidebarPane := components.RenderPane(a.statusBar.styles, components.PaneSpec{
 		Content: sidebarContent,
 		Width:   layout.SidebarPaneWidth,
@@ -2392,7 +2395,7 @@ func (a App) View() string {
 	if contentWidth < layout.ContentInnerWidth {
 		contentStyle = contentStyle.Padding(0, appContentHorizontalPadding)
 	}
-	contentContent := contentStyle.Render(fitViewBox(a.content.View(), contentWidth, layout.PaneInnerHeight))
+	contentContent := contentStyle.Render(a.content.View())
 	contentPane := components.RenderPane(a.statusBar.styles, components.PaneSpec{
 		Content: contentContent,
 		Width:   layout.ContentPaneWidth,
