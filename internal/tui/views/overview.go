@@ -272,6 +272,14 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 		}
 		switch m.overlay {
 		case overviewOverlayPlan:
+			if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.planReview.inputMode != planReviewNormal {
+				var cmd tea.Cmd
+				m.planReview, cmd = m.planReview.Update(msg)
+				m.overlay = overviewOverlayNone
+				m.syncViewport(false)
+
+				return m, cmd
+			}
 			var cmd tea.Cmd
 			m.planReview, cmd = m.planReview.Update(msg)
 
@@ -332,7 +340,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
 				case overviewActionPlanReview:
-					m.overlay = overviewOverlayPlan
+					m.openPlanOverlayForChanges()
 
 					return m, nil
 				case overviewActionQuestion:
@@ -397,14 +405,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			}
 		case "c":
 			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionPlanReview {
-				m.planReview.feedbackHeight = 1
-				m.planReview.feedbackInput.SetHeight(1)
-				m.planReview.feedbackInput.SetValue("")
-				m.planReview.inputMode = planReviewChanges
-				m.planReview.feedbackInput.Placeholder = "Describe the changes needed…"
-				m.planReview.feedbackInput.Focus()
-				m.planReview.syncViewportSize()
-				m.overlay = overviewOverlayPlan
+				m.openPlanOverlayForChanges()
 
 				return m, nil
 			}
@@ -481,6 +482,20 @@ func (m *SessionOverviewModel) syncViewport(reset bool) {
 	if reset {
 		m.viewport.GotoTop()
 	}
+}
+
+// openPlanOverlayForChanges resets the feedback input, enters request-changes
+// mode, and opens the plan overlay. Both the [c] and [i] shortcuts for a
+// plan-review action call this so the overlay always opens with the prompt ready.
+func (m *SessionOverviewModel) openPlanOverlayForChanges() {
+	m.planReview.feedbackHeight = 1
+	m.planReview.feedbackInput.SetHeight(1)
+	m.planReview.feedbackInput.SetValue("")
+	m.planReview.inputMode = planReviewChanges
+	m.planReview.feedbackInput.Placeholder = "Describe the changes needed\u2026"
+	m.planReview.feedbackInput.Focus()
+	m.planReview.syncViewportSize()
+	m.overlay = overviewOverlayPlan
 }
 
 func (m *SessionOverviewModel) syncActionModels() {

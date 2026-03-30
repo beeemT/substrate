@@ -493,6 +493,8 @@ func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
 	}
 	app.mainFocus = mainFocusContent
 
+	// [i] opens the overlay for the existing plan (no action card — session state was
+	// not rebuilt, so it takes the else-if branch with planReviewNormal mode).
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	updated := model.(App)
 	if cmd != nil {
@@ -505,6 +507,7 @@ func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
 		t.Fatalf("mainFocus = %v, want %v", updated.mainFocus, mainFocusContent)
 	}
 
+	// Single Esc closes the overlay (input is in normal mode, no cancel step needed).
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated = model.(App)
 	if cmd != nil {
@@ -533,6 +536,7 @@ func TestAppSidebarPlanOverlayTakesFocusAndEscRestoresSidebar(t *testing.T) {
 		OrchestratorPlan: strings.Repeat("plan line\n", 4),
 	}
 
+	// [i] opens the overlay (existing plan, no action card in the overview data).
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	updated := model.(App)
 	if cmd != nil {
@@ -545,6 +549,7 @@ func TestAppSidebarPlanOverlayTakesFocusAndEscRestoresSidebar(t *testing.T) {
 		t.Fatalf("mainFocus = %v, want %v when overlay opens from sidebar", updated.mainFocus, mainFocusContent)
 	}
 
+	// Single Esc closes the overlay (planReviewNormal, no input cancel step).
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated = model.(App)
 	if cmd != nil {
