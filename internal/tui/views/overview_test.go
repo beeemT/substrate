@@ -896,3 +896,121 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 		t.Fatalf("RetryFailedMsg.WorkItemID = %q, want %q", retryMsg.WorkItemID, "wi-failed")
 	}
 }
+
+// TestInspectKeyOpensPlanOverlayWithChangesInput verifies that pressing [i] on a
+// plan-review action card opens the overlay with the request-changes input
+// already active, mirroring the behaviour of [c].
+func TestInspectKeyOpensPlanOverlayWithChangesInput(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 8)}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionPlanReview,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Inspect test", StatusLabel: "Plan review needed", UpdatedAt: now},
+		Actions: []OverviewActionCard{{
+			Kind: overviewActionPlanReview,
+			Plan: &plan,
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatalf("[i] returned cmd %v, want nil", cmd)
+	}
+	if updated.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want overviewOverlayPlan", updated.overlay)
+	}
+	if updated.planReview.inputMode != planReviewChanges {
+		t.Fatalf("inputMode = %v, want planReviewChanges", updated.planReview.inputMode)
+	}
+}
+
+// TestPlanOverlayEnterSubmitClosesOverlay verifies that pressing Enter to submit
+// a request-changes prompt fires PlanRequestChangesMsg and closes the overlay.
+func TestPlanOverlayEnterSubmitClosesOverlay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	plan := domain.Plan{ID: "plan-42", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 8)}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionPlanReview,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Submit test", StatusLabel: "Plan review needed", UpdatedAt: now},
+		Actions: []OverviewActionCard{{
+			Kind: overviewActionPlanReview,
+			Plan: &plan,
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
+	})
+
+	// Open overlay (changes mode).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.overlay != overviewOverlayPlan || m.planReview.inputMode != planReviewChanges {
+		t.Fatalf("overlay=%v inputMode=%v, want plan overlay in changes mode", m.overlay, m.planReview.inputMode)
+	}
+
+	// Type some feedback.
+	for _, r := range "needs more tests" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Press Enter to submit.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v after Enter, want overviewOverlayNone", updated.overlay)
+	}
+	if cmd == nil {
+		t.Fatal("Enter submit must return a command")
+	}
+	result := cmd()
+	rcMsg, ok := result.(PlanRequestChangesMsg)
+	if !ok {
+		t.Fatalf("expected PlanRequestChangesMsg, got %T", result)
+	}
+	if rcMsg.PlanID != "plan-42" {
+		t.Fatalf("PlanRequestChangesMsg.PlanID = %q, want plan-42", rcMsg.PlanID)
+	}
+	if rcMsg.Feedback != "needs more tests" {
+		t.Fatalf("PlanRequestChangesMsg.Feedback = %q, want 'needs more tests'", rcMsg.Feedback)
+	}
+}
+
+// TestInspectKeyForCompletedPlanOpensNormalMode verifies that pressing [i] on an
+// overview with a completed/existing plan (no active plan-review action) opens
+// the overlay in normal mode — no request-changes input.
+func TestInspectKeyForCompletedPlanOpensNormalMode(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	plan := domain.Plan{ID: "plan-done", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 8)}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Completed", StatusLabel: "Completed", UpdatedAt: now},
+		// No Actions entry — session is done, no review needed.
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatalf("[i] returned cmd %v, want nil", cmd)
+	}
+	if updated.overlay != overviewOverlayPlan {
+		t.Fatalf("overlay = %v, want overviewOverlayPlan", updated.overlay)
+	}
+	if updated.planReview.inputMode != planReviewNormal {
+		t.Fatalf("inputMode = %v, want planReviewNormal for completed plan inspect", updated.planReview.inputMode)
+	}
+}
