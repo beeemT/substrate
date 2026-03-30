@@ -146,6 +146,10 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	windowWidth  int
 	windowHeight int
 
+	// Cached base render (sidebar + content + status bar) for overlay
+	// compositing. Pointer so the value survives Bubble Tea's value-receiver
+	// View() copies; allocated once in NewApp.
+	cachedBase *string
 	// Foreman lifecycle
 	foremanPlanID string // plan ID the Foreman was last started for
 
@@ -184,6 +188,7 @@ func NewApp(svcs Services) App {
 		pipelineCancels:                make(map[string]context.CancelFunc),
 		sessionsDir:                    sessionsDir,
 		hasWorkspace:                   svcs.WorkspaceID != "",
+		cachedBase:                     new(string),
 	}
 
 	if !app.hasWorkspace {
@@ -798,6 +803,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.windowWidth = msg.Width
 		a.windowHeight = msg.Height
+		*a.cachedBase = ""
 		a.toasts.SetWidth(msg.Width)
 		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome)
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
@@ -2348,14 +2354,21 @@ func (a App) View() string {
 		return renderOverlay(a.duplicateSessionDialogView(), a.windowWidth, a.windowHeight)
 	}
 
-	// Skip the expensive base view rendering when an overview overlay is
-	// active. The overlay covers nearly the entire screen, so the composited
-	// sidebar + content + status bar underneath is invisible. This avoids the
-	// full base render and the per-line ANSI surgery in renderCenteredOverlay,
-	// which is the main source of scroll stutter in plan review.
+	// When an overview overlay is active, reuse the cached base render
+	// instead of recomputing the full sidebar + content + status bar.
+	// The base is only stale by at most one frame (cached on the last
+	// non-overlay View call) and is invisible behind the near-fullscreen
+	// overlay anyway. renderCenteredOverlay composites the overlay on
+	// top so the background peeks through at the edges.
 	if a.activeOverlay == overlayNone && a.content.mode == ContentModeOverview && a.content.overview.overlay != overviewOverlayNone {
 		overlay := a.content.overview.overlayView(a.windowWidth, a.windowHeight)
-		return a.applyToasts(renderOverlay(overlay, a.windowWidth, a.windowHeight))
+		base := *a.cachedBase
+		if base == "" {
+			// First frame after overlay opened or after resize — no cached
+			// base yet. Fall back to blank placement (one frame only).
+			return a.applyToasts(renderOverlay(overlay, a.windowWidth, a.windowHeight))
+		}
+		return a.applyToasts(renderCenteredOverlay(base, overlay, a.windowWidth, a.windowHeight))
 	}
 
 	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
@@ -2403,6 +2416,7 @@ func (a App) View() string {
 	statusBar := a.statusBar.View(hints, a.statusBarText(), a.windowWidth)
 
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
+	*a.cachedBase = base
 
 	var result string
 	switch a.activeOverlay {
