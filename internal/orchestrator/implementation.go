@@ -1282,9 +1282,9 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 		// Check for residual uncommitted changes in the worktree.
 		if sess.WorktreePath != "" {
 			if dirty, _ := gitStatusDirty(ctx, sess.WorktreePath); dirty {
-				slog.Warn("agent left uncommitted changes in worktree; committing as safety net",
+				slog.Warn("agent left uncommitted changes in worktree; spinning up commit session",
 					"repo", repo, "worktree", sess.WorktreePath, "session_id", sess.SessionID)
-				if commitErr := gitStageAndCommit(ctx, sess.WorktreePath, "chore: commit residual changes before push"); commitErr != nil {
+				if commitErr := s.commitViaAgent(ctx, sess.WorktreePath, repo, sess.SessionID); commitErr != nil {
 					slog.Error("failed to commit residual changes", "repo", repo, "error", commitErr)
 				}
 			}
@@ -1325,6 +1325,59 @@ func gitStageAndCommit(ctx context.Context, dir, message string) error {
 	commitCmd.Dir = dir
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// commitViaAgent spins up a short-lived agent session to commit residual changes
+// using the configured commit message format instead of a hardcoded generic message.
+// Falls back to gitStageAndCommit with a generic message if the agent session fails.
+func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath, repo, sessionID string) error {
+	const fallbackCommitMsg = "chore: commit residual changes before push"
+
+	commitCfg := adapter.CommitConfig{
+		Strategy:      "single",
+		MessageFormat: "ai-generated",
+	}
+	if s.cfg != nil {
+		commitCfg.Strategy = string(s.cfg.Commit.Strategy)
+		commitCfg.MessageFormat = string(s.cfg.Commit.MessageFormat)
+		commitCfg.MessageTemplate = s.cfg.Commit.MessageTemplate
+	}
+
+	commitInstructions := buildCommitSection(commitCfg)
+	if commitInstructions == "" {
+		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
+	}
+
+	systemPrompt := "The implementation session is complete but there are residual uncommitted changes in the worktree.\n\n" +
+		"Stage all changes and make a single commit with an appropriate message. Do not modify any files.\n\n" +
+		commitInstructions
+
+	opts := adapter.SessionOpts{
+		Mode:         adapter.SessionModeAgent,
+		WorktreePath: worktreePath,
+		SystemPrompt: systemPrompt,
+		UserPrompt:   "Commit the residual changes now.",
+		AllowPush:    false,
+	}
+	sess, err := s.harness.StartSession(ctx, opts)
+	if err != nil {
+		slog.Warn("failed to start commit agent session, falling back to generic message",
+			"repo", repo, "error", err)
+		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
+	}
+	defer sess.Abort(ctx)
+
+	go s.forwardEvents(ctx, sess.Events(), "", "")
+
+	commitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if err := sess.Wait(commitCtx); err != nil {
+		slog.Warn("commit agent session failed, falling back to generic message",
+			"repo", repo, "error", err)
+		sess.Abort(ctx) // kill agent before touching worktree ourselves; deferred Abort is idempotent
+		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
 	}
 	return nil
 }

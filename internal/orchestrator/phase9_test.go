@@ -28,6 +28,7 @@ type mockAgentSession struct {
 	messages []string
 	aborted  bool
 	abortErr error
+	waitErr  error // non-nil causes Wait to return immediately with this error; nil waits for context cancellation
 }
 
 func newMockSession(id string, events ...adapter.AgentEvent) *mockAgentSession {
@@ -41,6 +42,9 @@ func newMockSession(id string, events ...adapter.AgentEvent) *mockAgentSession {
 
 func (s *mockAgentSession) ID() string { return s.id }
 func (s *mockAgentSession) Wait(ctx context.Context) error {
+	if s.waitErr != nil {
+		return s.waitErr
+	}
 	<-ctx.Done()
 
 	return ctx.Err()
@@ -63,7 +67,7 @@ func (s *mockAgentSession) Abort(_ context.Context) error {
 }
 func (s *mockAgentSession) Steer(_ context.Context, _ string) error      { return nil }
 func (s *mockAgentSession) SendAnswer(_ context.Context, _ string) error { return nil }
-func (s *mockAgentSession) Compact(_ context.Context) error { return nil }
+func (s *mockAgentSession) Compact(_ context.Context) error              { return nil }
 func (s *mockAgentSession) ResumeInfo() map[string]string                { return nil }
 
 // ============================================================
@@ -78,14 +82,21 @@ type mockAgentHarness struct {
 	outputs []string
 	idx     int
 	mu      sync.Mutex
+	// onStartSession, if set, is called instead of the default session creation.
+	// It receives the SessionOpts and returns a custom AgentSession.
+	onStartSession func(adapter.SessionOpts) (adapter.AgentSession, error)
 }
 
 func (h *mockAgentHarness) SupportsCompact() bool { return true }
-func (h *mockAgentHarness) Name() string { return "mock" }
+func (h *mockAgentHarness) Name() string          { return "mock" }
 
 func (h *mockAgentHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if h.onStartSession != nil {
+		return h.onStartSession(opts)
+	}
 
 	output := "NO_CRITIQUES"
 	if h.idx < len(h.outputs) {

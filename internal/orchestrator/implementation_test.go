@@ -2072,6 +2072,69 @@ func TestCommitAndPushRepos_CommitsDirtyWorktree(t *testing.T) {
 	}
 }
 
+func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
+	bareDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	initBareRepo(t, bareDir)
+	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+
+	// Track what the mock harness received.
+	var capturedOpts adapter.SessionOpts
+	harness := &mockAgentHarness{
+		onStartSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			capturedOpts = opts
+			return nil, errors.New("simulated agent failure")
+		},
+	}
+
+	svc, _, _, _, _ := newImplementationServiceForTest(bareDir, "repo-a")
+	svc.cfg = &config.Config{Commit: config.CommitConfig{
+		Strategy:        config.CommitStrategySemiRegular,
+		MessageFormat:   config.CommitMessageConventional,
+		MessageTemplate: "feat: $TITLE",
+	}}
+	// Replace the harness with our instrumented one.
+	svc.harness = harness
+
+	// Add an uncommitted file.
+	mustWriteFile(t, filepath.Join(worktreeDir, "residual.txt"), "left behind")
+
+	sessions := []SessionResult{{
+		Repository:   "repo-a",
+		WorktreePath: worktreeDir,
+		SessionID:    "sess-1",
+	}}
+	repoPaths := map[string]string{"repo-a": bareDir}
+
+	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+
+	// The agent session was attempted.
+	if capturedOpts.SystemPrompt == "" {
+		t.Fatal("expected StartSession to be called with a non-empty system prompt")
+	}
+	if !strings.Contains(capturedOpts.SystemPrompt, "Commit Strategy") {
+		t.Fatalf("expected system prompt to contain commit instructions, got: %s", capturedOpts.SystemPrompt)
+	}
+	if !strings.Contains(capturedOpts.SystemPrompt, "residual uncommitted changes") {
+		t.Fatalf("expected system prompt to mention residual changes, got: %s", capturedOpts.SystemPrompt)
+	}
+	if capturedOpts.UserPrompt != "Commit the residual changes now." {
+		t.Fatalf("expected user prompt 'Commit the residual changes now.', got: %s", capturedOpts.UserPrompt)
+	}
+	if capturedOpts.AllowPush {
+		t.Fatal("expected AllowPush to be false for commit session")
+	}
+
+	// The agent failed, so the fallback should have committed.
+	dirty, err := gitStatusDirty(context.Background(), worktreeDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dirty {
+		t.Fatal("expected worktree to be clean after fallback commit")
+	}
+}
+
 func TestEmitWorkItemCompleted(t *testing.T) {
 	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	workItem := &domain.Session{

@@ -20,6 +20,7 @@ func TestBuildResumeSystemPrompt(t *testing.T) {
 		"## Resume Context",
 		"some output",
 		"## Instructions",
+		"## Commit Strategy",
 		"continuing work on this sub-plan",
 	} {
 		if !strings.Contains(result, want) {
@@ -40,6 +41,7 @@ func TestBuildFollowUpSystemPrompt(t *testing.T) {
 		"## Previous Session Summary",
 		"done",
 		"## Follow-Up Request",
+		"## Commit Strategy",
 		"also update tests",
 	} {
 		if !strings.Contains(result, want) {
