@@ -650,8 +650,11 @@ func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	updated = model.(App)
-	if cmd != nil {
-		t.Fatalf("cmd = %v, want nil when requesting plan changes", cmd)
+	if cmd == nil {
+		t.Fatal("expected DisableMouse cmd from 'c', got nil")
+	}
+	if msg := cmd(); msg != tea.DisableMouse() {
+		t.Fatalf("expected DisableMouse msg, got %T", msg)
 	}
 	if updated.activeOverlay == overlaySettings {
 		t.Fatal("expected c to stay within the plan review flow instead of opening settings")
@@ -972,9 +975,31 @@ func TestPlanOverlayEnterSubmitClosesOverlay(t *testing.T) {
 		t.Fatal("Enter submit must return a command")
 	}
 	result := cmd()
-	rcMsg, ok := result.(PlanRequestChangesMsg)
+	// The cmd is now a batch (action + EnableMouseCellMotion).
+	// Unwrap the batch to find PlanRequestChangesMsg.
+	batch, ok := result.(tea.BatchMsg)
 	if !ok {
-		t.Fatalf("expected PlanRequestChangesMsg, got %T", result)
+		t.Fatalf("expected BatchMsg, got %T", result)
+	}
+	var rcMsg PlanRequestChangesMsg
+	var foundAction bool
+	var foundMouse bool
+	for _, c := range batch {
+		switch msg := c().(type) {
+		case PlanRequestChangesMsg:
+			rcMsg = msg
+			foundAction = true
+		default:
+			if msg == tea.EnableMouseCellMotion() {
+				foundMouse = true
+			}
+		}
+	}
+	if !foundAction {
+		t.Fatal("batch did not contain PlanRequestChangesMsg")
+	}
+	if !foundMouse {
+		t.Fatal("batch did not contain EnableMouseCellMotion")
 	}
 	if rcMsg.PlanID != "plan-42" {
 		t.Fatalf("PlanRequestChangesMsg.PlanID = %q, want plan-42", rcMsg.PlanID)

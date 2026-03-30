@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,64 @@ const (
 
 const feedbackMaxLines = 6
 
+// sgrMouseFragRe extracts button codes from complete SGR mouse escape sequence
+// bodies. It is non-anchored so it can find multiple fragments concatenated in
+// a single KeyRunes event (common under heavy scroll when ESC bytes between
+// sequences are stripped or split off by the terminal).
+var sgrMouseFragRe = regexp.MustCompile(`\[<(\d+);\d+;\d+[Mm]`)
+
+// allSGRBodyRunes returns true if every rune could appear in the body of an
+// SGR mouse escape sequence: [ < 0-9 ; M m.
+func allSGRBodyRunes(runes []rune) bool {
+	for _, r := range runes {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '[', r == '<', r == ';', r == 'M', r == 'm':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isLikelySGRMouseFragment returns true when runes look like the body (or
+// bodies) of SGR mouse escape sequences stripped of their leading ESC byte.
+//
+// The heuristic: len ≥ 2 and every rune is in the SGR body character set.
+// Single-rune events are not flagged to avoid blocking legitimate typing.
+// False positives in a feedback textarea are negligible — a user would have to
+// type two or more characters exclusively from that set with no spaces.
+func isLikelySGRMouseFragment(runes []rune) bool {
+	return len(runes) >= 2 && allSGRBodyRunes(runes)
+}
+
+// extractSGRScrollLines scans runes for complete SGR mouse sequence bodies
+// and returns the total viewport lines to scroll up (negative) and down
+// (positive). Fragments that don't contain a complete [<btn;col;rowM pattern
+// are silently discarded.
+func extractSGRScrollLines(runes []rune) int {
+	const linesPerTick = 3
+	matches := sgrMouseFragRe.FindAllStringSubmatch(string(runes), -1)
+	scroll := 0
+	for _, m := range matches {
+		btn, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		// SGR button encoding: bit 6 (value 64) = wheel flag, bit 0 = direction.
+		const wheelBit = 0b0100_0000
+		if btn&wheelBit == 0 {
+			continue // non-wheel mouse event (click/drag)
+		}
+		if btn&1 == 0 {
+			scroll -= linesPerTick // scroll up
+		} else {
+			scroll += linesPerTick // scroll down
+		}
+	}
+	return scroll
+}
+
 // PlanReviewModel renders the plan and handles approval flow.
 type PlanReviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	viewport       viewport.Model
@@ -40,6 +99,12 @@ type PlanReviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns v
 	styles         styles.Styles
 	width          int
 	height         int
+
+	// pendingBracket is true when a lone '[' rune has been buffered as a
+	// potential start of an SGR mouse fragment body. The next event
+	// resolves whether it is a real fragment (starts with '<') or
+	// legitimate text input (flushed to the textarea).
+	pendingBracket bool
 }
 
 func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
@@ -345,6 +410,9 @@ func wrapPlanReviewCodeLine(line string, width int) []string {
 
 func (m *PlanReviewModel) SetWorkItemID(id string) { m.workItemID = id }
 
+// FeedbackValue returns the current text in the feedback textarea.
+func (m *PlanReviewModel) FeedbackValue() string { return m.feedbackInput.Value() }
+
 func (m *PlanReviewModel) KeybindHints() []KeybindHint {
 	if m.inputMode != planReviewNormal {
 		return []KeybindHint{
@@ -370,6 +438,13 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 		if m.inputMode != planReviewNormal {
 			switch msg.String() {
 			case keyEnter:
+				// Flush any buffered '[' before reading the value.
+				if m.pendingBracket {
+					m.pendingBracket = false
+					m.feedbackInput, _ = m.feedbackInput.Update(
+						tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}},
+					)
+				}
 				text := strings.TrimSpace(m.feedbackInput.Value())
 				m.feedbackHeight = 1
 				m.feedbackInput.SetHeight(1)
@@ -379,24 +454,86 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 					m.inputMode = planReviewNormal
 					m.syncViewportSize()
 
-					return m, func() tea.Msg {
-						return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
-					}
+					return m, tea.Batch(
+						func() tea.Msg {
+							return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
+						},
+						tea.EnableMouseCellMotion,
+					)
 				}
 				m.inputMode = planReviewNormal
 				m.syncViewportSize()
 
-				return m, func() tea.Msg {
-					return PlanRejectMsg{PlanID: m.planID, Reason: text, WorkItemID: m.workItemID}
-				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						return PlanRejectMsg{PlanID: m.planID, Reason: text, WorkItemID: m.workItemID}
+					},
+					tea.EnableMouseCellMotion,
+				)
 			case keyEsc:
+				m.pendingBracket = false // text discarded on cancel
 				m.inputMode = planReviewNormal
 				m.feedbackHeight = 1
 				m.feedbackInput.SetHeight(1)
 				m.feedbackInput.SetValue("")
 				m.feedbackInput.Blur()
 				m.syncViewportSize()
+				return m, tea.EnableMouseCellMotion
 			default:
+				if msg.Type == tea.KeyRunes {
+					// Discard Alt-modified runes in the SGR character set.
+					// These come from \x1b being parsed together with the
+					// next byte as an Alt-modified key (e.g. \x1b[ → Alt+[).
+					if msg.Alt && allSGRBodyRunes(msg.Runes) {
+						m.pendingBracket = false
+						return m, nil
+					}
+
+					// Resolve a pending '[' against the current runes.
+					// If the continuation starts with '<' and all runes
+					// are in the SGR body set, it is a fragment.
+					if m.pendingBracket {
+						m.pendingBracket = false
+						if len(msg.Runes) > 0 && msg.Runes[0] == '<' && allSGRBodyRunes(msg.Runes) {
+							combined := append([]rune{'['}, msg.Runes...)
+							scroll := extractSGRScrollLines(combined)
+							if scroll < 0 {
+								m.viewport.LineUp(-scroll)
+							} else if scroll > 0 {
+								m.viewport.LineDown(scroll)
+							}
+							return m, nil
+						}
+						// Not a fragment — flush the buffered '['.
+						m.feedbackInput, _ = m.feedbackInput.Update(
+							tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}},
+						)
+						// Fall through to process current msg normally.
+					}
+
+					// Buffer a lone '[' as a potential SGR fragment start.
+					if len(msg.Runes) == 1 && msg.Runes[0] == '[' {
+						m.pendingBracket = true
+						return m, nil
+					}
+
+					// Intercept multi-rune SGR mouse fragments.
+					if isLikelySGRMouseFragment(msg.Runes) {
+						scroll := extractSGRScrollLines(msg.Runes)
+						if scroll < 0 {
+							m.viewport.LineUp(-scroll)
+						} else if scroll > 0 {
+							m.viewport.LineDown(scroll)
+						}
+						return m, nil
+					}
+				} else if m.pendingBracket {
+					// Non-rune key with pending bracket — flush it first.
+					m.pendingBracket = false
+					m.feedbackInput, _ = m.feedbackInput.Update(
+						tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}},
+					)
+				}
 				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
 				m.syncFeedbackHeight()
 			}
@@ -413,15 +550,37 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.feedbackInput.Placeholder = "Describe the orchestration or sub-plan changes needed…"
 			m.feedbackInput.Focus()
 			m.syncViewportSize()
+			return m, tea.DisableMouse
 		case "r":
 			m.inputMode = planReviewReject
 			m.feedbackInput.Placeholder = "Reason for rejection…"
 			m.feedbackInput.Focus()
 			m.syncViewportSize()
+			return m, tea.DisableMouse
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
 		case "up", "k", keyDown, "j", "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
+		default:
+			if msg.Type == tea.KeyRunes && isLikelySGRMouseFragment(msg.Runes) {
+				if scroll := extractSGRScrollLines(msg.Runes); scroll != 0 {
+					if scroll < 0 {
+						m.viewport.LineUp(-scroll)
+					} else {
+						m.viewport.LineDown(scroll)
+					}
+				}
+			}
+		}
+	case tea.MouseMsg:
+		// Scroll the plan viewport on wheel events. Mouse reporting is
+		// disabled while the feedback textarea is focused (inputMode != normal),
+		// so these only arrive in normal/read mode.
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				m.viewport, cmd = m.viewport.Update(msg)
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.syncViewportSize()

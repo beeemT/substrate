@@ -409,3 +409,170 @@ func TestPlanReviewModel_TablePreservesTrailingBlankLine(t *testing.T) {
 		t.Fatalf("rendered = %q, want 'Text after table.'", plain)
 	}
 }
+
+// TestPlanReviewDisablesMouseDuringFeedbackInput verifies that entering
+// feedback mode (changes or reject) returns tea.DisableMouse and leaving
+// it returns tea.EnableMouseCellMotion.
+func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 24)
+	m.SetPlanDocument("p1", "plan content")
+	m.SetTitle("T")
+
+	// Entering changes mode must return DisableMouse.
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected DisableMouse cmd from 'c', got nil")
+	}
+	if msg := cmd(); msg != tea.DisableMouse() {
+		t.Fatalf("expected DisableMouse msg, got %T", msg)
+	}
+
+	// Type some legitimate text — should be accepted.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	if got := m.FeedbackValue(); got != "hello" {
+		t.Errorf("feedback = %q, want %q", got, "hello")
+	}
+
+	// Pressing esc must return EnableMouseCellMotion.
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected EnableMouseCellMotion cmd from esc, got nil")
+	}
+	if msg := cmd(); msg != tea.EnableMouseCellMotion() {
+		t.Fatalf("expected EnableMouseCellMotion msg, got %T", msg)
+	}
+
+	// Re-enter via reject mode.
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("expected DisableMouse cmd from 'r', got nil")
+	}
+	if msg := cmd(); msg != tea.DisableMouse() {
+		t.Fatalf("expected DisableMouse msg, got %T", msg)
+	}
+}
+
+// TestPlanReviewFeedbackInterceptsMouseFragments verifies that SGR mouse
+// escape sequence bodies arriving as KeyRunes are intercepted and never
+// inserted into the textarea. This exercises every observed fragment shape:
+//   - single complete fragment per KeyMsg
+//   - multiple fragments concatenated (heavy scroll, no ESC between them)
+//   - partial / tail fragments from buffer splits
+//   - lone '[' split from the rest of the fragment body
+//   - Alt+[ from \x1b[ parsed as alt-modified bracket
+func TestPlanReviewFeedbackInterceptsMouseFragments(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 24)
+	m.SetPlanDocument("p1", strings.Repeat("plan line\n", 40))
+	m.SetTitle("T")
+
+	// Enter changes mode.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	// Type legitimate text.
+	for _, r := range "fix the bug" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// 1) Single complete fragment.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<65;97;554M")})
+
+	// 2) Multiple fragments concatenated in one KeyMsg.
+	m, _ = m.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("[<65;97;554M[<64;97;554M[<65;108;260M"),
+	})
+
+	// 3) Partial / tail fragments from buffer-boundary splits.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<65;97;554M")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("554M")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("65;97;554")})
+
+	// 4) Lone '[' followed by SGR continuation — buffer boundary
+	//    between '[' and '<65;97;554M'.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<65;97;554M")})
+
+	// 5) Alt+[ from \x1b[ parsed as alt-modified bracket.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+
+	// Verify no fragments leaked into the textarea.
+	if got := m.FeedbackValue(); got != "fix the bug" {
+		t.Errorf("feedback = %q, want %q (mouse fragments leaked in)", got, "fix the bug")
+	}
+}
+
+// TestPlanReviewFeedbackPreservesLegitBrackets verifies that a lone '[' typed
+// by the user is correctly inserted into the textarea when the next keystroke
+// is not an SGR continuation (starts with '<').
+func TestPlanReviewFeedbackPreservesLegitBrackets(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 24)
+	m.SetPlanDocument("p1", "plan content")
+	m.SetTitle("T")
+
+	// Enter changes mode.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	// Type "[fix]" one character at a time.
+	for _, r := range "[fix]" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	if got := m.FeedbackValue(); got != "[fix]" {
+		t.Errorf("feedback = %q, want %q (bracket was swallowed)", got, "[fix]")
+	}
+}
+
+// TestPlanReviewPendingBracketFlushedOnSubmit verifies that a pending '['
+// makes it into the submitted text when the user presses Enter.
+func TestPlanReviewPendingBracketFlushedOnSubmit(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 24)
+	m.SetPlanDocument("p1", "plan content")
+	m.SetTitle("T")
+	m.SetWorkItemID("w1")
+
+	// Enter reject mode.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	// Type "not good [" — the trailing '[' will be pending.
+	for _, r := range "not good [" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Submit with Enter — pending '[' must be flushed first.
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Verify the submitted text includes the trailing '['.
+	if cmd == nil {
+		t.Fatal("expected a command from Enter submission")
+	}
+	// tea.Batch wraps commands; unwrap to find PlanRejectMsg.
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected tea.BatchMsg, got %T", cmd())
+	}
+	var reason string
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if rej, ok := c().(views.PlanRejectMsg); ok {
+			reason = rej.Reason
+		}
+	}
+	if reason != "not good [" {
+		t.Errorf("reason = %q, want %q", reason, "not good [")
+	}
+}

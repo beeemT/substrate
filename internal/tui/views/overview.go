@@ -273,6 +273,17 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			m.overlay = overviewOverlayNone
 			m.syncViewport(false)
 
+			// If the plan review had mouse reporting disabled (feedback
+			// textarea was focused), restore it now that the overlay is closing.
+			if m.planReview.inputMode != planReviewNormal {
+				m.planReview.inputMode = planReviewNormal
+				m.planReview.feedbackHeight = 1
+				m.planReview.feedbackInput.SetHeight(1)
+				m.planReview.feedbackInput.SetValue("")
+				m.planReview.feedbackInput.Blur()
+				return m, tea.EnableMouseCellMotion
+			}
+
 			return m, nil
 		}
 		switch m.overlay {
