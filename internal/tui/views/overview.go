@@ -213,7 +213,12 @@ func (m *SessionOverviewModel) SetData(data SessionOverviewData) {
 		m.selectedAction = len(m.data.Actions) - 1
 	}
 	m.syncActionModels()
-	m.syncViewport(resetViewport)
+	// Skip the expensive overview document re-render when an overlay covers
+	// the viewport. syncViewport runs when the overlay closes (line 269),
+	// so the viewport catches up before it becomes visible again.
+	if m.overlay == overviewOverlayNone || resetViewport {
+		m.syncViewport(resetViewport)
+	}
 }
 
 func (m SessionOverviewModel) KeybindHints() []KeybindHint {
@@ -716,7 +721,6 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 		frameWidth = min(max(72, width-12), 220)
 		innerHeight = max(12, height-2)
 	}
-	innerWidth := m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
 	var body string
 	switch m.overlay {
 	case overviewOverlayPlan:
@@ -733,7 +737,11 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 		return ""
 	}
 
-	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewBox(body, innerWidth, innerHeight), Focused: true})
+	// Each overlay model's View() already applies fitViewBox with identical
+	// width (set via SetSize from planOverlayInnerSize / defaultOverlayInnerSize),
+	// so per-line ANSI truncation and width-padding are already done. Only the
+	// cheap height constraint (split, slice, pad) is needed here.
+	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewHeight(body, innerHeight), Focused: true})
 }
 
 func actionKeybindHints(action OverviewActionCard) []KeybindHint {

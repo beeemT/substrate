@@ -112,7 +112,10 @@ func (m *PlanReviewModel) syncFeedbackHeight() {
 func (m *PlanReviewModel) SetTitle(title string) { m.title = title }
 
 func (m *PlanReviewModel) SetPlanDocument(planID, content string) {
-	reset := m.planID != planID || m.planContent != content
+	if m.planID == planID && m.planContent == content {
+		return
+	}
+	reset := m.planID != planID
 	m.planID = planID
 	m.planContent = content
 	m.refreshViewportContent(reset)
