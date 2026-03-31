@@ -103,6 +103,24 @@ func LoadPlanCmd(svc *service.PlanService, workItemID string) tea.Cmd {
 	}
 }
 
+// LoadPlanByIDCmd fetches a plan by its ID and composes a read-only document.
+func LoadPlanByIDCmd(svc *service.PlanService, planID string) tea.Cmd {
+	return func() tea.Msg {
+		plan, err := svc.GetPlan(context.Background(), planID)
+		if err != nil {
+			return InspectPlanLoadedMsg{PlanID: planID}
+		}
+		subPlans, err := svc.ListSubPlansByPlanID(context.Background(), plan.ID)
+		if err != nil {
+			return InspectPlanLoadedMsg{PlanID: planID}
+		}
+		return InspectPlanLoadedMsg{
+			PlanID:   planID,
+			Document: domain.ComposePlanDocument(plan, subPlans),
+		}
+	}
+}
+
 // LoadQuestionsCmd fetches open questions for a session.
 func LoadQuestionsCmd(svc *service.QuestionService, sessionID string) tea.Cmd {
 	return func() tea.Msg {

@@ -967,6 +967,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
+
+	case InspectPlanMsg:
+		if msg.PlanID != "" {
+			return a, LoadPlanByIDCmd(a.svcs.Plan, msg.PlanID)
+		}
+		return a, nil
 	case QuestionsLoadedMsg:
 		a.questions[msg.SessionID] = msg.Questions
 		a.rebuildSidebar()
@@ -1826,6 +1832,7 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 		resumeOffset = a.content.sessionLog.offset
 	}
 	a.content.sessionLog.SetLogPath(session.ID, logPath)
+	a.content.sessionLog.SetPlanID(session.PlanID)
 	switch session.Status {
 	case domain.AgentSessionFailed:
 		a.content.sessionLog.ClearCompletedSession()

@@ -381,3 +381,12 @@ type FollowUpPlanResultMsg struct {
 	WorkItemID string
 	Err        error
 }
+
+// InspectPlanMsg requests loading a plan by ID for read-only inspection.
+type InspectPlanMsg struct{ PlanID string }
+
+// InspectPlanLoadedMsg delivers a composed plan document for overlay display.
+type InspectPlanLoadedMsg struct {
+	PlanID   string
+	Document string
+}

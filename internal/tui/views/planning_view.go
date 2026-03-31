@@ -70,6 +70,12 @@ type SessionLogModel struct {
 	// Silence detection: track last event arrival to surface no-output warnings.
 	lastEventAt         time.Time
 	silenceNoticeActive bool
+
+	// Plan inspection overlay for planning sessions.
+	planID       string
+	planOverlay  bool
+	planDocument string
+	planViewport viewport.Model
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -147,6 +153,15 @@ func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.renderedEntryCount = 0
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
+}
+
+func (m *SessionLogModel) SetPlanID(id string) {
+	if m.planID == id {
+		return
+	}
+	m.planID = id
+	m.planOverlay = false
+	m.planDocument = ""
 }
 
 func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
@@ -236,6 +251,12 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 			{Key: "Esc", Label: "Cancel"},
 		}
 	}
+	if m.planOverlay {
+		return []KeybindHint{
+			{Key: "esc", Label: "Close"},
+			{Key: "↑↓", Label: "Scroll"},
+		}
+	}
 	hints := []KeybindHint{
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "f", Label: "Follow tail"},
@@ -252,6 +273,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Follow up"})
 	} else if m.live {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
+	}
+	if m.planID != "" {
+		hints = append(hints, KeybindHint{Key: "i", Label: "Inspect plan"})
 	}
 	return hints
 }
@@ -279,6 +303,16 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 
 		return m, TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
 	case tea.KeyMsg:
+		if m.planOverlay {
+			switch msg.String() {
+			case "esc", "i", "q":
+				m.planOverlay = false
+				return m, nil
+			default:
+				m.planViewport, cmd = m.planViewport.Update(msg)
+				return m, cmd
+			}
+		}
 		if m.steerActive {
 			switch msg.String() {
 			case "enter":
@@ -338,6 +372,15 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		case "t":
 			m.collapseThinking = !m.collapseThinking
 			m.doRebuildTranscript()
+		case "i":
+			if m.planID != "" && !m.planOverlay {
+				m.planOverlay = true
+				if m.planDocument != "" {
+					// Already loaded; just show.
+					return m, nil
+				}
+				return m, func() tea.Msg { return InspectPlanMsg{PlanID: m.planID} }
+			}
 		default:
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
@@ -352,6 +395,18 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		shouldWarn := !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) >= sessionLogSilenceThreshold
 		m.silenceNoticeActive = shouldWarn
 		return m, sessionLogSpinnerTickCmd()
+	case InspectPlanLoadedMsg:
+		if msg.PlanID == m.planID && msg.Document != "" {
+			m.planDocument = msg.Document
+			fw := m.styles.Chrome.OverlayFrame
+			m.planViewport.Width = fw.InnerWidth(m.width)
+			m.planViewport.Height = max(1, m.height-fw.VerticalFrame()-2) // header + footer
+			m.planViewport.SetContent(msg.Document)
+			m.planViewport.GotoTop()
+		} else {
+			m.planOverlay = false
+		}
+		return m, nil
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
@@ -394,6 +449,22 @@ func (m SessionLogModel) noticeView() string {
 func (m SessionLogModel) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
+	}
+
+	if m.planOverlay && m.planDocument != "" {
+		headerLine := m.styles.Muted.Render("Plan (read-only)")
+		footerLine := m.styles.Muted.Render("esc close  ↑↓ scroll")
+		body := m.planViewport.View()
+		frameWidth := m.width
+		innerHeight := max(1, m.height-m.styles.Chrome.OverlayFrame.VerticalFrame()-2) // header + footer
+		body = fitViewHeight(body, innerHeight)
+		frame := components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
+			HeaderLines: []string{headerLine},
+			Body:        body,
+			Footer:      footerLine,
+			Focused:     true,
+		})
+		return fitViewBox(frame, m.width, m.height)
 	}
 
 	header := m.header()
