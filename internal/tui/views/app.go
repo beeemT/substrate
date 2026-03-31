@@ -1797,6 +1797,11 @@ func sourceDetailsNoticeFromOverviewAction(action OverviewActionCard) *sourceDet
 			notice.Body = "Review critiques are waiting for a human decision."
 		}
 		notice.Hint = "Press [Enter] to open the overview and inspect the review."
+	case overviewActionCompleted:
+		notice.Title = "Work item completed"
+		notice.Body = "This work item completed while you were focused on a task view."
+		notice.Hint = "Press [Enter] to open the overview and inspect the final status or review artifacts."
+		notice.Variant = components.CalloutCard
 	default:
 		notice.Body = firstNonEmptyString(strings.TrimSpace(action.Why), strings.TrimSpace(action.Blocked))
 	}

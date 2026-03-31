@@ -239,10 +239,25 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 		t.Fatalf("review row = %+v", row)
 	}
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"External lifecycle", "Review artifacts", "#7"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("content view = %q, want %q", view, want)
+	if !strings.Contains(view, "External lifecycle") {
+		t.Fatalf("content view = %q, want External lifecycle section", view)
+	}
+	// Verify the completed action card is built and shows the correct hints.
+	hints := app.content.KeybindHints()
+	var foundChanges, foundInspect bool
+	for _, h := range hints {
+		if h.Key == "c" && h.Label == "Changes" {
+			foundChanges = true
 		}
+		if h.Key == "i" && h.Label == "Inspect" {
+			foundInspect = true
+		}
+	}
+	if !foundChanges {
+		t.Fatalf("expected 'c Changes' hint, got %v", hints)
+	}
+	if !foundInspect {
+		t.Fatalf("expected 'i Inspect' hint, got %v", hints)
 	}
 }
 
@@ -378,6 +393,65 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 	}
 	if opened.completed.selectedLink != 0 {
 		t.Fatalf("selected link = %d, want 0", opened.completed.selectedLink)
+	}
+}
+
+// TestCompletedActionCardCOpensFollowUpInput verifies that pressing [c] on a
+// completed action card opens the completed overlay with the follow-up feedback
+// input already active.
+func TestCompletedActionCardCOpensFollowUpInput(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Done", StatusLabel: "Completed", UpdatedAt: time.Now()},
+		Actions:    []OverviewActionCard{{Kind: overviewActionCompleted}},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd != nil {
+		t.Fatalf("[c] returned cmd %v, want nil", cmd)
+	}
+	if updated.overlay != overviewOverlayCompleted {
+		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)
+	}
+	if !updated.completed.inputActive {
+		t.Fatal("expected inputActive to be true after [c]")
+	}
+}
+
+// TestCompletedActionCardIOpensOverlayInNormalMode verifies that pressing [i] on a
+// completed action card opens the completed overlay without the feedback input,
+// allowing the user to inspect PR/MR links.
+func TestCompletedActionCardIOpensOverlayInNormalMode(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Done", StatusLabel: "Completed", UpdatedAt: time.Now()},
+		External: OverviewExternalLifecycle{
+			Reviews: []OverviewReviewRow{{RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "ready"}},
+		},
+		Actions: []OverviewActionCard{{Kind: overviewActionCompleted}},
+	})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatalf("[i] returned cmd %v, want nil", cmd)
+	}
+	if updated.overlay != overviewOverlayCompleted {
+		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)
+	}
+	if updated.completed.inputActive {
+		t.Fatal("expected inputActive to be false after [i]")
 	}
 }
 

@@ -29,6 +29,7 @@ const (
 	overviewActionInterrupted OverviewActionKind = "interrupted"
 	overviewActionReviewing   OverviewActionKind = "reviewing"
 	overviewActionFailed      OverviewActionKind = "failed"
+	overviewActionCompleted   OverviewActionKind = "completed"
 
 	providerGitlab       = "gitlab"
 	labelReviewArtifacts = "Review artifacts"
@@ -371,6 +372,10 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					m.overlay = overviewOverlayReviewing
 
 					return m, nil
+				case overviewActionCompleted:
+					m.overlay = overviewOverlayCompleted
+
+					return m, nil
 				case overviewActionFailed:
 					if len(action.ReviewRepos) > 0 {
 						m.overlay = overviewOverlayReviewing
@@ -420,10 +425,17 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				return m, func() tea.Msg { return AnswerQuestionMsg{QuestionID: questionID, Answer: answer, AnsweredBy: "human"} }
 			}
 		case "c":
-			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionPlanReview {
-				m.openPlanOverlayForChanges()
+			if action := m.selectedActionCard(); action != nil {
+				switch action.Kind {
+				case overviewActionPlanReview:
+					m.openPlanOverlayForChanges()
 
-				return m, nil
+					return m, nil
+				case overviewActionCompleted:
+					m.openCompletedOverlayForChanges()
+
+					return m, nil
+				}
 			}
 		case "r":
 			if action := m.selectedActionCard(); action != nil {
@@ -512,6 +524,15 @@ func (m *SessionOverviewModel) openPlanOverlayForChanges() {
 	m.planReview.feedbackInput.Focus()
 	m.planReview.syncViewportSize()
 	m.overlay = overviewOverlayPlan
+}
+
+// openCompletedOverlayForChanges resets the follow-up feedback input,
+// activates it, and opens the completed overlay.
+func (m *SessionOverviewModel) openCompletedOverlayForChanges() {
+	m.completed.feedbackInput.SetValue("")
+	m.completed.inputActive = true
+	m.completed.feedbackInput.Focus()
+	m.overlay = overviewOverlayCompleted
 }
 
 func (m *SessionOverviewModel) syncActionModels() {
@@ -776,6 +797,8 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
 	case overviewActionFailed:
 		return []KeybindHint{{Key: "r", Label: "Retry"}, {Key: "i", Label: "Inspect"}}
+	case overviewActionCompleted:
+		return []KeybindHint{{Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
 	default:
 		return nil
 	}
@@ -1419,6 +1442,9 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	if failedAction := a.buildFailedActionCard(wi, subPlans); failedAction != nil {
 		actions = append(actions, *failedAction)
 	}
+	if completedAction := a.buildCompletedActionCard(wi, subPlans); completedAction != nil {
+		actions = append(actions, *completedAction)
+	}
 	// Build a set of sub-plan IDs (or work-item-scoped planning markers)
 	// that have an active (non-interrupted, non-terminal) session, so we
 	// can skip stale interrupted sessions that have been replaced.
@@ -1582,6 +1608,26 @@ func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPl
 		Affected:    affected,
 		Context:     context,
 		ReviewRepos: reviewRepos,
+	}
+}
+
+func (a *App) buildCompletedActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {
+	if wi.State != domain.SessionCompleted {
+		return nil
+	}
+	var affected []string
+	for _, subPlan := range subPlans {
+		if subPlan.Status == domain.SubPlanCompleted {
+			affected = append(affected, subPlan.RepositoryName)
+		}
+	}
+	context := []string{fmt.Sprintf("Completed repos: %d of %d", len(affected), len(subPlans))}
+	return &OverviewActionCard{
+		Kind:     overviewActionCompleted,
+		Title:    "Implementation completed",
+		Why:      "The implementation is done. You can request follow-up changes or inspect the results.",
+		Affected: affected,
+		Context:  context,
 	}
 }
 
