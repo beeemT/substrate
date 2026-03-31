@@ -152,11 +152,11 @@ func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.
 	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	// An existing plan row may be left over from a prior cycle — for example a
+	// An existing plan may be left over from a prior cycle — for example a
 	// hard rejection leaves a rejected plan, or a completed work item retains its
-	// approved plan. Because plans.work_item_id has a UNIQUE constraint, the INSERT
-	// in buildAndPersistPlan would collide with that row. Pass the existing plan's
-	// ID so CreatePlanAtomic can delete it atomically before inserting the new plan.
+	// approved plan. The partial unique index only allows one active (non-superseded)
+	// plan per work item. Pass the existing plan's ID so CreatePlanAtomic can
+	// supersede it atomically before inserting the new plan.
 	var replacePlanID string
 	if existing, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID); err == nil {
 		replacePlanID = existing.ID
@@ -176,9 +176,8 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	priorSessionID, priorResumeInfo := s.findPriorPlanningSessionResumeInfo(ctx, workItemID)
 	// Capture plan text before rejecting so the revision prompt has context.
 	currentPlanText := s.buildPlanText(ctx, oldPlanID)
-	// Mark the old plan rejected. The row stays in the DB until buildAndPersistPlan
-	// replaces it atomically — during the planning agent run the rejected plan
-	// remains the last-known plan for the work item.
+	// Mark the old plan rejected. It remains the active plan for the work item
+	// until buildAndPersistPlan supersedes it atomically with the new plan.
 	if err := s.planSvc.RejectPlan(ctx, oldPlanID); err != nil {
 		return nil, fmt.Errorf("reject old plan: %w", err)
 	}
@@ -244,8 +243,7 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 	return s.planRun(ctx, planRunRequest{
 		workItemID:       workItemID,
 		revisionFeedback: followUpContext,
-		// replacePlanID atomically swaps out the old approved plan when the new one
-		// is persisted, satisfying the UNIQUE constraint on plans.work_item_id.
+		// replacePlanID supersedes the old approved plan when the new one is persisted.
 		replacePlanID: currentPlan.ID,
 	})
 }
@@ -554,6 +552,11 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
 		}
 		return nil, fmt.Errorf("persist plan: %w", err)
+	}
+
+	// 12b. Link the planning session to the plan it produced.
+	if err := s.sessionSvc.SetPlanID(ctx, sessionID, plan.ID); err != nil {
+		slog.Warn("failed to store plan_id on planning session", "error", err, "session_id", sessionID, "plan_id", plan.ID)
 	}
 
 	// 13. Transition plan from draft to pending_review.

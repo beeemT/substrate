@@ -15,6 +15,7 @@ type sessionRow struct {
 	ID              string  `db:"id"`
 	WorkItemID      string  `db:"work_item_id"`
 	SubPlanID       *string `db:"sub_plan_id"`
+	PlanID          *string `db:"plan_id"`
 	WorkspaceID     string  `db:"workspace_id"`
 	Phase           string  `db:"phase"`
 	RepositoryName  *string `db:"repository_name"`
@@ -111,6 +112,7 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 		ID:              r.ID,
 		WorkItemID:      r.WorkItemID,
 		SubPlanID:       derefStr(r.SubPlanID),
+		PlanID:          derefStr(r.PlanID),
 		WorkspaceID:     r.WorkspaceID,
 		Phase:           domain.TaskPhase(r.Phase),
 		RepositoryName:  derefStr(r.RepositoryName),
@@ -134,6 +136,7 @@ func rowFromSession(s domain.Task) sessionRow {
 		ID:              s.ID,
 		WorkItemID:      s.WorkItemID,
 		SubPlanID:       strPtr(s.SubPlanID),
+		PlanID:          strPtr(s.PlanID),
 		WorkspaceID:     s.WorkspaceID,
 		Phase:           string(s.Phase),
 		RepositoryName:  strPtr(s.RepositoryName),
@@ -310,11 +313,11 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 	row := rowFromSession(s)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO agent_sessions
-		 (id, work_item_id, sub_plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
+		 (id, work_item_id, sub_plan_id, plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
 		  pid, status, exit_code, started_at, shutdown_at, completed_at, created_at,
 		  owner_instance_id, updated_at, resume_info)
 		 VALUES
-		 (:id, :work_item_id, :sub_plan_id, :workspace_id, :phase, :repository_name, :harness_name, :worktree_path,
+		 (:id, :work_item_id, :sub_plan_id, :plan_id, :workspace_id, :phase, :repository_name, :harness_name, :worktree_path,
 		  :pid, :status, :exit_code, :started_at, :shutdown_at, :completed_at, :created_at,
 		  :owner_instance_id, :updated_at, :resume_info)`, row)
 	if err != nil {
@@ -327,7 +330,8 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
 	row := rowFromSession(s)
 	res, err := r.remote.NamedExecContext(ctx,
-		`UPDATE agent_sessions SET work_item_id = :work_item_id, sub_plan_id = :sub_plan_id, workspace_id = :workspace_id,
+		`UPDATE agent_sessions SET work_item_id = :work_item_id, sub_plan_id = :sub_plan_id, plan_id = :plan_id,
+		 workspace_id = :workspace_id,
 		 phase = :phase, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
 		 pid = :pid, status = :status, exit_code = :exit_code, started_at = :started_at,
 		 shutdown_at = :shutdown_at, completed_at = :completed_at, owner_instance_id = :owner_instance_id,

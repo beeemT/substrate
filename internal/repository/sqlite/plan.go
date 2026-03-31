@@ -86,7 +86,7 @@ func (r PlanRepo) Get(ctx context.Context, id string) (domain.Plan, error) {
 
 func (r PlanRepo) GetByWorkItemID(ctx context.Context, workItemID string) (domain.Plan, error) {
 	var row planRow
-	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM plans WHERE work_item_id = ?`, workItemID); err != nil {
+	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM plans WHERE work_item_id = ? AND status != 'superseded'`, workItemID); err != nil {
 		return domain.Plan{}, fmt.Errorf("get plan by work item %s: %w", workItemID, err)
 	}
 

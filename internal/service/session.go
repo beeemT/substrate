@@ -304,6 +304,21 @@ func (s *TaskService) UpdateResumeInfo(ctx context.Context, id string, info map[
 	})
 }
 
+// SetPlanID records the plan produced by a planning session.
+func (s *TaskService) SetPlanID(ctx context.Context, id string, planID string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		task, err := res.Tasks.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("task", id)
+		}
+
+		task.PlanID = planID
+		task.UpdatedAt = time.Now()
+
+		return res.Tasks.Update(ctx, task)
+	})
+}
+
 // Fail transitions a task to failed.
 func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {

@@ -18,6 +18,7 @@ type Task struct {
 	WorkspaceID     string
 	Phase           TaskPhase
 	SubPlanID       string
+	PlanID          string // Plan produced by this planning session (empty for non-planning tasks).
 	RepositoryName  string
 	WorktreePath    string
 	HarnessName     string

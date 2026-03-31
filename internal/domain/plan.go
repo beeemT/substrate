@@ -34,6 +34,7 @@ const (
 	PlanPendingReview PlanStatus = "pending_review"
 	PlanApproved      PlanStatus = "approved"
 	PlanRejected      PlanStatus = "rejected"
+	PlanSuperseded    PlanStatus = "superseded"
 )
 
 // TaskPlan is a single repository's portion of the plan.

@@ -26,8 +26,9 @@ func NewPlanService(transacter atomic.Transacter[repository.Resources]) *PlanSer
 var validPlanTransitions = map[domain.PlanStatus][]domain.PlanStatus{
 	domain.PlanDraft:         {domain.PlanPendingReview},
 	domain.PlanPendingReview: {domain.PlanApproved, domain.PlanRejected},
-	domain.PlanApproved:      {}, // Terminal state
+	domain.PlanApproved:      {}, // Terminal state — superseding is handled outside the transition table.
 	domain.PlanRejected:      {domain.PlanPendingReview},
+	domain.PlanSuperseded:    {}, // Terminal state — a superseded plan is historical and immutable.
 }
 
 func canTransitionPlan(from, to domain.PlanStatus) bool {
@@ -322,22 +323,26 @@ func (s *PlanService) AppendFAQ(ctx context.Context, entry domain.FAQEntry) erro
 	})
 }
 
-// CreatePlanAtomic atomically deletes the old plan (when replacePlanID is non-empty)
-// and creates the new plan and sub-plans in a single transaction, so the UNIQUE
-// constraint on plans.work_item_id is never violated during a replace.
+// CreatePlanAtomic atomically supersedes the old plan (when replacePlanID is non-empty)
+// and creates the new plan and sub-plans in a single transaction.
+// The partial unique index on plans(work_item_id) WHERE status != 'superseded' ensures
+// at most one active plan per work item. The old plan and its sub-plans remain in the
+// database for historical reference.
 func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan domain.Plan, subPlans []domain.TaskPlan) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		// When replacing a prior plan, delete it first so the UNIQUE constraint on
-		// plans.work_item_id is cleared before the INSERT. Sub-plans cascade-delete
-		// automatically. Both operations land in the same transaction so there is
-		// never a window where the work item has no plan row.
 		if replacePlanID != "" {
-			if err := res.Plans.Delete(ctx, replacePlanID); err != nil {
-				return fmt.Errorf("delete replaced plan: %w", err)
+			old, err := res.Plans.Get(ctx, replacePlanID)
+			if err != nil {
+				return fmt.Errorf("get replaced plan: %w", err)
+			}
+			old.Status = domain.PlanSuperseded
+			old.UpdatedAt = time.Now()
+			if err := res.Plans.Update(ctx, old); err != nil {
+				return fmt.Errorf("supersede old plan: %w", err)
 			}
 		}
 		if err := res.Plans.Create(ctx, plan); err != nil {
-			return fmt.Errorf("create plan: %w", err)
+			return fmt.Errorf("create plan %s: %w", plan.ID, err)
 		}
 		for i := range subPlans {
 			if err := res.SubPlans.Create(ctx, subPlans[i]); err != nil {
