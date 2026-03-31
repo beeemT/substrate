@@ -54,7 +54,7 @@ type planningHarnessSpy struct {
 }
 
 func (h *planningHarnessSpy) SupportsCompact() bool { return true }
-func (h *planningHarnessSpy) Name() string { return "planning-spy" }
+func (h *planningHarnessSpy) Name() string          { return "planning-spy" }
 
 func (h *planningHarnessSpy) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.lastOpts = opts
@@ -146,7 +146,7 @@ type scriptedPlanningHarness struct {
 }
 
 func (h *scriptedPlanningHarness) SupportsCompact() bool { return true }
-func (h *scriptedPlanningHarness) Name() string { return "planning-scripted" }
+func (h *scriptedPlanningHarness) Name() string          { return "planning-scripted" }
 
 func (h *scriptedPlanningHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.lastOpts = opts
@@ -656,7 +656,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 //     → session failed with exit_code=1; work item returned to ingested
 //     Steps 1-2 repeated three times (sessions 01KMDVM6, 01KME1D5, 01KME3JY).
 //
-// Fix: Plan() now looks up any existing rejected plan and passes its ID as
+// Fix: Plan() now looks up any existing plan (regardless of status) and passes its ID as
 // replacePlanID, so CreatePlanAtomic can delete it atomically before inserting.
 func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -760,6 +760,121 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	}
 
 	// New plan must now occupy the slot.
+	if planRepo.taken[workItemID] == oldPlanID || planRepo.taken[workItemID] == "" {
+		t.Errorf("unique slot not updated: still points to %q", planRepo.taken[workItemID])
+	}
+}
+
+// TestPlan_ReplacesExistingApprovedPlanFromCompleted is the regression test for
+// the UNIQUE constraint failure when a completed work item (which retains its
+// approved plan) is re-entered into planning via the duplicate-session dialog.
+//
+// Production failure sequence:
+//  1. Work item completed successfully — plan row has status=approved.
+//  2. User picked the same item in the new-session browser.
+//  3. Duplicate dialog fired; user chose "Start planning with existing item".
+//  4. TUI called StartPlanningCmd → Plan() — completed→planning is a valid transition.
+//  5. Plan() only checked for PlanRejected; the approved plan was invisible.
+//  6. Agent succeeded, buildAndPersistPlan tried to INSERT →
+//     UNIQUE constraint failed: plans.work_item_id.
+//
+// Fix: Plan() now passes any existing plan's ID as replacePlanID, regardless of status.
+func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceRoot := filepath.Join(tmpDir, "workspace")
+
+	// Fake gitwork repo.
+	repoName := "test-repo"
+	repoDir := filepath.Join(workspaceRoot, repoName)
+	mainDir := filepath.Join(repoDir, "main")
+	for _, d := range []string{filepath.Join(repoDir, ".bare"), mainDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("create dir %s: %v", d, err)
+		}
+	}
+
+	wtJSON, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"worktrees": []map[string]any{
+				{"dir": mainDir, "branch": "main", "current": true},
+			},
+		},
+	})
+	fakeGitWork := filepath.Join(tmpDir, "git-work")
+	if err := os.WriteFile(
+		fakeGitWork,
+		fmt.Appendf(nil, "#!/bin/sh\nprintf '%%s\\n' %q\n", string(wtJSON)),
+		0o755,
+	); err != nil {
+		t.Fatalf("write fake git-work: %v", err)
+	}
+
+	const (
+		workItemID  = "wi-completed-replan"
+		workspaceID = "ws-completed-replan"
+		oldPlanID   = "plan-approved-completed"
+	)
+
+	planRepo := newUniqueWorkItemPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+
+	// Seed an approved plan — the artifact of a completed work item.
+	if err := planRepo.Create(context.Background(), domain.Plan{
+		ID:         oldPlanID,
+		WorkItemID: workItemID,
+		Status:     domain.PlanApproved,
+		Version:    1,
+	}); err != nil {
+		t.Fatalf("seed approved plan: %v", err)
+	}
+
+	// Work item starts in completed state — the transition table allows completed→planning.
+	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionCompleted},
+	}}
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
+
+	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
+	}}
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+
+	sessionRepo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+
+	eventRepo := &planTestEventRepo{}
+	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
+
+	gitClient := gitwork.NewClient(fakeGitWork)
+	globalCfg := &config.Config{}
+	globalCfg.Plan.MaxParseRetries = ptrInt(0)
+	discoverer := NewDiscoverer(gitClient, globalCfg)
+
+	planText := validPlanningPlanWithRepo(repoName, "Re-plan after completion.", "Implement the next iteration.")
+	harness := &planningHarnessSpy{planText: planText}
+
+	pcfg := DefaultPlanningConfig()
+	pcfg.MaxParseRetries = 0
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, globalCfg)
+	if err != nil {
+		t.Fatalf("NewPlanningService: %v", err)
+	}
+
+	result, planErr := svc.Plan(context.Background(), workItemID)
+	if planErr != nil {
+		t.Fatalf("Plan(): %v", planErr)
+	}
+	if result == nil {
+		t.Fatal("Plan() returned nil result")
+	}
+
+	// Old approved plan must be gone.
+	if _, exists := planRepo.plans[oldPlanID]; exists {
+		t.Error("old approved plan still present after Plan(): replacePlanID was not passed to buildAndPersistPlan")
+	}
+
+	// New plan must occupy the unique slot.
 	if planRepo.taken[workItemID] == oldPlanID || planRepo.taken[workItemID] == "" {
 		t.Errorf("unique slot not updated: still points to %q", planRepo.taken[workItemID])
 	}

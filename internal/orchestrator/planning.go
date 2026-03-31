@@ -147,21 +147,18 @@ type planRunRequest struct {
 	replacePlanID string
 }
 
-// Plan executes the planning pipeline for a work item in Ingested state.
+// Plan executes the planning pipeline for a work item, transitioning it to planning state.
 func (s *PlanningService) Plan(ctx context.Context, workItemID string) (*domain.PlanningResult, error) {
 	if err := s.workItemSvc.StartPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
-	// A hard rejection (PlanRejectMsg path) leaves the plan row in the DB with
-	// status=rejected while transitioning the work item back to ingested. If the
-	// user triggers re-planning from ingested, Plan() is called again and the
-	// INSERT in buildAndPersistPlan would collide with the still-existing rejected
-	// plan row (plans.work_item_id has a UNIQUE constraint). Pass the rejected
-	// plan's ID so CreatePlanAtomic can delete it atomically before inserting the
-	// new plan, satisfying the constraint without a window where the slot is empty.
+	// An existing plan row may be left over from a prior cycle — for example a
+	// hard rejection leaves a rejected plan, or a completed work item retains its
+	// approved plan. Because plans.work_item_id has a UNIQUE constraint, the INSERT
+	// in buildAndPersistPlan would collide with that row. Pass the existing plan's
+	// ID so CreatePlanAtomic can delete it atomically before inserting the new plan.
 	var replacePlanID string
-	if existing, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID); err == nil &&
-		existing.Status == domain.PlanRejected {
+	if existing, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID); err == nil {
 		replacePlanID = existing.ID
 	}
 	return s.planRun(ctx, planRunRequest{
