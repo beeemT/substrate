@@ -506,12 +506,12 @@ func validPlanningSubPlan(goal string) string {
 }
 
 // uniqueWorkItemPlanRepo is an in-memory PlanRepository that enforces the
-// plans.work_item_id UNIQUE constraint, reproducing the SQLite behaviour that
-// caused the production failure. Using it in unit tests catches regressions
-// where buildAndPersistPlan tries to INSERT without first clearing the slot.
+// partial unique index on plans(work_item_id) WHERE status != 'superseded',
+// reproducing the SQLite behaviour. Using it in unit tests catches regressions
+// where buildAndPersistPlan tries to INSERT without first superseding the old plan.
 type uniqueWorkItemPlanRepo struct {
 	plans map[string]domain.Plan // planID → Plan
-	taken map[string]string      // workItemID → planID holding the slot
+	taken map[string]string      // workItemID → planID holding the active slot
 }
 
 func newUniqueWorkItemPlanRepo() *uniqueWorkItemPlanRepo {
@@ -536,22 +536,37 @@ func (r *uniqueWorkItemPlanRepo) GetByWorkItemID(_ context.Context, workItemID s
 }
 
 func (r *uniqueWorkItemPlanRepo) Create(_ context.Context, plan domain.Plan) error {
+	// The partial unique index only constrains non-superseded plans.
 	if existingID, ok := r.taken[plan.WorkItemID]; ok {
 		return fmt.Errorf("UNIQUE constraint failed: plans.work_item_id (slot held by %s)", existingID)
 	}
 	r.plans[plan.ID] = plan
-	r.taken[plan.WorkItemID] = plan.ID
+	if plan.Status != domain.PlanSuperseded {
+		r.taken[plan.WorkItemID] = plan.ID
+	}
 	return nil
 }
 
 func (r *uniqueWorkItemPlanRepo) Update(_ context.Context, plan domain.Plan) error {
+	old, ok := r.plans[plan.ID]
+	if !ok {
+		return fmt.Errorf("plan not found: %s", plan.ID)
+	}
 	r.plans[plan.ID] = plan
+	// If transitioning to superseded, release the active slot.
+	if old.Status != domain.PlanSuperseded && plan.Status == domain.PlanSuperseded {
+		if r.taken[plan.WorkItemID] == plan.ID {
+			delete(r.taken, plan.WorkItemID)
+		}
+	}
 	return nil
 }
 
 func (r *uniqueWorkItemPlanRepo) Delete(_ context.Context, id string) error {
 	if p, ok := r.plans[id]; ok {
-		delete(r.taken, p.WorkItemID)
+		if r.taken[p.WorkItemID] == id {
+			delete(r.taken, p.WorkItemID)
+		}
 		delete(r.plans, id)
 	}
 	return nil
@@ -562,9 +577,9 @@ func (r *uniqueWorkItemPlanRepo) AppendFAQ(_ context.Context, _ domain.FAQEntry)
 }
 
 // TestBuildAndPersistPlanAtomicReplace is the regression test for the UNIQUE
-// constraint bug. It verifies that buildAndPersistPlan atomically removes the
-// old plan and inserts the new one in the same transaction, so the constraint
-// on plans.work_item_id is never violated.
+// constraint bug. It verifies that buildAndPersistPlan atomically supersedes the
+// old plan and inserts the new one in the same transaction, so the partial unique
+// index on plans.work_item_id is never violated.
 func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 	const (
 		workItemID = "wi-atomic-replace"
@@ -611,12 +626,16 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 		t.Fatalf("buildAndPersistPlan with replacePlanID: %v", err)
 	}
 
-	// Old plan must be gone — the unique slot was released.
-	if _, exists := planRepo.plans[oldPlanID]; exists {
-		t.Error("old plan still present after atomic replace")
+	// Old plan must be superseded, not deleted.
+	oldAfter, exists := planRepo.plans[oldPlanID]
+	if !exists {
+		t.Fatal("old plan was deleted instead of superseded")
+	}
+	if oldAfter.Status != domain.PlanSuperseded {
+		t.Errorf("old plan status = %q, want %q", oldAfter.Status, domain.PlanSuperseded)
 	}
 	if planRepo.taken[workItemID] == oldPlanID {
-		t.Error("unique slot still points to old plan after atomic replace")
+		t.Error("active slot still points to old (superseded) plan")
 	}
 
 	// New plan must occupy the slot.
@@ -745,7 +764,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
 
-	// Call Plan() — should atomically replace the rejected plan.
+	// Call Plan() — should atomically supersede the rejected plan.
 	result, planErr := svc.Plan(context.Background(), workItemID)
 	if planErr != nil {
 		t.Fatalf("Plan(): %v", planErr)
@@ -754,12 +773,16 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 		t.Fatal("Plan() returned nil result")
 	}
 
-	// Old plan must be gone: the unique slot was released and re-taken.
-	if _, exists := planRepo.plans[oldPlanID]; exists {
-		t.Error("old rejected plan still present after Plan(): replacePlanID was not passed to buildAndPersistPlan")
+	// Old plan must be superseded, not deleted.
+	oldAfter, exists := planRepo.plans[oldPlanID]
+	if !exists {
+		t.Fatal("old rejected plan was deleted instead of superseded")
+	}
+	if oldAfter.Status != domain.PlanSuperseded {
+		t.Errorf("old plan status = %q, want %q", oldAfter.Status, domain.PlanSuperseded)
 	}
 
-	// New plan must now occupy the slot.
+	// New plan must occupy the active slot.
 	if planRepo.taken[workItemID] == oldPlanID || planRepo.taken[workItemID] == "" {
 		t.Errorf("unique slot not updated: still points to %q", planRepo.taken[workItemID])
 	}
@@ -869,12 +892,16 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 		t.Fatal("Plan() returned nil result")
 	}
 
-	// Old approved plan must be gone.
-	if _, exists := planRepo.plans[oldPlanID]; exists {
-		t.Error("old approved plan still present after Plan(): replacePlanID was not passed to buildAndPersistPlan")
+	// Old approved plan must be superseded, not deleted.
+	oldAfter, exists := planRepo.plans[oldPlanID]
+	if !exists {
+		t.Fatal("old approved plan was deleted instead of superseded")
+	}
+	if oldAfter.Status != domain.PlanSuperseded {
+		t.Errorf("old plan status = %q, want %q", oldAfter.Status, domain.PlanSuperseded)
 	}
 
-	// New plan must occupy the unique slot.
+	// New plan must occupy the active slot.
 	if planRepo.taken[workItemID] == oldPlanID || planRepo.taken[workItemID] == "" {
 		t.Errorf("unique slot not updated: still points to %q", planRepo.taken[workItemID])
 	}
