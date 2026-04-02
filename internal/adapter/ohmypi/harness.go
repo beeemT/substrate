@@ -112,7 +112,7 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	bunCacheDir := filepath.Join(globalDir, "bun-cache")
 
 	// Build the sandboxed command. OS detection is handled inside BuildSandboxCmd.
-	cmd, sessionTmpDir, err := bridge.BuildSandboxCmd(ctx, bridgeRt, workDir, bunPath, bunCacheDir, ".omp")
+	cmd, sessionTmpDir, err := bridge.BuildSandboxCmd(ctx, bridgeRt, workDir, bridge.ResolveGitDir(workDir), bunPath, bunCacheDir, ".omp")
 	if err != nil {
 		return nil, err
 	}

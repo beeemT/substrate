@@ -486,3 +486,59 @@ func TestResolveBridgeRuntimeFromSourceScriptSetsNeedsBun(t *testing.T) {
 		t.Error("expected NeedsBun == true for a .ts bridge script")
 	}
 }
+
+func TestResolveGitDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("git-work repo returns .bare path", func(t *testing.T) {
+		t.Parallel()
+		repoRoot := t.TempDir()
+		worktree := filepath.Join(repoRoot, "sub-branch-name")
+		if err := os.MkdirAll(filepath.Join(repoRoot, ".bare"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(worktree, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := ResolveGitDir(worktree)
+		want := filepath.Join(repoRoot, ".bare")
+		if got != want {
+			t.Errorf("ResolveGitDir(%q) = %q, want %q", worktree, got, want)
+		}
+	})
+
+	t.Run("plain git repo returns empty", func(t *testing.T) {
+		t.Parallel()
+		worktree := t.TempDir()
+		got := ResolveGitDir(worktree)
+		if got != "" {
+			t.Errorf("ResolveGitDir(%q) = %q, want empty string", worktree, got)
+		}
+	})
+
+	t.Run("non-existent worktree returns empty", func(t *testing.T) {
+		t.Parallel()
+		// Use a path that doesn't exist — Stat will fail, so empty is returned.
+		got := ResolveGitDir("/nonexistent/path/to/worktree")
+		if got != "" {
+			t.Errorf("ResolveGitDir(nonexistent) = %q, want empty string", got)
+		}
+	})
+
+	t.Run(".bare exists but is a file not a directory", func(t *testing.T) {
+		t.Parallel()
+		repoRoot := t.TempDir()
+		worktree := filepath.Join(repoRoot, "sub-branch-name")
+		if err := os.MkdirAll(worktree, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Create .bare as a file, not a directory.
+		if err := os.WriteFile(filepath.Join(repoRoot, ".bare"), []byte("not a dir"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := ResolveGitDir(worktree)
+		if got != "" {
+			t.Errorf("ResolveGitDir(%q) = %q, want empty string (file not dir)", worktree, got)
+		}
+	})
+}
