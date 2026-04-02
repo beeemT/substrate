@@ -145,31 +145,6 @@ func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
 	return s.TransitionPlan(ctx, id, domain.PlanRejected)
 }
 
-// RevisePlan transitions a rejected plan back to pending_review and increments version.
-func (s *PlanService) RevisePlan(ctx context.Context, id string, newContent string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		plan, err := res.Plans.Get(ctx, id)
-		if err != nil {
-			return newNotFoundError("plan", id)
-		}
-
-		if plan.Status != domain.PlanRejected {
-			return newInvalidTransitionError(
-				planStatusName(plan.Status),
-				planStatusName(domain.PlanPendingReview),
-				"plan",
-			)
-		}
-
-		plan.Status = domain.PlanPendingReview
-		plan.OrchestratorPlan = newContent
-		plan.Version++
-		plan.UpdatedAt = time.Now()
-
-		return res.Plans.Update(ctx, plan)
-	})
-}
-
 // UpdatePlanContent updates the plan content without changing status.
 func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
@@ -217,7 +192,6 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 		}
 
 		changed := plan.OrchestratorPlan != rawOutput.Orchestration || len(existingSubPlans) != len(rawOutput.SubPlans)
-		newVersion := plan.Version + 1
 		seen := make(map[string]bool, len(rawOutput.SubPlans))
 		updatedSubPlans := make([]domain.TaskPlan, 0, len(rawOutput.SubPlans))
 		for _, rawSubPlan := range rawOutput.SubPlans {
@@ -228,7 +202,6 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				subPlanChanged := existing.RepositoryName != rawSubPlan.RepoName || existing.Content != rawSubPlan.Content || existing.Order != order
 				if subPlanChanged {
 					changed = true
-					existing.PlanningRound = newVersion
 					if existing.Status == domain.SubPlanCompleted {
 						existing.Status = domain.SubPlanPending
 					}
@@ -250,7 +223,6 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 				RepositoryName: rawSubPlan.RepoName,
 				Content:        rawSubPlan.Content,
 				Order:          order,
-				PlanningRound:  newVersion,
 				Status:         domain.SubPlanPending,
 				CreatedAt:      now,
 				UpdatedAt:      now,
@@ -275,7 +247,6 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 			return nil
 		}
 		plan.OrchestratorPlan = rawOutput.Orchestration
-		plan.Version = newVersion
 		plan.UpdatedAt = now
 		if err := res.Plans.Update(ctx, plan); err != nil {
 			return err
@@ -337,6 +308,7 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 			}
 			old.Status = domain.PlanSuperseded
 			old.UpdatedAt = time.Now()
+			plan.Version = old.Version + 1 // generation counter
 			if err := res.Plans.Update(ctx, old); err != nil {
 				return fmt.Errorf("supersede old plan: %w", err)
 			}

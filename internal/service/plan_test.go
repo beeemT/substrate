@@ -139,58 +139,6 @@ func TestPlanService_InvalidTransitions(t *testing.T) {
 	}
 }
 
-func TestPlanService_RevisePlan(t *testing.T) {
-	ctx := context.Background()
-	planRepo := NewMockPlanRepository()
-	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
-
-	// Create rejected plan
-	plan := domain.Plan{
-		ID:               "plan-1",
-		WorkItemID:       "wi-1",
-		OrchestratorPlan: "Original",
-		Status:           domain.PlanRejected,
-		Version:          1,
-	}
-	planRepo.plans["plan-1"] = plan
-
-	t.Run("revises rejected plan and increments version", func(t *testing.T) {
-		if err := svc.RevisePlan(ctx, "plan-1", "Revised content"); err != nil {
-			t.Fatalf("RevisePlan failed: %v", err)
-		}
-
-		got, _ := svc.GetPlan(ctx, "plan-1")
-		if got.Status != domain.PlanPendingReview {
-			t.Errorf("Status = %q, want %q", got.Status, domain.PlanPendingReview)
-		}
-		if got.Version != 2 {
-			t.Errorf("Version = %d, want 2", got.Version)
-		}
-		if got.OrchestratorPlan != "Revised content" {
-			t.Errorf("OrchestratorPlan = %q, want %q", got.OrchestratorPlan, "Revised content")
-		}
-	})
-
-	t.Run("cannot revise non-rejected plan", func(t *testing.T) {
-		plan := domain.Plan{
-			ID:               "plan-2",
-			WorkItemID:       "wi-2",
-			OrchestratorPlan: "Test",
-			Status:           domain.PlanDraft,
-		}
-		planRepo.plans["plan-2"] = plan
-
-		err := svc.RevisePlan(ctx, "plan-2", "New content")
-		if err == nil {
-			t.Fatal("expected error for revising non-rejected plan")
-		}
-		if _, ok := err.(ErrInvalidTransition); !ok {
-			t.Errorf("error type = %T, want ErrInvalidTransition", err)
-		}
-	})
-}
-
 func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
@@ -229,8 +177,8 @@ func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
 	if updatedPlan.OrchestratorPlan != "New orchestration" {
 		t.Fatalf("OrchestratorPlan = %q, want %q", updatedPlan.OrchestratorPlan, "New orchestration")
 	}
-	if updatedPlan.Version != 2 {
-		t.Fatalf("Version = %d, want 2", updatedPlan.Version)
+	if updatedPlan.Version != 1 {
+		t.Fatalf("Version = %d, want 1 (review edits do not bump generation)", updatedPlan.Version)
 	}
 	if _, ok := subPlanRepo.subPlans["sp-drop"]; ok {
 		t.Fatal("expected repo-drop sub-plan to be deleted")
@@ -253,7 +201,7 @@ func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
 	}
 }
 
-func TestPlanService_ApplyReviewedPlanOutput_NoOpDoesNotBumpVersion(t *testing.T) {
+func TestPlanService_ApplyReviewedPlanOutput_NoOpPreservesVersion(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
@@ -285,6 +233,59 @@ func TestPlanService_ApplyReviewedPlanOutput_NoOpDoesNotBumpVersion(t *testing.T
 	}
 	if len(updatedSubPlans) != 1 || updatedSubPlans[0].ID != "sp-a" {
 		t.Fatalf("updated sub-plans = %#v, want original sub-plan preserved", updatedSubPlans)
+	}
+}
+
+func TestPlanService_CreatePlanAtomic_VersionGeneration(t *testing.T) {
+	ctx := context.Background()
+	planRepo := NewMockPlanRepository()
+	subPlanRepo := NewMockSubPlanRepository()
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+
+	// First plan starts at version 1.
+	planV1 := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: "v1", Version: 1}
+	if err := svc.CreatePlanAtomic(ctx, "", planV1, nil); err != nil {
+		t.Fatalf("CreatePlanAtomic v1: %v", err)
+	}
+	gotV1, err := svc.GetPlan(ctx, "plan-1")
+	if err != nil {
+		t.Fatalf("GetPlan v1: %v", err)
+	}
+	if gotV1.Version != 1 {
+		t.Fatalf("v1.Version = %d, want 1", gotV1.Version)
+	}
+
+	// Second plan should be version 2 (generation counter from superseded plan).
+	planV2 := domain.Plan{ID: "plan-2", WorkItemID: "wi-1", OrchestratorPlan: "v2"}
+	if err := svc.CreatePlanAtomic(ctx, "plan-1", planV2, nil); err != nil {
+		t.Fatalf("CreatePlanAtomic v2: %v", err)
+	}
+	gotV2, err := svc.GetPlan(ctx, "plan-2")
+	if err != nil {
+		t.Fatalf("GetPlan v2: %v", err)
+	}
+	if gotV2.Version != 2 {
+		t.Fatalf("v2.Version = %d, want 2", gotV2.Version)
+	}
+	// Old plan should be superseded.
+	gotOld, err := svc.GetPlan(ctx, "plan-1")
+	if err != nil {
+		t.Fatalf("GetPlan old: %v", err)
+	}
+	if gotOld.Status != domain.PlanSuperseded {
+		t.Fatalf("old plan status = %q, want %q", gotOld.Status, domain.PlanSuperseded)
+	}
+	// Third plan should be version 3.
+	planV3 := domain.Plan{ID: "plan-3", WorkItemID: "wi-1", OrchestratorPlan: "v3"}
+	if err := svc.CreatePlanAtomic(ctx, "plan-2", planV3, nil); err != nil {
+		t.Fatalf("CreatePlanAtomic v3: %v", err)
+	}
+	gotV3, err := svc.GetPlan(ctx, "plan-3")
+	if err != nil {
+		t.Fatalf("GetPlan v3: %v", err)
+	}
+	if gotV3.Version != 3 {
+		t.Fatalf("v3.Version = %d, want 3", gotV3.Version)
 	}
 }
 

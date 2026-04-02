@@ -818,9 +818,10 @@ func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (str
 }
 
 // buildAndPersistPlan creates the plan and sub-plans and persists them atomically.
-// When replacePlanID is non-empty, the identified plan (and its sub-plans, via cascade)
-// is deleted within the same transaction, satisfying the UNIQUE constraint on
-// plans.work_item_id without exposing a window where the work item has no plan.
+// When replacePlanID is non-empty, the identified plan is superseded within the same
+// transaction, and the new plan's version is derived from the old plan's version
+// (generation counter). The partial unique index on plans(work_item_id)
+// WHERE status != 'superseded' ensures at most one active plan per work item.
 func (s *PlanningService) buildAndPersistPlan(
 	ctx context.Context,
 	rawOutput domain.RawPlanOutput,
