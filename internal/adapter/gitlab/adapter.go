@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -33,6 +32,15 @@ const (
 	filterCreatedByMe = "created_by_me"
 	filterClosed      = "closed"
 )
+
+// defaultStateMappings maps domain TrackerStates to GitLab state_event values.
+// GitLab's issue state_event API accepts "close" and "reopen".
+var defaultStateMappings = map[string]string{
+	string(domain.TrackerStateTodo):       "reopen",
+	string(domain.TrackerStateInProgress): "reopen",
+	string(domain.TrackerStateInReview):   "reopen",
+	string(domain.TrackerStateDone):       "close",
+}
 
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -111,6 +119,10 @@ func newWithDeps(ctx context.Context, cfg config.GitlabConfig, client httpDoer, 
 	cfg.Token = token
 
 	a := &GitlabAdapter{cfg: cfg, baseURL: baseURL, client: client}
+
+	if len(a.cfg.StateMappings) == 0 {
+		a.cfg.StateMappings = defaultStateMappings
+	}
 
 	return a, nil
 }
@@ -383,12 +395,7 @@ func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 }
 
 func (a *GitlabAdapter) UpdateState(ctx context.Context, externalID string, state domain.TrackerState) error {
-	mapped, ok := a.cfg.StateMappings[string(state)]
-	if !ok || strings.TrimSpace(mapped) == "" {
-		slog.Warn("gitlab: no state mapping configured; UpdateState is a no-op", "state", state, "external_id", externalID)
-
-		return nil
-	}
+	mapped := a.cfg.StateMappings[string(state)]
 	projectID, iid, err := parseExternalID(externalID)
 	if err != nil {
 		return err

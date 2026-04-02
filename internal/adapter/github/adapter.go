@@ -124,6 +124,13 @@ const (
 	stateClosed       = "closed"
 )
 
+var defaultStateMappings = map[string]string{
+	string(domain.TrackerStateTodo):       "open",
+	string(domain.TrackerStateInProgress): "open",
+	string(domain.TrackerStateInReview):   "open",
+	string(domain.TrackerStateDone):       "closed",
+}
+
 // maxResponseBodyBytes limits HTTP response body reads to prevent OOM from
 // a malicious or misconfigured API server.
 const maxResponseBodyBytes = 50 * 1024 * 1024 // 50 MiB
@@ -163,6 +170,9 @@ func newWithDeps(
 		tracked:       make(map[string]githubPull),
 		defaultBranch: defaultBranchMain,
 		repos:         repos,
+	}
+	if len(a.cfg.StateMappings) == 0 {
+		a.cfg.StateMappings = defaultStateMappings
 	}
 	viewer, _ := a.viewerLogin(ctx)
 	if cfg.Assignee == "" || cfg.Assignee == "me" {
@@ -405,10 +415,8 @@ func (a *GithubAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 }
 
 func (a *GithubAdapter) UpdateState(ctx context.Context, externalID string, state domain.TrackerState) error {
-	mapped, ok := a.cfg.StateMappings[string(state)]
-	if !ok || strings.TrimSpace(mapped) == "" {
-		slog.Warn("github: no state mapping configured; UpdateState is a no-op", "state", state, "external_id", externalID)
-
+	mapped := a.cfg.StateMappings[string(state)]
+	if strings.TrimSpace(mapped) == "" {
 		return nil
 	}
 	owner, repo, number, err := parseExternalID(externalID)

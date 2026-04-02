@@ -212,10 +212,12 @@ func TestOnEventUpdatesStates(t *testing.T) {
 	}
 }
 
-func TestUpdateStateNoMappingNoop(t *testing.T) {
+func TestUpdateStateDefaultMappings(t *testing.T) {
+	var seenBody []byte
 	a, err := newWithClient(context.Background(), config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/api/v4/projects/1234" {
-			return jsonResponse(t, http.StatusOK, map[string]any{"namespace": map[string]any{"id": 1, "kind": "group"}}), nil
+		if req.URL.Path == "/api/v4/projects/1234/issues/42" {
+			seenBody, _ = io.ReadAll(req.Body)
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42}), nil
 		}
 		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
 
@@ -225,7 +227,14 @@ func TestUpdateStateNoMappingNoop(t *testing.T) {
 		t.Fatalf("newWithClient: %v", err)
 	}
 	if err := a.UpdateState(context.Background(), "gl:issue:1234#42", domain.TrackerStateDone); err != nil {
-		t.Fatalf("UpdateState noop: %v", err)
+		t.Fatalf("UpdateState: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(seenBody, &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["state_event"] != "close" {
+		t.Fatalf("state_event = %v, want \"close\"", body["state_event"])
 	}
 }
 
