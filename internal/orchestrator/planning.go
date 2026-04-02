@@ -141,9 +141,10 @@ type planRunRequest struct {
 	priorSessionID   string
 	priorResumeInfo  map[string]string
 	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
-	// must atomically replace. The old plan's row is deleted within the same
-	// transaction that inserts the new one, keeping the UNIQUE constraint on
-	// plans.work_item_id satisfied at all times.
+	// must atomically supersede. The old plan's status is set to 'superseded'
+	// in the same transaction that inserts the new one; the partial unique
+	// index on plans(work_item_id) WHERE status != 'superseded' enforces
+	// at most one active plan per work item.
 	replacePlanID string
 }
 
@@ -855,7 +856,7 @@ func (s *PlanningService) buildAndPersistPlan(
 		})
 	}
 
-	if err := s.planSvc.CreatePlanAtomic(ctx, replacePlanID, *plan, subPlans); err != nil {
+	if err := s.planSvc.CreatePlanAtomic(ctx, replacePlanID, plan, subPlans); err != nil {
 		return nil, nil, err
 	}
 

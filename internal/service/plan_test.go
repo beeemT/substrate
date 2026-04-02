@@ -244,7 +244,7 @@ func TestPlanService_CreatePlanAtomic_VersionGeneration(t *testing.T) {
 
 	// First plan starts at version 1.
 	planV1 := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: "v1", Version: 1}
-	if err := svc.CreatePlanAtomic(ctx, "", planV1, nil); err != nil {
+	if err := svc.CreatePlanAtomic(ctx, "", &planV1, nil); err != nil {
 		t.Fatalf("CreatePlanAtomic v1: %v", err)
 	}
 	gotV1, err := svc.GetPlan(ctx, "plan-1")
@@ -257,7 +257,7 @@ func TestPlanService_CreatePlanAtomic_VersionGeneration(t *testing.T) {
 
 	// Second plan should be version 2 (generation counter from superseded plan).
 	planV2 := domain.Plan{ID: "plan-2", WorkItemID: "wi-1", OrchestratorPlan: "v2"}
-	if err := svc.CreatePlanAtomic(ctx, "plan-1", planV2, nil); err != nil {
+	if err := svc.CreatePlanAtomic(ctx, "plan-1", &planV2, nil); err != nil {
 		t.Fatalf("CreatePlanAtomic v2: %v", err)
 	}
 	gotV2, err := svc.GetPlan(ctx, "plan-2")
@@ -277,7 +277,7 @@ func TestPlanService_CreatePlanAtomic_VersionGeneration(t *testing.T) {
 	}
 	// Third plan should be version 3.
 	planV3 := domain.Plan{ID: "plan-3", WorkItemID: "wi-1", OrchestratorPlan: "v3"}
-	if err := svc.CreatePlanAtomic(ctx, "plan-2", planV3, nil); err != nil {
+	if err := svc.CreatePlanAtomic(ctx, "plan-2", &planV3, nil); err != nil {
 		t.Fatalf("CreatePlanAtomic v3: %v", err)
 	}
 	gotV3, err := svc.GetPlan(ctx, "plan-3")

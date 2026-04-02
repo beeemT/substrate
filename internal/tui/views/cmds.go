@@ -108,11 +108,11 @@ func LoadPlanByIDCmd(svc *service.PlanService, planID string) tea.Cmd {
 	return func() tea.Msg {
 		plan, err := svc.GetPlan(context.Background(), planID)
 		if err != nil {
-			return InspectPlanLoadedMsg{PlanID: planID}
+			return InspectPlanLoadedMsg{PlanID: planID, Err: fmt.Errorf("load plan %s: %w", planID, err)}
 		}
 		subPlans, err := svc.ListSubPlansByPlanID(context.Background(), plan.ID)
 		if err != nil {
-			return InspectPlanLoadedMsg{PlanID: planID}
+			return InspectPlanLoadedMsg{PlanID: planID, Err: fmt.Errorf("load sub-plans for plan %s: %w", planID, err)}
 		}
 		return InspectPlanLoadedMsg{
 			PlanID:   planID,

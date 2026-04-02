@@ -396,6 +396,9 @@ func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Se
 
 func (a *GitlabAdapter) UpdateState(ctx context.Context, externalID string, state domain.TrackerState) error {
 	mapped := a.cfg.StateMappings[string(state)]
+	if strings.TrimSpace(mapped) == "" {
+		return nil
+	}
 	projectID, iid, err := parseExternalID(externalID)
 	if err != nil {
 		return err

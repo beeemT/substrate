@@ -299,7 +299,7 @@ func (s *PlanService) AppendFAQ(ctx context.Context, entry domain.FAQEntry) erro
 // The partial unique index on plans(work_item_id) WHERE status != 'superseded' ensures
 // at most one active plan per work item. The old plan and its sub-plans remain in the
 // database for historical reference.
-func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan domain.Plan, subPlans []domain.TaskPlan) error {
+func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan *domain.Plan, subPlans []domain.TaskPlan) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		if replacePlanID != "" {
 			old, err := res.Plans.Get(ctx, replacePlanID)
@@ -313,7 +313,7 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 				return fmt.Errorf("supersede old plan: %w", err)
 			}
 		}
-		if err := res.Plans.Create(ctx, plan); err != nil {
+		if err := res.Plans.Create(ctx, *plan); err != nil {
 			return fmt.Errorf("create plan %s: %w", plan.ID, err)
 		}
 		for i := range subPlans {

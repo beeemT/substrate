@@ -389,4 +389,6 @@ type InspectPlanMsg struct{ PlanID string }
 type InspectPlanLoadedMsg struct {
 	PlanID   string
 	Document string
+	// Err is non-nil when the plan could not be loaded; the overlay must close and surface the error.
+	Err error
 }

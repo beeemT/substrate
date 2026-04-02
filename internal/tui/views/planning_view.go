@@ -1,12 +1,14 @@
 package views
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -76,6 +78,12 @@ type SessionLogModel struct {
 	planOverlay  bool
 	planDocument string
 	planViewport viewport.Model
+
+	// Cached header: avoids re-rendering header on every View() frame.
+	// Invalidated when any header input changes (title, modeLabel, meta,
+	// width, notice, silenceNoticeActive, lastEventAt).
+	cachedHeader    string
+	cachedHeaderKey string
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -396,7 +404,15 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		m.silenceNoticeActive = shouldWarn
 		return m, sessionLogSpinnerTickCmd()
 	case InspectPlanLoadedMsg:
-		if msg.PlanID == m.planID && msg.Document != "" {
+		if msg.PlanID != m.planID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			// Close the overlay and surface the error as a toast.
+			m.planOverlay = false
+			return m, func() tea.Msg { return ErrMsg{Err: msg.Err} }
+		}
+		if msg.Document != "" {
 			m.planDocument = msg.Document
 			fw := m.styles.Chrome.OverlayFrame
 			m.planViewport.Width = fw.InnerWidth(m.width)
@@ -407,6 +423,17 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			m.planOverlay = false
 		}
 		return m, nil
+	case tea.MouseMsg:
+		// Only forward press events; ignore motion and release.
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		if m.planOverlay {
+			m.planViewport, cmd = m.planViewport.Update(msg)
+			return m, cmd
+		}
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
 	default:
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
@@ -415,13 +442,24 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 }
 
 func (m SessionLogModel) header() string {
+	// For static content (no silence warning), the header is deterministic
+	// based on title, modeLabel, meta, width, and notice. Cache it to avoid
+	// re-rendering on every View() frame during scrolling.
+	var key string
+	if !m.silenceNoticeActive {
+		key = m.title + "|" + m.modeLabel + "|" + m.meta + "|" + fmt.Sprintf("%d", m.width)
+		if m.notice != nil {
+			key += fmt.Sprintf("|%p", m.notice)
+		}
+		if m.cachedHeaderKey == key {
+			return m.cachedHeader
+		}
+	}
+
 	headerText := m.title
 	if m.modeLabel != "" {
 		headerText += " · " + m.modeLabel
 	}
-	// When rate-limit silence warning is active, render it in-place on the
-	// divider row so the header line count stays constant and the viewport
-	// content below does not shift down.
 	var statusLine string
 	if m.silenceNoticeActive && !m.lastEventAt.IsZero() {
 		elapsed := time.Since(m.lastEventAt).Round(time.Second)
@@ -438,6 +476,10 @@ func (m SessionLogModel) header() string {
 	out := header
 	if notice := m.noticeView(); notice != "" {
 		out = out + "\n" + notice
+	}
+	if !m.silenceNoticeActive {
+		m.cachedHeader = out
+		m.cachedHeaderKey = key
 	}
 	return out
 }
@@ -483,10 +525,26 @@ func (m SessionLogModel) View() string {
 	if m.agentActive {
 		body = overlaySpinner(body, sessionLogSpinnerFrames[m.spinnerFrame]+" working", m.styles, m.width)
 	}
-	parts := append(strings.Split(header, "\n"), body)
+
+	// Apply width fitting only to the header; the viewport already constrains
+	// its content to viewport dimensions via lipgloss Width/Height/MaxWidth.
+	// This avoids re-processing the viewport body through fitViewBox on every
+	// scroll frame, which was the dominant per-frame cost for large sessions.
+	headerLines := strings.Split(header, "\n")
+	fittedHeader := make([]string, 0, len(headerLines))
+	lineStyle := lipgloss.NewStyle().Width(m.width)
+	for _, line := range headerLines {
+		if ansi.StringWidth(line) <= m.width {
+			fittedHeader = append(fittedHeader, line)
+		} else {
+			fittedHeader = append(fittedHeader, lineStyle.Render(ansi.Truncate(line, m.width, "")))
+		}
+	}
+
+	parts := append(fittedHeader, body)
 	if m.steerActive {
 		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
 	}
 
-	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
+	return fitViewHeight(strings.Join(parts, "\n"), m.height)
 }
