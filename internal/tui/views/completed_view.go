@@ -72,7 +72,7 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 	}
 	hints := []KeybindHint{{Key: "Esc", Label: "Close"}}
 	if m.workItemID != "" {
-		hints = append(hints, KeybindHint{Key: "f", Label: "Follow up"})
+		hints = append(hints, KeybindHint{Key: "c", Label: "Changes"})
 	}
 	if len(m.mrLinks) > 0 {
 		hints = append([]KeybindHint{{Key: "↑↓", Label: "Select"}, {Key: "Enter", Label: "Open"}}, hints...)
@@ -120,7 +120,7 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 
 				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
 			}
-		case "f":
+		case "c":
 			if m.workItemID != "" {
 				m.inputActive = true
 				return m, m.feedbackInput.Focus()
