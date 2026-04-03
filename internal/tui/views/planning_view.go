@@ -1,14 +1,12 @@
 package views
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -80,10 +78,9 @@ type SessionLogModel struct {
 	planViewport viewport.Model
 
 	// Cached header: avoids re-rendering header on every View() frame.
-	// Invalidated when any header input changes (title, modeLabel, meta,
-	// width, notice, silenceNoticeActive, lastEventAt).
-	cachedHeader    string
-	cachedHeaderKey string
+	// cachedHeader holds the pre-computed header string. Populated by
+	// rebuildHeader() and returned directly from header().
+	cachedHeader string
 }
 
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
@@ -103,8 +100,9 @@ func (m *SessionLogModel) SetSize(width, height int) {
 }
 
 func (m *SessionLogModel) syncViewportSize() {
+	m.rebuildHeader()
 	m.viewport.Width = m.width
-	headerLines := len(strings.Split(m.header(), "\n"))
+	headerLines := len(strings.Split(m.cachedHeader, "\n"))
 	reserved := headerLines
 	if m.steerActive {
 		reserved += 2 // divider + input row
@@ -135,9 +133,15 @@ func (m *SessionLogModel) doRebuildTranscript() {
 	m.renderedCollapse = m.collapseThinking
 }
 
-func (m *SessionLogModel) SetTitle(title string) { m.title = title }
+func (m *SessionLogModel) SetTitle(title string) {
+	m.title = title
+	m.rebuildHeader()
+}
 
-func (m *SessionLogModel) SetModeLabel(label string) { m.modeLabel = label }
+func (m *SessionLogModel) SetModeLabel(label string) {
+	m.modeLabel = label
+	m.rebuildHeader()
+}
 
 func (m *SessionLogModel) SetMeta(meta string) {
 	m.meta = meta
@@ -228,8 +232,10 @@ func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
 		return sessionLogSpinnerTickCmd()
 	}
 	// Warning occupies the divider slot; clearing it does not affect header
-	// line count, so no viewport resize is needed.
+	// line count, so no viewport resize is needed. Rebuild the header to
+	// clear the warning text from the cache.
 	m.silenceNoticeActive = false
+	m.rebuildHeader()
 	return nil
 }
 
@@ -303,6 +309,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			// Clear any silence warning and rebuild transcript. Warning replaces
 			// the divider, so no viewport resize is needed on state change.
 			m.silenceNoticeActive = false
+			m.rebuildHeader()
 			m.doRebuildTranscript()
 			if wasAtBottom {
 				m.viewport.GotoBottom()
@@ -399,9 +406,13 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
 		// Surface a warning after prolonged silence while agent is active.
 		// The warning replaces the divider row in the header, so no viewport
-		// resize is needed when the state changes.
+		// resize is needed when the state changes — but the header content
+		// changes, so rebuildHeader is required.
 		shouldWarn := !m.lastEventAt.IsZero() && time.Since(m.lastEventAt) >= sessionLogSilenceThreshold
-		m.silenceNoticeActive = shouldWarn
+		if m.silenceNoticeActive != shouldWarn {
+			m.silenceNoticeActive = shouldWarn
+			m.rebuildHeader()
+		}
 		return m, sessionLogSpinnerTickCmd()
 	case InspectPlanLoadedMsg:
 		if msg.PlanID != m.planID {
@@ -441,25 +452,19 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m SessionLogModel) header() string {
-	// For static content (no silence warning), the header is deterministic
-	// based on title, modeLabel, meta, width, and notice. Cache it to avoid
-	// re-rendering on every View() frame during scrolling.
-	var key string
-	if !m.silenceNoticeActive {
-		key = m.title + "|" + m.modeLabel + "|" + m.meta + "|" + fmt.Sprintf("%d", m.width)
-		if m.notice != nil {
-			key += fmt.Sprintf("|%p", m.notice)
-		}
-		if m.cachedHeaderKey == key {
-			return m.cachedHeader
-		}
-	}
-
+// rebuildHeader pre-computes and caches the header string. Must be called
+// from any pointer-receiver method that changes header inputs (title,
+// modeLabel, meta, width, notice, silenceNoticeActive, lastEventAt).
+// This is the only correct way to populate cachedHeader because header()
+// has a value receiver and cannot persist mutations.
+func (m *SessionLogModel) rebuildHeader() {
 	headerText := m.title
 	if m.modeLabel != "" {
 		headerText += " · " + m.modeLabel
 	}
+	// When rate-limit silence warning is active, render it in-place on the
+	// divider row so the header line count stays constant and the viewport
+	// content below does not shift down.
 	var statusLine string
 	if m.silenceNoticeActive && !m.lastEventAt.IsZero() {
 		elapsed := time.Since(m.lastEventAt).Round(time.Second)
@@ -477,11 +482,13 @@ func (m SessionLogModel) header() string {
 	if notice := m.noticeView(); notice != "" {
 		out = out + "\n" + notice
 	}
-	if !m.silenceNoticeActive {
-		m.cachedHeader = out
-		m.cachedHeaderKey = key
-	}
-	return out
+	m.cachedHeader = out
+}
+
+// header returns the pre-computed header string. Call rebuildHeader() first
+// whenever any header input has changed.
+func (m SessionLogModel) header() string {
+	return m.cachedHeader
 }
 
 func (m SessionLogModel) noticeView() string {
@@ -525,26 +532,10 @@ func (m SessionLogModel) View() string {
 	if m.agentActive {
 		body = overlaySpinner(body, sessionLogSpinnerFrames[m.spinnerFrame]+" working", m.styles, m.width)
 	}
-
-	// Apply width fitting only to the header; the viewport already constrains
-	// its content to viewport dimensions via lipgloss Width/Height/MaxWidth.
-	// This avoids re-processing the viewport body through fitViewBox on every
-	// scroll frame, which was the dominant per-frame cost for large sessions.
-	headerLines := strings.Split(header, "\n")
-	fittedHeader := make([]string, 0, len(headerLines))
-	lineStyle := lipgloss.NewStyle().Width(m.width)
-	for _, line := range headerLines {
-		if ansi.StringWidth(line) <= m.width {
-			fittedHeader = append(fittedHeader, line)
-		} else {
-			fittedHeader = append(fittedHeader, lineStyle.Render(ansi.Truncate(line, m.width, "")))
-		}
-	}
-
-	parts := append(fittedHeader, body)
+	parts := append(strings.Split(header, "\n"), body)
 	if m.steerActive {
 		parts = append(parts, components.RenderDivider(m.styles, m.width), m.steerInput.View())
 	}
 
-	return fitViewHeight(strings.Join(parts, "\n"), m.height)
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
 }
