@@ -205,11 +205,11 @@ func (e SidebarEntry) Subtitle() string {
 // SidebarModel manages the session list sidebar.
 type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
 	entries    []SidebarEntry
-	cursor    int
-	title     string
-	styles    styles.Styles
-	width     int
-	height    int
+	cursor     int
+	title      string
+	styles     styles.Styles
+	width      int
+	height     int
 	cachedView *string // render cache; pointer survives value-receiver copies
 	viewDirty  *bool   // true when state changed since last View()
 }
@@ -389,21 +389,12 @@ func (m SidebarModel) View() string {
 	if width <= 0 {
 		width = SidebarWidth
 	}
-	var lines []string
-
-	titleText := m.title
-	if strings.TrimSpace(titleText) == "" {
-		titleText = "Sessions"
-	}
-	title := m.styles.SectionLabel.Render(titleText)
-	header := lipgloss.NewStyle().Width(width).AlignHorizontal(lipgloss.Center).Render(title)
-	lines = append(lines, header)
-	lines = append(lines, components.RenderDivider(m.styles, width))
+	const headerLines = 2 // title + divider
+	availableRows := max(0, m.height-headerLines)
+	// Determine visible entries and whether scrolling is needed.
 	var start, end int
-	// Determine visible entries based on row budget.
-	availableRows := m.height - len(lines)
+	var needsScroll bool
 	if availableRows > 0 {
-		// Count how many entries fit the budget.
 		rowBudget := availableRows
 		visibleRowCount := 0
 		visibleEntryCount := 0
@@ -416,9 +407,13 @@ func (m SidebarModel) View() string {
 			visibleEntryCount++
 		}
 		if visibleEntryCount < len(m.entries) {
-			// Need scrolling. Start from cursor and slide upward.
-			start = m.cursor
-			cursorRows := entryRowHeight(m.entries[m.cursor])
+			needsScroll = true
+			// Need scrolling. Start from cursor (clamped to 0 if unselected).
+			start = 0
+			if m.cursor >= 0 {
+				start = m.cursor
+			}
+			cursorRows := entryRowHeight(m.entries[start])
 			for start > 0 {
 				prevRows := entryRowHeight(m.entries[start-1])
 				if cursorRows+prevRows > availableRows {
@@ -442,37 +437,60 @@ func (m SidebarModel) View() string {
 			end = len(m.entries)
 		}
 	}
+	// When entries overflow, shrink content width for a thin scrollbar.
+	contentWidth := width
+	var scrollbar string
+	if needsScroll && width > 2 {
+		contentWidth = width - 2 // 1 char scrollbar + 1 char gap
+		scrollbar = renderSidebarScrollbar(m.styles, m.entries, availableRows, start, m.height)
+	}
+	// Build header lines at the resolved content width.
+	var lines []string
+	titleText := m.title
+	if strings.TrimSpace(titleText) == "" {
+		titleText = "Sessions"
+	}
+	title := m.styles.SectionLabel.Render(titleText)
+	header := lipgloss.NewStyle().Width(contentWidth).AlignHorizontal(lipgloss.Center).Render(title)
+	lines = append(lines, header)
+	lines = append(lines, components.RenderDivider(m.styles, contentWidth))
 	for i := start; i < end; i++ {
 		entry := m.entries[i]
 		if entry.Kind == SidebarEntryGroupHeader {
-			lines = append(lines, renderGroupHeader(m.styles, entry.GroupTitle, width))
+			lines = append(lines, renderGroupHeader(m.styles, entry.GroupTitle, contentWidth))
 			lines = append(lines, "")
 			continue
 		}
 		selected := i == m.cursor
 		icon := entry.StatusIcon(m.styles)
-		line1 := truncate(icon+" "+entry.sidebarPrefix(), width)
-		titleLine := truncate("  "+entry.Title, width)
+		line1 := truncate(icon+" "+entry.sidebarPrefix(), contentWidth)
+		titleLine := truncate("  "+entry.Title, contentWidth)
 		var line3 string
 		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
-			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, width-4))
-			line3 = "  " + truncate(bar, max(1, width-2))
+			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, contentWidth-4))
+			line3 = "  " + truncate(bar, max(1, contentWidth-2))
 		} else {
-			line3 = "  " + m.styles.Subtitle.Render(truncate(entry.Subtitle(), max(1, width-2)))
+			line3 = "  " + m.styles.Subtitle.Render(truncate(entry.Subtitle(), max(1, contentWidth-2)))
 		}
 		block := strings.Join([]string{line1, titleLine, line3}, "\n")
 		if selected {
-			lines = append(lines, m.styles.SidebarSelected.Width(width).Render(block))
+			lines = append(lines, m.styles.SidebarSelected.Width(contentWidth).Render(block))
 		} else {
-			lines = append(lines, lipgloss.NewStyle().Width(width).Render(block))
+			lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(block))
 		}
 		lines = append(lines, "")
 	}
 	for len(lines) < m.height {
-		lines = append(lines, lipgloss.NewStyle().Width(width).Render(""))
+		lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(""))
 	}
 
-	result := fitViewBox(strings.Join(lines, "\n"), width, m.height)
+	var result string
+	if scrollbar != "" {
+		content := fitViewBox(strings.Join(lines, "\n"), contentWidth, m.height)
+		result = lipgloss.JoinHorizontal(lipgloss.Top, content, " ", scrollbar)
+	} else {
+		result = fitViewBox(strings.Join(lines, "\n"), width, m.height)
+	}
 	*m.cachedView = result
 	*m.viewDirty = false
 
@@ -548,6 +566,47 @@ func entryRowHeight(e SidebarEntry) int {
 		return 2 // heading line + blank separator
 	}
 	return 4 // 3 lines + blank separator
+}
+
+// renderSidebarScrollbar renders a thin scrollbar column for the sidebar content area.
+// The scrollbar covers the full rendered height; header rows show the track, and the
+// thumb is positioned based on scrollOffset within the content portion.
+func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHeight, firstVisible, totalHeight int) string {
+	if totalHeight <= 0 {
+		return ""
+	}
+	totalRows := 0
+	for _, e := range entries {
+		totalRows += entryRowHeight(e)
+	}
+	if totalRows <= contentHeight {
+		return ""
+	}
+	scrollOffset := 0
+	for i := 0; i < firstVisible; i++ {
+		scrollOffset += entryRowHeight(entries[i])
+	}
+	headerRows := 2 // title + divider
+	thumbHeight := max(1, (contentHeight*contentHeight)/max(1, totalRows))
+	thumbHeight = min(thumbHeight, contentHeight)
+	thumbRange := max(0, contentHeight-thumbHeight)
+	scrollRange := max(1, totalRows-contentHeight)
+	thumbTop := 0
+	if thumbRange > 0 {
+		thumbTop = (scrollOffset*thumbRange + scrollRange/2) / scrollRange
+	}
+	lines := make([]string, totalHeight)
+	for i := range lines {
+		lines[i] = st.ScrollbarTrack.Render("▏")
+	}
+	for i := 0; i < thumbHeight; i++ {
+		idx := headerRows + thumbTop + i
+		if idx < totalHeight {
+			lines[idx] = st.ScrollbarThumb.Render("▐")
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // renderGroupHeader renders a group section heading with a trailing divider on one line.

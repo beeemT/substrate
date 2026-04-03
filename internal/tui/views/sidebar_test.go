@@ -337,3 +337,73 @@ func TestSidebarGotoTopBottomSkipGroupHeaders(t *testing.T) {
 		t.Fatalf("GotoBottom should skip group header to s2, got %v", sel)
 	}
 }
+
+func TestSidebarNoScrollbarWhenAllEntriesFit(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(20)
+	m.SetEntries(makeSessions(2)) // 2*4=8 rows content + 2 header = 10 < 20
+
+	view := stripANSI(m.View())
+	// Scrollbar uses ▏ and ▐ characters which should NOT appear when no overflow.
+	if strings.Contains(view, "▏") || strings.Contains(view, "▐") {
+		t.Fatalf("scrollbar should not appear when all entries fit: %q", view)
+	}
+}
+
+func TestSidebarScrollbarAppearsOnOverflow(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(10)
+	m.SetEntries(makeSessions(5)) // 5*4=20 rows content, available=8, overflows
+	m.GotoBottom()
+
+	view := m.View() // raw view with ANSI for scrollbar styling
+	// The scrollbar track character must be present.
+	if !strings.Contains(view, "▏") {
+		t.Fatalf("expected scrollbar track character in overflow view: %q", stripANSI(view))
+	}
+	// The scrollbar thumb character must be present.
+	if !strings.Contains(view, "▐") {
+		t.Fatalf("expected scrollbar thumb character in overflow view: %q", stripANSI(view))
+	}
+	// Output height must still equal the requested height.
+	lines := strings.Split(stripANSI(view), "\n")
+	if got := len(lines); got != 10 {
+		t.Fatalf("sidebar line count = %d, want 10", got)
+	}
+}
+
+func TestSidebarScrollbarThumbMovesWithScroll(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetHeight(10)
+	m.SetEntries(makeSessions(5))
+
+	// Scroll to top: select first entry.
+	m.GotoTop()
+	viewTop := stripANSI(m.View())
+	// Find thumb position (column with ▐).
+	thumbTopLine := thumbLineIndex(viewTop)
+	// Scroll to bottom.
+	m.GotoBottom()
+	viewBottom := stripANSI(m.View())
+	thumbBottomLine := thumbLineIndex(viewBottom)
+
+	if thumbTopLine >= thumbBottomLine {
+		t.Fatalf("thumb should move down when scrolling: top=%d, bottom=%d", thumbTopLine, thumbBottomLine)
+	}
+}
+
+func thumbLineIndex(view string) int {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "▐") {
+			return i
+		}
+	}
+	return -1
+}
