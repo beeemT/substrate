@@ -262,8 +262,8 @@ func TestOnEvent_WorkItemCompleted_UnDraftsMRs(t *testing.T) {
 	branch := "sub-LIN-FOO-99-complete-me"
 	a.mu.Lock()
 	a.tracked[branch] = []branchEntry{
-		{repo: "repo-a", worktreePath: "/wt/a"},
-		{repo: "repo-b", worktreePath: "/wt/b"},
+		{repo: "repo-a", worktreePath: "/wt/a", ref: "!1", url: "https://gitlab.com/org/repo-a/-/merge_requests/1"},
+		{repo: "repo-b", worktreePath: "/wt/b", ref: "!2", url: "https://gitlab.com/org/repo-b/-/merge_requests/2"},
 	}
 	a.mu.Unlock()
 
@@ -346,6 +346,85 @@ func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("glab failure must not propagate, got: %v", err)
+	}
+}
+
+
+func TestOnEvent_WorkItemCompleted_CreatesMRWhenNoneExists(t *testing.T) {
+	// Simulate adapter restart: tracked entry has empty ref/url
+	// (MR creation failed during worktree setup). mrExists returns false,
+	// so createMR should be called.
+	var calls []stubCall
+	createdMR := false
+	mrJSON := `{"iid":10,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/10"}`
+	callCount := 0
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		callCount++
+		joined := strings.Join(args, " ")
+		// First call is mr view (mrExists check) — return error.
+		if callCount == 1 && strings.Contains(joined, "mr view") {
+			return nil, errors.New("MR not found")
+		}
+		// Second call is mr create.
+		if strings.Contains(joined, "mr create") {
+			createdMR = true
+			return []byte("https://gitlab.com/org/repo/-/merge_requests/10\n"), nil
+		}
+		// Third call is mr update (markMRReady after create).
+		if strings.Contains(joined, "mr update") {
+			return nil, nil
+		}
+		// Fourth call is mr view for recording.
+		if strings.Contains(joined, "mr view") {
+			return []byte(mrJSON), nil
+		}
+		t.Errorf("unexpected call %d: %q %v", callCount, name, args)
+		return nil, errors.New("unexpected")
+	}
+
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", runner)
+
+	branch := "sub-LIN-FOO-7-create-missing"
+	a.mu.Lock()
+	a.tracked[branch] = []branchEntry{{repo: "repo-c", worktreePath: "/wt/c"}}
+	a.mu.Unlock()
+
+	payload := mustJSON(completedPayload{
+		Branch:        branch,
+		ExternalID:    "LIN-FOO-7",
+		WorkItemTitle: "Create missing MR",
+		SubPlan:       "Implementation details",
+	})
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType: string(domain.EventWorkItemCompleted),
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !createdMR {
+		t.Fatal("expected mr create to be called when no MR exists")
+	}
+	// Verify the expected call sequence: mr create + mr update (mark ready).
+	var foundCreate, foundUpdate bool
+	for _, call := range calls {
+		joined := strings.Join(call.args, " ")
+		if strings.Contains(joined, "mr create") {
+			foundCreate = true
+			if !strings.Contains(joined, "--title Create missing MR") {
+				t.Errorf("mr create missing expected title: %q", joined)
+			}
+		}
+		if strings.Contains(joined, "mr update") && strings.Contains(joined, "--draft=false") {
+			foundUpdate = true
+		}
+	}
+	if !foundCreate {
+		t.Fatal("expected mr create to be called when no MR exists")
+	}
+	if !foundUpdate {
+		t.Fatal("expected mr update --draft=false after completion-time create")
 	}
 }
 

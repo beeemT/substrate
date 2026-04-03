@@ -77,6 +77,32 @@ func TestDetectPlatform_ConfiguredGitHubEnterpriseHost(t *testing.T) {
 		t.Fatalf("DetectPlatform() platform = %v, want github", platform)
 	}
 }
+func TestDetectPlatform_SelfHostedGitLabViaGlabCLI(t *testing.T) {
+	repoDir := createRepoWithRemote(t, "git@gitlab.internal.example:org/repo.git")
+
+	// Create a fake glab binary that outputs valid JSON.
+	binDir := t.TempDir()
+	glabBin := filepath.Join(binDir, "glab")
+	glabScript := `#!/bin/sh` + "\n" + `echo '{"web_url":"https://gitlab.internal.example/org/repo"}'`
+	if err := os.WriteFile(glabBin, []byte(glabScript), 0o755); err != nil {
+		t.Fatalf("write fake glab: %v", err)
+	}
+
+	// Point PATH at the fake binary and ensure no glab config exists.
+	originalPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+originalPath)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	platform, err := DetectPlatform(context.Background(), repoDir, nil)
+	if err != nil {
+		t.Fatalf("DetectPlatform() error = %v", err)
+	}
+	if platform != PlatformGitLab {
+		t.Fatalf("DetectPlatform() platform = %v, want gitlab", platform)
+	}
+}
+
 
 func createRepoWithRemote(t *testing.T, remoteURL string) string {
 	t.Helper()

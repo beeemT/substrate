@@ -2,6 +2,7 @@ package remotedetect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -57,6 +58,11 @@ func DetectPlatform(ctx context.Context, dir string, cfg *config.Config) (Platfo
 		return PlatformUnknown, err
 	}
 	if isGitLab {
+		return PlatformGitLab, nil
+	}
+
+	// Fallback: ask glab CLI for the repo's actual host.
+	if glabHost := detectGlabHostFromCLI(ctx, dir); glabHost != "" {
 		return PlatformGitLab, nil
 	}
 
@@ -235,4 +241,44 @@ func loadGlabKnownHosts() ([]string, error) {
 	sort.Strings(hosts)
 
 	return hosts, nil
+}
+
+// glabRepoViewOutput is the minimal JSON output from `glab repo view --output json`.
+type glabRepoViewOutput struct {
+	WebURL string `json:"web_url"`
+}
+
+// runCommand executes a named command with args in dir and returns its trimmed output.
+func runCommand(ctx context.Context, dir, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// detectGlabHostFromCLI runs `glab repo view --output json` in dir and returns
+// the normalized host from the web_url field. Returns empty if glab is not
+// available or the command fails.
+func detectGlabHostFromCLI(ctx context.Context, dir string) string {
+	out, err := runCommand(ctx, dir, "glab", "repo", "view", "--output", "json")
+	if err != nil {
+		return ""
+	}
+	var repo glabRepoViewOutput
+	if err := json.Unmarshal([]byte(out), &repo); err != nil {
+		return ""
+	}
+	if repo.WebURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(repo.WebURL)
+	if err != nil {
+		return ""
+	}
+
+	return normalizeHost(parsed.Hostname())
 }

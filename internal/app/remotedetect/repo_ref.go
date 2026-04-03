@@ -38,9 +38,14 @@ func ResolveReviewContext(ctx context.Context, dir string) (ReviewContext, error
 	}
 
 	baseRemote, headRemote := chooseReviewRemotes(remotes)
-	platform := platformForHost(baseRemote.Host)
+
+	// Prefer DetectPlatform which includes glab CLI fallback.
+	platform, _ := DetectPlatform(ctx, dir, nil)
 	if platform == PlatformUnknown {
-		platform = platformForHost(headRemote.Host)
+		platform = platformForHost(baseRemote.Host)
+		if platform == PlatformUnknown {
+			platform = platformForHost(headRemote.Host)
+		}
 	}
 
 	baseBranch := detectDefaultBranch(ctx, dir, baseRemote.Name)
@@ -57,6 +62,49 @@ func ResolveReviewContext(ctx context.Context, dir string) (ReviewContext, error
 		},
 	}, nil
 }
+
+// ResolveReviewContextWithBranch resolves remotes and platform from dir,
+// using the provided headBranch instead of running git branch --show-current.
+// This is necessary for bare repos where --show-current always fails.
+func ResolveReviewContextWithBranch(ctx context.Context, dir string, headBranch string) (ReviewContext, error) {
+	if strings.TrimSpace(dir) == "" {
+		return ReviewContext{}, errors.New("workspace directory is empty")
+	}
+
+	remotes, err := resolveRemotes(ctx, dir)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	if len(remotes) == 0 {
+		return ReviewContext{}, errors.New("no git remotes found in " + dir)
+	}
+
+	baseRemote, headRemote := chooseReviewRemotes(remotes)
+
+	// Prefer DetectPlatform which includes glab CLI fallback.
+	platform, _ := DetectPlatform(ctx, dir, nil)
+	if platform == PlatformUnknown {
+		platform = platformForHost(baseRemote.Host)
+		if platform == PlatformUnknown {
+			platform = platformForHost(headRemote.Host)
+		}
+	}
+
+	baseBranch := detectDefaultBranch(ctx, dir, baseRemote.Name)
+
+	return ReviewContext{
+		Platform:   platform,
+		RemoteName: headRemote.Name,
+		RemoteURL:  headRemote.URL,
+		Review: domain.ReviewRef{
+			BaseRepo:   baseRemote.RepoRef,
+			HeadRepo:   headRemote.RepoRef,
+			BaseBranch: baseBranch,
+			HeadBranch: strings.TrimSpace(headBranch),
+		},
+	}, nil
+}
+
 
 type resolvedRemote struct {
 	Name string

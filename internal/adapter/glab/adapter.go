@@ -126,10 +126,12 @@ type worktreePayload struct {
 // Emitters must populate Branch so the glab adapter can locate the MRs.
 // external_id is included for symmetry with the linear adapter's OnEvent.
 type completedPayload struct {
-	WorkspaceID string `json:"workspace_id"`
-	WorkItemID  string `json:"work_item_id"`
-	Branch      string `json:"branch"`
-	ExternalID  string `json:"external_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	WorkItemID    string `json:"work_item_id"`
+	Branch        string `json:"branch"`
+	ExternalID    string `json:"external_id"`
+	WorkItemTitle string `json:"work_item_title"`
+	SubPlan       string `json:"sub_plan"`
 }
 
 func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) error {
@@ -231,13 +233,39 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	}
 
 	entries := a.entriesForCompletion(ctx, p)
+	if len(entries) == 0 {
+		entries = a.worktreePathsForCompletion(ctx, p)
+	}
 
 	for _, entry := range entries {
-		if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
-			slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+		hasPreviousTracking := entry.ref != "" || entry.url != ""
 
-			continue
+		if hasPreviousTracking {
+			// Previously tracked MR — mark ready (existing flow).
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+				slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+				continue
+			}
+		} else if a.mrExists(ctx, entry.worktreePath, p.Branch) {
+			// MR exists on remote but wasn't tracked (adapter restart). Mark ready.
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+				slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+				continue
+			}
+		} else {
+			// No MR at all — create one, then mark it ready (review already passed).
+			title := mrTitle(p.WorkItemTitle, p.Branch)
+			description := strings.TrimSpace(p.SubPlan)
+			if _, err := a.createMR(ctx, entry.worktreePath, p.Branch, title, description); err != nil {
+				slog.Warn("glab: completion-time MR creation failed", "repo", entry.repo, "branch", p.Branch, "error", err)
+				continue
+			}
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+				slog.Warn("glab: mr update --draft=false failed after completion-time create", "repo", entry.repo, "branch", p.Branch, "error", err)
+			}
 		}
+
+		// Record the artifact.
 		if mr, ok := a.mrView(ctx, entry.worktreePath, p.Branch); ok {
 			a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 				Provider:     "gitlab",
@@ -455,6 +483,45 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 	return entries
 }
 
+
+// worktreePathsForCompletion is a fallback that scans persisted EventWorktreeCreated
+// events to find worktree paths when no tracked entries or recorded artifacts exist.
+// This handles the case where the adapter restarted before MR creation, or MR
+// creation failed during onWorktreeCreated.
+func (a *GlabAdapter) worktreePathsForCompletion(ctx context.Context, p completedPayload) []branchEntry {
+	if a.repos.Events == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
+		return nil
+	}
+	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
+	if err != nil {
+		return nil
+	}
+	var entries []branchEntry
+	for _, event := range events {
+		if domain.EventType(event.EventType) != domain.EventWorktreeCreated {
+			continue
+		}
+		var wt worktreePayload
+		if err := json.Unmarshal([]byte(event.Payload), &wt); err != nil {
+			continue
+		}
+		if wt.WorkItemID != p.WorkItemID || wt.Branch != p.Branch || wt.WorktreePath == "" {
+			continue
+		}
+		entries = append(entries, branchEntry{
+			repo:         wt.Repository,
+			worktreePath: wt.WorktreePath,
+		})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].repo != entries[j].repo {
+			return entries[i].repo < entries[j].repo
+		}
+		return entries[i].worktreePath < entries[j].worktreePath
+	})
+
+	return entries
+}
 func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) {
 	if err := coreadapter.PersistGitlabMR(ctx, a.repos, workspaceID, workItemID, artifact, projectPath, iid); err != nil {
 		slog.Warn("glab: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)

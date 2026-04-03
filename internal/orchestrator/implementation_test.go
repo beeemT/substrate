@@ -1948,6 +1948,87 @@ func TestBuildCommitSection(t *testing.T) {
 	}
 }
 
+func TestBuildCommitSection_MessageFormat(t *testing.T) {
+	t.Run("conventional format emits format section", func(t *testing.T) {
+		got := buildCommitSection(adapter.CommitConfig{Strategy: "semi-regular", MessageFormat: "conventional"})
+		if !strings.Contains(got, "### Commit Message Format") {
+			t.Errorf("expected message format section, got: %q", got)
+		}
+		if !strings.Contains(got, "Conventional Commits") {
+			t.Errorf("expected conventional commits mention, got: %q", got)
+		}
+		if !strings.Contains(got, "feat, fix, refactor") {
+			t.Errorf("expected type examples, got: %q", got)
+		}
+	})
+
+	t.Run("custom format with template emits format section", func(t *testing.T) {
+		got := buildCommitSection(adapter.CommitConfig{Strategy: "single", MessageFormat: "custom", MessageTemplate: "[${type}] ${summary}"})
+		if !strings.Contains(got, "### Commit Message Format") {
+			t.Errorf("expected message format section, got: %q", got)
+		}
+		if !strings.Contains(got, "[${type}] ${summary}") {
+			t.Errorf("expected template content, got: %q", got)
+		}
+	})
+
+	t.Run("custom format without template skips format section", func(t *testing.T) {
+		got := buildCommitSection(adapter.CommitConfig{Strategy: "single", MessageFormat: "custom", MessageTemplate: ""})
+		if strings.Contains(got, "### Commit Message Format") {
+			t.Errorf("expected no message format section when template is empty, got: %q", got)
+		}
+	})
+
+	t.Run("ai-generated format has no extra section", func(t *testing.T) {
+		got := buildCommitSection(adapter.CommitConfig{Strategy: "semi-regular", MessageFormat: "ai-generated"})
+		if strings.Contains(got, "### Commit Message Format") {
+			t.Errorf("expected no message format section for ai-generated, got: %q", got)
+		}
+	})
+}
+
+func TestBuildCommitAgentSystemPrompt(t *testing.T) {
+	t.Run("granular strategy instructs per-logical-unit commits", func(t *testing.T) {
+		got := buildCommitAgentSystemPrompt(adapter.CommitConfig{Strategy: "granular"})
+		if !strings.Contains(got, "self-contained logical units") {
+			t.Errorf("expected per-unit commit guidance, got: %q", got)
+		}
+		if !strings.Contains(got, "Stage and commit each unit separately") {
+			t.Errorf("expected separate commit instruction, got: %q", got)
+		}
+	})
+
+	t.Run("semi-regular strategy instructs logical grouping", func(t *testing.T) {
+		got := buildCommitAgentSystemPrompt(adapter.CommitConfig{Strategy: "semi-regular"})
+		if !strings.Contains(got, "logical commits") {
+			t.Errorf("expected grouped commit guidance, got: %q", got)
+		}
+	})
+
+	t.Run("single strategy instructs one commit", func(t *testing.T) {
+		got := buildCommitAgentSystemPrompt(adapter.CommitConfig{Strategy: "single"})
+		if !strings.Contains(got, "single commit") {
+			t.Errorf("expected single commit guidance, got: %q", got)
+		}
+	})
+
+	t.Run("unknown strategy falls back to single commit", func(t *testing.T) {
+		got := buildCommitAgentSystemPrompt(adapter.CommitConfig{Strategy: "unknown"})
+		if !strings.Contains(got, "single commit") {
+			t.Errorf("expected single commit fallback, got: %q", got)
+		}
+	})
+
+	t.Run("all variants prohibit file modifications", func(t *testing.T) {
+		for _, strategy := range []string{"granular", "semi-regular", "single", ""} {
+			got := buildCommitAgentSystemPrompt(adapter.CommitConfig{Strategy: strategy})
+			if !strings.Contains(got, "Do not modify any files") {
+				t.Errorf("strategy %q: expected no-modification instruction, got: %q", strategy, got)
+			}
+		}
+	})
+}
+
 func TestGitStatusDirty(t *testing.T) {
 	t.Run("clean repo returns false", func(t *testing.T) {
 		dir := t.TempDir()

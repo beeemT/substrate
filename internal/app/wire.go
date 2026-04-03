@@ -119,7 +119,21 @@ func (a routedRepoLifecycleAdapter) Name() string { return a.adapter.Name() }
 
 func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.SystemEvent) error {
 	provider, ok := repoLifecycleEventPlatform(evt)
-	if !ok || provider != a.provider {
+	if !ok {
+		slog.Debug("repo lifecycle adapter: dropping event, platform detection failed",
+			"adapter_provider", a.provider,
+			"event_type", evt.EventType,
+			"workspace_id", evt.WorkspaceID,
+		)
+		return nil
+	}
+	if provider != a.provider {
+		slog.Debug("repo lifecycle adapter: dropping event, platform mismatch",
+			"adapter_provider", a.provider,
+			"detected_provider", provider,
+			"event_type", evt.EventType,
+			"workspace_id", evt.WorkspaceID,
+		)
 		return nil
 	}
 	return a.adapter.OnEvent(ctx, evt)

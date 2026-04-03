@@ -1031,8 +1031,8 @@ func (s *ImplementationService) buildSystemPrompt(
 }
 
 // buildCommitSection returns a prompt section instructing the agent how to commit
-// its work based on the configured strategy. Returns empty string when no
-// meaningful strategy is set.
+// its work based on the configured strategy and message format. Returns empty
+// string when no meaningful strategy is set.
 func buildCommitSection(cfg adapter.CommitConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Commit Strategy\n\n")
@@ -1046,6 +1046,58 @@ func buildCommitSection(cfg adapter.CommitConfig) string {
 		sb.WriteString("Make a single commit at the end of the session containing all your changes. Use \x60git add -A && git commit\x60. Write a comprehensive commit message summarizing the full scope of work.")
 	default:
 		return ""
+	}
+
+	if section := buildMessageFormatSection(cfg); section != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(section)
+	}
+
+	return sb.String()
+}
+
+// buildMessageFormatSection returns instructions for commit message format based on the
+// configured format. Returns empty string when using the default ai-generated format.
+func buildMessageFormatSection(cfg adapter.CommitConfig) string {
+	switch cfg.MessageFormat {
+	case "conventional":
+		return "### Commit Message Format\n\n" +
+			"Use Conventional Commits format: \x60type(scope): description\x60\n" +
+			"Common types: feat, fix, refactor, docs, test, chore, perf, build, ci.\n" +
+			"Keep the subject line under 72 characters. Use imperative mood (\"add feature\" not \"added feature\").\n" +
+			"Separate subject from body with a blank line when the body adds context."
+	case "custom":
+		if cfg.MessageTemplate == "" {
+			return ""
+		}
+		return "### Commit Message Format\n\n" +
+			"Follow this template for every commit message:\n\n" +
+			"\x60\x60\x60\n" + cfg.MessageTemplate + "\n\x60\x60\x60"
+	default:
+		// ai-generated or unrecognized: no extra format instructions needed.
+		return ""
+	}
+}
+
+// buildCommitAgentSystemPrompt constructs the system prompt for the short-lived commit
+// agent that handles residual uncommitted changes after an implementation session.
+// The prompt is strategy-aware: it instructs the agent how to group and commit
+// the leftover changes based on the configured strategy.
+func buildCommitAgentSystemPrompt(cfg adapter.CommitConfig) string {
+	var sb strings.Builder
+	sb.WriteString("The implementation session is complete but there are residual uncommitted changes in the worktree.\n\n")
+	sb.WriteString("Do not modify any files. Your only job is to stage and commit existing changes.\n\n")
+
+	switch cfg.Strategy {
+	case "granular":
+		sb.WriteString("Review each changed file and group them into self-contained logical units. ")
+		sb.WriteString("Stage and commit each unit separately with a descriptive message for that specific change. ")
+		sb.WriteString("For example, a new function and its test should be one commit; an unrelated refactor in another file should be a separate commit.")
+	case "semi-regular":
+		sb.WriteString("Review the changes and group them into a few logical commits (e.g. by feature area or concern). ")
+		sb.WriteString("Stage and commit each group with a message that describes what the group accomplishes.")
+	default: // "single" or unknown
+		sb.WriteString("Stage all changes and make a single commit with a comprehensive message summarizing the full scope of residual changes.")
 	}
 
 	return sb.String()
@@ -1330,7 +1382,7 @@ func gitStageAndCommit(ctx context.Context, dir, message string) error {
 }
 
 // commitViaAgent spins up a short-lived agent session to commit residual changes
-// using the configured commit message format instead of a hardcoded generic message.
+// using the configured commit strategy and message format.
 // Falls back to gitStageAndCommit with a generic message if the agent session fails.
 func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath, repo, sessionID string) error {
 	const fallbackCommitMsg = "chore: commit residual changes before push"
@@ -1350,9 +1402,7 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
 	}
 
-	systemPrompt := "The implementation session is complete but there are residual uncommitted changes in the worktree.\n\n" +
-		"Stage all changes and make a single commit with an appropriate message. Do not modify any files.\n\n" +
-		commitInstructions
+	systemPrompt := buildCommitAgentSystemPrompt(commitCfg) + "\n\n" + commitInstructions
 
 	opts := adapter.SessionOpts{
 		Mode:         adapter.SessionModeAgent,
@@ -1408,7 +1458,7 @@ func (s *ImplementationService) emitWorkItemCompleted(
 		}
 		// Use the bare repo path for review context resolution (same as ensureWorktree).
 		if bareRepo, ok := repoPaths[sess.Repository]; ok {
-			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, bareRepo)
+			reviewCtx, err := remotedetect.ResolveReviewContextWithBranch(ctx, bareRepo, branch)
 			if err != nil {
 				slog.Warn("failed to resolve review context for completion event", "repo", sess.Repository, "error", err)
 				continue
