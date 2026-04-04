@@ -1,6 +1,5 @@
 # 00 - Project Overview
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 ## Mission Statement
 
 Substrate is an AI-powered work-item orchestration tool built in Go. It automates the lifecycle of a development task — from ticket ingestion through cross-repo planning, agent-driven implementation, review, and completion. Operators work at the work-item level: planning, implementation, and session-history surfaces aggregate each work item while still exposing the latest child agent run, reviews, questions, and resume state when deeper inspection is needed. Substrate replaces manual multi-repo choreography with a deterministic, human-supervised pipeline where AI agents execute sub-plans under structured oversight.
@@ -39,7 +38,7 @@ Substrate is organized around a few stable seams:
 - **Events and hooks** — workflow progression is published as system events; external effects subscribe to those events (`03-event-system.md`)
 - **Adapters and harnesses** — providers, repo hosts, coding harnesses, and Sentry source-adapter behavior sit behind explicit interfaces (`04-adapters.md`)
 - **Runtime orchestration** — planning, execution waves, Foreman handling, review loops, and recovery are runtime workflows (`05-orchestration.md`)
-- **Operator interface** — the TUI exposes work-item overviews, per-work-item runs/tasks, session-history search, planning, implementation, settings, and recovery flows (`06-tui-design.md`)
+- **Operator interface** — the TUI exposes work-item overviews, per-work-item runs/tasks, session-history search, planning, implementation, settings, repository browsing and cloning, and recovery flows (`06-tui-design.md`)
 - **Delivery plan** — phased rollout, quality gates, validation strategy, and risk tracking live in one place (`07-implementation-plan.md`)
 
 ## Technology Decisions

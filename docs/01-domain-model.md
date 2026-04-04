@@ -1,6 +1,5 @@
 # 01 - Domain Model
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 Current domain types, state machines, and relationship rules for Substrate.
 This document describes repository HEAD, not earlier naming.
 
@@ -102,6 +101,7 @@ const (
 	PlanPendingReview PlanStatus = "pending_review"
 	PlanApproved      PlanStatus = "approved"
 	PlanRejected      PlanStatus = "rejected"
+	PlanSuperseded    PlanStatus = "superseded"
 )
 
 type TaskPlan struct {
@@ -111,7 +111,6 @@ type TaskPlan struct {
 	Content        string
 	Order          int
 	Status         TaskPlanStatus
-	PlanningRound  int
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -132,7 +131,8 @@ Notes:
 - `FAQ` is persisted on the `plans` row as JSON and is appended by the Foreman flow.
 - `TaskPlan.Order` is the execution-group index parsed from the planning YAML block.
 - The SQLite migration constrains `sub_plans.status` to `pending|in_progress|completed|failed`.
-- `TaskPlan.PlanningRound` tracks which planning round last modified this sub-plan. It is set from `Plan.Version` during `ApplyReviewedPlanOutput`. During differential re-implementation, `BuildWaves` filters out `SubPlanCompleted` sub-plans so only changed repos re-execute.
+- `Plan.Version` is a monotonically increasing generation counter. It starts at 1 and increments each time a new plan supersedes the current active plan.
+- Plan uniqueness is enforced by a partial unique index on non-superseded plans (`WHERE status != 'superseded'`), allowing historical plan rows to be retained when superseded.
 
 ### TaskPhase
 
@@ -248,6 +248,7 @@ type Task struct {
 	WorkItemID      string
 	WorkspaceID     string
 	Phase           TaskPhase
+	PlanID          string
 	SubPlanID       string
 	RepositoryName  string
 	WorktreePath    string
@@ -279,7 +280,7 @@ const (
 
 Nuance: the constants still use the historical `AgentSession...` prefix. That is legacy naming on the status enum, not evidence that the persisted aggregate is still named `AgentSession`.
 
-`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `Phase` discriminates the session kind: `planning`, `implementation`, or `review`.
+`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar. `Phase` discriminates the session kind: `planning`, `implementation`, or `review`.
 
 `ResumeInfo` carries harness-specific resume metadata as a generic string map instead of dedicated harness file/id fields.
 
@@ -554,7 +555,7 @@ erDiagram
 
 Relationship rules that matter in practice:
 
-- One root `Session` drives at most one persisted `Plan` row (`plans.work_item_id` is unique).
+- One root `Session` has at most one active (non-superseded) `Plan` row. Historical plans are retained with `PlanSuperseded` status.
 - One `Plan` fan-outs into one or more repository-scoped `TaskPlan` records.
 - A `TaskPlan` can accumulate multiple `Task` attempts over time because review-driven reimplementation and resume create additional runs.
 - `Question` and `ReviewCycle` remain attached to the specific `Task` that produced them, not to the root `Session`.
@@ -572,9 +573,12 @@ Migrations are applied sequentially from `migrations/`. The initial schema is in
 |-----------|---------|
 | 001 | Initial schema: all core tables |
 | 002 | `agent_sessions` rewritten with `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path` (canonical columns) |
-| 003 | `agent_sessions` adds generic resume metadata storage for harness-specific `ResumeInfo` |
+| 003 | `agent_sessions` adds OMP-specific session metadata columns (`omp_session_file`, `omp_session_id`) |
 | 004 | `sub_plans` adds `planning_round` column |
 | 005 | Review artifacts: `github_pull_requests`, `gitlab_merge_requests`, `session_review_artifacts` tables with backfill from `system_events` |
+| 006 | `agent_sessions` migrates OMP-specific session metadata to generic `resume_info` map column |
+| 007 | Plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with partial unique index on non-superseded plans, adds `plan_id` to `agent_sessions` |
+| 008 | Drops obsolete `sub_plans.planning_round` column |
 
 New tables introduced since initial schema:
 

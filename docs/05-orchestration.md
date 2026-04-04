@@ -1,6 +1,5 @@
 # 05 - Orchestration
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
 
 For domain/state definitions see `01-domain-model.md`. For event semantics see `03-event-system.md`. For provider, repo host, and harness behavior see `04-adapters.md`. For rollout status and test gates see `07-implementation-plan.md`.
@@ -57,7 +56,7 @@ If validation fails or the draft is missing, Substrate sends a correction messag
 
 On success:
 - persist the orchestration plan and sub-plans atomically via `PlanService.CreatePlanAtomic`
-- when `replacePlanID` is set (re-planning after rejection or follow-up), the old plan row is deleted within the same transaction before inserting the new one, keeping the UNIQUE constraint on `plans.work_item_id` satisfied at all times
+- when `replacePlanID` is set (re-planning after rejection or follow-up), the old plan row is marked `superseded` within the same transaction before inserting the new one, and `Plan.Version` is incremented as a generation counter. The partial unique index on non-superseded plans enforces at most one active plan per work item
 - assign execution order from the `execution_groups` index
 - transition the plan from `draft` to `pending_review`
 - transition the work item to `plan_review`
@@ -130,15 +129,9 @@ A completed work item can re-enter planning when the operator provides follow-up
 6. call `planRun()` — the standard planning pipeline (§1) runs normally
 7. return to plan review (§2) for human approval before re-implementation
 
-**Planning round versioning.** Each sub-plan carries a `PlanningRound int` field, set from `Plan.Version` when the sub-plan is created or modified during `ApplyReviewedPlanOutput`. This tracks which repos were touched in each re-planning wave:
+**Plan versioning.** Each plan carries a `Version int` generation counter. It starts at 1 and increments each time `CreatePlanAtomic` supersedes the prior active plan. Historical plan rows are retained with `PlanSuperseded` status. The orchestrator always queries for the active (non-superseded) plan.
 
-```
-Initial (round 0): repo-a(0), repo-b(0), repo-c(0)
-Follow-up 1 (round 1): repo-a(1), repo-b(0), repo-c(0)    — only repo-a changed
-Follow-up 2 (round 2): repo-a(2), repo-b(2), repo-c(0)    — repo-a + repo-b changed
-```
-
-**Sub-plan reconciliation.** `ApplyReviewedPlanOutput` runs inside a database transaction. It sets `PlanningRound = plan.Version` on created or updated sub-plans, resets `completed → pending` when sub-plan content changes (signaling re-execution), and leaves unchanged sub-plans untouched (status and `PlanningRound` preserved). The atomic plan replace via `CreatePlanAtomic` resolves the UNIQUE constraint on `plans.work_item_id` by deleting the old plan row before inserting the new one in the same transaction.
+**Sub-plan reconciliation.** `ApplyReviewedPlanOutput` runs inside a database transaction. It resets `completed → pending` when sub-plan content changes (signaling re-execution), and leaves unchanged sub-plans untouched (status preserved). Plan supersession via `CreatePlanAtomic` marks the old plan as superseded and inserts the new one in the same transaction.
 
 ---
 
@@ -235,6 +228,8 @@ The Foreman is a persistent harness session that holds:
 - accumulated FAQ / answered questions
 - prior Foreman conversation context
 
+The Foreman session is stopped when implementation completes and restarted when follow-up feedback is provided. It counts as a live session in the TUI status bar. The Foreman receives the full composed plan document (orchestrator section + all sub-plans) as its system prompt context.
+
 Questions are serialized through that single session so later answers can rely on earlier resolved context.
 
 ### 4b. Two-tier resolution
@@ -284,7 +279,7 @@ Substrate starts a review harness session in the same repository worktree, with 
 - cross-repo orchestration notes
 - accumulated FAQ decisions
 
-The orchestrator does not provide a precomputed diff as the canonical truth; the review session forms its own picture from the worktree.
+The orchestrator does not provide a precomputed diff as the canonical truth; the review session forms its own picture from the worktree. Review sessions run in `SessionModeAgent` with a review-only role instruction. If the review output is unparseable, it is treated as no critiques rather than triggering a correction loop — the bridge cannot do a correction loop in agent mode.
 
 ### 5c. Structured output and correction loop
 
@@ -357,14 +352,17 @@ type ReviewConfig struct {
 - **AutoFeedbackLoop** — when true, the orchestrator automatically re-implements on critique and loops; when false, any critique requiring re-implementation is escalated for human decision
 
 Threshold values and rollout gates live in `07-implementation-plan.md`.
+
+### 5h. Compact-before-critique
+
+When a harness session from the prior implementation exposes resume data and the harness supports compaction (`SupportsCompact()`), the orchestrator compacts the conversation context before sending critique feedback. This frees context window space so the model can process the critique without hitting token limits. If the harness does not support compaction, a fresh session is started with critiques appended to the system prompt.
 ---
 
 ## 6. Completion
 
 After all waves complete, the orchestrator evaluates outcomes across sub-plans:
 
-- **All repos passed review** → `CompleteWorkItem` (transition to `completed`), emit `WorkItemCompleted`
-- **Any repo escalated** → `SubmitForReview` (transition to `reviewing`) — human attention needed due to escalation
+- **All repos passed review** → `CompleteWorkItem` (transition to `completed`), emit `WorkItemCompleted`. Before completion, the orchestrator commits any residual uncommitted changes in the worktree and pushes to the remote branch, ensuring the worktree state is fully captured even if the agent did not commit everything.
 - **Any repo hard-failed** → `FailWorkItem` (transition to `failed`)
 
 **Semantic shift:** `reviewing` means "human attention needed due to escalation," not "automated review is running." Automated review runs entirely within the `implementing` state (see §5). Any code that checks for the `reviewing` state to determine whether review is in progress should check per-repo events instead.

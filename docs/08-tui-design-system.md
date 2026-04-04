@@ -1,6 +1,5 @@
 # TUI Design System
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 This document is the living reference for the current TUI design system.
 
 ---
@@ -75,6 +74,8 @@ These tests define the minimum acceptable safety net for shared shell and design
 - `internal/tui/views/session_transcript_test.go`
 - `internal/tui/views/overlay_source_items_test.go`
 - `internal/tui/views/app_toast_test.go`
+- `internal/tui/views/overlay_add_repo_test.go`
+- `internal/tui/views/app_add_repo_test.go`
 
 ---
 
@@ -202,7 +203,7 @@ Semantic styles consumed: `Thinking` for expanded thinking-block text, `Accent` 
 
 ### Overlays
 
-Session history search, the unified work browser (source items), help, workspace initialization, log viewer, confirm dialogs, duplicate-session dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
+Session history search, the unified work browser (source items), help, workspace initialization, log viewer, add repository, confirm dialogs, duplicate-session dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
 
 Overlay and modal styling uses **transparent backgrounds** — no `Background()` or `BorderBackground()` on overlay or modal styles. See `internal/tui/AGENTS.md` "Overlay and Modal Styling" for the full rule set covering ANSI-reset propagation and inter-pane separator constraints.
 
@@ -264,6 +265,7 @@ internal/tui/views/
   overlay_source_items.go
   overlay_logs.go
   overlay_new_session.go
+  overlay_add_repo.go
   overlay_help.go
   overlay_workspace_init.go
   settings_page.go
@@ -285,6 +287,7 @@ Useful smoke suites include:
 
 - `go test ./internal/tui/views -run 'TestSessionLogViewRespectsRequestedHeightWithMeta|TestPlanReview'`
 - `go test ./internal/tui/views -run 'TestAppViewWithSessionInteractionFitsWindow|TestSidebar|TestStatusBar'`
+- `go test ./internal/tui/views -run 'TestAddRepo'`
 - `go test ./internal/tui/views -run 'TestSettingsPage_'`
 
 These checks matter because the common failure mode is silent layout drift, overflow, or re-fragmented chrome ownership rather than compilation failure.

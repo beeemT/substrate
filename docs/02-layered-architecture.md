@@ -1,6 +1,5 @@
 # 02 - Layered Architecture
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 This document describes the current layering and wiring in repository HEAD.
 The important update versus older drafts is that the codebase now uses `Session`/`Task` domain names internally, while some storage tables and UI copy still use legacy `work_item` / `agent_session` terminology.
 
@@ -257,10 +256,13 @@ Cross-cutting reality today:
 
 The canonical base schema is `migrations/001_initial.sql`. Subsequent migrations extend it:
 
-- `002_agent_sessions_canonical.sql` — rewrites `agent_sessions` to add `work_item_id` and `phase` columns, adds indexes
-- `003_resume_info.sql` — adds generic resume metadata storage to `agent_sessions` via a `resume_info` map column
+- `002_agent_sessions_canonical.sql` — rewrites `agent_sessions` to add `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`, and indexes
+- `003_omp_session_meta.sql` — adds OMP-specific session metadata columns (`omp_session_file`, `omp_session_id`) to `agent_sessions`
 - `004_sub_plan_planning_round.sql` — adds `planning_round` column to `sub_plans`
 - `005_review_artifacts.sql` — adds `github_pull_requests`, `gitlab_merge_requests`, and `session_review_artifacts` tables with backfill from `system_events`
+- `006_session_resume_info.sql` — migrates OMP-specific session metadata to a generic `resume_info` map column and drops the old columns
+- `007_plan_supersede.sql` — plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with a partial unique index on non-superseded plans, adds `superseded` to the plan status CHECK constraint, and adds `plan_id` to `agent_sessions`
+- `008_drop_planning_round.sql` — drops obsolete `sub_plans.planning_round` column
 
 ### Naming note
 
@@ -295,9 +297,9 @@ CREATE TABLE work_items (
 
 CREATE TABLE plans (
     id                TEXT PRIMARY KEY,
-    work_item_id      TEXT NOT NULL UNIQUE REFERENCES work_items(id),
+    work_item_id      TEXT NOT NULL REFERENCES work_items(id),
     orchestrator_plan TEXT NOT NULL,
-    status            TEXT NOT NULL CHECK (status IN ('draft','pending_review','approved','rejected')),
+    status            TEXT NOT NULL CHECK (status IN ('draft','pending_review','approved','rejected','superseded')),
     version           INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
@@ -311,7 +313,6 @@ CREATE TABLE sub_plans (
     content         TEXT NOT NULL,
     exec_order      INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL CHECK (status IN ('pending','in_progress','completed','failed')),
-    planning_round  INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     UNIQUE(plan_id, repo_name)
@@ -321,6 +322,7 @@ CREATE TABLE agent_sessions (
     id                TEXT PRIMARY KEY,
     work_item_id      TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
     sub_plan_id       TEXT REFERENCES sub_plans(id) ON DELETE SET NULL,
+    plan_id           TEXT REFERENCES plans(id) ON DELETE SET NULL,
     workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
     phase             TEXT NOT NULL CHECK (phase IN ('planning','implementation','review')),
     repository_name   TEXT,
@@ -339,6 +341,12 @@ CREATE TABLE agent_sessions (
 
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+
+The `plans` table uses a partial unique index instead of an inline UNIQUE constraint to enforce at most one active plan per work item:
+
+```sql
+CREATE UNIQUE INDEX idx_plans_active_work_item ON plans(work_item_id) WHERE status != 'superseded';
+```
 
 CREATE TABLE questions (
     id               TEXT PRIMARY KEY,

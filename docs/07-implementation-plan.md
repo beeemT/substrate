@@ -1,6 +1,5 @@
 # 07 - Implementation Plan
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 Phased build-out of Substrate. This file remains a roadmap, but implemented phases are rewritten to match repository HEAD instead of earlier pre-rename drafts.
 
 ## Directory Structure
@@ -29,7 +28,7 @@ internal/
     gitwork/               # git-work integration and workspace helpers
     config/                # YAML config + secret hydration
     tui/                   # Bubble Tea UI
-        views/             # 60+ view and overlay files
+        views/             # 60+ view and overlay files (incl. overlay_add_repo.go)
         components/        # bunny, input, confirm, overlay frame, toast, etc.
 bridge/omp-bridge.ts
 migrations/
@@ -89,7 +88,9 @@ Current schema details worth preserving:
 - `system_events` persists raw `domain.SystemEvent` rows
 - `github_pull_requests` and `gitlab_merge_requests` store provider-native PR/MR records (migration 005)
 - `session_review_artifacts` links work items to provider artifacts with dedup on `(workspace_id, work_item_id, provider, provider_artifact_id)`
-- `sub_plans.planning_round` tracks per-sub-plan retry count (migration 004)
+- `sub_plans.planning_round` tracked which planning round last modified each sub-plan (migration 004; dropped in migration 008)- migration 006 migrates OMP-specific session metadata to generic `resume_info`
+- migration 007 adds plan supersede model (partial unique index on non-superseded plans) and `plan_id` to `agent_sessions` pointing at `plans(id)`
+- migration 008 drops `sub_plans.planning_round`
 - `agent_sessions.resume_info` tracks native harness session state as generic resume metadata
 
 SQLite implementations live in `internal/repository/sqlite/` and accept `generic.SQLXRemote`. `resources.go` still groups transaction-bound repos into a `Resources` bundle for tests / transactional construction.
@@ -189,10 +190,11 @@ What is true today:
 - startup and selection are wired
 - binary presence is checked
 - do not treat it as equal to oh-my-pi for interactive continuation semantics unless verified by tests/runtime evidence
+- supports compact and native resume via a TypeScript bridge (`@anthropic-ai/claude-agent-sdk`, same architecture as OMP bridge)
 
 ### 6c. Codex adapter (implemented, parity still limited)
 
-- same current status as Claude Code: selectable and wired, not documented as full parity
+- same current status as Claude Code: selectable and wired, supports messaging via thread resume and native resume, but steering returns `ErrSteerNotSupported` and compact is not supported
 
 ### 6d. Harness routing, packaging, and validation
 
@@ -273,6 +275,9 @@ What exists now:
 - uncertain answers are escalated with `Question.ProposedAnswer`
 - the TUI can keep iterating with the foreman before calling `ResolveEscalated`
 - `question_timeout` is configurable through `foreman.question_timeout`; config default is `"0"` (documented as indefinite, but runtime falls back to 60 s)
+- the Foreman is stopped on implementation completion and restarted for follow-up feedback
+- it counts as a live session in the TUI status bar
+- the Foreman receives the full composed plan document as its system prompt context
 
 ### Review
 
@@ -284,6 +289,8 @@ What exists now:
 - correction-loop retries reuse the same live review session
 - major/critical critiques trigger reimplementation decisions via the review result path
 - review outcome events are published through the bus
+- review sessions run in `SessionModeAgent` with a review-only role instruction
+- parse failures are treated as no critiques (no correction loop in agent mode)
 
 ### Orchestrator-owned review pipeline
 
@@ -358,6 +365,14 @@ Current TUI reality to keep in mind:
 - duplicate session dialog for choosing between duplicate work items
 - centralized text input/textarea component with macOS-compatible word-movement bindings
 - raw key debug logger (`SUBSTRATE_KEY_DEBUG`)
+- Add Repository overlay for browsing and cloning remote repositories via GitHub, GitLab, and manual URL
+- Sidebar filters (All/Active/Needs Attention/Completed), grouping dimensions, and sort direction controls with custom scrollbar
+- Render caching for sidebar and status bar
+- Grouped task sidebar entries under section headers
+- Completed-session action card with Changes keybind
+- Plan inspect key (`i`) from planning sessions and plan review
+- Commit strategy injection into agent system prompts and residual-change commit/push after review pass
+- Compact-before-critique for review reimplementation when harness supports it
 
 ## Phase 13: End-to-End Integration (Week 11-12)
 

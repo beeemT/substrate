@@ -1,6 +1,5 @@
 # 04 - Adapter Implementations
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 Concrete adapter behavior as implemented under `internal/adapter/` and wired from `internal/app/`.
 
 ---
@@ -11,11 +10,14 @@ Concrete adapter behavior as implemented under `internal/adapter/` and wired fro
 
 - `WorkItemAdapter`: tracker-style sources used by the new-session flow and by tracker synchronization hooks.
 - `RepoLifecycleAdapter`: repository event handlers used for MR/PR lifecycle work after a worktree exists.
-- `AgentHarness`: execution backends for planning / implementation / review / foreman sessions. `StartSession` returns an `AgentSession` that supports streaming, messaging, and steering. Key session and capability contracts:
+- `AgentHarness`: execution backends for planning / implementation / review / foreman sessions. `StartSession` returns an `AgentSession` that supports streaming, messaging, steering, and compaction. Key session and capability contracts:
   - `Steer(ctx, msg) error` — interrupts active streaming to inject a steering prompt. Harnesses that lack this capability return `ErrSteerNotSupported` (defined in `internal/adapter/interfaces.go`).
   - `SessionOpts.ResumeFromSessionID` and `SessionOpts.ResumeInfo` — when set, the harness resumes from an existing session identifier and harness-specific resume metadata rather than creating a fresh session.
   - `HarnessCapabilities.SupportsNativeResume` — advertises whether the harness supports session file resume. Used by the orchestrator to decide between native resume and fresh-session follow-up.
   - `HarnessCapabilities.SupportedTools` — lists the tool names a harness exposes to the orchestrator.
+  - `SupportsCompact() bool` — reports whether the harness supports manual context compaction. Used by the orchestrator to decide whether to resume a native session with compact before critique or start a fresh session.
+  - `Compact(ctx) error` — on `AgentSession`, requests manual context compaction to free context window space. Returns `ErrCompactNotSupported` if unsupported.
+  - `SessionOpts.CommitConfig` — commit strategy settings (`Strategy`, `MessageFormat`, `MessageTemplate`) injected by the orchestrator into implementation sessions.
 - `HarnessActionRunner`: executes short-lived control-plane actions (login, auth checks) via `RunAction(ctx, HarnessActionRequest)`. Used for provider login flows routed through the harness.
 
 ### Work item contract
@@ -179,6 +181,7 @@ Event handling:
 
 - `plan.approved` -> add the rendered plan comment to every referenced external ID, then move the primary `external_id` to `in_progress`
 - `work_item.completed` -> move the tracked issue to `done`
+- Default state mappings are applied when no explicit `state_mappings` are configured: `TrackerStateTodo`, `TrackerStateInProgress`, and `TrackerStateInReview` all map to `"reopen"`.
 
 ### GitHub (`internal/adapter/github`)
 
@@ -218,6 +221,7 @@ Event handling across its two roles:
 - `plan.approved` -> add plan comments to referenced issues, then move the primary issue to `in_progress`
 - `worktree.created` -> repository-lifecycle path for PR discovery / creation on GitHub remotes
 - `work_item.completed` -> attempt to move the issue to `done` and run PR completion handling
+- Default state mappings are applied when no explicit `state_mappings` are configured: `TrackerStateTodo`, `TrackerStateInProgress`, and `TrackerStateInReview` all map to `"open"`.
 
 ### Sentry (`internal/adapter/sentry`)
 
@@ -529,16 +533,20 @@ Current shipped harnesses:
   - streaming: yes
   - messaging / `SendMessage`: yes
   - native resume: yes (`SupportsNativeResume`)
+  - compact: yes (`SupportsCompact`)
   - supported tools: `read`, `grep`, `find`, `edit`, `write`, `bash`, `ask_foreman`
   - remains the default harness family in config defaults
 - `internal/adapter/claudeagent` (`Name() == "claude-code"`)
   - streaming: yes
   - messaging: yes (`SendMessage`, `Steer`)
   - native resume: yes (`SupportsNativeResume`)
+  - compact: yes (`SupportsCompact`)
   - supported tools: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `mcp__substrate__ask_foreman`
 - `internal/adapter/codex` (`Name() == "codex"`)
   - streaming: yes
-  - messaging: no
+  - messaging: yes (`SendMessage` via thread resume; `Steer` returns `ErrSteerNotSupported`)
+  - native resume: yes (`SupportsNativeResume`, via `codex_thread_id`)
+  - compact: no (`SupportsCompact: false`)
   - supported tools: `sandboxed-cli`
 
 Routing behavior from `internal/app/harness.go`:
@@ -555,7 +563,7 @@ Provider login notes:
   - all three harness implementations also support `RunAction(Action="login_provider", Provider="sentry")`
 - self-hosted Sentry login uses `config.SentryCLIEnvironment(...)` so `SENTRY_URL` points at the root host, not `/api/0`
 
-The practical boundary today is messaging and steering support: oh-my-pi and claude-agent both expose `SendMessage` and `Steer()` capability. Codex returns `ErrSteerNotSupported` from `Steer()` and is wired and usable for non-messaging flows but does not yet provide the same interactive correction surface.
+The practical boundary today is steering support: oh-my-pi and claude-agent both expose `Steer()` for mid-stream interruption. Codex returns `ErrSteerNotSupported` from `Steer()` but supports `SendMessage` via thread resume. All three harnesses support `SendMessage` and native resume. Compaction support differs: oh-my-pi and claude-agent support compact; codex does not.
 
 ### OMP-specific capabilities
 
@@ -623,3 +631,21 @@ The bridge emits `session_meta { session_id }` from the SDK's `system/init` mess
 #### Sandboxing
 
 Uses the same OS-level sandboxing as the OMP harness (sandbox-exec on macOS, bwrap on Linux). Writable paths include the git worktree, a process-scoped temp dir, `~/.claude` (auth store), and the bun cache directory.
+
+### Repo sources
+
+`internal/adapter/repo_source.go` defines the `RepoSource` interface for remote repository listing, used by the Add Repo overlay in the TUI.
+
+```go
+type RepoSource interface {
+    Name() string
+    ListRepos(ctx context.Context, opts RepoListOpts) (*RepoListResult, error)
+}
+```
+
+Implementations:
+- `internal/adapter/github/repo_source.go` — lists GitHub repositories via the authenticated API
+- `internal/adapter/gitlab/repo_source.go` — lists GitLab projects via the authenticated API
+- `internal/adapter/manual/repo_source.go` — manual clone by URL (no remote listing)
+
+Each source returns `RepoItem` structs with name, full name, description, clone URLs, default branch, visibility, and provider metadata. The TUI Add Repo overlay cycles through available sources and delegates cloning to `gitwork.Client.Clone()`.

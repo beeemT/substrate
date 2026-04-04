@@ -1,6 +1,5 @@
 # 03 - Event System
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 Substrate's event model has two parts:
 
 1. persisted `domain.SystemEvent` rows in SQLite

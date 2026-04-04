@@ -1,6 +1,5 @@
 # 06 - TUI Design
-<!-- docs:last-integrated-commit 15191d7174f9fd07787eb39e2a4763fb6c43cfeb -->
-
+<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
 bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bridging.
 
 ---
@@ -71,6 +70,7 @@ Historical search is separate from the live sidebar list: `/` opens the session-
 - `d` — when a work item, task row, or historical result is selected, confirm deletion of the full work item and its related task/session artifacts
 - `/` — open session-history search
 - `n` — open the Unified Work Browser
+- `a` — open the Add Repository overlay for browsing and cloning remote repositories
 - `s` — open Settings page
 - `?` — open Help
 - `q` — quit
@@ -85,6 +85,8 @@ type SidebarModel struct {
     height  int
 }
 ```
+
+**Filters, grouping, and sort.** The sidebar supports filter modes (All, Active, Needs Attention, Completed), grouping dimensions (flat, by status, by source), and sort direction (ascending/descending). `Ctrl+F` cycles filter mode, `Ctrl+G` cycles grouping dimension, `Ctrl+D` toggles sort direction. A status line below the title shows active filter/dimension/direction when non-default. A custom scrollbar renders on the right edge of the sidebar.
 
 The footer, not a header, carries workspace context such as `workspace · 2 active sessions`.
 
@@ -167,11 +169,11 @@ Full reconstructed plan document rendered in a scrollable viewport. The review s
 **Model**: `viewport.Model` for scrollable content, `textinput.Model` for feedback input — used for both `c` (request changes) and `r` (reject); appears at bottom on activation, `Enter` submits, `Esc` cancels.
 
 - `[a]` **Approve** — status → Approved; emits `PlanApproved`; triggers implementation pipeline.
-- `[c]` **Request changes** — opens inline feedback input (textinput at bottom). On `Enter`, spawns a new planning agent session with the current full plan document and feedback embedded in the prompt. The plan version is incremented on the revision.
+- `[c]` **Changes** — opens the plan overlay with the current full plan document and an inline feedback input. On `Enter`, spawns a new planning agent session with the current full plan document and feedback embedded in the prompt. The plan version is incremented on the revision.
 - `[e]` **Edit in $EDITOR** — opens the full reconstructed plan markdown in `$EDITOR` via `tea.ExecProcess`. On editor exit, the modified file is re-parsed, re-validated, and both orchestrator/sub-plan sections are updated in the DB before presenting the revised plan for re-review.
 - `[r]` **Reject** — opens inline rejection input. On `Enter`, work item returns to `Ingested` state; emits `PlanRejected`.
-
-**Keys**: `↑`/`↓` scroll, `a` approve, `c` request changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `r` reject.
+- `[i]` **Inspect** — opens the full reconstructed plan document in an overlay for read-only inspection without changing plan state. Also available from planning sessions and completed work items to inspect the current plan.
+**Keys**: `↑`/`↓` scroll, `a` approve, `c` changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `i` inspect plan, `r` reject.
 
 ### 3c. Session Interaction Mode
 
@@ -186,8 +188,8 @@ The `p` key activates a text input at the bottom of the session interaction view
 | Session state | Hint text | Enter action | Effect |
 |---------------|-----------|--------------|--------|
 | Running | `Prompt agent` | Sends a steer message routed through `SessionRegistry.Steer()` | Interrupts the agent's active streaming turn with the operator's guidance |
-| Completed | `Follow up` | Sends a follow-up message for the completed task | Preserves the completed Task row, creates a new Task row, and resumes the OMP session with full conversation context |
-| Failed | `Follow up` | Sends a follow-up message for the failed task | Same as completed follow-up — creates a new Task row and attempts OMP session resume |
+| Completed | `Changes` | Sends a follow-up message for the completed task | Opens the plan overlay with request-changes input for follow-up re-planning |
+| Failed | `Changes` | Sends a follow-up message for the failed task | Same as completed follow-up — creates a new Task row and attempts OMP session resume |
 | No session | Disabled | — | `p` is a no-op when no session is active |
 
 The steer/follow-up input is mutually exclusive: only one of the three session-state targets (live, completed, or failed) can be active at a time. `Esc` cancels and returns to normal mode.
@@ -232,11 +234,11 @@ type SessionOverviewData struct {
 
 **Action-required examples**:
 
-- **Plan review**: bounded plan excerpt plus `Approve` / `Request changes` / `Reject` actions. A `Review plan` overlay shows the full plan document.
+- **Plan review**: bounded plan excerpt plus `Approve` / `Changes` / `Inspect` / `Reject` actions. A `Review plan` overlay shows the full plan document.
 - **Open question**: question text, affected repo/task, Foreman's proposed answer and uncertainty. The human can approve, iterate with the Foreman, or skip — all from the overview.
 - **Interrupted session**: affected repo/task, failure/interruption reason, `Resume` / `Retry` actions.
 - **Under review**: review summary, critique list per repo, `Override accept` action for human escalation, `Re-implement` action for manual re-trigger when `AutoFeedbackLoop` is disabled. See `05-orchestration.md` for the orchestrator-owned review loop.
-- **Completed**: the `CompletedModel` overlay provides a `f` keybind that opens a feedback textarea for follow-up re-planning. `Enter` submits the feedback and transitions the work item back to `plan_review`, where the existing plan review flow takes over. Success and error feedback display as toasts.
+- **Completed**: the `CompletedModel` overlay provides a `f` keybind that opens a feedback input for requesting changes. `Enter` submits the feedback and opens the plan overlay with the changes input, where the existing plan review flow takes over. Success and error feedback display as toasts.
 
 **Source section rules**: for single-source sessions, the root work item title/description is sufficient. For multi-source sessions, the overview shows provider + ref only rather than reverse-parsing merged descriptions. Durable per-source-item summaries are a follow-up (see `future-work.md`).
 
@@ -387,6 +389,18 @@ Each log entry shows a right-aligned line number, timestamp, level (color-coded:
 
 **Keys:** `↑`/`↓` or mouse scroll to navigate, `c` copy all log entries to clipboard as raw unwrapped plain text (one entry per line, no ANSI codes), `Esc` close.
 
+
+### 4g. Add Repository Overlay
+
+Triggered by `a` from the main shell. This is a centered split overlay for browsing and cloning remote repositories into the workspace.
+
+The overlay has three focus areas: controls (search input, source cycling), repo list, and details pane. Sources include GitHub, GitLab, and Manual (clone by URL). `Tab` / `Shift-Tab` cycle focus areas; `↑` / `↓` navigate the repo list; `Enter` starts cloning the selected repository; `Esc` closes.
+
+When a source is selected, the adapter fetches repositories via the `RepoSource.ListRepos(...)` API. Search filters results server-side. The manual source shows a URL input field instead of a list.
+
+Cloning delegates to `gitwork.Client.Clone()` and creates a git-work managed repository in the workspace.
+
+**Keys:** `Tab` / `Shift-Tab` cycle focus, `↑` / `↓` navigate, `Enter` clone, `Esc` close.
 ---
 
 ## 5. Layout System
@@ -394,6 +408,8 @@ Each log entry shows a right-aligned line number, timestamp, level (color-coded:
 The shipped shell geometry is shared rather than redefined per view. The sidebar and content panes use the same pane chrome, centered overlays reuse a common overlay frame, and the settings page intentionally keeps its own full-screen split layout while speaking the same visual language.
 
 Implementation-facing ownership for shared geometry, chrome primitives, and layout guardrails lives in `docs/08-tui-design-system.md`.
+
+The sidebar supports a custom scrollbar rendered on the right edge. Render caching is used for the sidebar and status bar to avoid redundant recomputation — cached output is invalidated on content or dimension changes.
 
 **Footer / status bar**
 
@@ -446,10 +462,12 @@ Vim-style primary, arrow keys as aliases.
 | `Enter` | Select / confirm | Lists, overlays |
 | `p` | Steer running agent / follow up on completed or failed session | Session interaction view (context-dependent on session state) |
 | `f` | Open follow-up re-planning feedback | Completed work item overlay |
+| `a` | Add Repository overlay | Main shell |
+| `i` | Inspect plan | Plan review, overview |
 
 ### Global Keybinds (handled before delegation)
 
-`?` help overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `s` settings page, `L` logs overlay, contextual `d` delete-session shortcut when a work item, task row, or history result is active, `Ctrl+c` force quit.
+`?` help overlay, `a` Add Repository overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `s` settings page, `L` logs overlay, contextual `d` delete-session shortcut when a work item, task row, or history result is active, `Ctrl+c` force quit.
 
 ### Input Modes
 
