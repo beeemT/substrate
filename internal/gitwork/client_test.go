@@ -1,6 +1,11 @@
 package gitwork
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +217,70 @@ func TestParseListJSON_PathConstruction(t *testing.T) {
 				t.Errorf("Path = %q, want %q", worktrees[0].Path, tt.wantPath)
 			}
 		})
+	}
+}
+
+
+// writeFakeBin writes a shell script that acts as a fake git-work binary.
+// The script prints output to stdout and exits with exitCode.
+func writeFakeBin(t *testing.T, output string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\nexit %d\n", output, exitCode)
+	bin := filepath.Join(dir, "git-work")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake bin: %v", err)
+	}
+	return bin
+}
+
+func TestClone_SuccessReturnsCleanedPath(t *testing.T) {
+	t.Parallel()
+	parentDir := t.TempDir()
+	expectedPath := filepath.Join(parentDir, "some-repo")
+	bin := writeFakeBin(t, expectedPath+"\n", 0)
+	path, err := NewClient(bin).Clone(context.Background(), parentDir, "https://example.com/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path != expectedPath {
+		t.Errorf("path = %q, want %q", path, expectedPath)
+	}
+}
+
+func TestClone_EmptyOutputReturnsError(t *testing.T) {
+	t.Parallel()
+	parentDir := t.TempDir()
+	bin := writeFakeBin(t, "", 0)
+	_, err := NewClient(bin).Clone(context.Background(), parentDir, "https://example.com/repo")
+	if err == nil {
+		t.Fatal("expected error for empty output, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty output") {
+		t.Errorf("error = %q, want it to contain \"empty output\"", err.Error())
+	}
+}
+
+func TestClone_NonZeroExitReturnsError(t *testing.T) {
+	t.Parallel()
+	parentDir := t.TempDir()
+	bin := writeFakeBin(t, "", 1)
+	_, err := NewClient(bin).Clone(context.Background(), parentDir, "https://example.com/repo")
+	if err == nil {
+		t.Fatal("expected error for non-zero exit, got nil")
+	}
+}
+
+func TestClone_PathTraversalReturnsError(t *testing.T) {
+	t.Parallel()
+	parentDir := t.TempDir()
+	// Print the filesystem root, which is guaranteed to be outside any temp dir.
+	bin := writeFakeBin(t, "/", 0)
+	_, err := NewClient(bin).Clone(context.Background(), parentDir, "https://example.com/repo")
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+	if !strings.Contains(err.Error(), "escapes parent directory") {
+		t.Errorf("error = %q, want it to contain \"escapes parent directory\"", err.Error())
 	}
 }
