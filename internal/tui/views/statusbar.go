@@ -213,6 +213,7 @@ func hasContextualLeadingHint(hints []KeybindHint) bool {
 func DefaultHints() []KeybindHint {
 	return []KeybindHint{
 		{Key: "n", Label: "New session"},
+		{Key: "a", Label: "Add repo"},
 		{Key: "/", Label: "Search sessions"},
 		{Key: "s", Label: "Settings"},
 		{Key: "?", Label: "Help"},

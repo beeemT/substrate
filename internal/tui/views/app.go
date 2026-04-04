@@ -38,6 +38,7 @@ const (
 	overlayHelp
 	overlaySourceItems
 	overlayLogs
+	overlayAddRepo
 )
 
 type sessionHistoryScope int
@@ -100,6 +101,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	helpOverlay        HelpOverlay
 	sourceItemsOverlay SourceItemsOverlay
 	logsOverlay        LogsOverlay
+	addRepo         AddRepoOverlay
 	hasWorkspace       bool
 
 	// Toasts
@@ -176,6 +178,7 @@ func NewApp(svcs Services) App {
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
+		addRepo:                        NewAddRepoOverlay(svcs.RepoSources, svcs.WorkspaceDir, svcs.GitClient, st),
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
@@ -439,6 +442,13 @@ func (a *App) openNewSession() tea.Cmd {
 	a.newSession.Open()
 	return a.newSession.reloadItems()
 }
+
+func (a *App) openAddRepo() tea.Cmd {
+	a.activeOverlay = overlayAddRepo
+	a.addRepo.Open()
+	return a.addRepo.reloadRepos()
+}
+
 
 func (a App) currentHints() []KeybindHint {
 	global := DefaultHints()
@@ -816,6 +826,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.settingsPage.SetSize(msg.Width, msg.Height)
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
+		a.addRepo.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
@@ -866,6 +877,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionSearch.Close()
 		a.settingsPage.Close()
 		a.sourceItemsOverlay.Close()
+		a.addRepo.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -1225,6 +1237,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, createBrowseSessionCmd(a.svcs, msg))
 		return a, tea.Batch(cmds...)
 
+	case RepoClonedMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, func() tea.Msg { return ErrMsg{Err: msg.Err} })
+		} else {
+			cmds = append(cmds, func() tea.Msg { return ActionDoneMsg{Message: "Repository cloned to workspace"} })
+			// Trigger workspace rescan
+			cmds = append(cmds, LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID))
+		}
+		return a, tea.Batch(cmds...)
+
+	case AddRepoCloneMsg:
+		a.activeOverlay = overlayNone
+		a.addRepo.Close()
+		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.Repo.URL))
+		return a, tea.Batch(cmds...)
+
 	case SettingsAppliedMsg:
 		a.applyServicesReload(msg.Reload)
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -1475,6 +1503,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayNewSession {
 		a.newSession, cmd = a.newSession.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayAddRepo {
+		a.addRepo, cmd = a.addRepo.Update(msg)
+		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlaySessionSearch {
 		a.sessionSearch, cmd = a.sessionSearch.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1545,6 +1576,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.logsOverlay, cmd = a.logsOverlay.Update(msg)
 		return a, cmd
 	}
+	if a.activeOverlay == overlayAddRepo {
+		a.addRepo, cmd = a.addRepo.Update(msg)
+		return a, cmd
+	}
 	if a.activeOverlay == overlaySourceItems {
 		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
 		return a, cmd
@@ -1570,6 +1605,8 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleQuitRequest()
 	case "n":
 		return a, a.openNewSession()
+	case "a":
+		return a, a.openAddRepo()
 	case "s":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
@@ -2484,6 +2521,8 @@ func (a App) View() string {
 		result = renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayLogs:
 		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlayAddRepo:
+		result = renderOverlay(a.addRepo.View(), a.windowWidth, a.windowHeight)
 	default:
 		result = base
 	}
