@@ -1,6 +1,8 @@
 package views
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +28,35 @@ const (
 	SidebarEntryGroupHeader
 )
 
+// SidebarFilter controls which sessions appear in the sidebar.
+type SidebarFilter int
+
+const (
+	SidebarFilterAll SidebarFilter = iota
+	SidebarFilterActive
+	SidebarFilterNeedsAttention
+	SidebarFilterCompleted
+)
+
+// SidebarDimension controls how sessions are grouped and sorted.
+type SidebarDimension int
+
+const (
+	SidebarDimNone SidebarDimension = iota
+	SidebarDimState
+	SidebarDimSource
+	SidebarDimCreated
+	SidebarDimActivity
+)
+
+// SidebarDirection controls the ordering of groups.
+type SidebarDirection int
+
+const (
+	SidebarDirDesc SidebarDirection = iota
+	SidebarDirAsc
+)
+
 // SidebarEntry is one selectable row in the sidebar.
 type SidebarEntry struct {
 	Kind            SidebarEntryKind
@@ -41,6 +72,7 @@ type SidebarEntry struct {
 	SessionStatus   domain.TaskStatus
 	RepositoryName  string
 	LastActivity    time.Time
+	CreatedAt       time.Time
 	TotalSubPlans   int
 	DoneSubPlans    int
 	HasOpenQuestion bool
@@ -212,6 +244,9 @@ type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
 	height     int
 	cachedView *string // render cache; pointer survives value-receiver copies
 	viewDirty  *bool   // true when state changed since last View()
+	filter     SidebarFilter
+	dimension  SidebarDimension
+	direction  SidebarDirection
 }
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
@@ -274,6 +309,67 @@ func (m *SidebarModel) SetHeight(h int) { m.height = h; *m.viewDirty = true }
 func (m *SidebarModel) SetTitle(title string) {
 	m.title = title
 	*m.viewDirty = true
+}
+
+// CycleFilter advances to the next filter mode.
+func (m *SidebarModel) CycleFilter() {
+	m.filter = (m.filter + 1) % 4
+	*m.viewDirty = true
+}
+
+// CycleDimension advances to the next grouping dimension.
+func (m *SidebarModel) CycleDimension() {
+	m.dimension = (m.dimension + 1) % 5
+	*m.viewDirty = true
+}
+
+// ToggleDirection flips between ascending and descending.
+func (m *SidebarModel) ToggleDirection() {
+	if m.direction == SidebarDirDesc {
+		m.direction = SidebarDirAsc
+	} else {
+		m.direction = SidebarDirDesc
+	}
+	*m.viewDirty = true
+}
+
+// FilterMode returns the current filter mode.
+func (m *SidebarModel) FilterMode() SidebarFilter { return m.filter }
+
+// DimensionMode returns the current grouping dimension.
+func (m *SidebarModel) DimensionMode() SidebarDimension { return m.dimension }
+
+// DirectionMode returns the current sort direction.
+func (m *SidebarModel) DirectionMode() SidebarDirection { return m.direction }
+
+// StatusLabel returns the sidebar status line showing active filter/dimension/direction.
+// Returns empty string when all settings are at their defaults.
+func (m *SidebarModel) StatusLabel() string {
+	var parts []string
+	switch m.filter {
+	case SidebarFilterActive:
+		parts = append(parts, "active")
+	case SidebarFilterNeedsAttention:
+		parts = append(parts, "attention")
+	case SidebarFilterCompleted:
+		parts = append(parts, "completed")
+	}
+	switch m.dimension {
+	case SidebarDimState:
+		parts = append(parts, "state")
+	case SidebarDimSource:
+		parts = append(parts, "source")
+	case SidebarDimCreated:
+		parts = append(parts, "created")
+	case SidebarDimActivity:
+		parts = append(parts, "activity")
+	}
+	if m.direction == SidebarDirAsc {
+		parts = append(parts, "▲")
+	} else if m.dimension != SidebarDimNone {
+		parts = append(parts, "▼")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // MoveUp moves the cursor up by one selectable entry, skipping group headers.
@@ -453,7 +549,13 @@ func (m SidebarModel) View() string {
 	title := m.styles.SectionLabel.Render(titleText)
 	header := lipgloss.NewStyle().Width(contentWidth).AlignHorizontal(lipgloss.Center).Render(title)
 	lines = append(lines, header)
-	lines = append(lines, components.RenderDivider(m.styles, contentWidth))
+	statusLabel := m.StatusLabel()
+	if statusLabel != "" {
+		status := m.styles.Muted.Render(statusLabel)
+		lines = append(lines, lipgloss.NewStyle().Width(contentWidth).AlignHorizontal(lipgloss.Center).Render(status))
+	} else {
+		lines = append(lines, components.RenderDivider(m.styles, contentWidth))
+	}
 	for i := start; i < end; i++ {
 		entry := m.entries[i]
 		if entry.Kind == SidebarEntryGroupHeader {
@@ -617,4 +719,271 @@ func renderGroupHeader(st styles.Styles, title string, width int) string {
 		return lipgloss.NewStyle().Width(width).Render(label)
 	}
 	return label + " " + st.Divider.Render(strings.Repeat("─", dividerWidth))
+}
+
+// --- Filter / Dimension / Direction logic ---
+
+// FilterSidebarEntries returns entries matching the given filter mode.
+// Only SidebarEntryWorkItem entries are filtered; other kinds pass through.
+func FilterSidebarEntries(entries []SidebarEntry, mode SidebarFilter) []SidebarEntry {
+	if mode == SidebarFilterAll {
+		return entries
+	}
+	var filtered []SidebarEntry
+	for _, e := range entries {
+		if e.Kind != SidebarEntryWorkItem {
+			filtered = append(filtered, e)
+			continue
+		}
+		if sessionMatchesFilter(e.State, e.HasOpenQuestion, e.HasInterrupted, mode) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted bool, mode SidebarFilter) bool {
+	switch mode {
+	case SidebarFilterActive:
+		switch state {
+		case domain.SessionPlanning, domain.SessionPlanReview, domain.SessionImplementing, domain.SessionReviewing:
+			return true
+		default:
+			return false
+		}
+	case SidebarFilterNeedsAttention:
+		switch state {
+		case domain.SessionPlanReview:
+			return true
+		}
+		if hasQuestion || hasInterrupted {
+			return true
+		}
+		return false
+	case SidebarFilterCompleted:
+		return state == domain.SessionCompleted || state == domain.SessionFailed
+	default:
+		return true
+	}
+}
+
+// ApplyDimensionAndDirection groups and orders entries by the given dimension and direction.
+// Within each group, entries are sorted by LastActivity descending.
+func ApplyDimensionAndDirection(entries []SidebarEntry, dim SidebarDimension, dir SidebarDirection) []SidebarEntry {
+	if dim == SidebarDimNone || len(entries) == 0 {
+		sorted := make([]SidebarEntry, len(entries))
+		copy(sorted, entries)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			if !sorted[i].LastActivity.Equal(sorted[j].LastActivity) {
+				return sorted[i].LastActivity.After(sorted[j].LastActivity)
+			}
+			return sorted[i].WorkItemID < sorted[j].WorkItemID
+		})
+		return sorted
+	}
+
+	// Only work items participate in grouping.
+	workItems := make([]SidebarEntry, 0, len(entries))
+	others := make([]SidebarEntry, 0)
+	for _, e := range entries {
+		if e.Kind == SidebarEntryWorkItem {
+			workItems = append(workItems, e)
+		} else {
+			others = append(others, e)
+		}
+	}
+
+	var groups []groupedEntries
+	switch dim {
+	case SidebarDimState:
+		groups = groupByState(workItems, dir)
+	case SidebarDimSource:
+		groups = groupBySource(workItems, dir)
+	case SidebarDimCreated:
+		groups = groupByTime(workItems, dir, func(e SidebarEntry) time.Time { return e.CreatedAt })
+	case SidebarDimActivity:
+		groups = groupByTime(workItems, dir, func(e SidebarEntry) time.Time { return e.LastActivity })
+	}
+
+	var result []SidebarEntry
+	result = append(result, others...)
+	for _, g := range groups {
+		if len(g.items) == 0 {
+			continue
+		}
+		result = append(result, SidebarEntry{
+			Kind:       SidebarEntryGroupHeader,
+			GroupTitle: fmt.Sprintf("%s (%d)", g.label, len(g.items)),
+		})
+		result = append(result, g.items...)
+	}
+	return result
+}
+
+type groupedEntries struct {
+	label string
+	items []SidebarEntry
+}
+
+// groupByState groups work items into Active, Review, Waiting, Completed, Failed buckets.
+func groupByState(entries []SidebarEntry, dir SidebarDirection) []groupedEntries {
+	stateLabel := func(s domain.SessionState) string {
+		switch s {
+		case domain.SessionPlanning, domain.SessionImplementing:
+			return "Active"
+		case domain.SessionPlanReview, domain.SessionReviewing:
+			return "Review"
+		case domain.SessionApproved, domain.SessionIngested:
+			return "Waiting"
+		case domain.SessionCompleted:
+			return "Completed"
+		case domain.SessionFailed:
+			return "Failed"
+		default:
+			return string(s)
+		}
+	}
+
+	groups := make(map[string][]SidebarEntry)
+	for _, e := range entries {
+		label := stateLabel(e.State)
+		groups[label] = append(groups[label], e)
+	}
+
+	groupOrder := []string{"Active", "Review", "Waiting", "Completed", "Failed"}
+	result := make([]groupedEntries, 0, len(groupOrder))
+	for _, label := range groupOrder {
+		items := groups[label]
+		if len(items) == 0 {
+			continue
+		}
+		sortByActivityDesc(items)
+		result = append(result, groupedEntries{label: label, items: items})
+	}
+
+	if dir == SidebarDirAsc {
+		reverseGroups(result)
+	}
+	return result
+}
+
+// groupBySource groups work items by provider.
+func groupBySource(entries []SidebarEntry, dir SidebarDirection) []groupedEntries {
+	groups := make(map[string][]SidebarEntry)
+	for _, e := range entries {
+		label := sourceGroupLabel(e)
+		groups[label] = append(groups[label], e)
+	}
+
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+
+	if dir == SidebarDirDesc {
+		sort.SliceStable(keys, func(i, j int) bool {
+			if len(groups[keys[i]]) != len(groups[keys[j]]) {
+				return len(groups[keys[i]]) > len(groups[keys[j]])
+			}
+			return keys[i] < keys[j]
+		})
+	} else {
+		sort.Strings(keys)
+	}
+
+	result := make([]groupedEntries, 0, len(keys))
+	for _, k := range keys {
+		items := groups[k]
+		if len(items) == 0 {
+			continue
+		}
+		sortByActivityDesc(items)
+		result = append(result, groupedEntries{label: k, items: items})
+	}
+	return result
+}
+
+func sourceGroupLabel(e SidebarEntry) string {
+	if src := strings.TrimSpace(e.Source); src != "" {
+		return detailProviderLabel(src)
+	}
+	switch {
+	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gh:issue:"):
+		return "GitHub"
+	case strings.HasPrefix(strings.TrimSpace(e.ExternalID), "gl:issue:"):
+		return "GitLab"
+	default:
+		return "Other"
+	}
+}
+
+// groupByTime groups work items into time buckets.
+func groupByTime(entries []SidebarEntry, dir SidebarDirection, timeFn func(SidebarEntry) time.Time) []groupedEntries {
+	groups := make(map[string][]SidebarEntry)
+	for _, e := range entries {
+		bucket := TimeBucket(timeFn(e))
+		groups[bucket] = append(groups[bucket], e)
+	}
+
+	bucketOrder := []string{"Today", "Yesterday", "This Week", "This Month", "Last 3 Months", "Earlier"}
+	result := make([]groupedEntries, 0, len(bucketOrder))
+	for _, bucket := range bucketOrder {
+		items := groups[bucket]
+		if len(items) == 0 {
+			continue
+		}
+		sortByActivityDesc(items)
+		result = append(result, groupedEntries{label: bucket, items: items})
+	}
+
+	if dir == SidebarDirAsc {
+		reverseGroups(result)
+	}
+	return result
+}
+
+// TimeBucket classifies a time into a human-readable bucket relative to now.
+func TimeBucket(t time.Time) string {
+	if t.IsZero() {
+		return "Earlier"
+	}
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrow := today.Add(24 * time.Hour)
+	yesterday := today.Add(-24 * time.Hour)
+	weekday := today.Weekday()
+	mondayOffset := (int(weekday) - int(time.Monday) + 7) % 7
+	thisWeek := today.AddDate(0, 0, -mondayOffset)
+	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	threeMonthsAgo := thisMonth.AddDate(0, -3, 0)
+
+	switch {
+	case !t.Before(today) && t.Before(tomorrow):
+		return "Today"
+	case !t.Before(yesterday) && t.Before(today):
+		return "Yesterday"
+	case !t.Before(thisWeek):
+		return "This Week"
+	case !t.Before(thisMonth):
+		return "This Month"
+	case !t.Before(threeMonthsAgo):
+		return "Last 3 Months"
+	default:
+		return "Earlier"
+	}
+}
+
+func sortByActivityDesc(entries []SidebarEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if !entries[i].LastActivity.Equal(entries[j].LastActivity) {
+			return entries[i].LastActivity.After(entries[j].LastActivity)
+		}
+		return entries[i].WorkItemID < entries[j].WorkItemID
+	})
+}
+
+func reverseGroups(groups []groupedEntries) {
+	for i, j := 0, len(groups)-1; i < j; i, j = i+1, j-1 {
+		groups[i], groups[j] = groups[j], groups[i]
+	}
 }

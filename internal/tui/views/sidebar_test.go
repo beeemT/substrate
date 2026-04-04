@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -406,4 +407,370 @@ func thumbLineIndex(view string) int {
 		}
 	}
 	return -1
+}
+
+// Filter / Dimension / Direction tests
+
+func makeWorkItemEntry(id, extID string, state domain.SessionState, source string, lastActivity, createdAt time.Time) views.SidebarEntry {
+	return views.SidebarEntry{
+		Kind:         views.SidebarEntryWorkItem,
+		WorkItemID:   id,
+		ExternalID:   extID,
+		Source:       source,
+		Title:        "Session " + id,
+		State:        state,
+		LastActivity: lastActivity,
+		CreatedAt:    createdAt,
+	}
+}
+
+func TestFilterSidebarEntries(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionCompleted, "github", now, now),
+		makeWorkItemEntry("c", "gl:issue:1", domain.SessionFailed, "gitlab", now, now),
+		makeWorkItemEntry("d", "gh:issue:3", domain.SessionImplementing, "github", now, now),
+		makeWorkItemEntry("e", "gh:issue:4", domain.SessionPlanReview, "github", now, now),
+		makeWorkItemEntry("f", "gh:issue:5", domain.SessionIngested, "github", now, now),
+	}
+
+	t.Run("all", func(t *testing.T) {
+		got := views.FilterSidebarEntries(entries, views.SidebarFilterAll)
+		if len(got) != len(entries) {
+			t.Fatalf("expected %d entries, got %d", len(entries), len(got))
+		}
+	})
+
+	t.Run("active", func(t *testing.T) {
+		got := views.FilterSidebarEntries(entries, views.SidebarFilterActive)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 active entries, got %d", len(got))
+		}
+		for _, e := range got {
+			if e.Kind != views.SidebarEntryWorkItem {
+				continue
+			}
+			switch e.State {
+			case domain.SessionPlanning, domain.SessionPlanReview, domain.SessionImplementing, domain.SessionReviewing:
+			default:
+				t.Fatalf("unexpected state in active filter: %s", e.State)
+			}
+		}
+	})
+
+	t.Run("needs_attention", func(t *testing.T) {
+		// PlanReview entry only.
+		entries2 := []views.SidebarEntry{
+			makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+			makeWorkItemEntry("e", "gh:issue:4", domain.SessionPlanReview, "github", now, now),
+			{Kind: views.SidebarEntryWorkItem, WorkItemID: "h", State: domain.SessionImplementing, HasOpenQuestion: true, LastActivity: now, CreatedAt: now},
+			{Kind: views.SidebarEntryWorkItem, WorkItemID: "i", State: domain.SessionImplementing, HasInterrupted: true, LastActivity: now, CreatedAt: now},
+		}
+		got := views.FilterSidebarEntries(entries2, views.SidebarFilterNeedsAttention)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 attention entries, got %d", len(got))
+		}
+	})
+
+	t.Run("completed", func(t *testing.T) {
+		got := views.FilterSidebarEntries(entries, views.SidebarFilterCompleted)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 completed entries, got %d", len(got))
+		}
+		for _, e := range got {
+			if e.Kind != views.SidebarEntryWorkItem {
+				continue
+			}
+			if e.State != domain.SessionCompleted && e.State != domain.SessionFailed {
+				t.Fatalf("unexpected state in completed filter: %s", e.State)
+			}
+		}
+	})
+
+	t.Run("passes through non-work-item entries", func(t *testing.T) {
+		entries3 := []views.SidebarEntry{
+			{Kind: views.SidebarEntryTaskOverview, WorkItemID: "wi-1"},
+			makeWorkItemEntry("a", "gh:issue:1", domain.SessionCompleted, "github", now, now),
+		}
+		got := views.FilterSidebarEntries(entries3, views.SidebarFilterActive)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 entry (overview passthrough), got %d", len(got))
+		}
+		if got[0].Kind != views.SidebarEntryTaskOverview {
+			t.Fatalf("expected TaskOverview entry to pass through")
+		}
+	})
+}
+
+func TestApplyDimensionAndDirection_None(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionCompleted, "github", now.Add(-1*time.Hour), now),
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimNone, views.SidebarDirDesc)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
+	}
+	// Should be sorted by activity desc (a before b).
+	if got[0].WorkItemID != "a" {
+		t.Fatalf("expected 'a' first (most recent activity), got %q", got[0].WorkItemID)
+	}
+}
+
+func TestApplyDimensionAndDirection_State(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("c", "gh:issue:3", domain.SessionCompleted, "github", now, now),
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionFailed, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimState, views.SidebarDirDesc)
+	// Should have group headers + entries. Active first (a), then Completed (c), then Failed (b).
+	// Find the group headers.
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 group headers, got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Active") {
+		t.Fatalf("expected first group to be Active, got %q", groups[0])
+	}
+	if !strings.HasPrefix(groups[1], "Completed") {
+		t.Fatalf("expected second group to be Completed, got %q", groups[1])
+	}
+	if !strings.HasPrefix(groups[2], "Failed") {
+		t.Fatalf("expected third group to be Failed, got %q", groups[2])
+	}
+}
+
+func TestApplyDimensionAndDirection_State_Asc(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionFailed, "github", now, now),
+		makeWorkItemEntry("c", "gh:issue:3", domain.SessionCompleted, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimState, views.SidebarDirAsc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 group headers, got %d", len(groups))
+	}
+	// Asc reverses the natural order (Active, Review, Waiting, Completed, Failed).
+	// With Review and Waiting empty: Failed, Completed, Active.
+	if !strings.HasPrefix(groups[0], "Failed") {
+		t.Fatalf("expected first group to be Failed in asc, got %q", groups[0])
+	}
+	if !strings.HasPrefix(groups[1], "Completed") {
+		t.Fatalf("expected second group to be Completed in asc, got %q", groups[1])
+	}
+	if !strings.HasPrefix(groups[2], "Active") {
+		t.Fatalf("expected last group to be Active in asc, got %q", groups[2])
+	}
+}
+
+func TestApplyDimensionAndDirection_Source(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("c", "gl:issue:1", domain.SessionPlanning, "gitlab", now, now),
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionPlanning, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimSource, views.SidebarDirDesc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 group headers, got %d: %v", len(groups), groups)
+	}
+	// Desc: largest group first (Github has 2, Gitlab has 1).
+	if !strings.HasPrefix(groups[0], "Github") {
+		t.Fatalf("expected first group to be Github (largest), got %q", groups[0])
+	}
+	if !strings.HasPrefix(groups[1], "Gitlab") {
+		t.Fatalf("expected second group to be Gitlab, got %q", groups[1])
+	}
+}
+
+func TestApplyDimensionAndDirection_EmptyGroupsHidden(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimState, views.SidebarDirDesc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group header (Active only), got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Active") {
+		t.Fatalf("expected group to be Active, got %q", groups[0])
+	}
+}
+
+func TestApplyDimensionAndDirection_State_ReviewGroup(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionPlanReview, "github", now, now),
+		makeWorkItemEntry("c", "gh:issue:3", domain.SessionReviewing, "github", now, now),
+		makeWorkItemEntry("d", "gh:issue:4", domain.SessionCompleted, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimState, views.SidebarDirDesc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 group headers (Active, Review, Completed), got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Active") {
+		t.Fatalf("expected first group to be Active, got %q", groups[0])
+	}
+	if !strings.HasPrefix(groups[1], "Review") {
+		t.Fatalf("expected second group to be Review, got %q", groups[1])
+	}
+	if !strings.HasPrefix(groups[2], "Completed") {
+		t.Fatalf("expected third group to be Completed, got %q", groups[2])
+	}
+}
+
+func TestTimeBucket(t *testing.T) {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
+	yesterday := today.Add(-24 * time.Hour)
+	thisWeek := today.AddDate(0, 0, -int(now.Weekday()-time.Monday))
+	if thisWeek.After(today) {
+		thisWeek = today
+	}
+	// For "this month", we need a date after thisWeek's Monday midnight but before today.
+	// When thisWeek spans into this month, the day after Monday may still be in this week.
+	// Use the Sunday of this week + 1 day if it's still before today and in this month.
+	thisWeekMonday := time.Date(thisWeek.Year(), thisWeek.Month(), thisWeek.Day(), 0, 0, 0, 0, now.Location())
+	thisWeekSunday := thisWeekMonday.AddDate(0, 0, 7)        // midnight of next Monday
+	thisMonthCandidate := thisWeekSunday.Add(12 * time.Hour) // noon on next Monday
+	thisMonthValid := thisMonthCandidate.Before(today) && thisMonthCandidate.Month() == now.Month()
+	twoMonthsAgo := time.Date(now.Year(), now.Month()-2, 15, 12, 0, 0, 0, now.Location())
+	veryOld := time.Date(2020, 1, 1, 0, 0, 0, 0, now.Location())
+
+	tests := []struct {
+		name   string
+		t      time.Time
+		want   string
+		skipIf bool
+	}{
+		{"today", today, "Today", false},
+		{"yesterday", yesterday, "Yesterday", false},
+		{"this week", thisWeek, "This Week", false},
+		{"this month", thisMonthCandidate, "This Month", !thisMonthValid},
+		{"two months ago", twoMonthsAgo, "Last 3 Months", false},
+		{"very old", veryOld, "Earlier", false},
+		{"zero time", time.Time{}, "Earlier", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skipIf {
+				t.Skipf("skipping: no suitable date for %q test in current week/month", tt.name)
+			}
+			got := views.TimeBucket(tt.t)
+			if got != tt.want {
+				t.Fatalf("TimeBucket(%v) = %q, want %q", tt.t, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSidebarStatusLabel(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	// Default state: no label.
+	if got := m.StatusLabel(); got != "" {
+		t.Fatalf("expected empty status label at default, got %q", got)
+	}
+
+	m.CycleFilter()
+	if got := m.StatusLabel(); got != "active" {
+		t.Fatalf("expected 'active' after one filter cycle, got %q", got)
+	}
+
+	m.CycleDimension()
+	// Should contain both 'active' and a dimension label.
+	got := m.StatusLabel()
+	if !strings.Contains(got, "active") || !strings.Contains(got, "state") {
+		t.Fatalf("expected label to contain 'active' and 'state', got %q", got)
+	}
+}
+
+func TestSidebarCycleFilter(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	// Cycle through all 4 filter modes.
+	expected := []views.SidebarFilter{
+		views.SidebarFilterActive,
+		views.SidebarFilterNeedsAttention,
+		views.SidebarFilterCompleted,
+		views.SidebarFilterAll,
+	}
+	for _, want := range expected {
+		m.CycleFilter()
+		if got := m.FilterMode(); got != want {
+			t.Fatalf("CycleFilter() = %d, want %d", got, want)
+		}
+	}
+}
+
+func TestSidebarCycleDimension(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	expected := []views.SidebarDimension{
+		views.SidebarDimState,
+		views.SidebarDimSource,
+		views.SidebarDimCreated,
+		views.SidebarDimActivity,
+		views.SidebarDimNone,
+	}
+	for _, want := range expected {
+		m.CycleDimension()
+		if got := m.DimensionMode(); got != want {
+			t.Fatalf("CycleDimension() = %d, want %d", got, want)
+		}
+	}
+}
+
+func TestSidebarToggleDirection(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	if got := m.DirectionMode(); got != views.SidebarDirDesc {
+		t.Fatalf("expected default direction Desc, got %d", got)
+	}
+	m.ToggleDirection()
+	if got := m.DirectionMode(); got != views.SidebarDirAsc {
+		t.Fatalf("expected Asc after toggle, got %d", got)
+	}
+	m.ToggleDirection()
+	if got := m.DirectionMode(); got != views.SidebarDirDesc {
+		t.Fatalf("expected Desc after second toggle, got %d", got)
+	}
 }

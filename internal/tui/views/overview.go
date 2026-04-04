@@ -432,9 +432,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, nil
 				case overviewActionCompleted:
-					m.openCompletedOverlayForChanges()
-
-					return m, nil
+					return m, m.openCompletedOverlayForChanges()
 				}
 			}
 		case "r":
@@ -528,11 +526,12 @@ func (m *SessionOverviewModel) openPlanOverlayForChanges() {
 
 // openCompletedOverlayForChanges resets the follow-up feedback input,
 // activates it, and opens the completed overlay.
-func (m *SessionOverviewModel) openCompletedOverlayForChanges() {
+func (m *SessionOverviewModel) openCompletedOverlayForChanges() tea.Cmd {
 	m.completed.feedbackInput.SetValue("")
 	m.completed.inputActive = true
-	m.completed.feedbackInput.Focus()
+	cmd := m.completed.feedbackInput.Focus()
 	m.overlay = overviewOverlayCompleted
+	return cmd
 }
 
 func (m *SessionOverviewModel) syncActionModels() {

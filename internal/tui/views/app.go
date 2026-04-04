@@ -1626,6 +1626,33 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.sidebar.GotoBottom()
 		cmd = a.onSidebarMove()
 		return a, cmd
+	case "f":
+		if a.mainFocus == mainFocusContent {
+			break
+		}
+		if a.sidebarMode == sidebarPaneSessions {
+			a.sidebar.CycleFilter()
+			a.rebuildSidebar()
+			return a, nil
+		}
+	case "o":
+		if a.mainFocus == mainFocusContent {
+			break
+		}
+		if a.sidebarMode == sidebarPaneSessions {
+			a.sidebar.CycleDimension()
+			a.rebuildSidebar()
+			return a, nil
+		}
+	case "t":
+		if a.mainFocus == mainFocusContent {
+			break
+		}
+		if a.sidebarMode == sidebarPaneSessions {
+			a.sidebar.ToggleDirection()
+			a.rebuildSidebar()
+			return a, nil
+		}
 	case "?":
 		a.activeOverlay = overlayHelp
 		return a, nil
@@ -2081,6 +2108,7 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 		Title:        wi.Title,
 		State:        wi.State,
 		LastActivity: wi.UpdatedAt,
+		CreatedAt:    wi.CreatedAt,
 	}
 	if plan := a.plans[wi.ID]; plan != nil {
 		sps := a.subPlans[plan.ID]
@@ -2323,6 +2351,8 @@ func (a *App) rebuildSidebar() {
 	a.sidebarMode = sidebarPaneSessions
 	a.sidebar.SetTitle("Sessions")
 	entries := a.sessionSidebarEntries()
+	entries = FilterSidebarEntries(entries, a.sidebar.FilterMode())
+	entries = ApplyDimensionAndDirection(entries, a.sidebar.DimensionMode(), a.sidebar.DirectionMode())
 	a.sidebar.SetEntries(entries)
 	a.content.SetSessionStats(a.computeSessionStats(entries))
 	if a.currentWorkItemID == "" {
@@ -2335,8 +2365,15 @@ func (a *App) rebuildSidebar() {
 }
 
 // computeSessionStats derives aggregate counts from sidebar entries.
+// Only work items and task overviews count toward totals; group headers are excluded.
 func (a App) computeSessionStats(entries []SidebarEntry) SessionStats {
-	stats := SessionStats{TotalSessions: len(entries)}
+	total := 0
+	for _, e := range entries {
+		if e.Kind == SidebarEntryWorkItem || e.Kind == SidebarEntryTaskOverview {
+			total++
+		}
+	}
+	stats := SessionStats{TotalSessions: total}
 	for _, e := range entries {
 		if e.Kind != SidebarEntryWorkItem {
 			continue
