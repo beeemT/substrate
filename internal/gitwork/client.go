@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,49 @@ func (c *Client) Checkout(ctx context.Context, repoDir, branch string) (string, 
 	path := strings.TrimSpace(string(output))
 	if path == "" {
 		return "", fmt.Errorf("git-work checkout -b %s: empty output", branch)
+	}
+
+	return path, nil
+}
+
+// Clone clones a remote repository into the workspace using git-work clone.
+// It runs git-work clone <remoteURL> with cmd.Dir = parentDir.
+// git-work clone creates <parentDir>/<repo-name>/.bare/ layout and a worktree for HEAD.
+// It parses stdout for the directory path and validates the path is under parentDir.
+// Returns the absolute path to the created repository root.
+func (c *Client) Clone(ctx context.Context, parentDir, remoteURL string) (string, error) {
+	args := []string{"clone", remoteURL}
+	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd.Dir = parentDir
+
+	// git-work clone outputs the repository path to stdout
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			slog.Error("git-work clone failed", "url", remoteURL, "dir", parentDir, "err", err, "stderr", string(exitErr.Stderr))
+			return "", fmt.Errorf("git-work clone %s: %w (stderr: %s)", remoteURL, err, string(exitErr.Stderr))
+		}
+
+		slog.Error("git-work clone failed", "url", remoteURL, "dir", parentDir, "err", err)
+		return "", fmt.Errorf("git-work clone %s: %w", remoteURL, err)
+	}
+
+	path := strings.TrimSpace(string(output))
+	if path == "" {
+		slog.Error("git-work clone returned empty output", "url", remoteURL, "dir", parentDir)
+		return "", fmt.Errorf("git-work clone %s: empty output", remoteURL)
+	}
+
+	// Validate the returned path is under parentDir (path traversal guard)
+	rel, err := filepath.Rel(parentDir, path)
+	if err != nil {
+		slog.Error("failed to resolve clone path", "path", path, "parent", parentDir, "err", err)
+		return "", fmt.Errorf("resolve clone path: %w", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		slog.Error("clone path escapes parent directory", "path", path, "parent", parentDir)
+		return "", fmt.Errorf("invalid clone path %q: escapes parent directory", path)
 	}
 
 	return path, nil
