@@ -20,12 +20,8 @@ import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
 const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL || undefined;
-const allowPushEnv = process.env.SUBSTRATE_ALLOW_PUSH ?? "false";
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
-
 let systemPrompt: string | undefined;
-// biome-ignore lint/correctness/noUnusedVariables: allowPush is read by bridge consumers
-const allowPush = allowPushEnv === "true";
 
 const agentToolNames =
   mode === "agent" ? ["read", "grep", "find", "edit", "write", "bash"] : ["read", "grep", "find"];

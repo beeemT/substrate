@@ -283,3 +283,18 @@ func TestClone_PathTraversalReturnsError(t *testing.T) {
 		t.Errorf("error = %q, want it to contain \"escapes parent directory\"", err.Error())
 	}
 }
+
+func TestClone_DotPrefixedDirNameAccepted(t *testing.T) {
+	t.Parallel()
+	parentDir := t.TempDir()
+	// A directory starting with ".." but not a traversal should be accepted.
+	expectedPath := filepath.Join(parentDir, "..config")
+	bin := writeFakeBin(t, expectedPath+"\n", 0)
+	path, err := NewClient(bin).Clone(context.Background(), parentDir, "https://example.com/repo")
+	if err != nil {
+		t.Fatalf("unexpected error for ..config dir: %v", err)
+	}
+	if path != expectedPath {
+		t.Errorf("path = %q, want %q", path, expectedPath)
+	}
+}

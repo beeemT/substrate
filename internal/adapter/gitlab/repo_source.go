@@ -99,7 +99,7 @@ func (s *GitlabRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListO
 	if err != nil {
 		return nil, fmt.Errorf("parse base url: %w", err)
 	}
-	fullURL.Path = endpoint
+	fullURL.Path = path.Join(fullURL.Path, endpoint)
 	fullURL.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL.String(), nil)

@@ -15,7 +15,7 @@ type RepoSource interface {
 type RepoListOpts struct {
 	Search string // text filter -- when non-empty, repo sources use their provider's search API
 	Limit  int    // max results per page
-	Page   int    // pagination offset
+	Page   int    // 1-indexed page number
 }
 
 // RepoListResult holds a page of repository results.

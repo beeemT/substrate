@@ -178,7 +178,7 @@ func parseListJSON(data []byte, repoDir string) ([]Worktree, error) {
 			if err != nil {
 				return nil, fmt.Errorf("resolve worktree path: %w", err)
 			}
-			if strings.HasPrefix(rel, "..") {
+			if rel == ".." || strings.HasPrefix(rel, "../") {
 				return nil, fmt.Errorf("invalid worktree path %q: escapes repo directory", e.Dir)
 			}
 		}
