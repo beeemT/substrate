@@ -1036,16 +1036,20 @@ func WaitForLogToastCmd(ch <-chan tuilog.ToastEntry) tea.Cmd {
 	}
 }
 
-// LoadReposCmd fetches repos from the first configured repo source.
-func LoadReposCmd(sources []adapter.RepoSource, search string, limit int) tea.Cmd {
+// LoadReposCmd fetches repos from the repo source at sourceIndex.
+func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, limit int) tea.Cmd {
 	return func() tea.Msg {
 		if len(sources) == 0 {
 			return RepoListLoadedMsg{Repos: []adapter.RepoItem{}}
 		}
+		idx := sourceIndex
+		if idx < 0 || idx >= len(sources) {
+			idx = 0
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		opts := adapter.RepoListOpts{Search: search, Limit: limit, Page: 1}
-		result, err := sources[0].ListRepos(ctx, opts)
+		result, err := sources[idx].ListRepos(ctx, opts)
 		if err != nil {
 			return RepoListLoadedMsg{Errs: []error{err}}
 		}
