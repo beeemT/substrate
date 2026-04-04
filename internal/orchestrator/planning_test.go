@@ -676,7 +676,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 //     Steps 1-2 repeated three times (sessions 01KMDVM6, 01KME1D5, 01KME3JY).
 //
 // Fix: Plan() now looks up any existing plan (regardless of status) and passes its ID as
-// replacePlanID, so CreatePlanAtomic can delete it atomically before inserting.
+// replacePlanID, so CreatePlanAtomic can supersede it atomically before inserting.
 func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 	workspaceRoot := filepath.Join(tmpDir, "workspace")
