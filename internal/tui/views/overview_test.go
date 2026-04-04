@@ -413,8 +413,8 @@ func TestCompletedActionCardCOpensFollowUpInput(t *testing.T) {
 	})
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if cmd != nil {
-		t.Fatalf("[c] returned cmd %v, want nil", cmd)
+	if cmd == nil {
+		t.Fatal("[c] should return Focus cmd for the feedback input, got nil")
 	}
 	if updated.overlay != overviewOverlayCompleted {
 		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)

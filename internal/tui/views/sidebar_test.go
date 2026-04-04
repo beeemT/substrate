@@ -600,12 +600,12 @@ func TestApplyDimensionAndDirection_Source(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 group headers, got %d: %v", len(groups), groups)
 	}
-	// Desc: largest group first (Github has 2, Gitlab has 1).
-	if !strings.HasPrefix(groups[0], "Github") {
-		t.Fatalf("expected first group to be Github (largest), got %q", groups[0])
+	// Desc: largest group first (GitHub has 2, GitLab has 1).
+	if !strings.HasPrefix(groups[0], "GitHub") {
+		t.Fatalf("expected first group to be GitHub (largest), got %q", groups[0])
 	}
-	if !strings.HasPrefix(groups[1], "Gitlab") {
-		t.Fatalf("expected second group to be Gitlab, got %q", groups[1])
+	if !strings.HasPrefix(groups[1], "GitLab") {
+		t.Fatalf("expected second group to be GitLab, got %q", groups[1])
 	}
 }
 
