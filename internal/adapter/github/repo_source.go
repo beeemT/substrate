@@ -10,7 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time",
+	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
@@ -187,4 +187,3 @@ func mapGithubRepos(items []githubRepoItem) []adapter.RepoItem {
 	}
 	return repos
 }
-
