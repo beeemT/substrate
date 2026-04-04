@@ -3,8 +3,8 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
-	"errors",
-	"net/http",
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
