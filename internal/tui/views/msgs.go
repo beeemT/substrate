@@ -270,6 +270,28 @@ type OpenSourceItemsOverlayMsg struct {
 // when the user confirms opening one or more source item URLs.
 type openSourceItemURLsMsg struct{ URLs []string }
 
+// ShowAddRepoMsg opens the Add Repository overlay.
+type ShowAddRepoMsg struct{}
+
+// RepoListLoadedMsg carries fetched repos from repo sources.
+type RepoListLoadedMsg struct {
+	Repos   []adapter.RepoItem
+	HasMore bool
+	Errs    []error
+}
+
+// AddRepoCloneMsg fires when user confirms cloning a repo.
+type AddRepoCloneMsg struct {
+	Repo     adapter.RepoItem
+	CloneDir string // workspaceDir
+}
+
+// RepoClonedMsg fires when git-work clone completes.
+type RepoClonedMsg struct {
+	RepoPath string
+	Err      error
+}
+
 // --- Workspace Init ---
 
 // WorkspaceHealthCheckMsg carries the result of a workspace scan during init.

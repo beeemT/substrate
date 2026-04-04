@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/app/remotedetect"
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -1032,5 +1033,32 @@ func WaitForLogToastCmd(ch <-chan tuilog.ToastEntry) tea.Cmd {
 			Level:   entry.Level.String(),
 			Message: entry.Message,
 		}
+	}
+}
+
+// LoadReposCmd fetches repos from the first configured repo source.
+func LoadReposCmd(sources []adapter.RepoSource, search string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		if len(sources) == 0 {
+			return RepoListLoadedMsg{Repos: []adapter.RepoItem{}}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		opts := adapter.RepoListOpts{Search: search, Limit: limit, Page: 1}
+		result, err := sources[0].ListRepos(ctx, opts)
+		if err != nil {
+			return RepoListLoadedMsg{Errs: []error{err}}
+		}
+		return RepoListLoadedMsg{Repos: result.Repos, HasMore: result.HasMore}
+	}
+}
+
+// CloneRepoCmd runs git-work clone and returns the result.
+func CloneRepoCmd(gitClient *gitwork.Client, workspaceDir, cloneURL string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		path, err := gitClient.Clone(ctx, workspaceDir, cloneURL)
+		return RepoClonedMsg{RepoPath: path, Err: err}
 	}
 }
