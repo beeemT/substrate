@@ -23,9 +23,6 @@ func TestStatusBarHasNoBorderOrSeparator(t *testing.T) {
 	plain := stripANSI(rendered)
 	lines := strings.Split(plain, "\n")
 
-	if len(lines) != 1 {
-		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
-	}
 	if got := len([]rune(lines[0])); got != 40 {
 		t.Fatalf("content width = %d, want 40; line=%q", got, lines[0])
 	}
@@ -55,9 +52,6 @@ func TestStatusBarDropsHintsBeforeWrappingRightText(t *testing.T) {
 	plain := stripANSI(rendered)
 	lines := strings.Split(plain, "\n")
 
-	if len(lines) != 1 {
-		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
-	}
 	if got := len([]rune(lines[0])); got != 12 {
 		t.Fatalf("content width = %d, want 12; line=%q", got, lines[0])
 	}
@@ -78,9 +72,6 @@ func TestStatusBarPreservesLeadingContextualHintWhenSpaceIsTight(t *testing.T) {
 	plain := stripANSI(rendered)
 	lines := strings.Split(plain, "\n")
 
-	if len(lines) != 1 {
-		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
-	}
 	if got := len([]rune(lines[0])); got != 32 {
 		t.Fatalf("content width = %d, want 32; line=%q", got, lines[0])
 	}
@@ -101,9 +92,6 @@ func TestStatusBarKeepsDeleteKeyVisibleWhenHintTextMustTruncate(t *testing.T) {
 	plain := stripANSI(rendered)
 	lines := strings.Split(plain, "\n")
 
-	if len(lines) != 1 {
-		t.Fatalf("status bar line count = %d, want 1; plain=%q", len(lines), plain)
-	}
 	if got := len([]rune(lines[0])); got != 12 {
 		t.Fatalf("content width = %d, want 12; line=%q", got, lines[0])
 	}

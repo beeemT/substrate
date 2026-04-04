@@ -78,8 +78,8 @@ type MainPageLayout struct {
 }
 
 // ComputeMainPageLayout computes the app shell pane sizes from the shared chrome metrics.
-func ComputeMainPageLayout(totalWidth, totalHeight, sidebarInnerWidth int, chrome ChromeMetrics) MainPageLayout {
-	bodyHeight := maxInt(0, totalHeight-chrome.StatusBarHeight)
+func ComputeMainPageLayout(totalWidth, totalHeight, sidebarInnerWidth int, chrome ChromeMetrics, statusBarHeight int) MainPageLayout {
+	bodyHeight := maxInt(0, totalHeight-statusBarHeight)
 	paneInnerHeight := chrome.Pane.InnerHeight(bodyHeight)
 
 	sidebarPaneWidth := minInt(maxInt(0, totalWidth), maxInt(0, sidebarInnerWidth)+chrome.Pane.HorizontalFrame())

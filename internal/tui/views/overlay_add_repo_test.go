@@ -141,7 +141,7 @@ func TestAddRepoOverlay_ManualModeToggle(t *testing.T) {
 	m.SetSize(120, 40)
 	m.Open()
 
-	ctrlN := tea.KeyMsg{Type: tea.KeyCtrl, Name: "ctrl+n"}
+	ctrlN := tea.KeyMsg{Type: tea.KeyCtrlN}
 	m, _ = m.Update(ctrlN)
 
 	v := m.View()

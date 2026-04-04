@@ -1827,7 +1827,7 @@ func (a *App) widthForInnerContent() int {
 	if a.windowWidth <= 0 || a.windowHeight <= 0 {
 		return 72
 	}
-	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
+	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome, a.statusBar.RequiredHeight(a.currentHints(), a.statusBarText(), a.windowWidth))
 	if layout.ContentInnerWidth > 0 {
 		return layout.ContentInnerWidth
 	}

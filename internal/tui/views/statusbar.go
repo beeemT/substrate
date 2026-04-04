@@ -10,9 +10,6 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-// statusBarHeight is the single footer row at the bottom of the main page.
-const statusBarHeight = 1
-
 // StatusBarModel renders the footer content at the bottom.
 type StatusBarModel struct {
 	styles styles.Styles
@@ -35,7 +32,7 @@ func NewStatusBarModel(st styles.Styles) StatusBarModel {
 	}
 }
 
-// View renders the keybind hints and right-aligned metadata within one footer row.
+// View renders the keybind hints and right-aligned metadata within one or two footer rows.
 func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) string {
 	if width <= 0 {
 		return ""
@@ -53,11 +50,92 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 		innerWidth = width - 2
 	}
 
+	fitted, overflow, effectiveRight := statusBarFitLine1(s.styles, hints, rightText, width)
+
+	reordered := reorderStatusBarHintParts(fitted)
+	leftRaw := joinStatusBarHintRaw(reordered)
+	left := joinStatusBarHintRendered(reordered)
+	leftLen := lipgloss.Width(leftRaw)
+	right := s.styles.Muted.Render(effectiveRight)
+	rightLen := lipgloss.Width(effectiveRight)
+	gapLen := max(innerWidth-leftLen-rightLen, 0)
+
+	line1 := left + strings.Repeat(" ", gapLen) + right
+	lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
+	result := lineStyle.Render(line1)
+
+	if line2Parts := statusBarFitLine2(overflow, innerWidth); len(line2Parts) > 0 {
+		line2 := joinStatusBarHintRendered(line2Parts)
+		line2RawLen := lipgloss.Width(joinStatusBarHintRaw(line2Parts))
+		line2PadLen := max(innerWidth-line2RawLen, 0)
+		line2 += strings.Repeat(" ", line2PadLen)
+		result += "\n" + lineStyle.Render(line2)
+	}
+
+	*s.cachedView = result
+	*s.cachedHints = hintsFP
+	*s.cachedText = rightText
+	*s.cachedWidth = width
+
+	return result
+}
+
+// ViewN renders the status bar into exactly n lines.
+// When RequiredHeight < n, line 2 is padded as an empty status-bar-styled row.
+// When n == 1 but overflow exists, the overflow hints are silently dropped.
+// This guarantees the caller can allocate n rows for the footer and get exactly n rows back.
+func (s StatusBarModel) ViewN(hints []KeybindHint, rightText string, width, n int) string {
+	content := s.View(hints, rightText, width)
+	lines := strings.Split(content, "\n")
+	for len(lines) < n {
+		// Pad with an empty styled row of the correct width.
+		horizontalPadding := 0
+		if width >= 2 {
+			horizontalPadding = 1
+		}
+		lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
+		lines = append(lines, lineStyle.Render(""))
+	}
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// RequiredHeight returns the number of terminal lines needed to render the status bar.
+// It returns 2 when hints overflow line 1 and at least one overflow hint fits on line 2;
+// otherwise 1.
+func (s StatusBarModel) RequiredHeight(hints []KeybindHint, rightText string, width int) int {
+	_, overflow, _ := statusBarFitLine1(s.styles, hints, rightText, width)
+	if len(overflow) == 0 {
+		return 1
+	}
+	innerWidth := width
+	if width >= 2 {
+		innerWidth = width - 2
+	}
+	if len(statusBarFitLine2(overflow, innerWidth)) > 0 {
+		return 2
+	}
+	return 1
+}
+
+// statusBarFitLine1 determines which hints fit on line 1 alongside rightText
+// and returns (fittedParts, overflowParts, effectiveRightText).
+func statusBarFitLine1(st styles.Styles, hints []KeybindHint, rightText string, width int) (fitted, overflow []statusBarHintPart, effectiveRight string) {
+	if width <= 0 {
+		return nil, nil, ""
+	}
+
+	innerWidth := width
+	if width >= 2 {
+		innerWidth = width - 2
+	}
+
 	preserveLeading := hasContextualLeadingHint(hints) && len(hints) > 0
-	parts := renderStatusBarHintParts(s.styles, hints, innerWidth, preserveLeading)
+	allParts := renderStatusBarHintParts(st, hints, innerWidth, preserveLeading)
 
 	rightText = truncate(rightText, innerWidth)
-	right := s.styles.Muted.Render(rightText)
 	rightLen := lipgloss.Width(rightText)
 
 	requiredGap := 0
@@ -66,15 +144,19 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 	}
 
 	minParts := 0
-	if preserveLeading && len(parts) > 0 {
+	if preserveLeading && len(allParts) > 0 {
 		minParts = 1
 	}
-	leftRaw := joinStatusBarHintRaw(parts)
-	for len(parts) > minParts && lipgloss.Width(leftRaw)+rightLen+requiredGap > innerWidth {
-		parts = parts[:len(parts)-1]
-		leftRaw = joinStatusBarHintRaw(parts)
+
+	fittedCount := len(allParts)
+	leftRaw := joinStatusBarHintRaw(allParts[:fittedCount])
+	for fittedCount > minParts && lipgloss.Width(leftRaw)+rightLen+requiredGap > innerWidth {
+		fittedCount--
+		leftRaw = joinStatusBarHintRaw(allParts[:fittedCount])
 	}
-	if preserveLeading && len(parts) == 1 {
+
+	effectiveRight = rightText
+	if preserveLeading && fittedCount == 1 {
 		leftLen := lipgloss.Width(leftRaw)
 		if leftLen+rightLen+requiredGap > innerWidth {
 			availableRight := innerWidth - leftLen
@@ -82,32 +164,26 @@ func (s StatusBarModel) View(hints []KeybindHint, rightText string, width int) s
 				availableRight--
 			}
 			if availableRight <= 0 {
-				rightText = ""
+				effectiveRight = ""
 			} else {
-				rightText = truncate(rightText, availableRight)
+				effectiveRight = truncate(rightText, availableRight)
 			}
-			right = s.styles.Muted.Render(rightText)
-			rightLen = lipgloss.Width(rightText)
 		}
 	}
 
-	parts = reorderStatusBarHintParts(parts)
-	leftRaw = joinStatusBarHintRaw(parts)
-	left := joinStatusBarHintRendered(parts)
-	leftLen := lipgloss.Width(leftRaw)
-	gapLen := max(innerWidth-leftLen-rightLen, 0)
+	return allParts[:fittedCount], allParts[fittedCount:], effectiveRight
+}
 
-	line := left + strings.Repeat(" ", gapLen) + right
-	lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
-
-	result := lineStyle.Render(line)
-
-	*s.cachedView = result
-	*s.cachedHints = hintsFP
-	*s.cachedText = rightText
-	*s.cachedWidth = width
-
-	return result
+// statusBarFitLine2 drops trailing overflow hints that don't fit on line 2.
+func statusBarFitLine2(overflow []statusBarHintPart, innerWidth int) []statusBarHintPart {
+	parts := overflow
+	for len(parts) > 0 && lipgloss.Width(joinStatusBarHintRaw(parts)) > innerWidth {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
 }
 
 type statusBarHintPart struct {

@@ -285,13 +285,15 @@ func (m AddRepoOverlay) browserLayout() components.SplitOverlayLayout {
 	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, addRepoSizingSpec)
 }
 
-// browserChromeLines counts the header, search, divider, and hint lines.
+// browserChromeLines counts all lines outside the pane body.
 func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
+	// Frame borders (top + bottom) = 2
+	// Blank separator between header and body (added by RenderOverlayFrame) = 1
 	// Header: title + source labels + search input = 3 lines
-	// Divider: 1 line
-	// Hint footer: 1+ lines
+	// Divider line at top of browserView = 1
+	// Hint footer = 1+ lines
 	hintLines := addRepoHintLineCount(renderWidth)
-	return 3 + 1 + hintLines
+	return 2 + 1 + 3 + 1 + hintLines
 }
 
 // resizeInputs sets the input widths to the layout input width.
@@ -567,7 +569,7 @@ func (m *AddRepoOverlay) manualView(width int) string {
 	if m.cloning {
 		cloneStatus = "\n" + m.styles.Muted.Render("Cloning…")
 	} else if m.cloneError != "" {
-		cloneStatus = "\n" + m.styles.Error.Render("Error: " + m.cloneError)
+		cloneStatus = "\n" + m.styles.Error.Render("Error: "+m.cloneError)
 	}
 	return strings.Join([]string{
 		urlLabel + m.manualURL.View(),

@@ -101,7 +101,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	helpOverlay        HelpOverlay
 	sourceItemsOverlay SourceItemsOverlay
 	logsOverlay        LogsOverlay
-	addRepo         AddRepoOverlay
+	addRepo            AddRepoOverlay
 	hasWorkspace       bool
 
 	// Toasts
@@ -147,6 +147,10 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// Terminal size
 	windowWidth  int
 	windowHeight int
+	// sbHeight is the number of footer rows allocated for the status bar.
+	// Computed on WindowSizeMsg and used by both Update (for SetSize) and View (for layout).
+	// Keeping it stable across focus changes prevents body height from flickering.
+	sbHeight int
 
 	// Cached base render (sidebar + content + status bar) for overlay
 	// compositing. Pointer so the value survives Bubble Tea's value-receiver
@@ -192,6 +196,7 @@ func NewApp(svcs Services) App {
 		sessionsDir:                    sessionsDir,
 		hasWorkspace:                   svcs.WorkspaceID != "",
 		cachedBase:                     new(string),
+		sbHeight:                       1, // conservative default; updated on first WindowSizeMsg
 	}
 
 	if !app.hasWorkspace {
@@ -448,7 +453,6 @@ func (a *App) openAddRepo() tea.Cmd {
 	a.addRepo.Open()
 	return a.addRepo.reloadRepos()
 }
-
 
 func (a App) currentHints() []KeybindHint {
 	global := DefaultHints()
@@ -815,7 +819,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.windowHeight = msg.Height
 		*a.cachedBase = ""
 		a.toasts.SetWidth(msg.Width)
-		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome)
+		sbHeight := a.statusBar.RequiredHeight(a.currentHints(), a.statusBarText(), msg.Width)
+		a.sbHeight = sbHeight
+		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome, sbHeight)
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
 		a.sidebar.SetHeight(layout.PaneInnerHeight)
 		a.content.SetSize(appContentBodyWidth(layout.ContentInnerWidth), layout.PaneInnerHeight)
@@ -2457,7 +2463,12 @@ func (a App) View() string {
 		return a.applyToasts(renderCenteredOverlay(base, overlay, a.windowWidth, a.windowHeight))
 	}
 
-	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome)
+	hints := a.currentHints()
+	rightText := a.statusBarText()
+	// Use the sbHeight stored on the last WindowSizeMsg so body height is stable
+	// across focus changes that alter the hint set between resizes.
+	sbHeight := max(1, a.sbHeight)
+	layout := styles.ComputeMainPageLayout(a.windowWidth, a.windowHeight, SidebarWidth, a.statusBar.styles.Chrome, sbHeight)
 	overlayActive := a.overviewOverlayOpen()
 
 	// Each sub-model's View() already produces output sized to (width, height)
@@ -2501,8 +2512,7 @@ func (a App) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, bodyParts...)
 
-	hints := a.currentHints()
-	statusBar := a.statusBar.View(hints, a.statusBarText(), a.windowWidth)
+	statusBar := a.statusBar.ViewN(hints, rightText, a.windowWidth, sbHeight)
 
 	base := lipgloss.JoinVertical(lipgloss.Left, body, statusBar)
 	*a.cachedBase = base

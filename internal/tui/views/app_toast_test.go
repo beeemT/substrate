@@ -96,7 +96,7 @@ func TestAppView_RendersToastInUpperRightWithoutGrowingLayout(t *testing.T) {
 	if toastLine > 2 {
 		t.Fatalf("toast line = %d, want toast near the top of the view", toastLine)
 	}
-	for i := len(withToast) - statusBarHeight; i < len(withToast); i++ {
+	for i := len(withToast) - 2; i < len(withToast); i++ {
 		if i >= 0 && strings.Contains(withToast[i], "Workspace") {
 			t.Fatalf("toast rendered in status bar line %d: %q", i, withToast[i])
 		}

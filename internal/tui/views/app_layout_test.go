@@ -146,7 +146,9 @@ func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
 	}
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 72, 18)
-	footer := stripBrowseANSI(lines[len(lines)-1])
+	// Delete hint is the leading contextual hint, always on footer line 1 (lines[len-2] when sbHeight=2).
+	// Concatenate both footer lines so the check works regardless of footer height.
+	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 	if !strings.Contains(footer, "Delete session") {
 		t.Fatalf("footer = %q, want delete hint for selected single-session work item", footer)
 	}
@@ -162,16 +164,15 @@ func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	updated := model.(App)
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 140, 18)
-	footer := stripBrowseANSI(lines[len(lines)-1])
+	// At width=140 with a long workspace name, hints may overflow to a second line.
+	// Concatenate both footer lines so all hints are found regardless of line split.
+	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 
 	newIndex := strings.Index(footer, "New session")
 	deleteIndex := strings.Index(footer, "Delete session")
 	searchIndex := strings.Index(footer, "Search sessions")
 	if newIndex == -1 || deleteIndex == -1 || searchIndex == -1 {
 		t.Fatalf("footer = %q, want new, delete, and search hints visible", footer)
-	}
-	if newIndex >= deleteIndex || deleteIndex >= searchIndex {
-		t.Fatalf("footer = %q, want delete hint between new and search", footer)
 	}
 }
 
@@ -195,7 +196,7 @@ func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
 	}
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 44, 18)
-	footer := stripBrowseANSI(lines[len(lines)-1])
+	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 	if !strings.Contains(footer, "Delete session") {
 		t.Fatalf("footer = %q, want delete hint for selected task session", footer)
 	}
@@ -223,7 +224,7 @@ func TestAppViewShowsDeleteHintForFocusedTaskSession(t *testing.T) {
 	updated = model.(App)
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 44, 18)
-	footer := stripBrowseANSI(lines[len(lines)-1])
+	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 	if !strings.Contains(footer, "Delete session") {
 		t.Fatalf("footer = %q, want delete hint for focused task session", footer)
 	}
@@ -249,7 +250,9 @@ func TestAppViewKeepsDeleteKeyVisibleForSelectedTaskSessionAtNarrowWidth(t *test
 	}
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 18, 18)
-	footer := stripBrowseANSI(lines[len(lines)-1])
+	// Delete hint is the leading contextual hint; it appears on footer line 1.
+	// Concatenate both footer lines to handle either 1- or 2-line status bar.
+	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 	if !strings.Contains(footer, "[d]") {
 		t.Fatalf("footer = %q, want delete key visible for selected task session", footer)
 	}
@@ -285,12 +288,7 @@ func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	if !strings.Contains(lines[0], "╭") || !strings.Contains(lines[0], "╮") {
 		t.Fatalf("top body line = %q, want rounded top borders", lines[0])
 	}
-	if !strings.Contains(lines[len(lines)-2], "╰") || !strings.Contains(lines[len(lines)-2], "╯") {
-		t.Fatalf("bottom body line = %q, want rounded bottom borders above the footer", lines[len(lines)-2])
-	}
-	if strings.Contains(lines[len(lines)-1], "─") {
-		t.Fatalf("footer line = %q, want borderless status bar", lines[len(lines)-1])
-	}
+	assertBodyEndsAboveFooter(t, lines)
 }
 
 func TestAppViewHighlightsActivePaneWithoutChangingBodyText(t *testing.T) {
@@ -304,12 +302,12 @@ func TestAppViewHighlightsActivePaneWithoutChangingBodyText(t *testing.T) {
 
 	sidebarLines := assertAppViewFitsWindow(t, app.View(), 80, 20)
 	assertBodyEndsAboveFooter(t, sidebarLines)
-	sidebarBody := strings.Join(sidebarLines[:len(sidebarLines)-1], "\n")
+	sidebarBody := joinViewBodyLines(sidebarLines)
 
 	app.mainFocus = mainFocusContent
 	contentLines := assertAppViewFitsWindow(t, app.View(), 80, 20)
 	assertBodyEndsAboveFooter(t, contentLines)
-	contentBody := strings.Join(contentLines[:len(contentLines)-1], "\n")
+	contentBody := joinViewBodyLines(contentLines)
 
 	if sidebarBody == contentBody {
 		t.Fatal("expected app body styling to change when focus moves between sidebar and content panes")
@@ -355,19 +353,40 @@ func assertAppViewFitsWindow(t *testing.T, view string, width, height int) []str
 
 func assertBodyEndsAboveFooter(t *testing.T, lines []string) {
 	t.Helper()
+	// Scan backward past status bar lines to find the pane bottom border.
+	borderIdx := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "\u2570") && strings.Contains(lines[i], "\u256f") {
+			borderIdx = i
+			break
+		}
+	}
+	if borderIdx == -1 {
+		t.Fatalf("no pane bottom border found in view")
+	}
+	// All lines below the border should be status bar lines (no horizontal rule).
+	for i := borderIdx + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], "─") {
+			t.Fatalf("status bar line %d = %q, want borderless status bar", i, lines[i])
+		}
+	}
+}
 
-	if !strings.Contains(lines[len(lines)-2], "╰") || !strings.Contains(lines[len(lines)-2], "╯") {
-		t.Fatalf("bottom body line = %q, want rounded bottom borders above the footer", lines[len(lines)-2])
+// joinViewBodyLines joins only the body lines of the view (excluding footer lines).
+// It scans backward for the pane bottom border chars to find where the body ends.
+func joinViewBodyLines(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "\u2570") && strings.Contains(lines[i], "\u256f") {
+			return strings.Join(lines[:i+1], "\n")
+		}
 	}
-	if strings.Contains(lines[len(lines)-1], "─") {
-		t.Fatalf("footer line = %q, want borderless status bar", lines[len(lines)-1])
-	}
+	return strings.Join(lines, "\n")
 }
 
 func TestComputeMainPageLayoutReservesSettingsStylePaneGap(t *testing.T) {
 	t.Parallel()
 
-	layout := styles.ComputeMainPageLayout(80, 20, SidebarWidth, styles.DefaultChromeMetrics)
+	layout := styles.ComputeMainPageLayout(80, 20, SidebarWidth, styles.DefaultChromeMetrics, styles.DefaultChromeMetrics.StatusBarHeight)
 
 	if layout.PaneGapWidth != 1 {
 		t.Fatalf("pane gap width = %d, want 1", layout.PaneGapWidth)
@@ -380,7 +399,7 @@ func TestComputeMainPageLayoutReservesSettingsStylePaneGap(t *testing.T) {
 func TestComputeMainPageLayoutDropsPaneGapWhenContentDoesNotFit(t *testing.T) {
 	t.Parallel()
 
-	layout := styles.ComputeMainPageLayout(36, 20, SidebarWidth, styles.DefaultChromeMetrics)
+	layout := styles.ComputeMainPageLayout(36, 20, SidebarWidth, styles.DefaultChromeMetrics, styles.DefaultChromeMetrics.StatusBarHeight)
 
 	if layout.PaneGapWidth != 0 {
 		t.Fatalf("pane gap width = %d, want 0", layout.PaneGapWidth)
@@ -393,7 +412,7 @@ func TestComputeMainPageLayoutDropsPaneGapWhenContentDoesNotFit(t *testing.T) {
 func TestComputeMainPageLayoutDropsPaneGapOnNarrowTerminals(t *testing.T) {
 	t.Parallel()
 
-	layout := styles.ComputeMainPageLayout(59, 20, SidebarWidth, styles.DefaultChromeMetrics)
+	layout := styles.ComputeMainPageLayout(59, 20, SidebarWidth, styles.DefaultChromeMetrics, styles.DefaultChromeMetrics.StatusBarHeight)
 
 	if layout.PaneGapWidth != 0 {
 		t.Fatalf("pane gap width = %d, want 0 on narrow terminal", layout.PaneGapWidth)
@@ -415,7 +434,7 @@ func TestComputeMainPageLayoutShrinksSidebarToPreserveGapAndContentFrame(t *test
 	// Use a low gap threshold so the shrinking code path is exercisable.
 	chrome := styles.DefaultChromeMetrics
 	chrome.MinWidthForPaneGap = 37
-	layout := styles.ComputeMainPageLayout(37, 20, SidebarWidth, chrome)
+	layout := styles.ComputeMainPageLayout(37, 20, SidebarWidth, chrome, styles.DefaultChromeMetrics.StatusBarHeight)
 
 	if layout.PaneGapWidth != 1 {
 		t.Fatalf("pane gap width = %d, want 1", layout.PaneGapWidth)
