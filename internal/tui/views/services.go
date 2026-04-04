@@ -33,6 +33,7 @@ type Services struct {
 	SessionRegistry *orchestrator.SessionRegistry
 	Cfg             *config.Config
 	Adapters        []adapter.WorkItemAdapter
+	RepoSources     []adapter.RepoSource
 	Harnesses       app.AgentHarnesses
 	Settings        *SettingsService
 	SettingsData    SettingsSnapshot
