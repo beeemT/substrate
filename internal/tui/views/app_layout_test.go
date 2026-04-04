@@ -168,10 +168,7 @@ func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	// Concatenate both footer lines so all hints are found regardless of line split.
 	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
 
-	newIndex := strings.Index(footer, "New session")
-	deleteIndex := strings.Index(footer, "Delete session")
-	searchIndex := strings.Index(footer, "Search sessions")
-	if newIndex == -1 || deleteIndex == -1 || searchIndex == -1 {
+	if !strings.Contains(footer, "New session") || !strings.Contains(footer, "Delete session") || !strings.Contains(footer, "Search sessions") {
 		t.Fatalf("footer = %q, want new, delete, and search hints visible", footer)
 	}
 }

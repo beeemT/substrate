@@ -1,6 +1,7 @@
 package views
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -169,14 +170,6 @@ func (m *AddRepoOverlay) SetSize(w, h int) {
 	m.syncDetailViewport(false)
 }
 
-// currentSourceName returns the display name of the active repo source.
-func (m AddRepoOverlay) currentSourceName() string {
-	if m.sourceIndex < len(m.sources) {
-		return m.sources[m.sourceIndex].Name()
-	}
-	return ""
-}
-
 // currentListItem returns the currently selected repo, if any.
 func (m AddRepoOverlay) currentListItem() (adapter.RepoItem, bool) {
 	if len(m.allRepos) == 0 {
@@ -328,10 +321,10 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			cmds = append(cmds, func() tea.Msg {
 				return ErrMsg{Err: fmt.Errorf("clone failed: %w", msg.Err)}
 			})
-		} else {
-			return m, func() tea.Msg {
-				return ActionDoneMsg{Message: "Repository cloned: " + msg.RepoPath}
-			}
+			return m, tea.Batch(cmds...)
+		}
+		return m, func() tea.Msg {
+			return ActionDoneMsg{Message: "Repository cloned: " + msg.RepoPath}
 		}
 
 	case tea.MouseMsg:
@@ -406,7 +399,7 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			}
 			if m.gitClient == nil {
 				cmds = append(cmds, func() tea.Msg {
-					return ErrMsg{Err: fmt.Errorf("git client not configured")}
+					return ErrMsg{Err: errors.New("git client not configured")}
 				})
 				break
 			}
@@ -438,17 +431,19 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 				m.focus = addRepoFocusList
 			}
 		case panelLeft:
-			if m.focus == addRepoFocusDetails {
+			switch m.focus {
+			case addRepoFocusDetails:
 				m.focus = addRepoFocusList
-			} else if m.focus == addRepoFocusList {
+			case addRepoFocusList:
 				m.focus = addRepoFocusControls
 				m.searchInput.Focus()
 			}
 		case panelRight:
-			if m.focus == addRepoFocusControls {
+			switch m.focus {
+			case addRepoFocusControls:
 				m.focus = addRepoFocusList
 				m.searchInput.Blur()
-			} else if m.focus == addRepoFocusList {
+			case addRepoFocusList:
 				m.focus = addRepoFocusDetails
 			}
 		default:
@@ -508,7 +503,7 @@ func (m *AddRepoOverlay) View() string {
 	var body string
 	var footer string
 	if m.showManual {
-		body = m.manualView(renderWidth)
+		body = m.manualView()
 		footer = m.styles.Hint.Render(m.wrappedManualHintText(renderWidth))
 	} else {
 		body = m.browserView(layout)
@@ -560,7 +555,7 @@ func (m *AddRepoOverlay) browserView(layout components.SplitOverlayLayout) strin
 }
 
 // manualView renders the manual clone URL input view.
-func (m *AddRepoOverlay) manualView(width int) string {
+func (m *AddRepoOverlay) manualView() string {
 	urlLabel := m.styles.Label.Render("Clone URL:   ")
 	hints := m.styles.Hint.Render(
 		"Enter a git clone URL to clone into the workspace.\n" +

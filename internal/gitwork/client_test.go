@@ -220,7 +220,6 @@ func TestParseListJSON_PathConstruction(t *testing.T) {
 	}
 }
 
-
 // writeFakeBin writes a shell script that acts as a fake git-work binary.
 // The script prints output to stdout and exits with exitCode.
 func writeFakeBin(t *testing.T, output string, exitCode int) string {
