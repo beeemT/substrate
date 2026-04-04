@@ -27,11 +27,11 @@ type GitlabRepoSource struct {
 type gitlabProjectItem struct {
 	ID                int64   `json:"id"`
 	Name              string  `json:"name"`
-	PathWithNamespace string `json:"path_with_namespace"`
+	PathWithNamespace string  `json:"path_with_namespace"`
 	Description       *string `json:"description"`
 	WebURL            string  `json:"web_url"`
-	HTTPURL           string  `json:"http_url"`
-	SSHURL            string  `json:"ssh_url"`
+	HTTPURL           string  `json:"http_url_to_repo"`
+	SSHURL            string  `json:"ssh_url_to_repo"`
 	DefaultBranch     string  `json:"default_branch"`
 	Visibility        string  `json:"visibility"`
 	Owner             struct {
@@ -81,7 +81,7 @@ func (s *GitlabRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListO
 	}
 
 	query := url.Values{
-		"sort":     {"last_activity_at"},
+		"order_by": {"last_activity_at"},
 		"per_page": {strconv.Itoa(opts.Limit)},
 		"page":     {strconv.Itoa(opts.Page)},
 	}
@@ -175,6 +175,5 @@ func parseLinkHeaderNext(link string) bool {
 	}
 	return false
 }
-
 
 var _ adapter.RepoSource = (*GitlabRepoSource)(nil)

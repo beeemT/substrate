@@ -108,7 +108,7 @@ func (c *Client) Clone(ctx context.Context, parentDir, remoteURL string) (string
 		slog.Error("failed to resolve clone path", "path", path, "parent", parentDir, "err", err)
 		return "", fmt.Errorf("resolve clone path: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
+	if rel == ".." || strings.HasPrefix(rel, "../") {
 		slog.Error("clone path escapes parent directory", "path", path, "parent", parentDir)
 		return "", fmt.Errorf("invalid clone path %q: escapes parent directory", path)
 	}

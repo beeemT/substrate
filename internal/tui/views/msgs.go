@@ -284,6 +284,7 @@ type RepoListLoadedMsg struct {
 type AddRepoCloneMsg struct {
 	Repo     adapter.RepoItem
 	CloneDir string // workspaceDir
+	CloneURL string // resolved clone URL (URL or SSHURL fallback)
 }
 
 // RepoClonedMsg fires when git-work clone completes.

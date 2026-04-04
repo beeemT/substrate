@@ -37,8 +37,8 @@ func sampleProjectsJSON(visibility string) string {
 		Name              string  `json:"name"`
 		PathWithNamespace string  `json:"path_with_namespace"`
 		Description       *string `json:"description"`
-		HTTPURL           string  `json:"http_url"`
-		SSHURL            string  `json:"ssh_url"`
+		HTTPURL           string  `json:"http_url_to_repo"`
+		SSHURL            string  `json:"ssh_url_to_repo"`
 		DefaultBranch     string  `json:"default_branch"`
 		Visibility        string  `json:"visibility"`
 		Owner             owner   `json:"owner"`

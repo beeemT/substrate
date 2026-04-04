@@ -90,11 +90,14 @@ func (s StatusBarModel) ViewN(hints []KeybindHint, rightText string, width, n in
 	for len(lines) < n {
 		// Pad with an empty styled row of the correct width.
 		horizontalPadding := 0
+		innerWidth := 0
 		if width >= 2 {
 			horizontalPadding = 1
+			innerWidth = width - 2
 		}
 		lineStyle := s.styles.StatusBar.Padding(0, horizontalPadding)
-		lines = append(lines, lineStyle.Render(""))
+		padContent := strings.Repeat(" ", innerWidth)
+		lines = append(lines, lineStyle.Render(padContent))
 	}
 	if len(lines) > n {
 		lines = lines[:n]

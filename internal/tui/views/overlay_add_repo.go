@@ -349,10 +349,19 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 				return m, func() tea.Msg { return CloseOverlayMsg{} }
 			case keyEnter:
 				url := strings.TrimSpace(m.manualURL.Value())
-				if url != "" && m.gitClient != nil {
-					m.cloning = true
-					m.cloneError = ""
-					return m, CloneRepoCmd(m.gitClient, m.workspaceDir, url)
+				if url == "" {
+					break
+				}
+				if m.gitClient == nil {
+					cmds = append(cmds, func() tea.Msg {
+						return ErrMsg{Err: errors.New("git client not configured")}
+					})
+					break
+				}
+				m.cloning = true
+				m.cloneError = ""
+				return m, func() tea.Msg {
+					return AddRepoCloneMsg{Repo: adapter.RepoItem{URL: url}, CloneDir: m.workspaceDir, CloneURL: url}
 				}
 			case "ctrl+n":
 				m.showManual = false
@@ -406,7 +415,7 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			m.cloning = true
 			m.cloneError = ""
 			return m, func() tea.Msg {
-				return AddRepoCloneMsg{Repo: item, CloneDir: m.workspaceDir}
+				return AddRepoCloneMsg{Repo: item, CloneDir: m.workspaceDir, CloneURL: cloneURL}
 			}
 		case "up":
 			if m.focus == addRepoFocusDetails {

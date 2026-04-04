@@ -450,8 +450,7 @@ func (a *App) openNewSession() tea.Cmd {
 
 func (a *App) openAddRepo() tea.Cmd {
 	a.activeOverlay = overlayAddRepo
-	a.addRepo.Open()
-	return a.addRepo.reloadRepos()
+	return a.addRepo.Open()
 }
 
 func (a App) currentHints() []KeybindHint {
@@ -1256,7 +1255,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AddRepoCloneMsg:
 		a.activeOverlay = overlayNone
 		a.addRepo.Close()
-		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.Repo.URL))
+		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.CloneURL))
 		return a, tea.Batch(cmds...)
 
 	case SettingsAppliedMsg:
