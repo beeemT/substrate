@@ -574,3 +574,52 @@ Beyond basic streaming and messaging, the OMP bridge (`bridge/omp-bridge.ts`) su
 The orchestrator persists this generically via `TaskService.UpdateResumeInfo()`, instead of storing harness-specific fields such as separate session file/id columns.
 
 **Retry events**: The OMP harness emits `retry_wait` (with a `message` payload) when the agent enters a retry wait state, and `retry_resumed` when it resumes from retry. These are surfaced through the standard `AgentEvent` channel alongside `started`, `text_delta`, `tool_start`, `tool_result`, `done`, `error`, `question`, and `foreman_proposed` events.
+
+### Claude Agent-specific capabilities
+
+The Claude Agent harness (`internal/adapter/claudeagent`) uses `@anthropic-ai/claude-agent-sdk` via a TypeScript bridge (`bridge/claude-agent-bridge.ts`), the same architecture as the OMP bridge. Go drives the bridge over JSON-line stdio; the bridge manages the SDK lifecycle, which in turn spawns the user's `claude` binary with their existing auth and settings.
+
+#### Architecture
+
+```
+Substrate (Go)
+  └─ claudeagent.Harness.StartSession()
+       └─ exec: bun run bridge/claude-agent-bridge.ts
+            ├─ stdin  JSON-line protocol (Go → Bridge)
+            ├─ stdout JSON-line protocol (Bridge → Go)
+            └─ @anthropic-ai/claude-agent-sdk
+                 └─ query({ prompt: asyncIterable, options: {...} })
+                      └─ spawns: claude  [user's auth + user's settings]
+                           └─ MCP: substrate in-process server
+                                └─ ask_foreman tool
+```
+
+Both `claudeagent` and `ohmypi` embed the shared `bridge.BridgeSession` / `bridge.BridgeRuntime` from `internal/adapter/bridge/`. Feature parity between the two bridges is enforced — see `internal/adapter/bridge/AGENTS.md`.
+
+#### Bridge stdio protocol
+
+**Go → Bridge (stdin):** `init` (first, always; carries `mode`, `system_prompt?`, `resume_session_id?`, `permission_mode?`, `model?`, `max_turns?`, `max_budget_usd?`), then `prompt`, `message`, `steer`, `answer`, `compact`, `abort`.
+
+**Bridge → Go (stdout):** `session_meta` (after SDK init, carries `session_id`), then `event` lines wrapping canonical `AgentEvent` objects.
+
+Multi-turn support uses the SDK's async iterable prompt mode. The bridge keeps the session alive across multiple `SendMessage` calls from Go by feeding stdin lines into a `LineQueue` that yields `SDKUserMessage` objects to the running `query()`.
+
+#### Auth and settings
+
+The SDK inherits the user's existing Claude Code auth (OAuth, API key, Bedrock) and settings (model preference, custom instructions, per-project config) via `settingSources: ["user", "project"]`. No Substrate-specific auth configuration is needed.
+
+#### `ask_foreman` tool
+
+Registered as an in-process MCP tool via `createSdkMcpServer()`. Only added in agent mode — foreman sessions don't ask questions. The tool name in `allowedTools` follows the SDK convention: `mcp__substrate__ask_foreman`. The Go side sends `answer` messages to resolve pending questions.
+
+#### Foreman mode
+
+Foreman sessions restrict the agent to read-only tools (`Read`, `Grep`, `Glob`), set `permissionMode: "dontAsk"`, use `settingSources: ["user"]` only (no project settings), and omit the `ask_foreman` MCP server. Confidence signalling works identically to the OMP foreman: the system prompt instructs Claude to append `CONFIDENCE: high` or `CONFIDENCE: uncertain`, which the bridge strips and maps to `foreman_proposed` events.
+
+#### Session resume
+
+The bridge emits `session_meta { session_id }` from the SDK's `system/init` message. The Go session stores the Claude UUID and returns it via `ResumeInfo()`. On resume, Go passes the session ID in the `init` message; the bridge forwards it to `query()` options. The SDK manages session file location internally — only the UUID is persisted on the Go side.
+
+#### Sandboxing
+
+Uses the same OS-level sandboxing as the OMP harness (sandbox-exec on macOS, bwrap on Linux). Writable paths include the git worktree, a process-scoped temp dir, `~/.claude` (auth store), and the bun cache directory.
