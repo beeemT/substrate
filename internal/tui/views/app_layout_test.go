@@ -390,10 +390,32 @@ func TestComputeMainPageLayoutDropsPaneGapWhenContentDoesNotFit(t *testing.T) {
 	}
 }
 
+func TestComputeMainPageLayoutDropsPaneGapOnNarrowTerminals(t *testing.T) {
+	t.Parallel()
+
+	layout := styles.ComputeMainPageLayout(59, 20, SidebarWidth, styles.DefaultChromeMetrics)
+
+	if layout.PaneGapWidth != 0 {
+		t.Fatalf("pane gap width = %d, want 0 on narrow terminal", layout.PaneGapWidth)
+	}
+	// Without the gap, the full sidebar and all remaining columns go to content.
+	expectedSidebarPane := SidebarWidth + styles.DefaultChromeMetrics.Pane.HorizontalFrame()
+	if layout.SidebarPaneWidth != expectedSidebarPane {
+		t.Fatalf("sidebar pane width = %d, want %d (full size, no gap to preserve)", layout.SidebarPaneWidth, expectedSidebarPane)
+	}
+	expectedContent := 59 - expectedSidebarPane
+	if layout.ContentPaneWidth != expectedContent {
+		t.Fatalf("content pane width = %d, want %d", layout.ContentPaneWidth, expectedContent)
+	}
+}
+
 func TestComputeMainPageLayoutShrinksSidebarToPreserveGapAndContentFrame(t *testing.T) {
 	t.Parallel()
 
-	layout := styles.ComputeMainPageLayout(37, 20, SidebarWidth, styles.DefaultChromeMetrics)
+	// Use a low gap threshold so the shrinking code path is exercisable.
+	chrome := styles.DefaultChromeMetrics
+	chrome.MinWidthForPaneGap = 37
+	layout := styles.ComputeMainPageLayout(37, 20, SidebarWidth, chrome)
 
 	if layout.PaneGapWidth != 1 {
 		t.Fatalf("pane gap width = %d, want 1", layout.PaneGapWidth)
@@ -403,6 +425,18 @@ func TestComputeMainPageLayoutShrinksSidebarToPreserveGapAndContentFrame(t *test
 	}
 	if got := layout.SidebarPaneWidth + layout.ContentPaneWidth + layout.PaneGapWidth; got != 37 {
 		t.Fatalf("layout width = %d, want 37", got)
+	}
+}
+
+func TestAppViewRendersNoGapOnNarrowTerminal(t *testing.T) {
+	t.Parallel()
+
+	app := sizedLayoutTestApp(t, 59, 20)
+
+	lines := assertAppViewFitsWindow(t, app.View(), 59, 20)
+	topLine := ansi.Strip(lines[0])
+	if strings.Contains(topLine, "╮ ╭") {
+		t.Fatalf("top body line = %q, want no gap between panes on narrow terminal", topLine)
 	}
 }
 

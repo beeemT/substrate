@@ -26,13 +26,14 @@ func (m BoxMetrics) InnerHeight(height int) int {
 
 // ChromeMetrics centralizes the geometry consumed by shared TUI chrome.
 type ChromeMetrics struct {
-	StatusBarHeight int
-	ToastTopInset   int
-	Pane            BoxMetrics
-	OverlayFrame    BoxMetrics
-	OverlayPane     BoxMetrics
-	Callout         BoxMetrics
-	SettingsFooter  BoxMetrics
+	StatusBarHeight    int
+	ToastTopInset      int
+	Pane               BoxMetrics
+	OverlayFrame       BoxMetrics
+	OverlayPane        BoxMetrics
+	Callout            BoxMetrics
+	SettingsFooter     BoxMetrics
+	MinWidthForPaneGap int
 }
 
 // DefaultChromeMetrics is the single source of truth for shared shell geometry.
@@ -62,6 +63,7 @@ var DefaultChromeMetrics = ChromeMetrics{
 		BorderTop:   1,
 		PaddingLeft: 1, PaddingRight: 1,
 	},
+	MinWidthForPaneGap: 60,
 }
 
 // MainPageLayout captures shared pane shell geometry for the two-pane app shell.
@@ -81,11 +83,15 @@ func ComputeMainPageLayout(totalWidth, totalHeight, sidebarInnerWidth int, chrom
 	paneInnerHeight := chrome.Pane.InnerHeight(bodyHeight)
 
 	sidebarPaneWidth := minInt(maxInt(0, totalWidth), maxInt(0, sidebarInnerWidth)+chrome.Pane.HorizontalFrame())
+	// Only allocate a gap column when the terminal is wide enough to afford it.
+	// On narrow terminals every column belongs to content.
 	paneGapWidth := 0
+	if totalWidth >= chrome.MinWidthForPaneGap {
+		paneGapWidth = 1
+	}
 	contentPaneWidth := maxInt(0, totalWidth-sidebarPaneWidth)
 	minPaneWidth := chrome.Pane.HorizontalFrame()
-	if sidebarPaneWidth > 0 && contentPaneWidth > 0 {
-		paneGapWidth = 1
+	if sidebarPaneWidth > 0 && contentPaneWidth > 0 && paneGapWidth > 0 {
 		requiredContentWidth := minPaneWidth + paneGapWidth
 		if availableContentWidth := totalWidth - sidebarPaneWidth; availableContentWidth < requiredContentWidth {
 			sidebarPaneWidth = maxInt(0, sidebarPaneWidth-(requiredContentWidth-availableContentWidth))
