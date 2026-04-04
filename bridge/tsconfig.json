@@ -11,8 +11,5 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": false
   },
-  "include": [
-    "claude-agent-bridge.ts",
-    "omp-bridge.ts"
-  ]
+  "include": ["claude-agent-bridge.ts", "omp-bridge.ts"]
 }
