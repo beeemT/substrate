@@ -212,7 +212,7 @@ func displaySettingsOption(field *SettingsField, value string) string {
 		return value
 	}
 	switch field.Section {
-	case settingHarness, "harness.phase":
+	case settingHarness:
 		switch config.HarnessName(value) {
 		case config.HarnessOhMyPi:
 			return "Oh My Pi"

@@ -58,14 +58,10 @@ func (d HarnessDiagnostics) HasWarnings() bool {
 }
 
 func (d HarnessDiagnostics) WarningSummary() string {
-	groups := d.warningGroups()
-	if len(groups) == 0 {
+	if !d.HasWarnings() {
 		return ""
 	}
-	if len(groups) == 1 && len(groups[0].Phases) == 1 {
-		return groups[0].Phases[0] + " unavailable. Check Harness Routing."
-	}
-	return "Harnesses unavailable. Check Harness Routing."
+	return "Harness unavailable. Check Harness Routing."
 }
 
 func (d HarnessDiagnostics) PhaseWarnings() []string {
@@ -94,7 +90,7 @@ func (d HarnessDiagnostics) warningGroups() []settingsWarningGroup {
 		}
 		failure := phase.Failures[0]
 		reason := failure.SettingsReason()
-		phaseLabel := displayHarnessPhase(phase.Phase)
+		phaseLabel := phase.Phase
 		key := string(failure.Harness) + "\x00" + reason
 		if idx, ok := indexes[key]; ok {
 			groups[idx].Phases = append(groups[idx].Phases, phaseLabel)
@@ -189,68 +185,25 @@ func DiagnoseHarnesses(cfg *config.Config, workspaceRoot string) HarnessDiagnost
 	if cfg == nil {
 		return HarnessDiagnostics{}
 	}
-
-	phases := []struct {
-		name    string
-		harness config.HarnessName
-	}{
-		{name: "planning", harness: cfg.Harness.Phase.Planning},
-		{name: "implementation", harness: cfg.Harness.Phase.Implementation},
-		{name: "review", harness: cfg.Harness.Phase.Review},
-		{name: "foreman", harness: cfg.Harness.Phase.Foreman},
-	}
-	diagnostics := HarnessDiagnostics{Phases: make([]HarnessPhaseDiagnostic, 0, len(phases))}
-	for _, phase := range phases {
-		resolved := resolveHarnessPhase(cfg, phase.name, phase.harness, workspaceRoot)
-		diagnostics.Phases = append(diagnostics.Phases, resolved.diagnostic)
-	}
-	return diagnostics
+	resolved := resolveHarnessPhase(cfg, "Harness", cfg.Harness.Default, workspaceRoot)
+	return HarnessDiagnostics{Phases: []HarnessPhaseDiagnostic{resolved.diagnostic}}
 }
 
 func BuildAgentHarnesses(cfg *config.Config, workspaceRoot string) (AgentHarnesses, error) {
 	if cfg == nil {
 		return AgentHarnesses{}, errors.New("config is nil")
 	}
-
-	planning := resolveHarnessPhase(cfg, "planning", cfg.Harness.Phase.Planning, workspaceRoot)
-	implementation := resolveHarnessPhase(cfg, "implementation", cfg.Harness.Phase.Implementation, workspaceRoot)
-	review := resolveHarnessPhase(cfg, "review", cfg.Harness.Phase.Review, workspaceRoot)
-	foreman := resolveHarnessPhase(cfg, "foreman", cfg.Harness.Phase.Foreman, workspaceRoot)
-
-	// Deduplicate warnings: when the same harness+error causes multiple phases to
-	// fail (e.g. all four phases share one misconfigured harness), emit one log
-	// entry listing all affected phases rather than one entry per phase.
-	type failureKey struct {
-		harness config.HarnessName
-		message string
+	resolved := resolveHarnessPhase(cfg, "Harness", cfg.Harness.Default, workspaceRoot)
+	if len(resolved.diagnostic.Failures) > 0 {
+		f := resolved.diagnostic.Failures[0]
+		slog.Warn("harness unavailable", "harness", f.Harness, "error", f.Message)
 	}
-	type affectedPhases struct {
-		key    failureKey
-		phases []string
-	}
-	seen := map[failureKey]*affectedPhases{}
-	order := []failureKey{} // preserve insertion order for deterministic output
-	for _, phase := range []resolvedHarnessPhase{planning, implementation, review, foreman} {
-		for _, f := range phase.diagnostic.Failures {
-			k := failureKey{harness: f.Harness, message: f.Message}
-			if _, ok := seen[k]; !ok {
-				seen[k] = &affectedPhases{key: k}
-				order = append(order, k)
-			}
-			seen[k].phases = append(seen[k].phases, phase.diagnostic.Phase)
-		}
-	}
-	for _, k := range order {
-		entry := seen[k]
-		slog.Warn("harness phase unavailable", "phases", entry.phases, "harness", k.harness, "error", k.message)
-	}
-
 	return AgentHarnesses{
-		Planning:       planning.harness,
-		Implementation: implementation.harness,
-		Review:         review.harness,
-		Foreman:        foreman.harness,
-		Resume:         implementation.harness,
+		Planning:       resolved.harness,
+		Implementation: resolved.harness,
+		Review:         resolved.harness,
+		Foreman:        resolved.harness,
+		Resume:         resolved.harness,
 	}, nil
 }
 
@@ -270,20 +223,6 @@ func resolveHarnessPhase(cfg *config.Config, phase string, name config.HarnessNa
 	return resolvedHarnessPhase{diagnostic: diagnostic}
 }
 
-func displayHarnessPhase(phase string) string {
-	switch phase {
-	case "planning":
-		return "Planning"
-	case "implementation":
-		return "Implementation"
-	case "review":
-		return "Review"
-	case "foreman":
-		return "Foreman"
-	default:
-		return phase
-	}
-}
 
 func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRoot string) (adapter.AgentHarness, error) {
 	switch name {

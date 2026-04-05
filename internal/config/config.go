@@ -112,15 +112,8 @@ const (
 const defaultPollInterval = "60s"
 
 type HarnessConfig struct {
-	Default HarnessName        `yaml:"default"`
-	Phase   HarnessPhaseConfig `yaml:"phase"`
-}
-
-type HarnessPhaseConfig struct {
-	Planning       HarnessName `yaml:"planning"`
-	Implementation HarnessName `yaml:"implementation"`
-	Review         HarnessName `yaml:"review"`
-	Foreman        HarnessName `yaml:"foreman"`
+	// The harness used for all agent phases.
+	Default HarnessName `yaml:"default"`
 }
 
 // AdaptersConfig contains per-adapter configuration.
@@ -440,18 +433,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Harness.Default == "" {
 		cfg.Harness.Default = HarnessOhMyPi
 	}
-	if cfg.Harness.Phase.Planning == "" {
-		cfg.Harness.Phase.Planning = cfg.Harness.Default
-	}
-	if cfg.Harness.Phase.Implementation == "" {
-		cfg.Harness.Phase.Implementation = cfg.Harness.Default
-	}
-	if cfg.Harness.Phase.Review == "" {
-		cfg.Harness.Phase.Review = cfg.Harness.Default
-	}
-	if cfg.Harness.Phase.Foreman == "" {
-		cfg.Harness.Phase.Foreman = cfg.Harness.Default
-	}
 	if cfg.Foreman.QuestionTimeout == "" {
 		cfg.Foreman.QuestionTimeout = "0"
 	}
@@ -558,16 +539,6 @@ func validate(cfg *Config) error {
 	}
 	if !validHarnesses[cfg.Harness.Default] {
 		return fmt.Errorf("invalid harness.default: %q", cfg.Harness.Default)
-	}
-	for field, value := range map[string]HarnessName{
-		"planning":       cfg.Harness.Phase.Planning,
-		"implementation": cfg.Harness.Phase.Implementation,
-		"review":         cfg.Harness.Phase.Review,
-		"foreman":        cfg.Harness.Phase.Foreman,
-	} {
-		if !validHarnesses[value] {
-			return fmt.Errorf("invalid harness.phase.%s: %q", field, value)
-		}
 	}
 
 	if err := ValidateClaudeThinking(cfg.Adapters.ClaudeCode.Thinking); err != nil {

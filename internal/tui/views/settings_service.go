@@ -45,7 +45,6 @@ const (
 	statusWarning              = "warning"
 	statusEmpty                = "empty"
 	statusUnset                = "unset"
-	hintInheritsHarnessDefault = "inherits harness.default"
 	sentryAuthSourceCLI        = "sentry cli"
 )
 
@@ -711,13 +710,9 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		{
 			ID:          settingHarness,
 			Title:       "Harness Routing",
-			Description: "Select which harness runs each phase",
+			Description: "Select the harness used for all agent phases",
 			Fields: []SettingsField{
-				{Section: settingHarness, Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}, Required: true},
-				{Section: "harness.phase", Key: "planning", Label: "Planning Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Planning), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
-				{Section: "harness.phase", Key: "implementation", Label: "Implementation Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Implementation), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
-				{Section: "harness.phase", Key: "review", Label: "Review Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Review), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
-				{Section: "harness.phase", Key: "foreman", Label: "Foreman Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Foreman), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
+				{Section: settingHarness, Key: "default", Label: "Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}, Required: true},
 			},
 		},
 		{
@@ -846,48 +841,28 @@ func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, dia
 		return
 	}
 	harnessWarnings := diagnostics.HarnessWarnings()
-	routedHarnesses := configuredPhaseHarnesses(cfg)
 	for i := range sections {
 		switch sections[i].ID {
 		case settingHarness:
 			setSectionWarning(&sections[i], diagnostics.PhaseWarnings())
 		case "harness.ohmypi":
-			setHarnessSectionWarning(&sections[i], config.HarnessOhMyPi, routedHarnesses, harnessWarnings[config.HarnessOhMyPi])
+			if cfg.Harness.Default == config.HarnessOhMyPi {
+				setSectionWarning(&sections[i], harnessWarnings[config.HarnessOhMyPi])
+			}
 		case "harness.claude":
-			setHarnessSectionWarning(&sections[i], config.HarnessClaudeCode, routedHarnesses, harnessWarnings[config.HarnessClaudeCode])
+			if cfg.Harness.Default == config.HarnessClaudeCode {
+				setSectionWarning(&sections[i], harnessWarnings[config.HarnessClaudeCode])
+			}
 		case "harness.codex":
-			setHarnessSectionWarning(&sections[i], config.HarnessCodex, routedHarnesses, harnessWarnings[config.HarnessCodex])
+			if cfg.Harness.Default == config.HarnessCodex {
+				setSectionWarning(&sections[i], harnessWarnings[config.HarnessCodex])
+			}
 		case "harness.opencode":
-			setHarnessSectionWarning(&sections[i], config.HarnessOpenCode, routedHarnesses, harnessWarnings[config.HarnessOpenCode])
+			if cfg.Harness.Default == config.HarnessOpenCode {
+				setSectionWarning(&sections[i], harnessWarnings[config.HarnessOpenCode])
+			}
 		}
 	}
-}
-
-func configuredPhaseHarnesses(cfg *config.Config) map[config.HarnessName]bool {
-	harnesses := make(map[config.HarnessName]bool, 4)
-	if cfg == nil {
-		return harnesses
-	}
-	for _, harness := range []config.HarnessName{
-		cfg.Harness.Phase.Planning,
-		cfg.Harness.Phase.Implementation,
-		cfg.Harness.Phase.Review,
-		cfg.Harness.Phase.Foreman,
-	} {
-		if harness == "" {
-			continue
-		}
-		harnesses[harness] = true
-	}
-
-	return harnesses
-}
-
-func setHarnessSectionWarning(section *SettingsSection, harness config.HarnessName, routedHarnesses map[config.HarnessName]bool, warnings []string) {
-	if !routedHarnesses[harness] {
-		return
-	}
-	setSectionWarning(section, warnings)
 }
 
 func setSectionWarning(section *SettingsSection, warnings []string) {
@@ -974,14 +949,6 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Foreman.QuestionTimeout = value
 	case "harness.default":
 		cfg.Harness.Default = config.HarnessName(value)
-	case "harness.phase.planning":
-		cfg.Harness.Phase.Planning = config.HarnessName(value)
-	case "harness.phase.implementation":
-		cfg.Harness.Phase.Implementation = config.HarnessName(value)
-	case "harness.phase.review":
-		cfg.Harness.Phase.Review = config.HarnessName(value)
-	case "harness.phase.foreman":
-		cfg.Harness.Phase.Foreman = config.HarnessName(value)
 	case "adapters.ohmypi.bun_path":
 		cfg.Adapters.OhMyPi.BunPath = value
 	case "adapters.ohmypi.bridge_path":
@@ -1160,15 +1127,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "foreman.question_timeout":
 		return "How long Foreman waits before timing out a question; 0 disables the timeout.", "0"
 	case "harness.default":
-		return "Primary harness used whenever a phase-specific override is not set.", "ohmypi"
-	case "harness.phase.planning":
-		return "Overrides the harness used for the planning phase.", hintInheritsHarnessDefault
-	case "harness.phase.implementation":
-		return "Overrides the harness used for the implementation phase.", hintInheritsHarnessDefault
-	case "harness.phase.review":
-		return "Overrides the harness used for the review phase.", hintInheritsHarnessDefault
-	case "harness.phase.foreman":
-		return "Overrides the harness used for the Foreman coordination phase.", hintInheritsHarnessDefault
+		return "The harness used for all agent phases.", "ohmypi"
 	case "adapters.ohmypi.bun_path":
 		return "Optional override for the Bun executable used only when Substrate launches a source bridge script instead of the packaged compiled bridge.", "auto-detect on PATH when needed"
 	case "adapters.ohmypi.bridge_path":

@@ -21,10 +21,6 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	cfg.Commit.Strategy = config.CommitStrategyGranular
 	cfg.Commit.MessageFormat = config.CommitMessageConventional
 	cfg.Harness.Default = config.HarnessCodex
-	cfg.Harness.Phase.Planning = config.HarnessClaudeCode
-	cfg.Harness.Phase.Implementation = config.HarnessCodex
-	cfg.Harness.Phase.Review = config.HarnessClaudeCode
-	cfg.Harness.Phase.Foreman = config.HarnessOhMyPi
 	cfg.Adapters.Linear.APIKey = "lin-secret"
 	cfg.Adapters.Linear.TeamID = "team-1"
 	cfg.Adapters.GitHub.Token = "gh-secret"
@@ -144,7 +140,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if result.Services.Services.Foreman != nil {
 		t.Fatal("Apply() foreman service = non-nil, want nil when harness is unavailable")
 	}
-	if result.Services.SettingsData.HarnessWarning != "Harnesses unavailable. Check Harness Routing." {
+	if result.Services.SettingsData.HarnessWarning != "Harness unavailable. Check Harness Routing." {
 		t.Fatalf("Apply() harness warning = %q, want short aggregated warning", result.Services.SettingsData.HarnessWarning)
 	}
 
@@ -164,7 +160,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if routing.Status != "warning" {
 		t.Fatalf("routing status = %q, want warning", routing.Status)
 	}
-	if routing.Error != "Planning, Implementation, Review, Foreman: Claude agent bridge not found." {
+	if routing.Error != "Harness: Claude agent bridge not found." {
 		t.Fatalf("routing error = %q, want grouped Claude Code detail", routing.Error)
 	}
 	if strings.Contains(routing.Error, "Binary Path") {
@@ -173,7 +169,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if claude == nil {
 		t.Fatal("expected Claude Code harness section in settings snapshot")
 	}
-	if claude.Error != "Planning, Implementation, Review, Foreman: Claude agent bridge not found." {
+	if claude.Error != "Harness: Claude agent bridge not found." {
 		t.Fatalf("claude section error = %q, want grouped Claude Code detail", claude.Error)
 	}
 
@@ -225,10 +221,6 @@ func TestSettingsApply_ReturnsRebuiltServicesOnSuccess(t *testing.T) {
 func TestBuildSettingsSections_LeavesUnusedHarnessSectionsQuiet(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Harness.Default = config.HarnessOhMyPi
-	cfg.Harness.Phase.Planning = config.HarnessOhMyPi
-	cfg.Harness.Phase.Implementation = config.HarnessOhMyPi
-	cfg.Harness.Phase.Review = config.HarnessOhMyPi
-	cfg.Harness.Phase.Foreman = config.HarnessOhMyPi
 	cfg.Adapters.OhMyPi.BridgePath = filepath.Join(t.TempDir(), "missing-bridge")
 
 	sections := buildSettingsSections(cfg)
@@ -246,7 +238,7 @@ func TestBuildSettingsSections_LeavesUnusedHarnessSectionsQuiet(t *testing.T) {
 	if ohmypi == nil || claude == nil || codex == nil {
 		t.Fatal("expected harness sections in settings snapshot")
 	}
-	if ohmypi.Status != "warning" || ohmypi.Error != "Planning, Implementation, Review, Foreman: Oh My Pi bridge not found." {
+	if ohmypi.Status != "warning" || ohmypi.Error != "Harness: Oh My Pi bridge not found." {
 		t.Fatalf("ohmypi section = %+v, want grouped concise warning", *ohmypi)
 	}
 	if strings.Contains(ohmypi.Error, "\n") {
@@ -433,10 +425,6 @@ func TestProviderForSection(t *testing.T) {
 func newSettingsApplyHarnessConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.Harness.Default = config.HarnessClaudeCode
-	cfg.Harness.Phase.Planning = config.HarnessClaudeCode
-	cfg.Harness.Phase.Implementation = config.HarnessClaudeCode
-	cfg.Harness.Phase.Review = config.HarnessClaudeCode
-	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
 	cfg.Adapters.ClaudeCode.BridgePath = "/bin/sh"
 
 	return cfg

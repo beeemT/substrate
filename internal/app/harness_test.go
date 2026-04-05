@@ -12,10 +12,6 @@ import (
 func newHarnessConfig(primary config.HarnessName) *config.Config {
 	cfg := &config.Config{}
 	cfg.Harness.Default = primary
-	cfg.Harness.Phase.Planning = primary
-	cfg.Harness.Phase.Implementation = primary
-	cfg.Harness.Phase.Review = primary
-	cfg.Harness.Phase.Foreman = primary
 	cfg.Adapters.Codex.BinaryPath = "/bin/sh"
 
 	return cfg
@@ -138,31 +134,14 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) 
 	if len(warnings) != 1 {
 		t.Fatalf("phase warnings = %d, want 1 grouped warning", len(warnings))
 	}
-	if summary := diagnostics.WarningSummary(); summary != "Harnesses unavailable. Check Harness Routing." {
+	if summary := diagnostics.WarningSummary(); summary != "Harness unavailable. Check Harness Routing." {
 		t.Fatalf("warning summary = %q, want short aggregated warning", summary)
 	}
-	if warnings[0] != "Planning, Implementation, Review, Foreman: Codex binary not found." {
+	if warnings[0] != "Harness: Codex binary not found." {
 		t.Fatalf("planning warning = %q, want grouped codex detail", warnings[0])
 	}
 }
 
-func TestDiagnoseHarnesses_UsesShortSummaryForSinglePhaseFailure(t *testing.T) {
-	cfg := newHarnessConfig(config.HarnessCodex)
-	cfg.Harness.Phase.Planning = config.HarnessOhMyPi
-	cfg.Adapters.OhMyPi.BridgePath = filepath.Join(t.TempDir(), "missing-bridge")
-
-	diagnostics := DiagnoseHarnesses(cfg, "/tmp")
-	warnings := diagnostics.PhaseWarnings()
-	if len(warnings) != 1 {
-		t.Fatalf("phase warnings = %d, want 1", len(warnings))
-	}
-	if summary := diagnostics.WarningSummary(); summary != "Planning unavailable. Check Harness Routing." {
-		t.Fatalf("warning summary = %q, want short single-phase summary", summary)
-	}
-	if warnings[0] != "Planning: Oh My Pi bridge not found." {
-		t.Fatalf("planning warning = %q, want concise bridge detail", warnings[0])
-	}
-}
 
 func TestDiagnoseHarnesses_SummarizesOhMyPiBridgeLookupForUsers(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
@@ -170,7 +149,7 @@ func TestDiagnoseHarnesses_SummarizesOhMyPiBridgeLookupForUsers(t *testing.T) {
 
 	diagnostics := DiagnoseHarnesses(cfg, "/tmp")
 	warning := diagnostics.PhaseWarnings()[0]
-	if warning != "Planning, Implementation, Review, Foreman: Oh My Pi bridge not found." {
+	if warning != "Harness: Oh My Pi bridge not found." {
 		t.Fatalf("warning = %q, want concise grouped bridge guidance", warning)
 	}
 	if strings.Contains(warning, "checked ") {

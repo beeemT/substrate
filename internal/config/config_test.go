@@ -45,9 +45,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Harness.Default != HarnessOhMyPi {
 		t.Errorf("harness.default = %q, want %q", cfg.Harness.Default, HarnessOhMyPi)
 	}
-	if cfg.Harness.Phase.Planning != HarnessOhMyPi || cfg.Harness.Phase.Implementation != HarnessOhMyPi || cfg.Harness.Phase.Review != HarnessOhMyPi || cfg.Harness.Phase.Foreman != HarnessOhMyPi {
-		t.Errorf("harness phase defaults = %+v, want all ohmypi", cfg.Harness.Phase)
-	}
 	if cfg.Foreman.QuestionTimeout != "0" {
 		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "0")
 	}
@@ -272,11 +269,6 @@ func TestLoadHarnessConfig(t *testing.T) {
 	path := writeTestConfig(t, `
 harness:
   default: codex
-  phase:
-    planning: claude-code
-    implementation: codex
-    review: claude-code
-    foreman: ohmypi
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -284,9 +276,6 @@ harness:
 	}
 	if cfg.Harness.Default != HarnessCodex {
 		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessCodex)
-	}
-	if cfg.Harness.Phase.Foreman != HarnessOhMyPi {
-		t.Fatalf("harness.phase.foreman = %q, want %q", cfg.Harness.Phase.Foreman, HarnessOhMyPi)
 	}
 }
 
@@ -387,11 +376,6 @@ func TestValidHarnessName_OpenCode(t *testing.T) {
 	path := writeTestConfig(t, `
 harness:
   default: opencode
-  phase:
-    planning: opencode
-    implementation: opencode
-    review: opencode
-    foreman: opencode
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -399,9 +383,6 @@ harness:
 	}
 	if cfg.Harness.Default != HarnessOpenCode {
 		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessOpenCode)
-	}
-	if cfg.Harness.Phase.Planning != HarnessOpenCode {
-		t.Fatalf("harness.phase.planning = %q, want %q", cfg.Harness.Phase.Planning, HarnessOpenCode)
 	}
 }
 

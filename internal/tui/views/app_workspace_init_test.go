@@ -97,10 +97,7 @@ func (r *stubInstanceRepo) Delete(_ context.Context, id string) error {
 
 func newWorkspaceInitHarnessConfig() *config.Config {
 	cfg := &config.Config{}
-	cfg.Harness.Phase.Planning = config.HarnessClaudeCode
-	cfg.Harness.Phase.Implementation = config.HarnessClaudeCode
-	cfg.Harness.Phase.Review = config.HarnessClaudeCode
-	cfg.Harness.Phase.Foreman = config.HarnessClaudeCode
+	cfg.Harness.Default = config.HarnessClaudeCode
 	cfg.Adapters.ClaudeCode.BridgePath = "/bin/sh"
 
 	return cfg
