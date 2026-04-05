@@ -493,16 +493,19 @@ func TestNewSessionOverlaySearchChangeTriggersReload(t *testing.T) {
 	overlay.Open()
 	overlay.SetSize(100, 30)
 
-	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	// Typing schedules a debounce tick; loading is NOT set immediately.
+	postKey, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if postKey.loading {
+		t.Fatal("overlay must not enter loading state before debounce fires")
+	}
+
+	// Deliver the matching debounce message; now the reload must be issued.
+	updated, cmd := postKey.Update(browseDebounceMsg{seq: postKey.browseDebounceSeq})
 	if !updated.loading {
 		t.Fatal("expected loading after search input changes")
 	}
 	if cmd == nil {
 		t.Fatal("expected reload command after search input changes")
-	}
-	msg := cmd()
-	if _, ok := msg.(tea.BatchMsg); !ok {
-		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
 	}
 }
 
@@ -1393,15 +1396,19 @@ func TestNewSessionOverlayAdvancedFilterChangeTriggersReload(t *testing.T) {
 	overlay.SetSize(100, 30)
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 
-	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	// Typing schedules a debounce tick; loading is NOT set immediately.
+	postKey, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if postKey.loading {
+		t.Fatal("overlay must not enter loading state before debounce fires")
+	}
+
+	// Deliver the matching debounce message; now the reload must be issued.
+	updated, cmd := postKey.Update(browseDebounceMsg{seq: postKey.browseDebounceSeq})
 	if !updated.loading {
 		t.Fatal("expected loading after advanced filter input changes")
 	}
 	if cmd == nil {
 		t.Fatal("expected reload command after advanced filter input changes")
-	}
-	if _, ok := cmd().(tea.BatchMsg); !ok {
-		t.Fatalf("msg = %T, want tea.BatchMsg", cmd())
 	}
 }
 

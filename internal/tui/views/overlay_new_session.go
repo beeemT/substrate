@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -104,6 +105,13 @@ const (
 	browseLoadAppend
 )
 
+const browseDebounceDelay = 200 * time.Millisecond
+
+// browseDebounceMsg is delivered by a tea.Tick scheduled when the user types
+// in a browse control. Only the tick matching the current browseDebounceSeq
+// fires a network reload; earlier ticks are silently dropped.
+type browseDebounceMsg struct{ seq int }
+
 type browsePageState struct {
 	Items      []adapter.ListItem
 	Offset     int
@@ -162,41 +170,42 @@ func (i selectableItem) FilterValue() string {
 
 // NewSessionOverlay is the overlay for creating a new work item session.
 type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	adapters       []adapter.WorkItemAdapter
-	browseAdapters []adapter.WorkItemAdapter
-	workspaceID    string
-	providerIndex  int
-	scopeIndex     int
-	viewIndex      int
-	stateIndex     int
-	filterInput    textinput.Model
-	labelsInput    textinput.Model
-	ownerInput     textinput.Model
-	repoInput      textinput.Model
-	groupInput     textinput.Model
-	teamInput      textinput.Model
-	issueList      list.Model
-	allItems       []adapter.ListItem
-	browsePages    map[string]browsePageState
-	selectedIDs    map[string]bool
-	loading        bool
-	hasMore        bool
-	manualTitle    textinput.Model
-	manualDesc     textarea.Model
-	manualFocus    int
-	showManual     bool
-	browseFocus    browseFocusArea
-	browseControl  browseControl
-	detailViewport viewport.Model
-	detailItemID   string
-	detailWidth    int
-	requestSeq     int
-	styles         styles.Styles
-	width          int
-	height         int
-	active         bool
-	openBrowserCmd func(string) tea.Cmd
-	statusMessage  string
+	adapters          []adapter.WorkItemAdapter
+	browseAdapters    []adapter.WorkItemAdapter
+	workspaceID       string
+	providerIndex     int
+	scopeIndex        int
+	viewIndex         int
+	stateIndex        int
+	filterInput       textinput.Model
+	labelsInput       textinput.Model
+	ownerInput        textinput.Model
+	repoInput         textinput.Model
+	groupInput        textinput.Model
+	teamInput         textinput.Model
+	issueList         list.Model
+	allItems          []adapter.ListItem
+	browsePages       map[string]browsePageState
+	selectedIDs       map[string]bool
+	loading           bool
+	hasMore           bool
+	manualTitle       textinput.Model
+	manualDesc        textarea.Model
+	manualFocus       int
+	showManual        bool
+	browseFocus       browseFocusArea
+	browseControl     browseControl
+	detailViewport    viewport.Model
+	detailItemID      string
+	detailWidth       int
+	requestSeq        int
+	browseDebounceSeq int
+	styles            styles.Styles
+	width             int
+	height            int
+	active            bool
+	openBrowserCmd    func(string) tea.Cmd
+	statusMessage     string
 }
 
 // NewNewSessionOverlay constructs a NewSessionOverlay with sane defaults.
@@ -974,7 +983,11 @@ func (m *NewSessionOverlay) updateFocusedBrowseInput(msg tea.KeyMsg) []tea.Cmd {
 	}
 	cmds = append(cmds, cmd)
 	if before != after {
-		cmds = append(cmds, m.reloadItems())
+		m.browseDebounceSeq++
+		seq := m.browseDebounceSeq
+		cmds = append(cmds, tea.Tick(browseDebounceDelay, func(time.Time) tea.Msg {
+			return browseDebounceMsg{seq: seq}
+		}))
 	}
 	return cmds
 }
@@ -1472,6 +1485,11 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 	forceDetailTop := false
 
 	switch msg := msg.(type) {
+	case browseDebounceMsg:
+		if msg.seq == m.browseDebounceSeq {
+			cmds = append(cmds, m.reloadItems())
+		}
+
 	case issueListLoadedMsg:
 		if msg.requestID != 0 && msg.requestID != m.requestSeq {
 			break
