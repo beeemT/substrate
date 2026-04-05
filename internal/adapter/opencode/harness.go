@@ -99,7 +99,7 @@ func (h *Harness) SupportsCompact() bool { return true }
 
 // ValidateReadiness checks that the opencode binary is available on PATH.
 func ValidateReadiness(cfg config.OpenCodeConfig) error {
-	binary := cfg.ServerPath
+	binary := cfg.BinaryPath
 	if binary == "" {
 		binary = defaultBinary
 	}
@@ -113,7 +113,7 @@ func ValidateReadiness(cfg config.OpenCodeConfig) error {
 func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionRequest) (adapter.HarnessActionResult, error) {
 	switch req.Action {
 	case "check_auth":
-		binary := h.cfg.ServerPath
+		binary := h.cfg.BinaryPath
 		if binary == "" {
 			binary = defaultBinary
 		}
@@ -185,7 +185,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	}
 
 	// Resolve binary path.
-	binary := h.cfg.ServerPath
+	binary := h.cfg.BinaryPath
 	if binary == "" {
 		binary = defaultBinary
 	}

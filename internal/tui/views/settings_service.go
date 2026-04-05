@@ -760,7 +760,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Harness \u00b7 OpenCode",
 			Description: "OpenCode server configuration",
 			Fields: []SettingsField{
-				{Section: "adapters.opencode", Key: "server_path", Label: "Server Path", Type: SettingsFieldPath, Value: cfg.Adapters.OpenCode.ServerPath},
+				{Section: "adapters.opencode", Key: "binary_path", Label: "Binary Path", Type: SettingsFieldPath, Value: cfg.Adapters.OpenCode.BinaryPath},
 				{Section: "adapters.opencode", Key: "port", Label: "Port", Type: SettingsFieldString, Value: strconv.Itoa(cfg.Adapters.OpenCode.Port)},
 				{Section: "adapters.opencode", Key: "hostname", Label: "Hostname", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Hostname},
 				{Section: "adapters.opencode", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Model},
@@ -1028,8 +1028,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 			return err
 		}
 		cfg.Adapters.Codex.Quiet = parsed
-	case "adapters.opencode.server_path":
-		cfg.Adapters.OpenCode.ServerPath = value
+	case "adapters.opencode.binary_path":
+		cfg.Adapters.OpenCode.BinaryPath = value
 	case "adapters.opencode.port":
 		parsed, err := parseInt(fieldPath, value)
 		if err != nil {
@@ -1219,7 +1219,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Allows Codex to run in full-auto mode when the CLI supports it.", settingFalse
 	case "adapters.codex.quiet":
 		return "Reduces Codex CLI verbosity in session output.", settingFalse
-	case "adapters.opencode.server_path":
+	case "adapters.opencode.binary_path":
 		return "Path to the opencode binary. Defaults to opencode on PATH.", statusEmpty
 	case "adapters.opencode.port":
 		return "HTTP port for the opencode server. 0 lets the server pick.", "0"

@@ -218,9 +218,9 @@ type ClaudeCodeConfig struct {
 
 // OpenCodeConfig configures the opencode server harness.
 type OpenCodeConfig struct {
-	// ServerPath is the path to the opencode binary.
+	// BinaryPath is the path to the opencode binary.
 	// Defaults to "opencode" resolved via PATH.
-	ServerPath string `yaml:"server_path"`
+	BinaryPath string `yaml:"binary_path"`
 
 	// Port is the HTTP port for opencode serve.
 	// 0 means let the server pick an available port.

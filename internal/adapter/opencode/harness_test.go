@@ -50,9 +50,9 @@ func TestSupportsCompact(t *testing.T) {
 }
 
 func TestValidateReadiness_BinaryNotFound(t *testing.T) {
-	// Use a ServerPath pointing to a binary that definitely doesn't exist.
+	// Use a BinaryPath pointing to a binary that definitely doesn't exist.
 	err := ValidateReadiness(config.OpenCodeConfig{
-		ServerPath: "nonexistent_opencode_binary_test",
+		BinaryPath: "nonexistent_opencode_binary_test",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing binary, got nil")
