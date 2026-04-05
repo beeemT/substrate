@@ -106,6 +106,7 @@ const (
 	HarnessOhMyPi     HarnessName = "ohmypi"
 	HarnessClaudeCode HarnessName = "claude-code"
 	HarnessCodex      HarnessName = "codex"
+	HarnessOpenCode   HarnessName = "opencode"
 )
 const defaultPollInterval = "60s"
 
@@ -126,6 +127,7 @@ type AdaptersConfig struct {
 	OhMyPi     OhMyPiConfig     `yaml:"ohmypi"`
 	ClaudeCode ClaudeCodeConfig `yaml:"claude_code"`
 	Codex      CodexConfig      `yaml:"codex"`
+	OpenCode   OpenCodeConfig   `yaml:"opencode"`
 	Linear     LinearConfig     `yaml:"linear"`
 	Glab       GlabConfig       `yaml:"glab"`
 	GitLab     GitlabConfig     `yaml:"gitlab"`
@@ -144,24 +146,24 @@ type LinearConfig struct {
 }
 
 type GitlabConfig struct {
-	TokenRef      string            `yaml:"token_ref"` // keychain reference for GitLab REST API
-	Token         string            `yaml:"-"`
-	BaseURL       string            `yaml:"base_url"`      // default: https://gitlab.com
-	Assignee      string            `yaml:"assignee"`      // username filter for Watch
-	PollInterval  string            `yaml:"poll_interval"` // default: 60s
-	StateMappings map[string]string `yaml:"state_mappings"`
+	TokenRef            string              `yaml:"token_ref"` // keychain reference for GitLab REST API
+	Token               string              `yaml:"-"`
+	BaseURL             string              `yaml:"base_url"`      // default: https://gitlab.com
+	Assignee            string              `yaml:"assignee"`      // username filter for Watch
+	PollInterval        string              `yaml:"poll_interval"` // default: 60s
+	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
 }
 
 type GithubConfig struct {
-	TokenRef      string            `yaml:"token_ref"` // optional keychain reference; gh auth token remains fallback
-	Token         string            `yaml:"-"`
-	BaseURL       string            `yaml:"base_url"`      // default: https://api.github.com
-	Assignee      string            `yaml:"assignee"`      // username filter for Watch; "me" resolves via /user
-	PollInterval  string            `yaml:"poll_interval"` // default: 60s
-	Reviewers     []string          `yaml:"reviewers"`
-	Labels        []string          `yaml:"labels"`
-	StateMappings map[string]string `yaml:"state_mappings"`
+	TokenRef            string              `yaml:"token_ref"` // optional keychain reference; gh auth token remains fallback
+	Token               string              `yaml:"-"`
+	BaseURL             string              `yaml:"base_url"`      // default: https://api.github.com
+	Assignee            string              `yaml:"assignee"`      // username filter for Watch; "me" resolves via /user
+	PollInterval        string              `yaml:"poll_interval"` // default: 60s
+	Reviewers           []string            `yaml:"reviewers"`
+	Labels              []string            `yaml:"labels"`
+	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
 }
 
@@ -212,6 +214,29 @@ type ClaudeCodeConfig struct {
 
 	// MaxBudgetUSD caps spending per session (0 = unlimited).
 	MaxBudgetUSD float64 `yaml:"max_budget_usd"`
+}
+
+// OpenCodeConfig configures the opencode server harness.
+type OpenCodeConfig struct {
+	// ServerPath is the path to the opencode binary.
+	// Defaults to "opencode" resolved via PATH.
+	ServerPath string `yaml:"server_path"`
+
+	// Port is the HTTP port for opencode serve.
+	// 0 means let the server pick an available port.
+	Port int `yaml:"port"`
+
+	// Hostname is the bind address for opencode serve.
+	// Defaults to "127.0.0.1".
+	Hostname string `yaml:"hostname"`
+
+	// Model is the provider/model identifier (e.g. "anthropic/claude-sonnet-4-20250514").
+	// Empty means use opencode's own default.
+	Model string `yaml:"model"`
+
+	// Agent selects the opencode agent type: "build" (full-access) or "plan" (read-only).
+	// Defaults to "build".
+	Agent string `yaml:"agent"`
 }
 
 type CodexConfig struct {
@@ -455,6 +480,7 @@ func validate(cfg *Config) error {
 		HarnessOhMyPi:     true,
 		HarnessClaudeCode: true,
 		HarnessCodex:      true,
+		HarnessOpenCode:   true,
 	}
 	if !validHarnesses[cfg.Harness.Default] {
 		return fmt.Errorf("invalid harness.default: %q", cfg.Harness.Default)

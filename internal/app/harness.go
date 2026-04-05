@@ -11,6 +11,7 @@ import (
 	claudeagent "github.com/beeemT/substrate/internal/adapter/claudeagent"
 	codexadapter "github.com/beeemT/substrate/internal/adapter/codex"
 	omp "github.com/beeemT/substrate/internal/adapter/ohmypi"
+	opencodeadapter "github.com/beeemT/substrate/internal/adapter/opencode"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -122,6 +123,8 @@ func settingsHarnessFailureReason(harness config.HarnessName, message string) st
 		return settingsClaudeAgentFailureReason(message)
 	case config.HarnessCodex:
 		return settingsBinaryFailureReason("Codex", "codex", message)
+	case config.HarnessOpenCode:
+		return settingsBinaryFailureReason("OpenCode", "opencode", message)
 	default:
 		return message
 	}
@@ -281,6 +284,11 @@ func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRo
 			return nil, fmt.Errorf("codex binary %q not found: %w", binary, err)
 		}
 		return codexadapter.NewHarness(cfg.Adapters.Codex), nil
+	case config.HarnessOpenCode:
+		if err := opencodeadapter.ValidateReadiness(cfg.Adapters.OpenCode); err != nil {
+			return nil, fmt.Errorf("opencode unavailable: %w", err)
+		}
+		return opencodeadapter.NewHarness(cfg.Adapters.OpenCode, workspaceRoot), nil
 	default:
 		return nil, errors.New("unsupported harness: " + string(name))
 	}

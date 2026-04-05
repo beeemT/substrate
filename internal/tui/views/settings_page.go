@@ -220,6 +220,8 @@ func displaySettingsOption(field *SettingsField, value string) string {
 			return "Claude Code"
 		case config.HarnessCodex:
 			return "Codex"
+		case config.HarnessOpenCode:
+			return "OpenCode"
 		}
 	}
 	return value

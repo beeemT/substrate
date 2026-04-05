@@ -497,3 +497,53 @@ func setSettingsFieldValue(t *testing.T, sections []SettingsSection, section, ke
 	}
 	t.Fatalf("field %s.%s not found", section, key)
 }
+
+func TestBuildSettingsSections_IncludesOpenCodeHarnessSection(t *testing.T) {
+	t.Parallel()
+
+	section := findSection(buildSettingsSections(&config.Config{}), "harness.opencode")
+	if section.ID == "" {
+		t.Fatal("expected harness.opencode section in settings snapshot")
+	}
+	if section.Title != "Harness \u00b7 OpenCode" {
+		t.Fatalf("section title = %q, want %q", section.Title, "Harness \u00b7 OpenCode")
+	}
+	wantKeys := []string{"server_path", "port", "hostname", "model", "agent"}
+	if len(section.Fields) != len(wantKeys) {
+		t.Fatalf("field count = %d, want %d", len(section.Fields), len(wantKeys))
+	}
+	for i, key := range wantKeys {
+		if section.Fields[i].Key != key {
+			t.Fatalf("field[%d].Key = %q, want %q", i, section.Fields[i].Key, key)
+		}
+	}
+	if section.Fields[4].Type != SettingsFieldEnum || len(section.Fields[4].Options) != 2 {
+		t.Fatalf("agent field = %+v, want enum with build/plan options", section.Fields[4])
+	}
+}
+
+func TestBuildSettingsSections_HarnessRoutingIncludesOpenCode(t *testing.T) {
+	t.Parallel()
+
+	sections := buildSettingsSections(&config.Config{})
+	routing := findSection(sections, "harness")
+	if routing.ID == "" {
+		t.Fatal("expected harness routing section in settings snapshot")
+	}
+	for _, field := range routing.Fields {
+		if field.Key == "default" {
+			found := false
+			for _, opt := range field.Options {
+				if opt == "opencode" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("default field options = %#v, want \"opencode\" included", field.Options)
+			}
+			return
+		}
+	}
+	t.Fatal("default field not found in harness routing section")
+}

@@ -383,3 +383,59 @@ adapters:
 		t.Fatal("Load() should error on invalid adapters.github.issue_comment_content")
 	}
 }
+
+func TestValidHarnessName_OpenCode(t *testing.T) {
+	path := writeTestConfig(t, `
+harness:
+  default: opencode
+  phase:
+    planning: opencode
+    implementation: opencode
+    review: opencode
+    foreman: opencode
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Harness.Default != HarnessOpenCode {
+		t.Fatalf("harness.default = %q, want %q", cfg.Harness.Default, HarnessOpenCode)
+	}
+	if cfg.Harness.Phase.Planning != HarnessOpenCode {
+		t.Fatalf("harness.phase.planning = %q, want %q", cfg.Harness.Phase.Planning, HarnessOpenCode)
+	}
+}
+
+func TestLoadOpenCodeAdapterConfig(t *testing.T) {
+	path := writeTestConfig(t, `
+harness:
+  default: opencode
+adapters:
+  opencode:
+    server_path: /usr/local/bin/opencode
+    port: 8080
+    hostname: 0.0.0.0
+    model: opencode-custom
+    agent: plan
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	oc := cfg.Adapters.OpenCode
+	if oc.ServerPath != "/usr/local/bin/opencode" {
+		t.Fatalf("opencode.server_path = %q, want %q", oc.ServerPath, "/usr/local/bin/opencode")
+	}
+	if oc.Port != 8080 {
+		t.Fatalf("opencode.port = %d, want 8080", oc.Port)
+	}
+	if oc.Hostname != "0.0.0.0" {
+		t.Fatalf("opencode.hostname = %q, want %q", oc.Hostname, "0.0.0.0")
+	}
+	if oc.Model != "opencode-custom" {
+		t.Fatalf("opencode.model = %q, want %q", oc.Model, "opencode-custom")
+	}
+	if oc.Agent != "plan" {
+		t.Fatalf("opencode.agent = %q, want %q", oc.Agent, "plan")
+	}
+}

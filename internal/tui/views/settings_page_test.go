@@ -208,7 +208,7 @@ func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
 	if !strings.Contains(rendered, "Settings") {
 		t.Fatalf("view = %q, want underlying settings page to remain visible", rendered)
 	}
-	for _, want := range []string{"Oh My Pi", "Claude Code", "Codex"} {
+	for _, want := range []string{"Oh My Pi", "Claude Code", "Codex", "OpenCode"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view = %q, want %q in selection modal", rendered, want)
 		}
@@ -220,6 +220,34 @@ func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
 	}
 }
 
+
+func TestSettingsPage_SelectOpenCodeHarness(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessOhMyPi
+	page := newTestSettingsPage(cfg)
+	sectionIndex := findSectionIndex(t, page, "harness")
+	fieldIndex := findFieldIndex(t, page, "harness", "default")
+	page.sectionCursor = sectionIndex
+	page.fieldCursor = fieldIndex
+	page.focus = settingsFocusFields
+
+	// Open selection modal.
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}, Services{})
+	if !updated.editing || updated.editMode != settingsEditModeSelect {
+		t.Fatalf("editing state = (%v, %v), want selection modal", updated.editing, updated.editMode)
+	}
+
+	// Navigate to OpenCode: Oh My Pi -> Claude Code -> Codex -> OpenCode (3 downs).
+	for range 3 {
+		updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+
+	if got := updated.sections[sectionIndex].Fields[fieldIndex].Value; got != string(config.HarnessOpenCode) {
+		t.Fatalf("field value = %q, want %q", got, config.HarnessOpenCode)
+	}
+}
 func TestSettingsPage_EditModalFitsNarrowWindow(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}

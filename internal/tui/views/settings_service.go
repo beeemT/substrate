@@ -713,11 +713,11 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Harness Routing",
 			Description: "Select which harness runs each phase",
 			Fields: []SettingsField{
-				{Section: settingHarness, Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex"}, Required: true},
-				{Section: "harness.phase", Key: "planning", Label: "Planning Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Planning), Options: []string{"ohmypi", "claude-code", "codex"}},
-				{Section: "harness.phase", Key: "implementation", Label: "Implementation Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Implementation), Options: []string{"ohmypi", "claude-code", "codex"}},
-				{Section: "harness.phase", Key: "review", Label: "Review Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Review), Options: []string{"ohmypi", "claude-code", "codex"}},
-				{Section: "harness.phase", Key: "foreman", Label: "Foreman Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Foreman), Options: []string{"ohmypi", "claude-code", "codex"}},
+				{Section: settingHarness, Key: "default", Label: "Default Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}, Required: true},
+				{Section: "harness.phase", Key: "planning", Label: "Planning Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Planning), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
+				{Section: "harness.phase", Key: "implementation", Label: "Implementation Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Implementation), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
+				{Section: "harness.phase", Key: "review", Label: "Review Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Review), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
+				{Section: "harness.phase", Key: "foreman", Label: "Foreman Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Phase.Foreman), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}},
 			},
 		},
 		{
@@ -753,6 +753,18 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.codex", Key: "approval_mode", Label: "Approval Mode", Type: SettingsFieldString, Value: cfg.Adapters.Codex.ApprovalMode},
 				{Section: "adapters.codex", Key: "full_auto", Label: "Full Auto", Type: SettingsFieldBool, Value: boolStr(cfg.Adapters.Codex.FullAuto)},
 				{Section: "adapters.codex", Key: "quiet", Label: "Quiet", Type: SettingsFieldBool, Value: boolStr(cfg.Adapters.Codex.Quiet)},
+			},
+		},
+		{
+			ID:          "harness.opencode",
+			Title:       "Harness \u00b7 OpenCode",
+			Description: "OpenCode server configuration",
+			Fields: []SettingsField{
+				{Section: "adapters.opencode", Key: "server_path", Label: "Server Path", Type: SettingsFieldPath, Value: cfg.Adapters.OpenCode.ServerPath},
+				{Section: "adapters.opencode", Key: "port", Label: "Port", Type: SettingsFieldString, Value: strconv.Itoa(cfg.Adapters.OpenCode.Port)},
+				{Section: "adapters.opencode", Key: "hostname", Label: "Hostname", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Hostname},
+				{Section: "adapters.opencode", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Model},
+				{Section: "adapters.opencode", Key: "agent", Label: "Agent", Type: SettingsFieldEnum, Value: cfg.Adapters.OpenCode.Agent, Options: []string{"build", "plan"}},
 			},
 		},
 		{
@@ -839,6 +851,8 @@ func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, dia
 			setHarnessSectionWarning(&sections[i], config.HarnessClaudeCode, routedHarnesses, harnessWarnings[config.HarnessClaudeCode])
 		case "harness.codex":
 			setHarnessSectionWarning(&sections[i], config.HarnessCodex, routedHarnesses, harnessWarnings[config.HarnessCodex])
+		case "harness.opencode":
+			setHarnessSectionWarning(&sections[i], config.HarnessOpenCode, routedHarnesses, harnessWarnings[config.HarnessOpenCode])
 		}
 	}
 }
@@ -1006,6 +1020,20 @@ func applyField(cfg *config.Config, field SettingsField) error {
 			return err
 		}
 		cfg.Adapters.Codex.Quiet = parsed
+	case "adapters.opencode.server_path":
+		cfg.Adapters.OpenCode.ServerPath = value
+	case "adapters.opencode.port":
+		parsed, err := parseInt(fieldPath, value)
+		if err != nil {
+			return err
+		}
+		cfg.Adapters.OpenCode.Port = parsed
+	case "adapters.opencode.hostname":
+		cfg.Adapters.OpenCode.Hostname = value
+	case "adapters.opencode.model":
+		cfg.Adapters.OpenCode.Model = value
+	case "adapters.opencode.agent":
+		cfg.Adapters.OpenCode.Agent = value
 	case "adapters.linear.api_key_ref":
 		cfg.Adapters.Linear.APIKey, cfg.Adapters.Linear.APIKeyRef = applySecretField(value, "linear.api_key")
 	case "adapters.linear.team_id":
@@ -1181,6 +1209,16 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Allows Codex to run in full-auto mode when the CLI supports it.", settingFalse
 	case "adapters.codex.quiet":
 		return "Reduces Codex CLI verbosity in session output.", settingFalse
+	case "adapters.opencode.server_path":
+		return "Path to the opencode binary. Defaults to opencode on PATH.", statusEmpty
+	case "adapters.opencode.port":
+		return "HTTP port for the opencode server. 0 lets the server pick.", "0"
+	case "adapters.opencode.hostname":
+		return "Bind address for the opencode server.", "127.0.0.1"
+	case "adapters.opencode.model":
+		return "Provider/model identifier for new sessions.", statusEmpty
+	case "adapters.opencode.agent":
+		return "OpenCode agent type: build (full-access) or plan (read-only).", "build"
 	case "adapters.linear.api_key_ref":
 		return "Linear API credential stored in config or the OS keychain.", statusEmpty
 	case "adapters.linear.team_id":
