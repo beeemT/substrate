@@ -79,6 +79,7 @@ func resolveReadyBridgeRuntime(cfg config.OhMyPiConfig) (bridge.BridgeRuntime, s
 type bridgeInitMsg struct {
 	Type            string `json:"type"`
 	SystemPrompt    string `json:"system_prompt,omitempty"`
+	Model           string `json:"model,omitempty"`
 	AnswerTimeoutMs int64  `json:"answer_timeout_ms"`
 }
 
@@ -86,6 +87,10 @@ type bridgeInitMsg struct {
 func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	if opts.Mode == "" {
 		opts.Mode = adapter.SessionModeAgent
+	}
+
+	if err := config.ValidateThinkingLevel(h.cfg.ThinkingLevel); err != nil {
+		return nil, fmt.Errorf("validate thinking_level: %w", err)
 	}
 
 	// Determine working directory.
@@ -126,11 +131,13 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	}
 	env = append(env,
 		"SUBSTRATE_BRIDGE_MODE="+string(opts.Mode),
-		"SUBSTRATE_THINKING_LEVEL="+h.cfg.ThinkingLevel,
 		"SUBSTRATE_ALLOW_PUSH="+strconv.FormatBool(opts.AllowPush),
 		"SUBSTRATE_WORKTREE_PATH="+workDir,
 		"SUBSTRATE_SESSION_LOG_PATH="+filepath.Join(sessionLogDir, opts.SessionID+".log"),
 	)
+	if h.cfg.ThinkingLevel != "" {
+		env = append(env, "SUBSTRATE_THINKING_LEVEL="+h.cfg.ThinkingLevel)
+	}
 	if resumeFile := opts.ResumeInfo["omp_session_file"]; resumeFile != "" {
 		env = append(env, "SUBSTRATE_RESUME_SESSION_FILE="+resumeFile)
 	}
@@ -192,6 +199,7 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	initMsg := bridgeInitMsg{
 		Type:            "init",
 		SystemPrompt:    opts.SystemPrompt,
+		Model:           h.cfg.Model,
 		AnswerTimeoutMs: opts.AnswerTimeoutMs,
 	}
 	data, err := json.Marshal(initMsg)

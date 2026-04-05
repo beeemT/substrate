@@ -500,15 +500,9 @@ adapters:
     bun_path: ""
     bridge_path: ""
     model: ""
-    permission_mode: ""
-    max_turns: 0
-    max_budget_usd: 0
   codex:
     binary_path: ""
     model: ""
-    approval_mode: ""
-    full_auto: false
-    quiet: false
   linear:
     api_key_ref: ""
     team_id: ""

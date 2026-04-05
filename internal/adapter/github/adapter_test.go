@@ -458,7 +458,6 @@ func TestListIssuesFiltersByLabels(t *testing.T) {
 	}
 }
 
-
 func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 	var patchBody []byte
 	patchFired := false
@@ -493,5 +492,79 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 	}
 	if strings.Contains(body, "closed") {
 		t.Fatalf("patch body = %q, must not contain \"closed\" (done mapping)", body)
+	}
+}
+
+func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
+	var requestedReviewers []string
+	var appliedLabels []string
+	pullCreated := false
+
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet:
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodPost:
+			pullCreated = true
+			return jsonResp(t, http.StatusCreated, map[string]any{"number": 9, "draft": true, "html_url": "https://github.com/acme/rocket/pull/9"}), nil
+		case req.URL.Path == "/repos/acme/rocket/pulls/9/requested_reviewers" && req.Method == http.MethodPost:
+			var body map[string]any
+			data, _ := io.ReadAll(req.Body)
+			_ = json.Unmarshal(data, &body)
+			if raw, ok := body["reviewers"]; ok {
+				if arr, ok := raw.([]any); ok {
+					for _, r := range arr {
+						requestedReviewers = append(requestedReviewers, r.(string))
+					}
+				}
+			}
+			return jsonResp(t, http.StatusCreated, map[string]any{}), nil
+		case req.URL.Path == "/repos/acme/rocket/issues/9/labels" && req.Method == http.MethodPost:
+			var body map[string]any
+			data, _ := io.ReadAll(req.Body)
+			_ = json.Unmarshal(data, &body)
+			if raw, ok := body["labels"]; ok {
+				if arr, ok := raw.([]any); ok {
+					for _, l := range arr {
+						appliedLabels = append(appliedLabels, l.(string))
+					}
+				}
+			}
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	})
+
+	a, err := newWithDeps(
+		context.Background(),
+		config.GithubConfig{
+			Reviewers:     []string{"bob", "carol"},
+			Labels:        []string{"needs-review"},
+			StateMappings: map[string]string{"in_progress": "open", "done": "closed"},
+		},
+		adapter.ReviewArtifactRepos{},
+		rt,
+		func(context.Context) (string, error) { return "tok", nil },
+	)
+	if err != nil {
+		t.Fatalf("newWithDeps: %v", err)
+	}
+
+	payload := `{"branch":"feat/x","work_item_title":"Feature","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"feat/x"}}`
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent worktree created: %v", err)
+	}
+
+	if !pullCreated {
+		t.Fatal("expected draft PR to be created")
+	}
+	if len(requestedReviewers) != 2 || requestedReviewers[0] != "bob" || requestedReviewers[1] != "carol" {
+		t.Fatalf("requestedReviewers = %v, want [bob carol]", requestedReviewers)
+	}
+	if len(appliedLabels) != 1 || appliedLabels[0] != "needs-review" {
+		t.Fatalf("appliedLabels = %v, want [needs-review]", appliedLabels)
 	}
 }

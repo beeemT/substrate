@@ -11,9 +11,9 @@ import (
 
 func HarnessCredentialFields() map[string][]string {
 	return map[string][]string{
-		string(HarnessClaudeCode): {"bun_path", "bridge_path", "model", "permission_mode", "max_turns", "max_budget_usd"},
-		string(HarnessCodex):      {"binary_path", "model", "approval_mode", "full_auto", "quiet"},
-		string(HarnessOhMyPi):     {"bun_path", "bridge_path", "thinking_level"},
+		string(HarnessClaudeCode): {"bun_path", "bridge_path", "model", "thinking", "effort"},
+		string(HarnessCodex):      {"binary_path", "model", "reasoning_effort"},
+		string(HarnessOhMyPi):     {"bun_path", "bridge_path", "model", "thinking_level"},
 	}
 }
 

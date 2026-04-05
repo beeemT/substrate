@@ -220,7 +220,6 @@ func TestSettingsPage_EnumFieldUsesSelectionModal(t *testing.T) {
 	}
 }
 
-
 func TestSettingsPage_SelectOpenCodeHarness(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
@@ -248,6 +247,7 @@ func TestSettingsPage_SelectOpenCodeHarness(t *testing.T) {
 		t.Fatalf("field value = %q, want %q", got, config.HarnessOpenCode)
 	}
 }
+
 func TestSettingsPage_EditModalFitsNarrowWindow(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
@@ -274,27 +274,6 @@ func TestSettingsPage_SelectModalFitsNarrowWindow(t *testing.T) {
 
 	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
 	assertSettingsPageFitsWindow(t, updated.View(), 36, 12)
-}
-
-func TestSettingsPage_TogglesBoolField(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{}
-	cfg.Adapters.Codex.FullAuto = true
-	page := newTestSettingsPage(cfg)
-
-	sectionIndex := findSectionIndex(t, page, "harness.codex")
-	fieldIndex := findFieldIndex(t, page, "harness.codex", "full_auto")
-	page.sectionCursor = sectionIndex
-	page.fieldCursor = fieldIndex
-	page.focus = settingsFocusFields
-
-	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")}, Services{})
-	if got := updated.sections[sectionIndex].Fields[fieldIndex].Value; got != "false" {
-		t.Fatalf("bool field = %q, want false", got)
-	}
-	if !updated.dirty {
-		t.Fatal("expected page to become dirty")
-	}
 }
 
 func TestSettingsPage_RevealSecretsMasksByDefault(t *testing.T) {

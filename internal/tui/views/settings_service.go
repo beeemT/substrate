@@ -727,7 +727,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "adapters.ohmypi", Key: "bun_path", Label: "Bun Path", Type: SettingsFieldPath, Value: cfg.Adapters.OhMyPi.BunPath},
 				{Section: "adapters.ohmypi", Key: "bridge_path", Label: "Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.OhMyPi.BridgePath},
-				{Section: "adapters.ohmypi", Key: "thinking_level", Label: "Thinking Level", Type: SettingsFieldString, Value: cfg.Adapters.OhMyPi.ThinkingLevel},
+				{Section: "adapters.ohmypi", Key: "thinking_level", Label: "Thinking Level", Type: SettingsFieldEnum, Value: cfg.Adapters.OhMyPi.ThinkingLevel, Options: config.ValidThinkingLevels},
+				{Section: "adapters.ohmypi", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.OhMyPi.Model},
 			},
 		},
 		{
@@ -738,9 +739,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.claude_code", Key: "bun_path", Label: "Bun Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BunPath},
 				{Section: "adapters.claude_code", Key: "bridge_path", Label: "Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.ClaudeCode.BridgePath},
 				{Section: "adapters.claude_code", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ClaudeCode.Model},
-				{Section: "adapters.claude_code", Key: "permission_mode", Label: "Permission Mode", Type: SettingsFieldString, Value: cfg.Adapters.ClaudeCode.PermissionMode},
-				{Section: "adapters.claude_code", Key: "max_turns", Label: "Max Turns", Type: SettingsFieldString, Value: strconv.Itoa(cfg.Adapters.ClaudeCode.MaxTurns)},
-				{Section: "adapters.claude_code", Key: "max_budget_usd", Label: "Max Budget USD", Type: SettingsFieldString, Value: formatFloat(cfg.Adapters.ClaudeCode.MaxBudgetUSD)},
+				{Section: "adapters.claude_code", Key: "thinking", Label: "Thinking", Type: SettingsFieldEnum, Value: cfg.Adapters.ClaudeCode.Thinking, Options: config.ValidClaudeThinkingLevels},
+				{Section: "adapters.claude_code", Key: "effort", Label: "Effort", Type: SettingsFieldEnum, Value: cfg.Adapters.ClaudeCode.Effort, Options: config.ValidClaudeEffortLevels},
 			},
 		},
 		{
@@ -750,9 +750,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "adapters.codex", Key: "binary_path", Label: "Binary Path", Type: SettingsFieldPath, Value: cfg.Adapters.Codex.BinaryPath},
 				{Section: "adapters.codex", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.Codex.Model},
-				{Section: "adapters.codex", Key: "approval_mode", Label: "Approval Mode", Type: SettingsFieldString, Value: cfg.Adapters.Codex.ApprovalMode},
-				{Section: "adapters.codex", Key: "full_auto", Label: "Full Auto", Type: SettingsFieldBool, Value: boolStr(cfg.Adapters.Codex.FullAuto)},
-				{Section: "adapters.codex", Key: "quiet", Label: "Quiet", Type: SettingsFieldBool, Value: boolStr(cfg.Adapters.Codex.Quiet)},
+				{Section: "adapters.codex", Key: "reasoning_effort", Label: "Reasoning Effort", Type: SettingsFieldEnum, Value: cfg.Adapters.Codex.ReasoningEffort, Options: config.ValidCodexReasoningEfforts},
 			},
 		},
 		{
@@ -830,7 +828,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		{
 			ID:          "repos",
 			Title:       "Repo Overrides",
-			Description: "Per-repo documentation paths",
+			Description: "Documentation files the planning agent reads before writing a plan for each repository",
 			Fields:      []SettingsField{{Section: "repos", Key: "doc_paths", Label: "Repo Doc Paths", Type: SettingsFieldKeyValue, Value: formatRepos(cfg.Repos)}},
 		},
 	}
@@ -990,44 +988,24 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.OhMyPi.BridgePath = value
 	case "adapters.ohmypi.thinking_level":
 		cfg.Adapters.OhMyPi.ThinkingLevel = value
+	case "adapters.ohmypi.model":
+		cfg.Adapters.OhMyPi.Model = value
 	case "adapters.claude_code.bun_path":
 		cfg.Adapters.ClaudeCode.BunPath = value
 	case "adapters.claude_code.bridge_path":
 		cfg.Adapters.ClaudeCode.BridgePath = value
 	case "adapters.claude_code.model":
 		cfg.Adapters.ClaudeCode.Model = value
-	case "adapters.claude_code.permission_mode":
-		cfg.Adapters.ClaudeCode.PermissionMode = value
-	case "adapters.claude_code.max_turns":
-		parsed, err := parseInt(fieldPath, value)
-		if err != nil {
-			return err
-		}
-		cfg.Adapters.ClaudeCode.MaxTurns = parsed
-	case "adapters.claude_code.max_budget_usd":
-		parsed, err := parseFloat(fieldPath, value)
-		if err != nil {
-			return err
-		}
-		cfg.Adapters.ClaudeCode.MaxBudgetUSD = parsed
+	case "adapters.claude_code.thinking":
+		cfg.Adapters.ClaudeCode.Thinking = value
+	case "adapters.claude_code.effort":
+		cfg.Adapters.ClaudeCode.Effort = value
 	case "adapters.codex.binary_path":
 		cfg.Adapters.Codex.BinaryPath = value
 	case "adapters.codex.model":
 		cfg.Adapters.Codex.Model = value
-	case "adapters.codex.approval_mode":
-		cfg.Adapters.Codex.ApprovalMode = value
-	case "adapters.codex.full_auto":
-		parsed, err := parseFieldBool(fieldPath, value)
-		if err != nil {
-			return err
-		}
-		cfg.Adapters.Codex.FullAuto = parsed
-	case "adapters.codex.quiet":
-		parsed, err := parseFieldBool(fieldPath, value)
-		if err != nil {
-			return err
-		}
-		cfg.Adapters.Codex.Quiet = parsed
+	case "adapters.codex.reasoning_effort":
+		cfg.Adapters.Codex.ReasoningEffort = value
 	case "adapters.opencode.binary_path":
 		cfg.Adapters.OpenCode.BinaryPath = value
 	case "adapters.opencode.port":
@@ -1197,28 +1175,24 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Optional override for the oh-my-pi bridge binary or script; leave empty to use the packaged compiled bridge.", "packaged compiled bridge"
 	case "adapters.ohmypi.thinking_level":
 		return "Reasoning depth hint forwarded to the oh-my-pi bridge harness.", statusEmpty
+	case "adapters.ohmypi.model":
+		return "Provider/model pattern for new sessions, e.g. anthropic/claude-sonnet-4-20250514, openai/gpt-4o, google/gemini-2.5-pro. Empty uses oh-my-pi's own default.", statusEmpty
 	case "adapters.claude_code.bun_path":
 		return "Path to the bun executable for the claude-agent bridge. Defaults to bun on PATH.", statusEmpty
 	case "adapters.claude_code.bridge_path":
 		return "Path to the claude-agent bridge script or binary. Defaults to the bundled bridge.", statusEmpty
 	case "adapters.claude_code.model":
-		return "Claude model name passed to the CLI for new sessions.", statusEmpty
-	case "adapters.claude_code.permission_mode":
-		return "Permission or sandbox mode requested from Claude Code.", statusEmpty
-	case "adapters.claude_code.max_turns":
-		return "Upper bound on Claude Code turns for a single session.", "0"
-	case "adapters.claude_code.max_budget_usd":
-		return "Optional USD budget ceiling passed to Claude Code sessions.", "0"
+		return "Anthropic model ID for new sessions, e.g. claude-sonnet-4-20250514 or claude-opus-4-20250514. Empty uses Claude's default.", statusEmpty
+	case "adapters.claude_code.thinking":
+		return "Extended thinking mode: adaptive, enabled, or disabled. Empty uses Claude's default.", statusEmpty
+	case "adapters.claude_code.effort":
+		return "Reasoning effort level: low, medium, high, or max. Empty uses Claude's default.", statusEmpty
 	case "adapters.codex.binary_path":
 		return "Path to the Codex CLI binary.", statusEmpty
 	case "adapters.codex.model":
-		return "Codex model name used for new sessions.", statusEmpty
-	case "adapters.codex.approval_mode":
-		return "Approval mode passed to Codex for command execution.", statusEmpty
-	case "adapters.codex.full_auto":
-		return "Allows Codex to run in full-auto mode when the CLI supports it.", settingFalse
-	case "adapters.codex.quiet":
-		return "Reduces Codex CLI verbosity in session output.", settingFalse
+		return "OpenAI model name for new sessions, e.g. o4, o4-mini, or o3. Empty uses Codex's default.", statusEmpty
+	case "adapters.codex.reasoning_effort":
+		return "Reasoning effort level for Codex: none, minimal, low, medium, high, or xhigh. Empty uses Codex's default.", statusEmpty
 	case "adapters.opencode.binary_path":
 		return "Path to the opencode binary. Defaults to opencode on PATH.", statusEmpty
 	case "adapters.opencode.port":
@@ -1226,7 +1200,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.opencode.hostname":
 		return "Bind address for the opencode server.", "127.0.0.1"
 	case "adapters.opencode.model":
-		return "Provider/model identifier for new sessions.", statusEmpty
+		return "Provider/model identifier for new sessions, e.g. anthropic/claude-sonnet-4-20250514, openai/gpt-4o, google/gemini-2.5-pro. Empty uses opencode's default.", statusEmpty
 	case "adapters.opencode.agent":
 		return "OpenCode agent type: build (full-access) or plan (read-only).", "build"
 	case "adapters.opencode.variant":
@@ -1276,7 +1250,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.glab.labels":
 		return "Default GitLab merge request labels added by the glab lifecycle adapter.", statusEmpty
 	case "repos.doc_paths":
-		return "Per-repository documentation paths injected into planning context.", statusEmpty
+		return "File paths to project documentation the planning agent reads before writing a plan for this repository. Use this to surface architecture guides, conventions, or other reference material the agent should consult during planning.", statusEmpty
 	default:
 		return "", ""
 	}
@@ -1296,14 +1270,6 @@ func boolStr(v bool) string {
 	}
 
 	return settingFalse
-}
-
-func formatFloat(v float64) string {
-	if v == 0 {
-		return ""
-	}
-
-	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func parseOptionalInt(fieldPath, v string) (*int, error) {
@@ -1329,19 +1295,6 @@ func parseInt(fieldPath, v string) (int, error) {
 	}
 
 	return n, nil
-}
-
-func parseFloat(fieldPath, v string) (float64, error) {
-	trimmed := strings.TrimSpace(v)
-	if trimmed == "" {
-		return 0, nil
-	}
-	f, err := strconv.ParseFloat(trimmed, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s: invalid number %q: %w", fieldPath, trimmed, err)
-	}
-
-	return f, nil
 }
 
 func parseBool(v string) bool {

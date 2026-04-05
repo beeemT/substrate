@@ -606,7 +606,7 @@ Both `claudeagent` and `ohmypi` embed the shared `bridge.BridgeSession` / `bridg
 
 #### Bridge stdio protocol
 
-**Go → Bridge (stdin):** `init` (first, always; carries `mode`, `system_prompt?`, `resume_session_id?`, `permission_mode?`, `model?`, `max_turns?`, `max_budget_usd?`), then `prompt`, `message`, `steer`, `answer`, `compact`, `abort`.
+**Go → Bridge (stdin):** `init` (first, always; carries `mode`, `system_prompt?`, `resume_session_id?`, `model?`, `thinking?`, `effort?`), then `prompt`, `message`, `steer`, `answer`, `compact`, `abort`.
 
 **Bridge → Go (stdout):** `session_meta` (after SDK init, carries `session_id`), then `event` lines wrapping canonical `AgentEvent` objects.
 

@@ -344,7 +344,7 @@ func syntheticGroupForSectionID(sectionID string) (settingsSyntheticGroup, bool)
 	switch {
 	case strings.HasPrefix(sectionID, "provider."):
 		return settingsSyntheticGroup{key: "group.providers", label: "Providers"}, true
-	case sectionID == "repo.glab":
+	case sectionID == "repo.glab" || sectionID == "repo.github":
 		return settingsSyntheticGroup{key: "group.repo-lifecycle", label: "Repo lifecycle"}, true
 	default:
 		return settingsSyntheticGroup{}, false

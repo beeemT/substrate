@@ -117,38 +117,6 @@ func TestSettingsSerialize_PreservesSentryKeychainRefWithoutPendingSave(t *testi
 	}
 }
 
-func TestSettingsSerialize_RejectsInvalidScalarInput(t *testing.T) {
-	t.Setenv("SUBSTRATE_HOME", t.TempDir())
-
-	svc := &SettingsService{}
-	cases := []struct {
-		name    string
-		section string
-		key     string
-		value   string
-		want    string
-	}{
-		{name: "int", section: "adapters.claude_code", key: "max_turns", value: "abc", want: `adapters.claude_code.max_turns: invalid integer "abc"`},
-		{name: "float", section: "adapters.claude_code", key: "max_budget_usd", value: "12.3.4", want: `adapters.claude_code.max_budget_usd: invalid number "12.3.4"`},
-		{name: "bool", section: "adapters.codex", key: "full_auto", value: "sometimes", want: `adapters.codex.full_auto: invalid boolean "sometimes"`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sections := buildSettingsSections(newSettingsApplyHarnessConfig())
-			setSettingsFieldValue(t, sections, tc.section, tc.key, tc.value)
-
-			_, _, err := svc.Serialize(sections)
-			if err == nil {
-				t.Fatalf("Serialize(%s.%s) error = nil, want invalid scalar", tc.section, tc.key)
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Serialize(%s.%s) error = %q, want substring %q", tc.section, tc.key, err, tc.want)
-			}
-		})
-	}
-}
-
 func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SUBSTRATE_HOME", home)
@@ -557,6 +525,21 @@ func TestBuildSettingsSections_HarnessRoutingIncludesOpenCode(t *testing.T) {
 	t.Fatal("default field not found in harness routing section")
 }
 
+func TestOpenCodeVariantRoundTrip(t *testing.T) {
+	// Verify that setting variant in the UI survives configFromSections.
+	t.Parallel()
+	cfg := &config.Config{}
+	sections := buildSettingsSections(cfg)
+	setSettingsFieldValue(t, sections, "adapters.opencode", "variant", "high")
+	roundTripped, err := configFromSections(sections)
+	if err != nil {
+		t.Fatalf("configFromSections() error: %v", err)
+	}
+	if got := roundTripped.Adapters.OpenCode.Variant; got != "high" {
+		t.Errorf("Variant = %q, want %q", got, "high")
+	}
+}
+
 func TestBuildSettingsSections_GithubRepoLifecycleSection(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
@@ -613,20 +596,5 @@ func TestApplyField_GithubReviewersAndLabelsRoundTrip(t *testing.T) {
 	}
 	if got := rebuilt.Adapters.GitHub.Labels; len(got) != 1 || got[0] != "backend" {
 		t.Fatalf("Labels = %#v, want [\"backend\"]", got)
-	}
-}
-
-func TestOpenCodeVariantRoundTrip(t *testing.T) {
-	// Verify that setting variant in the UI survives configFromSections.
-	t.Parallel()
-	cfg := &config.Config{}
-	sections := buildSettingsSections(cfg)
-	setSettingsFieldValue(t, sections, "adapters.opencode", "variant", "high")
-	roundTripped, err := configFromSections(sections)
-	if err != nil {
-		t.Fatalf("configFromSections() error: %v", err)
-	}
-	if got := roundTripped.Adapters.OpenCode.Variant; got != "high" {
-		t.Errorf("Variant = %q, want %q", got, "high")
 	}
 }

@@ -111,15 +111,10 @@ func buildPrompt(system, user string) string {
 // buildArgs constructs the argument list for `codex exec --json ...`.
 // The prompt is NOT included here; it is delivered via stdin in StartSession.
 //
-// Approval-mode mapping (verified against codex-rs/protocol/src/config_types.rs):
-//
-//	FullAuto=true || ApprovalMode="full-auto" → --full-auto
-//	ApprovalMode="auto-edit"                 → --sandbox workspace-write
-//	ApprovalMode="suggest" or empty          → (no sandbox flag; read-only is default)
-//
-// Quiet is silently ignored — there is no equivalent in JSON mode.
+// --full-auto is always passed because Substrate has no approval-request UI;
+// the agent must operate autonomously.
 func buildArgs(opts adapter.SessionOpts, cfg config.CodexConfig) []string {
-	args := []string{"exec", jsonFlag}
+	args := []string{"exec", jsonFlag, "--full-auto"}
 
 	if opts.WorktreePath != "" {
 		args = append(args, "--cd", opts.WorktreePath)
@@ -127,18 +122,8 @@ func buildArgs(opts adapter.SessionOpts, cfg config.CodexConfig) []string {
 	if cfg.Model != "" {
 		args = append(args, "-m", cfg.Model)
 	}
-
-	switch {
-	case cfg.FullAuto || cfg.ApprovalMode == "full-auto":
-		args = append(args, "--full-auto")
-	case cfg.ApprovalMode == "auto-edit":
-		args = append(args, "--sandbox", "workspace-write")
-	default:
-		// "suggest" and empty both use the default read-only sandbox; no flag needed.
-	}
-
-	if cfg.Quiet {
-		slog.Debug("codex: Quiet flag is ignored in JSON mode")
+	if cfg.ReasoningEffort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+cfg.ReasoningEffort)
 	}
 
 	// Resume an existing thread when a thread ID is provided.

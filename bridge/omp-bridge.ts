@@ -16,12 +16,14 @@
  */
 
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
-const thinkingLevel = process.env.SUBSTRATE_THINKING_LEVEL || undefined;
+const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_LEVEL as ThinkingLevel | undefined;
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 let systemPrompt: string | undefined;
+let modelPattern: string | undefined;
 
 const agentToolNames =
   mode === "agent" ? ["read", "grep", "find", "edit", "write", "bash"] : ["read", "grep", "find"];
@@ -284,7 +286,8 @@ async function initSession(): Promise<void> {
   const sessionOpts: NonNullable<Parameters<typeof createAgentSession>[0]> = {
     cwd: worktreePath,
     sessionManager,
-    ...(thinkingLevel ? { thinkingLevel: thinkingLevel as any } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(modelPattern ? { modelPattern } : {}),
     toolNames: agentToolNames,
     spawns: "",
     enableMCP: false,
@@ -458,6 +461,9 @@ async function main(): Promise<void> {
         systemPrompt = parsed.system_prompt || undefined;
         if (typeof parsed.answer_timeout_ms === "number" && parsed.answer_timeout_ms >= 0) {
           answerTimeoutMs = parsed.answer_timeout_ms;
+        }
+        if (typeof parsed.model === "string" && parsed.model) {
+          modelPattern = parsed.model;
         }
       } else {
         // Not an init message — process it as a regular command after session starts.

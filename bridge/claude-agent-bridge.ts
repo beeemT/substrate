@@ -4,7 +4,7 @@
  * JSON-line protocol over stdio:
  *
  * Go → Bun (stdin):
- *   - {"type":"init","mode":"agent"|"foreman","system_prompt":"...","resume_session_id":"...","permission_mode":"...","model":"...","max_turns":N,"max_budget_usd":N}
+ *   - {"type":"init","mode":"agent"|"foreman","system_prompt":"...","resume_session_id":"...","model":"...","thinking":"...","effort":"..."}
  *   - {"type":"prompt","text":"..."}   — initial task
  *   - {"type":"message","text":"..."}  — follow-up message
  *   - {"type":"steer","text":"..."}    — interrupt + new direction
@@ -374,15 +374,14 @@ async function main(): Promise<void> {
     typeof initMsg.system_prompt === "string" ? initMsg.system_prompt : undefined;
   const resumeSessionId =
     typeof initMsg.resume_session_id === "string" ? initMsg.resume_session_id : undefined;
-  const permissionMode =
-    typeof initMsg.permission_mode === "string" ? initMsg.permission_mode : undefined;
   const model = typeof initMsg.model === "string" && initMsg.model ? initMsg.model : undefined;
-  const maxTurns =
-    typeof initMsg.max_turns === "number" && initMsg.max_turns > 0 ? initMsg.max_turns : undefined;
+  const thinking =
+    typeof initMsg.thinking === "string" && initMsg.thinking ? initMsg.thinking : undefined;
+  const effort =
+    typeof initMsg.effort === "string" && initMsg.effort ? initMsg.effort : undefined;
   if (typeof initMsg.answer_timeout_ms === "number" && initMsg.answer_timeout_ms >= 0) {
     answerTimeoutMs = initMsg.answer_timeout_ms;
   }
-  // maxBudgetUSD is not a direct SDK option; not forwarded
 
   const options: Record<string, unknown> = {
     cwd: worktreePath,
@@ -393,13 +392,10 @@ async function main(): Promise<void> {
     options.systemPrompt = { type: "preset", preset: "claude_code", append: systemPromptText };
   }
   if (resumeSessionId) options.resume = resumeSessionId;
-  if (permissionMode) {
-    options.permissionMode = permissionMode;
-  } else {
-    options.permissionMode = mode === "foreman" ? "dontAsk" : "acceptEdits";
-  }
+  options.permissionMode = mode === "foreman" ? "dontAsk" : "bypassPermissions";
   if (model) options.model = model;
-  if (maxTurns) options.maxTurns = maxTurns;
+  if (thinking) options.thinking = thinking;
+  if (effort) options.effort = effort;
 
   if (mode === "foreman") {
     options.allowedTools = ["Read", "Grep", "Glob"];

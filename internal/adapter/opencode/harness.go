@@ -282,7 +282,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 
 	// If not resuming, create a new session via POST /session.
 	if openCodeSessionID == "" {
-		createReq := CreateSessionRequest{Agent: h.cfg.Agent}
+		createReq := CreateSessionRequest{Agent: h.cfg.Agent, Model: h.cfg.Model}
 		if createReq.Agent == "" {
 			createReq.Agent = "build"
 		}

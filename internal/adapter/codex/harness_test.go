@@ -28,7 +28,7 @@ func TestBuildArgs_NewSession(t *testing.T) {
 	if len(args) < 2 || args[0] != "exec" || args[1] != jsonFlag {
 		t.Fatalf("args must start with [exec, %s], got %v", jsonFlag, args)
 	}
-	for _, want := range []string{"--cd", "/tmp/work", "-m", "o4"} {
+	for _, want := range []string{"--full-auto", "--cd", "/tmp/work", "-m", "o4"} {
 		if !slices.Contains(args, want) {
 			t.Fatalf("args missing %q: %v", want, args)
 		}
@@ -64,62 +64,35 @@ func TestBuildArgs_Resume(t *testing.T) {
 	}
 }
 
-func TestBuildArgs_ApprovalModeMapping(t *testing.T) {
+func TestBuildArgs_ReasoningEffort(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         config.CodexConfig
-		wantFlag    string // flag expected to be present, or ""
-		absentFlags []string
+		name   string
+		effort string
+		want   bool
 	}{
-		{
-			name:     "FullAuto true → --full-auto",
-			cfg:      config.CodexConfig{FullAuto: true},
-			wantFlag: "--full-auto",
-		},
-		{
-			name:     "ApprovalMode full-auto → --full-auto",
-			cfg:      config.CodexConfig{ApprovalMode: "full-auto"},
-			wantFlag: "--full-auto",
-		},
-		{
-			name:        "ApprovalMode auto-edit → --sandbox workspace-write",
-			cfg:         config.CodexConfig{ApprovalMode: "auto-edit"},
-			wantFlag:    "--sandbox",
-			absentFlags: []string{"--full-auto"},
-		},
-		{
-			name:        "ApprovalMode suggest → no sandbox flag",
-			cfg:         config.CodexConfig{ApprovalMode: "suggest"},
-			absentFlags: []string{"--full-auto", "--sandbox"},
-		},
-		{
-			name:        "ApprovalMode empty → no sandbox flag",
-			cfg:         config.CodexConfig{},
-			absentFlags: []string{"--full-auto", "--sandbox"},
-		},
-		{
-			name:        "Quiet is silently ignored",
-			cfg:         config.CodexConfig{Quiet: true},
-			absentFlags: []string{"-q"},
-		},
+		{name: "empty effort omitted", effort: "", want: false},
+		{name: "high effort included", effort: "high", want: true},
+		{name: "minimal effort included", effort: "minimal", want: true},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := buildArgs(adapter.SessionOpts{WorktreePath: "/tmp"}, tc.cfg)
-			if tc.wantFlag != "" && !slices.Contains(args, tc.wantFlag) {
-				t.Fatalf("args missing expected flag %q: %v", tc.wantFlag, args)
+			cfg := config.CodexConfig{ReasoningEffort: tc.effort}
+			opts := adapter.SessionOpts{WorktreePath: "/tmp/work"}
+			args := buildArgs(opts, cfg)
+			found := slices.ContainsFunc(args, func(s string) bool {
+				return strings.HasPrefix(s, "model_reasoning_effort=")
+			})
+			if found != tc.want {
+				t.Fatalf("reasoning effort presence = %v, want %v; args: %v", found, tc.want, args)
 			}
-			// auto-edit must pass workspace-write as the next arg after --sandbox.
-			if tc.cfg.ApprovalMode == "auto-edit" {
-				idx := slices.Index(args, "--sandbox")
-				if idx < 0 || idx+1 >= len(args) || args[idx+1] != "workspace-write" {
-					t.Fatalf("--sandbox workspace-write not found: %v", args)
+			if tc.want {
+				// Verify the -c flag precedes the key=value.
+				cIdx := slices.Index(args, "-c")
+				if cIdx < 0 {
+					t.Fatal("missing -c flag")
 				}
-			}
-			for _, absent := range tc.absentFlags {
-				if slices.Contains(args, absent) {
-					t.Fatalf("args must not contain %q: %v", absent, args)
+				if cIdx+1 >= len(args) || args[cIdx+1] != "model_reasoning_effort="+tc.effort {
+					t.Fatalf("-c value = %q, want model_reasoning_effort=%s", args[cIdx+1], tc.effort)
 				}
 			}
 		})

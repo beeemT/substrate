@@ -80,15 +80,14 @@ func resolveReadyBridgeRuntime(cfg config.ClaudeCodeConfig) (bridge.BridgeRuntim
 // bridgeInitMsg is sent first to configure the session.
 // All config is passed here rather than via env to avoid exposure in /proc/pid/environ.
 type bridgeInitMsg struct {
-	Type            string  `json:"type"`
-	Mode            string  `json:"mode"`
-	SystemPrompt    string  `json:"system_prompt,omitempty"`
-	ResumeSessionID string  `json:"resume_session_id,omitempty"`
-	PermissionMode  string  `json:"permission_mode,omitempty"`
-	Model           string  `json:"model,omitempty"`
-	MaxTurns        int     `json:"max_turns,omitempty"`
-	MaxBudgetUSD    float64 `json:"max_budget_usd,omitempty"`
-	AnswerTimeoutMs int64   `json:"answer_timeout_ms"`
+	Type            string `json:"type"`
+	Mode            string `json:"mode"`
+	SystemPrompt    string `json:"system_prompt,omitempty"`
+	ResumeSessionID string `json:"resume_session_id,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Thinking        string `json:"thinking,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	AnswerTimeoutMs int64  `json:"answer_timeout_ms"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -196,10 +195,9 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		Mode:            string(opts.Mode),
 		SystemPrompt:    opts.SystemPrompt,
 		ResumeSessionID: opts.ResumeInfo["claude_session_id"],
-		PermissionMode:  h.cfg.PermissionMode,
 		Model:           h.cfg.Model,
-		MaxTurns:        h.cfg.MaxTurns,
-		MaxBudgetUSD:    h.cfg.MaxBudgetUSD,
+		Thinking:        h.cfg.Thinking,
+		Effort:          h.cfg.Effort,
 		AnswerTimeoutMs: opts.AnswerTimeoutMs,
 	}
 	data, err := json.Marshal(initMsg)

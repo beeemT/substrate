@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -185,12 +186,40 @@ type GlabConfig struct {
 	Labels []string `yaml:"labels"`
 }
 
+// ValidThinkingLevels lists the accepted values for OhMyPiConfig.ThinkingLevel.
+// An empty string means "defer to the oh-my-pi agent's own default."
+var ValidThinkingLevels = []string{"", "off", "minimal", "low", "medium", "high", "xhigh"}
+
 // OhMyPiConfig configures the oh-my-pi agent harness.
 type OhMyPiConfig struct {
-	BunPath       string `yaml:"bun_path"`
-	BridgePath    string `yaml:"bridge_path"`
+	BunPath    string `yaml:"bun_path"`
+	BridgePath string `yaml:"bridge_path"`
+	// ThinkingLevel controls reasoning depth for the oh-my-pi agent.
+	// Empty defers to the agent's own configured default.
 	ThinkingLevel string `yaml:"thinking_level"`
+	// Model is the model pattern for new sessions (e.g. "anthropic/claude-sonnet-4-20250514").
+	// Empty means use oh-my-pi's own default.
+	Model string `yaml:"model"`
 }
+
+// ValidateThinkingLevel returns an error if level is not a recognised value.
+func ValidateThinkingLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+	if !slices.Contains(ValidThinkingLevels, level) {
+		return fmt.Errorf("invalid thinking_level %q: must be one of %v", level, ValidThinkingLevels)
+	}
+	return nil
+}
+
+// ValidClaudeThinkingLevels lists the accepted values for ClaudeCodeConfig.Thinking.
+// An empty string means "defer to Claude's own default."
+var ValidClaudeThinkingLevels = []string{"", "adaptive", "enabled", "disabled"}
+
+// ValidClaudeEffortLevels lists the accepted values for ClaudeCodeConfig.Effort.
+// An empty string means "defer to Claude's own default."
+var ValidClaudeEffortLevels = []string{"", "low", "medium", "high", "max"}
 
 // ClaudeCodeConfig configures the claude-agent bridge harness.
 type ClaudeCodeConfig struct {
@@ -205,15 +234,44 @@ type ClaudeCodeConfig struct {
 	// Model is the Claude model name. Empty means use Claude's own default.
 	Model string `yaml:"model"`
 
-	// PermissionMode controls tool permissions. Defaults to "acceptEdits".
-	// Valid: "default", "acceptEdits", "bypassPermissions", "dontAsk".
-	PermissionMode string `yaml:"permission_mode"`
+	// Thinking controls extended thinking mode. Empty uses Claude's default.
+	Thinking string `yaml:"thinking"`
 
-	// MaxTurns caps the agentic turn count (0 = SDK default).
-	MaxTurns int `yaml:"max_turns"`
+	// Effort controls reasoning depth and token spend. Empty uses Claude's default.
+	Effort string `yaml:"effort"`
+}
 
-	// MaxBudgetUSD caps spending per session (0 = unlimited).
-	MaxBudgetUSD float64 `yaml:"max_budget_usd"`
+// ValidateClaudeThinking returns an error if level is not a recognised value.
+func ValidateClaudeThinking(level string) error {
+	if level == "" {
+		return nil
+	}
+	if !slices.Contains(ValidClaudeThinkingLevels, level) {
+		return fmt.Errorf("invalid thinking %q: must be one of %v", level, ValidClaudeThinkingLevels)
+	}
+	return nil
+}
+
+// ValidateClaudeEffort returns an error if level is not a recognised value.
+func ValidateClaudeEffort(level string) error {
+	if level == "" {
+		return nil
+	}
+	if !slices.Contains(ValidClaudeEffortLevels, level) {
+		return fmt.Errorf("invalid effort %q: must be one of %v", level, ValidClaudeEffortLevels)
+	}
+	return nil
+}
+
+// ValidateCodexReasoningEffort returns an error if level is not a recognised value.
+func ValidateCodexReasoningEffort(level string) error {
+	if level == "" {
+		return nil
+	}
+	if !slices.Contains(ValidCodexReasoningEfforts, level) {
+		return fmt.Errorf("invalid reasoning_effort %q: must be one of %v", level, ValidCodexReasoningEfforts)
+	}
+	return nil
 }
 
 // OpenCodeConfig configures the opencode server harness.
@@ -248,12 +306,19 @@ type OpenCodeConfig struct {
 	Variant string `yaml:"variant"`
 }
 
+// ValidCodexReasoningEfforts lists the accepted values for CodexConfig.ReasoningEffort.
+// An empty string means "defer to the Codex model's own default."
+var ValidCodexReasoningEfforts = []string{"", "none", "minimal", "low", "medium", "high", "xhigh"}
+
+// CodexConfig configures the OpenAI Codex CLI harness.
 type CodexConfig struct {
-	BinaryPath   string `yaml:"binary_path"`
-	Model        string `yaml:"model"`
-	ApprovalMode string `yaml:"approval_mode"`
-	FullAuto     bool   `yaml:"full_auto"`
-	Quiet        bool   `yaml:"quiet"`
+	BinaryPath string `yaml:"binary_path"`
+	// Model is the OpenAI model name passed via -m flag (e.g. "o4", "o4-mini", "o3").
+	// Empty uses Codex's own default.
+	Model string `yaml:"model"`
+	// ReasoningEffort controls model reasoning depth via -c model_reasoning_effort.
+	// Empty defers to the model's own default.
+	ReasoningEffort string `yaml:"reasoning_effort"`
 }
 
 // ForemanConfig controls the foreman question-answering system.
@@ -503,6 +568,16 @@ func validate(cfg *Config) error {
 		if !validHarnesses[value] {
 			return fmt.Errorf("invalid harness.phase.%s: %q", field, value)
 		}
+	}
+
+	if err := ValidateClaudeThinking(cfg.Adapters.ClaudeCode.Thinking); err != nil {
+		return fmt.Errorf("invalid adapters.claude_code.thinking: %w", err)
+	}
+	if err := ValidateClaudeEffort(cfg.Adapters.ClaudeCode.Effort); err != nil {
+		return fmt.Errorf("invalid adapters.claude_code.effort: %w", err)
+	}
+	if err := ValidateCodexReasoningEffort(cfg.Adapters.Codex.ReasoningEffort); err != nil {
+		return fmt.Errorf("invalid adapters.codex.reasoning_effort: %w", err)
 	}
 
 	return nil
