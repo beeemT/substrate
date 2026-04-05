@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -29,8 +30,13 @@ const (
 )
 
 const (
-	addRepoPageSize = 30
+	addRepoPageSize      = 30
+	addRepoDebounceDelay = 200 * time.Millisecond
 )
+
+// addRepoDebounceMsg fires after the debounce window expires.
+// A seq mismatch means the user typed again before the timer fired; discard.
+type addRepoDebounceMsg struct{ seq int }
 
 // addRepoControl tracks which specific control within addRepoFocusControls is active.
 type addRepoControl int
@@ -55,28 +61,29 @@ var addRepoSizingSpec = components.SplitOverlaySizingSpec{
 
 // AddRepoOverlay is the overlay for browsing and cloning remote repositories.
 type AddRepoOverlay struct { //nolint:recvcheck
-	sources        []adapter.RepoSource
-	sourceIndex    int
-	gitClient      *gitwork.Client
-	workspaceDir   string
-	searchInput    textinput.Model
-	repoList       list.Model
-	allRepos       []adapter.RepoItem
-	loading        bool
-	hasMore        bool
-	manualURL      textinput.Model
-	showManual     bool
-	cloning        bool
-	cloneError     string
-	detailViewport viewport.Model
-	detailRepo     *adapter.RepoItem
-	focus          addRepoFocusArea
-	addRepoCtrl    addRepoControl
-	requestSeq     int
-	styles         styles.Styles
-	width          int
-	height         int
-	active         bool
+	sources           []adapter.RepoSource
+	sourceIndex       int
+	gitClient         *gitwork.Client
+	workspaceDir      string
+	searchInput       textinput.Model
+	repoList          list.Model
+	allRepos          []adapter.RepoItem
+	loading           bool
+	hasMore           bool
+	manualURL         textinput.Model
+	showManual        bool
+	cloning           bool
+	cloneError        string
+	detailViewport    viewport.Model
+	detailRepo        *adapter.RepoItem
+	focus             addRepoFocusArea
+	addRepoCtrl       addRepoControl
+	requestSeq        int
+	searchDebounceSeq int
+	styles            styles.Styles
+	width             int
+	height            int
+	active            bool
 }
 
 // repoItem adapts adapter.RepoItem for the bubbles list widget.
@@ -391,6 +398,12 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 	forceDetailTop := false
 
 	switch msg := msg.(type) {
+	case addRepoDebounceMsg:
+		// Only fire the real search if this timer belongs to the latest keystroke.
+		if msg.seq == m.searchDebounceSeq {
+			cmds = append(cmds, m.reloadRepos())
+		}
+
 	case RepoListLoadedMsg:
 		// Discard responses from superseded requests (user typed another character
 		// before the previous fetch completed). RequestID 0 is the zero value used
@@ -573,8 +586,15 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 					before := m.searchInput.Value()
 					m.searchInput, cmd = m.searchInput.Update(msg)
 					cmds = append(cmds, cmd)
-					if m.searchInput.Value() != before {
-						cmds = append(cmds, m.reloadRepos())
+					// Debounce: schedule the reload after the delay rather than firing
+					// immediately so rapid typing doesn't flood the source with requests.
+					if strings.TrimSpace(m.searchInput.Value()) != strings.TrimSpace(before) {
+						m.searchDebounceSeq++
+						seq := m.searchDebounceSeq
+						debounceCmd := tea.Tick(addRepoDebounceDelay, func(time.Time) tea.Msg {
+							return addRepoDebounceMsg{seq: seq}
+						})
+						cmds = append(cmds, debounceCmd)
 					}
 				}
 			case addRepoFocusList:

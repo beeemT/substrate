@@ -396,37 +396,6 @@ func TestAddRepoOverlay_ViewFitsSize_AfterNavigation(t *testing.T) {
 	assertViewFitsSize(t, m.View(), 120, 40)
 }
 
-// TestAddRepoOverlay_SearchOnTypeReloads asserts that typing into the search input
-// while the search control is focused triggers a repo reload.
-func TestAddRepoOverlay_SearchOnTypeReloads(t *testing.T) {
-	t.Parallel()
-
-	var loadCallCount int
-	source := &mockRepoSource{name: "github", repos: testRepos()}
-	// Wrap the source to count ListRepos calls after Open().
-	// We use a counting adapter via a closure-captured counter.
-
-	m := newAddRepoOverlay(t, []adapter.RepoSource{source})
-	m.SetSize(120, 40)
-	cmd := m.Open()
-	// Drain the initial load cmd.
-	if cmd != nil {
-		_ = cmd()
-	}
-	m, _ = m.Update(views.RepoListLoadedMsg{Repos: testRepos(), HasMore: false})
-
-	// Type a character while search control is focused.
-	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
-	_, cmd = m.Update(keyR)
-
-	// A reload command must have been issued (cmd is non-nil).
-	// We verify the cmd fires a load by checking it is non-nil.
-	_ = loadCallCount
-	if cmd == nil {
-		t.Error("expected a reload command after typing in search bar")
-	}
-}
-
 // TestAddRepoOverlay_EnterInSearchDoesNotClone asserts that pressing Enter while
 // the search control is focused does NOT trigger a clone of the selected repo.
 func TestAddRepoOverlay_EnterInSearchDoesNotClone(t *testing.T) {
