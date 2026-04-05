@@ -72,6 +72,7 @@ type AddRepoOverlay struct { //nolint:recvcheck
 	detailRepo     *adapter.RepoItem
 	focus          addRepoFocusArea
 	addRepoCtrl    addRepoControl
+	requestSeq     int
 	styles         styles.Styles
 	width          int
 	height         int
@@ -272,12 +273,20 @@ func (m AddRepoOverlay) renderDetailContent(item adapter.RepoItem, width int) st
 	return strings.Join(rows, "\n") + desc
 }
 
+// nextRequestID increments the sequence counter and returns the new value.
+// Every reloadRepos call captures one ID; the handler discards responses whose
+// ID no longer matches, so only the most recent in-flight request is applied.
+func (m *AddRepoOverlay) nextRequestID() int {
+	m.requestSeq++
+	return m.requestSeq
+}
+
 // reloadRepos triggers a fresh repo listing from the current source.
 func (m *AddRepoOverlay) reloadRepos() tea.Cmd {
 	m.loading = true
 	m.allRepos = nil
 	m.repoList.SetItems(nil)
-	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize)
+	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize, m.nextRequestID())
 }
 
 // browserLayout computes the split overlay geometry (2-pass like NewSession).
@@ -383,6 +392,12 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case RepoListLoadedMsg:
+		// Discard responses from superseded requests (user typed another character
+		// before the previous fetch completed). RequestID 0 is the zero value used
+		// by test helpers that don't set an ID, so treat it as always current.
+		if msg.RequestID != 0 && msg.RequestID != m.requestSeq {
+			break
+		}
 		m.loading = false
 		m.allRepos = msg.Repos
 		m.hasMore = msg.HasMore

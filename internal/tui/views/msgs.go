@@ -275,9 +275,10 @@ type ShowAddRepoMsg struct{}
 
 // RepoListLoadedMsg carries fetched repos from repo sources.
 type RepoListLoadedMsg struct {
-	Repos   []adapter.RepoItem
-	HasMore bool
-	Errs    []error
+	RequestID int
+	Repos     []adapter.RepoItem
+	HasMore   bool
+	Errs      []error
 }
 
 // AddRepoCloneMsg fires when user confirms cloning a repo.
