@@ -50,6 +50,7 @@ type session struct {
 	// pendingQuestionID tracks the latest pending question request ID
 	// from SSE events, used by SendAnswer.
 	pendingQuestionID string
+	variant          string
 }
 
 func (s *session) ID() string { return s.id }
@@ -72,6 +73,8 @@ func (s *session) Wait(ctx context.Context) error {
 // SendMessage sends a message to the running agent via POST /session/:id/message.
 func (s *session) SendMessage(ctx context.Context, msg string) error {
 	body := SendMessageRequest{Content: msg}
+	body.Variant = s.variant
+
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)

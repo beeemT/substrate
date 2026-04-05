@@ -508,7 +508,7 @@ func TestBuildSettingsSections_IncludesOpenCodeHarnessSection(t *testing.T) {
 	if section.Title != "Harness \u00b7 OpenCode" {
 		t.Fatalf("section title = %q, want %q", section.Title, "Harness \u00b7 OpenCode")
 	}
-	wantKeys := []string{"server_path", "port", "hostname", "model", "agent"}
+	wantKeys := []string{"binary_path", "port", "hostname", "model", "agent", "variant"}
 	if len(section.Fields) != len(wantKeys) {
 		t.Fatalf("field count = %d, want %d", len(section.Fields), len(wantKeys))
 	}
@@ -517,8 +517,23 @@ func TestBuildSettingsSections_IncludesOpenCodeHarnessSection(t *testing.T) {
 			t.Fatalf("field[%d].Key = %q, want %q", i, section.Fields[i].Key, key)
 		}
 	}
+	// agent field: enum with build/plan options
 	if section.Fields[4].Type != SettingsFieldEnum || len(section.Fields[4].Options) != 2 {
 		t.Fatalf("agent field = %+v, want enum with build/plan options", section.Fields[4])
+	}
+	// variant field: enum with empty-string-first options covering common providers
+	variantField := section.Fields[5]
+	wantVariantOptions := []string{"", "low", "medium", "high", "max"}
+	if variantField.Type != SettingsFieldEnum {
+		t.Fatalf("variant field type = %v, want SettingsFieldEnum", variantField.Type)
+	}
+	if len(variantField.Options) != len(wantVariantOptions) {
+		t.Fatalf("variant field options = %v, want %v", variantField.Options, wantVariantOptions)
+	}
+	for i, opt := range wantVariantOptions {
+		if variantField.Options[i] != opt {
+			t.Fatalf("variant option[%d] = %q, want %q", i, variantField.Options[i], opt)
+		}
 	}
 }
 
@@ -546,4 +561,78 @@ func TestBuildSettingsSections_HarnessRoutingIncludesOpenCode(t *testing.T) {
 		}
 	}
 	t.Fatal("default field not found in harness routing section")
+}
+
+func TestBuildSettingsSections_GithubRepoLifecycleSection(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.Reviewers = []string{"alice"}
+	cfg.Adapters.GitHub.Labels = []string{"backend"}
+	sections := buildSettingsSections(cfg)
+
+	// repo.github section must exist with correct metadata
+	section := findSection(sections, "repo.github")
+	if section.ID != "repo.github" {
+		t.Fatalf("repo.github section not found; got ID = %q", section.ID)
+	}
+	if section.Title != "Repo Lifecycle \u00b7 GitHub" {
+		t.Fatalf("section title = %q, want %q", section.Title, "Repo Lifecycle \u00b7 GitHub")
+	}
+
+	// must have reviewers and labels fields
+	var gotReviewers, gotLabels string
+	for _, f := range section.Fields {
+		switch f.Key {
+		case "reviewers":
+			gotReviewers = f.Value
+		case "labels":
+			gotLabels = f.Value
+		}
+	}
+	if gotReviewers != "alice" {
+		t.Fatalf("reviewers field value = %q, want %q", gotReviewers, "alice")
+	}
+	if gotLabels != "backend" {
+		t.Fatalf("labels field value = %q, want %q", gotLabels, "backend")
+	}
+
+	// provider.github must NOT contain reviewers or labels
+	githubSection := findSection(sections, "provider.github")
+	for _, f := range githubSection.Fields {
+		if f.Key == "reviewers" || f.Key == "labels" {
+			t.Fatalf("provider.github still has field with key %q", f.Key)
+		}
+	}
+}
+
+func TestApplyField_GithubReviewersAndLabelsRoundTrip(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Adapters.GitHub.Reviewers = []string{"alice"}
+	cfg.Adapters.GitHub.Labels = []string{"backend"}
+	rebuilt, err := configFromSections(buildSettingsSections(cfg))
+	if err != nil {
+		t.Fatalf("configFromSections: %v", err)
+	}
+	if got := rebuilt.Adapters.GitHub.Reviewers; len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("Reviewers = %#v, want [\"alice\"]", got)
+	}
+	if got := rebuilt.Adapters.GitHub.Labels; len(got) != 1 || got[0] != "backend" {
+		t.Fatalf("Labels = %#v, want [\"backend\"]", got)
+	}
+}
+
+func TestOpenCodeVariantRoundTrip(t *testing.T) {
+	// Verify that setting variant in the UI survives configFromSections.
+	t.Parallel()
+	cfg := &config.Config{}
+	sections := buildSettingsSections(cfg)
+	setSettingsFieldValue(t, sections, "adapters.opencode", "variant", "high")
+	roundTripped, err := configFromSections(sections)
+	if err != nil {
+		t.Fatalf("configFromSections() error: %v", err)
+	}
+	if got := roundTripped.Adapters.OpenCode.Variant; got != "high" {
+		t.Errorf("Variant = %q, want %q", got, "high")
+	}
 }

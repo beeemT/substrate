@@ -368,6 +368,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		logDir:     sessionLogDir,
 		workDir:    workDir,
 		cmd:        cmd,
+		variant:    h.cfg.Variant,
 		waitDone:   make(chan struct{}),
 	}
 

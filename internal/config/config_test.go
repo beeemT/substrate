@@ -417,6 +417,7 @@ adapters:
     hostname: 0.0.0.0
     model: opencode-custom
     agent: plan
+    variant: high
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -437,5 +438,8 @@ adapters:
 	}
 	if oc.Agent != "plan" {
 		t.Fatalf("opencode.agent = %q, want %q", oc.Agent, "plan")
+	}
+	if oc.Variant != "high" {
+		t.Fatalf("opencode.variant = %q, want %q", oc.Variant, "high")
 	}
 }

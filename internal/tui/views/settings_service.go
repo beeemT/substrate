@@ -765,6 +765,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.opencode", Key: "hostname", Label: "Hostname", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Hostname},
 				{Section: "adapters.opencode", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Model},
 				{Section: "adapters.opencode", Key: "agent", Label: "Agent", Type: SettingsFieldEnum, Value: cfg.Adapters.OpenCode.Agent, Options: []string{"build", "plan"}},
+				{Section: "adapters.opencode", Key: "variant", Label: "Thinking Level", Type: SettingsFieldEnum, Value: cfg.Adapters.OpenCode.Variant, Options: []string{"", "low", "medium", "high", "max"}, Description: "Model variant (reasoning effort). Anthropic: low, medium, high, max. OpenAI: none, minimal, low, medium, high, xhigh. Google: low, high, max. Empty defers to model default. Unsupported values are silently ignored."},
 			},
 		},
 		{
@@ -805,8 +806,6 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.github", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitHub.TokenRef, cfg.Adapters.GitHub.Token), Sensitive: true, Status: config.GitHubAuthSource(cfg.Adapters.GitHub)},
 				{Section: "adapters.github", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Assignee},
 				{Section: "adapters.github", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.PollInterval},
-				{Section: "adapters.github", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Reviewers, ",")},
-				{Section: "adapters.github", Key: "labels", Label: "Labels", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Labels, ",")},
 				{Section: "adapters.github", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitHub.StateMappings)},
 			},
 		},
@@ -817,6 +816,15 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "adapters.glab", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Glab.Reviewers, ",")},
 				{Section: "adapters.glab", Key: "labels", Label: "Labels", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Glab.Labels, ",")},
+			},
+		},
+		{
+			ID:          "repo.github",
+			Title:       "Repo Lifecycle \u00b7 GitHub",
+			Description: "GitHub PR automation",
+			Fields: []SettingsField{
+				{Section: "adapters.github", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Reviewers, ",")},
+				{Section: "adapters.github", Key: "labels", Label: "Labels", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.GitHub.Labels, ",")},
 			},
 		},
 		{
@@ -1034,6 +1042,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.OpenCode.Model = value
 	case "adapters.opencode.agent":
 		cfg.Adapters.OpenCode.Agent = value
+	case "adapters.opencode.variant":
+		cfg.Adapters.OpenCode.Variant = value
 	case "adapters.linear.api_key_ref":
 		cfg.Adapters.Linear.APIKey, cfg.Adapters.Linear.APIKeyRef = applySecretField(value, "linear.api_key")
 	case "adapters.linear.team_id":
@@ -1219,6 +1229,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Provider/model identifier for new sessions.", statusEmpty
 	case "adapters.opencode.agent":
 		return "OpenCode agent type: build (full-access) or plan (read-only).", "build"
+	case "adapters.opencode.variant":
+		return "Model variant (reasoning effort). Anthropic: low, medium, high, max. OpenAI: none, minimal, low, medium, high, xhigh. Google: low, high, max. Empty defers to model default. Unsupported values are silently ignored.", ""
 	case "adapters.linear.api_key_ref":
 		return "Linear API credential stored in config or the OS keychain.", statusEmpty
 	case "adapters.linear.team_id":

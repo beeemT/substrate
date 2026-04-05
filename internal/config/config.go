@@ -237,6 +237,15 @@ type OpenCodeConfig struct {
 	// Agent selects the opencode agent type: "build" (full-access) or "plan" (read-only).
 	// Defaults to "build".
 	Agent string `yaml:"agent"`
+
+	// Variant selects the model variant (reasoning effort) for prompts.
+	// Empty defers to the model's own default.
+	// Valid values depend on the provider and model:
+	//   Anthropic: high, max (adaptive models also: low, medium)
+	//   OpenAI: none, minimal, low, medium, high, xhigh
+	//   Google: low, high (2.5 models: high, max)
+	// Unsupported values are silently ignored by opencode.
+	Variant string `yaml:"variant"`
 }
 
 type CodexConfig struct {

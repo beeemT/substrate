@@ -118,3 +118,26 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestSession_VariantCarried(t *testing.T) {
+	// Variant set on session is exposed through the struct field.
+	s := &session{
+		id:      "test-id",
+		events:  make(chan adapter.AgentEvent, 1),
+		variant: "high",
+	}
+	if s.variant != "high" {
+		t.Errorf("variant = %q, want %q", s.variant, "high")
+	}
+}
+
+func TestSession_VariantEmpty(t *testing.T) {
+	// Empty variant leaves the field at zero value; SendMessage will omit it via omitempty.
+	s := &session{
+		id:     "test-id",
+		events: make(chan adapter.AgentEvent, 1),
+	}
+	if s.variant != "" {
+		t.Errorf("variant = %q, want empty string", s.variant)
+	}
+}
