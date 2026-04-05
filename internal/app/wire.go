@@ -71,12 +71,12 @@ func BuildWorkItemAdapters(
 }
 
 // BuildRepoSources constructs the ordered list of repo sources for the Add Repo
-// overlay. The manual source is always included (it handles direct URL entry).
-// GitHub and GitLab sources are added when their auth is configured; init
-// failures are logged and skipped so a single broken provider does not block
-// the overlay from showing the others.
+// overlay. GitHub and GitLab sources are added when their auth is configured;
+// init failures are logged and skipped so a single broken provider does not
+// block the overlay from showing the others. Manual URL entry is handled
+// separately via the overlay's Ctrl+N input and needs no source entry here.
 func BuildRepoSources(ctx context.Context, cfg *config.Config) []adapter.RepoSource {
-	sources := []adapter.RepoSource{manualadapter.NewRepoSource()}
+	var sources []adapter.RepoSource
 	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 		src, err := githubadapter.NewRepoSource(ctx, cfg.Adapters.GitHub)
 		if err != nil {

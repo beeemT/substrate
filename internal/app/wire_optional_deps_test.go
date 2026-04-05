@@ -52,17 +52,14 @@ func TestBuildRepoLifecycleAdapters_IgnoresSentryConfig(t *testing.T) {
 	}
 }
 
-func TestBuildRepoSources_AlwaysIncludesManual(t *testing.T) {
-	// Isolate PATH so no gh/glab CLI is found; only manual should be included.
+func TestBuildRepoSources_EmptyWithNoProviders(t *testing.T) {
+	// Isolate PATH so no gh/glab CLI is found; no providers configured → empty.
 	t.Setenv("PATH", t.TempDir())
 	cfg := &config.Config{}
 
 	sources := BuildRepoSources(context.Background(), cfg)
-	if len(sources) != 1 {
-		t.Fatalf("sources len = %d, want 1", len(sources))
-	}
-	if sources[0].Name() != "manual" {
-		t.Fatalf("sources[0].Name() = %q, want manual", sources[0].Name())
+	if len(sources) != 0 {
+		t.Fatalf("sources len = %d, want 0 (manual is not a repo source)", len(sources))
 	}
 }
 
@@ -72,11 +69,11 @@ func TestBuildRepoSources_IncludesGitHubWhenConfigTokenPresent(t *testing.T) {
 	cfg.Adapters.GitHub.Token = "ghp_test"
 
 	sources := BuildRepoSources(context.Background(), cfg)
-	if len(sources) != 2 {
-		t.Fatalf("sources len = %d, want 2 (manual + github)", len(sources))
+	if len(sources) != 1 {
+		t.Fatalf("sources len = %d, want 1 (github)", len(sources))
 	}
-	if sources[0].Name() != "manual" || sources[1].Name() != "github" {
-		t.Fatalf("source names = [%q %q], want [manual github]", sources[0].Name(), sources[1].Name())
+	if sources[0].Name() != "github" {
+		t.Fatalf("sources[0].Name() = %q, want github", sources[0].Name())
 	}
 }
 
@@ -87,11 +84,11 @@ func TestBuildRepoSources_IncludesGitHubWhenGhCLIAvailable(t *testing.T) {
 	cfg := &config.Config{}
 
 	sources := BuildRepoSources(context.Background(), cfg)
-	if len(sources) != 2 {
-		t.Fatalf("sources len = %d, want 2 (manual + github)", len(sources))
+	if len(sources) != 1 {
+		t.Fatalf("sources len = %d, want 1 (github)", len(sources))
 	}
-	if sources[0].Name() != "manual" || sources[1].Name() != "github" {
-		t.Fatalf("source names = [%q %q], want [manual github]", sources[0].Name(), sources[1].Name())
+	if sources[0].Name() != "github" {
+		t.Fatalf("sources[0].Name() = %q, want github", sources[0].Name())
 	}
 }
 
@@ -103,10 +100,7 @@ func TestBuildRepoSources_SkipsGitHubWhenTokenResolutionFails(t *testing.T) {
 	cfg := &config.Config{}
 
 	sources := BuildRepoSources(context.Background(), cfg)
-	if len(sources) != 1 {
-		t.Fatalf("sources len = %d, want 1 (manual only)", len(sources))
-	}
-	if sources[0].Name() != "manual" {
-		t.Fatalf("sources[0].Name() = %q, want manual", sources[0].Name())
+	if len(sources) != 0 {
+		t.Fatalf("sources len = %d, want 0", len(sources))
 	}
 }
