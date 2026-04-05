@@ -72,6 +72,7 @@ type coreServices struct {
 type adapterSetup struct {
 	workItem      []adapter.WorkItemAdapter
 	repoLifecycle []adapter.RepoLifecycleAdapter
+	repoSources   []adapter.RepoSource
 	warnings      []string
 	adapterErrors chan views.AdapterErrorMsg
 }
@@ -152,6 +153,7 @@ func run() error {
 		SessionArtifacts: services.sessionArtifact,
 		Cfg:              cfg,
 		Adapters:         adapters.workItem,
+		RepoSources:      adapters.repoSources,
 		Harnesses:        runtime.harnesses,
 		Settings:         services.settings,
 		SettingsData:     settingsData,
@@ -395,6 +397,8 @@ func buildAdapterSetup(
 			SessionArtifacts: services.sessionArtifact,
 		},
 	)
+	repoSources := app.BuildRepoSources(ctx, cfg)
+
 	adapterErrors := make(chan views.AdapterErrorMsg, 16)
 
 	if err := subscribeWorkItemAdapters(bus, workItemAdapters, adapterErrors); err != nil {
@@ -409,6 +413,7 @@ func buildAdapterSetup(
 	return adapterSetup{
 		workItem:      workItemAdapters,
 		repoLifecycle: repoLifecycleAdapters,
+		repoSources:   repoSources,
 		warnings:      adapterWarnings,
 		adapterErrors: adapterErrors,
 	}, nil

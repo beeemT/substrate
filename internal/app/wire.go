@@ -70,6 +70,32 @@ func BuildWorkItemAdapters(
 	return adapters, warnings
 }
 
+// BuildRepoSources constructs the ordered list of repo sources for the Add Repo
+// overlay. The manual source is always included (it handles direct URL entry).
+// GitHub and GitLab sources are added when their auth is configured; init
+// failures are logged and skipped so a single broken provider does not block
+// the overlay from showing the others.
+func BuildRepoSources(ctx context.Context, cfg *config.Config) []adapter.RepoSource {
+	sources := []adapter.RepoSource{manualadapter.NewRepoSource()}
+	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
+		src, err := githubadapter.NewRepoSource(ctx, cfg.Adapters.GitHub)
+		if err != nil {
+			slog.Warn("skipping github repo source", "err", err)
+		} else {
+			sources = append(sources, src)
+		}
+	}
+	if config.GitLabAuthConfigured(cfg.Adapters.GitLab) {
+		src, err := gitlabadapter.NewRepoSource(ctx, cfg.Adapters.GitLab)
+		if err != nil {
+			slog.Warn("skipping gitlab repo source", "err", err)
+		} else {
+			sources = append(sources, src)
+		}
+	}
+	return sources
+}
+
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
 func BuildRepoLifecycleAdapters(
 	ctx context.Context,
