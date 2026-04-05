@@ -1540,9 +1540,15 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	// Compute box dimensions first so description wrapping uses the real inner width.
-	innerWidth := m.styles.Chrome.Callout.InnerWidth(max(1, width))
-	innerHeight := m.styles.Chrome.Callout.InnerHeight(max(1, height))
+	// Compute box dimensions first so description wrapping uses the real text width.
+	// InnerWidth gives the value for lipgloss Width(); lipgloss then subtracts its own
+	// padding from that to get the actual text area. Wrap descriptions at the text area
+	// width to prevent lipgloss from re-wrapping our already-wrapped lines.
+	callout := m.styles.Chrome.Callout
+	innerWidth := callout.InnerWidth(max(1, width))
+	innerHeight := callout.InnerHeight(max(1, height))
+	// textWidth is the effective column budget after lipgloss applies callout padding.
+	textWidth := max(1, innerWidth-callout.PaddingLeft-callout.PaddingRight)
 	field := m.currentField()
 	lines := []string{}
 	if field == nil {
@@ -1550,9 +1556,7 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 	} else {
 		lines = append(lines, m.styles.Subtitle.Render(field.Label))
 		if field.Description != "" {
-			// Wrap to innerWidth so the full description is visible across multiple lines
-			// rather than being hard-truncated by fitViewBox.
-			wrapped := strings.Split(wrapText(field.Description, max(1, innerWidth)), "\n")
+			wrapped := strings.Split(wrapText(field.Description, textWidth), "\n")
 			lines = append(lines, wrapped...)
 		}
 		if field.DefaultValue != "" {
