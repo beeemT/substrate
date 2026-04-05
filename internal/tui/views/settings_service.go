@@ -1264,14 +1264,6 @@ func intPtrStr(p *int) string {
 	return strconv.Itoa(*p)
 }
 
-func boolStr(v bool) string {
-	if v {
-		return "true"
-	}
-
-	return settingFalse
-}
-
 func parseOptionalInt(fieldPath, v string) (*int, error) {
 	if strings.TrimSpace(v) == "" {
 		return nil, nil
@@ -1301,19 +1293,6 @@ func parseBool(v string) bool {
 	b, _ := strconv.ParseBool(strings.TrimSpace(v))
 
 	return b
-}
-
-func parseFieldBool(fieldPath, v string) (bool, error) {
-	trimmed := strings.TrimSpace(v)
-	if trimmed == "" {
-		return false, nil
-	}
-	b, err := strconv.ParseBool(trimmed)
-	if err != nil {
-		return false, fmt.Errorf("%s: invalid boolean %q: %w", fieldPath, trimmed, err)
-	}
-
-	return b, nil
 }
 
 func parseList(v string) []string {
