@@ -434,34 +434,594 @@ Create `design/tokens.json` as the shared source of truth, derived from the curr
 
 Both the Go TUI (`styles/theme.go`) and the Electron renderer (`theme/tokens.ts`) consume this file. Token changes propagate to both frontends. The Tailwind config extends its theme from these tokens.
 
-### 4.2 Visual Parity Principles
+### 4.2 Exhaustive UI Specification
 
-1. **Same layout proportions.** Two-pane with sidebar on left, content on right. Settings full-screen. Overlays centered (using shadcn Dialog/Sheet).
-2. **Same status vocabulary.** Icons, colors, and labels are identical.
-3. **Same information hierarchy.** Sidebar shows the same multi-line entry blocks (as Aceternity spotlight cards). Content modes render the same metadata headers, dividers, and body content.
-4. **Additive mouse interactions.** Click to select, scroll with trackpad, drag to resize panes, hover for tooltips and Aceternity spotlight effects. These supplement keyboard shortcuts, never replace them.
-5. **Same keyboard shortcuts.** `j/k`, `Up/Down`, `n`, `/`, `c`, `?`, `q`, `a`, `r`, `e` — all work identically. The Electron app is keyboard-first with mouse as enhancement.
-6. **Same sidebar filters and dimensions.** All/Active/NeedsAttention/Completed filters and None/State/Source/Created/Activity grouping dimensions carry over.
-
-### 4.3 Where the Electron App Should Differ
-
-The Electron app is not a terminal emulator. It should feel native and use Aceternity's motion library to create a polished desktop experience:
-
-- **Resizable panes** with a draggable divider (the TUI's fixed 34-char sidebar becomes a default that users can drag wider)
-- **Text selection and copy** — the TUI can't do this well; the Electron app should
-- **Syntax highlighting** in plan review and session transcripts via CodeMirror 6 (lighter than Monaco, sufficient for read + light edit)
-- **Rich markdown rendering** in plan review via react-markdown + rehype plugins (the TUI uses glamour for approximate rendering)
-- **Animated transitions** — Aceternity's text-generate-effect for streaming plan content, moving-border for active sessions, spotlight on hover, background-gradient for the idle/empty state (replacing the TUI's ASCII bunny with a visually rich idle screen)
-- **Native scrollbars** via shadcn's ScrollArea instead of viewport-based scroll simulation
-- **Notification integration** — OS-native notifications for question escalation, completion, and failures
-- **Command palette** — shadcn's Command component (cmdk-based) for quick session switching, action execution, and search (maps to the TUI's `/` search and `n` new session)
-- **Better diff rendering** in review mode using a real diff viewer component
-- **Multi-window** — potential to open session details in separate windows
-- **Native scrollbars** instead of viewport-based scroll simulation
-- **Toast notifications** via Sonner (shadcn's toast primitive) matching the TUI's toast stack behavior
+The Electron app replicates the TUI 1:1. Every pane, overlay, content mode, sidebar entry kind, keyboard binding, filter, grouping dimension, status label, flow sequence, and component primitive described below **MUST** exist in the Electron app. Mouse interactions and visual enhancements (animations, resizable panes, rich markdown) are additive — they never replace a keyboard-driven flow or omit information the TUI shows.
 
 ---
 
+#### 4.2.1 Shell Layout
+
+```
+┌──────────────────────────────────────────────────────┐
+│  ┌────────────┐ ┌──────────────────────────────────┐  │
+│  │  Sidebar    │ │  Content                         │  │
+│  │  (fixed     │ │  (flexible width, mode-switched) │  │
+│  │   width)    │ │                                  │  │
+│  │             │ │                                  │  │
+│  │             │ │                                  │  │
+│  └────────────┘ └──────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │  Status Bar (1-2 rows)                           │  │
+│  └──────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+        ┌──────────┐
+        │ Toasts   │  (top-right, stacked)
+        └──────────┘
+```
+
+- **Two-pane shell:** Sidebar (default ~25% width or 34 chars equivalent) + Content (fills remaining). Sidebar is resizable by dragging the divider (TUI's fixed 34-char width becomes a draggable default).
+- **Gap:** 1px divider between panes (TUI uses 1 col gap when width ≥ 60).
+- **Content body** gets horizontal padding when the pane is wide enough.
+- **Focus indicator:** Only the pane border color changes (PaneBorder → PaneBorderFocused). Layout does not shift.
+- **Overlay compositing order:** Workspace-init first → confirm dialog → duplicate-session dialog → active overlay (or overview sub-overlay) → toasts (top-right, last).
+- **Toasts:** Top-right corner, max 30% window width, 20s auto-dismiss. Levels: Info, Success, Warning, Error (level-colored borders). Newest-transient-first ordering; pinned toasts prepended.
+
+---
+
+#### 4.2.2 Keyboard Shortcuts
+
+Every shortcut below **MUST** work identically in the Electron app. When a text input is focused, single-key shortcuts are suppressed (only modifier-key and Escape/Enter pass through). When an overlay is open, it captures all input — global shortcuts do not fire.
+
+##### Global (always active, unless overlay captures or input is focused)
+
+| Key | Action |
+|-----|--------|
+| `n` | Open New Session overlay |
+| `a` | Open Add Repo overlay |
+| `s` | Open Settings (full-screen) |
+| `/` | Open Session Search overlay |
+| `?` | Open Help overlay |
+| `L` | Open Logs overlay |
+| `j` / `↓` | Navigate down in sidebar |
+| `k` / `↑` | Navigate up in sidebar |
+| `g` | Go to top of sidebar |
+| `G` | Go to bottom of sidebar |
+| `f` | Cycle sidebar filter (sessions mode only) |
+| `o` | Cycle sidebar dimension (sessions mode only) |
+| `t` | Toggle sort direction (sessions mode only) |
+| `d` | Delete session (only when a deletable session is selected) |
+| `Esc` / `←` | Back: content→sidebar focus, exit task sidebar, close overlay |
+| `→` / `Enter` | Enter content or drill into task sidebar |
+| `q` | Quit |
+| `Ctrl+C` | Force quit (with confirm dialog) |
+
+##### Plan Review Overlay
+
+| Key | Action |
+|-----|--------|
+| `a` | Approve plan |
+| `c` | Request changes (opens feedback textarea) |
+| `e` | Edit plan in $EDITOR |
+| `r` | Reject plan |
+| `↑` / `↓` | Scroll plan content |
+| `Esc` | Close overlay |
+| *In feedback mode:* `Enter` | Submit feedback |
+| *In feedback mode:* `Esc` | Cancel feedback |
+
+##### Planning / Session Log View
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Scroll log |
+| `f` | Follow tail (auto-scroll) |
+| `g` | Go to start |
+| `v` | Toggle verbose output |
+| `t` | Toggle thinking blocks |
+| `p` | Prompt agent (live session) / Follow up (completed/failed) |
+| `i` | Inspect plan |
+| *Steer-active:* `Enter` | Send steering input |
+| *Steer-active:* `Esc` | Cancel steering |
+
+##### Question Overlay
+
+| Key | Action |
+|-----|--------|
+| `A` | Approve Foreman's proposed answer |
+| `Enter` | Send answer to Foreman |
+| `Esc` | Skip question |
+
+##### Reviewing Overlay
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate critiques |
+| `Tab` | Switch repo tab |
+| `r` | Re-implement |
+| `o` | Override accept |
+
+##### Interrupted Overlay
+
+| Key | Action |
+|-----|--------|
+| `r` | Resume / Restart planning |
+| `a` | Abandon (only when canAct) |
+
+##### Completed Overlay
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select MR/PR link |
+| `Enter` | Open selected URL |
+| `c` | Request changes (follow-up feedback input) |
+| `Esc` | Close overlay |
+| *Input mode:* `Enter` | Submit |
+| *Input mode:* `Esc` | Cancel |
+
+##### Overview (base, no sub-overlay open)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` | Scroll |
+| `Tab` | Next action card |
+| Plan state: `a` / `c` / `r` / `i` | Approve / Changes / Reject / Inspect |
+| Question state: `A` / `Enter` / `i` | Approve / Send / Inspect |
+| Interrupted state: `r` / `a` / `i` | Resume / Abandon / Inspect |
+| Reviewing state: `r` / `o` / `i` | Re-implement / Override / Inspect |
+| Failed state: `r` / `i` | Retry / Inspect |
+| Completed state: `c` / `i` | Changes / Inspect |
+| `o` | Open review artifacts (when available) |
+| `Enter` | Start planning (ingested state) |
+| `i` | View full plan |
+
+##### Source Details
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Scroll |
+| `Enter` | Open overview (when notice exists) |
+| `o` | Open in browser (when URLs exist) |
+
+##### New Session Overlay
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle providers |
+| `Ctrl+S` | Cycle scope |
+| `Ctrl+V` | Cycle view |
+| `Ctrl+T` | Cycle state filter |
+| `Ctrl+R` | Reset filters |
+| `Ctrl+N` | Switch to manual mode |
+| `Ctrl+O` | Open current item in browser |
+| `Space` | Toggle select |
+| `Enter` | Start session |
+| `↑` / `↓` | Navigate list |
+| `←` / `→` | Focus zones |
+| `Esc` | Close |
+| *Manual mode:* `Tab` | Next field |
+| *Manual mode:* `Enter` | Create |
+| *Manual mode:* `Esc` | Close |
+
+##### Session Search Overlay
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle focus (scope → input → results → preview) |
+| `Enter` | Open result / Toggle scope |
+| `d` | Delete (when in results) |
+| `Ctrl+S` | Toggle scope |
+| `←` / `→` | Focus zones |
+| `Esc` | Close |
+
+##### Settings Page
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `j` / `k` | Navigate |
+| `←` / `h` | Collapse / back |
+| `→` / `l` | Expand / enter |
+| `Enter` / `e` | Edit field |
+| `Space` | Toggle boolean |
+| `r` | Reveal secrets |
+| `s` | Apply settings |
+| `t` | Test provider |
+| `g` | Login |
+| `Esc` | Back / close |
+
+##### Source Items Overlay
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Toggle list/preview focus |
+| `Space` | Toggle select |
+| `Enter` / `o` | Open selected URLs |
+| `↑` / `↓` | Navigate |
+| `←` / `→` | Focus zones |
+| `Esc` | Close |
+
+##### Add Repo Overlay
+
+Same browser pattern as New Session with repo-specific actions (clone, manual URL).
+
+##### Duplicate Session Dialog
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `j` / `k` / `Tab` | Cycle options |
+| `Enter` | Confirm selected option |
+| `Esc` / `c` | Cancel |
+| `o` / `g` | Open existing |
+| `s` / `n` | Start planning |
+
+##### Confirm Dialog
+
+| Key | Action |
+|-----|--------|
+| `y` / `Enter` / `Ctrl+C` | Confirm |
+| Any other key | Cancel |
+
+##### Help Overlay
+
+Any key closes it.
+
+---
+
+#### 4.2.3 Sidebar
+
+##### Entry Kinds
+
+| Kind | Renders As | When |
+|------|-----------|------|
+| `WorkItem` | 3-line card | Top-level session entry |
+| `SessionHistory` | 3-line card | Search results |
+| `TaskOverview` | 3-line card | Task drill-in header |
+| `TaskSourceDetails` | 3-line card | Task source metadata |
+| `TaskSession` | 3-line card | Individual agent session |
+| `GroupHeader` | 1-line header | Dimension group separator |
+
+##### Entry Rendering (3-line cards)
+
+Each entry renders as a card with 3 lines of content plus spacing:
+
+- **Line 1:** Status icon + prefix (external ID or work-item ID). Provider label appended as `prefix · provider`.
+- **Line 2:** Title (truncated to fit).
+- **Line 3:** Subtitle text OR progress bar (for implementing sessions with `TotalSubPlans > 0`).
+
+Group headers render as a single line with spacing.
+
+##### Status Icons
+
+| Status | Icon |
+|--------|------|
+| Completed | `✓` |
+| Failed | `✗` |
+| Interrupted | `⊘` |
+| Waiting / Plan review | `◐` |
+| Active / Running | `●` |
+| Default / Inactive | `◌` |
+
+##### Subtitles (exact strings)
+
+| State | Subtitle |
+|-------|----------|
+| Ingested | "Ready to plan" |
+| Planning | "Planning..." |
+| Plan review | "Plan review needed" |
+| Awaiting implementation | "Awaiting implementation" |
+| Has open question | "Waiting for answer" |
+| Interrupted | "Interrupted" |
+| Implementing | "Implementing" |
+| Under review | "Under review" |
+| Completed | "Completed" |
+| Failed | "Failed" |
+
+##### Filters (cycle with `f`)
+
+`All` → `Active` → `NeedsAttention` → `Completed` → `All`
+
+| Filter | Includes |
+|--------|----------|
+| All | Everything |
+| Active | Planning, PlanReview, Implementing, Reviewing |
+| NeedsAttention | PlanReview, or has open question, or has interruption |
+| Completed | Completed or Failed |
+
+##### Grouping Dimensions (cycle with `o`)
+
+`None` → `State` → `Source` → `Created` → `Activity` → `None`
+
+| Dimension | Groups |
+|-----------|--------|
+| None | Flat list |
+| State | Active, Review, Waiting, Completed, Failed |
+| Source | By provider (GitHub, GitLab, Other) |
+| Created | Today, Yesterday, This Week, This Month, Last 3 Months, Earlier |
+| Activity | Today, Yesterday, This Week, This Month, Last 3 Months, Earlier |
+
+##### Sort Direction (toggle with `t`)
+
+Descending ↔ Ascending. Indicator shown in sidebar header as `▲` / `▼`.
+
+##### Sidebar Header
+
+Status label joins: `active filter · dimension · direction indicator (▲/▼)`. Only non-default values shown.
+
+##### Task Sidebar (drill-in mode)
+
+When the user enters a work item (→ / Enter), the sidebar transitions to task-level navigation:
+
+Overview → Source Details → Planning group → Foreman group → Repo groups (alphabetical)
+
+Back (← / Esc) returns to the sessions list.
+
+##### Selection Model
+
+- Group headers are **not selectable** — cursor skips them.
+- No wrapping — top/bottom are hard stops.
+- Selection persists by `workItemID + sessionID` pair when entries rebuild (e.g., after filter change or data reload).
+
+---
+
+#### 4.2.4 Content Modes
+
+The content pane switches between exactly these modes based on the selected sidebar entry:
+
+| Mode | Trigger | Renders |
+|------|---------|---------|
+| **Empty** | No session selected or no sessions exist | Animated idle state (TUI shows ASCII bunny; Electron uses Aceternity background-gradient with "No sessions yet" / "Select a session" text) |
+| **Overview** | WorkItem or TaskOverview selected | Session overview with nested overlay state machine |
+| **SourceDetails** | TaskSourceDetails selected | Source metadata pane with optional notice callout |
+| **Planning** | TaskSession selected + session is live | Live log streaming with spinner, steering input, plan inspection overlay |
+| **SessionInteraction** | TaskSession selected + session is historical | Static transcript rendering (same component as Planning, different data source) |
+
+##### Overview Sections (rendered in this order)
+
+1. **Header** — Session title, status badge, external ID
+2. **Summary** — Key metadata (source, created, updated)
+3. **Action Required** — Status-specific action card (the primary interaction point)
+4. **Source** — Source adapter metadata
+5. **Plan** — Plan summary or status
+6. **Tasks** — Sub-plan / task list
+7. **External Lifecycle** — MR/PR links, CI status
+8. **Recent Activity** — Latest events
+
+##### Overview Sub-Overlays (nested within content, not app-level)
+
+The Overview has its own overlay state machine. Exactly one sub-overlay can be active at a time:
+
+| Sub-Overlay | Opened When | Contains |
+|-------------|-------------|----------|
+| Plan Review | Plan needs review | Markdown plan + approve/reject/changes/edit actions |
+| Question | Open question exists | Question text + proposed answer + approve/send/skip |
+| Interrupted | Session interrupted | Interruption details + resume/restart/abandon |
+| Completed | Session completed | MR/PR links + follow-up feedback input |
+| Reviewing | Review cycle active | Critique list + repo tabs + re-implement/override |
+
+---
+
+#### 4.2.5 Overlay Stack
+
+**Single active overlay slot** — overlays do not stack. The confirm dialog and duplicate-session dialog are side-band modals that render *above* the active overlay.
+
+| Overlay | Layout | Key Features |
+|---------|--------|-------------|
+| **New Session** | Centered split-pane, max 80% window height | Browse controls bar + adapter list + detail pane. Provider/scope/view/state cycling. Manual mode with title + body fields. |
+| **Session Search** | Centered split-pane, ~60% height | Search input + scope toggle (workspace/global) + results list + preview pane. Debounced search with spinner. |
+| **Source Items** | Centered split-pane | List + preview. Multi-select with Space, batch URL opening with Enter/o. |
+| **Add Repo** | Centered split-pane (same pattern as New Session) | Repo browser + search + manual clone URL entry + detail pane. |
+| **Settings** | Full-screen | Left: section navigation tree. Right: scrollable field editor with sticky header. Provider status badges, secret management, harness actions (login, auth test). |
+| **Help** | Centered read-only card | Keyboard shortcut reference. Any key closes. |
+| **Logs** | Centered scrollable viewport | slog entries with clipboard copy. Level filtering. |
+| **Workspace Init** | Centered startup modal | Workspace scan + initialize/cancel. Shown on first start when no `.substrate-workspace` exists. |
+
+---
+
+#### 4.2.6 Status Bar
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ [n] New session  [d] Delete  [/] Search  [s] Settings  ...  │  workspace · N active sessions
+│ [?] Help  [q] Quit                                          │  (overflow line, if needed)
+└──────────────────────────────────────────────────────────────┘
+```
+
+- **Line 1:** Left = key hints as `[key] label`. Right = `workspace · N active sessions` (muted).
+- **Line 2 (overflow):** Additional hints when line 1 overflows.
+- **Hint order:** Contextual hints first, then global (`n` New session, `a` Add repo, `/` Search, `s` Settings, `?` Help, `q` Quit).
+- **Delete hint** is reordered to appear immediately after `New session` when a deletable session is selected.
+
+---
+
+#### 4.2.7 Component Primitives
+
+Each TUI component has a 1:1 Electron counterpart:
+
+| TUI Component | Electron Component | Behavior |
+|---------------|-------------------|----------|
+| `pane.go` | `Pane.tsx` | Rounded border. Focus only recolors border (PaneBorder → PaneBorderFocused). No layout shift. |
+| `header_block.go` | `HeaderBlock.tsx` | Title + optional meta line + divider (or status-line replacement). |
+| `callout.go` | `Callout.tsx` | Variants: Default, Card, Warning, Running, Error, Tool. Border color changes per variant. |
+| `tabs.go` | Uses shadcn `Tabs` | Active = Title color + underline. Inactive = Muted. Separator between tabs. |
+| `overlay_frame.go` | Uses shadcn `Dialog` / `Sheet` | Rounded border, header/body/footer composition. Overlay content rendered inside. |
+| `SplitOverlayBody` | Split-pane layout | Left/right panes with separator column. Weight-based sizing. |
+| `progress.go` | `ProgressBar.tsx` | Filled/empty bar + `done/total` suffix (muted). |
+| `toast.go` | Uses shadcn/Sonner `Toast` | Level-colored card, width-capped to 30% window. 20s auto-dismiss. |
+| `confirm.go` | `Confirm.tsx` / shadcn `AlertDialog` | `[y] Confirm  [n] Cancel`. Renders above active overlay. |
+| `input.go` | Uses shadcn `Input` / `Textarea` | Text input with macOS word-movement parity (Opt+←/→, Cmd+←/→). |
+| `bunny.go` | `BunnyIdle.tsx` | Animated idle state. Electron replaces ASCII art with Aceternity background-gradient + motion. |
+| `keyhints.go` | `KeyHints.tsx` | `[key] label` formatted hint blocks for status bar. |
+| `statusbar.go` | `StatusBar.tsx` | Footer bar with hint blocks + right-aligned workspace metadata. |
+| `markdown_render.go` | `MarkdownRender.tsx` | TUI uses glamour. Electron uses react-markdown + rehype for rich rendering with syntax highlighting. |
+
+---
+
+#### 4.2.8 Flow Sequences
+
+These are the exact user flows. The Electron app **MUST** reproduce each sequence identically — same states, same transitions, same feedback.
+
+##### 1. Create New Session
+
+```
+User presses `n`
+  → New Session overlay opens (browse mode, first adapter selected)
+  → User browses/searches, selects item
+  → User presses `Enter`
+  → If duplicate detected → Duplicate Session dialog
+    → Cancel / Open existing / Start new
+  → SessionCreatedMsg
+  → Sidebar refreshes, new item selected
+  → Content shows Overview for new session
+```
+
+##### 2. Planning
+
+```
+Session created (ingested state)
+  → User presses `Enter` on overview action card to start planning
+  → Content switches to Planning mode (live log stream)
+  → Spinner active, logs stream in real-time
+  → Planning completes
+  → Content switches to Overview with plan review action card
+```
+
+##### 3. Plan Review
+
+```
+Overview shows plan review action card
+  → User presses `i` or `Tab` to card + `Enter`
+  → Plan Review sub-overlay opens
+  → User reads plan (scrollable markdown)
+  → `a` approve → PlanApprovedMsg → next state
+  → `c` changes → feedback textarea appears → `Enter` submits → replanning
+  → `r` reject → plan rejected
+  → `e` edit → opens $EDITOR → watches for file changes → PlanEditedMsg
+  → `Esc` closes overlay, returns to overview
+```
+
+##### 4. Question Handling
+
+```
+Question arrives via event bus
+  → Sidebar entry shows ◐ icon
+  → User navigates to session
+  → Overview shows question action card
+  → Question sub-overlay opens
+  → `A` approve Foreman's proposed answer
+  → `Enter` send typed answer to Foreman
+  → `Esc` skip question
+```
+
+##### 5. Implementation
+
+```
+Plan approved
+  → Implementation starts automatically
+  → Content switches to Planning mode (live log stream)
+  → Progress bar shown in sidebar (done/total sub-plans)
+  → Completion → CompletedView or InterruptedView
+```
+
+##### 6. Review
+
+```
+ReviewCycle created via event
+  → Overview shows review action card
+  → User opens reviewing sub-overlay
+  → Critique list with repo tabs, severity coloring
+  → `r` re-implement → triggers new implementation
+  → `o` override accept → marks review passed
+```
+
+##### 7. Interrupted Session
+
+```
+Session interrupted (agent crash, timeout, error)
+  → Sidebar shows ⊘ icon
+  → Overview shows interrupted action card
+  → Interrupted sub-overlay opens
+  → `r` resume / restart planning
+  → `a` abandon (marks session failed)
+```
+
+##### 8. Completed Session
+
+```
+Session completed
+  → Sidebar shows ✓ icon
+  → Overview shows completed action card
+  → Completed sub-overlay shows MR/PR links
+  → `↑/↓` select link, `Enter` opens in browser
+  → `c` follow-up feedback → textarea → `Enter` submits
+```
+
+##### 9. Search
+
+```
+User presses `/`
+  → Session Search overlay opens
+  → Input focused, scope = workspace (toggle with Ctrl+S)
+  → User types → debounced search → spinner → results
+  → `↑/↓` navigate results, preview updates
+  → `Enter` opens selected session → overlay closes, sidebar selects it
+  → `d` deletes selected result (with confirm)
+```
+
+##### 10. Settings
+
+```
+User presses `s`
+  → Full-screen settings page
+  → Left: section navigation tree (collapsible)
+  → Right: scrollable field editor
+  → Navigate with `j/k/↑/↓`, expand/collapse with `→/←`
+  → `Enter/e` edit field → inline editor or modal
+  → `Space` toggle boolean
+  → `s` apply changes
+  → `t` test provider auth
+  → `g` login to provider
+  → `Esc` close settings, return to main layout
+```
+
+##### 11. Sidebar ↔ Content Mapping
+
+| Sidebar Entry Kind | Content Mode |
+|--------------------|-------------|
+| WorkItem | Overview |
+| TaskOverview | Overview |
+| TaskSourceDetails | SourceDetails |
+| TaskSession (live) | Planning |
+| TaskSession (historical) | SessionInteraction |
+| GroupHeader | Not selectable |
+| Nothing selected | Empty |
+
+##### 12. Focus Model
+
+- `Tab` / arrow keys move focus between sidebar and content.
+- Overlays capture all input — global shortcuts do not fire.
+- Text inputs capture typing — single-key shortcuts are suppressed.
+- `Esc` cascades: close text input → close sub-overlay → close overlay → content→sidebar.
+
+---
+
+### 4.3 Where the Electron App Should Differ
+
+The Electron app is not a terminal emulator. These enhancements are additive — they **MUST NOT** remove, replace, or alter any keyboard flow, information display, or state transition described in 4.2:
+
+- **Resizable panes** with a draggable divider (the TUI's fixed 34-char sidebar becomes a default that users can drag wider)
+- **Text selection and copy** — the TUI can't do this well; the Electron app should
+- **Syntax highlighting** in plan review and session transcripts via CodeMirror 6
+- **Rich markdown rendering** in plan review via react-markdown + rehype plugins (the TUI uses glamour for approximate rendering)
+- **Animated transitions** — Aceternity's text-generate-effect for streaming plan content, moving-border for active sessions, spotlight on hover, background-gradient for the idle/empty state
+- **Native scrollbars** via shadcn's ScrollArea instead of viewport-based scroll simulation
+- **Notification integration** — OS-native notifications for question escalation, completion, and failures
+- **Command palette** — `Cmd+K` / `Ctrl+K` as an *additional* entry point to session search and quick actions (does not replace `/` shortcut)
+- **Better diff rendering** in review mode using a real diff viewer component
+- **Multi-window** — potential to open session details in separate windows
+- **Toast notifications** via Sonner matching the TUI's toast stack behavior (same levels, same 20s dismiss, same ordering)
+- **Click interactions** — clicking a sidebar item selects it (equivalent to `j/k` + `Enter`), clicking action buttons is equivalent to pressing the keyboard shortcut
+- **Hover effects** — tooltips on truncated text, Aceternity spotlight on sidebar cards
+
+---
 ## 5. Type Sharing Strategy
 
 ### 5.1 Go to TypeScript Code Generation
