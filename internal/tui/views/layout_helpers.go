@@ -78,3 +78,35 @@ func overlaySpinner(body, frame string, st styles.Styles, width int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// wrapText performs ANSI-aware word-boundary wrapping. Each output line is at
+// most width visible characters wide. Words that individually exceed width are
+// emitted on their own line and allowed to overflow rather than being split
+// mid-character — plain-text descriptions never contain such words in practice.
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return s
+	}
+	var sb strings.Builder
+	lineW := 0
+	for i, word := range words {
+		ww := ansi.StringWidth(word)
+		if i == 0 {
+			sb.WriteString(word)
+			lineW = ww
+		} else if lineW+1+ww <= width {
+			sb.WriteByte(' ')
+			sb.WriteString(word)
+			lineW += 1 + ww
+		} else {
+			sb.WriteByte('\n')
+			sb.WriteString(word)
+			lineW = ww
+		}
+	}
+	return sb.String()
+}

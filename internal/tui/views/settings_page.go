@@ -1143,7 +1143,10 @@ func (m SettingsPage) renderEditModal() string {
 	contentWidth := m.styles.Chrome.OverlayFrame.InnerWidth(max(1, frameWidth))
 	header := []string{m.styles.Title.Render(field.Label)}
 	if field.Description != "" {
-		header = append(header, m.styles.Muted.Render(truncate(field.Description, contentWidth)))
+		wrapped := strings.Split(wrapText(field.Description, max(1, contentWidth)), "\n")
+		for _, line := range wrapped {
+			header = append(header, m.styles.Muted.Render(line))
+		}
 	}
 	body := m.renderTextEditBody(contentWidth, field)
 	if m.editMode == settingsEditModeSelect {
@@ -1459,7 +1462,10 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 		metaPrefix := strings.Repeat(" ", indent+2)
 		metaStyle := m.styles.Muted.Width(width)
 		if sec.Description != "" {
-			appendRendered(metaStyle.Render(truncate(metaPrefix+sec.Description, width)))
+			innerW := max(1, width-len(metaPrefix))
+			for line := range strings.SplitSeq(wrapText(sec.Description, innerW), "\n") {
+				appendRendered(metaStyle.Render(metaPrefix + line))
+			}
 		}
 		appendRendered(metaStyle.Render(truncate(metaPrefix+"Section status: "+sec.Status, width)))
 		if sec.Error != "" {
@@ -1472,7 +1478,10 @@ func (m SettingsPage) buildMainDocument(width int) (string, map[int]int, map[str
 			if st, ok := m.providerStatus[provider]; ok {
 				appendRendered(m.renderProviderStatusLine(metaPrefix, st, width))
 				if st.Description != "" {
-					appendRendered(metaStyle.Render(truncate(metaPrefix+st.Description, width)))
+					innerW := max(1, width-len(metaPrefix))
+					for line := range strings.SplitSeq(wrapText(st.Description, innerW), "\n") {
+						appendRendered(metaStyle.Render(metaPrefix + line))
+					}
 				}
 			}
 		}
@@ -1531,6 +1540,9 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
+	// Compute box dimensions first so description wrapping uses the real inner width.
+	innerWidth := m.styles.Chrome.Callout.InnerWidth(max(1, width))
+	innerHeight := m.styles.Chrome.Callout.InnerHeight(max(1, height))
 	field := m.currentField()
 	lines := []string{}
 	if field == nil {
@@ -1538,7 +1550,10 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 	} else {
 		lines = append(lines, m.styles.Subtitle.Render(field.Label))
 		if field.Description != "" {
-			lines = append(lines, field.Description)
+			// Wrap to innerWidth so the full description is visible across multiple lines
+			// rather than being hard-truncated by fitViewBox.
+			wrapped := strings.Split(wrapText(field.Description, max(1, innerWidth)), "\n")
+			lines = append(lines, wrapped...)
 		}
 		if field.DefaultValue != "" {
 			lines = append(lines, m.styles.Muted.Render("Default: "+field.DefaultValue))
@@ -1555,8 +1570,6 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 			lines = append(lines, m.styles.Error.Render("Field error: "+field.Error))
 		}
 	}
-	innerWidth := m.styles.Chrome.Callout.InnerWidth(max(1, width))
-	innerHeight := m.styles.Chrome.Callout.InnerHeight(max(1, height))
 	content := fitViewBox(strings.Join(lines, "\n"), max(1, innerWidth), max(1, innerHeight))
 	return m.styles.Callout.
 		Width(max(1, innerWidth)).

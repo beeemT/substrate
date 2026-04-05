@@ -809,7 +809,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		},
 		{
 			ID:          "repo.glab",
-			Title:       "Repo Lifecycle · glab",
+			Title:       "Repo Lifecycle \u00b7 GitLab",
 			Description: "GitLab MR automation",
 			Fields: []SettingsField{
 				{Section: "adapters.glab", Key: "reviewers", Label: "Reviewers", Type: SettingsFieldStringList, Value: strings.Join(cfg.Adapters.Glab.Reviewers, ",")},

@@ -1305,3 +1305,28 @@ func TestSettingsPage_StickyDetailsUseBoxBorder(t *testing.T) {
 		t.Fatal("expected sticky details to render with a visible rounded box border")
 	}
 }
+
+func TestSettingsPage_StickyDetailsWrapsLongDescription(t *testing.T) {
+	// The repos.doc_paths field has a long description that previously got hard-truncated
+	// at the box inner width. It must now wrap and be fully visible.
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.sectionCursor = findSectionIndex(t, page, "repos")
+	page.fieldCursor = findFieldIndex(t, page, "repos", "doc_paths")
+
+	// Use a realistic narrow width where the description spans multiple lines.
+	// Strip ANSI only; check individual tokens that prove the tail of the
+	// description is visible and has been word-wrapped (not hard-truncated).
+	stripped := ansi.Strip(page.renderStickyFieldDetails(60, 14))
+	// Full description ends with "...during planning." - both must be present.
+	for _, want := range []string{"reference material", "during", "planning."} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("sticky details = %q\nwant %q visible (description must not be truncated)", stripped, want)
+		}
+	}
+	// Description must be wrapped: the first line must NOT contain "reads before",
+	// which proves it is not emitted as one long untruncated string.
+	if strings.Contains(strings.SplitN(stripped, "\n", 3)[1], "reads before") {
+		t.Fatal("description is not wrapping: first description line contains text from second wrapped line")
+	}
+}

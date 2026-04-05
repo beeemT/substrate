@@ -582,6 +582,40 @@ func TestBuildSettingsSections_GithubRepoLifecycleSection(t *testing.T) {
 	}
 }
 
+func TestBuildSettingsSections_GlabRepoLifecycleSection(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Adapters.Glab.Reviewers = []string{"bob"}
+	cfg.Adapters.Glab.Labels = []string{"ci"}
+	sections := buildSettingsSections(cfg)
+
+	// repo.glab section must exist with GitLab-branded title.
+	section := findSection(sections, "repo.glab")
+	if section.ID != "repo.glab" {
+		t.Fatalf("repo.glab section not found; got ID = %q", section.ID)
+	}
+	want := "Repo Lifecycle \u00b7 GitLab"
+	if section.Title != want {
+		t.Fatalf("section title = %q, want %q", section.Title, want)
+	}
+
+	var gotReviewers, gotLabels string
+	for _, f := range section.Fields {
+		switch f.Key {
+		case "reviewers":
+			gotReviewers = f.Value
+		case "labels":
+			gotLabels = f.Value
+		}
+	}
+	if gotReviewers != "bob" {
+		t.Fatalf("reviewers field value = %q, want %q", gotReviewers, "bob")
+	}
+	if gotLabels != "ci" {
+		t.Fatalf("labels field value = %q, want %q", gotLabels, "ci")
+	}
+}
+
 func TestApplyField_GithubReviewersAndLabelsRoundTrip(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{}
