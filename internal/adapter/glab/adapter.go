@@ -483,7 +483,6 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 	return entries
 }
 
-
 // worktreePathsForCompletion is a fallback that scans persisted EventWorktreeCreated
 // events to find worktree paths when no tracked entries or recorded artifacts exist.
 // This handles the case where the adapter restarted before MR creation, or MR

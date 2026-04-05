@@ -24,6 +24,8 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+const adapterName = "github"
+
 type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -221,7 +223,7 @@ func execTokenResolver(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (a *GithubAdapter) Name() string { return "github" }
+func (a *GithubAdapter) Name() string { return adapterName }
 func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
 	return adapter.AdapterCapabilities{
 		CanWatch:     true,
@@ -505,7 +507,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		a.tracked[p.Branch] = *pull
 		a.mu.Unlock()
 		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
-			Provider:  "github",
+			Provider:  adapterName,
 			Kind:      "PR",
 			RepoName:  baseOwner + "/" + baseRepo,
 			Ref:       fmt.Sprintf("#%d", pull.Number),
@@ -551,7 +553,7 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	a.tracked[p.Branch] = created
 	a.mu.Unlock()
 	a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
-		Provider:  "github",
+		Provider:  adapterName,
 		Kind:      "PR",
 		RepoName:  baseOwner + "/" + baseRepo,
 		Ref:       fmt.Sprintf("#%d", created.Number),
@@ -561,6 +563,9 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 		Draft:     created.Draft,
 		UpdatedAt: time.Now(),
 	}, baseOwner, baseRepo, created.Number)
+
+	a.applyPRReviewers(ctx, baseOwner, baseRepo, created.Number)
+	a.applyPRLabels(ctx, baseOwner, baseRepo, created.Number)
 
 	return nil
 }
@@ -661,7 +666,7 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 			a.tracked[p.Branch] = created
 			a.mu.Unlock()
 			a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
-				Provider:  "github",
+				Provider:  adapterName,
 				Kind:      "PR",
 				RepoName:  baseOwner + "/" + baseRepo,
 				Ref:       fmt.Sprintf("#%d", created.Number),
@@ -671,10 +676,12 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 				Draft:     created.Draft,
 				UpdatedAt: time.Now(),
 			}, baseOwner, baseRepo, created.Number)
+			a.applyPRReviewers(ctx, baseOwner, baseRepo, created.Number)
+			a.applyPRLabels(ctx, baseOwner, baseRepo, created.Number)
 			return nil
 		}
 		artifacts = []domain.ReviewArtifact{{
-			Provider:  "github",
+			Provider:  adapterName,
 			Kind:      "PR",
 			RepoName:  baseOwner + "/" + baseRepo,
 			Ref:       fmt.Sprintf("#%d", pull.Number),
@@ -704,6 +711,39 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 	}
 
 	return nil
+}
+
+// applyPRReviewers adds configured reviewers to a PR via the GitHub API.
+// Failures are logged at Warn and never returned — reviewer assignment is
+// a best-effort side effect that must not block the PR lifecycle.
+func (a *GithubAdapter) applyPRReviewers(ctx context.Context, owner, repo string, prNumber int) {
+	if len(a.cfg.Reviewers) == 0 {
+		return
+	}
+	if err := a.postJSON(ctx,
+		fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, prNumber),
+		map[string]any{"reviewers": a.cfg.Reviewers},
+		nil,
+	); err != nil {
+		slog.Warn("github: failed to add reviewers to PR", "pr", prNumber, "error", err)
+	}
+}
+
+// applyPRLabels adds configured labels to a PR via the GitHub issues API.
+// PRs share the issues namespace in GitHub's REST API.
+// Failures are logged at Warn and never returned — label application is
+// a best-effort side effect that must not block the PR lifecycle.
+func (a *GithubAdapter) applyPRLabels(ctx context.Context, owner, repo string, prNumber int) {
+	if len(a.cfg.Labels) == 0 {
+		return
+	}
+	if err := a.postJSON(ctx,
+		fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, prNumber),
+		map[string]any{"labels": a.cfg.Labels},
+		nil,
+	); err != nil {
+		slog.Warn("github: failed to add labels to PR", "pr", prNumber, "error", err)
+	}
 }
 
 func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
@@ -1000,7 +1040,7 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 		}
 		artifact := payload.Artifact
 		if payload.WorkItemID != p.WorkItemID ||
-			artifact.Provider != "github" ||
+			artifact.Provider != adapterName ||
 			strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) ||
 			strings.TrimSpace(artifact.Ref) == "" ||
 			strings.TrimSpace(artifact.RepoName) == "" {
@@ -1138,7 +1178,7 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: "github", StatusCode: resp.StatusCode, Body: body}
+			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
 		}
 		return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
@@ -1179,7 +1219,7 @@ func issueToWorkItem(iss githubIssue) domain.Session {
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(owner, repo, iss.Number),
-		Source:        "github",
+		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{issueSelectionID(iss)},
 		Title:         iss.Title,
@@ -1221,7 +1261,7 @@ func aggregateIssues(issues []githubIssue) domain.Session {
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(owner, repo, issues[0].Number),
-		Source:        "github",
+		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: itemIDs,
 		Title:         title,
@@ -1251,7 +1291,7 @@ func githubTrackerRefs(issues []githubIssue) []domain.TrackerReference {
 		}
 		seen[key] = struct{}{}
 		refs = append(refs, domain.TrackerReference{
-			Provider: "github",
+			Provider: adapterName,
 			Kind:     "issue",
 			ID:       strconv.FormatInt(iss.Number, 10),
 			URL:      iss.HTMLURL,
@@ -1482,7 +1522,7 @@ func renderGitHubTrackerRefs(refs []domain.TrackerReference, baseRepo domain.Rep
 
 func renderGitHubTrackerRef(ref domain.TrackerReference, baseRepo domain.RepoRef) string {
 	switch ref.Provider {
-	case "github":
+	case adapterName:
 		if ref.Kind != "issue" || ref.Number <= 0 {
 			return ""
 		}

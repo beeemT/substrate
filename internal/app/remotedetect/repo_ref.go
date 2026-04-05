@@ -105,7 +105,6 @@ func ResolveReviewContextWithBranch(ctx context.Context, dir string, headBranch 
 	}, nil
 }
 
-
 type resolvedRemote struct {
 	Name string
 	URL  string

@@ -46,7 +46,7 @@ func NewRepoSource(ctx context.Context, cfg config.GithubConfig) (*GithubRepoSou
 }
 
 // Name returns the source identifier.
-func (s *GithubRepoSource) Name() string { return "github" }
+func (s *GithubRepoSource) Name() string { return adapterName }
 
 // ListRepos returns repositories available for cloning.
 func (s *GithubRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListOpts) (*adapter.RepoListResult, error) {
@@ -130,7 +130,7 @@ func (s *GithubRepoSource) getJSON(ctx context.Context, endpoint string, query u
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: "github", StatusCode: resp.StatusCode, Body: body}
+			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
 		}
 		return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
@@ -181,7 +181,7 @@ func mapGithubRepos(items []githubRepoItem) []adapter.RepoItem {
 			SSHURL:        item.SSHURL,
 			DefaultBranch: item.DefaultBranch,
 			IsPrivate:     item.Private,
-			Source:        "github",
+			Source:        adapterName,
 			Owner:         item.Owner.Login,
 		})
 	}

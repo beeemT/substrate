@@ -3,8 +3,8 @@ package opencode
 import (
 	"encoding/json"
 	"testing"
-
 )
+
 func TestMapSSEEvent_SessionCreated(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.created","sessionID":"abc-123"}`)
 	events := mapSSEEvent(raw)

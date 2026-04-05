@@ -50,7 +50,7 @@ type session struct {
 	// pendingQuestionID tracks the latest pending question request ID
 	// from SSE events, used by SendAnswer.
 	pendingQuestionID string
-	variant          string
+	variant           string
 }
 
 func (s *session) ID() string { return s.id }
@@ -350,8 +350,8 @@ func (s *session) writeLogEvent(evt adapter.AgentEvent) {
 	}
 
 	logEntry := struct {
-		Type  string              `json:"type"`
-		Event adapter.AgentEvent  `json:"event"`
+		Type  string             `json:"type"`
+		Event adapter.AgentEvent `json:"event"`
 	}{
 		Type:  "event",
 		Event: evt,
@@ -393,8 +393,7 @@ func (s *session) closeResources() {
 // sseLineReader wraps an io.Reader to read SSE-style lines,
 // handling the buffered reading of the SSE stream.
 type sseLineReader struct {
-	r    *bufio.Reader
-	line string
+	r *bufio.Reader
 }
 
 func newSSELineReader(r io.Reader) *sseLineReader {

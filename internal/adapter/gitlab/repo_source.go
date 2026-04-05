@@ -67,7 +67,7 @@ func NewRepoSource(ctx context.Context, cfg config.GitlabConfig) (*GitlabRepoSou
 }
 
 // Name returns the source identifier.
-func (s *GitlabRepoSource) Name() string { return "gitlab" }
+func (s *GitlabRepoSource) Name() string { return adapterName }
 
 // ListRepos returns a page of GitLab projects.
 // When opts.Search is non-empty, the GitLab search API is used.
@@ -121,7 +121,7 @@ func (s *GitlabRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListO
 		body := strings.TrimSpace(string(data))
 		slog.Error("gitlab list repos failed", "status", resp.StatusCode, "body", body)
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, &adapter.PermissionError{Adapter: "gitlab", StatusCode: resp.StatusCode, Body: body}
+			return nil, &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
 		}
 		return nil, fmt.Errorf("gitlab list repos: %s", resp.Status)
 	}
@@ -145,7 +145,7 @@ func (s *GitlabRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListO
 			SSHURL:        p.SSHURL,
 			DefaultBranch: p.DefaultBranch,
 			IsPrivate:     p.Visibility == "private" || p.Visibility == "internal",
-			Source:        "gitlab",
+			Source:        adapterName,
 			Owner:         p.Owner.Username,
 		})
 	}
@@ -162,7 +162,7 @@ func parseLinkHeaderNext(link string) bool {
 	if link == "" {
 		return false
 	}
-	for _, part := range strings.Split(link, ",") {
+	for part := range strings.SplitSeq(link, ",") {
 		part = strings.TrimSpace(part)
 		segments := strings.Split(part, ";")
 		if len(segments) < 2 {

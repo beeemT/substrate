@@ -110,15 +110,14 @@ func mapMessageUpdated(evt SessionEvent, now time.Time) []adapter.AgentEvent {
 			}
 
 		case "tool-use":
-			switch part.State {
-			case "started":
+			if part.State == "started" {
 				events = append(events, adapter.AgentEvent{
 					Type:      "tool_start",
 					Timestamp: now,
 					Payload:   mapToolName(part.ToolName),
 					Metadata: map[string]any{
 						"tool_use_id": part.ToolUseID,
-						"input":      string(part.ToolInput),
+						"input":       string(part.ToolInput),
 					},
 				})
 			}

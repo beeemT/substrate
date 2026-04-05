@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -547,14 +548,7 @@ func TestBuildSettingsSections_HarnessRoutingIncludesOpenCode(t *testing.T) {
 	}
 	for _, field := range routing.Fields {
 		if field.Key == "default" {
-			found := false
-			for _, opt := range field.Options {
-				if opt == "opencode" {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.Contains(field.Options, "opencode") {
 				t.Fatalf("default field options = %#v, want \"opencode\" included", field.Options)
 			}
 			return

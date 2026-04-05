@@ -35,13 +35,13 @@ func (s *doneSession) SendMessage(_ context.Context, _ string) error { return ni
 func (s *doneSession) Steer(_ context.Context, _ string) error       { return nil }
 func (s *doneSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *doneSession) Abort(_ context.Context) error                 { return nil }
-func (s *doneSession) Compact(_ context.Context) error { return nil }
+func (s *doneSession) Compact(_ context.Context) error               { return nil }
 func (s *doneSession) ResumeInfo() map[string]string                 { return nil }
 
 type doneHarness struct{}
 
 func (h *doneHarness) SupportsCompact() bool { return true }
-func (h *doneHarness) Name() string { return "done-mock" }
+func (h *doneHarness) Name() string          { return "done-mock" }
 func (h *doneHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	return newDoneSession(opts.SessionID), nil
 }

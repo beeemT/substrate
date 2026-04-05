@@ -221,30 +221,30 @@ func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDi
 	// Core write allows: worktree, temp, config.
 	if rt.NeedsBun {
 		bc := EscapeSandboxPath(bunCacheDir)
-		profile.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&profile,
 			`(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`,
-			w, tmp, cl, bc))
+			w, tmp, cl, bc)
 	} else {
-		profile.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&profile,
 			`(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`,
-			w, tmp, cl))
+			w, tmp, cl)
 	}
 
 	// Git directory write access: required for commits (index, objects, refs, hooks).
 	if gitDir != "" {
-		profile.WriteString(fmt.Sprintf(`(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gitDir)))
+		fmt.Fprintf(&profile, `(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gitDir))
 	}
 
 	// SSH agent socket: required for SSH key authentication and signing
 	// (including 1Password SSH agent integration).
 	if sshSock := os.Getenv("SSH_AUTH_SOCK"); sshSock != "" {
-		profile.WriteString(fmt.Sprintf(`(allow file-write* (literal "%s"))`, EscapeSandboxPath(sshSock)))
+		fmt.Fprintf(&profile, `(allow file-write* (literal "%s"))`, EscapeSandboxPath(sshSock))
 	}
 
 	// GPG directory: required for GPG commit signing via gpg-agent.
 	gnupgDir := filepath.Join(homeDir, ".gnupg")
 	if info, err := os.Stat(gnupgDir); err == nil && info.IsDir() {
-		profile.WriteString(fmt.Sprintf(`(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gnupgDir)))
+		fmt.Fprintf(&profile, `(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gnupgDir))
 	}
 
 	// Network access: required for git push, fetch, and SSH connections.

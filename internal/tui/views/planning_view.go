@@ -267,7 +267,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	}
 	if m.planOverlay {
 		return []KeybindHint{
-			{Key: "esc", Label: "Close"},
+			{Key: keyEsc, Label: "Close"},
 			{Key: "↑↓", Label: "Scroll"},
 		}
 	}
@@ -320,9 +320,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.planOverlay {
 			switch msg.String() {
-			case "esc", "i", "q":
-				m.planOverlay = false
-				return m, nil
+			case keyEsc, "i", "q":
 			default:
 				m.planViewport, cmd = m.planViewport.Update(msg)
 				return m, cmd
@@ -356,7 +354,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 						return SteerSessionMsg{SessionID: sid, Message: text}
 					}
 				}
-			case "esc":
+			case keyEsc:
 				if m.steerInput.Value() != "" {
 					m.steerInput.SetValue("")
 				} else {

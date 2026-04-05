@@ -357,7 +357,6 @@ review:
 	}
 }
 
-
 func TestIssueCommentContentDefault(t *testing.T) {
 	path := writeTestConfig(t, "# empty\n")
 	cfg, err := Load(path)

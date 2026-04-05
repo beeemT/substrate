@@ -18,8 +18,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"

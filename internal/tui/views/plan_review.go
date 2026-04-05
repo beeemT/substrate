@@ -498,9 +498,9 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 							combined := append([]rune{'['}, msg.Runes...)
 							scroll := extractSGRScrollLines(combined)
 							if scroll < 0 {
-								m.viewport.LineUp(-scroll)
+								m.viewport.ScrollUp(-scroll)
 							} else if scroll > 0 {
-								m.viewport.LineDown(scroll)
+								m.viewport.ScrollDown(scroll)
 							}
 							return m, nil
 						}
@@ -521,9 +521,9 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 					if isLikelySGRMouseFragment(msg.Runes) {
 						scroll := extractSGRScrollLines(msg.Runes)
 						if scroll < 0 {
-							m.viewport.LineUp(-scroll)
+							m.viewport.ScrollUp(-scroll)
 						} else if scroll > 0 {
-							m.viewport.LineDown(scroll)
+							m.viewport.ScrollDown(scroll)
 						}
 						return m, nil
 					}
@@ -565,9 +565,9 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			if msg.Type == tea.KeyRunes && isLikelySGRMouseFragment(msg.Runes) {
 				if scroll := extractSGRScrollLines(msg.Runes); scroll != 0 {
 					if scroll < 0 {
-						m.viewport.LineUp(-scroll)
+						m.viewport.ScrollUp(-scroll)
 					} else {
-						m.viewport.LineDown(scroll)
+						m.viewport.ScrollDown(scroll)
 					}
 				}
 			}

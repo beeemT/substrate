@@ -29,7 +29,7 @@ func newTestRepoSource(t *testing.T, handler http.HandlerFunc) (*GithubRepoSourc
 }
 
 func TestGithubRepoSource_Name(t *testing.T) {
-	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, r *http.Request) {
+	src, _ := newTestRepoSource(t, func(_ http.ResponseWriter, _ *http.Request) {
 		t.Fatal("no HTTP request expected")
 	})
 
@@ -41,8 +41,8 @@ func TestGithubRepoSource_Name(t *testing.T) {
 func TestGithubRepoSource_ListUserRepos(t *testing.T) {
 	wantRepos := []map[string]any{{
 		"name": "repo1", "full_name": "user/repo1", "description": "A repo",
-		"clone_url": "https://github.com/user/repo1.git",
-		"ssh_url": "git@github.com:user/repo1.git",
+		"clone_url":      "https://github.com/user/repo1.git",
+		"ssh_url":        "git@github.com:user/repo1.git",
 		"default_branch": "main", "private": false,
 		"owner": map[string]string{"login": "user"},
 	}}
@@ -101,8 +101,8 @@ func TestGithubRepoSource_SearchRepos(t *testing.T) {
 		"total_count": 1,
 		"items": []map[string]any{{
 			"name": "repo1", "full_name": "user/repo1", "description": "A repo",
-			"clone_url": "https://github.com/user/repo1.git",
-			"ssh_url": "git@github.com:user/repo1.git",
+			"clone_url":      "https://github.com/user/repo1.git",
+			"ssh_url":        "git@github.com:user/repo1.git",
 			"default_branch": "main", "private": false,
 			"owner": map[string]string{"login": "user"},
 		}},
@@ -138,14 +138,14 @@ func TestGithubRepoSource_ListRepos_Pagination(t *testing.T) {
 		for i := range repos {
 			repos[i] = map[string]any{
 				"name": "repo", "full_name": "user/repo", "description": nil,
-				"clone_url": "https://github.com/user/repo.git",
-				"ssh_url": "git@github.com:user/repo.git",
+				"clone_url":      "https://github.com/user/repo.git",
+				"ssh_url":        "git@github.com:user/repo.git",
 				"default_branch": "main", "private": false,
 				"owner": map[string]string{"login": "user"},
 			}
 		}
 
-		src, _ := newTestRepoSource(t, func(w http.ResponseWriter, r *http.Request) {
+		src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(repos)
 		})
@@ -164,14 +164,14 @@ func TestGithubRepoSource_ListRepos_Pagination(t *testing.T) {
 		for i := range repos {
 			repos[i] = map[string]any{
 				"name": "repo", "full_name": "user/repo", "description": nil,
-				"clone_url": "https://github.com/user/repo.git",
-				"ssh_url": "git@github.com:user/repo.git",
+				"clone_url":      "https://github.com/user/repo.git",
+				"ssh_url":        "git@github.com:user/repo.git",
 				"default_branch": "main", "private": false,
 				"owner": map[string]string{"login": "user"},
 			}
 		}
 
-		src, _ := newTestRepoSource(t, func(w http.ResponseWriter, r *http.Request) {
+		src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(repos)
 		})
@@ -187,7 +187,7 @@ func TestGithubRepoSource_ListRepos_Pagination(t *testing.T) {
 }
 
 func TestGithubRepoSource_ListRepos_AuthError(t *testing.T) {
-	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, r *http.Request) {
+	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"Bad credentials"}`))
 	})
@@ -210,7 +210,7 @@ func TestGithubRepoSource_ListRepos_AuthError(t *testing.T) {
 }
 
 func TestGithubRepoSource_ListRepos_EmptyResult(t *testing.T) {
-	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, r *http.Request) {
+	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
 	})

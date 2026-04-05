@@ -85,7 +85,7 @@ func TestOverlaySpinnerPlacedOnLastLine(t *testing.T) {
 	if !strings.Contains(lines[lastIdx], "⠋") {
 		t.Fatalf("spinner must be on last line (index %d), got lines: %v", lastIdx, lines)
 	}
-	for i := 0; i < lastIdx; i++ {
+	for i := range lastIdx {
 		if strings.Contains(lines[i], "⠋") {
 			t.Errorf("line %d = %q, spinner should only be on the last line", i, lines[i])
 		}

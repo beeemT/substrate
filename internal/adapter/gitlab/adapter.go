@@ -28,6 +28,7 @@ const minPollInterval = 30 * time.Second
 const maxResponseBodyBytes = 50 * 1024 * 1024 // 50 MiB
 
 const (
+	adapterName       = "gitlab"
 	filterAll         = "all"
 	filterCreatedByMe = "created_by_me"
 	filterClosed      = "closed"
@@ -156,7 +157,7 @@ func execTokenResolver(ctx context.Context, host string) (string, error) {
 	return token, nil
 }
 
-func (a *GitlabAdapter) Name() string { return "gitlab" }
+func (a *GitlabAdapter) Name() string { return adapterName }
 
 func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 	filters := map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
@@ -647,7 +648,7 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: "gitlab", StatusCode: resp.StatusCode, Body: body}
+			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
 		}
 		return &apiError{StatusCode: resp.StatusCode, Body: body}
 	}
@@ -668,7 +669,7 @@ func issueToWorkItem(iss issue) domain.Session {
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(projectID, iss.IID),
-		Source:        "gitlab",
+		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{selectionID},
 		Title:         iss.Title,
@@ -709,7 +710,7 @@ func aggregateIssues(issues []issue) domain.Session {
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(projectID, issues[0].IID),
-		Source:        "gitlab",
+		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: itemIDs,
 		Title:         title,
@@ -739,7 +740,7 @@ func gitlabTrackerRefs(issues []issue) []domain.TrackerReference {
 		}
 		seen[key] = struct{}{}
 		refs = append(refs, domain.TrackerReference{
-			Provider: "gitlab",
+			Provider: adapterName,
 			Kind:     "issue",
 			ID:       strconv.FormatInt(iss.IID, 10),
 			URL:      iss.WebURL,

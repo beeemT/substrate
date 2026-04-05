@@ -1384,7 +1384,7 @@ func gitStageAndCommit(ctx context.Context, dir, message string) error {
 // commitViaAgent spins up a short-lived agent session to commit residual changes
 // using the configured commit strategy and message format.
 // Falls back to gitStageAndCommit with a generic message if the agent session fails.
-func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath, repo, sessionID string) error {
+func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath, repo, _ string) error {
 	const fallbackCommitMsg = "chore: commit residual changes before push"
 
 	commitCfg := adapter.CommitConfig{
@@ -1426,7 +1426,10 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 	if err := sess.Wait(commitCtx); err != nil {
 		slog.Warn("commit agent session failed, falling back to generic message",
 			"repo", repo, "error", err)
-		sess.Abort(ctx) // kill agent before touching worktree ourselves; deferred Abort is idempotent
+		// kill agent before touching worktree ourselves; deferred Abort is idempotent
+		if abortErr := sess.Abort(ctx); abortErr != nil {
+			slog.Warn("implementation: commit agent abort failed", "error", abortErr)
+		}
 		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
 	}
 	return nil

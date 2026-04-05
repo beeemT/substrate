@@ -103,7 +103,6 @@ func TestDetectPlatform_SelfHostedGitLabViaGlabCLI(t *testing.T) {
 	}
 }
 
-
 func createRepoWithRemote(t *testing.T, remoteURL string) string {
 	t.Helper()
 	repoDir := t.TempDir()

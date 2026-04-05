@@ -112,7 +112,7 @@ type captureHarness struct {
 }
 
 func (h *captureHarness) SupportsCompact() bool { return true }
-func (h *captureHarness) Name() string { return "capture" }
+func (h *captureHarness) Name() string          { return "capture" }
 
 func (h *captureHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
 	h.mu.Lock()

@@ -61,7 +61,7 @@ func sampleProjectsJSON(visibility string) string {
 
 func TestGitlabRepoSource_Name(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Fatal("unexpected HTTP request")
 	})
 	src, _ := newTestRepoSource(t, handler)
@@ -73,7 +73,7 @@ func TestGitlabRepoSource_Name(t *testing.T) {
 
 func TestGitlabRepoSource_ListProjects(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(sampleProjectsJSON("public")))
 	})
@@ -157,7 +157,7 @@ func TestGitlabRepoSource_Pagination_LinkHeader(t *testing.T) {
 
 	t.Run("next page present", func(t *testing.T) {
 		t.Parallel()
-		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Link", "</api/v4/projects?page=2>; rel=\"next\", </api/v4/projects?page=5>; rel=\"last\"")
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("[]"))
@@ -180,7 +180,7 @@ func TestGitlabRepoSource_Pagination_LinkHeader(t *testing.T) {
 
 	t.Run("no next page", func(t *testing.T) {
 		t.Parallel()
-		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("[]"))
 		})
@@ -198,7 +198,7 @@ func TestGitlabRepoSource_Pagination_LinkHeader(t *testing.T) {
 
 func TestGitlabRepoSource_AuthError(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"message":"401 Unauthorized"}`))
 	})
@@ -223,7 +223,7 @@ func TestGitlabRepoSource_AuthError(t *testing.T) {
 
 func TestGitlabRepoSource_PrivateVisibility(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(sampleProjectsJSON("private")))
 	})
@@ -243,7 +243,7 @@ func TestGitlabRepoSource_PrivateVisibility(t *testing.T) {
 
 func TestGitlabRepoSource_InternalVisibility(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(sampleProjectsJSON("internal")))
 	})

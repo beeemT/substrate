@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,7 +205,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 
 	args := []string{"serve"}
 	if port > 0 {
-		args = append(args, "--port", fmt.Sprintf("%d", port))
+		args = append(args, "--port", strconv.Itoa(port))
 	}
 	args = append(args, "--hostname", hostname)
 
@@ -427,7 +428,7 @@ func detectServerURL(stdout io.Reader, timeout <-chan time.Time) (string, error)
 
 // healthCheck retries GET /session until the server responds with 200.
 func healthCheck(client *http.Client, baseURL string) error {
-	for i := 0; i < healthCheckAttempts; i++ {
+	for i := range healthCheckAttempts {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/session", nil)
 		if err != nil {

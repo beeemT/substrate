@@ -505,10 +505,7 @@ func (m SidebarModel) View() string {
 		if visibleEntryCount < len(m.entries) {
 			needsScroll = true
 			// Need scrolling. Start from cursor (clamped to 0 if unselected).
-			start = 0
-			if m.cursor >= 0 {
-				start = m.cursor
-			}
+			start = max(0, m.cursor)
 			cursorRows := entryRowHeight(m.entries[start])
 			for start > 0 {
 				prevRows := entryRowHeight(m.entries[start-1])
@@ -685,7 +682,7 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 		return ""
 	}
 	scrollOffset := 0
-	for i := 0; i < firstVisible; i++ {
+	for i := range firstVisible {
 		scrollOffset += entryRowHeight(entries[i])
 	}
 	headerRows := 2 // title + divider
@@ -701,7 +698,7 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 	for i := range lines {
 		lines[i] = st.ScrollbarTrack.Render("▏")
 	}
-	for i := 0; i < thumbHeight; i++ {
+	for i := range thumbHeight {
 		idx := headerRows + thumbTop + i
 		if idx < totalHeight {
 			lines[idx] = st.ScrollbarThumb.Render("▐")
@@ -752,8 +749,7 @@ func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted
 			return false
 		}
 	case SidebarFilterNeedsAttention:
-		switch state {
-		case domain.SessionPlanReview:
+		if state == domain.SessionPlanReview {
 			return true
 		}
 		if hasQuestion || hasInterrupted {

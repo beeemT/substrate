@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 )
 
-
 // CreateSessionRequest is the body for POST /session.
 type CreateSessionRequest struct {
 	// Agent type: "build" (default) or "plan".
 	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
 // CreateSessionResponse is the response from POST /session.
@@ -85,9 +85,9 @@ type Part struct {
 	Text  string `json:"text,omitempty"`
 
 	// Tool fields (present when Type is "tool-use").
-	ToolUseID  string          `json:"toolUseID,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
-	ToolInput  json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"toolUseID,omitempty"`
+	ToolName  string          `json:"toolName,omitempty"`
+	ToolInput json.RawMessage `json:"input,omitempty"`
 
 	// Tool result fields (present when Type is "tool-result").
 	ToolResultID  string `json:"toolResultID,omitempty"`

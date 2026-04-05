@@ -349,7 +349,6 @@ func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	}
 }
 
-
 func TestOnEvent_WorkItemCompleted_CreatesMRWhenNoneExists(t *testing.T) {
 	// Simulate adapter restart: tracked entry has empty ref/url
 	// (MR creation failed during worktree setup). mrExists returns false,
