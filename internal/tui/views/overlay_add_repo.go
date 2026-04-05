@@ -32,6 +32,14 @@ const (
 	addRepoPageSize = 30
 )
 
+// addRepoControl tracks which specific control within addRepoFocusControls is active.
+type addRepoControl int
+
+const (
+	addRepoControlSource addRepoControl = iota
+	addRepoControlSearch
+)
+
 var addRepoSizingSpec = components.SplitOverlaySizingSpec{
 	MaxOverlayWidth:   0,
 	LeftMinWidth:      36,
@@ -63,6 +71,7 @@ type AddRepoOverlay struct { //nolint:recvcheck
 	detailViewport viewport.Model
 	detailRepo     *adapter.RepoItem
 	focus          addRepoFocusArea
+	addRepoCtrl    addRepoControl
 	styles         styles.Styles
 	width          int
 	height         int
@@ -133,9 +142,8 @@ func (m *AddRepoOverlay) Open() tea.Cmd {
 	m.manualURL.SetValue("")
 	m.cloneError = ""
 	m.cloning = false
-	m.focus = addRepoFocusControls
-	m.searchInput.Focus()
 	m.manualURL.Blur()
+	m.setAddRepoControlFocus(addRepoControlSearch)
 	return m.reloadRepos()
 }
 
@@ -158,6 +166,7 @@ func (m *AddRepoOverlay) Close() {
 	m.detailViewport.YOffset = 0
 	m.detailRepo = nil
 	m.focus = addRepoFocusControls
+	m.addRepoCtrl = addRepoControlSearch
 }
 
 // Active reports whether the overlay is currently shown.
@@ -282,11 +291,12 @@ func (m AddRepoOverlay) browserLayout() components.SplitOverlayLayout {
 func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
 	// Frame borders (top + bottom) = 2
 	// Blank separator between header and body (added by RenderOverlayFrame) = 1
-	// Header: title + source labels + search input = 3 lines
-	// Divider line at top of browserView = 1
+	// Header: title + source labels = 2 lines
+	// Search row at top of browserView = 1
+	// Divider line below search row = 1
 	// Hint footer = 1+ lines
 	hintLines := addRepoHintLineCount(renderWidth)
-	return 2 + 1 + 3 + 1 + hintLines
+	return 2 + 1 + 2 + 1 + 1 + hintLines
 }
 
 // resizeInputs sets the input widths to the layout input width.
@@ -294,6 +304,75 @@ func (m *AddRepoOverlay) resizeInputs(inputWidth int) {
 	inputWidth = maxInt(1, inputWidth)
 	m.searchInput.Width = inputWidth
 	m.manualURL.Width = inputWidth
+}
+
+// isAddRepoControlFocused reports whether a specific control within addRepoFocusControls is active.
+func (m AddRepoOverlay) isAddRepoControlFocused(control addRepoControl) bool {
+	return m.focus == addRepoFocusControls && m.addRepoCtrl == control
+}
+
+// controlLabel renders the label string with the focused style when the given control is active,
+// matching the same visual convention used by NewSessionOverlay.
+func (m AddRepoOverlay) controlLabel(label string, control addRepoControl) string {
+	style := m.styles.Label
+	if m.isAddRepoControlFocused(control) {
+		style = m.styles.Title
+	}
+	return style.Render(label)
+}
+
+// setAddRepoControlFocus transitions focus into the controls area and activates the specified sub-control.
+func (m *AddRepoOverlay) setAddRepoControlFocus(control addRepoControl) {
+	m.focus = addRepoFocusControls
+	m.addRepoCtrl = control
+	switch control {
+	case addRepoControlSearch:
+		m.searchInput.Focus()
+	default:
+		m.searchInput.Blur()
+	}
+}
+
+// moveAddRepoFocus advances or retreats focus by delta steps through the controls→list chain.
+// Returns true when it consumed the event (caller should not forward to list/detail).
+func (m *AddRepoOverlay) moveAddRepoFocus(delta int) bool {
+	controls := []addRepoControl{addRepoControlSource, addRepoControlSearch}
+	if m.focus == addRepoFocusList {
+		// At the top of the list, retreat back to the last control.
+		if delta < 0 && m.repoList.Index() == 0 {
+			m.setAddRepoControlFocus(controls[len(controls)-1])
+			return true
+		}
+		return false
+	}
+	if m.focus == addRepoFocusDetails {
+		return false
+	}
+	// Currently in controls — find current position.
+	currentIndex := 0
+	for i, c := range controls {
+		if c == m.addRepoCtrl {
+			currentIndex = i
+			break
+		}
+	}
+	nextIndex := currentIndex + delta
+	switch {
+	case nextIndex < 0:
+		// Clamp at the first control rather than wrapping past the top.
+		m.setAddRepoControlFocus(controls[0])
+	case nextIndex >= len(controls):
+		// Move into the list only when there is something to show.
+		if len(m.allRepos) > 0 {
+			m.focus = addRepoFocusList
+			m.searchInput.Blur()
+		} else {
+			m.setAddRepoControlFocus(controls[len(controls)-1])
+		}
+	default:
+		m.setAddRepoControlFocus(controls[nextIndex])
+	}
+	return true
 }
 
 // Update handles incoming messages for the overlay.
@@ -366,8 +445,7 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			case "ctrl+n":
 				m.showManual = false
 				m.manualURL.Blur()
-				m.searchInput.Focus()
-				m.focus = addRepoFocusControls
+				m.setAddRepoControlFocus(addRepoControlSearch)
 			default:
 				m.manualURL, cmd = m.manualURL.Update(msg)
 				cmds = append(cmds, cmd)
@@ -385,9 +463,9 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			}
 		case "ctrl+n":
 			m.showManual = true
+			m.addRepoCtrl = addRepoControlSearch
 			m.searchInput.Blur()
 			m.manualURL.Focus()
-			m.focus = addRepoFocusControls
 		case "ctrl+r":
 			m.searchInput.SetValue("")
 			cmds = append(cmds, m.reloadRepos())
@@ -422,44 +500,59 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
 				return m, cmd
 			}
-			if m.focus == addRepoFocusList {
-				m.repoList, cmd = m.repoList.Update(msg)
-				cmds = append(cmds, cmd)
-			} else {
-				m.focus = addRepoFocusList
+			if m.moveAddRepoFocus(-1) {
+				break
 			}
+			m.repoList, cmd = m.repoList.Update(msg)
+			cmds = append(cmds, cmd)
 		case keyDown:
 			if m.focus == addRepoFocusDetails {
 				m.detailViewport, cmd = m.detailViewport.Update(msg)
 				return m, cmd
 			}
-			if m.focus == addRepoFocusList {
-				m.repoList, cmd = m.repoList.Update(msg)
-				cmds = append(cmds, cmd)
-			} else {
-				m.focus = addRepoFocusList
+			if m.moveAddRepoFocus(1) {
+				break
 			}
+			m.repoList, cmd = m.repoList.Update(msg)
+			cmds = append(cmds, cmd)
 		case panelLeft:
 			switch m.focus {
 			case addRepoFocusDetails:
 				m.focus = addRepoFocusList
-			case addRepoFocusList:
-				m.focus = addRepoFocusControls
-				m.searchInput.Focus()
+			case addRepoFocusControls:
+				if m.addRepoCtrl == addRepoControlSource && len(m.sources) > 0 {
+					m.sourceIndex = (m.sourceIndex - 1 + len(m.sources)) % len(m.sources)
+					cmds = append(cmds, m.reloadRepos())
+				} else {
+					// Forward to search input for cursor movement.
+					m.searchInput, cmd = m.searchInput.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+				// addRepoFocusList: left does nothing (up from index 0 returns to controls).
 			}
 		case panelRight:
 			switch m.focus {
-			case addRepoFocusControls:
-				m.focus = addRepoFocusList
-				m.searchInput.Blur()
 			case addRepoFocusList:
 				m.focus = addRepoFocusDetails
+			case addRepoFocusControls:
+				if m.addRepoCtrl == addRepoControlSource && len(m.sources) > 0 {
+					m.sourceIndex = (m.sourceIndex + 1) % len(m.sources)
+					cmds = append(cmds, m.reloadRepos())
+				} else {
+					// Forward to search input for cursor movement.
+					m.searchInput, cmd = m.searchInput.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+				// addRepoFocusDetails: right does nothing.
 			}
 		default:
 			switch m.focus {
 			case addRepoFocusControls:
-				m.searchInput, cmd = m.searchInput.Update(msg)
-				cmds = append(cmds, cmd)
+				// Only forward to search input when search is the active sub-control.
+				if m.addRepoCtrl == addRepoControlSearch {
+					m.searchInput, cmd = m.searchInput.Update(msg)
+					cmds = append(cmds, cmd)
+				}
 			case addRepoFocusList:
 				m.repoList, cmd = m.repoList.Update(msg)
 				cmds = append(cmds, cmd)
@@ -500,13 +593,12 @@ func (m *AddRepoOverlay) View() string {
 	}
 	sourceLine := ""
 	if len(sourceLabels) > 0 {
-		sourceLine = m.styles.Label.Render("Source: ") + strings.Join(sourceLabels, "  ")
+		sourceLine = m.controlLabel("Source: ", addRepoControlSource) + strings.Join(sourceLabels, "  ")
 	}
 
 	header := []string{
 		m.styles.Title.Render("Browse Repositories"),
 		sourceLine,
-		m.searchInput.View(),
 	}
 
 	var body string
@@ -529,7 +621,9 @@ func (m *AddRepoOverlay) View() string {
 
 // browserView renders the split-pane browse view with list and detail.
 func (m *AddRepoOverlay) browserView(layout components.SplitOverlayLayout) string {
-	lines := make([]string, 0, 2)
+	lines := make([]string, 0, 3)
+	searchRow := m.controlLabel("Search: ", addRepoControlSearch) + m.searchInput.View()
+	lines = append(lines, searchRow)
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
 	m.repoList.SetWidth(layout.LeftInnerWidth)
