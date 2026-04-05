@@ -470,6 +470,11 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			m.searchInput.SetValue("")
 			cmds = append(cmds, m.reloadRepos())
 		case keyEnter:
+			// Do not clone while a control input is focused; the user may still be
+			// typing a search query. They must navigate to the list first (Down arrow).
+			if m.focus == addRepoFocusControls {
+				break
+			}
 			if m.cloning {
 				break
 			}
@@ -548,10 +553,14 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 		default:
 			switch m.focus {
 			case addRepoFocusControls:
-				// Only forward to search input when search is the active sub-control.
+				// Forward to search input and reload the list whenever the value changes.
 				if m.addRepoCtrl == addRepoControlSearch {
+					before := m.searchInput.Value()
 					m.searchInput, cmd = m.searchInput.Update(msg)
 					cmds = append(cmds, cmd)
+					if m.searchInput.Value() != before {
+						cmds = append(cmds, m.reloadRepos())
+					}
 				}
 			case addRepoFocusList:
 				m.repoList, cmd = m.repoList.Update(msg)
