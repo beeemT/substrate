@@ -664,17 +664,28 @@ func TestTimeBucket(t *testing.T) {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
 	yesterday := today.Add(-24 * time.Hour)
-	thisWeek := today.AddDate(0, 0, -int(now.Weekday()-time.Monday))
-	if thisWeek.After(today) {
-		thisWeek = today
+	// Mirror the implementation's formula to find Monday of the current week.
+	mondayOffset := (int(now.Weekday()) - int(time.Monday) + 7) % 7
+	thisWeekMonday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -mondayOffset)
+	// A "This Week" test date must be >= Monday midnight and < yesterday midnight.
+	// That range is empty when today is Monday (Monday==today) or Tuesday (Monday==yesterday).
+	thisWeekDate := thisWeekMonday.Add(12 * time.Hour) // noon on Monday
+	thisWeekValid := thisWeekDate.Before(yesterday)
+
+	var thisMonthCandidate time.Time
+	var thisMonthValid bool
+	if thisWeekValid {
+		// For "this month": need a date after Monday-of-next-week (so it falls past thisWeek)
+		// but still in this month and before today.
+		nextMonday := thisWeekMonday.AddDate(0, 0, 7)
+		tmp := nextMonday.Add(12 * time.Hour)
+		thisMonthValid = tmp.Before(today) && tmp.Month() == now.Month()
+		thisMonthCandidate = tmp
+	} else {
+		tmp := thisWeekMonday.Add(12*time.Hour).AddDate(0, 0, 7)
+		thisMonthValid = tmp.Before(today) && tmp.Month() == now.Month()
+		thisMonthCandidate = tmp
 	}
-	// For "this month", we need a date after thisWeek's Monday midnight but before today.
-	// When thisWeek spans into this month, the day after Monday may still be in this week.
-	// Use the Sunday of this week + 1 day if it's still before today and in this month.
-	thisWeekMonday := time.Date(thisWeek.Year(), thisWeek.Month(), thisWeek.Day(), 0, 0, 0, 0, now.Location())
-	thisWeekSunday := thisWeekMonday.AddDate(0, 0, 7)        // midnight of next Monday
-	thisMonthCandidate := thisWeekSunday.Add(12 * time.Hour) // noon on next Monday
-	thisMonthValid := thisMonthCandidate.Before(today) && thisMonthCandidate.Month() == now.Month()
 	twoMonthsAgo := time.Date(now.Year(), now.Month()-2, 15, 12, 0, 0, 0, now.Location())
 	veryOld := time.Date(2020, 1, 1, 0, 0, 0, 0, now.Location())
 
@@ -686,7 +697,7 @@ func TestTimeBucket(t *testing.T) {
 	}{
 		{"today", today, "Today", false},
 		{"yesterday", yesterday, "Yesterday", false},
-		{"this week", thisWeek, "This Week", false},
+		{"this week", thisWeekDate, "This Week", !thisWeekValid},
 		{"this month", thisMonthCandidate, "This Month", !thisMonthValid},
 		{"two months ago", twoMonthsAgo, "Last 3 Months", false},
 		{"very old", veryOld, "Earlier", false},
