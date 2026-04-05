@@ -217,10 +217,32 @@ func BuildAgentHarnesses(cfg *config.Config, workspaceRoot string) (AgentHarness
 	review := resolveHarnessPhase(cfg, "review", cfg.Harness.Phase.Review, workspaceRoot)
 	foreman := resolveHarnessPhase(cfg, "foreman", cfg.Harness.Phase.Foreman, workspaceRoot)
 
+	// Deduplicate warnings: when the same harness+error causes multiple phases to
+	// fail (e.g. all four phases share one misconfigured harness), emit one log
+	// entry listing all affected phases rather than one entry per phase.
+	type failureKey struct {
+		harness config.HarnessName
+		message string
+	}
+	type affectedPhases struct {
+		key    failureKey
+		phases []string
+	}
+	seen := map[failureKey]*affectedPhases{}
+	order := []failureKey{} // preserve insertion order for deterministic output
 	for _, phase := range []resolvedHarnessPhase{planning, implementation, review, foreman} {
 		for _, f := range phase.diagnostic.Failures {
-			slog.Warn("harness phase unavailable", "phase", phase.diagnostic.Phase, "harness", f.Harness, "error", f.Message)
+			k := failureKey{harness: f.Harness, message: f.Message}
+			if _, ok := seen[k]; !ok {
+				seen[k] = &affectedPhases{key: k}
+				order = append(order, k)
+			}
+			seen[k].phases = append(seen[k].phases, phase.diagnostic.Phase)
 		}
+	}
+	for _, k := range order {
+		entry := seen[k]
+		slog.Warn("harness phase unavailable", "phases", entry.phases, "harness", k.harness, "error", k.message)
 	}
 
 	return AgentHarnesses{
