@@ -82,6 +82,7 @@ const (
 	autonomousLifecycleStartedToast = "New Session autonomous mode started"
 	autonomousLifecycleStoppedToast = "New Session autonomous mode stopped"
 )
+
 func appContentBodyWidth(width int) int {
 	if width > appContentHorizontalPadding*2 {
 		return width - (appContentHorizontalPadding * 2)
@@ -830,7 +831,6 @@ func shouldSuppressAutonomousStatusToast(level components.ToastLevel, message st
 	return level == components.ToastInfo && isAutonomousLifecycleToastMessage(message)
 }
 
-
 func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 	a.tailingSessionIDs = make(map[string]bool)
 	a.currentHistoryEntry = SidebarEntry{}
@@ -1381,7 +1381,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan))
 		}
 		return a, tea.Batch(cmds...)
-
 
 	case NewSessionAutonomousDetectedWorkItemMsg:
 		cmds = append(cmds, func() tea.Msg { return persistCreatedWorkItemMsg(a.svcs, msg.WorkItem) })
@@ -2264,6 +2263,15 @@ func (a *App) teardownAllPipelines() {
 		cancel()
 		delete(a.pipelineCancels, id)
 	}
+
+	if runtime := a.newSessionAutonomous; runtime != nil {
+		if stopErr := runtime.Stop(); stopErr != nil {
+			slog.Warn("failed to stop new session autonomous runtime on teardown", "error", stopErr)
+		}
+	}
+	a.newSessionAutonomous = nil
+	a.newSessionAutonomousChan = nil
+	a.syncNewSessionFilterOverlays()
 
 	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
 		if stopErr := a.svcs.Foreman.Stop(context.Background()); stopErr != nil {

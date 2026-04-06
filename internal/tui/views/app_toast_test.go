@@ -363,3 +363,42 @@ func TestAppUpdate_NewSessionAutonomousStatusKeepsWarningErrorAndNonLifecycleInf
 		t.Fatalf("status toast count = %d, want 3", got)
 	}
 }
+
+func TestAppUpdate_QuitConfirmedStopsActiveNewSessionAutonomousRuntime(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	done := make(chan struct{})
+	stopCalled := false
+	runtime := &NewSessionAutonomousRuntime{
+		started: true,
+		done:    done,
+	}
+	runtime.cancel = func() {
+		stopCalled = true
+		close(done)
+	}
+
+	app.newSessionAutonomous = runtime
+	app.newSessionAutonomousChan = make(chan tea.Msg)
+	app.syncNewSessionFilterOverlays()
+
+	model, _ := app.Update(QuitConfirmedMsg{})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+
+	if !stopCalled {
+		t.Fatal("expected teardown to stop active autonomous runtime")
+	}
+	if updated.newSessionAutonomous != nil {
+		t.Fatal("expected teardown to clear autonomous runtime")
+	}
+	if updated.newSessionAutonomousChan != nil {
+		t.Fatal("expected teardown to clear autonomous runtime channel")
+	}
+	if updated.newSessionAutonomousOverlay.running {
+		t.Fatal("expected teardown to sync overlay runtime state to stopped")
+	}
+}
