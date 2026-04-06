@@ -1434,6 +1434,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 			result, err := a.ListSelectable(context.Background(), opts)
 			if err != nil {
 				slog.Error("adapter list failed",
+					"toast", false,
 					"adapter", a.Name(),
 					"scope", scope,
 					"view", view,

@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const toastAttrKey = "toast"
+
 const defaultMaxEntries = 1000
 
 // Entry is a single captured log record.
@@ -123,7 +125,7 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	}
 	h.store.Append(entry)
 
-	if r.Level >= slog.LevelWarn && h.toasts != nil {
+	if r.Level >= slog.LevelWarn && h.toasts != nil && recordToastEnabled(h.attrs, r) {
 		select {
 		case h.toasts <- ToastEntry{Level: r.Level, Message: r.Message}:
 		default:
@@ -169,4 +171,28 @@ func writeAttr(sb *strings.Builder, a slog.Attr) {
 		sb.WriteByte(' ')
 	}
 	fmt.Fprintf(sb, "%s=%s", a.Key, a.Value.String())
+}
+
+func recordToastEnabled(handlerAttrs []slog.Attr, r slog.Record) bool {
+	enabled := true
+
+	apply := func(a slog.Attr) {
+		if a.Equal(slog.Attr{}) || a.Key != toastAttrKey {
+			return
+		}
+		value := a.Value.Resolve()
+		if value.Kind() == slog.KindBool {
+			enabled = value.Bool()
+		}
+	}
+
+	for _, a := range handlerAttrs {
+		apply(a)
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		apply(a)
+		return true
+	})
+
+	return enabled
 }

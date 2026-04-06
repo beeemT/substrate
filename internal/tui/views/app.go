@@ -1468,7 +1468,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if errors.Is(msg.Err, context.Canceled) || errors.Is(msg.Err, context.DeadlineExceeded) {
 			return a, nil
 		}
-		slog.Error("operation failed", "error", msg.Err)
+		slog.Error("operation failed", "toast", false, "error", msg.Err)
 		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
 		return a, nil
 

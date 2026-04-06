@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
+	"github.com/beeemT/substrate/internal/tuilog"
 )
 
 var browseANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -1863,6 +1865,108 @@ func TestNewSessionOverlayAdapterErrorClearsLoading(t *testing.T) {
 	}
 	if !foundErr {
 		t.Fatal("expected ErrMsg in returned commands")
+	}
+}
+
+func TestNewSessionOverlayAdapterErrorLogSkipsToastChannel(t *testing.T) {
+	prev := slog.Default()
+	store := tuilog.NewStore()
+	logToasts := make(chan tuilog.ToastEntry, 4)
+	slog.SetDefault(slog.New(tuilog.NewHandler(store, logToasts)))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+	})
+
+	failAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"created_by_me"}},
+		},
+		listSelectable: func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+			return nil, errors.New("github api status 422")
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{failAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	cmd := overlay.loadItemsCmd(browseLoadReset, overlay.nextRequestID())
+	msg := cmd()
+	loaded, ok := msg.(issueListLoadedMsg)
+	if !ok {
+		t.Fatalf("cmd msg = %T, want issueListLoadedMsg", msg)
+	}
+	if len(loaded.errs) != 1 {
+		t.Fatalf("errs len = %d, want 1", len(loaded.errs))
+	}
+
+	select {
+	case toast := <-logToasts:
+		t.Fatalf("unexpected log toast: %#v", toast)
+	default:
+	}
+
+	entries := store.Snapshot()
+	found := false
+	for _, entry := range entries {
+		if entry.Message != "adapter list failed" {
+			continue
+		}
+		found = true
+		if !strings.Contains(entry.Attrs, "toast=false") {
+			t.Fatalf("adapter list failed attrs = %q, want toast=false", entry.Attrs)
+		}
+	}
+	if !found {
+		t.Fatalf("log store missing adapter list failed entry: %#v", entries)
+	}
+}
+
+func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
+	prev := slog.Default()
+	store := tuilog.NewStore()
+	logToasts := make(chan tuilog.ToastEntry, 4)
+	slog.SetDefault(slog.New(tuilog.NewHandler(store, logToasts)))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+	})
+
+	app := NewApp(Services{
+		Settings:  &SettingsService{},
+		LogStore:  store,
+		LogToasts: logToasts,
+	})
+	model, _ := app.Update(ErrMsg{Err: errors.New("boom")})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+
+	if view := stripBrowseANSI(updated.toasts.StackView()); !strings.Contains(view, "Error: boom") {
+		t.Fatalf("toast view = %q, want user-facing error toast", view)
+	}
+
+	select {
+	case toast := <-logToasts:
+		t.Fatalf("unexpected log toast echo: %#v", toast)
+	default:
+	}
+
+	entries := store.Snapshot()
+	found := false
+	for _, entry := range entries {
+		if entry.Message != "operation failed" {
+			continue
+		}
+		found = true
+		if !strings.Contains(entry.Attrs, "toast=false") {
+			t.Fatalf("operation failed attrs = %q, want toast=false", entry.Attrs)
+		}
+	}
+	if !found {
+		t.Fatalf("log store missing operation failed entry: %#v", entries)
 	}
 }
 
