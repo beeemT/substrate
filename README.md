@@ -106,15 +106,103 @@ go build -o substrate ./cmd/substrate
 
 ---
 
-## Prerequisites
+## Optional Dependencies
 
-Runtime dependencies:
+These tools are not required to run Substrate. When absent, the relevant feature is disabled or skipped rather than crashing.
 
-- **git-work** — [Git worktree manager](https://github.com/beeemT/git-work)
-- **Bun** — Only required for source-checkout builds that run TypeScript bridges directly; the Homebrew package ships compiled bridge executables instead
-- **gh** — Optional, used for GitHub CLI fallback auth and harness-driven GitHub login actions; when absent, GitHub CLI fallback/login features are disabled rather than crashing Substrate
-- **glab** — Optional, for GitLab MR creation; when absent, GitLab MR lifecycle automation is skipped rather than crashing Substrate
-- **Claude Code** — Required for the Claude Agent SDK harness; [install Claude Code](https://docs.anthropic.com/en/docs/claude-code) and run `claude` once to authenticate before using the Claude Code harness
+- **gh** — [GitHub CLI](https://cli.github.com). Used for GitHub auth fallback and harness-driven GitHub login actions. Without it, those auth flows are unavailable; the GitHub adapter still works via a configured token.
+- **glab** — [GitLab CLI](https://gitlab.com/gitlab-org/cli). Used for GitLab MR creation. Without it, MR lifecycle automation is skipped.
+- **Sentry** — No CLI required; configured via API token in `~/.substrate/config.yaml`. See the Sentry adapter fields under `adapters.sentry` (`token_ref`, `organization`, `projects`).
+
+
+---
+
+## Agent Harnesses
+
+Substrate delegates agent work to an external harness. Set the harness in `~/.substrate/config.yaml`:
+
+```yaml
+harness:
+  default: ohmypi   # ohmypi (default) | claude-code | codex | opencode
+```
+
+The harness selection is also surfaced in the TUI under **Settings → Harness Routing** and can be changed at runtime.
+
+### Oh My Pi (default: `ohmypi`)
+
+The default harness. The bridge that Substrate uses to talk to Oh My Pi is **bundled with Substrate** — nothing extra to install.
+
+- **Homebrew install**: a compiled bridge executable ships inside the package. Bun is not required.
+- **Source build / `go install`**: the bridge runs as a TypeScript script via Bun. Bun must be on your PATH and `bun install --cwd bridge` must have been run in the repository checkout.
+
+Optional config:
+
+```yaml
+adapters:
+  ohmypi:
+    thinking_level: xhigh   # off | minimal | low | medium | high | xhigh
+    model: ""               # empty = Oh My Pi's own default
+    # bun_path: /opt/homebrew/bin/bun   # only if bun is not on PATH
+    # bridge_path: /path/to/omp-bridge  # only for non-standard layouts
+```
+
+### Claude Code (`claude-code`)
+
+Uses Anthropic's Claude Agent SDK. The Substrate bridge is **bundled with Substrate** (same story as Oh My Pi above). However, the `claude` CLI itself is **not bundled** — you must install and authenticate it separately before this harness works:
+
+1. Install: follow the [Claude Code install guide](https://docs.anthropic.com/en/docs/claude-code)
+2. Authenticate: run `claude` once and complete the interactive login
+
+```yaml
+harness:
+  default: claude-code
+
+adapters:
+  claude_code:
+    model: ""      # empty = Claude's own default
+    thinking: ""   # adaptive | enabled | disabled
+    effort: ""     # low | medium | high | max
+    # bun_path: /opt/homebrew/bin/bun
+    # bridge_path: /path/to/claude-agent-bridge
+```
+
+### Codex (`codex`)
+
+Uses OpenAI's Codex CLI. **Must be installed manually** — Substrate invokes `codex` directly as a subprocess; there is no bridge and nothing is bundled.
+
+1. Install: `npm install -g @openai/codex` (see the [Codex CLI README](https://github.com/openai/codex))
+2. Authenticate: set `OPENAI_API_KEY` in your environment, or run `codex` once to go through its interactive setup
+
+```yaml
+harness:
+  default: codex
+
+adapters:
+  codex:
+    model: ""              # e.g. o4-mini, o3
+    reasoning_effort: ""   # none | minimal | low | medium | high | xhigh
+    # binary_path: /usr/local/bin/codex  # only if codex is not on PATH
+```
+
+### OpenCode (`opencode`)
+
+Uses the OpenCode server. **Must be installed manually** — Substrate launches `opencode serve` as a subprocess; nothing is bundled.
+
+1. Install: follow the [OpenCode install guide](https://opencode.ai)
+2. Authenticate: configure your provider credentials as OpenCode requires (typically via `opencode` interactive setup or environment variables)
+
+```yaml
+harness:
+  default: opencode
+
+adapters:
+  opencode:
+    model: ""     # e.g. anthropic/claude-sonnet-4-20250514
+    agent: build  # build (full-access) | plan (read-only)
+    variant: ""   # model reasoning variant; empty = model default
+    # binary_path: /usr/local/bin/opencode
+    # port: 0     # 0 = auto-assign a free port
+```
 ---
 
 ## Quick Start
@@ -146,6 +234,9 @@ $EDITOR ~/.substrate/config.yaml
 Example configuration:
 
 ```yaml
+harness:
+  default: ohmypi              # ohmypi | claude-code | codex | opencode
+
 commit:
   strategy: semi-regular        # granular | semi-regular | single
   message_format: ai-generated  # ai-generated | conventional | custom
