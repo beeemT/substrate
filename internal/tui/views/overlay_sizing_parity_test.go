@@ -53,6 +53,7 @@ func TestAlignedSplitOverlayCenterInsetsMatchNewSession(t *testing.T) {
 		width  int
 		height int
 	}{
+		{width: 72, height: 18},
 		{width: 120, height: 30},
 		{width: 240, height: 60},
 		{width: 250, height: 60},

@@ -200,21 +200,20 @@ func overlayFrameWidth(termWidth, maxOverlayWidth int, chrome styles.ChromeMetri
 }
 
 func overlayBodyHeight(termHeight, chromeLines int, spec SplitOverlaySizingSpec) int {
-	minBodyHeight := maxInt(1, spec.MinBodyHeight)
-	target := maxInt(minBodyHeight, spec.DefaultBodyHeight)
-	if termHeight > 0 && spec.HeightRatioNum > 0 && spec.HeightRatioDen > 0 {
-		totalTarget := ceilDiv(termHeight*spec.HeightRatioNum, spec.HeightRatioDen)
-		target = maxInt(minBodyHeight, totalTarget-chromeLines)
-	}
+	// Terminal size unknown: fall back to the configured default.
 	if termHeight <= 0 {
-		return maxInt(1, target)
+		minBodyHeight := maxInt(1, spec.MinBodyHeight)
+		return maxInt(1, maxInt(minBodyHeight, spec.DefaultBodyHeight))
 	}
+	// Fill the terminal: body gets every row not occupied by chrome.
+	// The height ratio and DefaultBodyHeight are intentionally ignored here —
+	// overlays are expected to fill the available vertical space. The ratio
+	// fields exist only to satisfy the spec struct and for the termHeight=0 path.
 	maxHeight := termHeight - chromeLines
 	if maxHeight < 1 {
 		return 1
 	}
-
-	return maxInt(1, minInt(target, maxHeight))
+	return maxInt(1, maxHeight)
 }
 
 func splitPaneWidths(contentWidth int, spec SplitOverlaySizingSpec) (int, int) {
