@@ -550,6 +550,9 @@ func validate(cfg *Config) error {
 	if err := ValidateCodexReasoningEffort(cfg.Adapters.Codex.ReasoningEffort); err != nil {
 		return fmt.Errorf("invalid adapters.codex.reasoning_effort: %w", err)
 	}
+	if err := ValidateThinkingLevel(cfg.Adapters.OhMyPi.ThinkingLevel); err != nil {
+		return fmt.Errorf("invalid adapters.ohmypi.thinking_level: %w", err)
+	}
 
 	return nil
 }

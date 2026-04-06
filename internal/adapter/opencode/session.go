@@ -61,7 +61,7 @@ func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
 func (s *session) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		if abortErr := s.Abort(ctx); abortErr != nil {
+		if abortErr := s.Abort(context.Background()); abortErr != nil {
 			slog.Warn("opencode: failed to abort on context cancel", "error", abortErr)
 		}
 		return ctx.Err()
@@ -248,6 +248,8 @@ func (s *session) finishSession(err error) {
 // On disconnect, it closes the events channel and finishes the session.
 func (s *session) startSSEReader(ctx context.Context) {
 	go func() {
+		defer close(s.events)
+		lastPartText := make(map[string]string)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.serverURL+"/event", nil)
 		if err != nil {
 			slog.Error("opencode: create SSE request", "error", err)
@@ -299,7 +301,7 @@ func (s *session) startSSEReader(ctx context.Context) {
 			}
 
 			// Parse and translate the SSE event.
-			events := mapSSEEvent(json.RawMessage(data))
+			events := mapSSEEvent(json.RawMessage(data), lastPartText)
 
 			// Track question.asked request IDs and session.created IDs.
 			for _, evt := range events {
@@ -386,7 +388,6 @@ func (s *session) closeResources() {
 			}
 		}
 
-		close(s.events)
 	})
 }
 

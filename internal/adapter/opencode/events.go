@@ -3,6 +3,7 @@ package opencode
 import (
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -31,7 +32,7 @@ func mapToolName(name string) string {
 // mapSSEEvent parses a raw SSE data payload and returns zero or more
 // canonical adapter.AgentEvents. Unknown event types are silently dropped
 // (logged at Debug level).
-func mapSSEEvent(raw json.RawMessage) []adapter.AgentEvent {
+func mapSSEEvent(raw json.RawMessage, lastPartText map[string]string) []adapter.AgentEvent {
 	var evt SessionEvent
 	if err := json.Unmarshal(raw, &evt); err != nil {
 		slog.Debug("opencode: unparseable SSE event", "raw", string(raw), "err", err)
@@ -49,7 +50,7 @@ func mapSSEEvent(raw json.RawMessage) []adapter.AgentEvent {
 		}}
 
 	case "message.updated":
-		return mapMessageUpdated(evt, now)
+		return mapMessageUpdated(evt, now, lastPartText)
 
 	case "session.completed":
 		return []adapter.AgentEvent{{
@@ -92,22 +93,27 @@ func mapSSEEvent(raw json.RawMessage) []adapter.AgentEvent {
 // mapMessageUpdated translates a message.updated event into AgentEvents.
 // A single message.updated can contain multiple parts, each producing
 // its own event.
-func mapMessageUpdated(evt SessionEvent, now time.Time) []adapter.AgentEvent {
+func mapMessageUpdated(evt SessionEvent, now time.Time, lastPartText map[string]string) []adapter.AgentEvent {
 	if evt.Message == nil {
 		return nil
 	}
 
 	var events []adapter.AgentEvent
-	for _, part := range evt.Message.Parts {
+	for i, part := range evt.Message.Parts {
+		key := evt.Message.ID + ":" + strconv.Itoa(i)
 		switch part.Type {
 		case "text":
-			if part.Text != "" {
-				events = append(events, adapter.AgentEvent{
-					Type:      "text_delta",
-					Timestamp: now,
-					Payload:   part.Text,
-				})
+			prev := lastPartText[key]
+			if len(part.Text) <= len(prev) {
+				continue
 			}
+			delta := part.Text[len(prev):]
+			lastPartText[key] = part.Text
+			events = append(events, adapter.AgentEvent{
+				Type:      "text_delta",
+				Timestamp: now,
+				Payload:   delta,
+			})
 
 		case "tool-use":
 			if part.State == "started" {
@@ -149,13 +155,17 @@ func mapMessageUpdated(evt SessionEvent, now time.Time) []adapter.AgentEvent {
 			})
 
 		case "thinking":
-			if part.Text != "" {
-				events = append(events, adapter.AgentEvent{
-					Type:      "thinking_output",
-					Timestamp: now,
-					Payload:   part.Text,
-				})
+			prev := lastPartText[key]
+			if len(part.Text) <= len(prev) {
+				continue
 			}
+			delta := part.Text[len(prev):]
+			lastPartText[key] = part.Text
+			events = append(events, adapter.AgentEvent{
+				Type:      "thinking_output",
+				Timestamp: now,
+				Payload:   delta,
+			})
 		}
 	}
 

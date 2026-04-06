@@ -42,58 +42,68 @@ function askForeman(question: string): Promise<ForemanAnswer> {
   }
 
   return new Promise<ForemanAnswer>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn();
+    };
+
     const socket = net.createConnection(socketPath);
 
+    // Safety net: reject if no answer arrives within 5 minutes.
+    // Stored in `timeout` after the variable is declared so the close handler
+    // can reference it via the closure.
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error("Timed out waiting for foreman answer"));
-    }, 5 * 60 * 1000); // 5 minute timeout
+      settle(() => reject(new Error("Timed out waiting for foreman answer")));
+    }, 5 * 60 * 1000);
 
     socket.on("connect", () => {
       socket.write(JSON.stringify({ type: "question", question }) + "\n");
     });
 
-    socket.on("data", (chunk: Buffer) => {
-      // We only expect one answer line; parse the first complete line.
-      const text = chunk.toString("utf-8");
-      for (const line of text.split("\n")) {
-        if (line.trim() === "") continue;
+    // Use readline to buffer across multiple data events so a response split
+    // across TCP/socket segments is reassembled before parsing.
+    const rl = createInterface({ input: socket, crlfDelay: Infinity });
 
-        clearTimeout(timeout);
-        socket.destroy();
+    rl.on("line", (line: string) => {
+      if (line.trim() === "") return;
+      rl.close();
+      socket.destroy();
 
-        try {
-          const msg = JSON.parse(line);
-          if (
-            msg.type !== "answer" ||
-            typeof msg.answer !== "string" ||
-            !["high", "medium", "low"].includes(msg.confidence)
-          ) {
+      try {
+        const msg = JSON.parse(line);
+        if (
+          msg.type !== "answer" ||
+          typeof msg.answer !== "string" ||
+          !["high", "medium", "low"].includes(msg.confidence)
+        ) {
+          settle(() =>
             reject(
               new Error(
                 `Invalid foreman response: expected {type:"answer",answer:string,confidence:"high"|"medium"|"low"}, got: ${line}`,
               ),
-            );
-            return;
-          }
-          resolve(msg as ForemanAnswer);
-        } catch {
-          reject(new Error(`Malformed JSON from foreman: ${line}`));
+            ),
+          );
           return;
         }
+        settle(() => resolve(msg as ForemanAnswer));
+      } catch {
+        settle(() => reject(new Error(`Malformed JSON from foreman: ${line}`)));
       }
     });
 
     socket.on("error", (err: Error) => {
-      clearTimeout(timeout);
-      reject(new Error(`Socket error: ${err.message}`));
+      settle(() => reject(new Error(`Socket error: ${err.message}`)));
     });
 
     socket.on("close", () => {
-      clearTimeout(timeout);
-      // If we haven't resolved yet, the connection closed prematurely.
-      // The promise is still pending; it will be rejected by the timeout
-      // or by an 'error' event that preceded the close.
+      // If we haven't settled yet, the connection closed before we got an answer.
+      settle(() =>
+        reject(new Error("Foreman socket closed without sending an answer")),
+      );
     });
   });
 }

@@ -7,7 +7,7 @@ import (
 
 func TestMapSSEEvent_SessionCreated(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.created","sessionID":"abc-123"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -32,7 +32,7 @@ func TestMapSSEEvent_TextDelta(t *testing.T) {
 			"parts":[{"type":"text","text":"hello world"}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -54,7 +54,7 @@ func TestMapSSEEvent_EmptyTextPartSkipped(t *testing.T) {
 			"parts":[{"type":"text","text":""}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for empty text part, got %d", len(events))
 	}
@@ -68,7 +68,7 @@ func TestMapSSEEvent_ToolStart(t *testing.T) {
 			"parts":[{"type":"tool-use","state":"started","toolUseID":"tu-1","toolName":"Read","input":"{\"path\":\"/tmp/file\"}"}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -103,7 +103,7 @@ func TestMapSSEEvent_ToolUseNotStartedIgnored(t *testing.T) {
 			"parts":[{"type":"tool-use","state":"completed","toolUseID":"tu-1","toolName":"Read"}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for non-started tool-use, got %d", len(events))
 	}
@@ -117,7 +117,7 @@ func TestMapSSEEvent_ToolResult(t *testing.T) {
 			"parts":[{"type":"tool-result","toolResultID":"tr-1","output":"file contents here"}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	// tool-result should emit tool_output + tool_result (2 events).
 	if len(events) != 2 {
@@ -158,7 +158,7 @@ func TestMapSSEEvent_ToolResultEmptyOutput(t *testing.T) {
 			"parts":[{"type":"tool-result","toolResultID":"tr-2"}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	// Empty output: no tool_output, but tool_result is always emitted.
 	if len(events) != 1 {
@@ -177,7 +177,7 @@ func TestMapSSEEvent_ToolResultWithError(t *testing.T) {
 			"parts":[{"type":"tool-result","toolResultID":"tr-3","error":"command failed","output":""}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	// Error set but no output: no tool_output, but tool_result emitted with error in metadata.
 	if len(events) != 1 {
@@ -199,7 +199,7 @@ func TestMapSSEEvent_Thinking(t *testing.T) {
 			"parts":[{"type":"thinking","text":"let me think..."}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -221,7 +221,7 @@ func TestMapSSEEvent_EmptyThinkingSkipped(t *testing.T) {
 			"parts":[{"type":"thinking","text":""}]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for empty thinking part, got %d", len(events))
 	}
@@ -229,7 +229,7 @@ func TestMapSSEEvent_EmptyThinkingSkipped(t *testing.T) {
 
 func TestMapSSEEvent_SessionCompleted(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.completed","sessionID":"abc"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -245,7 +245,7 @@ func TestMapSSEEvent_SessionCompleted(t *testing.T) {
 
 func TestMapSSEEvent_SessionAborted(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.aborted","sessionID":"abc"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -262,7 +262,7 @@ func TestMapSSEEvent_SessionAborted(t *testing.T) {
 
 func TestMapSSEEvent_SessionError(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.error","sessionID":"abc","error":"something went wrong"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -278,7 +278,7 @@ func TestMapSSEEvent_SessionError(t *testing.T) {
 
 func TestMapSSEEvent_SessionCompacted(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.compacted"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -300,7 +300,7 @@ func TestMapSSEEvent_QuestionAsked(t *testing.T) {
 			"question":"Which approach should I use?"
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -322,7 +322,7 @@ func TestMapSSEEvent_QuestionAsked(t *testing.T) {
 
 func TestMapSSEEvent_UnknownType(t *testing.T) {
 	raw := json.RawMessage(`{"type":"session.unknown_event"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if events != nil {
 		t.Errorf("expected nil for unknown event type, got %v", events)
 	}
@@ -330,7 +330,7 @@ func TestMapSSEEvent_UnknownType(t *testing.T) {
 
 func TestMapSSEEvent_InvalidJSON(t *testing.T) {
 	raw := json.RawMessage(`not valid json{{{`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if events != nil {
 		t.Errorf("expected nil for invalid JSON, got %v", events)
 	}
@@ -339,7 +339,7 @@ func TestMapSSEEvent_InvalidJSON(t *testing.T) {
 func TestMapSSEEvent_NilMessage(t *testing.T) {
 	// message.updated without a message field.
 	raw := json.RawMessage(`{"type":"message.updated"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if events != nil {
 		t.Errorf("expected nil for message.updated with nil message, got %v", events)
 	}
@@ -348,7 +348,7 @@ func TestMapSSEEvent_NilMessage(t *testing.T) {
 func TestMapSSEEvent_NilQuestion(t *testing.T) {
 	// question.asked without a question field.
 	raw := json.RawMessage(`{"type":"question.asked"}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 	if events != nil {
 		t.Errorf("expected nil for question.asked with nil question, got %v", events)
 	}
@@ -366,7 +366,7 @@ func TestMapSSEEvent_MultipleParts(t *testing.T) {
 			]
 		}
 	}`)
-	events := mapSSEEvent(raw)
+	events := mapSSEEvent(raw, map[string]string{})
 
 	if len(events) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(events))

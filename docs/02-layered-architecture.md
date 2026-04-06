@@ -485,24 +485,30 @@ review:
 
 harness:
   default: ohmypi
-  phase:
-    planning: ohmypi
-    implementation: ohmypi
-    review: ohmypi
-    foreman: ohmypi
 
 adapters:
   ohmypi:
     bun_path: ""
     bridge_path: ""
+    model: ""
     thinking_level: ""
   claude_code:
     bun_path: ""
     bridge_path: ""
     model: ""
+    thinking: ""
+    effort: ""
   codex:
     binary_path: ""
     model: ""
+    reasoning_effort: ""
+  opencode:
+    binary_path: ""
+    hostname: ""
+    port: 0
+    model: ""
+    agent: ""
+    variant: ""
   linear:
     api_key_ref: ""
     team_id: ""

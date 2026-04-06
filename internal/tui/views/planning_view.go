@@ -321,6 +321,8 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		if m.planOverlay {
 			switch msg.String() {
 			case keyEsc, "i", "q":
+				m.planOverlay = false
+				return m, nil
 			default:
 				m.planViewport, cmd = m.planViewport.Update(msg)
 				return m, cmd
