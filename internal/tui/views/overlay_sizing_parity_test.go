@@ -1,8 +1,12 @@
 package views
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -29,12 +33,70 @@ func TestAlignedSplitOverlaySizingFitsNarrowWindows(t *testing.T) {
 	addRepo.SetSize(60, 20)
 	assertOverlayFits(t, addRepo.View(), 60, 20)
 
-	sessionSearch := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
-	sessionSearch.Open(sessionHistoryScopeWorkspace, true)
+	sessionSearch := newSizingParitySessionSearchOverlay()
 	sessionSearch.SetSize(72, 18)
+	assertOverlayFits(t, sessionSearch.View(), 72, 18)
+
+	newSession := newDebounceTestNewSessionOverlay(t)
+	newSession.SetSize(72, 18)
+	assertOverlayFits(t, newSession.View(), 72, 18)
+
+	autonomous := newSizingParityAutonomousOverlay()
+	autonomous.SetSize(72, 18)
+	assertOverlayFits(t, autonomous.View(), 72, 18)
+}
+
+func TestAlignedSplitOverlayCenterInsetsMatchNewSession(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		width  int
+		height int
+	}{
+		{width: 72, height: 18},
+		{width: 120, height: 30},
+		{width: 240, height: 60},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(fmt.Sprintf("%dx%d", tc.width, tc.height), func(t *testing.T) {
+			t.Parallel()
+
+			newSession := newDebounceTestNewSessionOverlay(t)
+			newSession.SetSize(tc.width, tc.height)
+			newSessionTop, newSessionBottom := centeredOverlayInsets(newSession.View(), tc.width, tc.height)
+
+			sessionSearch := newSizingParitySessionSearchOverlay()
+			sessionSearch.SetSize(tc.width, tc.height)
+			sessionSearchTop, sessionSearchBottom := centeredOverlayInsets(sessionSearch.View(), tc.width, tc.height)
+			if sessionSearchTop != newSessionTop || sessionSearchBottom != newSessionBottom {
+				t.Fatalf("session search insets = (%d,%d), want (%d,%d)", sessionSearchTop, sessionSearchBottom, newSessionTop, newSessionBottom)
+			}
+
+			addRepo := newDebounceTestOverlay(t)
+			addRepo.SetSize(tc.width, tc.height)
+			addRepoTop, addRepoBottom := centeredOverlayInsets(addRepo.View(), tc.width, tc.height)
+			if addRepoTop != newSessionTop || addRepoBottom != newSessionBottom {
+				t.Fatalf("add repo insets = (%d,%d), want (%d,%d)", addRepoTop, addRepoBottom, newSessionTop, newSessionBottom)
+			}
+
+			autonomous := newSizingParityAutonomousOverlay()
+			autonomous.SetSize(tc.width, tc.height)
+			autonomousTop, autonomousBottom := centeredOverlayInsets(autonomous.View(), tc.width, tc.height)
+			if autonomousTop != newSessionTop || autonomousBottom != newSessionBottom {
+				t.Fatalf("autonomous insets = (%d,%d), want (%d,%d)", autonomousTop, autonomousBottom, newSessionTop, newSessionBottom)
+			}
+		})
+	}
+}
+
+func newSizingParitySessionSearchOverlay() SessionSearchOverlay {
+	overlay := NewSessionSearchOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.Open(sessionHistoryScopeWorkspace, true)
 
 	fixed := time.Unix(1_700_000_000, 0)
-	sessionSearch.SetEntries([]domain.SessionHistoryEntry{{
+	overlay.SetEntries([]domain.SessionHistoryEntry{{
 		SessionID:          "sess-overflow-check",
 		WorkspaceID:        "ws-1",
 		WorkspaceName:      "workspace-with-a-very-long-name",
@@ -50,15 +112,35 @@ func TestAlignedSplitOverlaySizingFitsNarrowWindows(t *testing.T) {
 		UpdatedAt:          fixed,
 		CreatedAt:          fixed,
 	}})
-	assertOverlayFits(t, sessionSearch.View(), 72, 18)
 
-	newSession := newDebounceTestNewSessionOverlay(t)
-	newSession.SetSize(72, 18)
-	assertOverlayFits(t, newSession.View(), 72, 18)
+	return overlay
+}
 
-	autonomous := NewNewSessionAutonomousOverlay(styles.NewStyles(styles.DefaultTheme))
-	autonomous.SetSavedFilters(testAutonomousFilters())
-	autonomous.Open()
-	autonomous.SetSize(72, 18)
-	assertOverlayFits(t, autonomous.View(), 72, 18)
+func newSizingParityAutonomousOverlay() NewSessionAutonomousOverlay {
+	overlay := NewNewSessionAutonomousOverlay(styles.NewStyles(styles.DefaultTheme))
+	overlay.SetSavedFilters(testAutonomousFilters())
+	overlay.Open()
+
+	return overlay
+}
+
+func centeredOverlayInsets(overlayView string, width, height int) (int, int) {
+	placed := ansi.Strip(renderOverlay(overlayView, width, height))
+	lines := strings.Split(placed, "\n")
+
+	first, last := -1, -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+	}
+	if first < 0 {
+		return len(lines), 0
+	}
+
+	return first, len(lines) - 1 - last
 }

@@ -42,6 +42,14 @@ type sessionSearchSpinnerTickMsg struct{}
 
 var sessionSearchSizingSpec = browseSizingSpec
 
+const (
+	sessionSearchChromeFrameLines      = 2
+	sessionSearchChromeHeaderBodyGap   = 1
+	sessionSearchChromeHeaderLines     = 4
+	sessionSearchChromeFooterHintLines = 1
+	sessionSearchLayoutParityExtraRows = 1
+)
+
 type sessionSearchFocus int
 
 const (
@@ -447,11 +455,16 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (m SessionSearchOverlay) chromeLines() int {
-	return 10 // outer border plus non-body chrome lines
+	return sessionSearchChromeFrameLines +
+		sessionSearchChromeHeaderBodyGap +
+		sessionSearchChromeHeaderLines +
+		sessionSearchChromeFooterHintLines
 }
 
 func (m SessionSearchOverlay) layout() components.SplitOverlayLayout {
-	return components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), sessionSearchSizingSpec)
+	layout := components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), sessionSearchSizingSpec)
+	// Keep split overlays vertically centered with New Session while still fitting short terminals.
+	return components.ExpandSplitOverlayBody(layout, m.height, m.chromeLines(), sessionSearchLayoutParityExtraRows)
 }
 
 func (m *SessionSearchOverlay) syncDetailViewport(forceTop bool) {
