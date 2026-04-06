@@ -47,7 +47,6 @@ const (
 	sessionSearchChromeHeaderBodyGap   = 1
 	sessionSearchChromeHeaderLines     = 4
 	sessionSearchChromeFooterHintLines = 1
-	sessionSearchLayoutParityExtraRows = 1
 )
 
 type sessionSearchFocus int
@@ -462,9 +461,7 @@ func (m SessionSearchOverlay) chromeLines() int {
 }
 
 func (m SessionSearchOverlay) layout() components.SplitOverlayLayout {
-	layout := components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), sessionSearchSizingSpec)
-	// Keep split overlays vertically centered with New Session while still fitting short terminals.
-	return components.ExpandSplitOverlayBody(layout, m.height, m.chromeLines(), sessionSearchLayoutParityExtraRows)
+	return components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), sessionSearchSizingSpec)
 }
 
 func (m *SessionSearchOverlay) syncDetailViewport(forceTop bool) {

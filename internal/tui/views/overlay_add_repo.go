@@ -48,8 +48,6 @@ const (
 
 var addRepoSizingSpec = browseSizingSpec
 
-const addRepoLayoutParityExtraRows = 1
-
 // AddRepoOverlay is the overlay for browsing and cloning remote repositories.
 type AddRepoOverlay struct { //nolint:recvcheck
 	sources           []adapter.RepoSource
@@ -291,9 +289,7 @@ func (m *AddRepoOverlay) reloadRepos() tea.Cmd {
 func (m AddRepoOverlay) browserLayout() components.SplitOverlayLayout {
 	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, addRepoSizingSpec)
 	chromeLines := m.browserChromeLines(maxInt(1, baseLayout.ContentWidth-4))
-	layout := components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, addRepoSizingSpec)
-	// Keep split overlays vertically centered with New Session while still fitting short terminals.
-	return components.ExpandSplitOverlayBody(layout, m.height, chromeLines, addRepoLayoutParityExtraRows)
+	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, addRepoSizingSpec)
 }
 
 // browserChromeLines counts all lines outside the pane body.

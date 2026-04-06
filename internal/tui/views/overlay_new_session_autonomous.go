@@ -20,14 +20,6 @@ import (
 
 var newSessionAutonomousSizingSpec = browseSizingSpec
 
-const (
-	newSessionAutonomousChromeFrameLines      = 2
-	newSessionAutonomousChromeHeaderBodyGap   = 1
-	newSessionAutonomousChromeHeaderLines     = 2
-	newSessionAutonomousChromeFooterHintLines = 1
-	newSessionAutonomousLayoutParityExtraRows = 3
-)
-
 type newSessionAutonomousFocus int
 
 const (
@@ -265,16 +257,11 @@ func (m *NewSessionAutonomousOverlay) toggleCurrentSelection() {
 }
 
 func (m NewSessionAutonomousOverlay) chromeLines() int {
-	return newSessionAutonomousChromeFrameLines +
-		newSessionAutonomousChromeHeaderBodyGap +
-		newSessionAutonomousChromeHeaderLines +
-		newSessionAutonomousChromeFooterHintLines
+	return 6 // 2 frame + 1 separator + 2 header + 1 footer
 }
 
 func (m NewSessionAutonomousOverlay) layout() components.SplitOverlayLayout {
-	layout := components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), newSessionAutonomousSizingSpec)
-	// Keep split overlays vertically centered with New Session while still fitting short terminals.
-	return components.ExpandSplitOverlayBody(layout, m.height, m.chromeLines(), newSessionAutonomousLayoutParityExtraRows)
+	return components.ComputeSplitOverlayLayout(m.width, m.height, m.chromeLines(), newSessionAutonomousSizingSpec)
 }
 
 func (m *NewSessionAutonomousOverlay) syncDetailViewport(forceTop bool) {

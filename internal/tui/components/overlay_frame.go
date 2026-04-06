@@ -96,21 +96,6 @@ func ComputeSplitOverlayLayout(termWidth, termHeight, chromeLines int, spec Spli
 	}
 }
 
-// ExpandSplitOverlayBody increases split-overlay body rows while keeping the overlay within terminal bounds.
-func ExpandSplitOverlayBody(layout SplitOverlayLayout, termHeight, chromeLines, extraRows int) SplitOverlayLayout {
-	if extraRows <= 0 || termHeight <= 0 {
-		return layout
-	}
-	maxBodyHeight := maxInt(1, termHeight-chromeLines)
-	layout.BodyHeight = minInt(maxBodyHeight, maxInt(1, layout.BodyHeight+extraRows))
-
-	pane := styles.DefaultChromeMetrics.OverlayPane
-	layout.ListHeight = maxInt(1, pane.InnerHeight(layout.BodyHeight))
-	layout.ViewportHeight = maxInt(1, layout.ListHeight-1)
-
-	return layout
-}
-
 // RenderOverlayFrame renders the outer overlay shell around header, body, and footer content.
 func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec) string {
 	parts := append([]string{}, spec.HeaderLines...)
@@ -218,7 +203,8 @@ func overlayBodyHeight(termHeight, chromeLines int, spec SplitOverlaySizingSpec)
 	minBodyHeight := maxInt(1, spec.MinBodyHeight)
 	target := maxInt(minBodyHeight, spec.DefaultBodyHeight)
 	if termHeight > 0 && spec.HeightRatioNum > 0 && spec.HeightRatioDen > 0 {
-		target = maxInt(minBodyHeight, ceilDiv(termHeight*spec.HeightRatioNum, spec.HeightRatioDen))
+		totalTarget := ceilDiv(termHeight*spec.HeightRatioNum, spec.HeightRatioDen)
+		target = maxInt(minBodyHeight, totalTarget-chromeLines)
 	}
 	if termHeight <= 0 {
 		return maxInt(1, target)
