@@ -8,6 +8,8 @@ var (
 	_ repository.PlanRepository                  = PlanRepo{}
 	_ repository.TaskPlanRepository              = SubPlanRepo{}
 	_ repository.WorkspaceRepository             = WorkspaceRepo{}
+	_ repository.NewSessionFilterRepository      = SessionFilterRepo{}
+	_ repository.NewSessionFilterLockRepository  = SessionFilterLockRepo{}
 	_ repository.TaskRepository                  = TaskRepo{}
 	_ repository.ReviewRepository                = ReviewRepo{}
 	_ repository.QuestionRepository              = QuestionRepo{}

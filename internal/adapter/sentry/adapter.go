@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -22,7 +23,11 @@ import (
 
 const defaultBaseURL = config.DefaultSentryBaseURL
 
-const providerSentry = "sentry"
+const (
+	providerSentry                 = "sentry"
+	defaultSentryWatchPollInterval = 5 * time.Minute
+	minSentryWatchPollInterval     = 60 * time.Second
+)
 
 type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -294,7 +299,7 @@ func (a *SentryAdapter) Name() string { return providerSentry }
 
 func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
 	return adapter.AdapterCapabilities{
-		CanWatch:     false,
+		CanWatch:     true,
 		CanBrowse:    true,
 		CanMutate:    false,
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues},
@@ -366,9 +371,66 @@ func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 	return aggregateIssues(a.organization, issues), nil
 }
 
-func (a *SentryAdapter) Watch(_ context.Context, _ adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
-	ch := make(chan adapter.WorkItemEvent)
-	close(ch)
+func (a *SentryAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
+	interval := resolveSentryWatchPollInterval(sentryPollIntervalValue(a.cfg))
+	ch := make(chan adapter.WorkItemEvent, 16)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		seen := make(map[string]string)
+		emit := func(event adapter.WorkItemEvent) bool {
+			select {
+			case <-ctx.Done():
+				return false
+			case ch <- event:
+				return true
+			}
+		}
+		poll := func() bool {
+			issues, err := a.fetchWatchIssues(ctx, filter)
+			if err != nil {
+				return emit(adapter.WorkItemEvent{Type: "error", Timestamp: domain.Now()})
+			}
+			for _, issue := range issues {
+				issueID := strings.TrimSpace(issue.ID)
+				if issueID == "" {
+					continue
+				}
+				status := strings.TrimSpace(issue.Status)
+				prevStatus, known := seen[issueID]
+				seen[issueID] = status
+				if !known {
+					if !emit(adapter.WorkItemEvent{Type: "created", WorkItem: issueToWorkItem(a.organization, issue), Timestamp: domain.Now()}) {
+						return false
+					}
+					continue
+				}
+				if prevStatus != status {
+					if !emit(adapter.WorkItemEvent{Type: "updated", WorkItem: issueToWorkItem(a.organization, issue), Timestamp: domain.Now()}) {
+						return false
+					}
+				}
+			}
+
+			return true
+		}
+
+		if !poll() {
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !poll() {
+					return
+				}
+			}
+		}
+	}()
 
 	return ch, nil
 }
@@ -523,6 +585,127 @@ func normalizeLimit(limit int) int {
 	return limit
 }
 
+func (a *SentryAdapter) fetchWatchIssues(ctx context.Context, filter adapter.WorkItemFilter) ([]sentryIssue, error) {
+	query, postFilterStates, empty, err := a.buildIssueWatchQuery(filter)
+	if err != nil {
+		return nil, err
+	}
+	if empty {
+		return []sentryIssue{}, nil
+	}
+
+	var issues []sentryIssue
+	if _, err := a.getJSON(ctx, a.organization, "/issues/", query, &issues); err != nil {
+		return nil, err
+	}
+	if len(postFilterStates) == 0 {
+		return issues, nil
+	}
+
+	filtered := make([]sentryIssue, 0, len(issues))
+	for _, issue := range issues {
+		if matchesWatchState(postFilterStates, issue.Status) {
+			filtered = append(filtered, issue)
+		}
+	}
+
+	return filtered, nil
+}
+
+func (a *SentryAdapter) buildIssueWatchQuery(filter adapter.WorkItemFilter) (url.Values, []string, bool, error) {
+	states := normalizeWatchStates(filter.States)
+	labels := normalizeWatchLabels(filter.Labels)
+
+	queryState := ""
+	postFilterStates := states
+	if len(states) == 1 {
+		queryState = states[0]
+		postFilterStates = nil
+	}
+
+	searchTerms := make([]string, 0, len(labels))
+	for _, label := range labels {
+		searchTerms = append(searchTerms, "label:"+label)
+	}
+
+	values, empty, err := a.buildIssueListQuery(adapter.ListOpts{
+		Scope:  domain.ScopeIssues,
+		State:  queryState,
+		Search: strings.Join(searchTerms, " "),
+	})
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	return values, postFilterStates, empty, nil
+}
+
+func normalizeWatchStates(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+
+	return normalized
+}
+
+func normalizeWatchLabels(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+
+	return normalized
+}
+
+func matchesWatchState(states []string, state string) bool {
+	if len(states) == 0 {
+		return true
+	}
+
+	return slices.Contains(states, strings.ToLower(strings.TrimSpace(state)))
+}
+
+func resolveSentryWatchPollInterval(raw string) time.Duration {
+	interval, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return defaultSentryWatchPollInterval
+	}
+	if interval < minSentryWatchPollInterval {
+		return minSentryWatchPollInterval
+	}
+
+	return interval
+}
+
+func sentryPollIntervalValue(cfg config.SentryConfig) string {
+	value := reflect.ValueOf(cfg)
+	field := value.FieldByName("PollInterval")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+
+	return field.String()
+}
+
 func issueListItem(organization string, issue sentryIssue) adapter.ListItem {
 	return adapter.ListItem{
 		ID:           issue.ID,
@@ -622,6 +805,7 @@ func issueMetadata(organization string, issues []sentryIssue) map[string]any {
 		"sentry_identifiers":  identifiers,
 		"tracker_refs":        sentryTrackerRefs(issues),
 		"source_summaries":    sentrySourceSummaries(issues),
+		"tracker_state":       strings.TrimSpace(issues[0].Status),
 	}
 	if len(projectSlugs) > 0 {
 		metadata["sentry_project_slugs"] = projectSlugs
@@ -634,6 +818,7 @@ func issueMetadata(organization string, issues []sentryIssue) map[string]any {
 		metadata["sentry_identifier"] = identifiers[0]
 		metadata["sentry_permalink"] = strings.TrimSpace(issues[0].Permalink)
 		metadata["sentry_project"] = issueProject(issues[0])
+		metadata["sentry_status"] = strings.TrimSpace(issues[0].Status)
 	}
 
 	return metadata

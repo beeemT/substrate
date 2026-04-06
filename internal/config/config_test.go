@@ -48,8 +48,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Foreman.QuestionTimeout != "0" {
 		t.Errorf("foreman.question_timeout = %q, want %q", cfg.Foreman.QuestionTimeout, "0")
 	}
-	if cfg.Adapters.Linear.PollInterval != "30s" {
-		t.Errorf("adapters.linear.poll_interval = %q, want %q", cfg.Adapters.Linear.PollInterval, "30s")
+	if cfg.Adapters.Linear.PollInterval != "5m" {
+		t.Errorf("adapters.linear.poll_interval = %q, want %q", cfg.Adapters.Linear.PollInterval, "5m")
 	}
 	if cfg.Adapters.GitLab.BaseURL != "https://gitlab.com" {
 		t.Errorf("adapters.gitlab.base_url = %q, want %q", cfg.Adapters.GitLab.BaseURL, "https://gitlab.com")
@@ -60,11 +60,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Adapters.Sentry.BaseURL != "https://sentry.io/api/0" {
 		t.Errorf("adapters.sentry.base_url = %q, want %q", cfg.Adapters.Sentry.BaseURL, "https://sentry.io/api/0")
 	}
-	if cfg.Adapters.GitLab.PollInterval != "60s" {
-		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "60s")
+	if cfg.Adapters.GitLab.PollInterval != "5m" {
+		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "5m")
 	}
-	if cfg.Adapters.GitHub.PollInterval != "60s" {
-		t.Errorf("adapters.github.poll_interval = %q, want %q", cfg.Adapters.GitHub.PollInterval, "60s")
+	if cfg.Adapters.GitHub.PollInterval != "5m" {
+		t.Errorf("adapters.github.poll_interval = %q, want %q", cfg.Adapters.GitHub.PollInterval, "5m")
+	}
+	if cfg.Adapters.Sentry.PollInterval != "5m" {
+		t.Errorf("adapters.sentry.poll_interval = %q, want %q", cfg.Adapters.Sentry.PollInterval, "5m")
 	}
 }
 
@@ -135,6 +138,9 @@ adapters:
 	}
 	if len(cfg.Adapters.Sentry.Projects) != 2 || cfg.Adapters.Sentry.Projects[0] != "web" || cfg.Adapters.Sentry.Projects[1] != "api" {
 		t.Fatalf("adapters.sentry.projects = %#v, want %#v", cfg.Adapters.Sentry.Projects, []string{"web", "api"})
+	}
+	if cfg.Adapters.Sentry.PollInterval != "5m" {
+		t.Fatalf("adapters.sentry.poll_interval = %q, want %q", cfg.Adapters.Sentry.PollInterval, "5m")
 	}
 }
 

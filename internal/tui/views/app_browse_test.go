@@ -1970,6 +1970,25 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 	}
 }
 
+func TestAppErrMsgFormatsGitHubSearchValidationError(t *testing.T) {
+	errMsg := `github: github api status 422: {"message":"Validation Failed","errors":[{"message":"The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.","resource":"Search","field":"q","code":"invalid"}],"documentation_url":"https://docs.github.com/v3/search/","status":"422"}`
+
+	app := NewApp(Services{Settings: &SettingsService{}})
+	model, _ := app.Update(ErrMsg{Err: errors.New(errMsg)})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+
+	view := stripBrowseANSI(updated.toasts.StackView())
+	if !strings.Contains(view, "Error: GitHub can't search one or more selected owners/repos.") {
+		t.Fatalf("toast view = %q, want actionable GitHub search message", view)
+	}
+	if strings.Contains(view, "github api status 422") {
+		t.Fatalf("toast view = %q, want raw API payload hidden from user", view)
+	}
+}
+
 func TestNewSessionOverlayPartialAdapterErrorShowsSuccessfulResults(t *testing.T) {
 	t.Parallel()
 

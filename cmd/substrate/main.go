@@ -55,18 +55,20 @@ type workspaceContext struct {
 }
 
 type coreServices struct {
-	workItem        *service.SessionService
-	plan            *service.PlanService
-	workspace       *service.WorkspaceService
-	task            *service.TaskService
-	question        *service.QuestionService
-	instance        *service.InstanceService
-	review          *service.ReviewService
-	event           *service.EventService
-	githubPR        *service.GithubPRService
-	gitlabMR        *service.GitlabMRService
-	sessionArtifact *service.SessionReviewArtifactService
-	settings        *views.SettingsService
+	workItem             *service.SessionService
+	plan                 *service.PlanService
+	workspace            *service.WorkspaceService
+	task                 *service.TaskService
+	question             *service.QuestionService
+	instance             *service.InstanceService
+	review               *service.ReviewService
+	event                *service.EventService
+	githubPR             *service.GithubPRService
+	gitlabMR             *service.GitlabMRService
+	sessionArtifact      *service.SessionReviewArtifactService
+	newSessionFilter     *service.SessionFilterService
+	newSessionFilterLock *service.SessionFilterLockService
+	settings             *views.SettingsService
 }
 
 type adapterSetup struct {
@@ -140,39 +142,41 @@ func run() error {
 	}
 
 	return views.RunTUI(views.Services{
-		Session:          services.workItem,
-		Plan:             services.plan,
-		Task:             services.task,
-		Question:         services.question,
-		Instance:         services.instance,
-		Workspace:        services.workspace,
-		Review:           services.review,
-		Events:           services.event,
-		GithubPRs:        services.githubPR,
-		GitlabMRs:        services.gitlabMR,
-		SessionArtifacts: services.sessionArtifact,
-		Cfg:              cfg,
-		Adapters:         adapters.workItem,
-		RepoSources:      adapters.repoSources,
-		Harnesses:        runtime.harnesses,
-		Settings:         services.settings,
-		SettingsData:     settingsData,
-		GitClient:        runtime.gitClient,
-		Bus:              bus,
-		AdapterErrors:    adapters.adapterErrors,
-		StartupWarnings:  adapters.warnings,
-		LogStore:         logStore,
-		LogToasts:        logToasts,
-		InstanceID:       instanceID,
-		WorkspaceID:      workspace.ID,
-		WorkspaceName:    workspace.Name,
-		WorkspaceDir:     workspace.Dir,
-		Planning:         runtime.planning,
-		Implementation:   runtime.implementation,
-		ReviewPipeline:   runtime.reviewPipeline,
-		Resumption:       runtime.resumption,
-		Foreman:          runtime.foreman,
-		SessionRegistry:  runtime.registry,
+		Session:               services.workItem,
+		Plan:                  services.plan,
+		Task:                  services.task,
+		Question:              services.question,
+		Instance:              services.instance,
+		Workspace:             services.workspace,
+		Review:                services.review,
+		Events:                services.event,
+		GithubPRs:             services.githubPR,
+		GitlabMRs:             services.gitlabMR,
+		SessionArtifacts:      services.sessionArtifact,
+		NewSessionFilters:     services.newSessionFilter,
+		NewSessionFilterLocks: services.newSessionFilterLock,
+		Cfg:                   cfg,
+		Adapters:              adapters.workItem,
+		RepoSources:           adapters.repoSources,
+		Harnesses:             runtime.harnesses,
+		Settings:              services.settings,
+		SettingsData:          settingsData,
+		GitClient:             runtime.gitClient,
+		Bus:                   bus,
+		AdapterErrors:         adapters.adapterErrors,
+		StartupWarnings:       adapters.warnings,
+		LogStore:              logStore,
+		LogToasts:             logToasts,
+		InstanceID:            instanceID,
+		WorkspaceID:           workspace.ID,
+		WorkspaceName:         workspace.Name,
+		WorkspaceDir:          workspace.Dir,
+		Planning:              runtime.planning,
+		Implementation:        runtime.implementation,
+		ReviewPipeline:        runtime.reviewPipeline,
+		Resumption:            runtime.resumption,
+		Foreman:               runtime.foreman,
+		SessionRegistry:       runtime.registry,
 	})
 }
 
@@ -302,19 +306,23 @@ func buildCoreServices(
 	ghPRSvc := service.NewGithubPRService(transacter)
 	glMRSvc := service.NewGitlabMRService(transacter)
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(transacter)
+	newSessionFilterSvc := service.NewSessionFilterService(transacter)
+	newSessionFilterLockSvc := service.NewSessionFilterLockService(transacter)
 
 	return coreServices{
-		workItem:        workItemSvc,
-		plan:            planSvc,
-		workspace:       workspaceSvc,
-		task:            taskSvc,
-		question:        questionSvc,
-		instance:        instanceSvc,
-		review:          reviewSvc,
-		event:           eventSvc,
-		githubPR:        ghPRSvc,
-		gitlabMR:        glMRSvc,
-		sessionArtifact: sessionArtifactSvc,
+		workItem:             workItemSvc,
+		plan:                 planSvc,
+		workspace:            workspaceSvc,
+		task:                 taskSvc,
+		question:             questionSvc,
+		instance:             instanceSvc,
+		review:               reviewSvc,
+		event:                eventSvc,
+		githubPR:             ghPRSvc,
+		gitlabMR:             glMRSvc,
+		sessionArtifact:      sessionArtifactSvc,
+		newSessionFilter:     newSessionFilterSvc,
+		newSessionFilterLock: newSessionFilterLockSvc,
 		settings: views.NewSettingsService(
 			transacter, planSvc, eventRepo, config.OSKeychainStore{},
 		),

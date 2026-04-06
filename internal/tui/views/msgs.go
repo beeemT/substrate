@@ -3,6 +3,8 @@ package views
 import (
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -173,6 +175,73 @@ type NewSessionManualMsg struct {
 	Adapter adapter.WorkItemAdapter
 	Title   string
 	Desc    string
+}
+
+// LoadNewSessionFiltersMsg requests loading saved New Session Filters for the active workspace.
+type LoadNewSessionFiltersMsg struct{ WorkspaceID string }
+
+// NewSessionFiltersLoadedMsg delivers saved New Session Filters for the workspace.
+type NewSessionFiltersLoadedMsg struct {
+	WorkspaceID string
+	Filters     []domain.NewSessionFilter
+}
+
+// SaveNewSessionFilterMsg requests persisting the current New Session Filter criteria.
+type SaveNewSessionFilterMsg struct {
+	WorkspaceID string
+	Provider    string
+	Name        string
+	Criteria    domain.NewSessionFilterCriteria
+}
+
+// NewSessionFilterSavedMsg acknowledges a persisted New Session Filter.
+type NewSessionFilterSavedMsg struct {
+	Filter  domain.NewSessionFilter
+	Message string
+}
+
+// DeleteNewSessionFilterMsg requests deleting a saved New Session Filter by ID.
+type DeleteNewSessionFilterMsg struct {
+	WorkspaceID string
+	FilterID    string
+}
+
+// NewSessionFilterDeletedMsg acknowledges deletion of a saved New Session Filter.
+type NewSessionFilterDeletedMsg struct {
+	FilterID string
+	Message  string
+}
+
+
+// StartNewSessionAutonomousModeMsg requests starting autonomous mode from selected New Session Filters.
+type StartNewSessionAutonomousModeMsg struct {
+	SelectedFilterIDs []string
+}
+
+// StopNewSessionAutonomousModeMsg requests stopping autonomous mode.
+type StopNewSessionAutonomousModeMsg struct{ Runtime *NewSessionAutonomousRuntime }
+
+// NewSessionAutonomousStartedMsg reports autonomous mode startup with runtime handles.
+type NewSessionAutonomousStartedMsg struct {
+	Runtime *NewSessionAutonomousRuntime
+	Events  <-chan tea.Msg
+	Message string
+}
+
+// NewSessionAutonomousStoppedMsg reports autonomous mode shutdown.
+type NewSessionAutonomousStoppedMsg struct{ Message string }
+
+// NewSessionAutonomousStatusMsg delivers runtime status/warning updates.
+type NewSessionAutonomousStatusMsg struct {
+	Level   string // info, warning, error
+	Message string
+}
+
+// NewSessionAutonomousDetectedWorkItemMsg is emitted when autonomous mode detects a matching created work item.
+type NewSessionAutonomousDetectedWorkItemMsg struct {
+	Adapter  adapter.WorkItemAdapter
+	FilterID string
+	WorkItem domain.Session
 }
 
 // SessionHistorySearchRequestedMsg requests a session-history refresh for the active overlay filter.

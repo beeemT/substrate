@@ -1,6 +1,7 @@
 package views
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -57,6 +58,22 @@ func newToastTestApp(t *testing.T) App {
 	}
 
 	return updated
+}
+
+func updateToastTestApp(t *testing.T, app App, msg tea.Msg) App {
+	t.Helper()
+
+	model, _ := app.Update(msg)
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+
+	return updated
+}
+
+func toastCount(app App) int {
+	return reflect.ValueOf(app.toasts).FieldByName("toasts").Len()
 }
 
 func TestRenderTopRightOverlay_RespectsBottomInset(t *testing.T) {
@@ -290,5 +307,59 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	}
 	if warningLine >= syncLine {
 		t.Fatalf("toast order = warning:%d sync:%d, want pinned warning above transient toast", warningLine, syncLine)
+	}
+}
+
+func TestAppUpdate_NewSessionAutonomousStartToastDeduplicatesStatusInfo(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	runtime := &NewSessionAutonomousRuntime{}
+	events := make(chan tea.Msg)
+
+	app = updateToastTestApp(t, app, NewSessionAutonomousStartedMsg{
+		Runtime: runtime,
+		Events:  events,
+		Message: autonomousLifecycleStartedToast,
+	})
+	app = updateToastTestApp(t, app, NewSessionAutonomousStatusMsg{
+		Level:   "info",
+		Message: autonomousLifecycleStartedToast,
+	})
+
+	if got := toastCount(app); got != 1 {
+		t.Fatalf("start toast count = %d, want 1", got)
+	}
+}
+
+func TestAppUpdate_NewSessionAutonomousStopToastDeduplicatesRepeatedStopMessages(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	runtime := &NewSessionAutonomousRuntime{}
+	events := make(chan tea.Msg)
+
+	app = updateToastTestApp(t, app, NewSessionAutonomousStartedMsg{
+		Runtime: runtime,
+		Events:  events,
+	})
+	app = updateToastTestApp(t, app, NewSessionAutonomousStoppedMsg{Message: autonomousLifecycleStoppedToast})
+	app = updateToastTestApp(t, app, NewSessionAutonomousStoppedMsg{Message: autonomousLifecycleStoppedToast})
+
+	if got := toastCount(app); got != 1 {
+		t.Fatalf("stop toast count = %d, want 1", got)
+	}
+}
+
+func TestAppUpdate_NewSessionAutonomousStatusKeepsWarningErrorAndNonLifecycleInfo(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app = updateToastTestApp(t, app, NewSessionAutonomousStatusMsg{Level: "warning", Message: "Watch degraded"})
+	app = updateToastTestApp(t, app, NewSessionAutonomousStatusMsg{Level: "error", Message: "Watch failed"})
+	app = updateToastTestApp(t, app, NewSessionAutonomousStatusMsg{Level: "info", Message: "Heartbeat"})
+
+	if got := toastCount(app); got != 3 {
+		t.Fatalf("status toast count = %d, want 3", got)
 	}
 }

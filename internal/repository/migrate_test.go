@@ -156,6 +156,7 @@ func TestMigrateWithRealMigrations(t *testing.T) {
 		"workspaces", "work_items", "plans", "sub_plans", "agent_sessions",
 		"review_cycles", "critiques", "questions",
 		"system_events", "substrate_instances",
+		"new_session_filters", "new_session_filter_locks",
 	}
 
 	for _, table := range tables {

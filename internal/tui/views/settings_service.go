@@ -42,10 +42,10 @@ const (
 )
 
 const (
-	statusWarning              = "warning"
-	statusEmpty                = "empty"
-	statusUnset                = "unset"
-	sentryAuthSourceCLI        = "sentry cli"
+	statusWarning       = "warning"
+	statusEmpty         = "empty"
+	statusUnset         = "unset"
+	sentryAuthSourceCLI = "sentry cli"
 )
 
 type SettingsField struct {
@@ -434,6 +434,7 @@ func sentrySettingsFields(cfg *config.Config) []SettingsField {
 	return []SettingsField{
 		{Section: "adapters.sentry", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(sentry.TokenRef, sentry.Token), Sensitive: true, Status: authSource},
 		{Section: "adapters.sentry", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: sentryBaseURLFieldValue(sentry)},
+		{Section: "adapters.sentry", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: sentry.PollInterval},
 		orgField,
 		{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(sentry.Projects, ",")},
 	}
@@ -450,6 +451,8 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	ghPRSvc := service.NewGithubPRService(s.transacter)
 	glMRSvc := service.NewGitlabMRService(s.transacter)
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(s.transacter)
+	newSessionFilterSvc := service.NewSessionFilterService(s.transacter)
+	newSessionFilterLockSvc := service.NewSessionFilterLockService(s.transacter)
 	bus := event.NewBus(event.BusConfig{EventRepo: s.eventRepo})
 	gitClient := current.GitClient
 	if gitClient == nil {
@@ -627,33 +630,35 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		SessionsDir:  sessionsDir,
 		SettingsData: snapshot,
 		Services: Services{
-			Session:          workItemSvc,
-			Plan:             s.planSvc,
-			Task:             sessionSvc,
-			Question:         questionSvc,
-			Instance:         instanceSvc,
-			Workspace:        workspaceSvc,
-			Review:           reviewSvc,
-			Events:           eventSvc,
-			GithubPRs:        ghPRSvc,
-			GitlabMRs:        glMRSvc,
-			SessionArtifacts: sessionArtifactSvc,
-			Planning:         planningSvc,
-			Implementation:   implSvc,
-			ReviewPipeline:   reviewPipeline,
-			Resumption:       resumption,
-			Foreman:          foreman,
-			SessionRegistry:  registry,
-			Cfg:              cfg,
-			Adapters:         adapters,
-			Harnesses:        harnesses,
-			GitClient:        gitClient,
-			Bus:              bus,
-			AdapterErrors:    adapterErrors,
-			InstanceID:       current.InstanceID,
-			WorkspaceID:      current.WorkspaceID,
-			WorkspaceDir:     current.WorkspaceDir,
-			WorkspaceName:    current.WorkspaceName,
+			Session:               workItemSvc,
+			Plan:                  s.planSvc,
+			Task:                  sessionSvc,
+			Question:              questionSvc,
+			Instance:              instanceSvc,
+			Workspace:             workspaceSvc,
+			Review:                reviewSvc,
+			Events:                eventSvc,
+			GithubPRs:             ghPRSvc,
+			GitlabMRs:             glMRSvc,
+			SessionArtifacts:      sessionArtifactSvc,
+			NewSessionFilters:     newSessionFilterSvc,
+			NewSessionFilterLocks: newSessionFilterLockSvc,
+			Planning:              planningSvc,
+			Implementation:        implSvc,
+			ReviewPipeline:        reviewPipeline,
+			Resumption:            resumption,
+			Foreman:               foreman,
+			SessionRegistry:       registry,
+			Cfg:                   cfg,
+			Adapters:              adapters,
+			Harnesses:             harnesses,
+			GitClient:             gitClient,
+			Bus:                   bus,
+			AdapterErrors:         adapterErrors,
+			InstanceID:            current.InstanceID,
+			WorkspaceID:           current.WorkspaceID,
+			WorkspaceDir:          current.WorkspaceDir,
+			WorkspaceName:         current.WorkspaceName,
 		},
 	}, nil
 }
@@ -1016,6 +1021,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.Sentry.BaseURLExplicit = value != ""
 	case "adapters.sentry.organization":
 		cfg.Adapters.Sentry.Organization = value
+	case "adapters.sentry.poll_interval":
+		cfg.Adapters.Sentry.PollInterval = value
 	case "adapters.sentry.projects":
 		cfg.Adapters.Sentry.Projects = parseList(value)
 	case "adapters.github.token_ref":
@@ -1171,7 +1178,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.linear.assignee_filter":
 		return "Watcher assignee filter; use 'me' or a specific Linear user identifier.", statusEmpty
 	case "adapters.linear.poll_interval":
-		return "Polling interval for Linear watch updates.", "30s"
+		return "Polling interval for Linear watch updates.", "5m"
 	case "adapters.linear.state_mappings":
 		return "Maps Substrate tracker states to Linear workflow states.", statusEmpty
 	case "adapters.gitlab.token_ref":
@@ -1181,7 +1188,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.gitlab.assignee":
 		return "GitLab assignee username filter used by watch polling.", statusEmpty
 	case "adapters.gitlab.poll_interval":
-		return "Polling interval for GitLab watch updates.", "60s"
+		return "Polling interval for GitLab watch updates.", "5m"
 	case "adapters.gitlab.state_mappings":
 		return "Maps Substrate tracker states to GitLab issue states.", statusEmpty
 	case "adapters.github.token_ref":
@@ -1189,7 +1196,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.github.assignee":
 		return "GitHub assignee filter used by watch polling.", statusEmpty
 	case "adapters.github.poll_interval":
-		return "Polling interval for GitHub watch updates.", "60s"
+		return "Polling interval for GitHub watch updates.", "5m"
 	case "adapters.github.reviewers":
 		return "Default reviewers requested when Substrate opens GitHub pull requests.", statusEmpty
 	case "adapters.github.labels":
@@ -1202,6 +1209,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Base URL for the Sentry API used by the adapter and sentry CLI fallback.", config.DefaultSentryBaseURL
 	case "adapters.sentry.organization":
 		return "Sentry organization slug required for browsing and resolving issues.", statusEmpty
+	case "adapters.sentry.poll_interval":
+		return "Polling interval for Sentry watch updates.", "5m"
 	case "adapters.sentry.projects":
 		return "Optional comma-separated Sentry project allowlist used to scope browsing.", statusEmpty
 	case "adapters.glab.reviewers":

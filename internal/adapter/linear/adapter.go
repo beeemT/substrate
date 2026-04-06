@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	providerLinear = "linear"
-	filterAll      = "all"
+	providerLinear           = "linear"
+	filterAll                = "all"
+	defaultWatchPollInterval = 5 * time.Minute
+	minWatchPollInterval     = 60 * time.Second
 )
 
 // queryIssueByIdentifier fetches a single issue by its display identifier (e.g. "FOO-123").
@@ -360,10 +362,7 @@ func (a *LinearAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 // Watch polls Linear for assigned issues and emits events when they appear or change state.
 // It respects context cancellation and applies exponential backoff on rate limiting.
 func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
-	interval, err := time.ParseDuration(a.cfg.PollInterval)
-	if err != nil {
-		interval = 30 * time.Second
-	}
+	interval := resolveWatchPollInterval(a.cfg.PollInterval)
 	ch := make(chan adapter.WorkItemEvent, 16)
 	go func() {
 		defer close(ch)
@@ -384,10 +383,7 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 				issues, err := a.fetchAssignedIssues(ctx)
 				if err != nil {
 					if err == ErrRateLimited {
-						backoff *= 2
-						if backoff > 10*interval {
-							backoff = 10 * interval
-						}
+						backoff = nextWatchBackoff(backoff, interval)
 						ticker.Reset(backoff)
 					} else {
 						ch <- adapter.WorkItemEvent{Type: "error", WorkItem: domain.Session{}, Timestamp: domain.Now()}
@@ -424,6 +420,34 @@ func (a *LinearAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 	}()
 
 	return ch, nil
+}
+
+func resolveWatchPollInterval(raw string) time.Duration {
+	interval, err := time.ParseDuration(raw)
+	if err != nil {
+		slog.Warn("linear: invalid poll interval; using default",
+			"poll_interval", raw,
+			"default", defaultWatchPollInterval,
+			"error", err,
+		)
+
+		return defaultWatchPollInterval
+	}
+	if interval < minWatchPollInterval {
+		return minWatchPollInterval
+	}
+
+	return interval
+}
+
+func nextWatchBackoff(current, base time.Duration) time.Duration {
+	backoff := current * 2
+	maxBackoff := 10 * base
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+
+	return backoff
 }
 
 // Fetch retrieves a work item by its Substrate ExternalID (e.g. "LIN-FOO-123").

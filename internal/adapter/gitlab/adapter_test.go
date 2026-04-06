@@ -62,9 +62,24 @@ func TestParseExternalID(t *testing.T) {
 	}
 }
 
-func TestParsePollIntervalFloor(t *testing.T) {
-	if got := parsePollInterval("5s"); got != 30*time.Second {
-		t.Fatalf("parsePollInterval floor = %v, want 30s", got)
+func TestParsePollIntervalPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "invalid falls back to default", raw: "nope", want: 5 * time.Minute},
+		{name: "empty falls back to default", raw: "", want: 5 * time.Minute},
+		{name: "below floor clamps", raw: "5s", want: 60 * time.Second},
+		{name: "above floor unchanged", raw: "90s", want: 90 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parsePollInterval(tc.raw); got != tc.want {
+				t.Fatalf("parsePollInterval(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
 	}
 }
 

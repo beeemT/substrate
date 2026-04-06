@@ -13,6 +13,8 @@ type Resources struct {
 	Plans                  PlanRepository
 	SubPlans               TaskPlanRepository
 	Workspaces             WorkspaceRepository
+	NewSessionFilters      NewSessionFilterRepository
+	NewSessionFilterLocks  NewSessionFilterLockRepository
 	Tasks                  TaskRepository
 	Reviews                ReviewRepository
 	Questions              QuestionRepository

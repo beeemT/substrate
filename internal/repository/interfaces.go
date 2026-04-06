@@ -58,6 +58,25 @@ type WorkspaceRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// NewSessionFilterRepository provides CRUD and lookup for saved New Session filters.
+type NewSessionFilterRepository interface {
+	Get(ctx context.Context, id string) (domain.NewSessionFilter, error)
+	GetByWorkspaceProviderName(ctx context.Context, workspaceID, provider, name string) (domain.NewSessionFilter, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.NewSessionFilter, error)
+	ListByWorkspaceProvider(ctx context.Context, workspaceID, provider string) ([]domain.NewSessionFilter, error)
+	Create(ctx context.Context, filter domain.NewSessionFilter) error
+	Update(ctx context.Context, filter domain.NewSessionFilter) error
+	Delete(ctx context.Context, id string) error
+}
+
+// NewSessionFilterLockRepository coordinates New Session filter lock leases.
+type NewSessionFilterLockRepository interface {
+	Get(ctx context.Context, filterID string) (domain.NewSessionFilterLock, error)
+	Acquire(ctx context.Context, lock domain.NewSessionFilterLock) (domain.NewSessionFilterLock, bool, error)
+	Renew(ctx context.Context, lock domain.NewSessionFilterLock) (domain.NewSessionFilterLock, bool, error)
+	Release(ctx context.Context, filterID, instanceID string) error
+}
+
 // TaskRepository provides CRUD for child agent sessions.
 type TaskRepository interface {
 	Get(ctx context.Context, id string) (domain.Task, error)

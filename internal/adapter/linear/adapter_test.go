@@ -816,68 +816,49 @@ func TestResolve(t *testing.T) {
 	})
 }
 
-func TestWatchBackoff(t *testing.T) {
-	var reqCount int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&reqCount, 1)
-		if n <= 2 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		// After the first two 429s, return a valid response.
-		// The Watch goroutine may call viewer first, then issues.
-		var req testGQLBody
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		switch {
-		case strings.Contains(req.Query, "Viewer"):
-			respondJSON(w, map[string]any{
-				"data": map[string]any{
-					"viewer": map[string]any{"id": "user1"},
-				},
-			})
-		default:
-			respondJSON(w, map[string]any{
-				"data": map[string]any{
-					"issues": map[string]any{"nodes": []any{}},
-				},
-			})
-		}
-	}))
-	defer srv.Close()
-
-	cfg := config.LinearConfig{
-		APIKey:       "test-key",
-		TeamID:       "team1",
-		PollInterval: "50ms",
-	}
-	a := &LinearAdapter{
-		cfg:    cfg,
-		client: newGQLClient(cfg.APIKey, srv.URL),
+func TestResolveWatchPollInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "invalid falls back to default", raw: "nope", want: defaultWatchPollInterval},
+		{name: "empty falls back to default", raw: "", want: defaultWatchPollInterval},
+		{name: "below floor clamps", raw: "30s", want: minWatchPollInterval},
+		{name: "zero clamps", raw: "0s", want: minWatchPollInterval},
+		{name: "negative clamps", raw: "-10s", want: minWatchPollInterval},
+		{name: "equal to floor", raw: "60s", want: minWatchPollInterval},
+		{name: "above floor stays", raw: "90s", want: 90 * time.Second},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	ch, err := a.Watch(ctx, adapter.WorkItemFilter{TeamID: "team1"})
-	if err != nil {
-		t.Fatalf("Watch returned error: %v", err)
-	}
-
-	timeout := time.After(500 * time.Millisecond)
-	for {
-		select {
-		case event, ok := <-ch:
-			if !ok {
-				t.Fatal("Watch channel closed before any error event was received")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveWatchPollInterval(tt.raw)
+			if got != tt.want {
+				t.Fatalf("resolveWatchPollInterval(%q) = %s, want %s", tt.raw, got, tt.want)
 			}
-			if event.Type == "error" {
-				// Confirmed: error event received on 429 responses.
-				return
-			}
-		case <-timeout:
-			t.Fatal("timed out waiting for error event from Watch on 429 responses")
-		}
+		})
 	}
+}
+
+func TestNextWatchBackoff(t *testing.T) {
+	t.Run("doubles until cap", func(t *testing.T) {
+		base := minWatchPollInterval
+		got := nextWatchBackoff(base, base)
+		want := 2 * base
+		if got != want {
+			t.Fatalf("nextWatchBackoff(%s, %s) = %s, want %s", base, base, got, want)
+		}
+	})
+
+	t.Run("caps at 10x resolved base", func(t *testing.T) {
+		base := defaultWatchPollInterval
+		got := nextWatchBackoff(8*base, base)
+		want := 10 * base
+		if got != want {
+			t.Fatalf("nextWatchBackoff(%s, %s) = %s, want %s", 8*base, base, got, want)
+		}
+	})
 }
 
 func TestLinearExternalID(t *testing.T) {

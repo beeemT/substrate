@@ -105,19 +105,28 @@ const (
 	browseLoadAppend
 )
 
+type newSessionFilterModalMode int
+
+const (
+	newSessionFilterModalNone newSessionFilterModalMode = iota
+	newSessionFilterModalSavePrompt
+	newSessionFilterModalLoadPicker
+)
+
 const browseDebounceDelay = 200 * time.Millisecond
 
 // browseDebounceMsg is delivered by a tea.Tick scheduled when the user types
 // in a browse control. Only the tick matching the current browseDebounceSeq
 // fires a network reload; earlier ticks are silently dropped.
-type browseDebounceMsg struct{ seq int }
-
-type browsePageState struct {
-	Items      []adapter.ListItem
-	Offset     int
-	NextCursor string
-	HasMore    bool
-}
+type (
+	browseDebounceMsg struct{ seq int }
+	browsePageState   struct {
+		Items      []adapter.ListItem
+		Offset     int
+		NextCursor string
+		HasMore    bool
+	}
+)
 
 func minInt(a, b int) int {
 	if a < b {
@@ -168,44 +177,82 @@ func (i selectableItem) FilterValue() string {
 	return strings.Join([]string{i.item.Provider, i.item.Identifier, i.item.ContainerRef, i.item.Title, i.item.Description}, " ")
 }
 
+type savedFilterPickerItem struct {
+	filter domain.NewSessionFilter
+}
+
+func (i savedFilterPickerItem) Title() string {
+	name := strings.TrimSpace(i.filter.Name)
+	if name == "" {
+		return "(unnamed New Session Filter)"
+	}
+	return name
+}
+
+func (i savedFilterPickerItem) Description() string {
+	parts := []string{detailProviderLabel(strings.TrimSpace(i.filter.Provider))}
+	if scope := strings.TrimSpace(string(i.filter.Criteria.Scope)); scope != "" {
+		parts = append(parts, scope)
+	}
+	if search := strings.TrimSpace(i.filter.Criteria.Search); search != "" {
+		parts = append(parts, "search: "+search)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (i savedFilterPickerItem) FilterValue() string {
+	return strings.Join([]string{
+		strings.TrimSpace(i.filter.Name),
+		strings.TrimSpace(i.filter.Provider),
+		strings.TrimSpace(string(i.filter.Criteria.Scope)),
+		strings.TrimSpace(i.filter.Criteria.Search),
+	}, " ")
+}
+
 // NewSessionOverlay is the overlay for creating a new work item session.
 type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	adapters          []adapter.WorkItemAdapter
-	browseAdapters    []adapter.WorkItemAdapter
-	workspaceID       string
-	providerIndex     int
-	scopeIndex        int
-	viewIndex         int
-	stateIndex        int
-	filterInput       textinput.Model
-	labelsInput       textinput.Model
-	ownerInput        textinput.Model
-	repoInput         textinput.Model
-	groupInput        textinput.Model
-	teamInput         textinput.Model
-	issueList         list.Model
-	allItems          []adapter.ListItem
-	browsePages       map[string]browsePageState
-	selectedIDs       map[string]bool
-	loading           bool
-	hasMore           bool
-	manualTitle       textinput.Model
-	manualDesc        textarea.Model
-	manualFocus       int
-	showManual        bool
-	browseFocus       browseFocusArea
-	browseControl     browseControl
-	detailViewport    viewport.Model
-	detailItemID      string
-	detailWidth       int
-	requestSeq        int
-	browseDebounceSeq int
-	styles            styles.Styles
-	width             int
-	height            int
-	active            bool
-	openBrowserCmd    func(string) tea.Cmd
-	statusMessage     string
+	adapters                       []adapter.WorkItemAdapter
+	browseAdapters                 []adapter.WorkItemAdapter
+	workspaceID                    string
+	providerIndex                  int
+	scopeIndex                     int
+	viewIndex                      int
+	stateIndex                     int
+	filterInput                    textinput.Model
+	labelsInput                    textinput.Model
+	ownerInput                     textinput.Model
+	repoInput                      textinput.Model
+	groupInput                     textinput.Model
+	teamInput                      textinput.Model
+	issueList                      list.Model
+	allItems                       []adapter.ListItem
+	browsePages                    map[string]browsePageState
+	selectedIDs                    map[string]bool
+	loading                        bool
+	hasMore                        bool
+	manualTitle                    textinput.Model
+	manualDesc                     textarea.Model
+	manualFocus                    int
+	showManual                     bool
+	browseFocus                    browseFocusArea
+	browseControl                  browseControl
+	detailViewport                 viewport.Model
+	detailItemID                   string
+	detailWidth                    int
+	requestSeq                     int
+	browseDebounceSeq              int
+	savedFilters                   []domain.NewSessionFilter
+	savedFilterCycleIndexByAdapter map[string]int
+	saveFilterNameInput            textinput.Model
+	loadFilterList                 list.Model
+	loadFilterChoices              []domain.NewSessionFilter
+	filterModalMode                newSessionFilterModalMode
+	styles                         styles.Styles
+	width                          int
+	height                         int
+	active                         bool
+	openBrowserCmd                 func(string) tea.Cmd
+	statusMessage                  string
 }
 
 // NewNewSessionOverlay constructs a NewSessionOverlay with sane defaults.
@@ -255,6 +302,20 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	il.SetShowHelp(false)
 	il = components.ApplyOverlayListStyles(il, st)
 
+	saveFilterName := components.NewTextInput()
+	saveFilterName.Placeholder = "Filter name…"
+	saveFilterName.CharLimit = 200
+
+	filterPickerDelegate := list.NewDefaultDelegate()
+	filterPickerDelegate.ShowDescription = true
+	filterPicker := list.New([]list.Item{}, filterPickerDelegate, 60, 10)
+	filterPicker.SetShowTitle(false)
+	filterPicker.SetShowStatusBar(false)
+	filterPicker.SetShowPagination(false)
+	filterPicker.SetFilteringEnabled(false)
+	filterPicker.SetShowHelp(false)
+	filterPicker = components.ApplyOverlayListStyles(filterPicker, st)
+
 	browseAdapters := make([]adapter.WorkItemAdapter, 0, len(adapters))
 	for _, a := range adapters {
 		if a.Capabilities().CanBrowse {
@@ -263,29 +324,33 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	}
 
 	return NewSessionOverlay{
-		adapters:       adapters,
-		browseAdapters: browseAdapters,
-		workspaceID:    workspaceID,
-		providerIndex:  0,
-		scopeIndex:     0,
-		viewIndex:      0,
-		stateIndex:     0,
-		filterInput:    fi,
-		labelsInput:    labels,
-		ownerInput:     owner,
-		repoInput:      repo,
-		groupInput:     group,
-		teamInput:      team,
-		issueList:      il,
-		browsePages:    make(map[string]browsePageState),
-		selectedIDs:    make(map[string]bool),
-		manualTitle:    mt,
-		manualDesc:     md,
-		browseFocus:    browseFocusControls,
-		browseControl:  browseControlSearch,
-		detailViewport: viewport.New(0, 0),
-		styles:         st,
-		openBrowserCmd: OpenBrowserCmd,
+		adapters:                       adapters,
+		browseAdapters:                 browseAdapters,
+		workspaceID:                    workspaceID,
+		providerIndex:                  0,
+		scopeIndex:                     0,
+		viewIndex:                      0,
+		stateIndex:                     0,
+		filterInput:                    fi,
+		labelsInput:                    labels,
+		ownerInput:                     owner,
+		repoInput:                      repo,
+		groupInput:                     group,
+		teamInput:                      team,
+		issueList:                      il,
+		browsePages:                    make(map[string]browsePageState),
+		selectedIDs:                    make(map[string]bool),
+		manualTitle:                    mt,
+		manualDesc:                     md,
+		browseFocus:                    browseFocusControls,
+		browseControl:                  browseControlSearch,
+		detailViewport:                 viewport.New(0, 0),
+		savedFilterCycleIndexByAdapter: make(map[string]int),
+		saveFilterNameInput:            saveFilterName,
+		loadFilterList:                 filterPicker,
+		filterModalMode:                newSessionFilterModalNone,
+		styles:                         st,
+		openBrowserCmd:                 OpenBrowserCmd,
 	}
 }
 
@@ -293,6 +358,11 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 func (m *NewSessionOverlay) Open() {
 	m.active = true
 	m.showManual = false
+	m.filterModalMode = newSessionFilterModalNone
+	m.saveFilterNameInput.SetValue("")
+	m.saveFilterNameInput.Blur()
+	m.loadFilterList.SetItems(nil)
+	m.loadFilterChoices = nil
 	m.normalizeSelectionOptions()
 	m.syncBrowseListState(true)
 	m.setBrowseControlFocus(browseControlSearch)
@@ -326,6 +396,11 @@ func (m *NewSessionOverlay) Close() {
 	m.manualTitle.Blur()
 	m.manualDesc.SetValue("")
 	m.manualDesc.Blur()
+	m.saveFilterNameInput.SetValue("")
+	m.saveFilterNameInput.Blur()
+	m.loadFilterList.SetItems(nil)
+	m.loadFilterChoices = nil
+	m.filterModalMode = newSessionFilterModalNone
 	m.browsePages = make(map[string]browsePageState)
 	m.selectedIDs = make(map[string]bool)
 	m.allItems = nil
@@ -839,6 +914,173 @@ func (m *NewSessionOverlay) reloadItems() tea.Cmd {
 	return m.loadItemsCmd(browseLoadReset, m.nextRequestID())
 }
 
+func (m *NewSessionOverlay) SetSavedNewSessionFilters(filters []domain.NewSessionFilter) {
+	m.savedFilters = append([]domain.NewSessionFilter(nil), filters...)
+	m.savedFilterCycleIndexByAdapter = make(map[string]int)
+
+	if m.filterModalMode != newSessionFilterModalLoadPicker {
+		return
+	}
+
+	selectedFilterID := ""
+	preferredProvider := strings.TrimSpace(m.currentProvider())
+	selectedIndex := m.loadFilterList.Index()
+	if selectedIndex >= 0 && selectedIndex < len(m.loadFilterChoices) {
+		selected := m.loadFilterChoices[selectedIndex]
+		selectedFilterID = strings.TrimSpace(selected.ID)
+		if provider := strings.TrimSpace(selected.Provider); provider != "" {
+			preferredProvider = provider
+		}
+	}
+	m.syncLoadFilterPicker(selectedFilterID, preferredProvider)
+}
+
+func (m NewSessionOverlay) currentFilterCriteria() domain.NewSessionFilterCriteria {
+	return domain.NewSessionFilterCriteria{
+		Scope:      m.currentScope(),
+		View:       strings.TrimSpace(m.currentView()),
+		State:      strings.TrimSpace(m.currentState()),
+		Search:     strings.TrimSpace(m.filterInput.Value()),
+		Labels:     parseCommaSeparated(m.labelsInput.Value()),
+		Owner:      strings.TrimSpace(m.ownerInput.Value()),
+		Repository: strings.TrimSpace(m.repoInput.Value()),
+		Group:      strings.TrimSpace(m.groupInput.Value()),
+		TeamID:     strings.TrimSpace(m.teamInput.Value()),
+	}
+}
+
+func sortedSavedFilters(filters []domain.NewSessionFilter) []domain.NewSessionFilter {
+	sorted := append([]domain.NewSessionFilter(nil), filters...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Provider != sorted[j].Provider {
+			return sorted[i].Provider < sorted[j].Provider
+		}
+		if sorted[i].Name != sorted[j].Name {
+			return sorted[i].Name < sorted[j].Name
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	return sorted
+}
+
+func (m *NewSessionOverlay) syncLoadFilterPicker(selectedFilterID, preferredProvider string) {
+	filters := sortedSavedFilters(m.savedFilters)
+	if len(filters) == 0 {
+		m.closeFilterModal()
+		return
+	}
+
+	items := make([]list.Item, len(filters))
+	preferred := 0
+	hasPreferred := false
+	selectedFilterID = strings.TrimSpace(selectedFilterID)
+	preferredProvider = strings.TrimSpace(preferredProvider)
+	for i, filter := range filters {
+		items[i] = savedFilterPickerItem{filter: filter}
+		if selectedFilterID != "" && strings.TrimSpace(filter.ID) == selectedFilterID {
+			preferred = i
+			hasPreferred = true
+			continue
+		}
+		if !hasPreferred && selectedFilterID == "" && preferredProvider != "" && strings.TrimSpace(filter.Provider) == preferredProvider {
+			preferred = i
+			hasPreferred = true
+		}
+	}
+	m.loadFilterChoices = filters
+	m.loadFilterList.SetItems(items)
+	m.loadFilterList.Select(preferred)
+}
+
+func (m NewSessionOverlay) savedFiltersForProvider(provider string) []domain.NewSessionFilter {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil
+	}
+	filters := make([]domain.NewSessionFilter, 0, len(m.savedFilters))
+	for _, filter := range m.savedFilters {
+		if strings.TrimSpace(filter.Provider) != provider {
+			continue
+		}
+		filters = append(filters, filter)
+	}
+	return filters
+}
+
+func (m *NewSessionOverlay) openSaveFilterPrompt() {
+	m.filterModalMode = newSessionFilterModalSavePrompt
+	m.saveFilterNameInput.SetValue("")
+	m.saveFilterNameInput.Focus()
+	m.saveFilterNameInput.CursorEnd()
+	m.blurBrowseInputs()
+}
+
+func (m *NewSessionOverlay) openLoadFilterPicker() tea.Cmd {
+	if len(m.savedFilters) == 0 {
+		return func() tea.Msg {
+			return ErrMsg{Err: errors.New("no saved Filters available to load")}
+		}
+	}
+	m.syncLoadFilterPicker("", strings.TrimSpace(m.currentProvider()))
+	m.filterModalMode = newSessionFilterModalLoadPicker
+	m.blurBrowseInputs()
+	return nil
+}
+
+func (m *NewSessionOverlay) closeFilterModal() {
+	m.filterModalMode = newSessionFilterModalNone
+	m.saveFilterNameInput.Blur()
+	m.loadFilterList.SetItems(nil)
+	m.loadFilterChoices = nil
+	m.setBrowseControlFocus(m.browseControl)
+}
+
+func (m *NewSessionOverlay) clearBrowseResults() {
+	m.browsePages = make(map[string]browsePageState)
+	m.selectedIDs = make(map[string]bool)
+	m.allItems = nil
+	m.loading = false
+	m.hasMore = false
+	m.detailViewport.SetContent("")
+	m.detailViewport.YOffset = 0
+	m.detailItemID = ""
+	m.detailWidth = 0
+}
+
+func (m *NewSessionOverlay) applySavedFilter(filter domain.NewSessionFilter) {
+	m.providerIndex = providerOptionIndex(strings.TrimSpace(filter.Provider))
+	m.scopeIndex = scopeOptionIndex(filter.Criteria.Scope)
+	m.filterInput.SetValue(strings.TrimSpace(filter.Criteria.Search))
+	m.labelsInput.SetValue(strings.Join(filter.Criteria.Labels, ", "))
+	m.ownerInput.SetValue(strings.TrimSpace(filter.Criteria.Owner))
+	m.repoInput.SetValue(strings.TrimSpace(filter.Criteria.Repository))
+	m.groupInput.SetValue(strings.TrimSpace(filter.Criteria.Group))
+	m.teamInput.SetValue(strings.TrimSpace(filter.Criteria.TeamID))
+	m.viewIndex = 0
+	m.stateIndex = 0
+	m.normalizeSelectionOptions()
+	if view := strings.TrimSpace(filter.Criteria.View); view != "" {
+		for i, option := range m.availableViewOptions() {
+			if option == view {
+				m.viewIndex = i
+				break
+			}
+		}
+	}
+	if state := strings.TrimSpace(filter.Criteria.State); state != "" {
+		for i, option := range m.availableStateOptions() {
+			if option == state {
+				m.stateIndex = i
+				break
+			}
+		}
+	}
+	m.clearBrowseResults()
+	m.syncBrowseListState(true)
+	m.setBrowseControlFocus(browseControlSearch)
+	m.syncDetailViewport(true)
+}
+
 func (m *NewSessionOverlay) resetBrowseState() {
 	m.providerIndex = providerOptionIndex(viewFilterAll)
 	m.scopeIndex = scopeOptionIndex(domain.ScopeIssues)
@@ -850,15 +1092,7 @@ func (m *NewSessionOverlay) resetBrowseState() {
 	m.repoInput.SetValue("")
 	m.groupInput.SetValue("")
 	m.teamInput.SetValue("")
-	m.browsePages = make(map[string]browsePageState)
-	m.selectedIDs = make(map[string]bool)
-	m.allItems = nil
-	m.loading = false
-	m.hasMore = false
-	m.detailViewport.SetContent("")
-	m.detailViewport.YOffset = 0
-	m.detailItemID = ""
-	m.detailWidth = 0
+	m.clearBrowseResults()
 	m.normalizeSelectionOptions()
 	m.syncBrowseListState(true)
 	m.setBrowseControlFocus(browseControlSearch)
@@ -1529,6 +1763,65 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.filterModalMode == newSessionFilterModalSavePrompt {
+			switch msg.String() {
+			case keyEsc:
+				m.closeFilterModal()
+			case keyEnter:
+				provider := m.currentProvider()
+				criteria := m.currentFilterCriteria()
+				m.closeFilterModal()
+				return m, func() tea.Msg {
+					return SaveNewSessionFilterMsg{
+						WorkspaceID: m.workspaceID,
+						Provider:    provider,
+						Name:        m.saveFilterNameInput.Value(),
+						Criteria:    criteria,
+					}
+				}
+			default:
+				m.saveFilterNameInput, cmd = m.saveFilterNameInput.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
+
+		if m.filterModalMode == newSessionFilterModalLoadPicker {
+			switch msg.String() {
+			case keyEsc:
+				m.closeFilterModal()
+			case keyEnter:
+				index := m.loadFilterList.Index()
+				if index < 0 || index >= len(m.loadFilterChoices) {
+					m.closeFilterModal()
+					break
+				}
+				selected := m.loadFilterChoices[index]
+				m.closeFilterModal()
+				m.applySavedFilter(selected)
+				if cmd = m.reloadItems(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			case "d":
+				index := m.loadFilterList.Index()
+				if index < 0 || index >= len(m.loadFilterChoices) {
+					break
+				}
+				selected := m.loadFilterChoices[index]
+				filterID := strings.TrimSpace(selected.ID)
+				if filterID == "" {
+					break
+				}
+				return m, func() tea.Msg {
+					return DeleteNewSessionFilterMsg{WorkspaceID: m.workspaceID, FilterID: filterID}
+				}
+			case "up", keyDown, keyPgUp, keyPgDown, panelLeft, panelRight, "home", "end":
+				m.loadFilterList, cmd = m.loadFilterList.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
+
 		if m.showManual {
 			switch msg.String() {
 			case keyEsc:
@@ -1600,6 +1893,12 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		case "ctrl+r":
 			m.resetBrowseState()
 			if cmd = m.reloadItems(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		case "ctrl+f":
+			m.openSaveFilterPrompt()
+		case "ctrl+l":
+			if cmd = m.openLoadFilterPicker(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		case "ctrl+n":
@@ -1854,12 +2153,51 @@ func (m *NewSessionOverlay) View() string {
 		footer = m.styles.Hint.Render(m.wrappedBrowserHintText(renderWidth))
 	}
 
-	return components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
+	base := components.RenderOverlayFrame(m.styles, layout.FrameWidth, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        body,
 		Footer:      footer,
 		Focused:     true,
 	})
+	if modal := m.filterModalView(); modal != "" {
+		return renderCenteredOverlay(base, modal, m.width, m.height)
+	}
+	return base
+}
+
+func (m *NewSessionOverlay) filterModalView() string {
+	maxFrameWidth := maxInt(1, m.width-4)
+	if m.filterModalMode == newSessionFilterModalNone || maxFrameWidth <= 0 {
+		return ""
+	}
+	frameWidth := minInt(78, maxFrameWidth)
+	if frameWidth < 40 {
+		frameWidth = maxFrameWidth
+	}
+	contentWidth := maxInt(1, frameWidth-4)
+
+	spec := components.OverlayFrameSpec{Focused: true}
+	switch m.filterModalMode {
+	case newSessionFilterModalSavePrompt:
+		m.saveFilterNameInput.Width = maxInt(1, contentWidth-8)
+		spec.HeaderLines = []string{m.styles.Title.Render("Save New Session Filter")}
+		spec.Body = strings.Join([]string{
+			m.styles.Label.Render("Name: ") + m.saveFilterNameInput.View(),
+			"",
+			m.styles.Muted.Render(truncate("Enter saves this New Session Filter. Esc cancels.", contentWidth)),
+		}, "\n")
+		spec.Footer = m.styles.Hint.Render(truncate("[Enter] Save  [Esc] Cancel", contentWidth))
+	case newSessionFilterModalLoadPicker:
+		m.loadFilterList.SetWidth(contentWidth)
+		pickerHeight := minInt(10, maxInt(3, m.height-14))
+		m.loadFilterList.SetHeight(pickerHeight)
+		spec.HeaderLines = []string{m.styles.Title.Render("Load New Session Filter")}
+		spec.Body = m.loadFilterList.View()
+		spec.Footer = m.styles.Hint.Render(truncate("[↑↓] Select  [Enter] Apply + Reload  [d] Delete  [Esc] Cancel", contentWidth))
+	default:
+		return ""
+	}
+	return components.RenderOverlayFrame(m.styles, frameWidth, spec)
 }
 
 func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) string {
@@ -1912,7 +2250,7 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 }
 
 func browserHintParts(includeState, includeView bool) []string {
-	parts := []string{"Ctrl+O open", "Ctrl+R clear", "Ctrl+N manual"}
+	parts := []string{"Ctrl+O open", "Ctrl+R clear", "Ctrl+F save-as", "Ctrl+L load", "Ctrl+N manual"}
 	if includeState {
 		parts = append(parts, "Ctrl+T state")
 	}

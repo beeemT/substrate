@@ -18,10 +18,6 @@ import (
 )
 
 const (
-	sessionSearchWindowWidth    = 180
-	sessionSearchPaneMinWidth   = 40
-	sessionSearchDetailMinWidth = 52
-
 	sessionSearchSpinnerDelay    = 500 * time.Millisecond
 	sessionSearchSpinnerInterval = 100 * time.Millisecond
 	sessionSearchDebounceDelay   = 200 * time.Millisecond
@@ -44,18 +40,7 @@ type sessionSearchDebounceMsg struct{ seq int }
 // sessionSearchSpinnerTickMsg drives the spinner animation inside SessionSearchOverlay.
 type sessionSearchSpinnerTickMsg struct{}
 
-var sessionSearchSizingSpec = components.SplitOverlaySizingSpec{
-	MaxOverlayWidth:   sessionSearchWindowWidth,
-	LeftMinWidth:      sessionSearchPaneMinWidth,
-	RightMinWidth:     sessionSearchDetailMinWidth,
-	LeftWeight:        2,
-	RightWeight:       3,
-	MinBodyHeight:     8,
-	DefaultBodyHeight: 18,
-	HeightRatioNum:    3,
-	HeightRatioDen:    5,
-	InputWidthOffset:  20,
-}
+var sessionSearchSizingSpec = browseSizingSpec
 
 type sessionSearchFocus int
 

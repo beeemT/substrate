@@ -46,18 +46,7 @@ const (
 	addRepoControlSearch
 )
 
-var addRepoSizingSpec = components.SplitOverlaySizingSpec{
-	MaxOverlayWidth:   0,
-	LeftMinWidth:      36,
-	RightMinWidth:     44,
-	LeftWeight:        2,
-	RightWeight:       3,
-	MinBodyHeight:     8,
-	DefaultBodyHeight: 24,
-	HeightRatioNum:    3,
-	HeightRatioDen:    5,
-	InputWidthOffset:  20,
-}
+var addRepoSizingSpec = browseSizingSpec
 
 // AddRepoOverlay is the overlay for browsing and cloning remote repositories.
 type AddRepoOverlay struct { //nolint:recvcheck

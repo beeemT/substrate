@@ -109,7 +109,7 @@ const (
 	HarnessCodex      HarnessName = "codex"
 	HarnessOpenCode   HarnessName = "opencode"
 )
-const defaultPollInterval = "60s"
+const defaultPollInterval = "5m"
 
 type HarnessConfig struct {
 	// The harness used for all agent phases.
@@ -135,7 +135,7 @@ type LinearConfig struct {
 	APIKey         string            `yaml:"-"` //nolint:gosec // credential field name, not a hardcoded value
 	TeamID         string            `yaml:"team_id"`
 	AssigneeFilter string            `yaml:"assignee_filter"` // "me" or explicit user ID
-	PollInterval   string            `yaml:"poll_interval"`   // e.g. "30s"; default "30s"
+	PollInterval   string            `yaml:"poll_interval"`   // e.g. "5m"; default "5m"
 	StateMappings  map[string]string `yaml:"state_mappings"`  // TrackerState -> Linear workflow state UUID
 }
 
@@ -144,7 +144,7 @@ type GitlabConfig struct {
 	Token               string              `yaml:"-"`
 	BaseURL             string              `yaml:"base_url"`      // default: https://gitlab.com
 	Assignee            string              `yaml:"assignee"`      // username filter for Watch
-	PollInterval        string              `yaml:"poll_interval"` // default: 60s
+	PollInterval        string              `yaml:"poll_interval"` // default: 5m
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
 }
@@ -154,7 +154,7 @@ type GithubConfig struct {
 	Token               string              `yaml:"-"`
 	BaseURL             string              `yaml:"base_url"`      // default: https://api.github.com
 	Assignee            string              `yaml:"assignee"`      // username filter for Watch; "me" resolves via /user
-	PollInterval        string              `yaml:"poll_interval"` // default: 60s
+	PollInterval        string              `yaml:"poll_interval"` // default: 5m
 	Reviewers           []string            `yaml:"reviewers"`
 	Labels              []string            `yaml:"labels"`
 	StateMappings       map[string]string   `yaml:"state_mappings"`
@@ -168,6 +168,7 @@ type SentryConfig struct {
 	BaseURLExplicit bool     `yaml:"-"`
 	Organization    string   `yaml:"organization"`
 	Projects        []string `yaml:"projects"`
+	PollInterval    string   `yaml:"poll_interval"` // default: 5m
 }
 
 // GlabConfig configures the glab CLI adapter.
@@ -437,7 +438,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Foreman.QuestionTimeout = "0"
 	}
 	if cfg.Adapters.Linear.PollInterval == "" {
-		cfg.Adapters.Linear.PollInterval = "30s"
+		cfg.Adapters.Linear.PollInterval = defaultPollInterval
 	}
 	if cfg.Adapters.GitLab.BaseURL == "" {
 		cfg.Adapters.GitLab.BaseURL = "https://gitlab.com"
@@ -459,6 +460,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
+	}
+	if cfg.Adapters.Sentry.PollInterval == "" {
+		cfg.Adapters.Sentry.PollInterval = defaultPollInterval
 	}
 }
 

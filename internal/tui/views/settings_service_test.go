@@ -28,12 +28,13 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "sentry-secret"
 	cfg.Adapters.Sentry.Organization = "acme"
 	cfg.Adapters.Sentry.Projects = []string{"web", "api"}
+	cfg.Adapters.Sentry.PollInterval = "9m"
 
 	raw, rebuilt, err := svc.Serialize(buildSettingsSections(cfg))
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
-	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token", "token_ref: keychain:sentry.token", "organization: acme", "- web", "- api"} {
+	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token", "token_ref: keychain:sentry.token", "organization: acme", "poll_interval: 9m", "- web", "- api"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("serialized YAML missing %q\n%s", want, raw)
 		}
@@ -46,6 +47,9 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	}
 	if got := rebuilt.Adapters.Sentry.Projects; len(got) != 2 || got[0] != "web" || got[1] != "api" {
 		t.Fatalf("rebuilt sentry projects = %#v, want %#v", got, []string{"web", "api"})
+	}
+	if rebuilt.Adapters.Sentry.PollInterval != "9m" {
+		t.Fatalf("rebuilt sentry poll_interval = %q, want %q", rebuilt.Adapters.Sentry.PollInterval, "9m")
 	}
 }
 
@@ -287,17 +291,20 @@ func TestBuildSettingsSections_IncludesSentryProviderSection(t *testing.T) {
 	if section.Title != "Provider · Sentry" {
 		t.Fatalf("section title = %q, want %q", section.Title, "Provider · Sentry")
 	}
-	if len(section.Fields) != 4 {
-		t.Fatalf("field count = %d, want 4", len(section.Fields))
+	if len(section.Fields) != 5 {
+		t.Fatalf("field count = %d, want 5", len(section.Fields))
 	}
-	if section.Fields[0].Key != "token_ref" || section.Fields[1].Key != "base_url" || section.Fields[2].Key != "organization" || section.Fields[3].Key != "projects" {
-		t.Fatalf("unexpected field keys = %#v", []string{section.Fields[0].Key, section.Fields[1].Key, section.Fields[2].Key, section.Fields[3].Key})
+	if section.Fields[0].Key != "token_ref" || section.Fields[1].Key != "base_url" || section.Fields[2].Key != "poll_interval" || section.Fields[3].Key != "organization" || section.Fields[4].Key != "projects" {
+		t.Fatalf("unexpected field keys = %#v", []string{section.Fields[0].Key, section.Fields[1].Key, section.Fields[2].Key, section.Fields[3].Key, section.Fields[4].Key})
 	}
 	if !strings.Contains(section.Fields[0].Description, "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.") {
 		t.Fatalf("token description = %q, want Sentry credential copy", section.Fields[0].Description)
 	}
 	if section.Fields[1].DefaultValue != config.DefaultSentryBaseURL {
 		t.Fatalf("base_url default = %q, want %q", section.Fields[1].DefaultValue, config.DefaultSentryBaseURL)
+	}
+	if section.Fields[2].DefaultValue != "5m" {
+		t.Fatalf("poll_interval default = %q, want %q", section.Fields[2].DefaultValue, "5m")
 	}
 }
 

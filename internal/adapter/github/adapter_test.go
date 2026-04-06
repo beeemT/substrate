@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
@@ -129,6 +130,27 @@ func TestCreatedByMeUsesViewerLoginWhenAssigneeConfigured(t *testing.T) {
 	q := values.Get("q")
 	if !strings.Contains(q, "author:alice") || strings.Contains(q, "author:bob") {
 		t.Fatalf("search query = %q, want viewer author only", q)
+	}
+}
+
+func TestParsePollInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "empty falls back to default", raw: "", want: 5 * time.Minute},
+		{name: "invalid falls back to default", raw: "not-a-duration", want: 5 * time.Minute},
+		{name: "below floor clamps", raw: "5s", want: 60 * time.Second},
+		{name: "above floor unchanged", raw: "90s", want: 90 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parsePollInterval(tc.raw); got != tc.want {
+				t.Fatalf("parsePollInterval(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
 	}
 }
 

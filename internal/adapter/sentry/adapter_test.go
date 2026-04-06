@@ -132,7 +132,7 @@ func TestCapabilitiesExposeSourceOnlyIssueBrowse(t *testing.T) {
 	t.Parallel()
 
 	caps := (&SentryAdapter{}).Capabilities()
-	if caps.CanWatch || !caps.CanBrowse || caps.CanMutate {
+	if !caps.CanWatch || !caps.CanBrowse || caps.CanMutate {
 		t.Fatalf("capabilities = %#v", caps)
 	}
 	issues := caps.BrowseFilters[domain.ScopeIssues]
@@ -419,6 +419,83 @@ func TestFetchParsesExternalIDAndFallsBackToNumericIdentifier(t *testing.T) {
 	}
 }
 
+func TestWatchEmitsCreatedEventsAndClosesOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	issue := testIssue("101", "SEN-101", "Crash in checkout", "web")
+	requestCount := 0
+	a := testAdapter(t, config.SentryConfig{Token: "token", Organization: "acme", BaseURL: "https://sentry.example/api/0"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		if req.URL.Path != "/api/0/organizations/acme/issues/" {
+			t.Fatalf("path = %q, want issues endpoint", req.URL.Path)
+		}
+
+		return jsonResponse(t, http.StatusOK, nil, []map[string]any{issuePayload(issue, 3)}), nil
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := a.Watch(ctx, adapter.WorkItemFilter{})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	select {
+	case event, ok := <-ch:
+		if !ok {
+			t.Fatal("watch channel closed before first event")
+		}
+		if event.Type != "created" {
+			t.Fatalf("event type = %q, want created", event.Type)
+		}
+		if event.WorkItem.ExternalID != "SEN-acme-101" {
+			t.Fatalf("external id = %q, want SEN-acme-101", event.WorkItem.ExternalID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for watch event")
+	}
+	if requestCount == 0 {
+		t.Fatal("watch did not poll sentry")
+	}
+
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("watch channel did not close after cancellation")
+		}
+	}
+}
+
+func TestResolveSentryWatchPollInterval(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "empty uses default", raw: "", want: 5 * time.Minute},
+		{name: "invalid uses default", raw: "not-a-duration", want: 5 * time.Minute},
+		{name: "too low uses floor", raw: "30s", want: 60 * time.Second},
+		{name: "valid interval", raw: "2m", want: 2 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveSentryWatchPollInterval(tt.raw); got != tt.want {
+				t.Fatalf("resolveSentryWatchPollInterval(%q) = %s, want %s", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSourceOnlyMethodsAreNoOps(t *testing.T) {
 	t.Parallel()
 
@@ -428,18 +505,6 @@ func TestSourceOnlyMethodsAreNoOps(t *testing.T) {
 		return nil, nil
 	}))
 
-	ch, err := a.Watch(context.Background(), adapter.WorkItemFilter{})
-	if err != nil {
-		t.Fatalf("Watch: %v", err)
-	}
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("watch channel open, want closed")
-		}
-	default:
-		t.Fatal("watch channel was not closed")
-	}
 	if err := a.UpdateState(context.Background(), "SEN-acme-101", domain.TrackerStateDone); err != nil {
 		t.Fatalf("UpdateState: %v", err)
 	}

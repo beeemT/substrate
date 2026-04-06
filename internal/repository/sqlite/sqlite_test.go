@@ -434,6 +434,196 @@ func TestInstanceCRUD(t *testing.T) {
 	}
 }
 
+func TestNewSessionFilterCRUD(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewSessionFilterRepo(tx)
+
+	filter := domain.NewSessionFilter{
+		ID:          domain.NewID(),
+		WorkspaceID: ws.ID,
+		Name:        "critical-github-issues",
+		Provider:    "github",
+		Criteria: domain.NewSessionFilterCriteria{
+			Scope:      domain.ScopeIssues,
+			View:       "all",
+			State:      "open",
+			Search:     "panic",
+			Labels:     []string{"substrate:auto-plan"},
+			Owner:      "me",
+			Repository: "acme/rocket",
+			TeamID:     "",
+		},
+		CreatedAt: now(),
+		UpdatedAt: now(),
+	}
+
+	if err := repo.Create(ctx, filter); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, filter.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != filter.Name {
+		t.Fatalf("name = %q, want %q", got.Name, filter.Name)
+	}
+	if got.Criteria.Repository != filter.Criteria.Repository {
+		t.Fatalf("criteria.repository = %q, want %q", got.Criteria.Repository, filter.Criteria.Repository)
+	}
+	if len(got.Criteria.Labels) != 1 || got.Criteria.Labels[0] != "substrate:auto-plan" {
+		t.Fatalf("criteria.labels = %#v", got.Criteria.Labels)
+	}
+
+	byWorkspace, err := repo.ListByWorkspaceID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("list workspace: %v", err)
+	}
+	if len(byWorkspace) != 1 {
+		t.Fatalf("workspace list len = %d, want 1", len(byWorkspace))
+	}
+
+	byProvider, err := repo.ListByWorkspaceProvider(ctx, ws.ID, "github")
+	if err != nil {
+		t.Fatalf("list workspace/provider: %v", err)
+	}
+	if len(byProvider) != 1 {
+		t.Fatalf("workspace/provider list len = %d, want 1", len(byProvider))
+	}
+
+	byName, err := repo.GetByWorkspaceProviderName(ctx, ws.ID, "github", filter.Name)
+	if err != nil {
+		t.Fatalf("get by name: %v", err)
+	}
+	if byName.ID != filter.ID {
+		t.Fatalf("get by name id = %q, want %q", byName.ID, filter.ID)
+	}
+
+	filter.Criteria.Search = "deadlock"
+	filter.UpdatedAt = now()
+	if err := repo.Update(ctx, filter); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	updated, err := repo.Get(ctx, filter.ID)
+	if err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	if updated.Criteria.Search != "deadlock" {
+		t.Fatalf("criteria.search = %q, want deadlock", updated.Criteria.Search)
+	}
+
+	if err := repo.Delete(ctx, filter.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := repo.Get(ctx, filter.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("get after delete error = %v, want %v", err, sql.ErrNoRows)
+	}
+}
+
+func TestNewSessionFilterLockAcquireRenewRelease(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	filterRepo := reposqlite.NewSessionFilterRepo(tx)
+	lockRepo := reposqlite.NewSessionFilterLockRepo(tx)
+
+	filter := domain.NewSessionFilter{
+		ID:          domain.NewID(),
+		WorkspaceID: ws.ID,
+		Name:        "sentry-prod-errors",
+		Provider:    "sentry",
+		Criteria: domain.NewSessionFilterCriteria{
+			Scope:      domain.ScopeIssues,
+			View:       "all",
+			Repository: "prod",
+		},
+		CreatedAt: now(),
+		UpdatedAt: now(),
+	}
+	if err := filterRepo.Create(ctx, filter); err != nil {
+		t.Fatalf("create filter: %v", err)
+	}
+
+	base := now()
+	first := domain.NewSessionFilterLock{
+		FilterID:       filter.ID,
+		InstanceID:     "instance-1",
+		LeaseExpiresAt: base.Add(2 * time.Minute),
+		AcquiredAt:     base,
+		UpdatedAt:      base,
+	}
+	current, acquired, err := lockRepo.Acquire(ctx, first)
+	if err != nil {
+		t.Fatalf("acquire first: %v", err)
+	}
+	if !acquired {
+		t.Fatal("first acquire = false, want true")
+	}
+	if current.InstanceID != "instance-1" {
+		t.Fatalf("current.instance_id = %q, want instance-1", current.InstanceID)
+	}
+
+	second := domain.NewSessionFilterLock{
+		FilterID:       filter.ID,
+		InstanceID:     "instance-2",
+		LeaseExpiresAt: base.Add(3 * time.Minute),
+		AcquiredAt:     base.Add(30 * time.Second),
+		UpdatedAt:      base.Add(30 * time.Second),
+	}
+	current, acquired, err = lockRepo.Acquire(ctx, second)
+	if err != nil {
+		t.Fatalf("acquire second: %v", err)
+	}
+	if acquired {
+		t.Fatal("second acquire = true, want false while active lease is held")
+	}
+	if current.InstanceID != "instance-1" {
+		t.Fatalf("current.instance_id after conflict = %q, want instance-1", current.InstanceID)
+	}
+
+	renew := domain.NewSessionFilterLock{
+		FilterID:       filter.ID,
+		InstanceID:     "instance-1",
+		LeaseExpiresAt: base.Add(4 * time.Minute),
+		UpdatedAt:      base.Add(45 * time.Second),
+	}
+	current, renewed, err := lockRepo.Renew(ctx, renew)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if !renewed {
+		t.Fatal("renew = false, want true")
+	}
+	if !current.LeaseExpiresAt.Equal(renew.LeaseExpiresAt) {
+		t.Fatalf("lease_expires_at = %s, want %s", current.LeaseExpiresAt, renew.LeaseExpiresAt)
+	}
+
+	if err := lockRepo.Release(ctx, filter.ID, "instance-2"); err != nil {
+		t.Fatalf("release wrong owner should no-op: %v", err)
+	}
+	stillHeld, err := lockRepo.Get(ctx, filter.ID)
+	if err != nil {
+		t.Fatalf("get after wrong-owner release: %v", err)
+	}
+	if stillHeld.InstanceID != "instance-1" {
+		t.Fatalf("instance after wrong-owner release = %q, want instance-1", stillHeld.InstanceID)
+	}
+
+	if err := lockRepo.Release(ctx, filter.ID, "instance-1"); err != nil {
+		t.Fatalf("release owner: %v", err)
+	}
+	if _, err := lockRepo.Get(ctx, filter.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("get after release error = %v, want %v", err, sql.ErrNoRows)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Session CRUD
 // ---------------------------------------------------------------------------

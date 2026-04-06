@@ -21,7 +21,10 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
-const minPollInterval = 30 * time.Second
+const (
+	defaultWatchPollInterval = 5 * time.Minute
+	minPollInterval          = 60 * time.Second
+)
 
 // maxResponseBodyBytes limits HTTP response body reads to prevent OOM from
 // a malicious or misconfigured API server.
@@ -677,8 +680,9 @@ func issueToWorkItem(iss issue) domain.Session {
 		Labels:        append([]string(nil), iss.Labels...),
 		State:         domain.SessionIngested,
 		Metadata: map[string]any{
-			"url":          iss.WebURL,
-			"tracker_refs": gitlabTrackerRefs([]issue{iss}),
+			"url":           iss.WebURL,
+			"tracker_refs":  gitlabTrackerRefs([]issue{iss}),
+			"tracker_state": strings.TrimSpace(iss.State),
 		},
 		CreatedAt: derefTime(iss.CreatedAt),
 		UpdatedAt: derefTime(iss.UpdatedAt),
@@ -720,6 +724,7 @@ func aggregateIssues(issues []issue) domain.Session {
 		Metadata: map[string]any{
 			"tracker_refs":     gitlabTrackerRefs(issues),
 			"source_summaries": gitlabIssueSourceSummaries(issues),
+			"tracker_state":    strings.TrimSpace(issues[0].State),
 		},
 		CreatedAt: domain.Now(),
 		UpdatedAt: domain.Now(),
@@ -937,8 +942,11 @@ func applyListOpts(query url.Values, opts adapter.ListOpts) {
 }
 
 func parsePollInterval(raw string) time.Duration {
-	interval, err := time.ParseDuration(raw)
-	if err != nil || interval < minPollInterval {
+	interval, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return defaultWatchPollInterval
+	}
+	if interval < minPollInterval {
 		return minPollInterval
 	}
 

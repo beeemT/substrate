@@ -75,6 +75,188 @@ func LoadTasksCmd(svc *service.TaskService, workspaceID string) tea.Cmd {
 	}
 }
 
+// LoadNewSessionFiltersCmd fetches saved New Session Filters for a workspace.
+func LoadNewSessionFiltersCmd(svc *service.SessionFilterService, workspaceID string) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: errors.New("filter service is unavailable")}
+		}
+		id := strings.TrimSpace(workspaceID)
+		if id == "" {
+			return ErrMsg{Err: errors.New("workspace ID is required")}
+		}
+		filters, err := svc.ListByWorkspaceID(context.Background(), id)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		sort.SliceStable(filters, func(i, j int) bool {
+			if filters[i].Provider != filters[j].Provider {
+				return filters[i].Provider < filters[j].Provider
+			}
+			if filters[i].Name != filters[j].Name {
+				return filters[i].Name < filters[j].Name
+			}
+			return filters[i].ID < filters[j].ID
+		})
+		return NewSessionFiltersLoadedMsg{WorkspaceID: id, Filters: filters}
+	}
+}
+
+// SaveNewSessionFilterCmd persists a new saved New Session Filter using the requested name when provided.
+func SaveNewSessionFilterCmd(svc *service.SessionFilterService, req SaveNewSessionFilterMsg) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: errors.New("filter service is unavailable")}
+		}
+		workspaceID := strings.TrimSpace(req.WorkspaceID)
+		if workspaceID == "" {
+			return ErrMsg{Err: errors.New("workspace ID is required")}
+		}
+		provider := strings.TrimSpace(req.Provider)
+		if provider == "" {
+			return ErrMsg{Err: errors.New("provider is required")}
+		}
+		name := strings.TrimSpace(req.Name)
+		if name == "" {
+			name = generatedNewSessionFilterName(provider, req.Criteria)
+		}
+		created := domain.NewSessionFilter{
+			ID:          domain.NewID(),
+			WorkspaceID: workspaceID,
+			Name:        name,
+			Provider:    provider,
+			Criteria:    req.Criteria,
+		}
+		if err := svc.Create(context.Background(), created); err != nil {
+			return ErrMsg{Err: err}
+		}
+		persisted, err := svc.Get(context.Background(), created.ID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return NewSessionFilterSavedMsg{
+			Filter:  persisted,
+			Message: "Filter saved: " + persisted.Name,
+		}
+	}
+}
+
+// DeleteNewSessionFilterCmd deletes a saved New Session Filter by ID.
+func DeleteNewSessionFilterCmd(svc *service.SessionFilterService, req DeleteNewSessionFilterMsg) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: errors.New("filter service is unavailable")}
+		}
+		workspaceID := strings.TrimSpace(req.WorkspaceID)
+		if workspaceID == "" {
+			return ErrMsg{Err: errors.New("workspace ID is required")}
+		}
+		filterID := strings.TrimSpace(req.FilterID)
+		if filterID == "" {
+			return ErrMsg{Err: errors.New("filter ID is required")}
+		}
+		if err := svc.Delete(context.Background(), filterID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return NewSessionFilterDeletedMsg{
+			FilterID: filterID,
+			Message:  "Filter deleted",
+		}
+	}
+}
+
+func generatedNewSessionFilterName(provider string, criteria domain.NewSessionFilterCriteria) string {
+	parts := []string{"Filter", strings.TrimSpace(provider)}
+	if scope := strings.TrimSpace(string(criteria.Scope)); scope != "" {
+		parts = append(parts, scope)
+	}
+	if view := strings.TrimSpace(criteria.View); view != "" {
+		parts = append(parts, view)
+	}
+	parts = append(parts, time.Now().UTC().Format("20060102-150405"))
+	name := strings.Join(parts, " · ")
+	return strings.TrimSpace(name)
+}
+
+func isAutonomousEligibleFilter(filter domain.NewSessionFilter) bool {
+	return strings.EqualFold(strings.TrimSpace(filter.Provider), viewFilterAll) == false
+}
+
+// StartNewSessionAutonomousModeCmd starts autonomous mode for selected New Session Filters.
+func StartNewSessionAutonomousModeCmd(
+	workspaceID string,
+	instanceID string,
+	lockSvc *service.SessionFilterLockService,
+	adapters []adapter.WorkItemAdapter,
+	loadedFilters []domain.NewSessionFilter,
+	selectedFilterIDs []string,
+) tea.Cmd {
+	return func() tea.Msg {
+		if len(selectedFilterIDs) == 0 {
+			return ErrMsg{Err: errors.New("at least one Filter must be selected")}
+		}
+		byID := make(map[string]domain.NewSessionFilter, len(loadedFilters))
+		for _, filter := range loadedFilters {
+			id := strings.TrimSpace(filter.ID)
+			if id == "" {
+				continue
+			}
+			byID[id] = filter
+		}
+		selected := make([]domain.NewSessionFilter, 0, len(selectedFilterIDs))
+		for _, id := range selectedFilterIDs {
+			trimmedID := strings.TrimSpace(id)
+			filter, ok := byID[trimmedID]
+			if !ok {
+				return ErrMsg{Err: fmt.Errorf("selected Filter %s was not found", trimmedID)}
+			}
+			if !isAutonomousEligibleFilter(filter) {
+				return ErrMsg{Err: fmt.Errorf("selected Filter %s cannot be used for autonomous mode because provider is all", trimmedID)}
+			}
+			selected = append(selected, filter)
+		}
+		runtime := NewNewSessionAutonomousRuntime(workspaceID, instanceID, selected, adapters, lockSvc)
+		if err := runtime.Start(); err != nil {
+			if strings.TrimSpace(err.Error()) == newSessionAutonomousLockConflictWarning {
+				return NewSessionAutonomousStatusMsg{Level: "warning", Message: newSessionAutonomousLockConflictWarning}
+			}
+			return ErrMsg{Err: err}
+		}
+		return NewSessionAutonomousStartedMsg{
+			Runtime: runtime,
+			Events:  runtime.Events(),
+			Message: "New Session autonomous mode started",
+		}
+	}
+}
+
+// StopNewSessionAutonomousModeCmd stops a running autonomous mode runtime.
+func StopNewSessionAutonomousModeCmd(runtime *NewSessionAutonomousRuntime) tea.Cmd {
+	return func() tea.Msg {
+		if runtime == nil {
+			return NewSessionAutonomousStoppedMsg{Message: "New Session autonomous mode stopped"}
+		}
+		if err := runtime.Stop(); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return NewSessionAutonomousStoppedMsg{Message: "New Session autonomous mode stopped"}
+	}
+}
+
+// WaitForNewSessionAutonomousEventCmd waits for one autonomous runtime event.
+func WaitForNewSessionAutonomousEventCmd(ch <-chan tea.Msg) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return NewSessionAutonomousStoppedMsg{Message: "New Session autonomous mode stopped"}
+		}
+		return msg
+	}
+}
+
 // SearchSessionHistoryCmd searches session history within the requested scope.
 func SearchSessionHistoryCmd(svc *service.TaskService, filter domain.SessionHistoryFilter) tea.Cmd {
 	return func() tea.Msg {

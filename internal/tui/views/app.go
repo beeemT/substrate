@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,7 @@ type overlayKind int
 const (
 	overlayNone overlayKind = iota
 	overlayNewSession
+	overlayNewSessionAutonomous
 	overlaySessionSearch
 	overlaySettings
 	overlayWorkspaceInit
@@ -74,8 +76,12 @@ const (
 	mainFocusContent
 )
 
-const appContentHorizontalPadding = 1
+const (
+	appContentHorizontalPadding = 1
 
+	autonomousLifecycleStartedToast = "New Session autonomous mode started"
+	autonomousLifecycleStoppedToast = "New Session autonomous mode stopped"
+)
 func appContentBodyWidth(width int) int {
 	if width > appContentHorizontalPadding*2 {
 		return width - (appContentHorizontalPadding * 2)
@@ -93,16 +99,17 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	statusBar StatusBarModel
 
 	// Overlays
-	activeOverlay      overlayKind
-	newSession         NewSessionOverlay
-	sessionSearch      SessionSearchOverlay
-	settingsPage       SettingsPage
-	workspaceModal     WorkspaceInitModal
-	helpOverlay        HelpOverlay
-	sourceItemsOverlay SourceItemsOverlay
-	logsOverlay        LogsOverlay
-	addRepo            AddRepoOverlay
-	hasWorkspace       bool
+	activeOverlay               overlayKind
+	newSession                  NewSessionOverlay
+	newSessionAutonomousOverlay NewSessionAutonomousOverlay
+	sessionSearch               SessionSearchOverlay
+	settingsPage                SettingsPage
+	workspaceModal              WorkspaceInitModal
+	helpOverlay                 HelpOverlay
+	sourceItemsOverlay          SourceItemsOverlay
+	logsOverlay                 LogsOverlay
+	addRepo                     AddRepoOverlay
+	hasWorkspace                bool
 
 	// Toasts
 	toasts components.ToastModel
@@ -114,6 +121,10 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	plans     map[string]*domain.Plan      // keyed by workItemID
 	questions map[string][]domain.Question // keyed by sessionID
 	reviews   map[string]ReviewsLoadedMsg  // keyed by sessionID
+
+	savedNewSessionFilters   []domain.NewSessionFilter
+	newSessionAutonomous     *NewSessionAutonomousRuntime
+	newSessionAutonomousChan <-chan tea.Msg
 
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
@@ -177,6 +188,7 @@ func NewApp(svcs Services) App {
 		content:                        NewContentModel(st),
 		statusBar:                      NewStatusBarModel(st),
 		newSession:                     NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
+		newSessionAutonomousOverlay:    NewNewSessionAutonomousOverlay(st),
 		sessionSearch:                  NewSessionSearchOverlay(st),
 		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
@@ -198,6 +210,8 @@ func NewApp(svcs Services) App {
 		cachedBase:                     new(string),
 		sbHeight:                       1, // conservative default; updated on first WindowSizeMsg
 	}
+
+	app.syncNewSessionFilterOverlays()
 
 	if !app.hasWorkspace {
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, svcs.Workspace)
@@ -239,6 +253,7 @@ func (a App) Init() tea.Cmd {
 			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 			LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 			LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+			LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID),
 			ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 		)
 	}
@@ -253,9 +268,11 @@ func (a App) Init() tea.Cmd {
 func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.svcs = reload.Services
 	a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
+	a.newSessionAutonomousOverlay = NewNewSessionAutonomousOverlay(a.statusBar.styles)
 	a.settingsPage.SetSnapshot(reload.SettingsData)
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.svcs.WorkspaceID != ""
+	a.syncNewSessionFilterOverlays()
 }
 
 func sameSessionHistoryFilter(current, incoming domain.SessionHistoryFilter) bool {
@@ -446,6 +463,23 @@ func (a *App) openNewSession() tea.Cmd {
 	a.activeOverlay = overlayNewSession
 	a.newSession.Open()
 	return a.newSession.reloadItems()
+}
+
+func (a *App) syncNewSessionFilterOverlays() {
+	a.newSession.SetSavedNewSessionFilters(a.savedNewSessionFilters)
+	activeFilterIDs := []string(nil)
+	if a.newSessionAutonomous != nil {
+		activeFilterIDs = a.newSessionAutonomous.activeFilterIDsSnapshot()
+	}
+	a.newSessionAutonomousOverlay.SetSavedFilters(a.savedNewSessionFilters)
+	a.newSessionAutonomousOverlay.SetRuntimeState(a.newSessionAutonomous != nil, activeFilterIDs)
+}
+
+func (a *App) openNewSessionAutonomousOverlay() tea.Cmd {
+	a.syncNewSessionFilterOverlays()
+	a.newSessionAutonomousOverlay.Open()
+	a.activeOverlay = overlayNewSessionAutonomous
+	return nil
 }
 
 func (a *App) openAddRepo() tea.Cmd {
@@ -783,6 +817,20 @@ func (a App) pinnedToasts() []components.Toast {
 	return pinned
 }
 
+func isAutonomousLifecycleToastMessage(message string) bool {
+	switch strings.TrimSpace(message) {
+	case autonomousLifecycleStartedToast, autonomousLifecycleStoppedToast:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSuppressAutonomousStatusToast(level components.ToastLevel, message string) bool {
+	return level == components.ToastInfo && isAutonomousLifecycleToastMessage(message)
+}
+
+
 func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 	a.tailingSessionIDs = make(map[string]bool)
 	a.currentHistoryEntry = SidebarEntry{}
@@ -832,6 +880,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		a.addRepo.SetSize(msg.Width, msg.Height)
+		a.newSessionAutonomousOverlay.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
@@ -860,6 +909,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
 				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
+				LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID),
 				ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 			)
 		}
@@ -879,6 +929,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CloseOverlayMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
+		a.newSessionAutonomousOverlay.Close()
 		a.sessionSearch.Close()
 		a.settingsPage.Close()
 		a.sourceItemsOverlay.Close()
@@ -1230,6 +1281,115 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, OverrideAcceptCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Task, a.svcs.Bus, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
+	case LoadNewSessionFiltersMsg:
+		if strings.TrimSpace(msg.WorkspaceID) == "" {
+			return a, nil
+		}
+		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, msg.WorkspaceID)
+
+	case NewSessionFiltersLoadedMsg:
+		if msg.WorkspaceID != a.svcs.WorkspaceID {
+			return a, nil
+		}
+		a.savedNewSessionFilters = append([]domain.NewSessionFilter(nil), msg.Filters...)
+		a.syncNewSessionFilterOverlays()
+		return a, nil
+
+	case DeleteNewSessionFilterMsg:
+		if strings.TrimSpace(msg.WorkspaceID) == "" || msg.WorkspaceID != a.svcs.WorkspaceID {
+			return a, nil
+		}
+		return a, DeleteNewSessionFilterCmd(a.svcs.NewSessionFilters, msg)
+
+	case NewSessionFilterDeletedMsg:
+		if strings.TrimSpace(msg.Message) != "" {
+			a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		}
+		if a.svcs.WorkspaceID == "" {
+			return a, nil
+		}
+		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID)
+
+	case SaveNewSessionFilterMsg:
+		return a, SaveNewSessionFilterCmd(a.svcs.NewSessionFilters, msg)
+
+	case NewSessionFilterSavedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if a.svcs.WorkspaceID == "" {
+			return a, nil
+		}
+		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID)
+
+	case StartNewSessionAutonomousModeMsg:
+		if a.newSessionAutonomous != nil {
+			a.toasts.AddToast("New Session autonomous mode is already running", components.ToastInfo)
+			return a, nil
+		}
+		return a, StartNewSessionAutonomousModeCmd(
+			a.svcs.WorkspaceID,
+			a.svcs.InstanceID,
+			a.svcs.NewSessionFilterLocks,
+			a.svcs.Adapters,
+			a.savedNewSessionFilters,
+			msg.SelectedFilterIDs,
+		)
+
+	case StopNewSessionAutonomousModeMsg:
+		runtime := msg.Runtime
+		if runtime == nil {
+			runtime = a.newSessionAutonomous
+		}
+		if runtime == nil {
+			a.toasts.AddToast("New Session autonomous mode is not running", components.ToastInfo)
+			return a, nil
+		}
+		return a, StopNewSessionAutonomousModeCmd(runtime)
+
+	case NewSessionAutonomousStartedMsg:
+		a.newSessionAutonomous = msg.Runtime
+		a.newSessionAutonomousChan = msg.Events
+		a.syncNewSessionFilterOverlays()
+		if message := strings.TrimSpace(msg.Message); message != "" {
+			a.toasts.AddToast(message, components.ToastSuccess)
+		}
+		return a, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan)
+
+	case NewSessionAutonomousStoppedMsg:
+		wasRunning := a.newSessionAutonomous != nil || a.newSessionAutonomousChan != nil
+		a.newSessionAutonomous = nil
+		a.newSessionAutonomousChan = nil
+		a.syncNewSessionFilterOverlays()
+		if message := strings.TrimSpace(msg.Message); message != "" {
+			if !(message == autonomousLifecycleStoppedToast && !wasRunning) {
+				a.toasts.AddToast(message, components.ToastInfo)
+			}
+		}
+		return a, nil
+
+	case NewSessionAutonomousStatusMsg:
+		level := components.ToastInfo
+		switch strings.ToLower(strings.TrimSpace(msg.Level)) {
+		case "error":
+			level = components.ToastError
+		case "warning", "warn":
+			level = components.ToastWarning
+		}
+		if message := strings.TrimSpace(msg.Message); message != "" && !shouldSuppressAutonomousStatusToast(level, message) {
+			a.toasts.AddToast(message, level)
+		}
+		if a.newSessionAutonomousChan != nil {
+			cmds = append(cmds, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan))
+		}
+		return a, tea.Batch(cmds...)
+
+
+	case NewSessionAutonomousDetectedWorkItemMsg:
+		cmds = append(cmds, func() tea.Msg { return persistCreatedWorkItemMsg(a.svcs, msg.WorkItem) })
+		if a.newSessionAutonomousChan != nil {
+			cmds = append(cmds, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan))
+		}
+		return a, tea.Batch(cmds...)
+
 	case NewSessionManualMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
@@ -1264,6 +1424,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.activeOverlay == overlaySettings {
 			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
 			cmds = append(cmds, cmd)
+		}
+		if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID))
 		}
 		return a, tea.Batch(cmds...)
 	case SettingsProviderTestedMsg:
@@ -1469,7 +1632,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		slog.Error("operation failed", "toast", false, "error", msg.Err)
-		a.toasts.AddToast("Error: "+msg.Err.Error(), components.ToastError)
+		a.toasts.AddToast(formatOperationErrorToast(msg.Err), components.ToastError)
 		return a, nil
 
 	case AdapterErrorMsg:
@@ -1507,6 +1670,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlayNewSession {
 		a.newSession, cmd = a.newSession.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayNewSessionAutonomous {
+		a.newSessionAutonomousOverlay, cmd = a.newSessionAutonomousOverlay.Update(msg)
 		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlayAddRepo {
 		a.addRepo, cmd = a.addRepo.Update(msg)
@@ -1565,6 +1731,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.newSession, cmd = a.newSession.Update(msg)
 		return a, cmd
 	}
+	if a.activeOverlay == overlayNewSessionAutonomous {
+		a.newSessionAutonomousOverlay, cmd = a.newSessionAutonomousOverlay.Update(msg)
+		return a, cmd
+	}
 	if a.activeOverlay == overlaySessionSearch {
 		a.sessionSearch, cmd = a.sessionSearch.Update(msg)
 		return a, cmd
@@ -1610,6 +1780,8 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleQuitRequest()
 	case "n":
 		return a, a.openNewSession()
+	case "A":
+		return a, a.openNewSessionAutonomousOverlay()
 	case "a":
 		return a, a.openAddRepo()
 	case "s":
@@ -2520,6 +2692,8 @@ func (a App) View() string {
 	switch a.activeOverlay {
 	case overlayNewSession:
 		result = renderOverlay(a.newSession.View(), a.windowWidth, a.windowHeight)
+	case overlayNewSessionAutonomous:
+		result = renderOverlay(a.newSessionAutonomousOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlaySessionSearch:
 		result = renderOverlay(a.sessionSearch.View(), a.windowWidth, a.windowHeight)
 	case overlaySettings:
@@ -2952,6 +3126,49 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 		}
 		return persistCreatedWorkItemMsg(svcs, wi)
 	}
+}
+
+// formatOperationErrorToast converts operational errors into concise, actionable toast copy.
+func formatOperationErrorToast(err error) string {
+	if isGitHubInvalidSearchError(err) {
+		return "Error: GitHub can't search one or more selected owners/repos.\nCheck the Owner/Repo filters or your repository access."
+	}
+
+	return "Error: " + err.Error()
+}
+
+func isGitHubInvalidSearchError(err error) bool {
+	errText := err.Error()
+	if !strings.Contains(errText, "github api status 422:") {
+		return false
+	}
+	payloadStart := strings.Index(errText, "{")
+	if payloadStart < 0 {
+		return false
+	}
+
+	type githubValidationError struct {
+		Message  string `json:"message"`
+		Resource string `json:"resource"`
+		Field    string `json:"field"`
+		Code     string `json:"code"`
+	}
+	type githubAPIErrorPayload struct {
+		Message string                  `json:"message"`
+		Errors  []githubValidationError `json:"errors"`
+	}
+
+	var payload githubAPIErrorPayload
+	if err := json.Unmarshal([]byte(errText[payloadStart:]), &payload); err != nil {
+		return false
+	}
+	for _, validationErr := range payload.Errors {
+		if strings.EqualFold(validationErr.Resource, "Search") && strings.EqualFold(validationErr.Field, "q") && strings.EqualFold(validationErr.Code, "invalid") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // formatAdapterErrorToast formats an adapter error for display as a toast.

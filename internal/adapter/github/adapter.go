@@ -121,9 +121,11 @@ type completedPayload struct {
 }
 
 const (
-	filterAll         = "all"
-	defaultBranchMain = "main"
-	stateClosed       = "closed"
+	filterAll                = "all"
+	defaultBranchMain        = "main"
+	stateClosed              = "closed"
+	defaultWatchPollInterval = 5 * time.Minute
+	minimumWatchPollInterval = 60 * time.Second
 )
 
 var defaultStateMappings = map[string]string{
@@ -363,10 +365,7 @@ func (a *GithubAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 }
 
 func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
-	interval := 120 * time.Second
-	if parsed, err := time.ParseDuration(a.cfg.PollInterval); err == nil && parsed > 0 {
-		interval = parsed
-	}
+	interval := parsePollInterval(a.cfg.PollInterval)
 	ch := make(chan adapter.WorkItemEvent, 16)
 	go func() {
 		defer close(ch)
@@ -401,6 +400,18 @@ func (a *GithubAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 	}()
 
 	return ch, nil
+}
+
+func parsePollInterval(raw string) time.Duration {
+	interval, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return defaultWatchPollInterval
+	}
+	if interval < minimumWatchPollInterval {
+		return minimumWatchPollInterval
+	}
+
+	return interval
 }
 
 func (a *GithubAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
@@ -1227,8 +1238,9 @@ func issueToWorkItem(iss githubIssue) domain.Session {
 		Labels:        issueLabels(iss),
 		State:         domain.SessionIngested,
 		Metadata: map[string]any{
-			"url":          iss.HTMLURL,
-			"tracker_refs": githubTrackerRefs([]githubIssue{iss}),
+			"url":           iss.HTMLURL,
+			"tracker_refs":  githubTrackerRefs([]githubIssue{iss}),
+			"tracker_state": strings.TrimSpace(iss.State),
 		},
 		CreatedAt: derefTime(iss.CreatedAt),
 		UpdatedAt: derefTime(iss.UpdatedAt),
@@ -1271,6 +1283,7 @@ func aggregateIssues(issues []githubIssue) domain.Session {
 		Metadata: map[string]any{
 			"tracker_refs":     githubTrackerRefs(issues),
 			"source_summaries": githubIssueSourceSummaries(issues),
+			"tracker_state":    strings.TrimSpace(issues[0].State),
 		},
 		CreatedAt: domain.Now(),
 		UpdatedAt: domain.Now(),

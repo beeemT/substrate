@@ -18,6 +18,8 @@ func ResourcesFactory(
 		Plans:                  NewPlanRepo(tx),
 		SubPlans:               NewSubPlanRepo(tx),
 		Workspaces:             NewWorkspaceRepo(tx),
+		NewSessionFilters:      NewSessionFilterRepo(tx),
+		NewSessionFilterLocks:  NewSessionFilterLockRepo(tx),
 		Tasks:                  NewTaskRepo(tx),
 		Reviews:                NewReviewRepo(tx),
 		Questions:              NewQuestionRepo(tx),

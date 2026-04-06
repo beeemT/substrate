@@ -13,17 +13,19 @@ import (
 
 // Services aggregates all dependencies needed by the TUI.
 type Services struct {
-	Session          *service.SessionService
-	Plan             *service.PlanService
-	Task             *service.TaskService
-	Question         *service.QuestionService
-	Instance         *service.InstanceService
-	Workspace        *service.WorkspaceService
-	Review           *service.ReviewService
-	Events           *service.EventService
-	GithubPRs        *service.GithubPRService
-	GitlabMRs        *service.GitlabMRService
-	SessionArtifacts *service.SessionReviewArtifactService
+	Session               *service.SessionService
+	Plan                  *service.PlanService
+	Task                  *service.TaskService
+	Question              *service.QuestionService
+	Instance              *service.InstanceService
+	Workspace             *service.WorkspaceService
+	Review                *service.ReviewService
+	Events                *service.EventService
+	GithubPRs             *service.GithubPRService
+	GitlabMRs             *service.GitlabMRService
+	SessionArtifacts      *service.SessionReviewArtifactService
+	NewSessionFilters     *service.SessionFilterService
+	NewSessionFilterLocks *service.SessionFilterLockService
 	// Orchestration pipelines backed by the configured agent harnesses.
 	Planning        *orchestrator.PlanningService
 	Implementation  *orchestrator.ImplementationService
