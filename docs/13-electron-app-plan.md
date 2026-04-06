@@ -161,6 +161,11 @@ The API mirrors the existing `views/cmds.go` surface. Every command function tha
 | `OpenBrowserCmd` | `system.openURL` | Open URL in browser |
 | Adapter browse (overlay_new_session) | `adapters.browse` | Unified work browser |
 | Manual creation (overlay_new_session) | `adapters.createManual` | Manual work item |
+| `LoadNewSessionFiltersCmd` | `newSessionFilters.list` | Load saved New Session Filters for workspace |
+| `SaveNewSessionFilterCmd` | `newSessionFilters.save` | Persist current provider/scope/view/state/search criteria |
+| `DeleteNewSessionFilterCmd` | `newSessionFilters.delete` | Delete a saved New Session Filter by ID |
+| `StartNewSessionAutonomousModeCmd` | `newSessionAutonomous.start` | Start autonomous watch from selected saved filter IDs |
+| `StopNewSessionAutonomousModeCmd` | `newSessionAutonomous.stop` | Stop running autonomous watch runtime |
 | Settings snapshot | `settings.get` | Current settings |
 | Settings apply | `settings.apply` | Apply settings changes |
 | Settings test provider | `settings.testProvider` | Provider auth test |
@@ -185,6 +190,8 @@ ws://localhost:{port}/stream/session-log/{session-id}
 ```
 
 This replaces the TUI's file-watch pattern with a push stream that works identically for remote or local clients.
+
+Autonomous mode lifecycle and watch notifications are streamed as server-push events as well (`newSessionAutonomous.started`, `.stopped`, `.status`, `.detectedWorkItem`) so the GUI can stay in sync with runtime state and detected work items without polling.
 
 ### 2.4 Authentication
 
@@ -246,6 +253,8 @@ desktop/
         SessionTranscript.tsx # Mirrors session_transcript.go — block rendering
       overlays/
         NewSession.tsx       # Mirrors overlay_new_session.go — work browser + manual
+        NewSessionAutonomous.tsx # Mirrors overlay_new_session_autonomous.go — saved filter selection + runtime control
+
         SessionSearch.tsx    # Mirrors overlay_session_search.go — search + preview
         SourceItems.tsx      # Mirrors overlay_source_items.go — split-pane items
         AddRepo.tsx          # Mirrors overlay_add_repo.go — repo browser/clone
@@ -478,6 +487,7 @@ Every shortcut below **MUST** work identically in the Electron app. When a text 
 | Key | Action |
 |-----|--------|
 | `n` | Open New Session overlay |
+| `A` | Open New Session Autonomous overlay |
 | `a` | Open Add Repo overlay |
 | `s` | Open Settings (full-screen) |
 | `/` | Open Session Search overlay |
@@ -588,19 +598,60 @@ Every shortcut below **MUST** work identically in the Electron app. When a text 
 |-----|--------|
 | `Tab` / `Shift+Tab` | Cycle providers |
 | `Ctrl+S` | Cycle scope |
-| `Ctrl+V` | Cycle view |
-| `Ctrl+T` | Cycle state filter |
-| `Ctrl+R` | Reset filters |
+| `Ctrl+V` | Cycle view (if scope supports views) |
+| `Ctrl+T` | Cycle state filter (if scope supports states) |
+| `Ctrl+R` | Reset provider/scope/view/state/search/advanced filters |
+| `Ctrl+F` | Save current filter criteria as a named New Session Filter |
+| `Ctrl+L` | Open saved filter picker |
 | `Ctrl+N` | Switch to manual mode |
 | `Ctrl+O` | Open current item in browser |
-| `Space` | Toggle select |
-| `Enter` | Start session |
+| `Space` | Toggle select (multi-select constrained to one provider) |
+| `Enter` | Start session from selected items |
 | `↑` / `↓` | Navigate list |
 | `←` / `→` | Focus zones |
 | `Esc` | Close |
+| *Saved filter picker:* `↑/↓` | Select saved filter |
+| *Saved filter picker:* `Enter` | Apply filter + reload browse results |
+| *Saved filter picker:* `d` | Delete selected saved filter |
+| *Saved filter picker:* `Esc` | Close picker |
+| *Save filter prompt:* `Enter` | Persist new saved filter |
+| *Save filter prompt:* `Esc` | Cancel |
 | *Manual mode:* `Tab` | Next field |
 | *Manual mode:* `Enter` | Create |
 | *Manual mode:* `Esc` | Close |
+
+
+##### New Session Filter Logic
+
+The New Session browse overlay now follows a persisted filter model, not just ephemeral in-memory controls:
+
+- Filters are persisted per workspace via `NewSessionFilterService` and loaded at app startup and after settings reload.
+- Saved criteria include: provider, scope, view, state, search, labels, owner, repository/project, group, and team.
+- `Ctrl+F` opens a save prompt. If no name is provided, a generated name (`Filter · provider · scope · view · timestamp`) is used.
+- `Ctrl+L` opens a saved-filter picker. `Enter` applies the selected filter and reloads results. `d` deletes the selected saved filter.
+- Saved filters are sorted by provider → name → ID. Picker selection is preserved across refreshes when possible.
+- Provider and scope determine which advanced controls are visible. The overlay computes capability intersections across active adapters and only shows filters supported by all selected adapters for that scope.
+- Provider `All` is only available in issue scope. Multi-select remains restricted to a single concrete provider.
+
+##### New Session Autonomous Overlay
+
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle saved filter selection |
+| `Enter` | Start autonomous mode with selected filters |
+| `x` / `X` | Stop autonomous mode |
+| `Tab` / `→` | Focus details pane |
+| `←` | Focus saved-filter list pane |
+| `Esc` | Close overlay |
+
+Behavioral requirements:
+
+- Overlay shows only saved filters eligible for autonomous mode (provider must not be `all`).
+- Runtime status is explicit (`Stopped` / `Running`) and active filters are marked in-list and in details.
+- Starting with zero selected filters returns a visible validation error.
+- Starting while already running returns a non-fatal info toast and keeps runtime state unchanged.
+- Runtime lock conflicts across Substrate instances surface a warning toast (`This filter is already active in another Substrate instance.`).
+- While running, detected work items stream back into the app and are persisted through the normal creation path so sidebar/content stay synchronized.
 
 ##### Session Search Overlay
 
@@ -805,7 +856,8 @@ The Overview has its own overlay state machine. Exactly one sub-overlay can be a
 
 | Overlay | Layout | Key Features |
 |---------|--------|-------------|
-| **New Session** | Centered split-pane, max 80% window height | Browse controls bar + adapter list + detail pane. Provider/scope/view/state cycling. Manual mode with title + body fields. |
+| **New Session** | Centered split-pane, max 80% window height | Browse controls bar + adapter list + detail pane. Provider/scope/view/state cycling, advanced capability-aware filters, and saved-filter save/load/delete modals. Manual mode with title + body fields. |
+| **New Session Autonomous** | Centered split-pane (sizing-parity with New Session) | Saved filter selector + filter details pane + runtime status line. Starts/stops autonomous watch mode and shows active filter ownership state. |
 | **Session Search** | Centered split-pane, ~60% height | Search input + scope toggle (workspace/global) + results list + preview pane. Debounced search with spinner. |
 | **Source Items** | Centered split-pane | List + preview. Multi-select with Space, batch URL opening with Enter/o. |
 | **Add Repo** | Centered split-pane (same pattern as New Session) | Repo browser + search + manual clone URL entry + detail pane. |
@@ -820,14 +872,14 @@ The Overview has its own overlay state machine. Exactly one sub-overlay can be a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ [n] New session  [d] Delete  [/] Search  [s] Settings  ...  │  workspace · N active sessions
+│ [n] New session  [A] Autonomous  [d] Delete  [/] Search  [s] Settings  ...  │  workspace · N active sessions
 │ [?] Help  [q] Quit                                          │  (overflow line, if needed)
 └──────────────────────────────────────────────────────────────┘
 ```
 
 - **Line 1:** Left = key hints as `[key] label`. Right = `workspace · N active sessions` (muted).
 - **Line 2 (overflow):** Additional hints when line 1 overflows.
-- **Hint order:** Contextual hints first, then global (`n` New session, `a` Add repo, `/` Search, `s` Settings, `?` Help, `q` Quit).
+- **Hint order:** Contextual hints first, then global (`n` New session, `A` Autonomous, `a` Add repo, `/` Search, `s` Settings, `?` Help, `q` Quit).
 - **Delete hint** is reordered to appear immediately after `New session` when a deletable session is selected.
 
 ---
@@ -994,7 +1046,35 @@ User presses `s`
 | GroupHeader | Not selectable |
 | Nothing selected | Empty |
 
-##### 12. Focus Model
+##### 12. Saved New Session Filter Workflow
+
+```
+User opens New Session (`n`)
+  → Adjust provider/scope/view/state/search/advanced controls
+  → `Ctrl+F` to save current criteria
+  → Save prompt opens, user enters optional name, presses `Enter`
+  → Filter persisted to workspace
+  → Later, user presses `Ctrl+L`
+  → Load picker opens with provider-aware default selection
+  → `Enter` applies selected filter and reloads browse results
+  → Optional `d` deletes selected saved filter
+```
+
+##### 13. New Session Autonomous Mode Workflow
+
+```
+User presses `A`
+  → New Session Autonomous overlay opens
+  → Overlay lists eligible saved filters (provider != all)
+  → User selects one or more filters with `Space`
+  → User presses `Enter` to start runtime
+  → Runtime acquires per-filter lease locks and starts provider watchers
+  → Status updates stream as toasts (info/warning/error)
+  → Detected matching work items are persisted and appear in sidebar/content
+  → User presses `x` to stop runtime (or runtime stops when no active filters remain)
+```
+
+##### 14. Focus Model
 
 - `Tab` / arrow keys move focus between sidebar and content.
 - Overlays capture all input — global shortcuts do not fire.
@@ -1134,16 +1214,17 @@ JSON-RPC request/response types are also generated from Go handler signatures. T
 2. **Question answering** — Approve foreman answer, type reply, skip.
 3. **Session steering** — Live input to running sessions via `SteerSessionCmd`.
 4. **Follow-up actions** — Follow-up on completed/failed sessions, follow-up on plans.
-5. **New Session overlay** — shadcn Command palette for work browser, adapter-backed browsing with provider/scope/view/state cycling, manual creation.
-6. **Session Search overlay** — Command palette with debounced search, result list, preview pane, workspace/global scope toggle.
-7. **Source Items overlay** — Split-pane with list selection and detail, multi-select URL opening.
-8. **Add Repo overlay** — Repository browser/clone with search and manual URL entry.
-9. **Resume/Abandon** — Interrupted session actions with restart-planning option.
-10. **Delete** — Work item deletion with shadcn AlertDialog confirmation.
-11. **Duplicate session dialog** — Cancel, open-existing, create-session options.
-12. **Toast notifications** — Sonner-based toasts matching TUI toast levels (Info/Success/Warning/Error).
+5. **New Session overlay** — adapter-backed work browser with capability-aware filters, persisted saved-filter workflows (`Ctrl+F` save, `Ctrl+L` load, `d` delete), and manual creation mode.
+6. **New Session Autonomous overlay** — saved-filter selector + runtime status/details panes, `Enter` start, `x` stop, and live status/detected-work-item updates.
+7. **Session Search overlay** — Command palette with debounced search, result list, preview pane, workspace/global scope toggle.
+8. **Source Items overlay** — Split-pane with list selection and detail, multi-select URL opening.
+9. **Add Repo overlay** — Repository browser/clone with search and manual URL entry.
+10. **Resume/Abandon** — Interrupted session actions with restart-planning option.
+11. **Delete** — Work item deletion with shadcn AlertDialog confirmation.
+12. **Duplicate session dialog** — Cancel, open-existing, create-session options.
+13. **Toast notifications** — Sonner-based toasts matching TUI toast levels (Info/Success/Warning/Error), including autonomous lifecycle/status warnings.
 
-**Validation:** Complete a full workflow: create session, plan, approve, implement, answer question, review, complete. All from the Electron app.
+**Validation:** Complete a full workflow: create session, save/load New Session Filters, start/stop autonomous mode, plan, approve, implement, answer question, review, complete — all from the Electron app.
 
 ### Phase 4: Settings + Overlays (1-2 weeks)
 
