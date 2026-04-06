@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -372,7 +371,7 @@ func (a *SentryAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 }
 
 func (a *SentryAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter) (<-chan adapter.WorkItemEvent, error) {
-	interval := resolveSentryWatchPollInterval(sentryPollIntervalValue(a.cfg))
+	interval := resolveSentryWatchPollInterval(a.cfg.PollInterval)
 	ch := make(chan adapter.WorkItemEvent, 16)
 	go func() {
 		defer close(ch)
@@ -694,16 +693,6 @@ func resolveSentryWatchPollInterval(raw string) time.Duration {
 	}
 
 	return interval
-}
-
-func sentryPollIntervalValue(cfg config.SentryConfig) string {
-	value := reflect.ValueOf(cfg)
-	field := value.FieldByName("PollInterval")
-	if !field.IsValid() || field.Kind() != reflect.String {
-		return ""
-	}
-
-	return field.String()
 }
 
 func issueListItem(organization string, issue sentryIssue) adapter.ListItem {

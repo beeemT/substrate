@@ -53,6 +53,42 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	}
 }
 
+func TestSettingsSerialize_ValidatesSentryPollInterval(t *testing.T) {
+	t.Setenv("SUBSTRATE_HOME", t.TempDir())
+
+	svc := &SettingsService{}
+	tests := []struct {
+		name         string
+		pollInterval string
+		wantErr      string
+	}{
+		{name: "empty", pollInterval: "   "},
+		{name: "invalid", pollInterval: "not-a-duration", wantErr: "invalid duration \"not-a-duration\""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Adapters.Sentry.PollInterval = tc.pollInterval
+
+			_, _, err := svc.Serialize(buildSettingsSections(cfg))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Serialize() error = %v, want nil", err)
+				}
+
+				return
+			}
+			if err == nil {
+				t.Fatalf("Serialize() error = nil, want containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Serialize() error = %q, want containing %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestSettingsSerialize_ClearsSentryTokenRefWhenSecretFieldBlank(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())

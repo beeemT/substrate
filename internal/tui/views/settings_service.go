@@ -1072,7 +1072,7 @@ func validateSettingsConfig(cfg *config.Config) error {
 	if _, err := config.Load(tmpPath); err != nil {
 		return err
 	}
-	for _, durationValue := range []string{cfg.Adapters.Linear.PollInterval, cfg.Adapters.GitLab.PollInterval, cfg.Adapters.GitHub.PollInterval, cfg.Foreman.QuestionTimeout} {
+	for _, durationValue := range []string{cfg.Adapters.Linear.PollInterval, cfg.Adapters.GitLab.PollInterval, cfg.Adapters.GitHub.PollInterval, cfg.Adapters.Sentry.PollInterval, cfg.Foreman.QuestionTimeout} {
 		if strings.TrimSpace(durationValue) == "" {
 			continue
 		}
