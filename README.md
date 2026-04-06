@@ -112,7 +112,7 @@ These tools are not required to run Substrate. When absent, the relevant feature
 
 - **gh** — [GitHub CLI](https://cli.github.com). Used for GitHub auth fallback and harness-driven GitHub login actions. Without it, those auth flows are unavailable; the GitHub adapter still works via a configured token.
 - **glab** — [GitLab CLI](https://gitlab.com/gitlab-org/cli). Used for GitLab MR creation. Without it, MR lifecycle automation is skipped.
-- **Sentry** — No CLI required; configured via API token in `~/.substrate/config.yaml`. See the Sentry adapter fields under `adapters.sentry` (`token_ref`, `organization`, `projects`).
+- **Sentry** — [Sentry CLI](https://docs.sentry.io/cli/). When `sentry` is on your PATH and authenticated, Substrate uses it for auth and API proxying automatically — no token configuration needed. Without it, configure `adapters.sentry.token_ref` (or `SENTRY_AUTH_TOKEN`) explicitly.
 
 
 ---
