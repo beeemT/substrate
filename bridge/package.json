@@ -19,5 +19,8 @@
     "check": "tsc --noEmit && biome check .",
     "check:fix": "tsc --noEmit && biome check --write .",
     "typecheck": "tsc --noEmit"
+  },
+  "patchedDependencies": {
+    "markit-ai@0.5.0": "patches/markit-ai@0.5.0.patch"
   }
 }
