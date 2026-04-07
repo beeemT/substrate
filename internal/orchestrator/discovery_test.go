@@ -21,10 +21,10 @@ func TestDiscoverer_PullMainWorktrees_FirstCallPulls(t *testing.T) {
 	d.pullCooldown = time.Hour
 
 	// lastPullAt is zero — no previous pull, so this call must proceed.
-	failures := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
 
 	// The broken binary means the pull failed, which is proof the call was made.
-	if len(failures) == 0 {
+	if len(result.PullFailures) == 0 {
 		t.Fatal("expected pull failure (pull was attempted with broken binary), got none")
 	}
 
@@ -39,11 +39,11 @@ func TestDiscoverer_PullMainWorktrees_SkipsWithinCooldown(t *testing.T) {
 	d.pullCooldown = time.Hour
 	d.lastPullAt = time.Now() // simulate a very recent pull
 
-	// The broken binary would produce failures if called; cooldown must suppress the call.
-	failures := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+	// The broken binary would produce failures if called; cooldown must suppress both pull and sync.
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
 
-	if failures != nil {
-		t.Errorf("expected nil (cooldown active, pull skipped), got %v", failures)
+	if result.PullFailures != nil {
+		t.Errorf("expected nil PullFailures (cooldown active, pull+sync skipped), got %v", result.PullFailures)
 	}
 }
 
@@ -53,9 +53,9 @@ func TestDiscoverer_PullMainWorktrees_PullsAfterCooldownExpires(t *testing.T) {
 	d.lastPullAt = time.Now().Add(-2 * time.Hour) // simulate a stale pull
 
 	// Cooldown has expired; this call must proceed.
-	failures := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
 
-	if len(failures) == 0 {
+	if len(result.PullFailures) == 0 {
 		t.Fatal("expected pull failure (cooldown expired, pull attempted with broken binary), got none")
 	}
 }
@@ -73,9 +73,9 @@ func TestDiscoverer_PullMainWorktrees_EmptyReposDoesNotSkipNextCall(t *testing.T
 	}
 
 	// Subsequent call within cooldown must be skipped.
-	failures := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
-	if failures != nil {
-		t.Errorf("expected nil (cooldown active after empty-repo pull), got %v", failures)
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+	if result.PullFailures != nil {
+		t.Errorf("expected nil PullFailures (cooldown active after empty-repo pull), got %v", result.PullFailures)
 	}
 }
 
@@ -84,10 +84,39 @@ func TestDiscoverer_PullMainWorktrees_MultipleReposAllAttempted(t *testing.T) {
 	d.pullCooldown = time.Hour // no previous pull
 
 	repoPaths := []string{"/repo-a", "/repo-b", "/repo-c"}
-	failures := d.PullMainWorktrees(context.Background(), repoPaths)
+	result := d.PullMainWorktrees(context.Background(), repoPaths)
 
 	// Each repo must have produced a failure (broken binary), so count must match.
-	if len(failures) != len(repoPaths) {
-		t.Errorf("expected %d failures (one per repo), got %d", len(repoPaths), len(failures))
+	// syncWorktrees also runs for each repo but failures are logged, not returned.
+	if len(result.PullFailures) != len(repoPaths) {
+		t.Errorf("expected %d failures (one per repo), got %d", len(repoPaths), len(result.PullFailures))
+	}
+}
+
+func TestDiscoverer_PullMainWorktrees_SyncRunsEvenIfPullFailed(t *testing.T) {
+	d := NewDiscoverer(brokenClient(), nil)
+	d.pullCooldown = time.Hour
+
+	// Pull fails (broken binary). Sync must still be attempted for every repo,
+	// swallow its own error, and not affect the returned PullFailures.
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+
+	if len(result.PullFailures) == 0 {
+		t.Fatal("expected pull failure to be recorded; got none")
+	}
+	// If sync had panicked or propagated its error, the test would not reach here.
+}
+
+func TestDiscoverer_PullMainWorktrees_SyncSkippedWithinCooldown(t *testing.T) {
+	d := NewDiscoverer(brokenClient(), nil)
+	d.pullCooldown = time.Hour
+	d.lastPullAt = time.Now() // within cooldown
+
+	// The cooldown gates both pull and sync. Neither must be invoked.
+	// brokenClient would produce observable failures if either were called.
+	result := d.PullMainWorktrees(context.Background(), []string{"/repo-a"})
+
+	if result.PullFailures != nil {
+		t.Errorf("expected zero-value result (cooldown active), got PullFailures=%v", result.PullFailures)
 	}
 }

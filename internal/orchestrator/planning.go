@@ -416,8 +416,8 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	if err != nil {
 		return nil, fmt.Errorf("preflight check: %w", err)
 	}
-	pullFailures := s.discoverer.PullMainWorktrees(ctx, healthCheck.GitWorkRepos)
-	healthCheck.PullFailures = pullFailures
+	repoUpdate := s.discoverer.PullMainWorktrees(ctx, healthCheck.GitWorkRepos)
+	healthCheck.PullFailures = repoUpdate.PullFailures
 
 	// 4. Discover repos with metadata
 	repos, err := s.discoverer.DiscoverRepos(ctx, workspace.RootPath, healthCheck.GitWorkRepos)

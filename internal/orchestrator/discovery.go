@@ -51,19 +51,28 @@ func (d *Discoverer) PreflightCheck(ctx context.Context, workspaceDir string) (d
 	}, nil
 }
 
-// PullMainWorktrees pulls the main worktree in each git-work repo.
+// RepoUpdateResults holds the outcomes of a combined pull-and-sync pass over all
+// git-work repos. Sync failures are logged internally and not returned; they are
+// maintenance-only and must not surface as planning warnings or toasts.
+type RepoUpdateResults struct {
+	PullFailures []domain.PullFailure
+}
+
+// PullMainWorktrees pulls the main worktree of each git-work repo and then runs
+// gw sync to prune stale worktrees whose remote branches have been deleted.
 // Failures are recorded but don't stop the process.
 //
 // Calls within pullCooldown of the previous pull are skipped; this prevents
 // redundant network I/O when multiple sessions start in rapid succession.
-func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) []domain.PullFailure {
+// The cooldown gates both the pull and sync passes as a unit.
+func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) RepoUpdateResults {
 	d.lastPullMu.Lock()
 	if !d.lastPullAt.IsZero() && time.Since(d.lastPullAt) < d.pullCooldown {
 		since := time.Since(d.lastPullAt)
 		d.lastPullMu.Unlock()
-		slog.Debug("skipping pull: within cooldown", "since", since, "cooldown", d.pullCooldown)
+		slog.Debug("skipping pull+sync: within cooldown", "since", since, "cooldown", d.pullCooldown)
 
-		return nil
+		return RepoUpdateResults{}
 	}
 	// Stamp the time optimistically before releasing the lock so that concurrent
 	// callers that arrive while this pull is in-flight also see the cooldown.
@@ -86,7 +95,25 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 		}
 	}
 
-	return failures
+	// Sync runs regardless of individual pull outcomes: a pull failure on one repo
+	// (e.g. non-fast-forward) must not prevent stale-worktree cleanup on others.
+	d.syncWorktrees(ctx, repoPaths)
+
+	return RepoUpdateResults{PullFailures: failures}
+}
+
+// syncWorktrees runs `git-work sync` (fetch --prune + stale-worktree removal) on
+// each repo. Failures are logged and not returned — sync is best-effort maintenance
+// and must never block a planning run or surface as a user-visible warning.
+func (d *Discoverer) syncWorktrees(ctx context.Context, repoPaths []string) {
+	for _, repoPath := range repoPaths {
+		repoName := filepath.Base(repoPath)
+		if err := d.gitClient.Sync(ctx, repoPath); err != nil {
+			slog.Warn("failed to sync worktrees", "repo", repoName, "error", err)
+		} else {
+			slog.Debug("synced worktrees", "repo", repoName)
+		}
+	}
 }
 
 // DiscoverRepos discovers git-work repos and builds RepoPointers with metadata.
