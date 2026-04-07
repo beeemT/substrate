@@ -507,7 +507,7 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return append(prependDelete(hints), global...)
 	}
-	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}}), global...)
+	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "o", Label: "Group"}, {Key: "t", Label: "Sort"}}), global...)
 }
 
 func (a App) overviewOverlayOpen() bool {

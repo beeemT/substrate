@@ -649,3 +649,32 @@ func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestSidebarSessionsHintsIncludeFilterGroupSort(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	// Default state: sidebar focused, sessions pane.
+	if app.mainFocus != mainFocusSidebar || app.sidebarMode != sidebarPaneSessions {
+		t.Fatal("expected default app state to be sidebar-focused on the sessions pane")
+	}
+
+	hints := app.currentHints()
+	want := []struct{ key, label string }{
+		{"f", "Filter"},
+		{"o", "Group"},
+		{"t", "Sort"},
+	}
+	for _, w := range want {
+		found := false
+		for _, h := range hints {
+			if h.Key == w.key && h.Label == w.label {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("currentHints() = %#v, want hint {%q, %q}", hints, w.key, w.label)
+		}
+	}
+}
