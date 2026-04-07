@@ -120,8 +120,8 @@ func TestRepoManagerOverlayPlainGitWarning(t *testing.T) {
 	}
 	m = loadTestRepos(m, repos)
 	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "substrate") && !strings.Contains(v, "plain") {
-		t.Fatalf("view = %q, want plain git warning containing 'substrate' or 'plain'", v)
+	if !strings.Contains(v, "Not managed by substrate") {
+		t.Fatalf("view = %q, want plain git warning text 'Not managed by substrate'", v)
 	}
 }
 

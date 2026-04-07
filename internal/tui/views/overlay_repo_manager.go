@@ -49,7 +49,7 @@ func (i repoManagerItem) FilterValue() string { return i.repo.Name }
 // Layout: split screen (left = repo list, right = worktree details or contextual info).
 // Key bindings when active:
 //
-//	r/a        – open Add Repo overlay
+//	a          – open Add Repo overlay
 //	d          – confirm-delete selected repo
 //	i          – init plain git repo with git-work (only for plain git repos)
 //	Tab        – toggle focus between list and detail viewport
@@ -245,6 +245,7 @@ func (m *RepoManagerOverlay) Update(msg tea.Msg) (RepoManagerOverlay, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		m.syncDetailViewport()
+		m.detailViewport.GotoTop()
 		return *m, tea.Batch(cmds...)
 
 	case WorktreesLoadedMsg:
@@ -259,6 +260,7 @@ func (m *RepoManagerOverlay) Update(msg tea.Msg) (RepoManagerOverlay, tea.Cmd) {
 			slog.Error("repo manager: failed to list worktrees", "repo", msg.RepoPath, "error", msg.Err)
 		}
 		m.syncDetailViewport()
+		m.detailViewport.GotoTop()
 		return *m, nil
 
 	case RepoRemovedMsg:
@@ -322,6 +324,8 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		default:
 			// Any other key (including n, esc) cancels the confirm.
 			m.pendingDelete = nil
+			m.syncDetailViewport()
+			m.detailViewport.GotoTop()
 			return *m, nil
 		}
 	}
@@ -346,6 +350,8 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		if repo, ok := m.selectedRepo(); ok {
 			repo := repo // capture
 			m.pendingDelete = &repo
+			m.syncDetailViewport()
+			m.detailViewport.GotoTop()
 		}
 		return *m, nil
 
@@ -369,7 +375,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 			}
 			return *m, tea.Batch(listCmd, wtCmd)
 		}
-		m.detailViewport.LineUp(1)
+		m.detailViewport.ScrollUp(1)
 		return *m, nil
 
 	case "down", "j":
@@ -383,7 +389,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 			}
 			return *m, tea.Batch(listCmd, wtCmd)
 		}
-		m.detailViewport.LineDown(1)
+		m.detailViewport.ScrollDown(1)
 		return *m, nil
 	}
 
@@ -410,7 +416,6 @@ func (m *RepoManagerOverlay) syncDetailViewport() {
 	m.detailViewport.Width = layout.ViewportWidth
 	m.detailViewport.Height = layout.ViewportHeight
 	m.detailViewport.SetContent(m.renderDetailContent(layout.ViewportWidth))
-	m.detailViewport.GotoTop()
 }
 
 // renderDetailContent produces the text content for the right-pane viewport.

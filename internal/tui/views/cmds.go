@@ -1250,7 +1250,6 @@ func CloneRepoCmd(gitClient *gitwork.Client, workspaceDir, cloneURL string) tea.
 	}
 }
 
-
 // --- Repo Manager ---
 
 // LoadManagedReposCmd scans the workspace for git-work and plain git repositories.
@@ -1284,9 +1283,6 @@ func LoadWorktreesCmd(client *gitwork.Client, repo managedRepo, requestID int) t
 			return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path}
 		}
 		wts, err := client.List(context.Background(), repo.Path)
-		if err != nil {
-			slog.Error("failed to list worktrees", "repo", repo.Path, "error", err)
-		}
 		return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path, Worktrees: wts, Err: err}
 	}
 }

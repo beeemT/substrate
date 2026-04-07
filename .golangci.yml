@@ -121,6 +121,7 @@ linters:
         - name: unnecessary-stmt
         - name: use-any
         - name: early-return
+        - name: flag-parameter
 
     gocritic:
       disabled-checks:
