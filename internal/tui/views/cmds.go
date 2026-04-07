@@ -1249,3 +1249,72 @@ func CloneRepoCmd(gitClient *gitwork.Client, workspaceDir, cloneURL string) tea.
 		return RepoClonedMsg{RepoPath: path, Err: err}
 	}
 }
+
+
+// --- Repo Manager ---
+
+// LoadManagedReposCmd scans the workspace for git-work and plain git repositories.
+func LoadManagedReposCmd(workspaceDir string) tea.Cmd {
+	return func() tea.Msg {
+		scan, err := gitwork.ScanWorkspace(workspaceDir)
+		if err != nil {
+			return ManagedReposLoadedMsg{Err: err}
+		}
+		repos := make([]managedRepo, 0, len(scan.GitWorkRepos)+len(scan.PlainGitRepos))
+		for _, p := range scan.GitWorkRepos {
+			repos = append(repos, managedRepo{Path: p, Name: filepath.Base(p), Kind: repoKindGitWork})
+		}
+		for _, p := range scan.PlainGitRepos {
+			repos = append(repos, managedRepo{Path: p, Name: filepath.Base(p), Kind: repoKindPlainGit})
+		}
+		sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+		return ManagedReposLoadedMsg{Repos: repos}
+	}
+}
+
+// LoadWorktreesCmd lists worktrees for a git-work repository.
+// requestID guards against stale responses when selection changes quickly.
+// For plain git repos, returns an empty WorktreesLoadedMsg immediately (no worktrees to show).
+func LoadWorktreesCmd(client *gitwork.Client, repo managedRepo, requestID int) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path, Err: errors.New("git-work client is unavailable")}
+		}
+		if repo.Kind != repoKindGitWork {
+			return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path}
+		}
+		wts, err := client.List(context.Background(), repo.Path)
+		if err != nil {
+			slog.Error("failed to list worktrees", "repo", repo.Path, "error", err)
+		}
+		return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path, Worktrees: wts, Err: err}
+	}
+}
+
+// RemoveRepoCmd permanently deletes the repository directory tree from the workspace.
+// This is irreversible; the caller must obtain explicit user confirmation before invoking this.
+func RemoveRepoCmd(repoPath string) tea.Cmd {
+	return func() tea.Msg {
+		if err := os.RemoveAll(repoPath); err != nil {
+			slog.Error("failed to remove repository", "path", repoPath, "error", err)
+			return RepoRemovedMsg{RepoPath: repoPath, Err: err}
+		}
+		return RepoRemovedMsg{RepoPath: repoPath}
+	}
+}
+
+// InitRepoCmd converts a plain git repository into a git-work managed repository
+// by running git-work init. On success, the repo will appear as a git-work repo
+// on the next scan.
+func InitRepoCmd(client *gitwork.Client, repoPath string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return RepoInitializedMsg{RepoPath: repoPath, Err: errors.New("git-work client is unavailable")}
+		}
+		if err := client.Init(context.Background(), repoPath); err != nil {
+			slog.Error("failed to initialize git-work repo", "path", repoPath, "error", err)
+			return RepoInitializedMsg{RepoPath: repoPath, Err: err}
+		}
+		return RepoInitializedMsg{RepoPath: repoPath}
+	}
+}

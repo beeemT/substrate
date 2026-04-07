@@ -7,6 +7,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
@@ -484,4 +485,49 @@ type InspectPlanLoadedMsg struct {
 	Document string
 	// Err is non-nil when the plan could not be loaded; the overlay must close and surface the error.
 	Err error
+}
+
+
+// --- Repo Manager ---
+
+// repoKind classifies a repository found in the workspace.
+type repoKind int
+
+const (
+	repoKindGitWork  repoKind = iota // has .bare/ layout, fully git-work managed
+	repoKindPlainGit                 // has .git entry, not yet initialized with git-work
+)
+
+// managedRepo is a repository discovered in the workspace directory.
+type managedRepo struct {
+	Path string   // absolute path to the repo directory
+	Name string   // filepath.Base(Path)
+	Kind repoKind // classification
+}
+
+// ManagedReposLoadedMsg is sent when the repo manager scans the workspace.
+type ManagedReposLoadedMsg struct {
+	Repos []managedRepo
+	Err   error
+}
+
+// WorktreesLoadedMsg delivers worktrees for a git-work repository.
+// RequestID guards against stale responses when list selection changes quickly.
+type WorktreesLoadedMsg struct {
+	RequestID int
+	RepoPath  string
+	Worktrees []gitwork.Worktree
+	Err       error
+}
+
+// RepoRemovedMsg is sent after RemoveRepoCmd completes (success or failure).
+type RepoRemovedMsg struct {
+	RepoPath string
+	Err      error
+}
+
+// RepoInitializedMsg is sent after InitRepoCmd completes (success or failure).
+type RepoInitializedMsg struct {
+	RepoPath string
+	Err      error
 }

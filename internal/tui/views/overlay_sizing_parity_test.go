@@ -24,6 +24,9 @@ func TestSplitOverlaySizingSpecsMatchNewSession(t *testing.T) {
 	if newSessionAutonomousSizingSpec != browseSizingSpec {
 		t.Fatalf("new session autonomous sizing spec = %+v, want %+v", newSessionAutonomousSizingSpec, browseSizingSpec)
 	}
+	if repoManagerSizingSpec != browseSizingSpec {
+		t.Fatalf("repo manager sizing spec = %+v, want %+v", repoManagerSizingSpec, browseSizingSpec)
+	}
 }
 
 func TestAlignedSplitOverlaySizingFitsNarrowWindows(t *testing.T) {
@@ -44,6 +47,10 @@ func TestAlignedSplitOverlaySizingFitsNarrowWindows(t *testing.T) {
 	autonomous := newSizingParityAutonomousOverlay()
 	autonomous.SetSize(72, 18)
 	assertOverlayFits(t, autonomous.View(), 72, 18)
+
+	repoManager := newSizingParityRepoManagerOverlay()
+	repoManager.SetSize(60, 20)
+	assertOverlayFits(t, repoManager.View(), 60, 20)
 }
 
 func TestAlignedSplitOverlayCenterInsetsMatchNewSession(t *testing.T) {
@@ -88,6 +95,13 @@ func TestAlignedSplitOverlayCenterInsetsMatchNewSession(t *testing.T) {
 			if autonomousTop != newSessionTop || autonomousBottom != newSessionBottom {
 				t.Fatalf("autonomous insets = (%d,%d), want (%d,%d)", autonomousTop, autonomousBottom, newSessionTop, newSessionBottom)
 			}
+
+			repoMgr := newSizingParityRepoManagerOverlay()
+			repoMgr.SetSize(tc.width, tc.height)
+			repoMgrTop, repoMgrBottom := centeredOverlayInsets(repoMgr.View(), tc.width, tc.height)
+			if repoMgrTop != newSessionTop || repoMgrBottom != newSessionBottom {
+				t.Fatalf("repo manager insets = (%d,%d), want (%d,%d)", repoMgrTop, repoMgrBottom, newSessionTop, newSessionBottom)
+			}
 		})
 	}
 }
@@ -122,6 +136,12 @@ func newSizingParityAutonomousOverlay() NewSessionAutonomousOverlay {
 	overlay.SetSavedFilters(testAutonomousFilters())
 	overlay.Open()
 
+	return overlay
+}
+
+func newSizingParityRepoManagerOverlay() RepoManagerOverlay {
+	overlay := NewRepoManagerOverlay("/tmp/workspace", nil, styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
 	return overlay
 }
 

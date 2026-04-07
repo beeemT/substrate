@@ -28,6 +28,7 @@ func (h HelpOverlay) View() string {
 
 	global := []entry{
 		{"n", "New session"},
+		{"r", "Repos"},
 		{"s", "Settings"},
 		{"L", "Logs"},
 		{"j / ↓", "Navigate down"},
@@ -66,6 +67,13 @@ func (h HelpOverlay) View() string {
 		{"Interrupted", []entry{
 			{"r", "Resume session"},
 			{"a", "Abandon session"},
+		}},
+		{"Repo Manager", []entry{
+			{"a", "Add repo"},
+			{"d", "Delete selected repo"},
+			{"i", "Init plain git repo (git-work)"},
+			{"Tab", "Switch focus"},
+			{"Esc", "Close"},
 		}},
 	}
 

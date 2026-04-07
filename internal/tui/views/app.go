@@ -41,6 +41,7 @@ const (
 	overlaySourceItems
 	overlayLogs
 	overlayAddRepo
+	overlayRepoManager
 )
 
 type sessionHistoryScope int
@@ -110,6 +111,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	sourceItemsOverlay          SourceItemsOverlay
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
+	repoManager                 RepoManagerOverlay
 	hasWorkspace                bool
 
 	// Toasts
@@ -196,6 +198,7 @@ func NewApp(svcs Services) App {
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
 		addRepo:                        NewAddRepoOverlay(svcs.RepoSources, svcs.WorkspaceDir, svcs.GitClient, st),
+		repoManager:                    NewRepoManagerOverlay(svcs.WorkspaceDir, svcs.GitClient, st),
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
@@ -486,6 +489,11 @@ func (a *App) openNewSessionAutonomousOverlay() tea.Cmd {
 func (a *App) openAddRepo() tea.Cmd {
 	a.activeOverlay = overlayAddRepo
 	return a.addRepo.Open()
+}
+
+func (a *App) openRepoManager() tea.Cmd {
+	a.activeOverlay = overlayRepoManager
+	return a.repoManager.Open()
 }
 
 func (a App) currentHints() []KeybindHint {
@@ -880,6 +888,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		a.addRepo.SetSize(msg.Width, msg.Height)
+		a.repoManager.SetSize(msg.Width, msg.Height)
 		a.newSessionAutonomousOverlay.SetSize(msg.Width, msg.Height)
 		return a, nil
 
@@ -934,6 +943,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.settingsPage.Close()
 		a.sourceItemsOverlay.Close()
 		a.addRepo.Close()
+		a.repoManager.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -1417,6 +1427,42 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.CloneURL))
 		return a, tea.Batch(cmds...)
 
+	case ShowAddRepoMsg:
+		a.repoManager.Close()
+		return a, a.openAddRepo()
+
+	case ManagedReposLoadedMsg:
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		cmds = append(cmds, cmd)
+		return a, tea.Batch(cmds...)
+
+	case WorktreesLoadedMsg:
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		cmds = append(cmds, cmd)
+		return a, tea.Batch(cmds...)
+
+	case RepoRemovedMsg:
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		cmds = append(cmds, cmd)
+		if msg.Err != nil {
+			slog.Error("failed to remove repository", "path", msg.RepoPath, "error", msg.Err)
+			a.toasts.AddToast("Failed to delete repository: "+msg.Err.Error(), components.ToastError)
+		} else {
+			a.toasts.AddToast("Repository deleted: "+filepath.Base(msg.RepoPath), components.ToastSuccess)
+		}
+		return a, tea.Batch(cmds...)
+
+	case RepoInitializedMsg:
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		cmds = append(cmds, cmd)
+		if msg.Err != nil {
+			slog.Error("failed to initialize repository", "path", msg.RepoPath, "error", msg.Err)
+			a.toasts.AddToast("Failed to initialize repository: "+msg.Err.Error(), components.ToastError)
+		} else {
+			a.toasts.AddToast("Repository initialized: "+filepath.Base(msg.RepoPath), components.ToastSuccess)
+		}
+		return a, tea.Batch(cmds...)
+
 	case SettingsAppliedMsg:
 		a.applyServicesReload(msg.Reload)
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -1676,6 +1722,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayAddRepo {
 		a.addRepo, cmd = a.addRepo.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayRepoManager {
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlaySessionSearch {
 		a.sessionSearch, cmd = a.sessionSearch.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1750,6 +1799,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.logsOverlay, cmd = a.logsOverlay.Update(msg)
 		return a, cmd
 	}
+	if a.activeOverlay == overlayRepoManager {
+		a.repoManager, cmd = a.repoManager.Update(msg)
+		return a, cmd
+	}
 	if a.activeOverlay == overlayAddRepo {
 		a.addRepo, cmd = a.addRepo.Update(msg)
 		return a, cmd
@@ -1781,8 +1834,13 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openNewSession()
 	case "A":
 		return a, a.openNewSessionAutonomousOverlay()
-	case "a":
-		return a, a.openAddRepo()
+	case "r":
+		// ContentModeOverview uses 'r' for retry/restart when a work item is selected.
+		// Fall through to updateContentForKey in that case to preserve that binding.
+		if a.content.mode == ContentModeOverview && a.currentWorkItemID != "" {
+			break
+		}
+		return a, a.openRepoManager()
 	case "s":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
@@ -2700,6 +2758,8 @@ func (a App) View() string {
 		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayAddRepo:
 		result = renderOverlay(a.addRepo.View(), a.windowWidth, a.windowHeight)
+	case overlayRepoManager:
+		result = renderOverlay(a.repoManager.View(), a.windowWidth, a.windowHeight)
 	default:
 		result = base
 	}

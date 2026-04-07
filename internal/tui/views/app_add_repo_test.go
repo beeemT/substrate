@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestAppAKeyOpensAddRepoOverlay(t *testing.T) {
+func TestAppAKeyNoLongerOpensAddRepoOverlay(t *testing.T) {
 	t.Parallel()
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
@@ -18,11 +18,8 @@ func TestAppAKeyOpensAddRepoOverlay(t *testing.T) {
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	updated = model.(App)
 
-	if updated.activeOverlay != overlayAddRepo {
-		t.Fatalf("activeOverlay = %v, want overlayAddRepo", updated.activeOverlay)
-	}
-	if !updated.addRepo.Active() {
-		t.Fatal("expected addRepo overlay to be active after 'a' key")
+	if updated.activeOverlay == overlayAddRepo {
+		t.Fatal("'a' key must NOT open addRepo overlay directly; use 'r' \u2192 'a' instead")
 	}
 }
 
@@ -33,7 +30,7 @@ func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model, _ = updated.Update(ShowAddRepoMsg{})
 	updated = model.(App)
 
 	// Esc is routed to addRepo.Update, which returns CloseOverlayMsg as a command.
@@ -92,7 +89,7 @@ func TestAppAddRepoViewFitsWindowWhenOpen(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model, _ = updated.Update(ShowAddRepoMsg{})
 	updated = model.(App)
 
 	view := updated.View()
