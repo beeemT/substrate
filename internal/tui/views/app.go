@@ -507,7 +507,7 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return append(prependDelete(hints), global...)
 	}
-	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "o", Label: "Group"}, {Key: "t", Label: "Sort"}}), global...)
+	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}), global...)
 }
 
 func (a App) overviewOverlayOpen() bool {
@@ -1825,20 +1825,6 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.sidebar.MoveDown()
 		cmd = a.onSidebarMove()
 		return a, cmd
-	case "g":
-		if a.mainFocus == mainFocusContent {
-			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
-		}
-		a.sidebar.GotoTop()
-		cmd = a.onSidebarMove()
-		return a, cmd
-	case "G":
-		if a.mainFocus == mainFocusContent {
-			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
-		}
-		a.sidebar.GotoBottom()
-		cmd = a.onSidebarMove()
-		return a, cmd
 	case "f":
 		if a.mainFocus == mainFocusContent {
 			break
@@ -1848,7 +1834,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSidebar()
 			return a, nil
 		}
-	case "o":
+	case "g":
 		if a.mainFocus == mainFocusContent {
 			break
 		}
@@ -1857,7 +1843,7 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSidebar()
 			return a, nil
 		}
-	case "t":
+	case "o":
 		if a.mainFocus == mainFocusContent {
 			break
 		}

@@ -662,8 +662,8 @@ func TestSidebarSessionsHintsIncludeFilterGroupSort(t *testing.T) {
 	hints := app.currentHints()
 	want := []struct{ key, label string }{
 		{"f", "Filter"},
-		{"o", "Group"},
-		{"t", "Sort"},
+		{"g", "Group"},
+		{"o", "Sort"},
 	}
 	for _, w := range want {
 		found := false
