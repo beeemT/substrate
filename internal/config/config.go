@@ -516,7 +516,7 @@ func validate(cfg *Config) error {
 	}
 
 	if cfg.Adapters.Sentry.BaseURL != "" {
-		if err := validateAbsoluteHTTPURL(cfg.Adapters.Sentry.BaseURL); err != nil {
+		if err := validateHTTPSURL(cfg.Adapters.Sentry.BaseURL); err != nil {
 			return fmt.Errorf("invalid sentry base_url: %w", err)
 		}
 	}
@@ -572,22 +572,6 @@ func (c *Config) IssueCommentContentForSource(source string) IssueCommentContent
 		return c.Adapters.GitLab.IssueCommentContent
 	default:
 		return IssueCommentSubPlan
-	}
-}
-
-func validateAbsoluteHTTPURL(raw string) error {
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil {
-		return err
-	}
-	if !parsed.IsAbs() || parsed.Host == "" {
-		return errors.New("must be an absolute URL")
-	}
-	switch parsed.Scheme {
-	case "http", "https":
-		return nil
-	default:
-		return errors.New("must use http or https")
 	}
 }
 
