@@ -441,7 +441,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Adapters.Linear.PollInterval = defaultPollInterval
 	}
 	if cfg.Adapters.GitLab.BaseURL == "" {
-		cfg.Adapters.GitLab.BaseURL = "https://gitlab.com"
+		cfg.Adapters.GitLab.BaseURL = InferGlabBaseURL()
 	}
 	if cfg.Adapters.GitLab.PollInterval == "" {
 		cfg.Adapters.GitLab.PollInterval = defaultPollInterval
