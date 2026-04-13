@@ -266,12 +266,6 @@ func openDatabase(ctx context.Context) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Harden database file permissions — the file may have been created with
-	// the process umask (often 0644); restrict to owner-only access.
-	if err := os.Chmod(dbPath, 0o600); err != nil {
-		slog.Warn("failed to set database permissions", "path", dbPath, "err", err)
-	}
-
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
@@ -286,6 +280,13 @@ func openDatabase(ctx context.Context) (*sqlx.DB, error) {
 	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Harden database file permissions — the file may have been created with
+	// the process umask (often 0644); restrict to owner-only access.
+	// Must run after migrations so the file exists on first launch.
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		slog.Warn("failed to set database permissions", "path", dbPath, "err", err)
 	}
 
 	return db, nil
