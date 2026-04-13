@@ -22,12 +22,13 @@ type RepoPointer struct {
 
 // WorkItemSnapshot is a projection of WorkItem for planning context.
 type WorkItemSnapshot struct {
-	ID          string
-	ExternalID  string
-	Title       string
-	Description string
-	Labels      []string
-	Source      string
+	ID           string
+	ExternalID   string
+	Title        string
+	Description  string
+	Labels       []string
+	Source       string
+	ExtraContext string
 }
 
 // PlanningContext contains all information needed to run a planning session.

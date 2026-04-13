@@ -167,8 +167,9 @@ type OverrideAcceptMsg struct{ WorkItemID string }
 
 // NewSessionBrowseMsg fires when user selects browsed items and starts a session.
 type NewSessionBrowseMsg struct {
-	Adapter   adapter.WorkItemAdapter
-	Selection adapter.Selection
+	Adapter      adapter.WorkItemAdapter
+	Selection    adapter.Selection
+	ExtraContext string
 }
 
 // NewSessionManualMsg fires when user submits the manual session form.

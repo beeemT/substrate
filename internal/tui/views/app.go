@@ -3178,6 +3178,7 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
+		wi.ExtraContext = msg.ExtraContext
 		return persistCreatedWorkItemMsg(svcs, wi)
 	}
 }

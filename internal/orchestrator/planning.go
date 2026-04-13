@@ -470,12 +470,13 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	// 9. Build planning context.
 	planningCtx := &domain.PlanningContext{
 		WorkItem: domain.WorkItemSnapshot{
-			ID:          workItem.ID,
-			ExternalID:  workItem.ExternalID,
-			Title:       workItem.Title,
-			Description: workItem.Description,
-			Labels:      workItem.Labels,
-			Source:      workItem.Source,
+			ID:           workItem.ID,
+			ExternalID:   workItem.ExternalID,
+			Title:        workItem.Title,
+			Description:  workItem.Description,
+			Labels:       workItem.Labels,
+			Source:       workItem.Source,
+			ExtraContext: workItem.ExtraContext,
 		},
 		WorkspaceAgentsMd: workspaceAgentsMd,
 		Repos:             repos,
@@ -941,7 +942,10 @@ Title: {{.WorkItem.Title}}
 ID: {{.WorkItem.ExternalID}}
 Description:
 {{.WorkItem.Description}}
-
+{{if .WorkItem.ExtraContext}}
+## Additional Context
+{{.WorkItem.ExtraContext}}
+{{end}}
 ## Repos
 {{range .Repos}}- {{.Name}} ({{.Language}}{{if .Framework}}/{{.Framework}}{{end}}) — {{.MainDir}}{{if .AgentsMdPath}}
   guidance: {{.AgentsMdPath}}{{end}}{{if .DocPaths}}

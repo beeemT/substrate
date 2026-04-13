@@ -14,6 +14,7 @@ type Session struct {
 	AssigneeID    string
 	State         SessionState
 	Metadata      map[string]any
+	ExtraContext  string
 	SourceScope   SelectionScope
 	SourceItemIDs []string
 	CreatedAt     time.Time

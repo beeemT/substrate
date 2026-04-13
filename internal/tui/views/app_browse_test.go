@@ -467,6 +467,13 @@ func TestNewSessionOverlayDispatchesSelectedProvider(t *testing.T) {
 	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gl-1", Provider: "gitlab", Title: "GitLab issue"}))
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 
+	// First Enter transitions to the extra context step.
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !overlay.showExtraContext {
+		t.Fatal("expected extra context step after first Enter")
+	}
+
+	// Second Enter confirms and fires the session msg.
 	_, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected session command")

@@ -234,6 +234,8 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	manualDesc                     textarea.Model
 	manualFocus                    int
 	showManual                     bool
+	showExtraContext               bool
+	extraContextInput             textarea.Model
 	browseFocus                    browseFocusArea
 	browseControl                  browseControl
 	detailViewport                 viewport.Model
@@ -289,7 +291,13 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	md.Placeholder = "Description (optional)…"
 	md.SetWidth(60)
 	md.SetHeight(3)
-	md.CharLimit = 2000
+	md.CharLimit = 5000
+
+	ec := components.NewTextArea()
+	ec.Placeholder = "Additional context (optional)…"
+	ec.SetWidth(60)
+	ec.SetHeight(5)
+	ec.CharLimit = 5000
 
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
@@ -342,6 +350,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		selectedIDs:                    make(map[string]bool),
 		manualTitle:                    mt,
 		manualDesc:                     md,
+		extraContextInput:             ec,
 		browseFocus:                    browseFocusControls,
 		browseControl:                  browseControlSearch,
 		detailViewport:                 viewport.New(0, 0),
@@ -358,6 +367,9 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 func (m *NewSessionOverlay) Open() {
 	m.active = true
 	m.showManual = false
+	m.showExtraContext = false
+	m.extraContextInput.SetValue("")
+	m.extraContextInput.Blur()
 	m.filterModalMode = newSessionFilterModalNone
 	m.saveFilterNameInput.SetValue("")
 	m.saveFilterNameInput.Blur()
@@ -396,6 +408,9 @@ func (m *NewSessionOverlay) Close() {
 	m.manualTitle.Blur()
 	m.manualDesc.SetValue("")
 	m.manualDesc.Blur()
+	m.showExtraContext = false
+	m.extraContextInput.SetValue("")
+	m.extraContextInput.Blur()
 	m.saveFilterNameInput.SetValue("")
 	m.saveFilterNameInput.Blur()
 	m.loadFilterList.SetItems(nil)
@@ -444,6 +459,29 @@ func (m NewSessionOverlay) adapterForName(name string) adapter.WorkItemAdapter {
 		}
 	}
 	return nil
+}
+
+// confirmBrowseSelection validates the current selection and returns the adapter and selection
+// to use when starting a session. Returns nil adapter on error.
+func (m NewSessionOverlay) confirmBrowseSelection() (adapter.WorkItemAdapter, adapter.Selection, error) {
+	provider := m.selectedProvider()
+	if provider == "" || provider == "mixed" {
+		return nil, adapter.Selection{}, errors.New("selected work items must come from exactly one provider")
+	}
+	ids := make([]string, 0, len(m.selectedIDs))
+	for id := range m.selectedIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	a := m.adapterForName(provider)
+	if a == nil {
+		return nil, adapter.Selection{}, fmt.Errorf("no browse adapter configured for provider %s", provider)
+	}
+	if !slices.Contains(a.Capabilities().BrowseScopes, m.currentScope()) {
+		return nil, adapter.Selection{}, fmt.Errorf("provider %s does not support %s selection", provider, m.currentScope())
+	}
+	sel := adapter.Selection{Scope: m.currentScope(), ItemIDs: ids, Metadata: map[string]any{"provider": a.Name()}}
+	return a, sel, nil
 }
 
 func (m *NewSessionOverlay) toggleSelection(item adapter.ListItem) error {
@@ -1334,14 +1372,14 @@ func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
 }
 
 func (m *NewSessionOverlay) syncDetailViewport(forceTop bool) {
-	if m.showManual {
+	if m.showManual || m.showExtraContext {
 		return
 	}
 	m.syncDetailViewportWithLayout(m.browserLayout(), forceTop)
 }
 
 func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.SplitOverlayLayout, forceTop bool) {
-	if m.showManual {
+	if m.showManual || m.showExtraContext {
 		return
 	}
 	m.resizeInputs(layout.InputWidth)
@@ -1822,6 +1860,27 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			break
 		}
 
+		if m.showExtraContext {
+			switch msg.String() {
+			case keyEsc:
+				m.showExtraContext = false
+				m.extraContextInput.Blur()
+			case keyEnter:
+				a, sel, err := m.confirmBrowseSelection()
+				if err != nil {
+					return m, func() tea.Msg { return ErrMsg{Err: err} }
+				}
+				extraCtx := m.extraContextInput.Value()
+				return m, func() tea.Msg {
+					return NewSessionBrowseMsg{Adapter: a, Selection: sel, ExtraContext: extraCtx}
+				}
+			default:
+				m.extraContextInput, cmd = m.extraContextInput.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
+
 		if m.showManual {
 			switch msg.String() {
 			case keyEsc:
@@ -2015,30 +2074,12 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				}
 			}
 			if len(m.selectedIDs) > 0 {
-				provider := m.selectedProvider()
-				if provider == "" || provider == "mixed" {
-					return m, func() tea.Msg {
-						return ErrMsg{Err: errors.New("selected work items must come from exactly one provider")}
-					}
+				if _, _, err := m.confirmBrowseSelection(); err != nil {
+					return m, func() tea.Msg { return ErrMsg{Err: err} }
 				}
-				ids := make([]string, 0, len(m.selectedIDs))
-				for id := range m.selectedIDs {
-					ids = append(ids, id)
-				}
-				sort.Strings(ids)
-				a := m.adapterForName(provider)
-				if a == nil {
-					return m, func() tea.Msg {
-						return ErrMsg{Err: fmt.Errorf("no browse adapter configured for provider %s", provider)}
-					}
-				}
-				if slices.Contains(a.Capabilities().BrowseScopes, m.currentScope()) {
-					sel := adapter.Selection{Scope: m.currentScope(), ItemIDs: ids, Metadata: map[string]any{"provider": a.Name()}}
-					return m, func() tea.Msg { return NewSessionBrowseMsg{Adapter: a, Selection: sel} }
-				}
-				return m, func() tea.Msg {
-					return ErrMsg{Err: fmt.Errorf("provider %s does not support %s selection", provider, m.currentScope())}
-				}
+				m.showExtraContext = true
+				m.extraContextInput.SetValue("")
+				m.extraContextInput.Focus()
 			}
 		case " ":
 			if item, ok := m.currentListItem(); ok {
@@ -2146,7 +2187,9 @@ func (m *NewSessionOverlay) View() string {
 
 	var body string
 	footer := ""
-	if m.showManual {
+	if m.showExtraContext {
+		body = m.extraContextView(renderWidth)
+	} else if m.showManual {
 		body = m.manualView(renderWidth)
 	} else {
 		body = m.browserView(layout)
@@ -2325,9 +2368,35 @@ func (m NewSessionOverlay) manualView(width int) string {
 	}, "\n")
 }
 
+func (m NewSessionOverlay) extraContextView(width int) string {
+	label := m.styles.Label.Render("Additional context")
+	hints := m.styles.Hint.Render(
+		truncate("[Enter] Start session  [Esc] Back to selection", maxInt(1, width)))
+
+	selectedLabel := m.styles.Label.Render("Selected:")
+	selectedLines := make([]string, 0, len(m.selectedIDs))
+	for _, item := range m.allItems {
+		if !m.selectedIDs[item.ID] {
+			continue
+		}
+		title := item.Title
+		if item.Identifier != "" {
+			title = item.Identifier + "  " + title
+		}
+		selectedLines = append(selectedLines, "  • "+title)
+	}
+
+	parts := []string{selectedLabel}
+	parts = append(parts, selectedLines...)
+	parts = append(parts, "", label, m.extraContextInput.View(), "", hints)
+	return strings.Join(parts, "\n")
+}
+
 // SetSize stores the available terminal dimensions for responsive rendering.
 func (m *NewSessionOverlay) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.syncDetailViewport(false)
+	inputWidth := maxInt(20, w-8)
+	m.extraContextInput.SetWidth(inputWidth)
 }

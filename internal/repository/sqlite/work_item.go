@@ -23,6 +23,7 @@ type workItemRow struct {
 	Labels        *string `db:"labels"`
 	SourceItemIDs *string `db:"source_item_ids"`
 	Metadata      *string `db:"metadata"`
+	ExtraContext  *string `db:"extra_context"`
 	CreatedAt     string  `db:"created_at"`
 	UpdatedAt     string  `db:"updated_at"`
 }
@@ -62,6 +63,7 @@ func (r *workItemRow) toDomain() (domain.Session, error) {
 		Labels:        labels,
 		SourceItemIDs: sourceItemIDs,
 		Metadata:      metadata,
+		ExtraContext:  derefStr(r.ExtraContext),
 		CreatedAt:     createdAt,
 		UpdatedAt:     updatedAt,
 	}, nil
@@ -94,6 +96,7 @@ func rowFromWorkItem(item domain.Session) (workItemRow, error) {
 		Labels:        labels,
 		SourceItemIDs: sourceItemIDs,
 		Metadata:      metadata,
+		ExtraContext:  strPtr(item.ExtraContext),
 		CreatedAt:     formatTime(item.CreatedAt),
 		UpdatedAt:     formatTime(item.UpdatedAt),
 	}, nil
@@ -168,10 +171,10 @@ func (r SessionRepo) Create(ctx context.Context, item domain.Session) error {
 	_, err = r.remote.NamedExecContext(ctx,
 		`INSERT INTO work_items
 		 (id, workspace_id, external_id, source, source_scope, title, description, assignee_id,
-		  state, labels, source_item_ids, metadata, created_at, updated_at)
+		  state, labels, source_item_ids, metadata, extra_context, created_at, updated_at)
 		 VALUES
 		 (:id, :workspace_id, :external_id, :source, :source_scope, :title, :description, :assignee_id,
-		  :state, :labels, :source_item_ids, :metadata, :created_at, :updated_at)`, row)
+		  :state, :labels, :source_item_ids, :metadata, :extra_context, :created_at, :updated_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create work item %s: %w", item.ID, err)
 	}
@@ -189,7 +192,8 @@ func (r SessionRepo) Update(ctx context.Context, item domain.Session) error {
 		 workspace_id = :workspace_id, external_id = :external_id, source = :source,
 		 source_scope = :source_scope, title = :title, description = :description,
 		 assignee_id = :assignee_id, state = :state, labels = :labels,
-		 source_item_ids = :source_item_ids, metadata = :metadata, updated_at = :updated_at
+		 source_item_ids = :source_item_ids, metadata = :metadata, extra_context = :extra_context,
+		 updated_at = :updated_at
 		 WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update work item %s: %w", item.ID, err)
