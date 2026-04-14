@@ -583,8 +583,16 @@ func validateHTTPSURL(raw string) error {
 	if !parsed.IsAbs() || parsed.Host == "" {
 		return errors.New("must be an absolute URL")
 	}
-	if parsed.Scheme != "https" {
-		return errors.New("must use https (bearer tokens must not be sent over plaintext)")
+	if parsed.Scheme == "https" {
+		return nil
 	}
-	return nil
+	// Allow plain HTTP only for loopback addresses (local dev and test servers).
+	// Loopback traffic never leaves the machine, so plaintext is acceptable.
+	if parsed.Scheme == "http" {
+		switch parsed.Hostname() {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+	}
+	return errors.New("must use https (bearer tokens must not be sent over plaintext)")
 }

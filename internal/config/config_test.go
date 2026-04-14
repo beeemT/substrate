@@ -22,6 +22,7 @@ func writeTestConfig(t *testing.T, content string) string {
 func TestLoadDefaults(t *testing.T) {
 	path := writeTestConfig(t, `# empty config - all defaults
 `)
+	t.Setenv("PATH", "") // isolate from local glab config; InferGlabBaseURL must return the fallback default
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
