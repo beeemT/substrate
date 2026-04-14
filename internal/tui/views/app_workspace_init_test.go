@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -226,6 +228,49 @@ func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 	}
 	if updated.sessionsDir != "/tmp/sessions" {
 		t.Fatalf("sessions dir = %q, want /tmp/sessions", updated.sessionsDir)
+	}
+}
+
+func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{Settings: &SettingsService{}, SettingsData: snapshot})
+
+	// Establish terminal size before the services reload.
+	const wantWidth, wantHeight = 160, 48
+	model, _ := app.Update(tea.WindowSizeMsg{Width: wantWidth, Height: wantHeight})
+	app = model.(App)
+
+	reload := viewsServicesReload{
+		SessionsDir:  "/tmp/sessions",
+		SettingsData: snapshot,
+		Services: Services{
+			WorkspaceID:   "ws-1",
+			WorkspaceName: "workspace",
+			WorkspaceDir:  "/tmp/ws",
+			Adapters:      []adapter.WorkItemAdapter{stubWorkspaceInitAdapter{name: "manual"}},
+			Settings:      &SettingsService{},
+			SettingsData:  snapshot,
+		},
+	}
+
+	model, _ = app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+
+	// New overlay instances must inherit the terminal size set before the reload.
+	// Without this, the overlay renders at 1px wide until the user manually resizes.
+	if updated.newSession.width != wantWidth || updated.newSession.height != wantHeight {
+		t.Fatalf("newSession size = (%d,%d), want (%d,%d) after services reload",
+			updated.newSession.width, updated.newSession.height, wantWidth, wantHeight)
+	}
+	if updated.newSessionAutonomousOverlay.width != wantWidth || updated.newSessionAutonomousOverlay.height != wantHeight {
+		t.Fatalf("newSessionAutonomousOverlay size = (%d,%d), want (%d,%d) after services reload",
+			updated.newSessionAutonomousOverlay.width, updated.newSessionAutonomousOverlay.height, wantWidth, wantHeight)
 	}
 }
 

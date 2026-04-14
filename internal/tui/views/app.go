@@ -272,7 +272,9 @@ func (a App) Init() tea.Cmd {
 func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.svcs = reload.Services
 	a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
+	a.newSession.SetSize(a.windowWidth, a.windowHeight)
 	a.newSessionAutonomousOverlay = NewNewSessionAutonomousOverlay(a.statusBar.styles)
+	a.newSessionAutonomousOverlay.SetSize(a.windowWidth, a.windowHeight)
 	a.settingsPage.SetSnapshot(reload.SettingsData)
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.svcs.WorkspaceID != ""
