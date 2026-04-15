@@ -13,9 +13,10 @@ type RepoSource interface {
 
 // RepoListOpts controls repository listing behavior.
 type RepoListOpts struct {
-	Search string // text filter -- when non-empty, repo sources use their provider's search API
-	Limit  int    // max results per page
-	Page   int    // 1-indexed page number
+	Search    string // text filter -- when non-empty, repo sources use their provider's search API
+	Limit     int    // max results per page
+	Page      int    // 1-indexed page number
+	OwnedOnly bool   // when true, restrict to projects owned by the authenticated user (GitLab only; other sources ignore this)
 }
 
 // RepoListResult holds a page of repository results.

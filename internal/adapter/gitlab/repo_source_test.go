@@ -73,13 +73,20 @@ func TestGitlabRepoSource_Name(t *testing.T) {
 
 func TestGitlabRepoSource_ListProjects(t *testing.T) {
 	t.Parallel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browse with OwnedOnly=true must send both membership=true and owned=true.
+		if got := r.URL.Query().Get("membership"); got != "true" {
+			t.Errorf("membership param = %q, want %q", got, "true")
+		}
+		if got := r.URL.Query().Get("owned"); got != "true" {
+			t.Errorf("owned param = %q, want %q", got, "true")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(sampleProjectsJSON("public")))
 	})
 	src, _ := newTestRepoSource(t, handler)
 
-	result, err := src.ListRepos(context.Background(), adapter.RepoListOpts{})
+	result, err := src.ListRepos(context.Background(), adapter.RepoListOpts{OwnedOnly: true})
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
 	}
@@ -117,6 +124,30 @@ func TestGitlabRepoSource_ListProjects(t *testing.T) {
 	}
 	if result.HasMore {
 		t.Errorf("HasMore = true, want false (no Link header)")
+	}
+}
+
+func TestGitlabRepoSource_ListProjects_AllRepos(t *testing.T) {
+	t.Parallel()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// OwnedOnly=false: membership=true must be present, owned must NOT be sent.
+		if got := r.URL.Query().Get("membership"); got != "true" {
+			t.Errorf("membership param = %q, want %q", got, "true")
+		}
+		if r.URL.Query().Has("owned") {
+			t.Error("owned param must not be sent when OwnedOnly is false")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(sampleProjectsJSON("public")))
+	})
+	src, _ := newTestRepoSource(t, handler)
+
+	result, err := src.ListRepos(context.Background(), adapter.RepoListOpts{OwnedOnly: false})
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if len(result.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(result.Repos))
 	}
 }
 

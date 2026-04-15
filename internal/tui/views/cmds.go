@@ -1220,7 +1220,7 @@ func WaitForLogToastCmd(ch <-chan tuilog.ToastEntry) tea.Cmd {
 
 // LoadReposCmd fetches repos from the repo source at sourceIndex.
 // requestID is stamped onto the response so the overlay can discard stale results.
-func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, limit int, requestID int) tea.Cmd {
+func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, limit int, requestID int, ownedOnly bool) tea.Cmd {
 	return func() tea.Msg {
 		if len(sources) == 0 {
 			return RepoListLoadedMsg{RequestID: requestID, Repos: []adapter.RepoItem{}}
@@ -1231,7 +1231,7 @@ func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, 
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		opts := adapter.RepoListOpts{Search: search, Limit: limit, Page: 1}
+		opts := adapter.RepoListOpts{Search: search, Limit: limit, Page: 1, OwnedOnly: ownedOnly}
 		result, err := sources[idx].ListRepos(ctx, opts)
 		if err != nil {
 			return RepoListLoadedMsg{RequestID: requestID, Errs: []error{err}}

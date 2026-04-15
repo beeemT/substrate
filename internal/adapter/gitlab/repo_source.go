@@ -89,8 +89,13 @@ func (s *GitlabRepoSource) ListRepos(ctx context.Context, opts adapter.RepoListO
 	if opts.Search != "" {
 		query.Set("search", opts.Search)
 	} else {
+		// membership=true returns all projects the user is a member of, including group projects.
+		// owned=true additionally restricts to only projects in the user's personal namespace;
+		// callers opt in via OwnedOnly (the TUI default).
 		query.Set("membership", "true")
-		query.Set("owned", "true")
+		if opts.OwnedOnly {
+			query.Set("owned", "true")
+		}
 	}
 
 	endpoint := path.Join("/api/v4", "projects")

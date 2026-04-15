@@ -43,6 +43,7 @@ type addRepoControl int
 
 const (
 	addRepoControlSource addRepoControl = iota
+	addRepoControlFilter
 	addRepoControlSearch
 )
 
@@ -67,6 +68,7 @@ type AddRepoOverlay struct { //nolint:recvcheck
 	detailRepo        *adapter.RepoItem
 	focus             addRepoFocusArea
 	addRepoCtrl       addRepoControl
+	ownedOnly         bool // when true, the GitLab source filters to personally-owned projects only
 	requestSeq        int
 	searchDebounceSeq int
 	styles            styles.Styles
@@ -127,6 +129,7 @@ func NewAddRepoOverlay(sources []adapter.RepoSource, workspaceDir string, gitCli
 		manualURL:      mu,
 		detailViewport: viewport.New(0, 0),
 		focus:          addRepoFocusControls,
+		ownedOnly:      true,
 		styles:         st,
 	}
 }
@@ -164,6 +167,7 @@ func (m *AddRepoOverlay) Close() {
 	m.detailRepo = nil
 	m.focus = addRepoFocusControls
 	m.addRepoCtrl = addRepoControlSearch
+	m.ownedOnly = true
 }
 
 // Active reports whether the overlay is currently shown.
@@ -282,7 +286,7 @@ func (m *AddRepoOverlay) reloadRepos() tea.Cmd {
 	m.loading = true
 	m.allRepos = nil
 	m.repoList.SetItems(nil)
-	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize, m.nextRequestID())
+	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize, m.nextRequestID(), m.ownedOnly)
 }
 
 // browserLayout computes the split overlay geometry (2-pass like NewSession).
@@ -298,10 +302,11 @@ func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
 	// Blank separator between header and body (added by RenderOverlayFrame) = 1
 	// Header: title + source labels = 2 lines
 	// Search row at top of browserView = 1
-	// Divider line below search row = 1
+	// Filter row = 1
+	// Divider line below filter row = 1
 	// Hint footer = 1+ lines
 	hintLines := addRepoHintLineCount(renderWidth)
-	return 2 + 1 + 2 + 1 + 1 + hintLines
+	return 2 + 1 + 2 + 1 + 1 + 1 + hintLines
 }
 
 // resizeInputs sets the input widths to the layout input width.
@@ -341,7 +346,7 @@ func (m *AddRepoOverlay) setAddRepoControlFocus(control addRepoControl) {
 // moveAddRepoFocus advances or retreats focus by delta steps through the controls→list chain.
 // Returns true when it consumed the event (caller should not forward to list/detail).
 func (m *AddRepoOverlay) moveAddRepoFocus(delta int) bool {
-	controls := []addRepoControl{addRepoControlSource, addRepoControlSearch}
+	controls := []addRepoControl{addRepoControlSource, addRepoControlFilter, addRepoControlSearch}
 	if m.focus == addRepoFocusList {
 		// At the top of the list, retreat back to the last control.
 		if delta < 0 && m.repoList.Index() == 0 {
@@ -486,6 +491,10 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 		case "ctrl+r":
 			m.searchInput.SetValue("")
 			cmds = append(cmds, m.reloadRepos())
+		case "ctrl+g":
+			// Toggle owned/all filter from anywhere in the overlay.
+			m.ownedOnly = !m.ownedOnly
+			cmds = append(cmds, m.reloadRepos())
 		case keyEnter:
 			// Do not clone while a control input is focused; the user may still be
 			// typing a search query. They must navigate to the list first (Down arrow).
@@ -542,10 +551,19 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			case addRepoFocusDetails:
 				m.focus = addRepoFocusList
 			case addRepoFocusControls:
-				if m.addRepoCtrl == addRepoControlSource && len(m.sources) > 0 {
-					m.sourceIndex = (m.sourceIndex - 1 + len(m.sources)) % len(m.sources)
-					cmds = append(cmds, m.reloadRepos())
-				} else {
+				switch m.addRepoCtrl {
+				case addRepoControlSource:
+					if len(m.sources) > 0 {
+						m.sourceIndex = (m.sourceIndex - 1 + len(m.sources)) % len(m.sources)
+						cmds = append(cmds, m.reloadRepos())
+					}
+				case addRepoControlFilter:
+					// Left = select Owned.
+					if !m.ownedOnly {
+						m.ownedOnly = true
+						cmds = append(cmds, m.reloadRepos())
+					}
+				default:
 					// Forward to search input for cursor movement.
 					m.searchInput, cmd = m.searchInput.Update(msg)
 					cmds = append(cmds, cmd)
@@ -557,10 +575,19 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			case addRepoFocusList:
 				m.focus = addRepoFocusDetails
 			case addRepoFocusControls:
-				if m.addRepoCtrl == addRepoControlSource && len(m.sources) > 0 {
-					m.sourceIndex = (m.sourceIndex + 1) % len(m.sources)
-					cmds = append(cmds, m.reloadRepos())
-				} else {
+				switch m.addRepoCtrl {
+				case addRepoControlSource:
+					if len(m.sources) > 0 {
+						m.sourceIndex = (m.sourceIndex + 1) % len(m.sources)
+						cmds = append(cmds, m.reloadRepos())
+					}
+				case addRepoControlFilter:
+					// Right = select All.
+					if m.ownedOnly {
+						m.ownedOnly = false
+						cmds = append(cmds, m.reloadRepos())
+					}
+				default:
 					// Forward to search input for cursor movement.
 					m.searchInput, cmd = m.searchInput.Update(msg)
 					cmds = append(cmds, cmd)
@@ -570,8 +597,15 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 		default:
 			switch m.focus {
 			case addRepoFocusControls:
-				// Forward to search input and reload the list whenever the value changes.
-				if m.addRepoCtrl == addRepoControlSearch {
+				switch m.addRepoCtrl {
+				case addRepoControlFilter:
+					// Space toggles the owned/all filter when the filter control is focused.
+					if msg.Type == tea.KeySpace || msg.String() == " " {
+						m.ownedOnly = !m.ownedOnly
+						cmds = append(cmds, m.reloadRepos())
+					}
+				case addRepoControlSearch:
+					// Forward to search input and reload the list whenever the value changes.
 					before := m.searchInput.Value()
 					m.searchInput, cmd = m.searchInput.Update(msg)
 					cmds = append(cmds, cmd)
@@ -654,9 +688,23 @@ func (m *AddRepoOverlay) View() string {
 
 // browserView renders the split-pane browse view with list and detail.
 func (m *AddRepoOverlay) browserView(layout components.SplitOverlayLayout) string {
-	lines := make([]string, 0, 3)
+	lines := make([]string, 0, 4)
 	searchRow := m.controlLabel("Search: ", addRepoControlSearch) + m.searchInput.View()
 	lines = append(lines, searchRow)
+
+	// Filter row: toggle between Owned-only and All-membership projects.
+	activeLbl := m.styles.Accent
+	inactiveLbl := m.styles.Hint
+	ownedLabel := inactiveLbl.Render("Owned")
+	allLabel := inactiveLbl.Render("All")
+	if m.ownedOnly {
+		ownedLabel = activeLbl.Render("[► Owned ◄]")
+	} else {
+		allLabel = activeLbl.Render("[► All ◄]")
+	}
+	filterRow := m.controlLabel("Filter:  ", addRepoControlFilter) + ownedLabel + "  " + allLabel
+	lines = append(lines, filterRow)
+
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
 	m.repoList.SetWidth(layout.LeftInnerWidth)
@@ -712,7 +760,7 @@ func (m *AddRepoOverlay) manualView() string {
 
 // addRepoBrowserHintParts returns the hint keybindings for browser mode.
 func addRepoBrowserHintParts() []string {
-	return []string{"Ctrl+N manual", "Ctrl+R clear", "Enter clone", "Tab source", "Esc cancel"}
+	return []string{"Ctrl+N manual", "Ctrl+R clear", "Ctrl+G filter", "Enter clone", "Tab source", "Esc cancel"}
 }
 
 // addRepoManualHintParts returns the hint keybindings for manual mode.

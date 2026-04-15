@@ -14,14 +14,16 @@ import (
 
 // mockRepoSource implements adapter.RepoSource for tests.
 type mockRepoSource struct {
-	name  string
-	repos []adapter.RepoItem
-	err   error
+	name     string
+	repos    []adapter.RepoItem
+	err      error
+	lastOpts adapter.RepoListOpts // populated on each ListRepos call
 }
 
 func (m *mockRepoSource) Name() string { return m.name }
 
-func (m *mockRepoSource) ListRepos(_ context.Context, _ adapter.RepoListOpts) (*adapter.RepoListResult, error) {
+func (m *mockRepoSource) ListRepos(_ context.Context, opts adapter.RepoListOpts) (*adapter.RepoListResult, error) {
+	m.lastOpts = opts
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -418,4 +420,131 @@ func TestAddRepoOverlay_EnterInSearchDoesNotClone(t *testing.T) {
 			t.Error("Enter while search control is focused must not trigger a clone")
 		}
 	}
+}
+
+// TestAddRepoOverlay_FilterRowVisible asserts that the filter row is rendered
+// in browser mode.
+func TestAddRepoOverlay_FilterRowVisible(t *testing.T) {
+	t.Parallel()
+
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
+	m.SetSize(120, 40)
+	m.Open()
+
+	v := ansi.Strip(m.View())
+	if !strings.Contains(v, "Filter:") {
+		t.Error("expected 'Filter:' row to appear in browser view")
+	}
+	// Default state: Owned should be the active selection.
+	if !strings.Contains(v, "Owned") {
+		t.Error("expected 'Owned' label in filter row")
+	}
+}
+
+// TestAddRepoOverlay_CtrlGTogglesFilter asserts that Ctrl+G flips the filter
+// between owned-only and all-membership, visible in the rendered view.
+func TestAddRepoOverlay_CtrlGTogglesFilter(t *testing.T) {
+	t.Parallel()
+
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
+	m.SetSize(120, 40)
+	m.Open()
+
+	// Initial state: Owned is the active choice.
+	v0 := ansi.Strip(m.View())
+	if !strings.Contains(v0, "Owned") {
+		t.Error("expected 'Owned' to appear in initial filter row")
+	}
+
+	// Press Ctrl+G once — should flip to All.
+	ctrlG := tea.KeyMsg{Type: tea.KeyCtrlG}
+	m, _ = m.Update(ctrlG)
+	v1 := ansi.Strip(m.View())
+	if !strings.Contains(v1, "All") {
+		t.Error("expected 'All' to appear in filter row after first Ctrl+G")
+	}
+
+	// Press Ctrl+G again — should flip back to Owned.
+	m, _ = m.Update(ctrlG)
+	v2 := ansi.Strip(m.View())
+	if !strings.Contains(v2, "Owned") {
+		t.Error("expected 'Owned' to appear in filter row after second Ctrl+G")
+	}
+}
+
+// TestAddRepoOverlay_FilterRowToggleWithArrows asserts that left/right arrows
+// toggle the filter when the filter control is focused.
+func TestAddRepoOverlay_FilterRowToggleWithArrows(t *testing.T) {
+	t.Parallel()
+
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
+	m.SetSize(120, 40)
+	m.Open()
+
+	// Navigate up from search to filter control.
+	up := tea.KeyMsg{Type: tea.KeyUp}
+	m, _ = m.Update(up)
+
+	// Right arrow: switch to All.
+	right := tea.KeyMsg{Type: tea.KeyRight}
+	m, _ = m.Update(right)
+	v := ansi.Strip(m.View())
+	if !strings.Contains(v, "All") {
+		t.Error("expected 'All' active in filter row after right arrow on filter control")
+	}
+
+	// Left arrow: switch back to Owned.
+	left := tea.KeyMsg{Type: tea.KeyLeft}
+	m, _ = m.Update(left)
+	v2 := ansi.Strip(m.View())
+	if !strings.Contains(v2, "Owned") {
+		t.Error("expected 'Owned' active in filter row after left arrow on filter control")
+	}
+}
+
+// TestAddRepoOverlay_FilterOwnedOnlyPassedToSource asserts that the OwnedOnly
+// flag is forwarded to the repo source through LoadReposCmd.
+func TestAddRepoOverlay_FilterOwnedOnlyPassedToSource(t *testing.T) {
+	t.Parallel()
+
+	src := &mockRepoSource{name: "gitlab", repos: testRepos()}
+	m := newAddRepoOverlay(t, []adapter.RepoSource{src})
+	m.SetSize(120, 40)
+
+	// Open triggers an initial load with ownedOnly=true (the default).
+	cmd := m.Open()
+	if cmd != nil {
+		cmd() // execute the load cmd synchronously so lastOpts is populated
+	}
+	if !src.lastOpts.OwnedOnly {
+		t.Error("expected OwnedOnly=true on initial Open")
+	}
+
+	// Ctrl+G toggles to false; the next reload must carry OwnedOnly=false.
+	ctrlG := tea.KeyMsg{Type: tea.KeyCtrlG}
+	m, cmd = m.Update(ctrlG)
+	if cmd != nil {
+		cmd()
+	}
+	if src.lastOpts.OwnedOnly {
+		t.Error("expected OwnedOnly=false after Ctrl+G toggle")
+	}
+	_ = m
+}
+
+// TestAddRepoOverlay_ViewFitsSize_AfterFilterToggle asserts that toggling the
+// filter does not push the layout outside the terminal bounds.
+func TestAddRepoOverlay_ViewFitsSize_AfterFilterToggle(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open()
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+
+	ctrlG := tea.KeyMsg{Type: tea.KeyCtrlG}
+	m, _ = m.Update(ctrlG)
+
+	assertViewFitsSize(t, m.View(), 120, 40)
 }
