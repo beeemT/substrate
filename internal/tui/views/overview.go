@@ -828,7 +828,7 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 	// Append plan excerpt at render time so that buildOverviewActions stays free
 	// of any layout dependency. The Plan field carries the raw text; excerpt
 	// truncation uses the same innerWidth computed here for the rest of the card.
-	contextLines := action.Context
+	contextLines := append([]string(nil), action.Context...)
 	if action.Plan != nil {
 		if excerpt := excerptLines(stripPlanPrelude(action.Plan.OrchestratorPlan), innerWidth, 4); len(excerpt) > 0 {
 			contextLines = append(contextLines, excerpt...)
