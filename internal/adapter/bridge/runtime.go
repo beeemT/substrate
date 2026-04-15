@@ -137,7 +137,6 @@ func IsBridgeScript(path string) bool {
 	}
 }
 
-
 // EnsureBridgeDependencies checks that the bridge's npm dependencies are installed.
 // depSubpath is the node_modules subpath to check (e.g. "@oh-my-pi/pi-coding-agent").
 // bridgeLabel is used in error messages (e.g. "ohmypi source bridge").
@@ -184,7 +183,7 @@ func ResolveGitDir(workDir string) string {
 // Returns the command, the created temp directory path, and any error.
 func BuildSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath string) (*exec.Cmd, string, error) {
 	if runtime.GOOS == "darwin" {
-		return buildDarwinSandboxCmd(ctx, rt, workDir, gitDir, bunPath)
+		return buildDarwinSandboxCmd(ctx, rt, bunPath)
 	}
 	return buildLinuxSandboxCmd(ctx, rt, workDir, gitDir, bunPath)
 }
@@ -193,9 +192,7 @@ func BuildSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bun
 // A deny-list (allow default + deny specific write paths) lets developer tools
 // (bun, git, gpg, etc.) use their own cache/temp dirs without explicit per-tool
 // allowances, while still preventing writes to sensitive system directories.
-// workDir and gitDir are unused here — the deny-list covers the filesystem
-// without enumerating allowed paths — but are accepted for signature symmetry.
-func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath string) (*exec.Cmd, string, error) {
+func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, bunPath string) (*exec.Cmd, string, error) {
 	sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
 	if err != nil {
 		return nil, "", fmt.Errorf("create session temp dir: %w", err)
