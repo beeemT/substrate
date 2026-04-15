@@ -161,6 +161,7 @@ func TestNewSessionOverlayRejectsMixedProviderSelection(t *testing.T) {
 		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "GitHub issue"},
 		adapter.ListItem{ID: "gl-1", Provider: "gitlab", Title: "GitLab issue"},
 	))
+	overlay.setBrowseListFocus()
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -193,6 +194,7 @@ func TestNewSessionOverlayBrowseSelectionPersistsInRenderedList(t *testing.T) {
 		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
 		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
 	))
+	overlay.setBrowseListFocus()
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -232,6 +234,7 @@ func TestNewSessionOverlayCloseClearsSelectedBrowseState(t *testing.T) {
 		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
 		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
 	))
+	overlay.setBrowseListFocus()
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 
 	view := stripBrowseANSI(overlay.View())
@@ -250,6 +253,40 @@ func TestNewSessionOverlayCloseClearsSelectedBrowseState(t *testing.T) {
 	}
 	if strings.Contains(view, "First") || strings.Contains(view, "Second") {
 		t.Fatalf("view = %q, want stale browse items cleared after reopen", view)
+	}
+}
+
+func TestNewSessionOverlaySpaceTypedIntoLabelsInputNotToggleSelection(t *testing.T) {
+	t.Parallel()
+
+	gitlabAdapter := &browseTestAdapter{
+		name:         "gitlab",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				SupportsLabels: true,
+			},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{gitlabAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gl-1", Provider: "gitlab", Title: "First"},
+	))
+
+	// Navigate to the labels control.
+	overlay.setBrowseControlFocus(browseControlLabels)
+
+	// Pressing space while labels input is focused must type a space, not toggle a list item.
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+
+	if len(overlay.selectedIDs) != 0 {
+		t.Fatalf("selectedIDs = %v, want no selection: space must not toggle items while labels input is focused", overlay.selectedIDs)
+	}
+	if got := overlay.labelsInput.Value(); got != " " {
+		t.Fatalf("labelsInput = %q, want \" \": space must be typed into the labels field", got)
 	}
 }
 
@@ -1491,8 +1528,8 @@ func TestNewSessionOverlayCtrlRClearsBrowseStateAndReloadsDefaults(t *testing.T)
 		adapter.ListItem{ID: "lin-1", Provider: "linear", Title: "First"},
 		adapter.ListItem{ID: "lin-2", Provider: "linear", Title: "Second"},
 	))
-	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay.setBrowseListFocus()
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay.issueList.Select(1)
 
 	view := stripBrowseANSI(overlay.View())

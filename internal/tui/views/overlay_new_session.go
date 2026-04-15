@@ -235,7 +235,7 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	manualFocus                    int
 	showManual                     bool
 	showExtraContext               bool
-	extraContextInput             textarea.Model
+	extraContextInput              textarea.Model
 	browseFocus                    browseFocusArea
 	browseControl                  browseControl
 	detailViewport                 viewport.Model
@@ -350,7 +350,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		selectedIDs:                    make(map[string]bool),
 		manualTitle:                    mt,
 		manualDesc:                     md,
-		extraContextInput:             ec,
+		extraContextInput:              ec,
 		browseFocus:                    browseFocusControls,
 		browseControl:                  browseControlSearch,
 		detailViewport:                 viewport.New(0, 0),
@@ -2082,6 +2082,10 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				m.extraContextInput.Focus()
 			}
 		case " ":
+			if m.browseFocus == browseFocusControls {
+				cmds = append(cmds, m.updateFocusedBrowseInput(msg)...)
+				break
+			}
 			if item, ok := m.currentListItem(); ok {
 				if err := m.toggleSelection(item); err != nil {
 					return m, func() tea.Msg { return ErrMsg{Err: err} }
