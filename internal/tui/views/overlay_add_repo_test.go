@@ -450,25 +450,25 @@ func TestAddRepoOverlay_CtrlGTogglesFilter(t *testing.T) {
 	m.SetSize(120, 40)
 	m.Open()
 
-	// Initial state: Owned is the active choice.
+	// Initial state: Owned is the active choice — the bracket indicator wraps it.
 	v0 := ansi.Strip(m.View())
-	if !strings.Contains(v0, "Owned") {
-		t.Error("expected 'Owned' to appear in initial filter row")
+	if !strings.Contains(v0, "► Owned") {
+		t.Error("expected active Owned indicator (► Owned) in initial filter row")
 	}
 
 	// Press Ctrl+G once — should flip to All.
 	ctrlG := tea.KeyMsg{Type: tea.KeyCtrlG}
 	m, _ = m.Update(ctrlG)
 	v1 := ansi.Strip(m.View())
-	if !strings.Contains(v1, "All") {
-		t.Error("expected 'All' to appear in filter row after first Ctrl+G")
+	if !strings.Contains(v1, "► All") {
+		t.Error("expected active All indicator (► All) after first Ctrl+G")
 	}
 
 	// Press Ctrl+G again — should flip back to Owned.
 	m, _ = m.Update(ctrlG)
 	v2 := ansi.Strip(m.View())
-	if !strings.Contains(v2, "Owned") {
-		t.Error("expected 'Owned' to appear in filter row after second Ctrl+G")
+	if !strings.Contains(v2, "► Owned") {
+		t.Error("expected active Owned indicator (► Owned) after second Ctrl+G")
 	}
 }
 
@@ -481,24 +481,24 @@ func TestAddRepoOverlay_FilterRowToggleWithArrows(t *testing.T) {
 	m.SetSize(120, 40)
 	m.Open()
 
-	// Navigate up from search to filter control.
+	// Navigate up from search — filter is directly above search in the render order.
 	up := tea.KeyMsg{Type: tea.KeyUp}
 	m, _ = m.Update(up)
 
-	// Right arrow: switch to All.
+	// Right arrow: select All.
 	right := tea.KeyMsg{Type: tea.KeyRight}
 	m, _ = m.Update(right)
 	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "All") {
-		t.Error("expected 'All' active in filter row after right arrow on filter control")
+	if !strings.Contains(v, "► All") {
+		t.Error("expected active All indicator (► All) after right arrow on filter control")
 	}
 
-	// Left arrow: switch back to Owned.
+	// Left arrow: select Owned.
 	left := tea.KeyMsg{Type: tea.KeyLeft}
 	m, _ = m.Update(left)
 	v2 := ansi.Strip(m.View())
-	if !strings.Contains(v2, "Owned") {
-		t.Error("expected 'Owned' active in filter row after left arrow on filter control")
+	if !strings.Contains(v2, "► Owned") {
+		t.Error("expected active Owned indicator (► Owned) after left arrow on filter control")
 	}
 }
 

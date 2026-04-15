@@ -301,9 +301,9 @@ func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
 	// Frame borders (top + bottom) = 2
 	// Blank separator between header and body (added by RenderOverlayFrame) = 1
 	// Header: title + source labels = 2 lines
-	// Search row at top of browserView = 1
 	// Filter row = 1
-	// Divider line below filter row = 1
+	// Search row = 1
+	// Divider line = 1
 	// Hint footer = 1+ lines
 	hintLines := addRepoHintLineCount(renderWidth)
 	return 2 + 1 + 2 + 1 + 1 + 1 + hintLines
@@ -689,10 +689,8 @@ func (m *AddRepoOverlay) View() string {
 // browserView renders the split-pane browse view with list and detail.
 func (m *AddRepoOverlay) browserView(layout components.SplitOverlayLayout) string {
 	lines := make([]string, 0, 4)
-	searchRow := m.controlLabel("Search: ", addRepoControlSearch) + m.searchInput.View()
-	lines = append(lines, searchRow)
 
-	// Filter row: toggle between Owned-only and All-membership projects.
+	// Filter row first — matches navigation order: source → filter → search → list.
 	activeLbl := m.styles.Accent
 	inactiveLbl := m.styles.Hint
 	ownedLabel := inactiveLbl.Render("Owned")
@@ -704,6 +702,9 @@ func (m *AddRepoOverlay) browserView(layout components.SplitOverlayLayout) strin
 	}
 	filterRow := m.controlLabel("Filter:  ", addRepoControlFilter) + ownedLabel + "  " + allLabel
 	lines = append(lines, filterRow)
+
+	searchRow := m.controlLabel("Search: ", addRepoControlSearch) + m.searchInput.View()
+	lines = append(lines, searchRow)
 
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
