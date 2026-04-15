@@ -1064,3 +1064,43 @@ func TestSubstrateToLinearIdentifier(t *testing.T) {
 		})
 	}
 }
+
+
+func TestOnEvent_IgnoresForeignExternalID(t *testing.T) {
+	// No GraphQL mutation must fire when external_id doesn't start with LIN-.
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			called = true
+		}
+		respondJSON(w, map[string]any{"data": map[string]any{}})
+	}))
+	defer srv.Close()
+	a := testLinearAdapter(t, srv.URL)
+
+	foreignIDs := []string{"gh:issue:acme/rocket#42", "gl:issue:83#4796", "SEN-acme-12345"}
+	for _, fid := range foreignIDs {
+		called = false
+		payload := `{"external_id":"` + fid + `"}`
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventPlanApproved),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(plan.approved, %q): got error %v, want nil", fid, err)
+		}
+		if called {
+			t.Errorf("OnEvent(plan.approved, %q): made unexpected HTTP call", fid)
+		}
+
+		called = false
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventWorkItemCompleted),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(work_item.completed, %q): got error %v, want nil", fid, err)
+		}
+		if called {
+			t.Errorf("OnEvent(work_item.completed, %q): made unexpected HTTP call", fid)
+		}
+	}
+}

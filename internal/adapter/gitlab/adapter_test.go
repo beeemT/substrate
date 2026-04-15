@@ -479,3 +479,37 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 		t.Fatalf("body = %q, must not contain close (that would be done, not in_review)", capturedBody)
 	}
 }
+
+
+func TestOnEvent_IgnoresForeignExternalID_PlanApproved(t *testing.T) {
+	// No HTTP calls must be made; return nil for non-gl: IDs.
+	a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected HTTP request to %s", req.URL.Path)
+		return nil, nil
+	}))
+	for _, foreignID := range []string{"gh:issue:acme/rocket#42", "LIN-TEAM-42", "SEN-acme-12345"} {
+		payload := `{"external_id":"` + foreignID + `"}`
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventPlanApproved),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(plan.approved, %q): got error %v, want nil", foreignID, err)
+		}
+	}
+}
+
+func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
+	a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected HTTP request to %s", req.URL.Path)
+		return nil, nil
+	}))
+	for _, foreignID := range []string{"gh:issue:acme/rocket#42", "LIN-TEAM-42"} {
+		payload := `{"external_id":"` + foreignID + `"}`
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventWorkItemCompleted),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(work_item.completed, %q): got error %v, want nil", foreignID, err)
+		}
+	}
+}

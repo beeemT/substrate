@@ -508,14 +508,14 @@ func (a *LinearAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 	switch domain.EventType(event.EventType) {
 	case domain.EventPlanApproved:
 		id := extractExternalID(event.Payload)
-		if id == "" {
+		if id == "" || !strings.HasPrefix(id, "LIN-") {
 			return nil
 		}
 
 		return a.UpdateState(ctx, id, domain.TrackerStateInProgress)
 	case domain.EventWorkItemCompleted:
 		id := extractExternalID(event.Payload)
-		if id == "" {
+		if id == "" || !strings.HasPrefix(id, "LIN-") {
 			return nil
 		}
 

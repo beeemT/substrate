@@ -456,7 +456,7 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 			return err
 		}
 		externalID := extractExternalID(event.Payload)
-		if externalID == "" {
+		if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
 			return nil
 		}
 
@@ -477,7 +477,7 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 
 	case domain.EventWorkItemCompleted:
 		externalID := extractExternalID(event.Payload)
-		if externalID != "" {
+		if externalID != "" && strings.HasPrefix(externalID, "gh:") {
 			if updateErr := a.UpdateState(ctx, externalID, domain.TrackerStateInReview); updateErr != nil {
 				slog.Warn("failed to update tracker state to in_review", "error", updateErr, "external_id", externalID)
 			}
@@ -621,6 +621,9 @@ func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) erro
 		return nil
 	}
 	for _, externalID := range externalIDs {
+		if !strings.HasPrefix(externalID, "gh:") {
+			continue
+		}
 		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
 			return err
 		}

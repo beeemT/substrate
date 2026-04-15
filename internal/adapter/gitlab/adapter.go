@@ -427,13 +427,13 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if err := a.onPlanApproved(ctx, event.Payload); err != nil {
 			return err
 		}
-		if externalID == "" {
+		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
 			return nil
 		}
 
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
 	case domain.EventWorkItemCompleted:
-		if externalID == "" {
+		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
 			return nil
 		}
 
@@ -449,6 +449,9 @@ func (a *GitlabAdapter) onPlanApproved(ctx context.Context, payload string) erro
 		return nil
 	}
 	for _, externalID := range externalIDs {
+		if !strings.HasPrefix(externalID, "gl:") {
+			continue
+		}
 		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
 			return err
 		}

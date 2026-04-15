@@ -590,3 +590,43 @@ func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
 		t.Fatalf("appliedLabels = %v, want [needs-review]", appliedLabels)
 	}
 }
+
+func TestOnEvent_IgnoresForeignExternalID_PlanApproved(t *testing.T) {
+	// The adapter must NOT make any HTTP calls and must return nil
+	// when plan.approved carries a non-gh: external_id.
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/user" {
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		}
+		t.Fatalf("unexpected HTTP request to %s", req.URL.Path)
+		return nil, nil
+	}))
+	for _, foreignID := range []string{"gl:issue:83#4796", "LIN-TEAM-42", "SEN-acme-12345"} {
+		payload := `{"external_id":"` + foreignID + `"}`
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventPlanApproved),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(plan.approved, %q): got error %v, want nil", foreignID, err)
+		}
+	}
+}
+
+func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/user" {
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		}
+		t.Fatalf("unexpected HTTP request to %s", req.URL.Path)
+		return nil, nil
+	}))
+	for _, foreignID := range []string{"gl:issue:83#4796", "LIN-TEAM-42"} {
+		payload := `{"external_id":"` + foreignID + `"}`
+		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+			EventType: string(domain.EventWorkItemCompleted),
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("OnEvent(work_item.completed, %q): got error %v, want nil", foreignID, err)
+		}
+	}
+}
