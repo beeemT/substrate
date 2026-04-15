@@ -2426,3 +2426,66 @@ func assertPayloadField(t *testing.T, payload map[string]any, key, expected stri
 		t.Fatalf("payload[%q] = %v, want %v", key, got, expected)
 	}
 }
+
+func TestIsCommitMessageRejection(t *testing.T) {
+	const gitlabOutput = `git push origin sub-gl-issue-83-4796-global-channel-create: exit status 1 (output: remote: GitLab: Commit message does not follow the pattern '^(Revert "(refs|fixes) #[\d]+: .*;"|(refs|fixes) #[\d]+: .*;)(\n(\n    - .*){0,})?|Update.*|Automated.*|Add renovate.json'
+To gitlab.justtrack.io:justtrack/frontend/paket.git
+ ! [remote rejected]     sub-gl-issue-83-4796-global-channel-create -> sub-gl-issue-83-4796-global-channel-create (pre-receive hook declined)
+error: failed to push some refs to 'gitlab.justtrack.io:justtrack/frontend/paket.git')`
+
+	tests := []struct {
+		name        string
+		input       string
+		wantPattern string
+		wantOK      bool
+	}{
+		{
+			name:        "gitlab output with embedded pattern",
+			input:       gitlabOutput,
+			wantPattern: `^(Revert "(refs|fixes) #[\d]+: .*;"|(refs|fixes) #[\d]+: .*;)(\n(\n    - .*){0,})?|Update.*|Automated.*|Add renovate.json`,
+			wantOK:      true,
+		},
+		{
+			name:        "hook declined without pattern",
+			input:       "git push origin branch: exit status 1 (output: remote: pre-receive hook declined)",
+			wantPattern: "",
+			wantOK:      false,
+		},
+		{
+			name:        "signal present but no trailing quote",
+			input:       "Commit message does not follow the pattern 'unclosed",
+			wantPattern: "",
+			wantOK:      true,
+		},
+		{
+			name:        "signal present but no opening quote",
+			input:       "Commit message does not follow the pattern no-quotes",
+			wantPattern: "",
+			wantOK:      true,
+		},
+		{
+			name:        "network error unrelated to hook",
+			input:       "git push origin branch: exit status 1 (output: error: could not read Username for 'https://github.com')",
+			wantPattern: "",
+			wantOK:      false,
+		},
+		{
+			name:        "empty input",
+			input:       "",
+			wantPattern: "",
+			wantOK:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPattern, gotOK := isCommitMessageRejection(tt.input)
+			if gotOK != tt.wantOK {
+				t.Errorf("ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotPattern != tt.wantPattern {
+				t.Errorf("pattern = %q, want %q", gotPattern, tt.wantPattern)
+			}
+		})
+	}
+}
