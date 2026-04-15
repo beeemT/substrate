@@ -283,11 +283,11 @@ func TestOnEvent_WorkItemCompleted_UnDraftsMRs(t *testing.T) {
 		joined := strings.Join(call.args, " ")
 		if strings.Contains(joined, "mr update") {
 			updateCalls++
-			if !strings.Contains(joined, "--draft=false") {
-				t.Errorf("call[%d] missing --draft=false: %q", i, joined)
+			if !strings.Contains(joined, "--ready") {
+				t.Errorf("call[%d] missing --ready: %q", i, joined)
 			}
-			if !strings.Contains(joined, "--source-branch "+branch) {
-				t.Errorf("call[%d] missing --source-branch: %q", i, joined)
+			if !strings.Contains(joined, "mr update "+branch) {
+				t.Errorf("call[%d] missing branch as positional arg: %q", i, joined)
 			}
 		}
 	}
@@ -415,7 +415,7 @@ func TestOnEvent_WorkItemCompleted_CreatesMRWhenNoneExists(t *testing.T) {
 				t.Errorf("mr create missing expected title: %q", joined)
 			}
 		}
-		if strings.Contains(joined, "mr update") && strings.Contains(joined, "--draft=false") {
+		if strings.Contains(joined, "mr update") && strings.Contains(joined, "--ready") {
 			foundUpdate = true
 		}
 	}
@@ -423,7 +423,7 @@ func TestOnEvent_WorkItemCompleted_CreatesMRWhenNoneExists(t *testing.T) {
 		t.Fatal("expected mr create to be called when no MR exists")
 	}
 	if !foundUpdate {
-		t.Fatal("expected mr update --draft=false after completion-time create")
+		t.Fatal("expected mr update --ready after completion-time create")
 	}
 }
 

@@ -364,12 +364,11 @@ func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
 	return ok
 }
 
-// markMRReady runs `glab mr update --source-branch <branch> --draft=false --yes`.
+// markMRReady runs `glab mr update <branch> --ready --yes`.
 func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error {
 	out, err := a.runner(ctx, dir, "glab",
-		"mr", "update",
-		"--source-branch", branch,
-		"--draft=false",
+		"mr", "update", branch,
+		"--ready",
 		"--yes",
 	)
 	if err != nil {
@@ -382,8 +381,7 @@ func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error
 // updateMRDescription updates the description of an existing MR.
 func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, description string) error {
 	out, err := a.runner(ctx, dir, "glab",
-		"mr", "update",
-		"--source-branch", branch,
+		"mr", "update", branch,
 		"--description", description,
 		"--yes",
 	)
@@ -521,6 +519,7 @@ func (a *GlabAdapter) worktreePathsForCompletion(ctx context.Context, p complete
 
 	return entries
 }
+
 func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) {
 	if err := coreadapter.PersistGitlabMR(ctx, a.repos, workspaceID, workItemID, artifact, projectPath, iid); err != nil {
 		slog.Warn("glab: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
