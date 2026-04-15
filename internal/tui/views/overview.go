@@ -1059,7 +1059,7 @@ func (a *App) buildOverviewData(wi *domain.Session) SessionOverviewData {
 		WorkItemID: wi.ID,
 		State:      wi.State,
 		Header:     buildOverviewHeader(*wi, entry),
-		Actions:    a.buildOverviewActions(wi, plan, subPlans),
+		Actions:    a.buildOverviewActions(wi, plan, subPlans, a.widthForInnerContent()),
 		Sources:    buildOverviewSources(*wi, a.widthForInnerContent()),
 		Plan:       a.buildOverviewPlan(wi, plan, subPlans),
 		Tasks:      a.buildOverviewTasks(wi, subPlans),
@@ -1402,7 +1402,7 @@ func readPlanningDraftExcerpt(path string, width int) (time.Time, []string) {
 	return info.ModTime(), excerptLines(stripPlanPrelude(string(data)), width, 5)
 }
 
-func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPlans []domain.TaskPlan) []OverviewActionCard {
+func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPlans []domain.TaskPlan, contentWidth int) []OverviewActionCard {
 	actions := make([]OverviewActionCard, 0, 4)
 	if wi.State == domain.SessionPlanReview && plan != nil {
 		affected := make([]string, 0, len(subPlans))
@@ -1422,8 +1422,14 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 		if len(plan.FAQ) > 0 {
 			context = append(context, fmt.Sprintf("Open FAQ items: %d", len(plan.FAQ)))
 		}
-		if excerpt := excerptLines(stripPlanPrelude(plan.OrchestratorPlan), components.CalloutInnerWidth(a.statusBar.styles, max(20, a.widthForInnerContent())), 4); len(excerpt) > 0 {
-			context = append(context, excerpt...)
+		// Only compute the excerpt when a real content width is available.
+		// Passing contentWidth=0 skips this step so callers that do not need
+		// rendered context (e.g. hint-presence checks) do not trigger the
+		// widthForInnerContent → currentHints → buildOverviewActions cycle.
+		if contentWidth > 0 {
+			if excerpt := excerptLines(stripPlanPrelude(plan.OrchestratorPlan), components.CalloutInnerWidth(a.statusBar.styles, max(20, contentWidth)), 4); len(excerpt) > 0 {
+				context = append(context, excerpt...)
+			}
 		}
 		actions = append(actions, OverviewActionCard{
 			Kind:     overviewActionPlanReview,

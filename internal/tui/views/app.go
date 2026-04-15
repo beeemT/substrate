@@ -2032,7 +2032,7 @@ func (a *App) sourceDetailsNoticeForWorkItem(wi *domain.Session) *sourceDetailsN
 		plan = currentPlan
 		subPlans = a.subPlans[currentPlan.ID]
 	}
-	if actions := a.buildOverviewActions(wi, plan, subPlans); len(actions) > 0 {
+	if actions := a.buildOverviewActions(wi, plan, subPlans, 0); len(actions) > 0 {
 		return sourceDetailsNoticeFromOverviewAction(actions[0])
 	}
 	switch wi.State {
