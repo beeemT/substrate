@@ -1026,6 +1026,7 @@ func (s *ImplementationService) buildSystemPrompt(
 	prompt.WriteString("## Validation\n")
 	prompt.WriteString("Before marking complete: run all relevant formatters, compilation checks, and unit tests.\n")
 	prompt.WriteString("All must pass. Refer to AGENTS.md in this repo for tooling specifics.\n")
+	prompt.WriteString("Commit all changes before finishing. If a Commit Strategy section is present above, follow it; otherwise use a single commit: \x60git add -A && git commit\x60.\n")
 
 	return prompt.String()
 }
