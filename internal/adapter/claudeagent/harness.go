@@ -119,7 +119,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	}
 	bunCacheDir := filepath.Join(globalDir, "bun-cache")
 
-	cmd, sessionTmpDir, err := bridge.BuildSandboxCmd(ctx, bridgeRt, workDir, bridge.ResolveGitDir(workDir), bunPath, bunCacheDir, ".claude")
+	cmd, sessionTmpDir, err := bridge.BuildSandboxCmd(ctx, bridgeRt, workDir, bridge.ResolveGitDir(workDir), bunPath)
 	if err != nil {
 		return nil, err
 	}

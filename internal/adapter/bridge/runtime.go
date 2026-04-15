@@ -137,13 +137,6 @@ func IsBridgeScript(path string) bool {
 	}
 }
 
-// EscapeSandboxPath escapes a path for use in a sandbox-exec profile.
-// It replaces backslashes and double quotes to prevent profile injection.
-func EscapeSandboxPath(path string) string {
-	path = strings.ReplaceAll(path, "\\", "\\\\")
-	path = strings.ReplaceAll(path, "\"", "\\\"")
-	return path
-}
 
 // EnsureBridgeDependencies checks that the bridge's npm dependencies are installed.
 // depSubpath is the node_modules subpath to check (e.g. "@oh-my-pi/pi-coding-agent").
@@ -185,19 +178,49 @@ func ResolveGitDir(workDir string) string {
 }
 
 // BuildSandboxCmd constructs a sandboxed command for the bridge subprocess.
-// homeDirName is the config directory name (e.g. ".claude" or ".omp").
 // gitDir is the git directory path that needs write access (e.g. the .bare/
 // directory for git-work repos). When empty, no additional git write access
-// is granted (appropriate for plain git repos where .git/ is inside workDir).
+// is needed (appropriate for plain git repos where .git/ is inside workDir).
 // Returns the command, the created temp directory path, and any error.
-func BuildSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath, bunCacheDir, homeDirName string) (*exec.Cmd, string, error) {
+func BuildSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath string) (*exec.Cmd, string, error) {
 	if runtime.GOOS == "darwin" {
-		return buildDarwinSandboxCmd(ctx, rt, workDir, gitDir, bunPath, bunCacheDir, homeDirName)
+		return buildDarwinSandboxCmd(ctx, rt, workDir, gitDir, bunPath)
 	}
-	return buildLinuxSandboxCmd(ctx, rt, workDir, gitDir, bunPath, bunCacheDir, homeDirName)
+	return buildLinuxSandboxCmd(ctx, rt, workDir, gitDir, bunPath)
 }
 
-func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath, bunCacheDir, homeDirName string) (*exec.Cmd, string, error) {
+// buildDarwinSandboxCmd builds a sandbox-exec command using a deny-list strategy.
+// A deny-list (allow default + deny specific write paths) lets developer tools
+// (bun, git, gpg, etc.) use their own cache/temp dirs without explicit per-tool
+// allowances, while still preventing writes to sensitive system directories.
+// workDir and gitDir are unused here — the deny-list covers the filesystem
+// without enumerating allowed paths — but are accepted for signature symmetry.
+func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath string) (*exec.Cmd, string, error) {
+	sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
+	if err != nil {
+		return nil, "", fmt.Errorf("create session temp dir: %w", err)
+	}
+
+	// Deny-list: allow everything by default, then block writes to OS-owned
+	// directories. This avoids maintaining an exhaustive allow-list of every
+	// tool cache location while still protecting system integrity.
+	const profile = `(version 1)` +
+		`(allow default)` +
+		`(deny file-write* (subpath "/System"))` +
+		`(deny file-write* (subpath "/usr"))` +
+		`(deny file-write* (subpath "/bin"))` +
+		`(deny file-write* (subpath "/sbin"))` +
+		`(deny file-write* (subpath "/private/etc"))` +
+		`(deny file-write* (subpath "/Library"))` +
+		`(deny file-write* (subpath "/Applications"))`
+
+	if rt.NeedsBun {
+		return exec.CommandContext(ctx, "sandbox-exec", "-p", profile, bunPath, "run", rt.Path), sessionTmpDir, nil
+	}
+	return exec.CommandContext(ctx, "sandbox-exec", "-p", profile, rt.Path), sessionTmpDir, nil
+}
+
+func buildLinuxSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath string) (*exec.Cmd, string, error) {
 	sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
 	if err != nil {
 		return nil, "", fmt.Errorf("create session temp dir: %w", err)
@@ -207,67 +230,7 @@ func buildDarwinSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDi
 		os.RemoveAll(sessionTmpDir)
 		return nil, "", fmt.Errorf("get user home dir: %w", err)
 	}
-	configDir := filepath.Join(homeDir, homeDirName)
-	w := EscapeSandboxPath(workDir)
-	tmp := EscapeSandboxPath(sessionTmpDir)
-	cl := EscapeSandboxPath(configDir)
 
-	// Build the sandbox-exec profile.
-	// Base: allow all defaults, then deny all file writes, then selectively re-allow.
-	const base = `(version 1)(allow default)(deny file-write* (subpath "/"))`
-	var profile strings.Builder
-	profile.WriteString(base)
-
-	// Core write allows: worktree, temp, config.
-	if rt.NeedsBun {
-		bc := EscapeSandboxPath(bunCacheDir)
-		fmt.Fprintf(&profile,
-			`(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`,
-			w, tmp, cl, bc)
-	} else {
-		fmt.Fprintf(&profile,
-			`(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (subpath "%s"))(allow file-write* (literal "/dev/null"))`,
-			w, tmp, cl)
-	}
-
-	// Git directory write access: required for commits (index, objects, refs, hooks).
-	if gitDir != "" {
-		fmt.Fprintf(&profile, `(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gitDir))
-	}
-
-	// SSH agent socket: required for SSH key authentication and signing
-	// (including 1Password SSH agent integration).
-	if sshSock := os.Getenv("SSH_AUTH_SOCK"); sshSock != "" {
-		fmt.Fprintf(&profile, `(allow file-write* (literal "%s"))`, EscapeSandboxPath(sshSock))
-	}
-
-	// GPG directory: required for GPG commit signing via gpg-agent.
-	gnupgDir := filepath.Join(homeDir, ".gnupg")
-	if info, err := os.Stat(gnupgDir); err == nil && info.IsDir() {
-		fmt.Fprintf(&profile, `(allow file-write* (subpath "%s"))`, EscapeSandboxPath(gnupgDir))
-	}
-
-	// Network access: required for git push, fetch, and SSH connections.
-	profile.WriteString(`(allow network*)`)
-
-	profileStr := profile.String()
-	if rt.NeedsBun {
-		return exec.CommandContext(ctx, "sandbox-exec", "-p", profileStr, bunPath, "run", rt.Path), sessionTmpDir, nil
-	}
-	return exec.CommandContext(ctx, "sandbox-exec", "-p", profileStr, rt.Path), sessionTmpDir, nil
-}
-
-func buildLinuxSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir, bunPath, bunCacheDir, homeDirName string) (*exec.Cmd, string, error) {
-	sessionTmpDir, err := os.MkdirTemp("", "substrate-session-*")
-	if err != nil {
-		return nil, "", fmt.Errorf("create session temp dir: %w", err)
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		os.RemoveAll(sessionTmpDir)
-		return nil, "", fmt.Errorf("get user home dir: %w", err)
-	}
-	configDir := filepath.Join(homeDir, homeDirName)
 	bwrapPath, lookErr := exec.LookPath("bwrap")
 	if lookErr != nil {
 		slog.Warn("bubblewrap (bwrap) not found; running bridge without sandbox", "error", lookErr)
@@ -276,37 +239,48 @@ func buildLinuxSandboxCmd(ctx context.Context, rt BridgeRuntime, workDir, gitDir
 		}
 		return exec.CommandContext(ctx, rt.Path), sessionTmpDir, nil
 	}
+
+	// isUnder reports whether path is the same as parent or nested within it.
+	// The trailing-slash trick avoids false positives like /home/user2 under /home/user.
+	isUnder := func(path, parent string) bool {
+		return strings.HasPrefix(filepath.Clean(path)+"/", filepath.Clean(parent)+"/")
+	}
+
+	// Deny-list strategy: bind the root read-only, then grant write access to
+	// the user home directory. This covers ~/.bun, ~/.cache, ~/.config, project
+	// dirs under home, gnupg, ssh config, and any tool-specific caches without
+	// needing to enumerate each one explicitly.
 	bwrapArgs := []string{
 		"--ro-bind", "/", "/",
-		"--bind", workDir, workDir,
-		"--bind", sessionTmpDir, sessionTmpDir,
-		"--bind", configDir, configDir,
+		"--bind", homeDir, homeDir,
 		"--dev", "/dev",
 		"--proc", "/proc",
 		"--unshare-pid",
 		"--die-with-parent",
 	}
 
-	// Git directory write access: required for commits (index, objects, refs, hooks).
-	if gitDir != "" {
+	// /tmp: standard Linux temp location; may not exist in minimal containers.
+	if _, err := os.Stat("/tmp"); err == nil {
+		bwrapArgs = append(bwrapArgs, "--bind", "/tmp", "/tmp")
+	}
+
+	// TMPDIR: if it's a non-standard location outside the home dir, bind it.
+	if tmpdir := os.Getenv("TMPDIR"); tmpdir != "" && tmpdir != "/tmp" && !isUnder(tmpdir, homeDir) {
+		bwrapArgs = append(bwrapArgs, "--bind", tmpdir, tmpdir)
+	}
+
+	// workDir: workspace may be on an external mount (e.g. NFS, separate volume).
+	if !isUnder(workDir, homeDir) {
+		bwrapArgs = append(bwrapArgs, "--bind", workDir, workDir)
+	}
+
+	// gitDir: bare repo may live outside home (e.g. /srv/repos).
+	if gitDir != "" && !isUnder(gitDir, homeDir) {
 		bwrapArgs = append(bwrapArgs, "--bind", gitDir, gitDir)
 	}
 
-	// SSH agent socket: required for SSH key authentication and signing.
-	if sshSock := os.Getenv("SSH_AUTH_SOCK"); sshSock != "" {
-		bwrapArgs = append(bwrapArgs, "--bind", sshSock, sshSock)
-	}
-
-	// GPG directory: required for GPG commit signing via gpg-agent.
-	gnupgDir := filepath.Join(homeDir, ".gnupg")
-	if info, err := os.Stat(gnupgDir); err == nil && info.IsDir() {
-		bwrapArgs = append(bwrapArgs, "--bind", gnupgDir, gnupgDir)
-	}
-
-	// Network is already allowed by default in bwrap (no --unshare-net flag).
-
+	// Network is allowed by default in bwrap (no --unshare-net flag).
 	if rt.NeedsBun {
-		bwrapArgs = append(bwrapArgs, "--bind", bunCacheDir, bunCacheDir)
 		bwrapArgs = append(bwrapArgs, bunPath, "run", rt.Path)
 	} else {
 		bwrapArgs = append(bwrapArgs, rt.Path)

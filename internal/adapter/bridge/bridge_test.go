@@ -38,29 +38,6 @@ func TestBridgeMsgJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
-
-func TestEscapeSandboxPath(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "plain path", in: "/tmp/foo", want: "/tmp/foo"},
-		{name: "backslash", in: "C:\\Users\\foo", want: "C:\\\\Users\\\\foo"},
-		{name: "double quote", in: "/path/with \"quote\"", want: "/path/with \\\"quote\\\""},
-		{name: "both", in: "C:\\path \"here\"", want: "C:\\\\path \\\"here\\\""},
-		{name: "empty", in: "", want: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := EscapeSandboxPath(tt.in)
-			if got != tt.want {
-				t.Errorf("EscapeSandboxPath(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestDedupePaths(t *testing.T) {
 	tests := []struct {
 		name  string
