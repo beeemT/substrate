@@ -330,6 +330,44 @@ func TestOnEvent_WorkItemCompleted_NoTrackedRepos_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestOnEvent_WorkItemCompleted_GitHubProvider_IsIgnored(t *testing.T) {
+	// The glab adapter must not invoke the glab CLI when the
+	// EventWorkItemCompleted payload names a GitHub-hosted repo.
+	stub := &stubRunner{}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+
+	branch := "sub-gh-99-feature"
+	a.mu.Lock()
+	a.tracked[branch] = []branchEntry{
+		{repo: "org/repo", worktreePath: "/wt/repo"},
+	}
+	a.mu.Unlock()
+
+	payload := mustJSON(map[string]any{
+		"branch":       branch,
+		"external_id":  "gh:issue:org/repo#99",
+		"work_item_id": "wi-999",
+		"workspace_id": "ws-local",
+		"review": map[string]any{
+			"base_repo": map[string]any{
+				"provider": "github",
+				"owner":    "org",
+				"repo":     "repo",
+			},
+		},
+	})
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType: string(domain.EventWorkItemCompleted),
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.calls) != 0 {
+		t.Errorf("expected no glab CLI calls for GitHub-hosted work item, got %d", len(stub.calls))
+	}
+}
+
 func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{err: errors.New("glab: MR not found")}
 	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)

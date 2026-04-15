@@ -517,6 +517,43 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 	}
 }
 
+func TestWorkItemCompleted_GitLabProvider_IsIgnored(t *testing.T) {
+	// The GitHub adapter must not attempt any GitHub API calls when the
+	// EventWorkItemCompleted payload names a GitLab-hosted repo.
+	apiCalled := false
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		default:
+			apiCalled = true
+			return jsonResp(t, http.StatusNotFound, map[string]any{"message": "Not Found", "status": "404"}), nil
+		}
+	}))
+	payload, _ := json.Marshal(map[string]any{
+		"external_id":  "gl:issue:org/project#7",
+		"branch":       "sub-gl-7-feature",
+		"work_item_id": "wi-123",
+		"workspace_id": "ws-local",
+		"review": map[string]any{
+			"base_repo": map[string]any{
+				"provider": "gitlab",
+				"owner":    "org",
+				"repo":     "project",
+			},
+		},
+	})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType: string(domain.EventWorkItemCompleted),
+		Payload:   string(payload),
+	}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if apiCalled {
+		t.Fatal("GitHub API was called for a GitLab-hosted work item; adapter must skip cross-platform events")
+	}
+}
+
 func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
 	var requestedReviewers []string
 	var appliedLabels []string

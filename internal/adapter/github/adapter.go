@@ -637,6 +637,11 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		return fmt.Errorf("unmarshal completed payload: %w", err)
 	}
+	// Only act on GitHub-hosted repos. If the review context names a different
+	// provider explicitly, this event belongs to another adapter.
+	if provider := strings.ToLower(strings.TrimSpace(p.Review.BaseRepo.Provider)); provider != "" && provider != "github" {
+		return nil
+	}
 	if p.Branch == "" {
 		slog.Warn("github: work_item.completed payload has no branch; skipping pr update")
 

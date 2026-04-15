@@ -126,12 +126,13 @@ type worktreePayload struct {
 // Emitters must populate Branch so the glab adapter can locate the MRs.
 // external_id is included for symmetry with the linear adapter's OnEvent.
 type completedPayload struct {
-	WorkspaceID   string `json:"workspace_id"`
-	WorkItemID    string `json:"work_item_id"`
-	Branch        string `json:"branch"`
-	ExternalID    string `json:"external_id"`
-	WorkItemTitle string `json:"work_item_title"`
-	SubPlan       string `json:"sub_plan"`
+	WorkspaceID   string           `json:"workspace_id"`
+	WorkItemID    string           `json:"work_item_id"`
+	Branch        string           `json:"branch"`
+	ExternalID    string           `json:"external_id"`
+	WorkItemTitle string           `json:"work_item_title"`
+	SubPlan       string           `json:"sub_plan"`
+	Review        domain.ReviewRef `json:"review"`
 }
 
 func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) error {
@@ -225,6 +226,11 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	var p completedPayload
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		return fmt.Errorf("unmarshal completed payload: %w", err)
+	}
+	// Only act on GitLab-hosted repos. If the review context names a different
+	// provider explicitly, this event belongs to another adapter.
+	if provider := strings.ToLower(strings.TrimSpace(p.Review.BaseRepo.Provider)); provider != "" && provider != "gitlab" {
+		return nil
 	}
 	if p.Branch == "" {
 		slog.Warn("glab: work_item.completed payload has no branch; skipping mr update")
