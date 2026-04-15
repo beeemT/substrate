@@ -825,9 +825,18 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 	if len(action.Affected) > 0 {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "Affected", strings.Join(action.Affected, ", ")))
 	}
-	if len(action.Context) > 0 {
+	// Append plan excerpt at render time so that buildOverviewActions stays free
+	// of any layout dependency. The Plan field carries the raw text; excerpt
+	// truncation uses the same innerWidth computed here for the rest of the card.
+	contextLines := action.Context
+	if action.Plan != nil {
+		if excerpt := excerptLines(stripPlanPrelude(action.Plan.OrchestratorPlan), innerWidth, 4); len(excerpt) > 0 {
+			contextLines = append(contextLines, excerpt...)
+		}
+	}
+	if len(contextLines) > 0 {
 		lines = append(lines, "", st.Subtitle.Render("Context"))
-		for _, line := range action.Context {
+		for _, line := range contextLines {
 			lines = append(lines, ansi.Hardwrap(st.SettingsText.Render(line), innerWidth, true))
 		}
 	}
@@ -1421,9 +1430,6 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 		}
 		if len(plan.FAQ) > 0 {
 			context = append(context, fmt.Sprintf("Open FAQ items: %d", len(plan.FAQ)))
-		}
-		if excerpt := excerptLines(stripPlanPrelude(plan.OrchestratorPlan), components.CalloutInnerWidth(a.statusBar.styles, max(20, a.widthForInnerContent())), 4); len(excerpt) > 0 {
-			context = append(context, excerpt...)
 		}
 		actions = append(actions, OverviewActionCard{
 			Kind:     overviewActionPlanReview,
