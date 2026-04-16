@@ -1346,20 +1346,20 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 		// Push branch to remote.
 		if reviewCtx.RemoteName != "" {
 			if pushErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); pushErr != nil {
-				if pattern, isMsg := isCommitMessageRejection(pushErr.Error()); isMsg {
-					// Commit message rejected by the remote's pre-receive hook.
-					// Spin up an agent to reword the offending commits and retry.
+				if isPreReceiveRejection(pushErr.Error()) {
+					// A server-side hook declined the push (commit message policy,
+					// secrets scan, etc.).  Attempt a local fix and retry.
 					if sess.WorktreePath == "" {
-						slog.Error("push rejected due to commit message policy; no worktree available to amend",
+						slog.Error("push rejected by pre-receive hook; no worktree available to fix",
 							"repo", repo, "branch", branch, "err", pushErr)
 					} else {
-						slog.Warn("push rejected due to commit message policy; attempting to amend commits",
-							"repo", repo, "branch", branch, "required_pattern", pattern)
-						if amendErr := s.amendCommitsViaAgent(ctx, sess.WorktreePath, repo, branch, pattern); amendErr != nil {
-							slog.Error("failed to amend commit messages for push",
-								"repo", repo, "branch", branch, "error", amendErr)
+						slog.Warn("push rejected by pre-receive hook; attempting local fix",
+							"repo", repo, "branch", branch)
+						if fixErr := s.fixPreReceiveRejectionViaAgent(ctx, sess.WorktreePath, pushErr.Error()); fixErr != nil {
+							slog.Error("failed to fix pre-receive hook rejection",
+								"repo", repo, "branch", branch, "error", fixErr)
 						} else if retryErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); retryErr != nil {
-							slog.Error("push still failed after amending commit messages",
+							slog.Error("push still failed after fixing pre-receive hook rejection",
 								"repo", repo, "branch", branch, "error", retryErr)
 						}
 					}
@@ -1709,79 +1709,59 @@ func gitPushBranch(ctx context.Context, repoDir, remote, branch string) error {
 	return nil
 }
 
-// isCommitMessageRejection reports whether the push error output indicates that
-// the remote rejected the push because a commit message did not satisfy a
-// server-side hook.  When the error embeds the required pattern (e.g. GitLab
-// pre-receive hooks include it verbatim), pattern is non-empty.
-func isCommitMessageRejection(errOutput string) (pattern string, ok bool) {
-	const signal = "Commit message does not follow the pattern"
-	idx := strings.Index(errOutput, signal)
-	if idx < 0 {
-		return "", false
-	}
-	// GitLab embeds the required pattern in single quotes immediately after the
-	// signal phrase: "does not follow the pattern 'PATTERN'".
-	rest := errOutput[idx+len(signal):]
-	start := strings.Index(rest, "'")
-	if start < 0 {
-		return "", true
-	}
-	rest = rest[start+1:]
-	end := strings.Index(rest, "'")
-	if end < 0 {
-		return "", true
-	}
-	return rest[:end], true
+// isPreReceiveRejection reports whether the push error output indicates that a
+// server-side pre-receive hook declined the push.  This is a git-standard
+// signal emitted regardless of hosting platform (GitLab, GitHub, Gitea, …).
+func isPreReceiveRejection(errOutput string) bool {
+	return strings.Contains(errOutput, "pre-receive hook declined")
 }
 
-// amendCommitsViaAgent spins up a short-lived agent session to reword the
-// commit messages on the current branch so they satisfy the pattern enforced by
-// the remote's pre-receive hook.
+// fixPreReceiveRejectionViaAgent spins up a short-lived agent session to
+// attempt to fix whatever caused the remote's pre-receive hook to decline the
+// push.  hookOutput is the verbatim combined output from the failed push; the
+// agent uses it to diagnose the rejection and take corrective action.
 //
-// requiredPattern is the regex the remote requires (may be empty when the hook
-// did not embed it in the error output).  The agent is instructed not to touch
-// file content — only reword commit messages.
-func (s *ImplementationService) amendCommitsViaAgent(ctx context.Context, worktreePath, repo, branch, requiredPattern string) error {
-	var sb strings.Builder
-	sb.WriteString("The branch push was rejected by the remote because one or more commit messages do not satisfy the server-side pre-receive hook.\n\n")
-	sb.WriteString("Your only task is to reword the commit messages on this branch to match the required pattern. ")
-	sb.WriteString("Do NOT modify any file content. Do NOT stage or unstage any files.\n\n")
-	sb.WriteString("Steps:\n")
-	sb.WriteString("1. Run `git log --not --remotes --oneline` to list commits that have not been pushed yet.\n")
-	sb.WriteString("   If that returns nothing, run `git log --oneline -20` and identify which commits are not on the remote.\n")
-	sb.WriteString("2. For a single commit: `git commit --amend --no-edit -m \"NEW MESSAGE\"`.\n")
-	sb.WriteString("   For multiple commits: use `GIT_SEQUENCE_EDITOR='sed -i s/^pick/reword/' git rebase -i <base>` to mark all as reword, then supply the corrected message for each.\n")
-	sb.WriteString("3. Verify with `git log --not --remotes --oneline` that all messages now conform.\n\n")
-	if requiredPattern != "" {
-		sb.WriteString("Required pattern the messages must match: `")
-		sb.WriteString(requiredPattern)
-		sb.WriteString("`\n")
-	} else {
-		sb.WriteString("The remote did not reveal the exact required pattern; rewrite commit messages to follow the repository's established commit message convention.\n")
-	}
+// The agent is explicitly constrained to straightforward local fixes —
+// rewording commit messages, removing a violating commit — so that it does not
+// attempt complex out-of-scope actions such as opening issues or merge
+// requests, changing branch-protection rules, or interacting with the remote
+// hosting platform in any way.
+func (s *ImplementationService) fixPreReceiveRejectionViaAgent(ctx context.Context, worktreePath, hookOutput string) error {
+	prompt := "A branch push was rejected by the remote's pre-receive hook. The full output from the failed push is shown below.\n\n" +
+		"Your task:\n" +
+		"  1. Read the hook output carefully and identify why the push was rejected.\n" +
+		"  2. Fix the problem using only local git operations (amend or interactive rebase).\n" +
+		"  3. Verify the fix with `git log --not --remotes --oneline` before finishing.\n\n" +
+		"You MUST stop and report without making any changes if the rejection requires anything beyond " +
+		"rewording or removing a commit — for example: branch protection that requires a merge request, " +
+		"repository access controls, missing GPG signing keys, secrets detected in file content, or any " +
+		"action that involves the remote hosting platform, CI systems, issues, or pull/merge requests. " +
+		"Those cases cannot be fixed here.\n\n" +
+		"Do NOT modify file content. Do NOT push. Do NOT create issues or merge requests.\n\n" +
+		"Hook output:\n" + hookOutput
 
 	opts := adapter.SessionOpts{
 		Mode:         adapter.SessionModeAgent,
 		WorktreePath: worktreePath,
-		SystemPrompt: "You are a git expert. Amend commit messages only; never modify file content.",
-		UserPrompt:   sb.String(),
+		SystemPrompt: "You are a git expert. Fix the pre-receive hook rejection using only local commit history edits; never modify file content or interact with the remote.",
+		UserPrompt:   prompt,
 		AllowPush:    false,
 	}
 	sess, err := s.harness.StartSession(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("start amend-commits agent: %w", err)
+		return fmt.Errorf("start pre-receive-fix agent: %w", err)
 	}
 	defer sess.Abort(ctx)
 
 	go s.forwardEvents(ctx, sess.Events(), "", "")
 
-	amendCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	fixCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if err := sess.Wait(amendCtx); err != nil {
+	if err := sess.Wait(fixCtx); err != nil {
 		if abortErr := sess.Abort(ctx); abortErr != nil {
-			slog.Warn("implementation: amend-commits agent abort failed", "error", abortErr)
+			slog.Warn("implementation: pre-receive-fix agent abort failed", "error", abortErr)
 		}
-		return fmt.Errorf("amend-commits agent: %w", err)
+		return fmt.Errorf("pre-receive-fix agent: %w", err)
 	}
 	return nil
 }
