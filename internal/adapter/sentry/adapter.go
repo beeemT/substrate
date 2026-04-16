@@ -502,7 +502,7 @@ func (a *SentryAdapter) getJSON(ctx context.Context, organization, path string, 
 		return nil, fmt.Errorf("read sentry response: %w", bodyErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("sentry api %s: %s", req.URL.Path, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("sentry api %s: %s", req.URL.Path, rawSnippet(body))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return nil, fmt.Errorf("decode sentry response: %w: %s", err, rawSnippet(body))

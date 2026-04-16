@@ -103,7 +103,9 @@ func (m *OverviewLinksOverlay) SetSize(w, h int) {
 
 // items returns all navigable items: tickets first, then MRs.
 func (m OverviewLinksOverlay) items() []overviewLinksItem {
-	return append(m.tickets, m.mrs...)
+	result := make([]overviewLinksItem, 0, len(m.tickets)+len(m.mrs))
+	result = append(result, m.tickets...)
+	return append(result, m.mrs...)
 }
 
 // navigate moves the cursor by delta, clamped to valid range.
