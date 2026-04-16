@@ -379,17 +379,12 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 			t.Fatalf("overlay view = %q, want %q", view, want)
 		}
 	}
-	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	after, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("expected completion overlay enter to emit open-url command")
+		t.Fatal("expected completion overlay Enter to emit a focus cmd for the feedback input")
 	}
-	msg := cmd()
-	openMsg, ok := msg.(OpenExternalURLMsg)
-	if !ok {
-		t.Fatalf("cmd() message = %T, want OpenExternalURLMsg", msg)
-	}
-	if openMsg.URL != "https://github.com/acme/rocket/pull/7" {
-		t.Fatalf("open url = %q, want review artifact url", openMsg.URL)
+	if !after.completed.inputActive {
+		t.Fatal("expected inputActive to be true after Enter on completed overlay")
 	}
 }
 

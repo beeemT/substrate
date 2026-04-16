@@ -2,7 +2,6 @@ package views
 
 import (
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -12,26 +11,14 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-// MRInfo holds MR/PR link information for a repo.
-type MRInfo struct {
-	RepoName string
-	MRURL    string
-	MRRef    string
-	State    string
-	IsOpen   bool
-}
-
-// CompletedModel shows the implemented plan, PR/MR completion links, and
-// review artifacts for a finished work item. It also hosts the follow-up
-// feedback input when the user requests additional changes via [c].
+// CompletedModel shows the implemented plan and hosts the follow-up feedback
+// input when the user requests additional changes. Completion metadata (timestamp,
+// MR/PR links) belongs on the overview page and is intentionally absent here.
 //
 //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type CompletedModel struct {
 	title         string
 	statusLabel   string
-	completedAt   time.Time
-	mrLinks       []MRInfo
-	warnings      []string
 	planContent   string
 	styles        styles.Styles
 	width         int
@@ -60,21 +47,9 @@ func (m *CompletedModel) SetSize(w, h int) {
 	m.syncViewportSize()
 }
 
-func (m *CompletedModel) SetTitle(t string) { m.title = t }
-
-func (m *CompletedModel) SetStatusLabel(label string) {
-	m.statusLabel = label
-	m.syncViewportSize()
-}
-
-func (m *CompletedModel) SetWorkItemID(id string) { m.workItemID = id }
-
-func (m *CompletedModel) SetData(completedAt time.Time, mrLinks []MRInfo, warnings []string) {
-	m.completedAt = completedAt
-	m.mrLinks = mrLinks
-	m.warnings = warnings
-	m.syncViewportSize()
-}
+func (m *CompletedModel) SetTitle(t string)           { m.title = t }
+func (m *CompletedModel) SetStatusLabel(label string) { m.statusLabel = label }
+func (m *CompletedModel) SetWorkItemID(id string)     { m.workItemID = id }
 
 // SetPlan sets the full plan document text displayed in the scrollable viewport.
 // The call is idempotent: identical content is a no-op.
@@ -87,32 +62,14 @@ func (m *CompletedModel) SetPlan(content string) {
 }
 
 // syncViewportSize recomputes the viewport dimensions from current model state.
-// The viewport occupies the upper body area; metadata and optional feedback
-// rows are reserved below it as fixed chrome.
+// Reserved rows: 2 (header + divider) + [2 if feedback active (divider + input)].
 func (m *CompletedModel) syncViewportSize() {
-	// Top chrome: header line (title + status label) + divider = 2 rows.
-	reservedRows := 2
-
-	// Blank separator between plan viewport and the metadata section below it.
-	reservedRows++
-
-	// Metadata rows.
-	statusLabel := strings.TrimSpace(m.statusLabel)
-	if !m.completedAt.IsZero() && statusLabel == "✓ Completed" {
-		reservedRows += 2 // timestamp line + trailing blank
-	}
-	if len(m.mrLinks) > 0 {
-		reservedRows += 1 + len(m.mrLinks) // "Repos:" label + one line per link
-	}
-	reservedRows += len(m.warnings)
-
-	// Feedback area when active: divider + input line.
+	reserved := 2 // header + divider
 	if m.inputActive {
-		reservedRows += 2
+		reserved += 2 // divider + input line
 	}
-
 	m.viewport.Width = max(1, m.width)
-	m.viewport.Height = max(1, m.height-reservedRows)
+	m.viewport.Height = max(1, m.height-reserved)
 	m.refreshViewportContent()
 }
 
@@ -135,16 +92,14 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 			{Key: "Esc", Label: "Cancel"},
 		}
 	}
-	hints := []KeybindHint{{Key: "Esc", Label: "Close"}}
-	if m.workItemID != "" {
-		hints = append(hints, KeybindHint{Key: "c", Label: "Changes"})
-	}
-	if len(m.mrLinks) > 0 {
-		hints = append([]KeybindHint{{Key: "Enter", Label: "Open MR"}}, hints...)
-	}
+	var hints []KeybindHint
 	if strings.TrimSpace(m.planContent) != "" {
-		hints = append([]KeybindHint{{Key: "↑↓", Label: "Scroll"}}, hints...)
+		hints = append(hints, KeybindHint{Key: "↑↓", Label: "Scroll"})
 	}
+	if m.workItemID != "" {
+		hints = append(hints, KeybindHint{Key: "Enter", Label: "Request changes"})
+	}
+	hints = append(hints, KeybindHint{Key: "Esc", Label: "Close"})
 	return hints
 }
 
@@ -180,14 +135,10 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
-		case "enter":
-			// Open the first (or only) MR link. Multi-repo sessions are rare
-			// and all links are listed in the view; Enter opens the primary one.
-			if len(m.mrLinks) > 0 && strings.TrimSpace(m.mrLinks[0].MRURL) != "" {
-				url := m.mrLinks[0].MRURL
-				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
-			}
-		case "c":
+		case "enter", "c":
+			// Both Enter and [c] open the follow-up feedback input.
+			// Enter is the primary CTA visible in the hint bar;
+			// [c] is the keyboard shortcut consistent with the action card.
 			if m.workItemID != "" {
 				m.inputActive = true
 				m.syncViewportSize()
@@ -197,7 +148,7 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 
 	case tea.MouseMsg:
 		// Forward wheel events to the plan viewport so trackpad/mouse scrolling
-		// works while the overlay is open and input is not captured.
+		// works while the overlay is open and the feedback input is not active.
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
@@ -223,38 +174,12 @@ func (m CompletedModel) View() string {
 	header := m.styles.Title.Render(m.title) + "  " + m.styles.Success.Render(statusLabel)
 	divider := components.RenderDivider(m.styles, m.width)
 
-	// Scrollable plan body occupies the upper portion of the overlay.
 	planBody := m.viewport.View()
 	if strings.TrimSpace(planBody) == "" {
 		planBody = m.styles.Muted.Render("No plan content available.")
 	}
 
-	// Fixed metadata section rendered below the plan viewport.
-	var metaLines []string
-	metaLines = append(metaLines, "") // blank separator between plan and metadata
-	if !m.completedAt.IsZero() && statusLabel == "✓ Completed" {
-		metaLines = append(metaLines, m.styles.Subtitle.Render("Completed "+m.completedAt.Format("2006-01-02 15:04 MST")), "")
-	}
-	if len(m.mrLinks) > 0 {
-		metaLines = append(metaLines, m.styles.SectionLabel.Render("Repos:"))
-		for _, mr := range m.mrLinks {
-			icon := m.styles.Success.Render("✓")
-			status := ""
-			if mr.MRRef != "" {
-				status = "  " + m.styles.Active.Render(mr.MRRef)
-			}
-			if strings.TrimSpace(mr.State) != "" {
-				status += "  " + m.styles.Muted.Render(strings.TrimSpace(mr.State))
-			}
-			metaLines = append(metaLines, "  "+icon+" "+m.styles.Subtitle.Render(mr.RepoName)+status)
-		}
-	}
-	for _, w := range m.warnings {
-		metaLines = append(metaLines, m.styles.Warning.Render("⚠ "+w))
-	}
-
 	parts := []string{header, divider, planBody}
-	parts = append(parts, metaLines...)
 	if m.inputActive {
 		parts = append(parts, components.RenderDivider(m.styles, m.width), m.feedbackInput.View())
 	}

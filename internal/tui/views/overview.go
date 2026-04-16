@@ -547,11 +547,6 @@ func (m *SessionOverviewModel) syncActionModels() {
 	m.completed.SetTitle(title)
 	m.completed.SetWorkItemID(m.data.WorkItemID)
 	m.completed.SetStatusLabel(reviewArtifactOverlayLabel(m.data.State))
-	completedAt := time.Time{}
-	if m.data.State == domain.SessionCompleted {
-		completedAt = m.data.Header.UpdatedAt
-	}
-	m.completed.SetData(completedAt, overviewReviewRowsToMRInfo(m.data.External.Reviews), nil)
 	// Pass the full plan document so the completed overlay shows what was implemented.
 	m.completed.SetPlan(m.data.Plan.FullDocument)
 	m.reviewing.SetTitle(title)
@@ -1787,21 +1782,6 @@ func reviewArtifactOverlayLabel(state domain.SessionState) string {
 	}
 
 	return labelReviewArtifacts
-}
-
-func overviewReviewRowsToMRInfo(rows []OverviewReviewRow) []MRInfo {
-	links := make([]MRInfo, 0, len(rows))
-	for _, row := range rows {
-		links = append(links, MRInfo{
-			RepoName: row.RepoName,
-			MRURL:    row.URL,
-			MRRef:    row.Ref,
-			State:    row.State,
-			IsOpen:   row.State != "merged" && row.State != "closed" && row.State != "done",
-		})
-	}
-
-	return links
 }
 
 func (a *App) buildOverviewActivity(wi *domain.Session, plan *domain.Plan) []OverviewActivityItem {
