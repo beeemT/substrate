@@ -42,6 +42,7 @@ const (
 	overlayLogs
 	overlayAddRepo
 	overlayRepoManager
+	overlayOverviewLinks
 )
 
 type sessionHistoryScope int
@@ -109,6 +110,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	workspaceModal              WorkspaceInitModal
 	helpOverlay                 HelpOverlay
 	sourceItemsOverlay          SourceItemsOverlay
+	overviewLinksOverlay        OverviewLinksOverlay
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
 	repoManager                 RepoManagerOverlay
@@ -196,6 +198,7 @@ func NewApp(svcs Services) App {
 		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
+		overviewLinksOverlay:           NewOverviewLinksOverlay(st),
 		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
 		addRepo:                        NewAddRepoOverlay(svcs.RepoSources, svcs.WorkspaceDir, svcs.GitClient, st),
 		repoManager:                    NewRepoManagerOverlay(svcs.WorkspaceDir, svcs.GitClient, st),
@@ -888,6 +891,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionSearch.SetSize(msg.Width, msg.Height)
 		a.settingsPage.SetSize(msg.Width, msg.Height)
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
+		a.overviewLinksOverlay.SetSize(msg.Width, msg.Height)
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		a.addRepo.SetSize(msg.Width, msg.Height)
 		a.repoManager.SetSize(msg.Width, msg.Height)
@@ -946,6 +950,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.Close()
 		a.addRepo.Close()
 		a.repoManager.Close()
+		a.overviewLinksOverlay.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -1581,6 +1586,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.Open(msg.Items)
 		return a, nil
 
+	case OpenOverviewLinksMsg:
+		a.activeOverlay = overlayOverviewLinks
+		a.overviewLinksOverlay.Open(msg.Sources, msg.Reviews)
+		return a, nil
+
 	case openSourceItemURLsMsg:
 		a.activeOverlay = overlayNone
 		a.sourceItemsOverlay.Close()
@@ -1732,6 +1742,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlaySourceItems {
 		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayOverviewLinks {
+		a.overviewLinksOverlay, cmd = a.overviewLinksOverlay.Update(msg)
+		cmds = append(cmds, cmd)
 	} else {
 		a.content, cmd = a.content.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1807,6 +1820,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if a.activeOverlay == overlaySourceItems {
 		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
+		return a, cmd
+	}
+	if a.activeOverlay == overlayOverviewLinks {
+		a.overviewLinksOverlay, cmd = a.overviewLinksOverlay.Update(msg)
 		return a, cmd
 	}
 	previousFocus := a.mainFocus
@@ -2752,6 +2769,8 @@ func (a App) View() string {
 		result = renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlaySourceItems:
 		result = renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlayOverviewLinks:
+		result = renderOverlay(a.overviewLinksOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayLogs:
 		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayAddRepo:

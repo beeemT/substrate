@@ -325,14 +325,14 @@ func TestReviewingOverviewExposesReviewArtifactAction(t *testing.T) {
 	})
 	foundHint := false
 	for _, hint := range m.KeybindHints() {
-		if hint.Label == "Review artifacts" {
+		if hint.Key == "o" && hint.Label == "Links" {
 			foundHint = true
 
 			break
 		}
 	}
 	if !foundHint {
-		t.Fatalf("keybind hints = %#v, want review-artifacts hint", m.KeybindHints())
+		t.Fatalf("keybind hints = %#v, want o Links hint", m.KeybindHints())
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	view := stripBrowseANSI(updated.View())
@@ -363,28 +363,43 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 	})
 	foundHint := false
 	for _, hint := range m.KeybindHints() {
-		if hint.Label == "Review artifacts" {
+		if hint.Key == "o" && hint.Label == "Links" {
 			foundHint = true
 
 			break
 		}
 	}
 	if !foundHint {
-		t.Fatalf("keybind hints = %#v, want review-artifacts hint", m.KeybindHints())
+		t.Fatalf("keybind hints = %#v, want o Links hint", m.KeybindHints())
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("expected [o] with reviews to emit OpenOverviewLinksMsg command")
+	}
+	linksMsg, ok := cmd().(OpenOverviewLinksMsg)
+	if !ok {
+		t.Fatalf("[o] cmd() = %T, want OpenOverviewLinksMsg", cmd())
+	}
+	if len(linksMsg.Reviews) == 0 {
+		t.Fatal("expected Reviews to be populated in OpenOverviewLinksMsg")
+	}
+	// Verify the review data from the test fixture is present in the message.
+	found := false
+	for _, r := range linksMsg.Reviews {
+		if r.Ref == "#7" && r.RepoName == "acme/rocket" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("OpenOverviewLinksMsg.Reviews = %v, want entry with Ref #7 RepoName acme/rocket", linksMsg.Reviews)
+	}
+	// Verify the main overview page still shows the MR data (it is not stripped from the overview body).
 	view := stripBrowseANSI(updated.View())
 	for _, want := range []string{"Completed", "#7", "acme/rocket"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("overlay view = %q, want %q", view, want)
+			t.Fatalf("overview view missing %q after pressing o", want)
 		}
-	}
-	after, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected completion overlay Enter to emit a focus cmd for the feedback input")
-	}
-	if !after.completed.inputActive {
-		t.Fatal("expected inputActive to be true after Enter on completed overlay")
 	}
 }
 

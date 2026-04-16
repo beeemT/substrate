@@ -243,8 +243,8 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 	}
 	if action := m.selectedActionCard(); action != nil {
 		hints = append(hints, actionKeybindHints(*action)...)
-	} else if len(m.data.External.Reviews) > 0 {
-		hints = append(hints, KeybindHint{Key: "o", Label: labelReviewArtifacts})
+	} else if len(m.data.Sources) > 0 || len(m.data.External.Reviews) > 0 {
+		hints = append(hints, KeybindHint{Key: "o", Label: "Links"})
 	} else if m.data.State == domain.SessionIngested {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Start planning"})
 	} else if m.data.Plan.Exists {
@@ -394,10 +394,10 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionReviewing {
 				return m, func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: m.data.WorkItemID} }
 			}
-			if len(m.data.External.Reviews) > 0 {
-				m.overlay = overviewOverlayCompleted
-
-				return m, nil
+			if len(m.data.Sources) > 0 || len(m.data.External.Reviews) > 0 {
+				srcs := m.data.Sources
+				reviews := m.data.External.Reviews
+				return m, func() tea.Msg { return OpenOverviewLinksMsg{Sources: srcs, Reviews: reviews} }
 			}
 		case "a":
 			if action := m.selectedActionCard(); action != nil {

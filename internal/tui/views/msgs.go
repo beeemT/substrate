@@ -329,6 +329,13 @@ type OpenSourceItemsOverlayMsg struct {
 	Items []domain.SourceSummary
 }
 
+// OpenOverviewLinksMsg opens the overview links overlay, showing the input
+// tickets and MR/PR links produced for the selected session.
+type OpenOverviewLinksMsg struct {
+	Sources []OverviewSourceItem
+	Reviews []OverviewReviewRow
+}
+
 // openSourceItemURLsMsg is an internal message emitted by the source items overlay
 // when the user confirms opening one or more source item URLs.
 type openSourceItemURLsMsg struct{ URLs []string }
