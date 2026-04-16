@@ -520,21 +520,21 @@ func TestPlanReviewPendingBracketFlushedOnSubmit(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected a command from Enter submission")
 	}
-	// tea.Batch wraps commands; unwrap to find PlanRejectMsg.
+	// tea.Batch wraps commands; unwrap to find PlanRequestChangesMsg.
 	batch, ok := cmd().(tea.BatchMsg)
 	if !ok {
 		t.Fatalf("expected tea.BatchMsg, got %T", cmd())
 	}
-	var reason string
+	var feedback string
 	for _, c := range batch {
 		if c == nil {
 			continue
 		}
-		if rej, ok := c().(views.PlanRejectMsg); ok {
-			reason = rej.Reason
+		if rc, ok := c().(views.PlanRequestChangesMsg); ok {
+			feedback = rc.Feedback
 		}
 	}
-	if reason != "not good [" {
-		t.Errorf("reason = %q, want %q", reason, "not good [")
+	if feedback != "not good [" {
+		t.Errorf("feedback = %q, want %q", feedback, "not good [")
 	}
 }
