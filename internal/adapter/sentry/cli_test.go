@@ -46,6 +46,9 @@ func TestListSelectableUsesSentryCLITransport(t *testing.T) {
 	var seenArgs []string
 	var seenEnv []string
 	runner := func(_ context.Context, name string, args []string, env []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte("0.27.0"), nil
+		}
 		seenName = name
 		seenArgs = append([]string(nil), args...)
 		seenEnv = append([]string(nil), env...)
@@ -104,6 +107,9 @@ func TestNewResolvesOrganizationFromCLI(t *testing.T) {
 
 	orgPayload := `[{"slug":"acme","name":"Acme Corp"}]`
 	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte("0.27.0"), nil
+		}
 		if len(args) >= 3 && args[0] == "org" && args[1] == "list" && args[2] == "--json" {
 			return []byte(orgPayload), nil
 		}
@@ -131,6 +137,9 @@ func TestNewRequiresOrganizationWhenCLIReturnsMultiple(t *testing.T) {
 
 	orgPayload := `[{"slug":"acme"},{"slug":"globex"}]`
 	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte("0.27.0"), nil
+		}
 		if len(args) >= 3 && args[0] == "org" && args[1] == "list" {
 			return []byte(orgPayload), nil
 		}
@@ -154,7 +163,11 @@ func TestNewFallsBackToOrgRequiredWhenCLIFails(t *testing.T) {
 	writeCLIExecutable(t, binDir, "sentry", "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", binDir)
 
-	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+	runner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte("0.27.0"), nil
+		}
+
 		return []byte("error"), errors.New("cli failed")
 	}
 	_, err := newWithDeps(context.Background(), config.SentryConfig{}, roundTripFunc(func(_ *http.Request) (*http.Response, error) {
@@ -176,4 +189,97 @@ func mustJSON(t *testing.T, value any) []byte {
 	}
 
 	return payload
+}
+
+func versionRunner(version string) commandRunner {
+	return func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte(version), nil
+		}
+
+		return nil, fmt.Errorf("unexpected args: %v", args)
+	}
+}
+
+func TestCheckSentryCLIVersionRejectsTooOld(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range []string{"0.26.1", "0.1.0", "0.0.1"} {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			err := checkSentryCLIVersion(context.Background(), "", versionRunner(version))
+			if err == nil {
+				t.Fatalf("checkSentryCLIVersion(%q) error = nil, want version error", version)
+			}
+			if !strings.Contains(err.Error(), "too old") {
+				t.Fatalf("error = %q, want 'too old' hint", err.Error())
+			}
+			if !strings.Contains(err.Error(), "sentry cli upgrade") {
+				t.Fatalf("error = %q, want upgrade command hint", err.Error())
+			}
+		})
+	}
+}
+
+func TestCheckSentryCLIVersionAcceptsMinimumAndNewer(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range []string{"0.27.0", "0.27.1", "0.28.0", "1.0.0", "sentry 0.27.0", "0.27.0-rc.1"} {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			if err := checkSentryCLIVersion(context.Background(), "", versionRunner(version)); err != nil {
+				t.Fatalf("checkSentryCLIVersion(%q) error = %v, want nil", version, err)
+			}
+		})
+	}
+}
+
+func TestCheckSentryCLIVersionHandlesUnparseable(t *testing.T) {
+	t.Parallel()
+
+	// Unrecognisable version must not fail — we warn and proceed to avoid
+	// breaking setups where the binary uses an unexpected format.
+	if err := checkSentryCLIVersion(context.Background(), "", versionRunner("nightly")); err != nil {
+		t.Fatalf("checkSentryCLIVersion(\"nightly\") error = %v, want nil", err)
+	}
+}
+
+func TestCheckSentryCLIVersionHandlesRunnerFailure(t *testing.T) {
+	t.Parallel()
+
+	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+		return []byte("exec: not found"), errors.New("sentry: command not found")
+	}
+	err := checkSentryCLIVersion(context.Background(), "", runner)
+	if err == nil {
+		t.Fatal("checkSentryCLIVersion() error = nil, want runner error")
+	}
+	if !strings.Contains(err.Error(), "check sentry cli version") {
+		t.Fatalf("error = %q, want version check prefix", err.Error())
+	}
+}
+
+func TestNewWithOldCLIVersionFails(t *testing.T) {
+	clearSentryTestEnv(t)
+	binDir := t.TempDir()
+	writeCLIExecutable(t, binDir, "sentry", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	oldCLIRunner := func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return []byte("0.26.1"), nil
+		}
+		return nil, fmt.Errorf("unexpected args: %v", args)
+	}
+
+	_, err := newWithDeps(context.Background(),
+		config.SentryConfig{Organization: "acme"},
+		roundTripFunc(func(_ *http.Request) (*http.Response, error) { return nil, nil }),
+		oldCLIRunner)
+	if err == nil {
+		t.Fatal("newWithDeps() error = nil, want version error")
+	}
+	if !strings.Contains(err.Error(), "too old") {
+		t.Fatalf("newWithDeps() error = %q, want 'too old' in message", err.Error())
+	}
 }

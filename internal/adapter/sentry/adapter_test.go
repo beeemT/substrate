@@ -546,3 +546,27 @@ func anyToStrings(v any) []string {
 		return nil
 	}
 }
+
+func TestListSelectableDecodeErrorIncludesBodySnippet(t *testing.T) {
+	t.Parallel()
+
+	a := testAdapter(t, config.SentryConfig{Token: "token", Organization: "acme"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{not valid json}`)),
+		}, nil
+	}))
+
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues})
+	if err == nil {
+		t.Fatal("ListSelectable() error = nil, want decode error")
+	}
+	// Error must carry the raw body so the caller can diagnose the issue.
+	if !strings.Contains(err.Error(), "not valid json") {
+		t.Fatalf("error = %q, want body snippet in message", err.Error())
+	}
+	if !strings.Contains(err.Error(), "decode sentry response") {
+		t.Fatalf("error = %q, want decode sentry response prefix", err.Error())
+	}
+}

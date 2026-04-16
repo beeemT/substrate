@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -63,6 +64,11 @@ func newWithDeps(ctx context.Context, cfg config.SentryConfig, client httpClient
 		return nil, fmt.Errorf("resolve sentry auth: %w", err)
 	}
 	organization := strings.TrimSpace(resolved.Organization)
+	if resolved.UseCLI {
+		if err := checkSentryCLIVersion(ctx, resolved.BaseURL, runner); err != nil {
+			return nil, err
+		}
+	}
 	var cliOrgErr error
 	if organization == "" && resolved.UseCLI {
 		cliOrg, err := resolveOrganizationFromCLI(ctx, resolved.BaseURL, runner)
@@ -113,7 +119,8 @@ func resolveOrganizationFromCLI(ctx context.Context, baseURL string, runner comm
 		Slug string `json:"slug"`
 	}
 	if err := json.Unmarshal(output, &orgs); err != nil {
-		return "", fmt.Errorf("decode sentry organizations: %w", err)
+		snippet := rawSnippet(output)
+		return "", fmt.Errorf("decode sentry organizations: %w: %s", err, snippet)
 	}
 	switch len(orgs) {
 	case 0:
@@ -490,13 +497,15 @@ func (a *SentryAdapter) getJSON(ctx context.Context, organization, path string, 
 		return nil, err
 	}
 	defer resp.Body.Close()
+	body, bodyErr := io.ReadAll(resp.Body)
+	if bodyErr != nil {
+		return nil, fmt.Errorf("read sentry response: %w", bodyErr)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-
 		return nil, fmt.Errorf("sentry api %s: %s", req.URL.Path, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return nil, fmt.Errorf("decode sentry response: %w", err)
+	if err := json.Unmarshal(body, out); err != nil {
+		return nil, fmt.Errorf("decode sentry response: %w: %s", err, rawSnippet(body))
 	}
 
 	return resp.Header.Clone(), nil
@@ -987,4 +996,89 @@ func formatTime(ts time.Time) string {
 	}
 
 	return ts.UTC().Format(time.RFC3339)
+}
+
+// rawSnippet returns up to 200 characters of b, trimmed of surrounding
+// whitespace, for use in diagnostic error messages.
+func rawSnippet(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+
+	return s[:max] + "\u2026" // …
+}
+
+// minSentryCLIVersion is the oldest sentry CLI release that supports the
+// --verbose flag consumed by cliHTTPClient. Earlier versions do not recognise
+// --verbose and produce output that fails JSON decoding with an opaque error.
+var minSentryCLIVersion = [3]int{0, 27, 0}
+
+// checkSentryCLIVersion runs "sentry --version" and returns an actionable
+// error when the installed CLI is older than minSentryCLIVersion. An
+// unrecognisable version string emits a warning but does not fail, so that
+// future format changes do not silently break existing setups.
+func checkSentryCLIVersion(ctx context.Context, baseURL string, runner commandRunner) error {
+	output, err := runner(ctx, "sentry", []string{"--version"}, config.SentryCLIEnvironment(baseURL))
+	if err != nil {
+		return fmt.Errorf("check sentry cli version: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	raw := strings.TrimSpace(string(output))
+	major, minor, patch, ok := parseSemVerLoose(raw)
+	if !ok {
+		// Unrecognisable version; warn but proceed so that future format
+		// changes do not silently break existing setups.
+		slog.Warn("sentry cli: could not parse version string; skipping minimum version check",
+			"version", raw,
+			"minimum", fmt.Sprintf("%d.%d.%d", minSentryCLIVersion[0], minSentryCLIVersion[1], minSentryCLIVersion[2]))
+
+		return nil
+	}
+	if compareSemVer([3]int{major, minor, patch}, minSentryCLIVersion) < 0 {
+		return fmt.Errorf(
+			"sentry cli %d.%d.%d is too old; upgrade to at least %d.%d.%d (run: sentry cli upgrade)",
+			major, minor, patch,
+			minSentryCLIVersion[0], minSentryCLIVersion[1], minSentryCLIVersion[2],
+		)
+	}
+
+	return nil
+}
+
+// parseSemVerLoose extracts the first X.Y.Z triple from s. It tolerates
+// pre-release suffixes (e.g. "0.27.0-rc.1") and label prefixes by scanning
+// all whitespace-separated tokens for the first parseable triple.
+func parseSemVerLoose(s string) (major, minor, patch int, ok bool) {
+	for _, tok := range strings.Fields(s) {
+		// Strip pre-release suffix before splitting on dots.
+		if idx := strings.IndexByte(tok, '-'); idx >= 0 {
+			tok = tok[:idx]
+		}
+		parts := strings.Split(tok, ".")
+		if len(parts) != 3 {
+			continue
+		}
+		ma, err1 := strconv.Atoi(parts[0])
+		mi, err2 := strconv.Atoi(parts[1])
+		pa, err3 := strconv.Atoi(parts[2])
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+
+		return ma, mi, pa, true
+	}
+
+	return 0, 0, 0, false
+}
+
+// compareSemVer returns negative when a < b, zero when equal, positive when a > b.
+func compareSemVer(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] - b[i]
+		}
+	}
+
+	return 0
 }
