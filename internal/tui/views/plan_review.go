@@ -23,7 +23,6 @@ type planReviewInputMode int
 const (
 	planReviewNormal  planReviewInputMode = iota
 	planReviewChanges                     // user pressed [c]: request changes
-	planReviewReject                      // user pressed [r]: rejection reason
 )
 
 const feedbackMaxLines = 6
@@ -425,7 +424,6 @@ func (m *PlanReviewModel) KeybindHints() []KeybindHint {
 		{Key: "a", Label: "Approve"},
 		{Key: "c", Label: "Request changes"},
 		{Key: "e", Label: "Edit in $EDITOR"},
-		{Key: "r", Label: "Reject"},
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "Esc", Label: "Close"},
 	}
@@ -450,23 +448,12 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				m.feedbackInput.SetHeight(1)
 				m.feedbackInput.SetValue("")
 				m.feedbackInput.Blur()
-				if m.inputMode == planReviewChanges {
-					m.inputMode = planReviewNormal
-					m.syncViewportSize()
-
-					return m, tea.Batch(
-						func() tea.Msg {
-							return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
-						},
-						tea.EnableMouseCellMotion,
-					)
-				}
 				m.inputMode = planReviewNormal
 				m.syncViewportSize()
 
 				return m, tea.Batch(
 					func() tea.Msg {
-						return PlanRejectMsg{PlanID: m.planID, Reason: text, WorkItemID: m.workItemID}
+						return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
 					},
 					tea.EnableMouseCellMotion,
 				)
@@ -551,12 +538,6 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			m.feedbackInput.Focus()
 			m.syncViewportSize()
 			return m, tea.DisableMouse
-		case "r":
-			m.inputMode = planReviewReject
-			m.feedbackInput.Placeholder = "Reason for rejection…"
-			m.feedbackInput.Focus()
-			m.syncViewportSize()
-			return m, tea.DisableMouse
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
 		case "up", "k", keyDown, "j", "pgup", "pgdown":
@@ -611,9 +592,6 @@ func (m PlanReviewModel) View() string {
 	var feedbackRow string
 	if m.inputMode != planReviewNormal {
 		label := "Request changes:"
-		if m.inputMode == planReviewReject {
-			label = "Rejection reason:"
-		}
 		feedbackRow = m.styles.Warning.Render(label) + "\n" + m.feedbackInput.View()
 	}
 

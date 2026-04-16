@@ -440,17 +440,6 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 		case "r":
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
-				case overviewActionPlanReview:
-					m.planReview.feedbackHeight = 1
-					m.planReview.feedbackInput.SetHeight(1)
-					m.planReview.feedbackInput.SetValue("")
-					m.planReview.inputMode = planReviewReject
-					m.planReview.feedbackInput.Placeholder = "Reason for rejection…"
-					m.planReview.feedbackInput.Focus()
-					m.planReview.syncViewportSize()
-					m.overlay = overviewOverlayPlan
-
-					return m, nil
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
 						if action.Session.Phase == domain.TaskPhasePlanning {
@@ -779,7 +768,7 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 	switch action.Kind {
 	case overviewActionPlanReview:
-		return []KeybindHint{{Key: "a", Label: "Approve"}, {Key: "c", Label: "Changes"}, {Key: "r", Label: "Reject"}, {Key: "i", Label: "Inspect"}}
+		return []KeybindHint{{Key: "a", Label: "Approve"}, {Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionQuestion:
 		return []KeybindHint{{Key: "A", Label: "Approve answer"}, {Key: "Enter", Label: "Answer"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionInterrupted:

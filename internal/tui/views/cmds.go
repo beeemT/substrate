@@ -603,20 +603,6 @@ func SaveReviewedPlanCmd(planningSvc *orchestrator.PlanningService, planID, cont
 	}
 }
 
-// RejectPlanCmd transitions a work item and its plan back to the Ingested state.
-func RejectPlanCmd(workItemSvc *service.SessionService, planSvc *service.PlanService, workItemID, planID, _ string) tea.Cmd {
-	return func() tea.Msg {
-		if err := planSvc.RejectPlan(context.Background(), planID); err != nil {
-			return ErrMsg{Err: err}
-		}
-		if err := workItemSvc.RejectPlan(context.Background(), workItemID); err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		return ActionDoneMsg{Message: "Plan rejected"}
-	}
-}
-
 // LoadLiveInstancesCmd fetches all substrate instances for a workspace and
 // returns the set of IDs whose heartbeat is fresher than 15 seconds ago.
 func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.Cmd {

@@ -97,13 +97,6 @@ type PlanRequestChangesMsg struct {
 	Feedback string
 }
 
-// PlanRejectMsg fires when user confirms rejection.
-type PlanRejectMsg struct {
-	PlanID     string
-	Reason     string
-	WorkItemID string
-}
-
 // AnswerQuestionMsg fires when the human approves a foreman answer.
 type AnswerQuestionMsg struct {
 	QuestionID string
@@ -213,7 +206,6 @@ type NewSessionFilterDeletedMsg struct {
 	FilterID string
 	Message  string
 }
-
 
 // StartNewSessionAutonomousModeMsg requests starting autonomous mode from selected New Session Filters.
 type StartNewSessionAutonomousModeMsg struct {
@@ -487,7 +479,6 @@ type InspectPlanLoadedMsg struct {
 	// Err is non-nil when the plan could not be loaded; the overlay must close and surface the error.
 	Err error
 }
-
 
 // --- Repo Manager ---
 

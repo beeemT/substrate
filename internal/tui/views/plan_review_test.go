@@ -229,34 +229,6 @@ func TestPlanReviewFeedbackInputNarrowTerminal(t *testing.T) {
 	}
 }
 
-// TestPlanReviewFeedbackInputRejectMode ensures the rejection-reason input
-// obeys the same growth and scrolling rules.
-func TestPlanReviewFeedbackInputRejectMode(t *testing.T) {
-	t.Parallel()
-
-	const width, height = 80, 22
-	// 20 plan lines > max viewport height (16).
-	planContent := strings.Repeat("plan line\n", 20)
-
-	m := views.NewPlanReviewModel(newTestStyles(t))
-	m.SetSize(width, height)
-	m.SetPlanDocument("p1", planContent)
-	m.SetTitle("TEST")
-
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	checkFeedbackViewBounds(t, "reject 1-row", m.View(), width, height)
-	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
-		t.Errorf("reject 1-row: plan lines = %d, want %d", got, want)
-	}
-
-	// 120 words appended → total ≥ 7 rows → capped at 6.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("word ", 120))})
-	checkFeedbackViewBounds(t, "reject capped", m.View(), width, height)
-	if got, want := countPlanLines(m.View()), wantViewport(height, 6); got != want {
-		t.Errorf("reject capped: plan lines = %d, want %d", got, want)
-	}
-}
-
 // TestPlanReviewModel_RendersMarkdownTable verifies that GFM tables in plan content
 // are rendered via glamour (with box-drawing characters) rather than shown as raw
 // pipe-delimited text.
@@ -411,8 +383,7 @@ func TestPlanReviewModel_TablePreservesTrailingBlankLine(t *testing.T) {
 }
 
 // TestPlanReviewDisablesMouseDuringFeedbackInput verifies that entering
-// feedback mode (changes or reject) returns tea.DisableMouse and leaving
-// it returns tea.EnableMouseCellMotion.
+// changes mode returns tea.DisableMouse and leaving it returns tea.EnableMouseCellMotion.
 func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	t.Parallel()
 
@@ -443,15 +414,6 @@ func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	}
 	if msg := cmd(); msg != tea.EnableMouseCellMotion() {
 		t.Fatalf("expected EnableMouseCellMotion msg, got %T", msg)
-	}
-
-	// Re-enter via reject mode.
-	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	if cmd == nil {
-		t.Fatal("expected DisableMouse cmd from 'r', got nil")
-	}
-	if msg := cmd(); msg != tea.DisableMouse() {
-		t.Fatalf("expected DisableMouse msg, got %T", msg)
 	}
 }
 
@@ -542,8 +504,8 @@ func TestPlanReviewPendingBracketFlushedOnSubmit(t *testing.T) {
 	m.SetTitle("T")
 	m.SetWorkItemID("w1")
 
-	// Enter reject mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	// Enter changes mode.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
 	// Type "not good [" — the trailing '[' will be pending.
 	for _, r := range "not good [" {

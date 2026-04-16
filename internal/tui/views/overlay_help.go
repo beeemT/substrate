@@ -43,7 +43,6 @@ func (h HelpOverlay) View() string {
 			{"a", "Approve plan"},
 			{"c", "Request changes"},
 			{"e", "Edit in $EDITOR"},
-			{"r", "Reject plan"},
 			{"↑↓", "Scroll"},
 		}},
 		{"Implementing", []entry{

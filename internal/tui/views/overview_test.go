@@ -82,7 +82,7 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 		t.Fatalf("overview actions = %d, want 1", got)
 	}
 	hints := app.content.KeybindHints()
-	for _, want := range []string{"Approve", "Changes", "Reject", "Inspect"} {
+	for _, want := range []string{"Approve", "Changes", "Inspect"} {
 		found := false
 		for _, hint := range hints {
 			if hint.Label == want {
