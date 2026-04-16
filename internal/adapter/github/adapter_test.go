@@ -667,3 +667,77 @@ func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
 		}
 	}
 }
+
+// TestListIssuesFiltersInboxByRepoPathWithoutOwner verifies that the repo filter
+// works when opts.Repo is supplied as "owner/repo" without a separate opts.Owner.
+// Previously the client-side filterGitHubIssuesByContainer call was gated on
+// opts.Owner != "", silently ignoring the repo filter.
+func TestListIssuesFiltersInboxByRepoPathWithoutOwner(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/issues":
+			return jsonResp(t, http.StatusOK, []any{
+				// Issue from the target repo — must be kept.
+				map[string]any{"number": 1, "title": "Keep me", "state": "open", "labels": []any{}, "body": "", "html_url": "https://github.com/acme/rocket/issues/1", "repository": map[string]any{"full_name": "acme/rocket", "owner": map[string]any{"login": "acme"}, "name": "rocket"}},
+				// Issue from a different repo — must be filtered out.
+				map[string]any{"number": 2, "title": "Drop me", "state": "open", "labels": []any{}, "body": "", "html_url": "https://github.com/other/engine/issues/2", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
+		}
+	}))
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{
+		Scope: domain.ScopeIssues,
+		Repo:  "acme/rocket", // no Owner field — the overlay sets Repo as "owner/repo"
+	})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("items = %+v, want 1 item (acme/rocket only)", res.Items)
+	}
+	if res.Items[0].ID != "acme/rocket#1" {
+		t.Fatalf("item ID = %q, want acme/rocket#1", res.Items[0].ID)
+	}
+}
+
+// TestListCreatedIssuesFiltersSearchByRepoPathWithoutOwner verifies that the
+// created_by_me view appends a repo: search term when opts.Repo is supplied as
+// "owner/repo" without a separate opts.Owner.
+func TestListCreatedIssuesFiltersSearchByRepoPathWithoutOwner(t *testing.T) {
+	var searchQuery string
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/search/issues":
+			searchQuery = req.URL.Query().Get("q")
+			// Return the target-repo issue and a foreign-repo issue; client-side
+			// filtering must discard the latter even though the search term already
+			// constrains the API result set.
+			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
+				map[string]any{"number": 3, "title": "My fix", "state": "open", "labels": []any{}, "body": "", "html_url": "https://github.com/acme/rocket/issues/3", "repository_url": "https://api.github.com/repos/acme/rocket"},
+			}}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
+		}
+	}))
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{
+		Scope: domain.ScopeIssues,
+		View:  "created_by_me",
+		Repo:  "acme/rocket", // no Owner field
+	})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if !strings.Contains(searchQuery, "repo:acme/rocket") {
+		t.Fatalf("search query = %q, want repo:acme/rocket qualifier", searchQuery)
+	}
+	if len(res.Items) != 1 || res.Items[0].ID != "acme/rocket#3" {
+		t.Fatalf("items = %+v, want acme/rocket#3 only", res.Items)
+	}
+}

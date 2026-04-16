@@ -787,6 +787,9 @@ func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOp
 	if owner := strings.TrimSpace(opts.Owner); owner != "" {
 		repo := strings.TrimSpace(opts.Repo)
 		filtered = filterGitHubIssuesByContainer(filtered, owner, repo)
+	} else if o, r, ok := splitGitHubRepoName(opts.Repo); ok {
+		// Repo supplied without Owner: treat "owner/repo" as a combined path.
+		filtered = filterGitHubIssuesByContainer(filtered, o, r)
 	}
 	if len(opts.Labels) > 0 {
 		filtered = filterGitHubIssuesByLabels(filtered, opts.Labels)
@@ -825,6 +828,9 @@ func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.List
 	if owner := strings.TrimSpace(opts.Owner); owner != "" {
 		repo := strings.TrimSpace(opts.Repo)
 		issues = filterGitHubIssuesByContainer(issues, owner, repo)
+	} else if o, r, ok := splitGitHubRepoName(opts.Repo); ok {
+		// Repo supplied without Owner: treat "owner/repo" as a combined path.
+		issues = filterGitHubIssuesByContainer(issues, o, r)
 	}
 	if len(opts.Labels) > 0 {
 		issues = filterGitHubIssuesByLabels(issues, opts.Labels)
@@ -878,6 +884,10 @@ func githubCreatedIssueSearchQuery(viewer string, opts adapter.ListOpts) (url.Va
 		if repo := strings.TrimSpace(opts.Repo); repo != "" {
 			terms = append(terms, fmt.Sprintf("repo:%s/%s", owner, repo))
 		}
+	} else if _, _, ok := splitGitHubRepoName(opts.Repo); ok {
+		// Repo supplied without Owner: the user typed "owner/repo" in the Repo
+		// field, which GitHub's search API accepts directly as a repo: qualifier.
+		terms = append(terms, "repo:"+strings.TrimSpace(opts.Repo))
 	}
 	for _, label := range opts.Labels {
 		trimmed := strings.TrimSpace(label)
