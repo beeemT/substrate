@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
-	"path"
 	"slices"
 	"sort"
 	"strconv"
@@ -465,8 +464,14 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	if err != nil {
 		return nil, err
 	}
+	// Route to the project-specific endpoint when a repo is provided; the global
+	// /api/v4/issues endpoint does not support filtering by project path.
+	endpoint := "/api/v4/issues"
+	if repo := strings.TrimSpace(opts.Repo); repo != "" {
+		endpoint = "/api/v4/projects/" + url.PathEscape(repo) + "/issues"
+	}
 	var issues []issue
-	if err := a.getJSON(ctx, "/api/v4/issues", query, &issues); err != nil {
+	if err := a.getJSON(ctx, endpoint, query, &issues); err != nil {
 		return nil, err
 	}
 
@@ -620,11 +625,15 @@ func (e *apiError) Error() string {
 }
 
 func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) error {
-	fullURL, err := url.Parse(a.baseURL)
+	// Build the full URL by string-concatenating base and endpoint so that
+	// pre-encoded path segments (e.g. owner%2Frepo) survive intact.
+	// url.Parse populates RawPath when the escaped form differs from Path,
+	// and url.URL.String() uses RawPath verbatim.
+	rawURL := strings.TrimRight(a.baseURL, "/") + endpoint
+	fullURL, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("parse base url: %w", err)
+		return fmt.Errorf("parse url: %w", err)
 	}
-	fullURL.Path = path.Join(fullURL.Path, endpoint)
 	if query != nil {
 		fullURL.RawQuery = query.Encode()
 	}
@@ -929,9 +938,6 @@ func applyListOpts(query url.Values, opts adapter.ListOpts) {
 	}
 	if len(opts.Labels) > 0 {
 		query.Set("labels", strings.Join(opts.Labels, ","))
-	}
-	if strings.TrimSpace(opts.Repo) != "" {
-		query.Set("project_path", strings.TrimSpace(opts.Repo))
 	}
 	if strings.TrimSpace(opts.Group) != "" {
 		query.Set("group_id", strings.TrimSpace(opts.Group))

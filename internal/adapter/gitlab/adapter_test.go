@@ -141,14 +141,14 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 		}}), nil
 	}))
 
-	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 5, View: "created_by_me", State: "closed", Labels: []string{"bug"}, Repo: "other-group/other-project", Group: "my-group"})
+	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 5, View: "created_by_me", State: "closed", Labels: []string{"bug"}, Group: "my-group"})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
 	}
 	if gotPath != "/api/v4/issues" {
 		t.Fatalf("path = %s, want /api/v4/issues", gotPath)
 	}
-	for _, want := range []string{"scope=created_by_me", "state=closed", "search=bug", "per_page=5", "labels=bug", "project_path=other-group%2Fother-project", "group_id=my-group"} {
+	for _, want := range []string{"scope=created_by_me", "state=closed", "search=bug", "per_page=5", "labels=bug", "group_id=my-group"} {
 		if !strings.Contains(gotQuery, want) {
 			t.Fatalf("query = %q, want %q", gotQuery, want)
 		}
@@ -177,6 +177,36 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 	}
 	if len(item.Labels) != 1 || item.Labels[0] != "bug" {
 		t.Fatalf("Labels = %#v, want [bug]", item.Labels)
+	}
+}
+
+func TestListSelectableIssuesFiltersToProjectByPath(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotPath = req.URL.EscapedPath()
+		gotQuery = req.URL.RawQuery
+		return jsonResponse(t, http.StatusOK, []map[string]any{{
+			"iid":        7,
+			"project_id": 99,
+			"title":      "Project-scoped issue",
+			"state":      "opened",
+			"web_url":    "https://gitlab.example.com/my-org/my-repo/-/issues/7",
+			"references": map[string]any{"full": "my-org/my-repo#7"},
+		}}), nil
+	}))
+
+	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Repo: "my-org/my-repo"})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	// Project path must be encoded as a URL path segment, not a query param.
+	const wantPath = "/api/v4/projects/my-org%2Fmy-repo/issues"
+	if gotPath != wantPath {
+		t.Fatalf("path = %q, want %q", gotPath, wantPath)
+	}
+	if strings.Contains(gotQuery, "project_path") {
+		t.Fatalf("query must not contain project_path; got %q", gotQuery)
 	}
 }
 
@@ -479,7 +509,6 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 		t.Fatalf("body = %q, must not contain close (that would be done, not in_review)", capturedBody)
 	}
 }
-
 
 func TestOnEvent_IgnoresForeignExternalID_PlanApproved(t *testing.T) {
 	// No HTTP calls must be made; return nil for non-gl: IDs.
