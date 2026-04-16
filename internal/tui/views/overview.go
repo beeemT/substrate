@@ -189,10 +189,12 @@ func (m *SessionOverviewModel) SetTerminalSize(w, h int) {
 	m.termHeight = h
 	pw, ph := m.planOverlayInnerSize()
 	m.planReview.SetSize(pw, ph)
+	// completed also uses the plan-overlay size: it now shows the full plan in a
+	// scrollable viewport and needs the wider/taller frame.
+	m.completed.SetSize(pw, ph)
 	dw, dh := m.defaultOverlayInnerSize()
 	m.question.SetSize(dw, dh)
 	m.interrupted.SetSize(dw, dh)
-	m.completed.SetSize(dw, dh)
 	m.reviewing.SetSize(dw, dh)
 }
 
@@ -550,6 +552,8 @@ func (m *SessionOverviewModel) syncActionModels() {
 		completedAt = m.data.Header.UpdatedAt
 	}
 	m.completed.SetData(completedAt, overviewReviewRowsToMRInfo(m.data.External.Reviews), nil)
+	// Pass the full plan document so the completed overlay shows what was implemented.
+	m.completed.SetPlan(m.data.Plan.FullDocument)
 	m.reviewing.SetTitle(title)
 	m.reviewing.SetWorkItemID(m.data.WorkItemID)
 	if m.data.Plan.Document != nil {
@@ -748,7 +752,9 @@ func (m SessionOverviewModel) renderActivitySection() string {
 func (m SessionOverviewModel) overlayView(width, height int) string {
 	frameWidth := min(max(48, width-6), 112)
 	innerHeight := max(10, min(height-4, 26))
-	if m.overlay == overviewOverlayPlan {
+	// completed uses the same large frame as plan review: both display a
+	// scrollable plan document and need the extra width and height.
+	if m.overlay == overviewOverlayPlan || m.overlay == overviewOverlayCompleted {
 		frameWidth = min(max(72, width-12), 220)
 		innerHeight = max(12, height-2)
 	}

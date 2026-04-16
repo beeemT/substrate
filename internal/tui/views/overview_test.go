@@ -379,7 +379,7 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 			t.Fatalf("overlay view = %q, want %q", view, want)
 		}
 	}
-	opened, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected completion overlay enter to emit open-url command")
 	}
@@ -390,9 +390,6 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 	}
 	if openMsg.URL != "https://github.com/acme/rocket/pull/7" {
 		t.Fatalf("open url = %q, want review artifact url", openMsg.URL)
-	}
-	if opened.completed.selectedLink != 0 {
-		t.Fatalf("selected link = %d, want 0", opened.completed.selectedLink)
 	}
 }
 
@@ -452,6 +449,42 @@ func TestCompletedActionCardIOpensOverlayInNormalMode(t *testing.T) {
 	}
 	if updated.completed.inputActive {
 		t.Fatal("expected inputActive to be false after [i]")
+	}
+}
+
+// TestCompletedOverlayShowsPlanContent verifies that pressing [i] on a completed
+// action card renders the plan document inside the overlay. This is the primary
+// regression test for the bug where only the completion timestamp was shown.
+func TestCompletedOverlayShowsPlanContent(t *testing.T) {
+	t.Parallel()
+
+	const planText = "# Plan\n\nStep 1: Implement the feature.\nStep 2: Write tests.\n"
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 30)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-plan",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-2", Title: "Plan visible", StatusLabel: "✓ Completed", UpdatedAt: time.Now()},
+		Actions:    []OverviewActionCard{{Kind: overviewActionCompleted}},
+		Plan: OverviewPlan{
+			Exists:       true,
+			FullDocument: planText,
+		},
+	})
+
+	// Open via [i] (inspect, no feedback input).
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if updated.overlay != overviewOverlayCompleted {
+		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)
+	}
+
+	overlay := stripBrowseANSI(updated.overlayView(220, 50))
+	for _, want := range []string{"Step 1", "Step 2", "Implement the feature"} {
+		if !strings.Contains(overlay, want) {
+			t.Fatalf("completed overlay view = %q\nwant substring %q", overlay, want)
+		}
 	}
 }
 
