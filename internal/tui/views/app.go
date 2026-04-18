@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -2447,6 +2448,19 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 		State:        wi.State,
 		LastActivity: wi.UpdatedAt,
 		CreatedAt:    wi.CreatedAt,
+	}
+	// For GitLab sessions the canonical ExternalID encodes a numeric project ID
+	// (e.g. "gl:issue:1234#42") which is meaningless to users. Replace it with
+	// the human-readable project path derived from the tracker reference so the
+	// sidebar shows "acme/rocket#42" instead.
+	if wi.Source == providerGitlab {
+		if refs := sessionTrackerRefs(wi.Metadata); len(refs) > 0 {
+			ref := refs[0]
+			container := trackerRefContainer(ref)
+			if container != "" && ref.Number > 0 {
+				entry.ExternalID = "gl:issue:" + container + "#" + strconv.FormatInt(ref.Number, 10)
+			}
+		}
 	}
 	if plan := a.plans[wi.ID]; plan != nil {
 		sps := a.subPlans[plan.ID]
