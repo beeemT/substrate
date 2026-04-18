@@ -59,12 +59,16 @@ const (
 
 // SidebarEntry is one selectable row in the sidebar.
 type SidebarEntry struct {
-	Kind            SidebarEntryKind
-	WorkItemID      string
-	SessionID       string
-	WorkspaceID     string
-	WorkspaceName   string
-	ExternalID      string
+	Kind          SidebarEntryKind
+	WorkItemID    string
+	SessionID     string
+	WorkspaceID   string
+	WorkspaceName string
+	ExternalID    string
+	// ExternalLabel overrides the display form of ExternalID when non-empty.
+	// Use this to show a human-readable identifier (e.g. "acme/rocket#42")
+	// without altering the canonical ExternalID value.
+	ExternalLabel   string
 	Source          string
 	Title           string
 	SubtitleText    string
@@ -108,6 +112,9 @@ func (e SidebarEntry) titlePrefix() string {
 }
 
 func (e SidebarEntry) displayExternalID() string {
+	if e.ExternalLabel != "" {
+		return e.ExternalLabel
+	}
 	raw := strings.TrimSpace(e.ExternalID)
 	if after, ok := strings.CutPrefix(raw, "gh:issue:"); ok {
 		return after
