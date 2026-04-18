@@ -368,3 +368,155 @@ func TestArtifactsViewMultipleExpanded(t *testing.T) {
 		t.Fatal("second expanded card missing")
 	}
 }
+
+func testArtifactItemsWithReviews() []views.ArtifactItem {
+	return []views.ArtifactItem{
+		{
+			Provider: "github",
+			Kind:     "PR",
+			RepoName: "acme/auth-svc",
+			Ref:      "#42",
+			URL:      "https://github.com/acme/auth-svc/pull/42",
+			State:    "open",
+			Branch:   "feat-config",
+			Reviews: []views.ArtifactReview{
+				{ReviewerLogin: "alice", State: "approved", SubmittedAt: time.Date(2024, 1, 3, 10, 0, 0, 0, time.UTC)},
+				{ReviewerLogin: "bob", State: "changes_requested", SubmittedAt: time.Date(2024, 1, 3, 12, 0, 0, 0, time.UTC)},
+			},
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			Provider: "github",
+			Kind:     "PR",
+			RepoName: "acme/billing",
+			Ref:      "#43",
+			URL:      "https://github.com/acme/billing/pull/43",
+			State:    "open",
+			Branch:   "feat-config",
+			Reviews: []views.ArtifactReview{
+				{ReviewerLogin: "charlie", State: "approved", SubmittedAt: time.Date(2024, 1, 3, 11, 0, 0, 0, time.UTC)},
+			},
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+	}
+}
+
+func TestArtifactsViewCollapsedRowShowsReviewSummary(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	m.SetItems(testArtifactItemsWithReviews())
+
+	plain := ansi.Strip(m.View())
+	// First item has changes_requested, so collapsed row should show review indicator.
+	if !strings.Contains(plain, "review") {
+		t.Error("collapsed row missing review summary")
+	}
+}
+
+func TestArtifactsViewExpandedCardShowsReviews(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 40)
+	items := testArtifactItemsWithReviews()
+	m.SetItems(items)
+
+	// Expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	plain := ansi.Strip(m.View())
+	// Should show Review section header.
+	if !strings.Contains(plain, "Review") {
+		t.Error("expanded card missing Review section")
+	}
+	// Should show reviewer names.
+	if !strings.Contains(plain, "alice") {
+		t.Error("expanded card missing reviewer alice")
+	}
+	if !strings.Contains(plain, "bob") {
+		t.Error("expanded card missing reviewer bob")
+	}
+	// Should show review states.
+	if !strings.Contains(plain, "approved") {
+		t.Error("expanded card missing approved state")
+	}
+	if !strings.Contains(plain, "changes_requested") {
+		t.Error("expanded card missing changes_requested state")
+	}
+}
+
+func TestArtifactsViewNoReviewSectionWhenNoReviews(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	// Use items without reviews.
+	m.SetItems([]views.ArtifactItem{{
+		Provider: "github",
+		Kind:     "PR",
+		RepoName: "acme/empty",
+		Ref:      "#99",
+		State:    "open",
+		Branch:   "main",
+	}})
+
+	plain := ansi.Strip(m.View())
+	// Single item renders expanded directly. Should NOT show Review section.
+	if strings.Contains(plain, "Review") {
+		t.Error("expanded card should not show Review section when no reviews")
+	}
+}
+
+func TestArtifactsViewUnresolvedThreadsDisplayName(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	m.SetItems([]views.ArtifactItem{{
+		Provider: "gitlab",
+		Kind:     "MR",
+		RepoName: "group/project",
+		Ref:      "!7",
+		State:    "open",
+		Branch:   "feat",
+		Reviews: []views.ArtifactReview{
+			{ReviewerLogin: "__unresolved_threads__", State: "changes_requested", SubmittedAt: time.Date(2024, 1, 3, 10, 0, 0, 0, time.UTC)},
+		},
+	}})
+
+	plain := ansi.Strip(m.View())
+	// Should display "unresolved threads" not the raw "__unresolved_threads__".
+	if !strings.Contains(plain, "unresolved threads") {
+		t.Error("expanded card should show 'unresolved threads' not raw login")
+	}
+	if strings.Contains(plain, "__unresolved_threads__") {
+		t.Error("expanded card should not show raw __unresolved_threads__ login")
+	}
+}
+
+func TestArtifactsViewReviewFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(60, 30)
+	m.SetItems(testArtifactItemsWithReviews())
+
+	// Expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	lines := strings.Split(m.View(), "\n")
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 60 {
+			t.Fatalf("line %d width = %d, want <= 60\nline: %q", i+1, got, line)
+		}
+	}
+}

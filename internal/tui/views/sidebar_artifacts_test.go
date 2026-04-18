@@ -52,17 +52,33 @@ func TestSidebarArtifactsEntryRendersCorrectly(t *testing.T) {
 func TestSidebarArtifactsEntryStatusIcon(t *testing.T) {
 	t.Parallel()
 
-	entry := views.SidebarEntry{
-		Kind:       views.SidebarEntryTaskArtifacts,
-		WorkItemID: "wi-1",
-		SessionID:  "__artifacts__",
-		Title:      "Artifacts",
+	st := makeSidebarStyles()
+
+	tests := []struct {
+		name     string
+		aggState string
+		wantIcon string
+	}{
+		{"no reviews", "", "◌"},
+		{"approved", "approved", "✓"},
+		{"changes requested", "changes_requested", "◐"},
 	}
-	icon := entry.StatusIcon(makeSidebarStyles())
-	// Should render the muted ◌ icon (same as source details).
-	plain := ansi.Strip(icon)
-	if plain != "◌" {
-		t.Fatalf("status icon = %q, want ◌", plain)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entry := views.SidebarEntry{
+				Kind:                         views.SidebarEntryTaskArtifacts,
+				WorkItemID:                   "wi-1",
+				SessionID:                    "__artifacts__",
+				Title:                        "Artifacts",
+				ArtifactAggregateReviewState: tt.aggState,
+			}
+			icon := entry.StatusIcon(st)
+			plain := ansi.Strip(icon)
+			if plain != tt.wantIcon {
+				t.Fatalf("status icon = %q, want %q", plain, tt.wantIcon)
+			}
+		})
 	}
 }
 
