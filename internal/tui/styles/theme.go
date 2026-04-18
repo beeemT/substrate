@@ -116,6 +116,7 @@ type Styles struct {
 	CalloutRunning      lipgloss.Style
 	CalloutError        lipgloss.Style
 	CalloutTool         lipgloss.Style
+	CalloutPrompt       lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -214,6 +215,10 @@ func NewStyles(t Theme) Styles {
 		CalloutTool: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.ToolBorder)).
+			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
+		CalloutPrompt: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.Accent)).
 			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
 		SettingsText:            lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
 		SettingsTextStrong:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),

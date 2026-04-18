@@ -261,7 +261,7 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 		Repository:          completedTask.RepositoryName,
 		WorktreePath:        completedTask.WorktreePath,
 		SystemPrompt:        systemPrompt,
-		UserPrompt:          "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
+		UserPrompt:          feedback,
 		ResumeFromSessionID: completedTask.ID,
 		ResumeInfo:          completedTask.ResumeInfo,
 	}
@@ -351,7 +351,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		Repository:   failedTask.RepositoryName,
 		WorktreePath: failedTask.WorktreePath,
 		SystemPrompt: systemPrompt,
-		UserPrompt:   "Apply the requested changes to the codebase. Review the current worktree state with `git status` and `git diff` before making any changes.",
+		UserPrompt:   feedback,
 	}
 	opts.ResumeFromSessionID = failedTask.ID
 	opts.ResumeInfo = failedTask.ResumeInfo
@@ -366,14 +366,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-	// If resuming a harness-native session, deliver feedback as a follow-up message.
-	if len(failedTask.ResumeInfo) > 0 {
-		if sendErr := harnessSession.SendMessage(ctx, feedback); sendErr != nil {
-			slog.Warn("failed to send follow-up feedback to resumed session",
-				"error", sendErr,
-				"task_id", newTask.ID)
-		}
-	}
 
 	if r.eventBus != nil {
 		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{

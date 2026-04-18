@@ -16,6 +16,7 @@ const (
 	CalloutRunning // active/accent border color for in-progress tool cards
 	CalloutError   // error border color for failed tool cards
 	CalloutTool    // completed tool call — more visible border than CalloutDefault
+	CalloutPrompt  // user prompt / feedback input blocks
 )
 
 // CalloutSpec describes a bordered content box.
@@ -44,6 +45,8 @@ func RenderCallout(st styles.Styles, spec CalloutSpec) string {
 		calloutStyle = st.CalloutError
 	case CalloutTool:
 		calloutStyle = st.CalloutTool
+	case CalloutPrompt:
+		calloutStyle = st.CalloutPrompt
 	}
 	if spec.Width > 0 {
 		horizontalBorder := st.Chrome.Callout.BorderLeft + st.Chrome.Callout.BorderRight

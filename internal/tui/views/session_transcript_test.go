@@ -1042,3 +1042,99 @@ func TestRenderTranscriptNonForemanQuestion(t *testing.T) {
 		t.Errorf("non-foreman question should not contain 'Foreman', got: %q", plain)
 	}
 }
+
+
+func TestRenderTranscriptLifecycleStartedHasSeparator(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "started", Message: "Session started"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "◈") {
+		t.Errorf("started lifecycle: expected ◈ marker in output, got: %q", plain)
+	}
+	if !strings.Contains(plain, "Session started") {
+		t.Errorf("started lifecycle: expected text in output, got: %q", plain)
+	}
+	// Must be multi-line: separator + label
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Errorf("started lifecycle: expected at least 2 lines (rule + label), got %d: %v", len(lines), lines)
+	}
+	// No line may exceed width
+	for _, line := range lines {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("started lifecycle: line width %d > 80: %q", w, line)
+		}
+	}
+}
+
+func TestRenderTranscriptLifecycleCompletedHasBookendSeparators(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "completed", Summary: "All tasks done"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "◉") {
+		t.Errorf("completed lifecycle: expected ◉ marker in output, got: %q", plain)
+	}
+	if !strings.Contains(plain, "All tasks done") {
+		t.Errorf("completed lifecycle: expected summary in output, got: %q", plain)
+	}
+	// Must be multi-line: top rule + label + bottom rule = 3 lines
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 3 {
+		t.Errorf("completed lifecycle: expected at least 3 lines (rule+label+rule), got %d: %v", len(lines), lines)
+	}
+	// No line may exceed width
+	for _, line := range lines {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("completed lifecycle: line width %d > 80: %q", w, line)
+		}
+	}
+}
+
+func TestRenderTranscriptLifecycleFailedHasSeparator(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "failed", Message: "timed out"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "✗") {
+		t.Errorf("failed lifecycle: expected ✗ marker in output, got: %q", plain)
+	}
+	if !strings.Contains(plain, "Failed") {
+		t.Errorf("failed lifecycle: expected 'Failed' in output, got: %q", plain)
+	}
+	// Must be multi-line: rule + label
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Errorf("failed lifecycle: expected at least 2 lines (rule + label), got %d: %v", len(lines), lines)
+	}
+}
+
+func TestRenderTranscriptLifecycleSeparatorInset(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	const width = 40
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindLifecycle, Stage: "completed", Summary: "done"},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("lifecycle separator: line width %d > %d: %q", w, width, line)
+		}
+		// Rule lines should be strictly less than width (inset)
+		stripped := strings.TrimSpace(ansi.Strip(line))
+		if strings.ContainsRune(stripped, '─') && ansi.StringWidth(line) >= width {
+			t.Errorf("lifecycle separator: rule line width %d should be < %d (inset): %q", ansi.StringWidth(line), width, line)
+		}
+	}
+}

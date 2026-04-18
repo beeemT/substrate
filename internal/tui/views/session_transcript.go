@@ -263,14 +263,24 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 	case blockKindThinking:
 		return renderThinkingBlock(st, block, width, collapseThinking)
 
-	case blockKindPrompt, blockKindForeman:
+	case blockKindPrompt:
 		label := block.label
 		if label == "" {
-			if block.kind == blockKindForeman {
-				label = "Foreman"
-			} else {
-				label = "Input"
-			}
+			label = "Input"
+		}
+		innerW := components.CalloutInnerWidth(st, width)
+		header := st.Accent.Render(label)
+		body := ansi.Hardwrap(block.text, max(1, innerW), true)
+		return components.RenderCallout(st, components.CalloutSpec{
+			Body:    header + "\n" + body,
+			Width:   width,
+			Variant: components.CalloutPrompt,
+		})
+
+	case blockKindForeman:
+		label := block.label
+		if label == "" {
+			label = "Foreman"
 		}
 		innerW := components.CalloutInnerWidth(st, width)
 		header := st.SectionLabel.Render(label)
@@ -305,14 +315,23 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		switch block.stage {
 		case "started":
 			text = firstNonEmptyTranscript(block.message, "Session started")
+			rule := renderInsetRule(st, width)
+			label := " " + st.Subtitle.Render(ansi.Truncate("◈ "+text, max(1, width-2), "…"))
+			return rule + "\n" + label
 		case "completed":
 			text = firstNonEmptyTranscript(block.summary, block.message, "Session complete")
+			rule := renderInsetRule(st, width)
+			label := " " + st.Success.Render(ansi.Truncate("◉ "+text, max(1, width-2), "…"))
+			return rule + "\n" + label + "\n" + rule
 		case "failed":
 			text = "Failed: " + firstNonEmptyTranscript(block.message, block.summary, "session failed")
+			rule := renderInsetRule(st, width)
+			label := " " + st.Error.Render(ansi.Truncate("✗ "+text, max(1, width-2), "…"))
+			return rule + "\n" + label
 		default:
 			text = firstNonEmptyTranscript(block.message, block.summary, block.text)
+			return st.Muted.Render(ansi.Truncate(text, width, "…"))
 		}
-		return st.Muted.Render(ansi.Truncate(text, width, "…"))
 
 	case blockKindQuestion:
 		label := "Question"
@@ -715,6 +734,13 @@ func renderThinkingBlock(st styles.Styles, block transcriptBlock, width int, col
 		lines = append(lines, "  "+st.Thinking.Render(line))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderInsetRule renders a horizontal rule indented by 1 space on the left
+// so it does not quite reach the viewport border, giving visual breathing room.
+func renderInsetRule(st styles.Styles, width int) string {
+	ruleW := max(1, width-2)
+	return " " + st.Divider.Render(strings.Repeat("─", ruleW))
 }
 
 // hasThinkingBlocks reports whether any entry in the slice is a thinking block.
