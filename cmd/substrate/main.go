@@ -66,6 +66,8 @@ type coreServices struct {
 	githubPR             *service.GithubPRService
 	gitlabMR             *service.GitlabMRService
 	sessionArtifact      *service.SessionReviewArtifactService
+	ghPRReview           *service.GithubPRReviewService
+	glMRReview           *service.GitlabMRReviewService
 	newSessionFilter     *service.SessionFilterService
 	newSessionFilterLock *service.SessionFilterLockService
 	settings             *views.SettingsService
@@ -153,6 +155,8 @@ func run() error {
 		GithubPRs:             services.githubPR,
 		GitlabMRs:             services.gitlabMR,
 		SessionArtifacts:      services.sessionArtifact,
+		GithubPRReviews:       services.ghPRReview,
+		GitlabMRReviews:       services.glMRReview,
 		NewSessionFilters:     services.newSessionFilter,
 		NewSessionFilterLocks: services.newSessionFilterLock,
 		Cfg:                   cfg,
@@ -307,6 +311,8 @@ func buildCoreServices(
 	ghPRSvc := service.NewGithubPRService(transacter)
 	glMRSvc := service.NewGitlabMRService(transacter)
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(transacter)
+	ghPRReviewSvc := service.NewGithubPRReviewService(transacter)
+	glMRReviewSvc := service.NewGitlabMRReviewService(transacter)
 	newSessionFilterSvc := service.NewSessionFilterService(transacter)
 	newSessionFilterLockSvc := service.NewSessionFilterLockService(transacter)
 
@@ -322,6 +328,8 @@ func buildCoreServices(
 		githubPR:             ghPRSvc,
 		gitlabMR:             glMRSvc,
 		sessionArtifact:      sessionArtifactSvc,
+		ghPRReview:           ghPRReviewSvc,
+		glMRReview:           glMRReviewSvc,
 		newSessionFilter:     newSessionFilterSvc,
 		newSessionFilterLock: newSessionFilterLockSvc,
 		settings: views.NewSettingsService(
@@ -404,6 +412,8 @@ func buildAdapterSetup(
 			GithubPRs:        services.githubPR,
 			GitlabMRs:        services.gitlabMR,
 			SessionArtifacts: services.sessionArtifact,
+			GithubPRReviews: services.ghPRReview,
+			GitlabMRReviews: services.glMRReview,
 		},
 	)
 	repoSources := app.BuildRepoSources(ctx, cfg)

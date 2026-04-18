@@ -2587,13 +2587,15 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	}
 
 	if artifactItems := a.buildArtifactItems(wi); len(artifactItems) > 0 {
+		aggregateReview := aggregateReviewState(artifactItems)
 		entries = append(entries, SidebarEntry{
-			Kind:         SidebarEntryTaskArtifacts,
-			WorkItemID:   workItemID,
-			SessionID:    taskSidebarArtifactsID,
-			Title:        "Pull requests & merge requests",
-			SubtitleText: fmt.Sprintf("%d artifact%s", len(artifactItems), pluralS(len(artifactItems))),
-			LastActivity: wi.UpdatedAt,
+			Kind:                         SidebarEntryTaskArtifacts,
+			WorkItemID:                   workItemID,
+			SessionID:                    taskSidebarArtifactsID,
+			Title:                        "Pull requests & merge requests",
+			SubtitleText:                 fmt.Sprintf("%d artifact%s", len(artifactItems), pluralS(len(artifactItems))),
+			LastActivity:                 wi.UpdatedAt,
+			ArtifactAggregateReviewState: aggregateReview,
 		})
 	}
 
@@ -2708,6 +2710,25 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		}
 	}
 	return entries
+}
+
+// aggregateReviewState derives the worst-case review state across all artifacts.
+func aggregateReviewState(items []ArtifactItem) string {
+	hasApproved := false
+	for _, item := range items {
+		for _, r := range item.Reviews {
+			if r.State == "changes_requested" {
+				return "changes_requested"
+			}
+			if r.State == "approved" {
+				hasApproved = true
+			}
+		}
+	}
+	if hasApproved {
+		return "approved"
+	}
+	return ""
 }
 
 func (a *App) rebuildSidebar() {

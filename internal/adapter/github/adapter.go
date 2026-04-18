@@ -97,6 +97,13 @@ type githubPull struct {
 	} `json:"head"`
 }
 
+type githubReview struct {
+	ID          int         `json:"id"`
+	User        githubOwner `json:"user"`
+	State       string      `json:"state"`
+	SubmittedAt *time.Time  `json:"submitted_at"`
+}
+
 type worktreePayload struct {
 	WorkspaceID   string                    `json:"workspace_id"`
 	WorkItemID    string                    `json:"work_item_id"`
@@ -1617,6 +1624,60 @@ func (a *GithubAdapter) refreshPRs(ctx context.Context, workspaceID string) {
 		}
 		if err := a.repos.GithubPRs.Upsert(ctx, updated); err != nil {
 			slog.Warn("github: refresh pr upsert failed", "error", err)
+		}
+		// Fetch and upsert PR reviews.
+		if a.repos.GithubPRReviews != nil {
+			state := githubPRState(freshPull)
+			if state == "merged" || state == "closed" {
+				// Terminal state: clean up stale review rows.
+				if err := a.repos.GithubPRReviews.DeleteByPRID(ctx, pr.ID); err != nil {
+					slog.Warn("github: delete pr reviews on terminal state failed", "pr", pr.ID, "error", err)
+				}
+			} else {
+				var apiReviews []githubReview
+				if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", pr.Owner, pr.Repo, pr.Number), nil, &apiReviews); err != nil {
+					slog.Warn("github: refresh pr reviews failed", "pr", pr.Number, "error", err)
+				} else {
+					a.upsertPRReviews(ctx, pr.ID, apiReviews)
+				}
+			}
+		}
+	}
+}
+
+// upsertPRReviews deduplicates GitHub reviews by reviewer (keeping latest non-PENDING per user)
+// and upserts each into the database.
+func (a *GithubAdapter) upsertPRReviews(ctx context.Context, prID string, apiReviews []githubReview) {
+	// Deduplicate: keep the latest non-PENDING review per reviewer.
+	// The API returns reviews chronologically, so iterate forward and overwrite.
+	latest := make(map[string]githubReview)
+	for _, r := range apiReviews {
+		if strings.EqualFold(r.State, "PENDING") {
+			continue
+		}
+		if r.User.Login == "" {
+			continue
+		}
+		latest[r.User.Login] = r
+	}
+
+	now := time.Now()
+	for login, r := range latest {
+		submittedAt := now
+		if r.SubmittedAt != nil {
+			submittedAt = *r.SubmittedAt
+		}
+		review := domain.GithubPRReview{
+			ID:            domain.NewID(),
+			PRID:          prID,
+			ReviewerLogin: login,
+			State:         strings.ToLower(r.State),
+			SubmittedAt:   submittedAt,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		if err := a.repos.GithubPRReviews.Upsert(ctx, review); err != nil {
+			slog.Warn("github: upsert pr review failed", "pr", prID, "reviewer", login, "error", err)
 		}
 	}
 }

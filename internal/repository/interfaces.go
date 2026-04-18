@@ -152,3 +152,17 @@ type SessionReviewArtifactRepository interface {
 	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.SessionReviewArtifact, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error)
 }
+
+// GithubPRReviewRepository provides persistence for GitHub PR reviews.
+type GithubPRReviewRepository interface {
+	Upsert(ctx context.Context, review domain.GithubPRReview) error
+	ListByPRID(ctx context.Context, prID string) ([]domain.GithubPRReview, error)
+	DeleteByPRID(ctx context.Context, prID string) error
+}
+
+// GitlabMRReviewRepository provides persistence for GitLab MR reviews.
+type GitlabMRReviewRepository interface {
+	Upsert(ctx context.Context, review domain.GitlabMRReview) error
+	ListByMRID(ctx context.Context, mrID string) ([]domain.GitlabMRReview, error)
+	DeleteByMRID(ctx context.Context, mrID string) error
+}

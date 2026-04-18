@@ -60,3 +60,26 @@ type SessionReviewArtifact struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
+
+
+// GithubPRReview is the durable row for a GitHub PR review.
+type GithubPRReview struct {
+	ID            string
+	PRID          string
+	ReviewerLogin string
+	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+	SubmittedAt   time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// GitlabMRReview is the durable row for a GitLab MR review.
+type GitlabMRReview struct {
+	ID            string
+	MRID          string
+	ReviewerLogin string
+	State         string    // "approved" | "changes_requested" | "unapproved"
+	SubmittedAt   time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}

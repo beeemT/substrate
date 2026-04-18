@@ -18,4 +18,6 @@ var (
 	_ repository.GithubPullRequestRepository     = GithubPRRepo{}
 	_ repository.GitlabMergeRequestRepository    = GitlabMRRepo{}
 	_ repository.SessionReviewArtifactRepository = SessionReviewArtifactRepo{}
+	_ repository.GithubPRReviewRepository        = GithubPRReviewRepo{}
+	_ repository.GitlabMRReviewRepository        = GitlabMRReviewRepo{}
 )

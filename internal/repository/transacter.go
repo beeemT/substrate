@@ -23,6 +23,8 @@ type Resources struct {
 	GithubPRs              GithubPullRequestRepository
 	GitlabMRs              GitlabMergeRequestRepository
 	SessionReviewArtifacts SessionReviewArtifactRepository
+	GithubPRReviews        GithubPRReviewRepository
+	GitlabMRReviews        GitlabMRReviewRepository
 }
 
 // NoopTransacter calls fn directly with the stored Resources without

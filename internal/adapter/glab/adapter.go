@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,6 +342,28 @@ type glabMRView struct {
 	WebURL         string `json:"web_url"`
 	Draft          bool   `json:"draft"`
 	WorkInProgress bool   `json:"work_in_progress"`
+}
+
+type glabApprovalState struct {
+	Rules []glabApprovalRule `json:"rules"`
+}
+
+type glabApprovalRule struct {
+	ApprovedBy        []glabApprovalUser `json:"approved_by"`
+	EligibleApprovers []glabApprovalUser `json:"eligible_approvers"`
+}
+
+type glabApprovalUser struct {
+	Username string `json:"username"`
+}
+
+type glabDiscussion struct {
+	Notes []glabNote `json:"notes"`
+}
+
+type glabNote struct {
+	Resolvable bool `json:"resolvable"`
+	Resolved   bool `json:"resolved"`
 }
 
 // mrView returns the current MR metadata for the branch when one exists.
@@ -733,5 +756,105 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 	}
 	if err := a.repos.GitlabMRs.Upsert(ctx, updated); err != nil {
 		slog.Warn("glab: refresh mr upsert failed", "iid", mr.IID, "error", err)
+	}
+
+	// Fetch and upsert MR reviews.
+	state := glabArtifactState(fresh)
+	if state == "merged" || state == "closed" {
+		if a.repos.GitlabMRReviews != nil {
+			if err := a.repos.GitlabMRReviews.DeleteByMRID(ctx, mr.ID); err != nil {
+				slog.Warn("glab: delete mr reviews on terminal state failed", "iid", mr.IID, "error", err)
+			}
+		}
+	} else {
+		a.refreshMRReviews(ctx, mr, repoDir)
+	}
+}
+
+// refreshMRReviews fetches approval state and unresolved discussions for a GitLab MR
+// and upserts review rows.
+func (a *GlabAdapter) refreshMRReviews(ctx context.Context, mr domain.GitlabMergeRequest, repoDir string) {
+	if a.repos.GitlabMRReviews == nil {
+		return
+	}
+
+	now := time.Now()
+	var reviews []domain.GitlabMRReview
+
+	// Fetch approval state via glab api.
+	approvalOut, err := a.runner(ctx, repoDir, "glab", "api",
+		fmt.Sprintf("/projects/%s/merge_requests/%d/approval_state",
+			url.PathEscape(mr.ProjectPath), mr.IID))
+	if err != nil {
+		slog.Warn("glab: fetch mr approval state failed", "iid", mr.IID, "error", err)
+	} else {
+		var approvalState glabApprovalState
+		if err := json.Unmarshal(approvalOut, &approvalState); err != nil {
+			slog.Warn("glab: parse mr approval state failed", "iid", mr.IID, "error", err)
+		} else {
+			approved := make(map[string]bool)
+			for _, rule := range approvalState.Rules {
+				for _, u := range rule.ApprovedBy {
+					if u.Username != "" {
+						approved[u.Username] = true
+					}
+				}
+			}
+			for login := range approved {
+				reviews = append(reviews, domain.GitlabMRReview{
+					ID:            domain.NewID(),
+					MRID:          mr.ID,
+					ReviewerLogin: login,
+					State:         "approved",
+					SubmittedAt:   now,
+					CreatedAt:     now,
+					UpdatedAt:     now,
+				})
+			}
+		}
+	}
+
+	// Fetch discussions to detect unresolved threads.
+	discOut, err := a.runner(ctx, repoDir, "glab", "api",
+		fmt.Sprintf("/projects/%s/merge_requests/%d/discussions",
+			url.PathEscape(mr.ProjectPath), mr.IID))
+	if err != nil {
+		slog.Warn("glab: fetch mr discussions failed", "iid", mr.IID, "error", err)
+	} else {
+		var discussions []glabDiscussion
+		if err := json.Unmarshal(discOut, &discussions); err != nil {
+			slog.Warn("glab: parse mr discussions failed", "iid", mr.IID, "error", err)
+		} else {
+			unresolved := 0
+			for _, d := range discussions {
+				for _, n := range d.Notes {
+					if n.Resolvable && !n.Resolved {
+						unresolved++
+						break
+					}
+				}
+			}
+			if unresolved > 0 {
+				reviews = append(reviews, domain.GitlabMRReview{
+					ID:            domain.NewID(),
+					MRID:          mr.ID,
+					ReviewerLogin: "__unresolved_threads__",
+					State:         "changes_requested",
+					SubmittedAt:   now,
+					CreatedAt:     now,
+					UpdatedAt:     now,
+				})
+			}
+		}
+	}
+
+	// Delete existing and re-insert fresh state.
+	if err := a.repos.GitlabMRReviews.DeleteByMRID(ctx, mr.ID); err != nil {
+		slog.Warn("glab: delete mr reviews failed", "iid", mr.IID, "error", err)
+	}
+	for _, review := range reviews {
+		if err := a.repos.GitlabMRReviews.Upsert(ctx, review); err != nil {
+			slog.Warn("glab: upsert mr review failed", "iid", mr.IID, "reviewer", review.ReviewerLogin, "error", err)
+		}
 	}
 }

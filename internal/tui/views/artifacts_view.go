@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -206,13 +207,42 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 	if item.Draft && stateTag != "merged" && stateTag != "closed" {
 		stateTag = "draft"
 	}
+	reviewSummary := m.reviewSummaryText(item)
 	line := fmt.Sprintf("  %s  %s  %s  [%s]", item.Ref, item.RepoName, item.Branch, stateTag)
+	if reviewSummary != "" {
+		line += "  " + reviewSummary
+	}
 	line = ansi.Truncate(line, m.width, "…")
 
 	if idx == m.cursor {
 		return m.styles.SidebarSelected.Width(m.width).Render(line)
 	}
 	return m.styles.SettingsText.Render(line)
+}
+
+// reviewSummaryText returns a compact review status string for the collapsed row.
+func (m ArtifactsModel) reviewSummaryText(item ArtifactItem) string {
+	if len(item.Reviews) == 0 {
+		return ""
+	}
+	hasApproved := false
+	hasChangesRequested := false
+	for _, r := range item.Reviews {
+		switch r.State {
+		case "approved":
+			hasApproved = true
+		case "changes_requested":
+			hasChangesRequested = true
+		}
+	}
+	switch {
+	case hasChangesRequested:
+		return m.styles.Error.Render("✗ review")
+	case hasApproved:
+		return m.styles.Success.Render("✓ review")
+	default:
+		return m.styles.Muted.Render("◐ review")
+	}
 }
 
 func (m ArtifactsModel) renderExpandedCard(idx int) string {
@@ -238,10 +268,53 @@ func (m ArtifactsModel) renderExpandedCard(idx int) string {
 	if item.MergedAt != nil {
 		rows = append(rows, renderKeyValueLine(m.styles, innerWidth, "Merged", formatAbsoluteTime(*item.MergedAt)))
 	}
+	if len(item.Reviews) > 0 {
+		rows = append(rows, "") // blank separator line
+		rows = append(rows, m.styles.SectionLabel.Render("Review"))
+		for _, r := range item.Reviews {
+			if r.ReviewerLogin == "__unresolved_threads__" {
+				rows = append(rows, renderReviewLine(m.styles, innerWidth, "unresolved threads", r.State, r.SubmittedAt))
+			} else {
+				rows = append(rows, renderReviewLine(m.styles, innerWidth, r.ReviewerLogin, r.State, r.SubmittedAt))
+			}
+		}
+	}
 
 	return components.RenderCallout(m.styles, components.CalloutSpec{
 		Body:    strings.Join(rows, "\n"),
 		Width:   m.width,
 		Variant: components.CalloutCard,
 	})
+}
+
+func renderReviewLine(st styles.Styles, width int, reviewer, state string, submittedAt time.Time) string {
+	var icon string
+	switch state {
+	case "approved":
+		icon = st.Success.Render("✓")
+	case "changes_requested":
+		icon = st.Error.Render("✗")
+	default:
+		icon = st.Muted.Render("◌")
+	}
+	ago := formatRelativeTime(submittedAt)
+	line := fmt.Sprintf("  %s %-16s %-20s %s", icon, reviewer, state, ago)
+	return ansi.Truncate(line, width, "…")
+}
+
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }

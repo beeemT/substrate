@@ -145,6 +145,14 @@ type ArtifactItem struct {
 	MergedAt  *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Reviews   []ArtifactReview
+}
+
+// ArtifactReview is the view-layer projection of a PR/MR review.
+type ArtifactReview struct {
+	ReviewerLogin string
+	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+	SubmittedAt   time.Time
 }
 
 type OverviewActivityItem struct {
@@ -1794,6 +1802,21 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 					if pr.Draft && state != "merged" && state != "closed" {
 						state = "draft"
 					}
+					var reviews []ArtifactReview
+					if a.svcs.GithubPRReviews != nil {
+						ghReviews, err := a.svcs.GithubPRReviews.ListByPRID(ctx, pr.ID)
+						if err != nil {
+							slog.Warn("failed to list github PR reviews", "error", err, "prID", pr.ID)
+						} else {
+							for _, r := range ghReviews {
+								reviews = append(reviews, ArtifactReview{
+									ReviewerLogin: r.ReviewerLogin,
+									State:         r.State,
+									SubmittedAt:   r.SubmittedAt,
+								})
+							}
+						}
+					}
 					items = append(items, ArtifactItem{
 						Provider:  "github",
 						Kind:      "PR",
@@ -1806,6 +1829,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						MergedAt:  pr.MergedAt,
 						CreatedAt: pr.CreatedAt,
 						UpdatedAt: pr.UpdatedAt,
+						Reviews:   reviews,
 					})
 				}
 			case providerGitlab:
@@ -1819,6 +1843,21 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 					if mr.Draft && state != "merged" && state != "closed" {
 						state = "draft"
 					}
+					var reviews []ArtifactReview
+					if a.svcs.GitlabMRReviews != nil {
+						glReviews, err := a.svcs.GitlabMRReviews.ListByMRID(ctx, mr.ID)
+						if err != nil {
+							slog.Warn("failed to list gitlab MR reviews", "error", err, "mrID", mr.ID)
+						} else {
+							for _, r := range glReviews {
+								reviews = append(reviews, ArtifactReview{
+									ReviewerLogin: r.ReviewerLogin,
+									State:         r.State,
+									SubmittedAt:   r.SubmittedAt,
+								})
+							}
+						}
+					}
 					items = append(items, ArtifactItem{
 						Provider:  "gitlab",
 						Kind:      "MR",
@@ -1830,6 +1869,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						Draft:     mr.Draft,
 						CreatedAt: mr.CreatedAt,
 						UpdatedAt: mr.UpdatedAt,
+						Reviews:   reviews,
 					})
 				}
 			}
