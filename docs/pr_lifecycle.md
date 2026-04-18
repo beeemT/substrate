@@ -1090,7 +1090,7 @@ BB1 (artifacts view) ← DONE
  │
  ├─► BB4 (CI/check status)      ← DONE
  │
- ├─► BB5 (post-merge)           ← independent of BB2/BB4; requires: config + state
+ ├► BB5 (post-merge)           ← DONE
  │
  ├─► BB6 (open PRs in browser)  ← independent; no data dependencies
  │
