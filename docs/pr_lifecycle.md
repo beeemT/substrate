@@ -994,6 +994,91 @@ The overlay open/close is internal to `ArtifactsModel` state.
 
 ---
 
+### Building block 7 — PR description sync on follow-up
+
+#### Goal
+
+When a follow-up plan is approved and an open PR exists for the work item, update the PR/MR
+description with the new plan text.
+
+#### Current state
+
+The `onWorktreeReused` handler in `internal/adapter/github/adapter.go` (line ~610) already
+patches the PR description:
+
+```go
+description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
+a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", ...), map[string]any{"body": description}, nil)
+```
+
+The equivalent logic exists in `internal/adapter/glab/adapter.go` via `glab mr update --description`.
+
+Neither adapter reacts to `plan.approved` for description updates — `onPlanApproved` only posts
+a comment on the source issue.
+
+#### Design
+
+1. **Extract a shared PR description builder** from the `onWorktreeReused` handlers:
+
+```go
+// In internal/adapter/github/adapter.go:
+func (a *GithubAdapter) updatePRDescription(ctx context.Context, owner, repo string, number int, planText string, trackerRefs []trackerRef, baseRepo repoCoordinates) error
+
+// In internal/adapter/glab/adapter.go:
+func (a *GlabAdapter) updateMRDescription(ctx context.Context, repoDir, sourceBranch, planText string) error
+```
+
+2. **Extend `onPlanApproved`** to also update PR descriptions:
+
+The `plan.approved` event payload already includes the plan text (it's what gets posted as a
+comment). The handler needs to:
+   a. Look up open PRs/MRs for the work item (via `SessionReviewArtifact` links).
+   b. For each open PR/MR, call the description update helper.
+
+The challenge: `onPlanApproved` currently receives a `commentBody` + `externalIDs` payload
+(see `extractPlanCommentPayload`). It does not receive work item ID or PR coordinates.
+
+**Solution:** Extend the `plan.approved` event payload to include `work_item_id`. The handler
+can then:
+- Look up `SessionReviewArtifact` links by work item ID.
+- For each link, load the provider row to get PR/MR coordinates.
+- Call the description update helper.
+
+3. **Call `onWorktreeReused`'s extracted helper** from the extended `onPlanApproved`:
+
+```go
+func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) error {
+	// Existing: post comment on source issue.
+	commentBody, externalIDs := extractPlanCommentPayload(payload)
+	// ... existing comment logic ...
+
+	// New: update PR description if work item has open PRs.
+	workItemID := extractWorkItemID(payload)
+	if workItemID != "" {
+		a.updateOpenPRDescriptions(ctx, workItemID, commentBody)
+	}
+	return nil
+}
+```
+
+#### Edge cases
+
+- **No open PR**: Skip description update (PR may have been merged between plan approval and
+  this handler running).
+- **Multiple open PRs**: Update all of them — each gets the same plan text.
+- **Follow-up on a merged PR**: The `SessionMerged` state (BB5) prevents follow-up, so this
+  path shouldn't trigger. But defensively: skip closed/merged PRs.
+
+#### Implementation touch-points
+
+| File | Change |
+|---|---|
+| `internal/adapter/github/adapter.go` | Extract `updatePRDescription` helper; extend `onPlanApproved` |
+| `internal/adapter/glab/adapter.go` | Extract `updateMRDescription` helper; extend `onPlanApproved` |
+| `internal/orchestrator/planning.go` | Include `work_item_id` in `plan.approved` event payload |
+
+---
+
 ## Dependency graph
 
 ```
@@ -1007,13 +1092,16 @@ BB1 (artifacts view) ← DONE
  │
  ├─► BB5 (post-merge)           ← independent of BB2/BB4; requires: config + state
  │
- └─► BB6 (open PRs in browser)  ← independent; no data dependencies
+ ├─► BB6 (open PRs in browser)  ← independent; no data dependencies
+ │
+ └─► BB7 (description sync)     ← independent; requires: plan.approved payload extension
 ```
 
-**Recommended implementation order:** BB6 → BB3 → BB5.
+**Recommended implementation order:** BB6 → BB3 → BB7 → BB5.
 
 BB6 is the smallest and has no dependencies beyond BB1. BB3 requires BB2 review data.
-BB5 depends on the `SessionMerged` state but not on BB2/BB4 data.
+BB7 is small and self-contained — can be done at any point after BB1. BB5 depends on the
+`SessionMerged` state but not on BB2/BB4 data.
 
 ---
 
