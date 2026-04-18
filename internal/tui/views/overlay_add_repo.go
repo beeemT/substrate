@@ -506,6 +506,9 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		if m.pendingConfirmClone != nil {
+			return m, nil
+		}
 		if !m.showManual && msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:

@@ -1311,8 +1311,8 @@ func repoSlugFromURL(rawURL string) string {
 	if strings.HasSuffix(lo, ".git") {
 		s = s[:len(s)-4]
 	}
-	// SSH form: git@github.com:owner/repo
-	if strings.Contains(s, "@") && strings.Contains(s, ":") {
+	// SCP-style SSH form: git@github.com:owner/repo (no scheme prefix).
+	if !strings.Contains(s, "://") && strings.Contains(s, "@") && strings.Contains(s, ":") {
 		if idx := strings.LastIndexByte(s, ':'); idx >= 0 {
 			return strings.ToLower(s[idx+1:])
 		}

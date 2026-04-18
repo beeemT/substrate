@@ -23,6 +23,9 @@ func TestRepoSlugFromURL(t *testing.T) {
 		{"mixed case preserved lowercase", "https://github.com/Owner/Repo.git", "owner/repo"},
 		{"empty", "", ""},
 		{"whitespace only", "   ", ""},
+		{"ssh protocol url", "ssh://git@github.com/owner/repo.git", "owner/repo"},
+		{"ssh protocol with port", "ssh://git@github.com:22/owner/repo.git", "owner/repo"},
+		{"https with user", "https://user@gitlab.com/owner/repo.git", "owner/repo"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

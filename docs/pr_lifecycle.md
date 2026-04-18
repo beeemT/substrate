@@ -19,7 +19,7 @@ Both `PersistGithubPR` and `PersistGitlabMR` write all three atomically.
 | `worktree.created` | Create draft PR (defer if no commits yet) | `glab mr create --draft` |
 | `worktree.reused` | Update PR description with new sub-plan | Update MR description |
 | `plan.approved` | Post plan as comment on source issue | Post plan as comment on source issue |
-| `work_item.completed` | Promote draft → ready | Promote draft → ready |
+| `work_item.completed` | Promote draft → open | Promote draft → open |
 
 ### Inbound refresh
 
@@ -34,7 +34,7 @@ thread fetching, no CI status.
   GithubPRs/GitlabMRs` (with event-replay fallback) and renders `OverviewReviewRow` (kind ·
   repoName · ref · state · URL) as plain bullet text under "Review artifacts".
 - **`o` keybind**: opens `OverviewLinksOverlay` — a flat list of tracker refs and PR/MR URLs.
-- PR/MR state (draft/ready/merged/closed) appears in the bullet but drives no action card,
+- PR/MR state (draft/open/merged/closed) appears in the bullet but drives no action card,
   no keybind, no automation.
 
 ### What happens after completion
@@ -119,15 +119,15 @@ detail card directly — no accordion chrome needed.
 Each list row (collapsed) shows the minimum needed to triage 30 items at a glance:
 
 ```
-  #42  acme/auth-svc    feat: distribute config    [ready]    ✗ CI  ◐ review
-  #43  acme/billing     feat: distribute config    [ready]    ✓ CI  ✓ review
+  #42  acme/auth-svc    feat: distribute config    [open]     ✗ CI  ◐ review
+  #43  acme/billing     feat: distribute config    [open]     ✓ CI  ✓ review
   #44  acme/gateway     feat: distribute config    [draft]    ○ CI  —
 ```
 
 Expanded card shows:
 
 ```
-  ┌─ #42  acme/auth-svc ──────────────────────────────── [ready] ─┐
+  ┌─ #42  acme/auth-svc ──────────────────────────────── [open] ──┐
   │  feat: distribute config                                       │
   │  feature/distribute-config → main                             │
   │  opened 2d ago · updated 3h ago                               │
@@ -157,7 +157,7 @@ type ArtifactItem struct {
     Title      string     // fetched from API; not stored today
     Ref        string     // "#42" or "!7"
     URL        string
-    State      string     // "draft" | "ready" | "merged" | "closed"
+    State      string     // "draft" | "open" | "merged" | "closed"
     HeadBranch string
     BaseBranch string     // target branch; not stored today
     Draft      bool
@@ -209,7 +209,7 @@ The Artifacts node icon reflects the worst-case state across all PRs for the wor
 
 ### Building block 2 — Inbound review state
 
-Extend the refresh loop to fetch review state for PRs in `ready` state:
+Extend the refresh loop to fetch review state for PRs in `open` state:
 
 - GitHub: `GET /repos/:owner/:repo/pulls/:number/reviews` → per-reviewer state + timestamp.
 - GitLab: `GET /projects/:id/merge_requests/:iid/approvals` for approval state.
@@ -243,7 +243,7 @@ This closes the loop: PR opened → reviewer leaves feedback → substrate addre
 
 ### Building block 4 — CI/check status
 
-- Extend the refresh loop: `GET /repos/:owner/:repo/commits/:ref/check-runs` for `ready` PRs.
+- Extend the refresh loop: `GET /repos/:owner/:repo/commits/:ref/check-runs` for `open` PRs.
 - Store per-check rows in a new `github_pr_checks` table (prID, name, status, conclusion).
 - The Artifacts view populates `ArtifactCheck` slice from this table.
 - Sidebar node icon reflects failing checks (see Building block 1 icon table).
@@ -276,7 +276,7 @@ When a follow-up plan is approved (`EventPlanApproved` for a follow-up session):
 
 ### Building block 7 — Merge gate from within substrate
 
-On the Artifacts view, when a PR is in `ready` state, all reviews `approved`, and CI passing:
+On the Artifacts view, when a PR is in `open` state, all reviews `approved`, and CI passing:
 
 - Add an `m` keybind: confirm dialog → merge API call (`PUT /repos/:owner/:repo/merges` or
   `gh pr merge`).

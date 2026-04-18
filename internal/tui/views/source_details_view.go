@@ -64,6 +64,9 @@ func (m *SourceDetailsModel) SetSession(session *domain.Session) {
 		}
 	} else {
 		// Preserve cursor, but clamp.
+		if m.cursor < 0 && len(m.items) > 0 {
+			m.cursor = 0
+		}
 		if m.cursor >= len(m.items) {
 			m.cursor = max(0, len(m.items)-1)
 		}
