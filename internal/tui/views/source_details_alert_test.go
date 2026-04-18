@@ -42,8 +42,8 @@ func TestSourceDetailsNoticeFitsRequestedSize(t *testing.T) {
 		t.Fatalf("notice = %#v, want question body with escalated question text", m.notice)
 	}
 	hints := m.KeybindHints()
-	if len(hints) < 2 || hints[0].Label != "Scroll" || hints[1].Label != "Open overview" {
-		t.Fatalf("keybind hints = %#v, want scroll + open overview", hints)
+	if len(hints) < 2 || hints[0].Label != "Navigate" || hints[1].Label != "Open overview" {
+		t.Fatalf("keybind hints = %#v, want navigate + open overview", hints)
 	}
 
 	lines := strings.Split(rendered, "\n")

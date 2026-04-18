@@ -1774,7 +1774,9 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 		t.Fatal("expected source-details selection to avoid starting a session tail")
 	}
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Source details", "Work item", "Combine auth and billing fixes into one coordinated rollout.", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42 · Fix auth", "Investigate auth timeouts in the login flow.", "Labels: bug, backend", "acme/rocket#43 · Repair billing", "Stabilize billing retries and duplicate charge handling."} {
+	// Accordion: multi-item sessions show collapsed rows with heading + state.
+	// Descriptions and metadata are only visible when expanded.
+	for _, want := range []string{"Source details", "Work item", "Combine auth and billing fixes into one coordinated rollout.", "Provider: GitHub", "Selected: 2 issues", "acme/rocket#42 · Fix auth", "acme/rocket#43 · Repair billing", "[open]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
@@ -1783,8 +1785,8 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 		t.Fatalf("selected task session = %q, want %q", updated.selectedTaskSessionID(), taskSidebarSourceDetailsID)
 	}
 	hints := updated.content.KeybindHints()
-	if len(hints) == 0 || hints[0].Label != "Scroll" {
-		t.Fatalf("keybind hints = %#v, want scroll hint", hints)
+	if len(hints) == 0 || hints[0].Label != "Navigate" {
+		t.Fatalf("keybind hints = %#v, want navigate hint", hints)
 	}
 	if updated.content.sessionLog.sessionID != "" {
 		t.Fatalf("session log session id = %q, want empty while showing source details", updated.content.sessionLog.sessionID)

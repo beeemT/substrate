@@ -26,16 +26,23 @@ type sourceDetailsNotice struct {
 }
 
 type SourceDetailsModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	viewport viewport.Model
-	session  *domain.Session
-	notice   *sourceDetailsNotice
-	styles   styles.Styles
-	width    int
-	height   int
+	viewport    viewport.Model
+	session     *domain.Session
+	notice      *sourceDetailsNotice
+	styles      styles.Styles
+	items       []domain.SourceSummary
+	cursor      int
+	expandedSet map[int]bool
+	width       int
+	height      int
 }
 
 func NewSourceDetailsModel(st styles.Styles) SourceDetailsModel {
-	return SourceDetailsModel{styles: st}
+	return SourceDetailsModel{
+		styles:      st,
+		cursor:      -1,
+		expandedSet: make(map[int]bool),
+	}
 }
 
 func (m *SourceDetailsModel) SetSize(w, h int) {
@@ -47,6 +54,23 @@ func (m *SourceDetailsModel) SetSize(w, h int) {
 func (m *SourceDetailsModel) SetSession(session *domain.Session) {
 	reset := m.session == nil || session == nil || m.session.ID != session.ID
 	m.session = session
+	m.items = sessionSourceItems(session)
+	if reset {
+		m.expandedSet = make(map[int]bool)
+		if len(m.items) > 0 {
+			m.cursor = 0
+		} else {
+			m.cursor = -1
+		}
+	} else {
+		// Preserve cursor, but clamp.
+		if m.cursor >= len(m.items) {
+			m.cursor = max(0, len(m.items)-1)
+		}
+		if len(m.items) == 0 {
+			m.cursor = -1
+		}
+	}
 	m.syncViewport(reset)
 }
 
@@ -56,41 +80,82 @@ func (m *SourceDetailsModel) SetNotice(notice *sourceDetailsNotice) {
 }
 
 func (m SourceDetailsModel) KeybindHints() []KeybindHint {
-	hints := []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+	if m.session == nil {
+		return nil
+	}
+	hints := []KeybindHint{{Key: "↑↓", Label: "Navigate"}}
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
-	if m.sourceItemsHaveURL() {
+	if len(m.items) > 1 {
+		hints = append(hints, KeybindHint{Key: "Space", Label: "Expand/collapse"})
+	}
+	if m.focusedItemHasURL() {
 		hints = append(hints, KeybindHint{Key: "o", Label: "Open in browser"})
 	}
-
 	return hints
 }
 
 func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
-	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		changed := false
 		switch msg.String() {
-		case "o":
-			if openCmd := m.openSourceItemsCmd(); openCmd != nil {
-				return m, openCmd
+		case "up", "k":
+			if len(m.items) > 1 && m.cursor > 0 {
+				m.cursor--
+				changed = true
+			} else if len(m.items) <= 1 {
+				// No items or single-item: scroll viewport.
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
 			}
-		case "up", "down", "j", "k", "pgup", "pgdown", "home", "end":
+		case "down", "j":
+			if len(m.items) > 1 && m.cursor < len(m.items)-1 {
+				m.cursor++
+				changed = true
+			} else if len(m.items) <= 1 {
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+		case "right", "l":
+			if len(m.items) > 1 && m.cursor >= 0 && !m.expandedSet[m.cursor] {
+				m.expandedSet[m.cursor] = true
+				changed = true
+			}
+		case " ":
+			if len(m.items) > 1 && m.cursor >= 0 {
+				m.expandedSet[m.cursor] = !m.expandedSet[m.cursor]
+				changed = true
+			}
+		case "o":
+			if cmd := m.openFocusedItemCmd(); cmd != nil {
+				return m, cmd
+			}
+		case "pgup", "pgdown", "home", "end":
+			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		if changed {
+			m.syncViewport(false)
+			m.ensureCursorVisible()
 		}
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				var cmd tea.Cmd
 				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
 			}
 		}
 	case tea.WindowSizeMsg:
 		m.syncViewport(false)
 	}
-
-	return m, cmd
+	return m, nil
 }
 
 func (m SourceDetailsModel) View() string {
@@ -98,16 +163,7 @@ func (m SourceDetailsModel) View() string {
 		return ""
 	}
 	header := m.header()
-	headerLines := len(strings.Split(header, "\n"))
-	if headerLines >= m.height {
-		return fitViewBox(header, m.width, m.height)
-	}
-	body := m.viewport.View()
-	if strings.TrimSpace(body) == "" {
-		body = m.styles.Muted.Render("No source details available.")
-	}
-
-	return fitViewBox(header+"\n"+body, m.width, m.height)
+	return fitViewBox(header+"\n"+m.viewport.View(), m.width, m.height)
 }
 
 func (m SourceDetailsModel) header() string {
@@ -123,12 +179,183 @@ func (m SourceDetailsModel) header() string {
 	if notice := m.noticeView(); notice != "" {
 		return header + "\n" + notice
 	}
-
 	return header
 }
 
 func (m SourceDetailsModel) noticeView() string {
 	return renderTaskViewNotice(m.styles, m.width, m.notice)
+}
+
+func (m *SourceDetailsModel) syncViewport(reset bool) {
+	if m.session == nil || m.width <= 0 || m.height <= 0 {
+		return
+	}
+	headerHeight := strings.Count(m.header(), "\n") + 1
+	m.viewport.Width = m.width
+	m.viewport.Height = max(1, m.height-headerHeight)
+	m.viewport.SetContent(m.buildBody())
+	if reset {
+		m.viewport.GotoTop()
+	}
+}
+
+func (m SourceDetailsModel) buildBody() string {
+	if m.session == nil || m.width <= 0 {
+		return ""
+	}
+	st := m.styles
+	sections := []string{
+		st.SectionLabel.Render("Summary"),
+		components.RenderCallout(st, components.CalloutSpec{
+			Body:  renderSourceSummaryBody(st, m.session, components.CalloutInnerWidth(st, m.width)),
+			Width: m.width,
+		}),
+	}
+	if workItem := renderAggregateWorkItemBody(m.session, m.width); workItem != "" {
+		sections = append(sections,
+			st.SectionLabel.Render("Work item"),
+			workItem,
+		)
+	}
+	if itemsContent := m.renderSourceItems(); itemsContent != "" {
+		sections = append(sections,
+			st.SectionLabel.Render("Selected items"),
+			itemsContent,
+		)
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// renderSourceItems builds the selected-items section content.
+// Single item: rendered inline (no accordion chrome).
+// Multiple items: accordion with cursor and expand/collapse.
+// No items: falls back to tracker refs or source IDs.
+func (m SourceDetailsModel) renderSourceItems() string {
+	switch {
+	case len(m.items) == 0:
+		return m.renderSourceItemsFallback()
+	case len(m.items) == 1:
+		return renderSourceItemBlock(m.styles, m.items[0], 0, m.width)
+	default:
+		return m.renderAccordion()
+	}
+}
+
+func (m SourceDetailsModel) renderAccordion() string {
+	var rows []string
+	for i, item := range m.items {
+		rows = append(rows, m.renderCollapsedRow(i, item))
+		if m.expandedSet[i] {
+			rows = append(rows, renderSourceItemBlock(m.styles, item, i, m.width))
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m SourceDetailsModel) renderCollapsedRow(idx int, item domain.SourceSummary) string {
+	heading := renderSourceItemHeading(item, idx)
+	state := strings.TrimSpace(item.State)
+	var line string
+	if state != "" {
+		line = fmt.Sprintf("  %s  [%s]", heading, state)
+	} else {
+		line = "  " + heading
+	}
+	line = ansi.Truncate(line, m.width, "…")
+	if idx == m.cursor {
+		return m.styles.SidebarSelected.Width(m.width).Render(line)
+	}
+	return m.styles.SettingsText.Render(line)
+}
+
+// renderSourceItemsFallback handles the case where no durable source summaries
+// exist — renders tracker refs or raw source IDs as a simple list.
+func (m SourceDetailsModel) renderSourceItemsFallback() string {
+	st := m.styles
+	refs := sessionTrackerRefs(m.session.Metadata)
+	rows := make([]string, 0, max(len(refs), len(m.session.SourceItemIDs)))
+	for _, ref := range refs {
+		rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), m.width, true))
+	}
+	if len(rows) == 0 {
+		for _, id := range m.session.SourceItemIDs {
+			if strings.TrimSpace(id) == "" {
+				continue
+			}
+			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), m.width, true))
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return strings.Join(rows, "\n")
+}
+
+// ensureCursorVisible scrolls the viewport so the focused item row is visible.
+func (m *SourceDetailsModel) ensureCursorVisible() {
+	if m.cursor < 0 || len(m.items) <= 1 {
+		return
+	}
+	// Count lines before the cursor to find its offset in the body.
+	// The body starts after Summary, optional Work item, and "Selected items" label.
+	// Rather than computing section sizes, scan the body text for cursor row position.
+	body := m.buildBody()
+	bodyLines := strings.Split(body, "\n")
+
+	// Find the cursor's collapsed row in the rendered body.
+	cursorLine := m.renderCollapsedRow(m.cursor, m.items[m.cursor])
+	plainCursor := ansi.Strip(cursorLine)
+	lineIdx := -1
+	for i, bl := range bodyLines {
+		if ansi.Strip(bl) == plainCursor {
+			lineIdx = i
+			break
+		}
+	}
+	if lineIdx < 0 {
+		return
+	}
+	if lineIdx < m.viewport.YOffset {
+		m.viewport.SetYOffset(lineIdx)
+	} else if lineIdx >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.SetYOffset(lineIdx - m.viewport.Height + 1)
+	}
+}
+
+// focusedItemHasURL reports whether the focused source item has a URL.
+func (m SourceDetailsModel) focusedItemHasURL() bool {
+	if len(m.items) == 0 {
+		return false
+	}
+	// Single item: always check it.
+	if len(m.items) == 1 {
+		return strings.TrimSpace(m.items[0].URL) != ""
+	}
+	if m.cursor >= 0 && m.cursor < len(m.items) {
+		return strings.TrimSpace(m.items[m.cursor].URL) != ""
+	}
+	return false
+}
+
+// openFocusedItemCmd returns a command to open the focused item's URL.
+func (m SourceDetailsModel) openFocusedItemCmd() tea.Cmd {
+	if len(m.items) == 0 {
+		return nil
+	}
+	// Single item: open directly if it has a URL.
+	if len(m.items) == 1 {
+		if url := strings.TrimSpace(m.items[0].URL); url != "" {
+			return func() tea.Msg { return OpenExternalURLMsg{URL: url} }
+		}
+		return nil
+	}
+	// Multiple items: open the focused item's URL directly.
+	if m.cursor >= 0 && m.cursor < len(m.items) {
+		if url := strings.TrimSpace(m.items[m.cursor].URL); url != "" {
+			return func() tea.Msg { return OpenExternalURLMsg{URL: url} }
+		}
+	}
+	return nil
 }
 
 func renderTaskViewNotice(st styles.Styles, width int, notice *sourceDetailsNotice) string {
@@ -143,52 +370,11 @@ func renderTaskViewNotice(st styles.Styles, width int, notice *sourceDetailsNoti
 	if hint := strings.TrimSpace(notice.Hint); hint != "" {
 		lines = append(lines, "", ansi.Hardwrap(st.Muted.Render(hint), innerWidth, true))
 	}
-
 	return components.RenderCallout(st, components.CalloutSpec{
 		Body:    strings.Join(filterEmptyStringsPreserveBlanks(lines), "\n"),
 		Width:   width,
 		Variant: notice.Variant,
 	})
-}
-
-func (m *SourceDetailsModel) syncViewport(reset bool) {
-	if m.session == nil || m.width <= 0 || m.height <= 0 {
-		return
-	}
-	headerHeight := len(strings.Split(m.header(), "\n"))
-	m.viewport.Width = m.width
-	m.viewport.Height = max(0, m.height-headerHeight)
-	m.viewport.SetContent(renderSourceDetailsDocument(m.styles, m.session, m.width))
-	if reset {
-		m.viewport.GotoTop()
-	}
-}
-
-func renderSourceDetailsDocument(st styles.Styles, session *domain.Session, width int) string {
-	if session == nil || width <= 0 {
-		return ""
-	}
-	sections := []string{
-		st.SectionLabel.Render("Summary"),
-		components.RenderCallout(st, components.CalloutSpec{
-			Body:  renderSourceSummaryBody(st, session, components.CalloutInnerWidth(st, width)),
-			Width: width,
-		}),
-	}
-	if workItem := renderAggregateWorkItemBody(session, width); workItem != "" {
-		sections = append(sections,
-			st.SectionLabel.Render("Work item"),
-			workItem,
-		)
-	}
-	if items := renderSourceItemsBody(st, session, width); items != "" {
-		sections = append(sections,
-			st.SectionLabel.Render("Selected items"),
-			items,
-		)
-	}
-
-	return strings.Join(sections, "\n\n")
 }
 
 func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width int) string {
@@ -201,7 +387,6 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 		}
 		rows = append(rows, ansi.Hardwrap(labelStyle.Render(label+": ")+valueStyle.Render(value), width, true))
 	}
-
 	add("Provider", detailProviderLabel(session.Source))
 	add("Selected", sessionSourceSelectionSummary(session))
 	if containers := sessionContainers(session); len(containers) > 0 {
@@ -220,7 +405,6 @@ func renderSourceSummaryBody(st styles.Styles, session *domain.Session, width in
 	if len(rows) == 0 {
 		return st.Muted.Render("No source summary available.")
 	}
-
 	return strings.Join(rows, "\n")
 }
 
@@ -228,39 +412,7 @@ func renderAggregateWorkItemBody(session *domain.Session, width int) string {
 	if session == nil || sessionSourceCount(session) <= 1 {
 		return ""
 	}
-
 	return renderMarkdownDocument(strings.TrimSpace(session.Description), width)
-}
-
-func renderSourceItemsBody(st styles.Styles, session *domain.Session, width int) string {
-	items := sessionSourceItems(session)
-	if len(items) > 0 {
-		blocks := make([]string, 0, len(items))
-		for i, item := range items {
-			blocks = append(blocks, renderSourceItemBlock(st, item, i, width))
-		}
-
-		return strings.Join(blocks, "\n\n")
-	}
-
-	refs := sessionTrackerRefs(session.Metadata)
-	rows := make([]string, 0, max(len(refs), len(session.SourceItemIDs)))
-	for _, ref := range refs {
-		rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+formatTrackerRef(ref)), width, true))
-	}
-	if len(rows) == 0 {
-		for _, id := range session.SourceItemIDs {
-			if strings.TrimSpace(id) == "" {
-				continue
-			}
-			rows = append(rows, ansi.Hardwrap(st.SettingsText.Render("• "+id), width, true))
-		}
-	}
-	if len(rows) == 0 {
-		return ""
-	}
-
-	return strings.Join(rows, "\n")
 }
 
 func renderSourceItemBlock(st styles.Styles, item domain.SourceSummary, index, width int) string {
@@ -709,46 +861,4 @@ func trackerRefContainer(ref domain.TrackerReference) string {
 	}
 
 	return ""
-}
-
-// sourceItemsHaveURL reports whether at least one source item has a non-empty URL.
-func (m SourceDetailsModel) sourceItemsHaveURL() bool {
-	items := sessionSourceItems(m.session)
-	for _, item := range items {
-		if strings.TrimSpace(item.URL) != "" {
-			return true
-		}
-	}
-
-	return false
-}
-
-// openSourceItemsCmd returns a tea.Cmd that either opens the single source item URL
-// directly or emits an OpenSourceItemsOverlayMsg for multi-item sessions.
-func (m SourceDetailsModel) openSourceItemsCmd() tea.Cmd {
-	items := sessionSourceItems(m.session)
-	if len(items) == 0 {
-		return nil
-	}
-
-	// Collect items that have URLs.
-	var urlItems []domain.SourceSummary
-	for _, item := range items {
-		if strings.TrimSpace(item.URL) != "" {
-			urlItems = append(urlItems, item)
-		}
-	}
-	if len(urlItems) == 0 {
-		return nil
-	}
-
-	// Single URL item: open directly.
-	if len(items) == 1 && len(urlItems) == 1 {
-		url := urlItems[0].URL
-		return func() tea.Msg { return OpenExternalURLMsg{URL: url} }
-	}
-
-	// Multiple source items: open the overlay for multi-select.
-	allItems := append([]domain.SourceSummary(nil), items...)
-	return func() tea.Msg { return OpenSourceItemsOverlayMsg{Items: allItems} }
 }
