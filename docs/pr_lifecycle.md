@@ -58,7 +58,7 @@ on reviewer changes.
    that back into a follow-up agent session.
 5. **PR description not updated on follow-up** — a `c`-triggered follow-up doesn't patch the
    existing PR description to reflect the new plan.
-6. **No merge gate from within substrate** — no TUI action to approve or merge a PR.
+6. **No open-in-browser from artifacts view** — PRs/MRs have URLs but the artifacts view has no dialog to open one or all in the system browser.
 7. **No configurable post-merge hooks** — e.g. close the linked issue on merge, archive the
    worktree, mark the work item as "truly done".
 
@@ -901,200 +901,96 @@ GitLab adapters. The handler checks `cfg.PostMergeCloseIssue` and calls the clos
 
 ---
 
-### Building block 6 — PR description sync on follow-up
+### Building block 6 — Open PRs in browser
 
 #### Goal
 
-When a follow-up plan is approved and an open PR exists for the work item, update the PR/MR
-description with the new plan text.
+Let the user open individual PR/MR URLs — or all at once — in the system browser directly from
+the Artifacts view. This follows the same pattern as the existing `OverviewLinksOverlay` dialog
+used for work item links.
 
 #### Current state
 
-The `onWorktreeReused` handler in `internal/adapter/github/adapter.go` (line ~610) already
-patches the PR description:
+The Artifacts view already has an `o` keybind that opens the focused PR/MR URL via
+`OpenExternalURLMsg`. However there is no way to:
 
-```go
-description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
-a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", ...), map[string]any{"body": description}, nil)
-```
-
-The equivalent logic exists in `internal/adapter/glab/adapter.go` via `glab mr update --description`.
-
-Neither adapter reacts to `plan.approved` for description updates — `onPlanApproved` only posts
-a comment on the source issue.
+- Open all PR/MR URLs at once (useful when a work item spans multiple repos).
+- See a navigable list of all PR/MR links before choosing which to open (the overview links
+  overlay does this for tickets + PRs, but only from the Overview page).
 
 #### Design
 
-1. **Extract a shared PR description builder** from the `onWorktreeReused` handlers:
+Add an `O` (shift-o) keybind to the Artifacts view that opens a links dialog scoped to
+PR/MR artifacts. The dialog reuses the same overlay frame, cursor, and open-URL mechanics as
+`OverviewLinksOverlay`.
 
-```go
-// In internal/adapter/github/adapter.go:
-func (a *GithubAdapter) updatePRDescription(ctx context.Context, owner, repo string, number int, planText string, trackerRefs []trackerRef, baseRepo repoCoordinates) error
+**Keybinds:**
 
-// In internal/adapter/glab/adapter.go:
-func (a *GlabAdapter) updateMRDescription(ctx context.Context, repoDir, sourceBranch, planText string) error
-```
-
-2. **Extend `onPlanApproved`** to also update PR descriptions:
-
-The `plan.approved` event payload already includes the plan text (it's what gets posted as a
-comment). The handler needs to:
-   a. Look up open PRs/MRs for the work item (via `SessionReviewArtifact` links).
-   b. For each open PR/MR, call the description update helper.
-
-The challenge: `onPlanApproved` currently receives a `commentBody` + `externalIDs` payload
-(see `extractPlanCommentPayload`). It does not receive work item ID or PR coordinates.
-
-**Solution:** Extend the `plan.approved` event payload to include `work_item_id`. The handler
-can then:
-- Look up `SessionReviewArtifact` links by work item ID.
-- For each link, load the provider row to get PR/MR coordinates.
-- Call the description update helper.
-
-3. **Call `onWorktreeReused`'s extracted helper** from the extended `onPlanApproved`:
-
-```go
-func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) error {
-	// Existing: post comment on source issue.
-	commentBody, externalIDs := extractPlanCommentPayload(payload)
-	// ... existing comment logic ...
-
-	// New: update PR description if work item has open PRs.
-	workItemID := extractWorkItemID(payload)
-	if workItemID != "" {
-		a.updateOpenPRDescriptions(ctx, workItemID, commentBody)
-	}
-	return nil
-}
-```
-
-#### Edge cases
-
-- **No open PR**: Skip description update (PR may have been merged between plan approval and
-  this handler running).
-- **Multiple open PRs**: Update all of them — each gets the same plan text.
-- **Follow-up on a merged PR**: The `SessionMerged` state (BB5) prevents follow-up, so this
-  path shouldn't trigger. But defensively: skip closed/merged PRs.
-
-#### Implementation touch-points
-
-| File | Change |
+| Key | Behaviour |
 |---|---|
-| `internal/adapter/github/adapter.go` | Extract `updatePRDescription` helper; extend `onPlanApproved` |
-| `internal/adapter/glab/adapter.go` | Extract `updateMRDescription` helper; extend `onPlanApproved` |
-| `internal/orchestrator/planning.go` | Include `work_item_id` in `plan.approved` event payload |
+| `o` | Open focused PR/MR URL in browser (existing; unchanged) |
+| `O` | Open PR links dialog |
 
----
+**Dialog keybinds (when open):**
 
-### Building block 7 — Merge gate from within substrate
+| Key | Behaviour |
+|---|---|
+| `↑` / `↓` | Navigate items |
+| `Enter` / `o` | Open selected PR/MR URL in browser |
+| `a` | Open all PR/MR URLs in browser |
+| `Esc` | Close dialog |
 
-#### Goal
+The dialog lists all PRs/MRs for the current work item. Each row shows:
 
-Let the user merge a PR/MR directly from the Artifacts view when all preconditions are met.
+```
+  #42  acme/auth-svc    feat: distribute config    [open]
+  #43  acme/billing     feat: distribute config    [merged]
+```
 
-#### Preconditions for the `m` keybind
+When there is only one PR/MR, `O` opens it directly (no dialog).
 
-The keybind is shown only when ALL of:
+#### "Open all" behaviour
 
-1. Config flag `allow_substrate_merge: true` is set (opt-in).
-2. The focused PR/MR is in `open` state (not `draft`, `merged`, or `closed`).
-3. All reviews are `approved` (no `changes_requested`, no pending reviews). If no reviews
-   exist, this condition is satisfied (some repos don't require reviews).
-4. All CI checks are `success` or `skipped` (no `failure`, `in_progress`, `queued`).
-   If no checks exist, this condition is satisfied.
+On `a`, iterate all items and emit an `OpenExternalURLMsg` for each URL. The browser will
+open one tab per URL. This is the same approach the `OverviewLinksOverlay` would use if it had
+an "open all" action — no new infrastructure needed.
 
-#### Config
+#### Implementation: `ArtifactsLinksOverlay`
 
-Add to `internal/config/config.go`:
+A new overlay component following the `OverviewLinksOverlay` pattern:
 
 ```go
-// In GithubConfig:
-AllowSubstrateMerge bool `yaml:"allow_substrate_merge"`
-
-// In GlabConfig:
-AllowSubstrateMerge bool `yaml:"allow_substrate_merge"`
-```
-
-The config value must be threaded through to the TUI so the artifacts view can check it.
-Add it to the `AppServices` or `AppConfig` struct that `App` holds.
-
-#### UX flow
-
-1. User focuses a PR that meets all preconditions.
-2. `m` appears in hints: "merge".
-3. On `m` press:
-   a. Show a confirmation dialog: "Merge #42 into main? [y/n]"
-   b. On `y`: emit `MergePRMsg`.
-   c. On `n`: dismiss dialog.
-4. App handles `MergePRMsg`:
-   a. Calls the adapter's merge method.
-   b. On success: the next refresh cycle will pick up `state = merged`.
-   c. On failure: show error in status bar.
-
-#### API calls
-
-**GitHub:**
-
-```
-PUT /repos/:owner/:repo/pulls/:number/merge
-```
-
-Body: `{ "merge_method": "merge" }` (or `squash` / `rebase` — future config option).
-Response: 200 on success, 405 if not mergeable, 409 if SHA mismatch.
-
-**GitLab:**
-
-```
-PUT /projects/:id/merge_requests/:iid/merge
-```
-
-Or via CLI: `glab mr merge :iid --yes` in the repo directory.
-
-#### Adapter interface
-
-```go
-// In internal/adapter/github/adapter.go:
-func (a *GithubAdapter) MergePR(ctx context.Context, owner, repo string, number int) error
-
-// In internal/adapter/glab/adapter.go:
-func (a *GlabAdapter) MergeMR(ctx context.Context, projectPath string, iid int) error
-```
-
-The TUI calls these through a `PRMerger` interface similar to `ReviewCommentFetcher` (BB3):
-
-```go
-type PRMerger interface {
-	MergePR(ctx context.Context, provider, repoIdentifier string, number int) error
+type ArtifactsLinksOverlay struct {
+	active bool
+	items  []overviewLinksItem // reuse the same item type
+	cursor int
+	vp     viewport.Model
+	styles styles.Styles
+	width  int
+	height int
 }
 ```
 
-Dispatcher routes to the appropriate adapter.
+The overlay is owned by `ArtifactsModel` (not by `App`), since it is scoped to the artifacts
+content panel. When the overlay is active, `ArtifactsModel.Update` routes all input to the
+overlay first.
+
+Alternatively, if the item list is structurally identical to what `OverviewLinksOverlay` already
+renders (label + meta + URL), consider reusing `OverviewLinksOverlay` directly with an `a` keybind
+extension, populated from `[]ArtifactItem` instead of `[]OverviewReviewRow`. This avoids a
+second overlay implementation.
 
 #### Messages
 
-```go
-type MergePRMsg struct {
-	Item ArtifactItem
-}
-
-type PRMergedMsg struct {
-	Item ArtifactItem
-	Err  error
-}
-```
+No new message types needed. Opening URLs uses the existing `OpenExternalURLMsg`.
+The overlay open/close is internal to `ArtifactsModel` state.
 
 #### Implementation touch-points
 
 | File | Change |
 |---|---|
-| `internal/config/config.go` | `AllowSubstrateMerge` on `GithubConfig`, `GlabConfig` |
-| `internal/adapter/github/adapter.go` | `MergePR` method |
-| `internal/adapter/glab/adapter.go` | `MergeMR` method |
-| `internal/adapter/pr_merger.go` (new) | `PRMerger` interface + dispatcher |
-| `internal/tui/views/artifacts_view.go` | `m` keybind with precondition check; confirm dialog; `MergePRMsg` emission |
-| `internal/tui/views/msgs.go` | `MergePRMsg`, `PRMergedMsg` |
-| `internal/tui/views/app.go` | Handle `MergePRMsg` → adapter call; handle `PRMergedMsg` → status bar feedback |
-| `cmd/substrate/main.go` | Wire `PRMerger` dispatcher; thread merge config to TUI |
+| `internal/tui/views/artifacts_view.go` | `O` keybind; links dialog rendering and input routing; `a` (open all) handler |
+| `internal/tui/views/overlay_overview_links.go` | Optionally extend with `a` keybind for open-all, or extract shared overlay base |
 
 ---
 
@@ -1105,24 +1001,19 @@ BB1 (artifacts view) ← DONE
  │
  ├─► BB2 (review state)        ← DONE
  │    │
- │    ├─► BB3 (review → agent)  ← requires: BB2 review data + follow-up path
- │    │
- │    └─► BB7 (merge gate)      ← requires: BB2 reviews + BB4 checks + config
+ │    └─► BB3 (review → agent)  ← requires: BB2 review data + follow-up path
  │
  ├─► BB4 (CI/check status)      ← DONE
- │    │
- │    └─► BB7 (merge gate)      ← requires: BB2 + BB4
  │
  ├─► BB5 (post-merge)           ← independent of BB2/BB4; requires: config + state
  │
- └─► BB6 (description sync)     ← independent; requires: plan.approved payload extension
+ └─► BB6 (open PRs in browser)  ← independent; no data dependencies
 ```
 
-**Recommended implementation order:** BB2 → BB4 → BB3 → BB6 → BB5 → BB7.
+**Recommended implementation order:** BB6 → BB3 → BB5.
 
-BB2 and BB4 can be parallelized (different API endpoints, different tables, no shared types).
-BB6 is small and self-contained — can be done at any point after BB1. BB5 depends on the
-`SessionMerged` state but not on BB2/BB4 data. BB7 is the capstone: it gates on review + CI state.
+BB6 is the smallest and has no dependencies beyond BB1. BB3 requires BB2 review data.
+BB5 depends on the `SessionMerged` state but not on BB2/BB4 data.
 
 ---
 
@@ -1133,21 +1024,20 @@ BB6 is small and self-contained — can be done at any point after BB1. BB5 depe
 | `internal/domain/review_artifact.go` | `GithubPRReview`, `GitlabMRReview`, `GithubPRCheck`, `GitlabMRCheck` |
 | `internal/domain/work_item.go` | `SessionMerged` state |
 | `internal/domain/event.go` | `EventPRMerged`, `EventPRReviewStateChanged`, `EventPRCIFailed` |
-| `internal/config/config.go` | `PostMergeCloseIssue`, `AllowSubstrateMerge` |
+| `internal/config/config.go` | `PostMergeCloseIssue` |
 | `internal/repository/interfaces.go` | Review + check repository interfaces |
 | `internal/repository/transacter.go` | New fields on `Resources` |
 | `internal/repository/sqlite/` | Review + check SQLite implementations |
 | `internal/service/` | Review + check thin services |
 | `internal/adapter/review_artifact_event.go` | Extend `ReviewArtifactRepos` |
 | `internal/adapter/review_comment.go` (new) | `ReviewCommentFetcher` interface + types |
-| `internal/adapter/pr_merger.go` (new) | `PRMerger` interface + dispatcher |
-| `internal/adapter/github/adapter.go` | Refresh loop extensions, `FetchReviewComments`, `MergePR` |
-| `internal/adapter/glab/adapter.go` | Refresh loop extensions, `FetchReviewComments`, `MergeMR` |
+| `internal/adapter/github/adapter.go` | Refresh loop extensions, `FetchReviewComments` |
+| `internal/adapter/glab/adapter.go` | Refresh loop extensions, `FetchReviewComments` |
 | `internal/orchestrator/planning.go` | Extend `plan.approved` payload with `work_item_id` |
 | `internal/tui/views/overview.go` | `ArtifactReview`, `ArtifactCheck` structs; extend `ArtifactItem`; extend `buildArtifactItems` |
-| `internal/tui/views/artifacts_view.go` | Review/check rendering; `f` keybind; `m` keybind; review feedback overlay |
+| `internal/tui/views/artifacts_view.go` | Review/check rendering; `f` keybind; `O` keybind; open-all handler; links dialog |
 | `internal/tui/views/sidebar.go` | Aggregate review/check state driving icon |
-| `internal/tui/views/app.go` | `FollowUpFromReviewMsg`, `MergePRMsg` handling; wire new services |
+| `internal/tui/views/app.go` | `FollowUpFromReviewMsg` handling; wire new services |
 | `internal/tui/views/msgs.go` | New message types |
 | `cmd/substrate/main.go` | Wire all new services, repos, subscriptions |
 | `migrations/011_pr_review_state.sql` (new) | Review tables |
