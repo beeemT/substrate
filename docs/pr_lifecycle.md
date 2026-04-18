@@ -1103,13 +1103,13 @@ type PRMergedMsg struct {
 ```
 BB1 (artifacts view) ← DONE
  │
- ├─► BB2 (review state)        ← requires: migration, adapter, TUI
+ ├─► BB2 (review state)        ← DONE
  │    │
  │    ├─► BB3 (review → agent)  ← requires: BB2 review data + follow-up path
  │    │
  │    └─► BB7 (merge gate)      ← requires: BB2 reviews + BB4 checks + config
  │
- ├─► BB4 (CI/check status)      ← requires: migration, adapter, TUI
+ ├─► BB4 (CI/check status)      ← IN PROGRESS
  │    │
  │    └─► BB7 (merge gate)      ← requires: BB2 + BB4
  │

@@ -146,6 +146,7 @@ type ArtifactItem struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Reviews   []ArtifactReview
+	Checks    []ArtifactCheck
 }
 
 // ArtifactReview is the view-layer projection of a PR/MR review.
@@ -153,6 +154,13 @@ type ArtifactReview struct {
 	ReviewerLogin string
 	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
 	SubmittedAt   time.Time
+}
+
+// ArtifactCheck is the view-layer projection of a CI check run.
+type ArtifactCheck struct {
+	Name       string
+	Status     string // "queued" | "in_progress" | "completed"
+	Conclusion string // "success" | "failure" | ...
 }
 
 type OverviewActivityItem struct {
@@ -1817,6 +1825,21 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 							}
 						}
 					}
+					var checks []ArtifactCheck
+					if a.svcs.GithubPRChecks != nil {
+						ghChecks, err := a.svcs.GithubPRChecks.ListByPRID(ctx, pr.ID)
+						if err != nil {
+							slog.Warn("failed to list github PR checks", "error", err, "prID", pr.ID)
+						} else {
+							for _, c := range ghChecks {
+								checks = append(checks, ArtifactCheck{
+									Name:       c.Name,
+									Status:     c.Status,
+									Conclusion: c.Conclusion,
+								})
+							}
+						}
+					}
 					items = append(items, ArtifactItem{
 						Provider:  "github",
 						Kind:      "PR",
@@ -1830,6 +1853,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						CreatedAt: pr.CreatedAt,
 						UpdatedAt: pr.UpdatedAt,
 						Reviews:   reviews,
+						Checks:    checks,
 					})
 				}
 			case providerGitlab:
@@ -1858,6 +1882,21 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 							}
 						}
 					}
+					var checks []ArtifactCheck
+					if a.svcs.GitlabMRChecks != nil {
+						glChecks, err := a.svcs.GitlabMRChecks.ListByMRID(ctx, mr.ID)
+						if err != nil {
+							slog.Warn("failed to list gitlab MR checks", "error", err, "mrID", mr.ID)
+						} else {
+							for _, c := range glChecks {
+								checks = append(checks, ArtifactCheck{
+									Name:       c.Name,
+									Status:     c.Status,
+									Conclusion: c.Conclusion,
+								})
+							}
+						}
+					}
 					items = append(items, ArtifactItem{
 						Provider:  "gitlab",
 						Kind:      "MR",
@@ -1870,6 +1909,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						CreatedAt: mr.CreatedAt,
 						UpdatedAt: mr.UpdatedAt,
 						Reviews:   reviews,
+						Checks:    checks,
 					})
 				}
 			}

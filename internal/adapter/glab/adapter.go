@@ -366,6 +366,18 @@ type glabNote struct {
 	Resolved   bool `json:"resolved"`
 }
 
+type glabPipeline struct {
+	ID     int    `json:"id"`
+	Status string `json:"status"`
+	Ref    string `json:"ref"`
+}
+
+type glabJob struct {
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 // mrView returns the current MR metadata for the branch when one exists.
 func (a *GlabAdapter) mrView(ctx context.Context, dir, branch string) (glabMRView, bool) {
 	out, err := a.runner(ctx, dir, "glab",
@@ -766,8 +778,14 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 				slog.Warn("glab: delete mr reviews on terminal state failed", "iid", mr.IID, "error", err)
 			}
 		}
+		if a.repos.GitlabMRChecks != nil {
+			if err := a.repos.GitlabMRChecks.DeleteByMRID(ctx, mr.ID); err != nil {
+				slog.Warn("glab: delete mr checks on terminal state failed", "iid", mr.IID, "error", err)
+			}
+		}
 	} else {
 		a.refreshMRReviews(ctx, mr, repoDir)
+		a.refreshMRChecks(ctx, mr, repoDir)
 	}
 }
 
@@ -856,5 +874,90 @@ func (a *GlabAdapter) refreshMRReviews(ctx context.Context, mr domain.GitlabMerg
 		if err := a.repos.GitlabMRReviews.Upsert(ctx, review); err != nil {
 			slog.Warn("glab: upsert mr review failed", "iid", mr.IID, "reviewer", review.ReviewerLogin, "error", err)
 		}
+	}
+}
+
+// refreshMRChecks fetches the latest pipeline jobs for a GitLab MR
+// and upserts them as check rows.
+func (a *GlabAdapter) refreshMRChecks(ctx context.Context, mr domain.GitlabMergeRequest, repoDir string) {
+	if a.repos.GitlabMRChecks == nil {
+		return
+	}
+
+	// Fetch the latest pipeline for the MR source branch.
+	pipelinesOut, err := a.runner(ctx, repoDir, "glab", "api",
+		fmt.Sprintf("/projects/%s/pipelines?ref=%s&per_page=1&order_by=updated_at",
+			url.PathEscape(mr.ProjectPath), url.QueryEscape(mr.SourceBranch)))
+	if err != nil {
+		slog.Warn("glab: fetch mr pipelines failed", "iid", mr.IID, "error", err)
+		return
+	}
+
+	var pipelines []glabPipeline
+	if err := json.Unmarshal(pipelinesOut, &pipelines); err != nil {
+		slog.Warn("glab: parse mr pipelines failed", "iid", mr.IID, "error", err)
+		return
+	}
+	if len(pipelines) == 0 {
+		return
+	}
+
+	// Fetch jobs for the latest pipeline.
+	jobsOut, err := a.runner(ctx, repoDir, "glab", "api",
+		fmt.Sprintf("/projects/%s/pipelines/%d/jobs",
+			url.PathEscape(mr.ProjectPath), pipelines[0].ID))
+	if err != nil {
+		slog.Warn("glab: fetch pipeline jobs failed", "iid", mr.IID, "pipeline", pipelines[0].ID, "error", err)
+		return
+	}
+
+	var jobs []glabJob
+	if err := json.Unmarshal(jobsOut, &jobs); err != nil {
+		slog.Warn("glab: parse pipeline jobs failed", "iid", mr.IID, "error", err)
+		return
+	}
+
+	now := time.Now()
+	// Delete existing and re-insert fresh state.
+	if err := a.repos.GitlabMRChecks.DeleteByMRID(ctx, mr.ID); err != nil {
+		slog.Warn("glab: delete mr checks failed", "iid", mr.IID, "error", err)
+	}
+	for _, job := range jobs {
+		if job.Name == "" {
+			continue
+		}
+		status, conclusion := glabJobStatusMap(job.Status)
+		check := domain.GitlabMRCheck{
+			ID:         domain.NewID(),
+			MRID:       mr.ID,
+			Name:       job.Name,
+			Status:     status,
+			Conclusion: conclusion,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		if err := a.repos.GitlabMRChecks.Upsert(ctx, check); err != nil {
+			slog.Warn("glab: upsert mr check failed", "iid", mr.IID, "job", job.Name, "error", err)
+		}
+	}
+}
+
+// glabJobStatusMap maps a GitLab CI job status to (status, conclusion) pair.
+func glabJobStatusMap(jobStatus string) (string, string) {
+	switch jobStatus {
+	case "success":
+		return "completed", "success"
+	case "failed":
+		return "completed", "failure"
+	case "canceled":
+		return "completed", "cancelled"
+	case "skipped":
+		return "completed", "skipped"
+	case "running", "pending":
+		return "in_progress", ""
+	case "manual":
+		return "queued", ""
+	default:
+		return "queued", ""
 	}
 }

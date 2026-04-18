@@ -212,6 +212,10 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 	if reviewSummary != "" {
 		line += "  " + reviewSummary
 	}
+	ciSummary := m.ciSummaryText(item)
+	if ciSummary != "" {
+		line += "  " + ciSummary
+	}
 	line = ansi.Truncate(line, m.width, "…")
 
 	if idx == m.cursor {
@@ -242,6 +246,31 @@ func (m ArtifactsModel) reviewSummaryText(item ArtifactItem) string {
 		return m.styles.Success.Render("✓ review")
 	default:
 		return m.styles.Muted.Render("◐ review")
+	}
+}
+
+// ciSummaryText returns a compact CI status string for the collapsed row.
+func (m ArtifactsModel) ciSummaryText(item ArtifactItem) string {
+	if len(item.Checks) == 0 {
+		return ""
+	}
+	hasFailure := false
+	hasInProgress := false
+	for _, c := range item.Checks {
+		if c.Conclusion == "failure" {
+			hasFailure = true
+		}
+		if c.Status == "in_progress" || c.Status == "queued" {
+			hasInProgress = true
+		}
+	}
+	switch {
+	case hasFailure:
+		return m.styles.Error.Render("✗ CI")
+	case hasInProgress:
+		return m.styles.Muted.Render("○ CI")
+	default:
+		return m.styles.Success.Render("✓ CI")
 	}
 }
 
@@ -277,6 +306,13 @@ func (m ArtifactsModel) renderExpandedCard(idx int) string {
 			} else {
 				rows = append(rows, renderReviewLine(m.styles, innerWidth, r.ReviewerLogin, r.State, r.SubmittedAt))
 			}
+		}
+	}
+	if len(item.Checks) > 0 {
+		rows = append(rows, "") // blank separator line
+		rows = append(rows, m.styles.SectionLabel.Render("CI"))
+		for _, c := range item.Checks {
+			rows = append(rows, renderCheckLine(m.styles, innerWidth, c))
 		}
 	}
 
@@ -317,4 +353,25 @@ func formatRelativeTime(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+func renderCheckLine(st styles.Styles, width int, check ArtifactCheck) string {
+	var icon string
+	switch {
+	case check.Conclusion == "failure":
+		icon = st.Error.Render("✗")
+	case check.Conclusion == "success":
+		icon = st.Success.Render("✓")
+	case check.Status == "in_progress":
+		icon = st.Muted.Render("○")
+	case check.Conclusion == "skipped":
+		icon = st.Muted.Render("–")
+	default:
+		icon = st.Muted.Render("◌")
+	}
+	line := fmt.Sprintf("  %s %-30s %s", icon, check.Name, check.Conclusion)
+	if check.Conclusion == "" && check.Status != "" {
+		line = fmt.Sprintf("  %s %-30s %s", icon, check.Name, check.Status)
+	}
+	return ansi.Truncate(line, width, "…")
 }

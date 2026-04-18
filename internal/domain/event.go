@@ -79,6 +79,7 @@ const (
 	EventReimplementationStarted EventType = "reimplementation.started"
 	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
 	EventPRReviewStateChanged   EventType = "pr.review_state_changed"
+	EventPRCIFailed          EventType = "pr.ci_failed"
 
 	// Adapter error events
 	EventAdapterError EventType = "adapter.error"

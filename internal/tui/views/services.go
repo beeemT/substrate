@@ -26,6 +26,8 @@ type Services struct {
 	SessionArtifacts      *service.SessionReviewArtifactService
 	GithubPRReviews       *service.GithubPRReviewService
 	GitlabMRReviews       *service.GitlabMRReviewService
+	GithubPRChecks        *service.GithubPRCheckService
+	GitlabMRChecks        *service.GitlabMRCheckService
 	NewSessionFilters     *service.SessionFilterService
 	NewSessionFilterLocks *service.SessionFilterLockService
 	// Orchestration pipelines backed by the configured agent harnesses.

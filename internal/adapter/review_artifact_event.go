@@ -19,6 +19,8 @@ type ReviewArtifactRepos struct {
 	SessionArtifacts *service.SessionReviewArtifactService
 	GithubPRReviews  *service.GithubPRReviewService
 	GitlabMRReviews  *service.GitlabMRReviewService
+	GithubPRChecks  *service.GithubPRCheckService
+	GitlabMRChecks  *service.GitlabMRCheckService
 }
 
 func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {

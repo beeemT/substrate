@@ -68,6 +68,8 @@ type coreServices struct {
 	sessionArtifact      *service.SessionReviewArtifactService
 	ghPRReview           *service.GithubPRReviewService
 	glMRReview           *service.GitlabMRReviewService
+	ghPRCheck            *service.GithubPRCheckService
+	glMRCheck            *service.GitlabMRCheckService
 	newSessionFilter     *service.SessionFilterService
 	newSessionFilterLock *service.SessionFilterLockService
 	settings             *views.SettingsService
@@ -157,6 +159,8 @@ func run() error {
 		SessionArtifacts:      services.sessionArtifact,
 		GithubPRReviews:       services.ghPRReview,
 		GitlabMRReviews:       services.glMRReview,
+		GithubPRChecks:        services.ghPRCheck,
+		GitlabMRChecks:        services.glMRCheck,
 		NewSessionFilters:     services.newSessionFilter,
 		NewSessionFilterLocks: services.newSessionFilterLock,
 		Cfg:                   cfg,
@@ -313,6 +317,8 @@ func buildCoreServices(
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(transacter)
 	ghPRReviewSvc := service.NewGithubPRReviewService(transacter)
 	glMRReviewSvc := service.NewGitlabMRReviewService(transacter)
+	ghPRCheckSvc := service.NewGithubPRCheckService(transacter)
+	glMRCheckSvc := service.NewGitlabMRCheckService(transacter)
 	newSessionFilterSvc := service.NewSessionFilterService(transacter)
 	newSessionFilterLockSvc := service.NewSessionFilterLockService(transacter)
 
@@ -330,6 +336,8 @@ func buildCoreServices(
 		sessionArtifact:      sessionArtifactSvc,
 		ghPRReview:           ghPRReviewSvc,
 		glMRReview:           glMRReviewSvc,
+		ghPRCheck:            ghPRCheckSvc,
+		glMRCheck:            glMRCheckSvc,
 		newSessionFilter:     newSessionFilterSvc,
 		newSessionFilterLock: newSessionFilterLockSvc,
 		settings: views.NewSettingsService(
@@ -414,6 +422,8 @@ func buildAdapterSetup(
 			SessionArtifacts: services.sessionArtifact,
 			GithubPRReviews: services.ghPRReview,
 			GitlabMRReviews: services.glMRReview,
+			GithubPRChecks:  services.ghPRCheck,
+			GitlabMRChecks:  services.glMRCheck,
 		},
 	)
 	repoSources := app.BuildRepoSources(ctx, cfg)

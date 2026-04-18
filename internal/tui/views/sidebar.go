@@ -83,6 +83,7 @@ type SidebarEntry struct {
 	HasOpenQuestion bool
 	HasInterrupted  bool
 	ArtifactAggregateReviewState string // "approved" | "changes_requested" | "" (none)
+	ArtifactAggregateCIState     string // "success" | "failure" | "in_progress" | "" (none)
 	GroupTitle      string
 }
 
@@ -165,14 +166,25 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 		return st.Muted.Render("◌")
 	}
 	if e.Kind == SidebarEntryTaskArtifacts {
+		// CI failure takes highest priority.
+		if e.ArtifactAggregateCIState == "failure" {
+			return st.Error.Render("✗")
+		}
 		switch e.ArtifactAggregateReviewState {
 		case "changes_requested":
 			return st.Warning.Render("◐")
+		}
+		if e.ArtifactAggregateCIState == "in_progress" {
+			return st.Muted.Render("○")
+		}
+		switch e.ArtifactAggregateReviewState {
 		case "approved":
 			return st.Success.Render("✓")
-		default:
-			return st.Muted.Render("◌")
 		}
+		if e.ArtifactAggregateCIState == "success" {
+			return st.Success.Render("✓")
+		}
+		return st.Muted.Render("◌")
 	}
 	if e.Kind == SidebarEntryTaskSession {
 		switch e.SessionStatus {

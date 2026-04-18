@@ -166,3 +166,17 @@ type GitlabMRReviewRepository interface {
 	ListByMRID(ctx context.Context, mrID string) ([]domain.GitlabMRReview, error)
 	DeleteByMRID(ctx context.Context, mrID string) error
 }
+
+// GithubPRCheckRepository provides persistence for GitHub PR check runs.
+type GithubPRCheckRepository interface {
+	Upsert(ctx context.Context, check domain.GithubPRCheck) error
+	ListByPRID(ctx context.Context, prID string) ([]domain.GithubPRCheck, error)
+	DeleteByPRID(ctx context.Context, prID string) error
+}
+
+// GitlabMRCheckRepository provides persistence for GitLab MR pipeline jobs.
+type GitlabMRCheckRepository interface {
+	Upsert(ctx context.Context, check domain.GitlabMRCheck) error
+	ListByMRID(ctx context.Context, mrID string) ([]domain.GitlabMRCheck, error)
+	DeleteByMRID(ctx context.Context, mrID string) error
+}

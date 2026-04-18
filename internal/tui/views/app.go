@@ -2588,6 +2588,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 
 	if artifactItems := a.buildArtifactItems(wi); len(artifactItems) > 0 {
 		aggregateReview := aggregateReviewState(artifactItems)
+		aggregateci := aggregateCIState(artifactItems)
 		entries = append(entries, SidebarEntry{
 			Kind:                         SidebarEntryTaskArtifacts,
 			WorkItemID:                   workItemID,
@@ -2596,6 +2597,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			SubtitleText:                 fmt.Sprintf("%d artifact%s", len(artifactItems), pluralS(len(artifactItems))),
 			LastActivity:                 wi.UpdatedAt,
 			ArtifactAggregateReviewState: aggregateReview,
+			ArtifactAggregateCIState:     aggregateci,
 		})
 	}
 
@@ -2729,6 +2731,29 @@ func aggregateReviewState(items []ArtifactItem) string {
 		return "approved"
 	}
 	return ""
+}
+
+func aggregateCIState(items []ArtifactItem) string {
+	hasChecks := false
+	for _, item := range items {
+		for _, c := range item.Checks {
+			hasChecks = true
+			if c.Conclusion == "failure" {
+				return "failure"
+			}
+		}
+	}
+	if !hasChecks {
+		return ""
+	}
+	for _, item := range items {
+		for _, c := range item.Checks {
+			if c.Status == "in_progress" || c.Status == "queued" {
+				return "in_progress"
+			}
+		}
+	}
+	return "success"
 }
 
 func (a *App) rebuildSidebar() {

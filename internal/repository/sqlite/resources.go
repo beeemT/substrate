@@ -30,5 +30,7 @@ func ResourcesFactory(
 		SessionReviewArtifacts: NewSessionReviewArtifactRepo(tx),
 		GithubPRReviews:        NewGithubPRReviewRepo(tx),
 		GitlabMRReviews:        NewGitlabMRReviewRepo(tx),
+		GithubPRChecks:  NewGithubPRCheckRepo(tx),
+		GitlabMRChecks:  NewGitlabMRCheckRepo(tx),
 	}, nil
 }

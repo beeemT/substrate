@@ -104,6 +104,13 @@ type githubReview struct {
 	SubmittedAt *time.Time  `json:"submitted_at"`
 }
 
+type githubCheckRun struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+}
+
 type worktreePayload struct {
 	WorkspaceID   string                    `json:"workspace_id"`
 	WorkItemID    string                    `json:"work_item_id"`
@@ -1642,6 +1649,24 @@ func (a *GithubAdapter) refreshPRs(ctx context.Context, workspaceID string) {
 				}
 			}
 		}
+		// Fetch and upsert PR check runs.
+		if a.repos.GithubPRChecks != nil && pr.HeadBranch != "" {
+			state := githubPRState(freshPull)
+			if state == "merged" || state == "closed" {
+				if err := a.repos.GithubPRChecks.DeleteByPRID(ctx, pr.ID); err != nil {
+					slog.Warn("github: delete pr checks on terminal state failed", "pr", pr.ID, "error", err)
+				}
+			} else {
+				var checkResp struct {
+					CheckRuns []githubCheckRun `json:"check_runs"`
+				}
+				if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs", pr.Owner, pr.Repo, pr.HeadBranch), nil, &checkResp); err != nil {
+					slog.Warn("github: refresh pr checks failed", "pr", pr.Number, "error", err)
+				} else {
+					a.upsertPRChecks(ctx, pr.ID, checkResp.CheckRuns)
+				}
+			}
+		}
 	}
 }
 
@@ -1678,6 +1703,28 @@ func (a *GithubAdapter) upsertPRReviews(ctx context.Context, prID string, apiRev
 		}
 		if err := a.repos.GithubPRReviews.Upsert(ctx, review); err != nil {
 			slog.Warn("github: upsert pr review failed", "pr", prID, "reviewer", login, "error", err)
+		}
+	}
+}
+
+// upsertPRChecks stores the latest check-run state per check name.
+func (a *GithubAdapter) upsertPRChecks(ctx context.Context, prID string, runs []githubCheckRun) {
+	now := time.Now()
+	for _, run := range runs {
+		if run.Name == "" {
+			continue
+		}
+		check := domain.GithubPRCheck{
+			ID:         domain.NewID(),
+			PRID:       prID,
+			Name:       run.Name,
+			Status:     strings.ToLower(run.Status),
+			Conclusion: strings.ToLower(run.Conclusion),
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		if err := a.repos.GithubPRChecks.Upsert(ctx, check); err != nil {
+			slog.Warn("github: upsert pr check failed", "pr", prID, "check", run.Name, "error", err)
 		}
 	}
 }

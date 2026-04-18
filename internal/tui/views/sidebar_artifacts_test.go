@@ -55,13 +55,21 @@ func TestSidebarArtifactsEntryStatusIcon(t *testing.T) {
 	st := makeSidebarStyles()
 
 	tests := []struct {
-		name     string
-		aggState string
-		wantIcon string
+		name        string
+		reviewState string
+		ciState     string
+		wantIcon    string
 	}{
-		{"no reviews", "", "◌"},
-		{"approved", "approved", "✓"},
-		{"changes requested", "changes_requested", "◐"},
+		{"no state", "", "", "◌"},
+		{"approved only", "approved", "", "✓"},
+		{"changes requested only", "changes_requested", "", "◐"},
+		{"ci failure", "", "failure", "✗"},
+		{"ci success", "", "success", "✓"},
+		{"ci in_progress", "", "in_progress", "○"},
+		{"ci failure overrides approved", "approved", "failure", "✗"},
+		{"ci failure overrides changes_requested", "changes_requested", "failure", "✗"},
+		{"changes_requested overrides ci in_progress", "changes_requested", "in_progress", "◐"},
+		{"approved with ci success", "approved", "success", "✓"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,7 +79,8 @@ func TestSidebarArtifactsEntryStatusIcon(t *testing.T) {
 				WorkItemID:                   "wi-1",
 				SessionID:                    "__artifacts__",
 				Title:                        "Artifacts",
-				ArtifactAggregateReviewState: tt.aggState,
+				ArtifactAggregateReviewState: tt.reviewState,
+				ArtifactAggregateCIState:     tt.ciState,
 			}
 			icon := entry.StatusIcon(st)
 			plain := ansi.Strip(icon)

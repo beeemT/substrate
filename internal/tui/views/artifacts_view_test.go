@@ -520,3 +520,151 @@ func TestArtifactsViewReviewFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+func testArtifactItemsWithChecks() []views.ArtifactItem {
+	return []views.ArtifactItem{
+		{
+			Provider: "github",
+			Kind:     "PR",
+			RepoName: "acme/auth-svc",
+			Ref:      "#42",
+			URL:      "https://github.com/acme/auth-svc/pull/42",
+			State:    "open",
+			Branch:   "feat-config",
+			Checks: []views.ArtifactCheck{
+				{Name: "test", Status: "completed", Conclusion: "failure"},
+				{Name: "build", Status: "completed", Conclusion: "success"},
+				{Name: "lint", Status: "completed", Conclusion: "success"},
+			},
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			Provider: "github",
+			Kind:     "PR",
+			RepoName: "acme/billing",
+			Ref:      "#43",
+			URL:      "https://github.com/acme/billing/pull/43",
+			State:    "open",
+			Branch:   "feat-config",
+			Checks: []views.ArtifactCheck{
+				{Name: "test", Status: "completed", Conclusion: "success"},
+				{Name: "build", Status: "completed", Conclusion: "success"},
+			},
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+	}
+}
+
+func TestArtifactsViewCollapsedRowShowsCISummary(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	m.SetItems(testArtifactItemsWithChecks())
+
+	plain := ansi.Strip(m.View())
+	// First item has CI failure, so collapsed row should show CI indicator.
+	if !strings.Contains(plain, "CI") {
+		t.Error("collapsed row missing CI summary")
+	}
+}
+
+func TestArtifactsViewExpandedCardShowsChecks(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 40)
+	m.SetItems(testArtifactItemsWithChecks())
+
+	// Expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "CI") {
+		t.Error("expanded card missing CI section")
+	}
+	if !strings.Contains(plain, "test") {
+		t.Error("expanded card missing check name 'test'")
+	}
+	if !strings.Contains(plain, "build") {
+		t.Error("expanded card missing check name 'build'")
+	}
+	if !strings.Contains(plain, "failure") {
+		t.Error("expanded card missing failure conclusion")
+	}
+	if !strings.Contains(plain, "success") {
+		t.Error("expanded card missing success conclusion")
+	}
+}
+
+func TestArtifactsViewNoCISectionWhenNoChecks(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	m.SetItems([]views.ArtifactItem{{
+		Provider: "github",
+		Kind:     "PR",
+		RepoName: "acme/empty",
+		Ref:      "#99",
+		State:    "open",
+		Branch:   "main",
+	}})
+
+	plain := ansi.Strip(m.View())
+	if strings.Contains(plain, "CI") {
+		t.Error("expanded card should not show CI section when no checks")
+	}
+}
+
+func TestArtifactsViewCIWithInProgressShows(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(100, 30)
+	m.SetItems([]views.ArtifactItem{{
+		Provider: "github",
+		Kind:     "PR",
+		RepoName: "acme/running",
+		Ref:      "#50",
+		State:    "open",
+		Branch:   "feat",
+		Checks: []views.ArtifactCheck{
+			{Name: "test", Status: "in_progress", Conclusion: ""},
+		},
+	}})
+
+	plain := ansi.Strip(m.View())
+	// Single item renders expanded. Should show CI section with in_progress.
+	if !strings.Contains(plain, "CI") {
+		t.Error("expanded card missing CI section for in-progress check")
+	}
+	if !strings.Contains(plain, "in_progress") {
+		t.Error("expanded card missing in_progress status")
+	}
+}
+
+func TestArtifactsViewCIFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(60, 30)
+	m.SetItems(testArtifactItemsWithChecks())
+
+	// Expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	lines := strings.Split(m.View(), "\n")
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 60 {
+			t.Fatalf("line %d width = %d, want <= 60\nline: %q", i+1, got, line)
+		}
+	}
+}

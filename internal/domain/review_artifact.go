@@ -83,3 +83,25 @@ type GitlabMRReview struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
+
+// GithubPRCheck is the durable row for a GitHub PR check run.
+type GithubPRCheck struct {
+	ID         string
+	PRID       string
+	Name       string
+	Status     string // "queued" | "in_progress" | "completed"
+	Conclusion string // "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | ...
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// GitlabMRCheck is the durable row for a GitLab MR pipeline job.
+type GitlabMRCheck struct {
+	ID         string
+	MRID       string
+	Name       string
+	Status     string
+	Conclusion string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
