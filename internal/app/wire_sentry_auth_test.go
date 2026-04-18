@@ -49,7 +49,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithEnvToken(t *testing.T) 
 func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 	clearSentryEnv(t)
 	binDir := t.TempDir()
-	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
+	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
 	repo := stubWorkItemRepo{}
@@ -76,7 +76,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *testing.T) {
 	clearSentryEnv(t)
 	binDir := t.TempDir()
-	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
+	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
 	repo := stubWorkItemRepo{}
@@ -103,7 +103,7 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 func TestBuildRepoLifecycleAdapters_StillIgnoresSentryCLIAuth(t *testing.T) {
 	clearSentryEnv(t)
 	binDir := t.TempDir()
-	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
+	writeExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatalf("LookPath(git): %v", err)

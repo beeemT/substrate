@@ -48,7 +48,7 @@ func clearSentryViewEnv(t *testing.T) {
 func TestBuildProviderStatuses_UsesSentryCLIAuthSource(t *testing.T) {
 	clearSentryViewEnv(t)
 	binDir := t.TempDir()
-	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
+	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
 	status := buildProviderStatuses(&config.Config{})["sentry"]
@@ -63,7 +63,7 @@ func TestBuildProviderStatuses_UsesSentryCLIAuthSource(t *testing.T) {
 func TestSettingsService_TestProviderSentryUsesCLITransport(t *testing.T) {
 	clearSentryViewEnv(t)
 	binDir := t.TempDir()
-	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"api\" ]; then\n  printf 'HTTP/2 200\nContent-Type: application/json\n\n[]\n'\n  exit 0\nfi\nexit 1\n")
+	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"api\" ]; then\n  printf 'HTTP/2 200\nContent-Type: application/json\n\n[]\n'\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
 	svc := &SettingsService{}
@@ -85,7 +85,7 @@ func TestSettingsService_TestProviderSentryUsesCLITransport(t *testing.T) {
 func TestSettingsService_LoginProviderSentryRefreshesCLIStatus(t *testing.T) {
 	clearSentryViewEnv(t)
 	binDir := t.TempDir()
-	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
+	writeSettingsExecutable(t, binDir, "sentry", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"sentry-cli 0.27.0\"\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
 	cfg := &config.Config{}
