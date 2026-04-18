@@ -144,6 +144,12 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	confirm       components.ConfirmDialog
 	confirmActive bool
 
+	// managedRepoSlugs is the set of lowercase owner/repo slugs for repos currently
+	// in the workspace. Rebuilt on every ManagedReposLoadedMsg and updated on clone success.
+	managedRepoSlugs map[string]bool
+	// pendingCloneSlug is the slug of the repo currently being cloned; cleared on RepoClonedMsg.
+	pendingCloneSlug string
+
 	// Duplicate-session dialog
 	duplicateSession       duplicateSessionDialogState
 	duplicateSessionActive bool
@@ -498,7 +504,13 @@ func (a *App) openNewSessionAutonomousOverlay() tea.Cmd {
 
 func (a *App) openAddRepo() tea.Cmd {
 	a.activeOverlay = overlayAddRepo
-	return a.addRepo.Open()
+	cmds := []tea.Cmd{a.addRepo.Open(a.managedRepoSlugs)}
+	// If no scan has run yet but we know the workspace dir, trigger one now.
+	// The result will arrive as ManagedReposLoadedMsg and update the overlay via SetPresentSlugs.
+	if a.managedRepoSlugs == nil && a.svcs.WorkspaceDir != "" {
+		cmds = append(cmds, LoadManagedReposCmd(a.svcs.WorkspaceDir))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (a *App) openRepoManager() tea.Cmd {
@@ -1440,12 +1452,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, func() tea.Msg { return ActionDoneMsg{Message: "Repository cloned to workspace"} })
 			// Trigger workspace rescan
 			cmds = append(cmds, LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID))
+			// Update the in-memory slug set so a re-opened add-repo overlay reflects the new repo.
+			if a.pendingCloneSlug != "" {
+				if a.managedRepoSlugs == nil {
+					a.managedRepoSlugs = make(map[string]bool)
+				}
+				a.managedRepoSlugs[a.pendingCloneSlug] = true
+			}
 		}
+		a.pendingCloneSlug = ""
 		return a, tea.Batch(cmds...)
 
 	case AddRepoCloneMsg:
 		a.activeOverlay = overlayNone
 		a.addRepo.Close()
+		// Track the slug so we can update managedRepoSlugs when the clone succeeds.
+		if msg.Repo.FullName != "" {
+			a.pendingCloneSlug = strings.ToLower(msg.Repo.FullName)
+		}
 		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.CloneURL))
 		return a, tea.Batch(cmds...)
 
@@ -1454,6 +1478,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.openAddRepo()
 
 	case ManagedReposLoadedMsg:
+		// Rebuild the workspace slug set from the fresh scan result.
+		if msg.Err == nil {
+			slugs := make(map[string]bool, len(msg.Repos))
+			for _, r := range msg.Repos {
+				if slug := repoSlugFromURL(r.RemoteURL); slug != "" {
+					slugs[slug] = true
+				}
+			}
+			a.managedRepoSlugs = slugs
+			// If the add-repo overlay is open, push the fresh set to it immediately.
+			if a.activeOverlay == overlayAddRepo {
+				a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
+			}
+		}
 		a.repoManager, cmd = a.repoManager.Update(msg)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)

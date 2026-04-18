@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"net/url"
 	"strings"
 	"time"
 
@@ -1243,6 +1244,86 @@ func CloneRepoCmd(gitClient *gitwork.Client, workspaceDir, cloneURL string) tea.
 	}
 }
 
+// gitConfigPath returns the path to the git config file for the given repo kind.
+// Returns "" for unrecognized kinds.
+func gitConfigPath(repoPath string, kind repoKind) string {
+	switch kind {
+	case repoKindGitWork:
+		return filepath.Join(repoPath, ".bare", "config")
+	case repoKindPlainGit:
+		return filepath.Join(repoPath, ".git", "config")
+	default:
+		return ""
+	}
+}
+
+// readOriginRemoteURL opens the git config file at configPath and returns the
+// url value from the [remote "origin"] section. Returns "" on any error or if
+// the section or key is not found. Failure is intentional/silent.
+func readOriginRemoteURL(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	f, err := os.Open(configPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	inOrigin := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == `[remote "origin"]` {
+			inOrigin = true
+			continue
+		}
+		if inOrigin {
+			if strings.HasPrefix(line, "[") {
+				break
+			}
+			if idx := strings.IndexByte(line, '='); idx > 0 {
+				key := strings.TrimSpace(line[:idx])
+				if key == "url" {
+					return strings.TrimSpace(line[idx+1:])
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// repoSlugFromURL normalizes a git remote URL to a lowercase owner/repo slug.
+// Returns "" on any error or if the result is empty.
+func repoSlugFromURL(rawURL string) string {
+	s := strings.TrimSpace(rawURL)
+	if s == "" {
+		return ""
+	}
+	// Strip .git suffix (case-insensitive).
+	lo := strings.ToLower(s)
+	if strings.HasSuffix(lo, ".git") {
+		s = s[:len(s)-4]
+	}
+	// SSH form: git@github.com:owner/repo
+	if strings.Contains(s, "@") && strings.Contains(s, ":") {
+		if idx := strings.LastIndexByte(s, ':'); idx >= 0 {
+			return strings.ToLower(s[idx+1:])
+		}
+		return ""
+	}
+	// HTTPS form.
+	u, err := url.Parse(s)
+	if err != nil || u.Path == "" {
+		return ""
+	}
+	result := strings.TrimPrefix(u.Path, "/")
+	if result == "" {
+		return ""
+	}
+	return strings.ToLower(result)
+}
+
 // --- Repo Manager ---
 
 // LoadManagedReposCmd scans the workspace for git-work and plain git repositories.
@@ -1254,10 +1335,20 @@ func LoadManagedReposCmd(workspaceDir string) tea.Cmd {
 		}
 		repos := make([]managedRepo, 0, len(scan.GitWorkRepos)+len(scan.PlainGitRepos))
 		for _, p := range scan.GitWorkRepos {
-			repos = append(repos, managedRepo{Path: p, Name: filepath.Base(p), Kind: repoKindGitWork})
+			repos = append(repos, managedRepo{
+				Path:      p,
+				Name:      filepath.Base(p),
+				Kind:      repoKindGitWork,
+				RemoteURL: readOriginRemoteURL(gitConfigPath(p, repoKindGitWork)),
+			})
 		}
 		for _, p := range scan.PlainGitRepos {
-			repos = append(repos, managedRepo{Path: p, Name: filepath.Base(p), Kind: repoKindPlainGit})
+			repos = append(repos, managedRepo{
+				Path:      p,
+				Name:      filepath.Base(p),
+				Kind:      repoKindPlainGit,
+				RemoteURL: readOriginRemoteURL(gitConfigPath(p, repoKindPlainGit)),
+			})
 		}
 		sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 		return ManagedReposLoadedMsg{Repos: repos}

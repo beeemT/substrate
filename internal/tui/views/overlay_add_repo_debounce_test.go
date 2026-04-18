@@ -32,7 +32,7 @@ func newDebounceTestOverlay(t *testing.T) AddRepoOverlay {
 	st := styles.NewStyles(styles.DefaultTheme)
 	m := NewAddRepoOverlay([]adapter.RepoSource{&debounceRepoSource{}}, "/tmp/workspace", nil, st)
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(RepoListLoadedMsg{Repos: debounceTestRepos(), HasMore: false})
 	return m
 }

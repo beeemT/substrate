@@ -54,7 +54,7 @@ func TestAddRepoOverlay_ActiveAfterOpen(t *testing.T) {
 	t.Parallel()
 
 	m := newAddRepoOverlay(t, nil)
-	m.Open()
+	m.Open(nil)
 
 	if !m.Active() {
 		t.Fatal("expected Active() == true after Open")
@@ -65,7 +65,7 @@ func TestAddRepoOverlay_InactiveAfterClose(t *testing.T) {
 	t.Parallel()
 
 	m := newAddRepoOverlay(t, nil)
-	m.Open()
+	m.Open(nil)
 	m.Close()
 
 	if m.Active() {
@@ -89,7 +89,7 @@ func TestAddRepoOverlay_ViewFitsSize_120x40(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: testRepos()}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Simulate repos being loaded.
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: testRepos(), HasMore: false})
@@ -106,7 +106,7 @@ func TestAddRepoOverlay_ViewFitsSize_60x20(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: testRepos()}})
 	m.SetSize(60, 20)
-	m.Open()
+	m.Open(nil)
 
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: testRepos(), HasMore: false})
 
@@ -122,7 +122,7 @@ func TestAddRepoOverlay_EscCloses(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	escKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e', 's', 'c'}}
 	_, cmd := m.Update(escKey)
@@ -141,7 +141,7 @@ func TestAddRepoOverlay_ManualModeToggle(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	ctrlN := tea.KeyMsg{Type: tea.KeyCtrlN}
 	m, _ = m.Update(ctrlN)
@@ -162,7 +162,7 @@ func TestAddRepoOverlay_SourceCycling(t *testing.T) {
 	}
 	m := newAddRepoOverlay(t, sources)
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	tabKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t', 'a', 'b'}}
 
@@ -186,7 +186,7 @@ func TestAddRepoOverlay_ViewContainsTitle(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	v := m.View()
 	plain := ansi.Strip(v)
@@ -200,7 +200,7 @@ func TestAddRepoOverlay_LoadingState(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Before sending RepoListLoadedMsg, the view should show a loading state.
 	v := m.View()
@@ -216,7 +216,7 @@ func TestAddRepoOverlay_DetailPaneContent(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
@@ -240,7 +240,7 @@ func TestAddRepoOverlay_EmptyDetailWhenNoSelection(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: nil, HasMore: false})
 
@@ -260,7 +260,7 @@ func TestAddRepoOverlay_DownFromControlsEntersList(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
 	// Start: focus is on search control (default after Open).
@@ -286,7 +286,7 @@ func TestAddRepoOverlay_UpFromListTopReturnsToSearch(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
 	// Navigate down to the list.
@@ -315,7 +315,7 @@ func TestAddRepoOverlay_UpFromSearchMovesToSource(t *testing.T) {
 	}
 	m := newAddRepoOverlay(t, sources)
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Press up from search — should move to source control.
 	up := tea.KeyMsg{Type: tea.KeyUp}
@@ -338,7 +338,7 @@ func TestAddRepoOverlay_SourceCyclesWithArrowKeys(t *testing.T) {
 	}
 	m := newAddRepoOverlay(t, sources)
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Navigate up from search to source control.
 	up := tea.KeyMsg{Type: tea.KeyUp}
@@ -368,7 +368,7 @@ func TestAddRepoOverlay_ViewContainsSearchLabel(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	v := ansi.Strip(m.View())
 	if !strings.Contains(v, "Search:") {
@@ -384,7 +384,7 @@ func TestAddRepoOverlay_ViewFitsSize_AfterNavigation(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
 	for _, key := range []tea.KeyMsg{
@@ -406,7 +406,7 @@ func TestAddRepoOverlay_EnterInSearchDoesNotClone(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
 	// Focus is on search control after Open. Press Enter.
@@ -429,7 +429,7 @@ func TestAddRepoOverlay_FilterRowVisible(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	v := ansi.Strip(m.View())
 	if !strings.Contains(v, "Filter:") {
@@ -448,7 +448,7 @@ func TestAddRepoOverlay_CtrlGTogglesFilter(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Initial state: Owned is the active choice — the bracket indicator wraps it.
 	v0 := ansi.Strip(m.View())
@@ -479,7 +479,7 @@ func TestAddRepoOverlay_FilterRowToggleWithArrows(t *testing.T) {
 
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab"}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 
 	// Navigate up from search — filter is directly above search in the render order.
 	up := tea.KeyMsg{Type: tea.KeyUp}
@@ -512,7 +512,7 @@ func TestAddRepoOverlay_FilterOwnedOnlyPassedToSource(t *testing.T) {
 	m.SetSize(120, 40)
 
 	// Open triggers an initial load with ownedOnly=true (the default).
-	cmd := m.Open()
+	cmd := m.Open(nil)
 	if cmd != nil {
 		cmd() // execute the load cmd synchronously so lastOpts is populated
 	}
@@ -540,11 +540,227 @@ func TestAddRepoOverlay_ViewFitsSize_AfterFilterToggle(t *testing.T) {
 	repos := testRepos()
 	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "gitlab", repos: repos}})
 	m.SetSize(120, 40)
-	m.Open()
+	m.Open(nil)
 	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
 
 	ctrlG := tea.KeyMsg{Type: tea.KeyCtrlG}
 	m, _ = m.Update(ctrlG)
+
+	assertViewFitsSize(t, m.View(), 120, 40)
+}
+
+
+// navigateToList moves focus from the default search control into the repo list.
+func navigateToList(t *testing.T, m views.AddRepoOverlay) views.AddRepoOverlay {
+	t.Helper()
+	down := tea.KeyMsg{Type: tea.KeyDown}
+	m, _ = m.Update(down) // search control -> list
+	return m
+}
+
+// TestAddRepoOverlay_AlreadyPresentItemShowsIndicator asserts that an item whose
+// FullName slug matches a presentSlug has "already added" in its description.
+func TestAddRepoOverlay_AlreadyPresentItemShowsIndicator(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos() // contains beeemT/substrate
+	presentSlugs := map[string]bool{"beeemt/substrate": true}
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(presentSlugs)
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+
+	v := ansi.Strip(m.View())
+	if !strings.Contains(v, "already added") {
+		t.Error("expected 'already added' indicator in view for a present repo")
+	}
+}
+
+// TestAddRepoOverlay_NonPresentItemClonesImmediately asserts that Enter on a
+// non-present item emits AddRepoCloneMsg directly without showing a confirm modal.
+func TestAddRepoOverlay_NonPresentItemClonesImmediately(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos() // beeemT/substrate is NOT in presentSlugs
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(nil) // no present repos
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+	m = navigateToList(t, m)
+
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	_, cmd := m.Update(enter)
+
+	if cmd == nil {
+		t.Fatal("expected a command after Enter on a non-present item")
+	}
+	msg := cmd()
+	// With a nil git client, the implementation emits ErrMsg instead of
+	// AddRepoCloneMsg, but both originate from the clone branch — neither
+	// represents a confirmation modal being shown.
+	switch msg.(type) {
+	case views.AddRepoCloneMsg, views.ErrMsg:
+		// expected: clone path was taken
+	default:
+		t.Fatalf("expected clone-path message (AddRepoCloneMsg or ErrMsg), got %T", msg)
+	}
+	// Confirm dialog must not be shown.
+	v := ansi.Strip(m.View())
+	if strings.Contains(v, "already in workspace") {
+		t.Error("confirm dialog must not appear for a non-present item")
+	}
+}
+
+// TestAddRepoOverlay_PresentItemShowsConfirmOnEnter asserts that Enter on an
+// already-present item shows the confirmation modal and does NOT emit AddRepoCloneMsg.
+func TestAddRepoOverlay_PresentItemShowsConfirmOnEnter(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	presentSlugs := map[string]bool{"beeemt/substrate": true}
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(presentSlugs)
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+	m = navigateToList(t, m)
+
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	m, cmd := m.Update(enter)
+
+	// No clone command emitted.
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(views.AddRepoCloneMsg); ok {
+			t.Error("Enter on a present item must not emit AddRepoCloneMsg")
+		}
+	}
+	// Confirm dialog visible in view.
+	v := ansi.Strip(m.View())
+	if !strings.Contains(v, "already in workspace") {
+		t.Errorf("expected confirm dialog text in view, got:\n%s", v)
+	}
+}
+
+// TestAddRepoOverlay_ConfirmWithYProceedsClone asserts that pressing y while
+// the confirm modal is active emits AddRepoCloneMsg and closes the modal.
+func TestAddRepoOverlay_ConfirmWithYProceedsClone(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	presentSlugs := map[string]bool{"beeemt/substrate": true}
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(presentSlugs)
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+	m = navigateToList(t, m)
+
+	// Trigger confirm modal.
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	m, _ = m.Update(enter)
+
+	// Confirm with y.
+	yKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}
+	m, cmd := m.Update(yKey)
+
+	if cmd == nil {
+		t.Fatal("expected AddRepoCloneMsg command after y")
+	}
+	msg := cmd()
+	// With a nil git client, the implementation emits ErrMsg instead of
+	// AddRepoCloneMsg, but both originate from the y-confirm clone branch.
+	switch msg.(type) {
+	case views.AddRepoCloneMsg, views.ErrMsg:
+		// expected: clone path was taken
+	default:
+		t.Fatalf("expected clone-path message (AddRepoCloneMsg or ErrMsg) after y, got %T", msg)
+	}
+	// Confirm dialog must be gone.
+	v := ansi.Strip(m.View())
+	if strings.Contains(v, "already in workspace") {
+		t.Error("confirm dialog must be cleared after y")
+	}
+}
+
+// TestAddRepoOverlay_ConfirmCancelClearsState asserts that pressing n (or any
+// non-y key) while the confirm modal is active cancels without emitting a clone.
+func TestAddRepoOverlay_ConfirmCancelClearsState(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	presentSlugs := map[string]bool{"beeemt/substrate": true}
+
+	for _, cancelKey := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'n'}},
+		{Type: tea.KeyEsc},
+	} {
+		t.Run(cancelKey.String(), func(t *testing.T) {
+			t.Parallel()
+			m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+			m.SetSize(120, 40)
+			m.Open(presentSlugs)
+			m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+			m = navigateToList(t, m)
+
+			// Open confirm.
+			enter := tea.KeyMsg{Type: tea.KeyEnter}
+			m, _ = m.Update(enter)
+
+			// Cancel.
+			m, cmd := m.Update(cancelKey)
+			if cmd != nil {
+				msg := cmd()
+				if _, ok := msg.(views.AddRepoCloneMsg); ok {
+					t.Error("cancel key must not emit AddRepoCloneMsg")
+				}
+			}
+			v := ansi.Strip(m.View())
+			if strings.Contains(v, "already in workspace") {
+				t.Error("confirm dialog must be cleared after cancel")
+			}
+		})
+	}
+}
+
+// TestAddRepoOverlay_SetPresentSlugsUpdatesLiveList asserts that calling
+// SetPresentSlugs after repos are loaded immediately reflects in the view.
+func TestAddRepoOverlay_SetPresentSlugsUpdatesLiveList(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(nil) // no present repos initially
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+
+	// Before SetPresentSlugs: no "already added" indicator.
+	v0 := ansi.Strip(m.View())
+	if strings.Contains(v0, "already added") {
+		t.Error("expected no 'already added' indicator before SetPresentSlugs")
+	}
+
+	// Update slugs to mark substrate as present.
+	m.SetPresentSlugs(map[string]bool{"beeemt/substrate": true})
+	v1 := ansi.Strip(m.View())
+	if !strings.Contains(v1, "already added") {
+		t.Error("expected 'already added' indicator after SetPresentSlugs")
+	}
+}
+
+// TestAddRepoOverlay_ConfirmViewFitsSize asserts the view stays within bounds
+// while the confirmation modal is active.
+func TestAddRepoOverlay_ConfirmViewFitsSize(t *testing.T) {
+	t.Parallel()
+
+	repos := testRepos()
+	presentSlugs := map[string]bool{"beeemt/substrate": true}
+	m := newAddRepoOverlay(t, []adapter.RepoSource{&mockRepoSource{name: "github", repos: repos}})
+	m.SetSize(120, 40)
+	m.Open(presentSlugs)
+	m, _ = m.Update(views.RepoListLoadedMsg{Repos: repos, HasMore: false})
+	m = navigateToList(t, m)
+
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	m, _ = m.Update(enter)
 
 	assertViewFitsSize(t, m.View(), 120, 40)
 }

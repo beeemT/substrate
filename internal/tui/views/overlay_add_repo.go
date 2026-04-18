@@ -3,6 +3,7 @@ package views
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -75,17 +76,27 @@ type AddRepoOverlay struct { //nolint:recvcheck
 	width             int
 	height            int
 	active            bool
+	// presentSlugs is the set of lowercase owner/repo slugs already in the workspace.
+	presentSlugs map[string]bool
+	// pendingConfirmClone is non-nil while the already-present confirmation modal is shown.
+	pendingConfirmClone *repoItem
+	// confirmDialog holds the rendered confirmation modal.
+	confirmDialog components.ConfirmDialog
 }
 
 // repoItem adapts adapter.RepoItem for the bubbles list widget.
 type repoItem struct {
-	item adapter.RepoItem
+	item           adapter.RepoItem
+	alreadyPresent bool
 }
 
 func (i repoItem) Title() string { return i.item.FullName }
 
 func (i repoItem) Description() string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
+	if i.alreadyPresent {
+		parts = append(parts, "already added")
+	}
 	if i.item.IsPrivate {
 		parts = append(parts, "Private")
 	}
@@ -99,6 +110,58 @@ func (i repoItem) FilterValue() string {
 	return strings.Join([]string{i.item.FullName, i.item.Description, i.item.Owner}, " ")
 }
 
+// addRepoItemDelegate wraps list.DefaultDelegate and renders already-present repos
+// with muted styling to indicate they are already in the workspace.
+type addRepoItemDelegate struct {
+	inner list.DefaultDelegate
+	st    styles.Styles
+}
+
+func newAddRepoItemDelegate(st styles.Styles) addRepoItemDelegate {
+	inner := list.NewDefaultDelegate()
+	inner.ShowDescription = true
+	return addRepoItemDelegate{inner: inner, st: st}
+}
+
+func (d addRepoItemDelegate) Height() int  { return d.inner.Height() }
+func (d addRepoItemDelegate) Spacing() int { return d.inner.Spacing() }
+func (d addRepoItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return d.inner.Update(msg, m)
+}
+
+func (d addRepoItemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	ri, ok := item.(repoItem)
+	if !ok || !ri.alreadyPresent {
+		d.inner.Render(w, m, index, item)
+		return
+	}
+
+	width := m.Width()
+	if width < 1 {
+		width = 1
+	}
+
+	isSelected := index == m.Index()
+	title := ri.Title()
+	desc := ri.Description()
+
+	maxW := maxInt(0, width-2) // 2 chars for indent/indicator
+	if ansi.StringWidth(title) > maxW {
+		title = ansi.Truncate(title, maxW, "\u2026")
+	}
+	if ansi.StringWidth(desc) > maxW {
+		desc = ansi.Truncate(desc, maxW, "\u2026")
+	}
+
+	prefix := "  "
+	if isSelected {
+		prefix = "> "
+	}
+
+	style := d.st.Muted
+	fmt.Fprintf(w, "%s\n%s", style.Render(prefix+title), style.Render("  "+desc))
+}
+
 // NewAddRepoOverlay constructs an AddRepoOverlay with sane defaults.
 func NewAddRepoOverlay(sources []adapter.RepoSource, workspaceDir string, gitClient *gitwork.Client, st styles.Styles) AddRepoOverlay {
 	si := components.NewTextInput()
@@ -109,9 +172,7 @@ func NewAddRepoOverlay(sources []adapter.RepoSource, workspaceDir string, gitCli
 	mu.Placeholder = "Paste git clone URL (https:// or git@)…"
 	mu.CharLimit = 500
 
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = true
-	rl := list.New([]list.Item{}, delegate, 60, 10)
+	rl := list.New([]list.Item{}, newAddRepoItemDelegate(st), 60, 10)
 	rl.Title = "Repositories"
 	rl.SetShowTitle(false)
 	rl.SetShowStatusBar(false)
@@ -134,9 +195,14 @@ func NewAddRepoOverlay(sources []adapter.RepoSource, workspaceDir string, gitCli
 	}
 }
 
-// Open activates the overlay and resets transient state.
-func (m *AddRepoOverlay) Open() tea.Cmd {
+// Open activates the overlay with the given set of already-present workspace repo slugs.
+// presentSlugs maps lowercase owner/repo slugs to true for repos already in the workspace.
+// Pass nil when the set is not yet known; it can be updated later via SetPresentSlugs.
+func (m *AddRepoOverlay) Open(presentSlugs map[string]bool) tea.Cmd {
 	m.active = true
+	m.presentSlugs = presentSlugs
+	m.pendingConfirmClone = nil
+	m.confirmDialog = components.ConfirmDialog{}
 	m.showManual = false
 	m.searchInput.SetValue("")
 	m.manualURL.SetValue("")
@@ -147,9 +213,19 @@ func (m *AddRepoOverlay) Open() tea.Cmd {
 	return m.reloadRepos()
 }
 
+// SetPresentSlugs updates the set of already-present repo slugs and immediately
+// refreshes the list to reflect the change without triggering a new remote fetch.
+func (m *AddRepoOverlay) SetPresentSlugs(slugs map[string]bool) {
+	m.presentSlugs = slugs
+	m.syncListItems()
+}
+
 // Close deactivates the overlay and clears all transient state.
 func (m *AddRepoOverlay) Close() {
 	m.active = false
+	m.presentSlugs = nil
+	m.pendingConfirmClone = nil
+	m.confirmDialog = components.ConfirmDialog{}
 	m.searchInput.SetValue("")
 	m.searchInput.Blur()
 	m.manualURL.SetValue("")
@@ -199,7 +275,8 @@ func (m AddRepoOverlay) currentListItem() (adapter.RepoItem, bool) {
 func (m *AddRepoOverlay) syncListItems() {
 	items := make([]list.Item, len(m.allRepos))
 	for i, r := range m.allRepos {
-		items[i] = repoItem{item: r}
+		slug := strings.ToLower(r.FullName)
+		items[i] = repoItem{item: r, alreadyPresent: m.presentSlugs[slug]}
 	}
 	m.repoList.SetItems(items)
 }
@@ -444,6 +521,38 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Confirmation gate: consume all key input while the already-present modal is active.
+		if m.pendingConfirmClone != nil {
+			switch msg.String() {
+			case "y":
+				ri := *m.pendingConfirmClone
+				m.pendingConfirmClone = nil
+				m.confirmDialog = components.ConfirmDialog{}
+				item := ri.item
+				cloneURL := item.URL
+				if cloneURL == "" {
+					cloneURL = item.SSHURL
+				}
+				if cloneURL == "" {
+					return m, nil
+				}
+				if m.gitClient == nil {
+					cmds = append(cmds, func() tea.Msg {
+						return ErrMsg{Err: errors.New("git client not configured")}
+					})
+					return m, tea.Batch(cmds...)
+				}
+				m.cloning = true
+				m.cloneError = ""
+				return m, func() tea.Msg {
+					return AddRepoCloneMsg{Repo: item, CloneDir: m.workspaceDir, CloneURL: cloneURL}
+				}
+			default:
+				m.pendingConfirmClone = nil
+				m.confirmDialog = components.ConfirmDialog{}
+			}
+			return m, nil
+		}
 		if m.showManual {
 			switch msg.String() {
 			case keyEsc:
@@ -507,6 +616,17 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 			item, ok := m.currentListItem()
 			if !ok {
 				break
+			}
+			// If the selected item is already in the workspace, show a confirmation modal.
+			if ri, riOk := m.repoList.SelectedItem().(repoItem); riOk && ri.alreadyPresent {
+				m.pendingConfirmClone = &ri
+				m.confirmDialog = components.NewConfirmDialog(
+					m.styles,
+					"Repository already in workspace",
+					fmt.Sprintf("%q appears to already be present in this workspace.\nClone it again?", item.FullName),
+					nil,
+				)
+				return m, nil
 			}
 			cloneURL := item.URL
 			if cloneURL == "" {
@@ -634,12 +754,8 @@ func (m AddRepoOverlay) Update(msg tea.Msg) (AddRepoOverlay, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the overlay, or empty string when inactive.
-func (m *AddRepoOverlay) View() string {
-	if !m.active {
-		return ""
-	}
-
+// viewBase renders the overlay content without the confirmation modal overlay.
+func (m *AddRepoOverlay) viewBase() string {
 	layout := m.browserLayout()
 	renderWidth := maxInt(1, layout.ContentWidth-4)
 	m.resizeInputs(layout.InputWidth)
@@ -684,6 +800,19 @@ func (m *AddRepoOverlay) View() string {
 		Footer:      footer,
 		Focused:     true,
 	})
+}
+
+// View renders the overlay. When an already-present confirmation is pending,
+// the confirm dialog is composited over the overlay content as a blocking modal.
+func (m *AddRepoOverlay) View() string {
+	if !m.active {
+		return ""
+	}
+	base := m.viewBase()
+	if m.pendingConfirmClone != nil {
+		return renderCenteredOverlay(base, m.confirmDialog.View(), m.width, m.height)
+	}
+	return base
 }
 
 // browserView renders the split-pane browse view with list and detail.

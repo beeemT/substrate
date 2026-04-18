@@ -502,9 +502,10 @@ const (
 
 // managedRepo is a repository discovered in the workspace directory.
 type managedRepo struct {
-	Path string   // absolute path to the repo directory
-	Name string   // filepath.Base(Path)
-	Kind repoKind // classification
+	Path      string   // absolute path to the repo directory
+	Name      string   // filepath.Base(Path)
+	Kind      repoKind // classification
+	RemoteURL string   // origin remote URL; empty when not resolvable
 }
 
 // ManagedReposLoadedMsg is sent when the repo manager scans the workspace.
