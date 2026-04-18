@@ -320,3 +320,148 @@ func TestOverviewPageOKeyOnSourcesOnlyEmitsOpenLinksMsg(t *testing.T) {
 		t.Fatalf("[o] cmd() = %T, want OpenOverviewLinksMsg", cmd())
 	}
 }
+
+
+// ---------------------------------------------------------------------------
+// Open-all: 'a' key opens every URL in the overlay.
+// ---------------------------------------------------------------------------
+
+func TestOverviewLinksOverlayOpenAllEmitsBatchCmd(t *testing.T) {
+	t.Parallel()
+	m := openedLinksOverlay(t) // 2 tickets + 2 MRs = 4 items
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd == nil {
+		t.Fatal("[a] must return a non-nil cmd")
+	}
+	batchResult := cmd()
+	batchCmds, ok := batchResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("[a] cmd() = %T, want tea.BatchMsg", batchResult)
+	}
+
+	wantURLs := map[string]bool{
+		"https://linear.app/t/SUB-42":               false,
+		"https://linear.app/t/SUB-43":               false,
+		"https://github.com/acme/api/pull/7":         false,
+		"https://github.com/acme/frontend/pull/12":   false,
+	}
+
+	for _, c := range batchCmds {
+		if c == nil {
+			continue
+		}
+		msg, ok := c().(views.OpenExternalURLMsg)
+		if !ok {
+			t.Fatalf("inner cmd() = %T, want OpenExternalURLMsg", c())
+		}
+		if _, exists := wantURLs[msg.URL]; !exists {
+			t.Fatalf("unexpected URL %q", msg.URL)
+		}
+		wantURLs[msg.URL] = true
+	}
+
+	for url, seen := range wantURLs {
+		if !seen {
+			t.Errorf("URL not opened: %s", url)
+		}
+	}
+}
+
+func TestOverviewLinksOverlayOpenAllEmptyOverlayReturnsNil(t *testing.T) {
+	t.Parallel()
+	m := views.NewOverviewLinksOverlay(newTestStyles(t))
+	m.SetSize(120, 40)
+	m.Open(nil, nil)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil {
+		t.Fatalf("[a] on empty overlay must return nil cmd, got %T", cmd)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OpenFromArtifacts: overlay populated from artifact items.
+// ---------------------------------------------------------------------------
+
+func TestOverviewLinksOverlayOpenFromArtifactsShowsMRsSection(t *testing.T) {
+	t.Parallel()
+	m := views.NewOverviewLinksOverlay(newTestStyles(t))
+	m.SetSize(120, 40)
+	m.OpenFromArtifacts([]views.ArtifactItem{
+		{Provider: "github", Kind: "PR", RepoName: "acme/api", Ref: "#7", URL: "https://github.com/acme/api/pull/7", State: "open", Branch: "feat/auth"},
+		{Provider: "github", Kind: "PR", RepoName: "acme/web", Ref: "#20", URL: "https://github.com/acme/web/pull/20", State: "merged"},
+	})
+
+	if !m.Active() {
+		t.Fatal("overlay must be active after OpenFromArtifacts")
+	}
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"MRs / PRs", "acme/api", "#7", "acme/web", "#20"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("View missing %q\nfull view:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "Tickets") {
+		t.Error("unexpected Tickets section in OpenFromArtifacts overlay")
+	}
+}
+
+func TestOverviewLinksOverlayOpenFromArtifactsNavigateAndOpen(t *testing.T) {
+	t.Parallel()
+	m := views.NewOverviewLinksOverlay(newTestStyles(t))
+	m.SetSize(120, 40)
+	m.OpenFromArtifacts([]views.ArtifactItem{
+		{Provider: "github", Kind: "PR", RepoName: "acme/api", Ref: "#7", URL: "https://github.com/acme/api/pull/7", State: "open"},
+		{Provider: "github", Kind: "PR", RepoName: "acme/web", Ref: "#20", URL: "https://github.com/acme/web/pull/20", State: "merged"},
+	})
+
+	// Navigate down once to second item
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on second artifact must return non-nil cmd")
+	}
+	msg, ok := cmd().(views.OpenExternalURLMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want OpenExternalURLMsg", cmd())
+	}
+	if msg.URL != "https://github.com/acme/web/pull/20" {
+		t.Fatalf("URL = %q, want second artifact URL", msg.URL)
+	}
+}
+
+func TestOverviewLinksOverlayOpenFromArtifactsFitsSize(t *testing.T) {
+	t.Parallel()
+	m := views.NewOverviewLinksOverlay(newTestStyles(t))
+	m.SetSize(80, 25)
+	m.OpenFromArtifacts([]views.ArtifactItem{
+		{Provider: "github", Kind: "PR", RepoName: "acme/api", Ref: "#7", URL: "https://github.com/acme/api/pull/7", State: "open"},
+	})
+	assertViewFitsSize(t, m.View(), 80, 25)
+}
+
+// ---------------------------------------------------------------------------
+// Hint text: [a] Open all shown conditionally.
+// ---------------------------------------------------------------------------
+
+func TestOverviewLinksOverlayHintShowsOpenAllWhenMultipleItems(t *testing.T) {
+	t.Parallel()
+	m := openedLinksOverlay(t) // 4 items
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Open all") {
+		t.Errorf("View with multiple items must contain 'Open all' hint\nfull view:\n%s", plain)
+	}
+}
+
+func TestOverviewLinksOverlayHintNoOpenAllWhenSingleItem(t *testing.T) {
+	t.Parallel()
+	m := views.NewOverviewLinksOverlay(newTestStyles(t))
+	m.SetSize(120, 40)
+	m.Open([]views.OverviewSourceItem{
+		{Ref: "T-1", Title: "Only ticket", URL: "https://example.com/t/1"},
+	}, nil)
+	plain := ansi.Strip(m.View())
+	if strings.Contains(plain, "Open all") {
+		t.Errorf("View with single item must NOT contain 'Open all' hint\nfull view:\n%s", plain)
+	}
+}

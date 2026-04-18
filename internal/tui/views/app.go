@@ -1658,6 +1658,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.overviewLinksOverlay.Open(msg.Sources, msg.Reviews)
 		return a, nil
 
+	case OpenArtifactLinksMsg:
+		a.activeOverlay = overlayOverviewLinks
+		a.overviewLinksOverlay.OpenFromArtifacts(msg.Items)
+		return a, nil
+
 	case openSourceItemURLsMsg:
 		a.activeOverlay = overlayNone
 		a.sourceItemsOverlay.Close()

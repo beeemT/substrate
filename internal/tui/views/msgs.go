@@ -336,6 +336,11 @@ type OpenOverviewLinksMsg struct {
 	Reviews []OverviewReviewRow
 }
 
+// OpenArtifactLinksMsg opens the overview links overlay populated with PR/MR artifacts.
+type OpenArtifactLinksMsg struct {
+	Items []ArtifactItem
+}
+
 // openSourceItemURLsMsg is an internal message emitted by the source items overlay
 // when the user confirms opening one or more source item URLs.
 type openSourceItemURLsMsg struct{ URLs []string }

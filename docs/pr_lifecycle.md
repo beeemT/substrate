@@ -1092,7 +1092,7 @@ BB1 (artifacts view) ← DONE
  │
  ├► BB5 (post-merge)           ← DONE
  │
- ├─► BB6 (open PRs in browser)  ← independent; no data dependencies
+ ├► BB6 (open PRs in browser)  ← DONE
  │
  └─► BB7 (description sync)     ← independent; requires: plan.approved payload extension
 ```

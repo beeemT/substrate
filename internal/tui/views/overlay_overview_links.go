@@ -91,6 +91,24 @@ func (m *OverviewLinksOverlay) Close() {
 	m.vp.GotoTop()
 }
 
+// OpenFromArtifacts populates the overlay with PR/MR artifact items (no tickets section).
+func (m *OverviewLinksOverlay) OpenFromArtifacts(items []ArtifactItem) {
+	m.tickets = nil
+	m.mrs = make([]overviewLinksItem, 0, len(items))
+	for _, item := range items {
+		label := item.RepoName + " · " + item.Ref
+		metaParts := filterEmptyStrings([]string{item.State, item.Branch})
+		m.mrs = append(m.mrs, overviewLinksItem{
+			label: label,
+			meta:  strings.Join(metaParts, " · "),
+			url:   item.URL,
+		})
+	}
+	m.cursor = 0
+	m.active = true
+	m.syncViewport(true)
+}
+
 // Active reports whether the overlay is currently visible.
 func (m OverviewLinksOverlay) Active() bool { return m.active }
 
@@ -106,6 +124,21 @@ func (m OverviewLinksOverlay) items() []overviewLinksItem {
 	result := make([]overviewLinksItem, 0, len(m.tickets)+len(m.mrs))
 	result = append(result, m.tickets...)
 	return append(result, m.mrs...)
+}
+
+// openAllCmd returns a command that opens all item URLs in the system browser.
+func (m OverviewLinksOverlay) openAllCmd() tea.Cmd {
+	all := m.items()
+	var cmds []tea.Cmd
+	for _, item := range all {
+		if url := strings.TrimSpace(item.url); url != "" {
+			cmds = append(cmds, func() tea.Msg { return OpenExternalURLMsg{URL: url} })
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // navigate moves the cursor by delta, clamped to valid range.
@@ -226,10 +259,17 @@ func (m OverviewLinksOverlay) renderItem(item overviewLinksItem, selected bool, 
 
 // hintText returns the context-sensitive key hint shown at the bottom of the overlay.
 func (m OverviewLinksOverlay) hintText() string {
-	if m.selectedURL() != "" {
+	all := m.items()
+	hasURL := m.selectedURL() != ""
+	hasMultiple := len(all) > 1
+	switch {
+	case hasURL && hasMultiple:
+		return "[↑↓] Select  [Enter/o] Open  [a] Open all  [Esc] Close"
+	case hasURL:
 		return "[↑↓] Select  [Enter/o] Open  [Esc] Close"
+	default:
+		return "[↑↓] Select  [Esc] Close"
 	}
-	return "[↑↓] Select  [Esc] Close"
 }
 
 // View renders the overlay frame. Returns "" when not active.
@@ -273,6 +313,8 @@ func (m OverviewLinksOverlay) Update(msg tea.Msg) (OverviewLinksOverlay, tea.Cmd
 			if url := m.selectedURL(); url != "" {
 				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
 			}
+		case "a":
+			return m, m.openAllCmd()
 		case keyEsc:
 			return m, func() tea.Msg { return CloseOverlayMsg{} }
 		}

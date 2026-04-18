@@ -668,3 +668,83 @@ func TestArtifactsViewCIFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+
+func TestArtifactsViewShiftOSingleItemOpensDirectly(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems()[:1])
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if cmd == nil {
+		t.Fatal("expected command from 'O' key on single item")
+	}
+	msg := cmd()
+	urlMsg, ok := msg.(views.OpenExternalURLMsg)
+	if !ok {
+		t.Fatalf("expected OpenExternalURLMsg, got %T", msg)
+	}
+	if urlMsg.URL != "https://github.com/acme/auth-svc/pull/42" {
+		t.Fatalf("URL = %q, want first item URL", urlMsg.URL)
+	}
+}
+
+func TestArtifactsViewShiftOMultiItemEmitsArtifactLinksMsg(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if cmd == nil {
+		t.Fatal("expected command from 'O' key on multiple items")
+	}
+	msg := cmd()
+	linksMsg, ok := msg.(views.OpenArtifactLinksMsg)
+	if !ok {
+		t.Fatalf("expected OpenArtifactLinksMsg, got %T", msg)
+	}
+	if got := len(linksMsg.Items); got != 3 {
+		t.Fatalf("len(Items) = %d, want 3", got)
+	}
+}
+
+func TestArtifactsViewShiftOEmptyItemsDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(nil)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if cmd != nil {
+		t.Fatal("expected no command when items are empty")
+	}
+}
+
+func TestArtifactsViewKeybindHintsIncludeShiftO(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+
+	hints := m.KeybindHints()
+	found := false
+	for _, h := range hints {
+		if h.Key == "O" && h.Label == "PR links" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("keybind hints missing O/PR links, got: %+v", hints)
+	}
+}

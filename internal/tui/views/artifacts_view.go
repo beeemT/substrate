@@ -126,6 +126,15 @@ func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 			if url := m.items[m.cursor].URL; url != "" {
 				return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
 			}
+		case "O":
+			if len(m.items) == 1 {
+				if url := m.items[0].URL; url != "" {
+					return m, func() tea.Msg { return OpenExternalURLMsg{URL: url} }
+				}
+			} else {
+				items := m.items
+				return m, func() tea.Msg { return OpenArtifactLinksMsg{Items: items} }
+			}
 		}
 		if changed {
 			m.syncViewport()
@@ -188,6 +197,7 @@ func (m ArtifactsModel) KeybindHints() []KeybindHint {
 	if m.cursor >= 0 && m.cursor < len(m.items) && m.items[m.cursor].URL != "" {
 		hints = append(hints, KeybindHint{Key: "o", Label: "Open in browser"})
 	}
+	hints = append(hints, KeybindHint{Key: "O", Label: "PR links"})
 	return hints
 }
 
