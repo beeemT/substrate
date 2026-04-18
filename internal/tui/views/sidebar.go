@@ -24,6 +24,7 @@ const (
 	SidebarEntrySessionHistory
 	SidebarEntryTaskOverview
 	SidebarEntryTaskSourceDetails
+	SidebarEntryTaskArtifacts
 	SidebarEntryTaskSession
 	SidebarEntryGroupHeader
 )
@@ -90,6 +91,8 @@ func (e SidebarEntry) titlePrefix() string {
 		return "Overview"
 	case SidebarEntryTaskSourceDetails:
 		return "Source"
+	case SidebarEntryTaskArtifacts:
+		return "Artifacts"
 	case SidebarEntryTaskSession:
 		if e.RepositoryName != "" {
 			return e.RepositoryName
@@ -158,6 +161,9 @@ func (e SidebarEntry) sidebarPrefix() string {
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 	if e.Kind == SidebarEntryTaskSourceDetails {
+		return st.Muted.Render("◌")
+	}
+	if e.Kind == SidebarEntryTaskArtifacts {
 		return st.Muted.Render("◌")
 	}
 	if e.Kind == SidebarEntryTaskSession {

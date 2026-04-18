@@ -27,6 +27,7 @@ const (
 	ContentModeEmpty              ContentMode = iota // no session selected
 	ContentModeOverview                              // canonical root-session overview/control surface
 	ContentModeSourceDetails                         // task-pane source metadata for the selected work item
+	ContentModeArtifacts                             // PR/MR artifact list for the selected work item
 	ContentModePlanning                              // planning/task session log tailing
 	ContentModeSessionInteraction                    // historical or task session interaction view
 )
@@ -47,6 +48,7 @@ type ContentModel struct { //nolint:recvcheck // Bubble Tea convention
 	// Per-mode sub-models
 	overview      SessionOverviewModel
 	sourceDetails SourceDetailsModel
+	artifacts     ArtifactsModel
 	sessionLog    SessionLogModel
 
 	// Current work item being displayed
@@ -74,6 +76,7 @@ func NewContentModel(st styles.Styles) ContentModel {
 		styles:          st,
 		overview:        NewSessionOverviewModel(st),
 		sourceDetails:   NewSourceDetailsModel(st),
+		artifacts:       NewArtifactsModel(st),
 		sessionLog:      NewSessionLogModel(st),
 		blinkNeedsStart: true,
 		blinkSide:       components.BunnySide(rand.Intn(2)), //nolint:gosec // UI-only bunny placement; not used for secrets or security decisions.
@@ -85,6 +88,7 @@ func (m *ContentModel) SetSize(width, height int) {
 	m.height = height
 	m.overview.SetSize(width, height)
 	m.sourceDetails.SetSize(width, height)
+	m.artifacts.SetSize(width, height)
 	m.sessionLog.SetSize(width, height)
 }
 
@@ -236,6 +240,9 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	case ContentModeSourceDetails:
 		m.sourceDetails, cmd = m.sourceDetails.Update(msg)
 		cmds = append(cmds, cmd)
+	case ContentModeArtifacts:
+		m.artifacts, cmd = m.artifacts.Update(msg)
+		cmds = append(cmds, cmd)
 	case ContentModePlanning, ContentModeSessionInteraction:
 		m.sessionLog, cmd = m.sessionLog.Update(msg)
 		cmds = append(cmds, cmd)
@@ -252,6 +259,8 @@ func (m ContentModel) View() string {
 		return m.overview.View()
 	case ContentModeSourceDetails:
 		return m.sourceDetails.View()
+	case ContentModeArtifacts:
+		return m.artifacts.View()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.View()
 	default:
@@ -419,6 +428,8 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 		return m.overview.KeybindHints()
 	case ContentModeSourceDetails:
 		return m.sourceDetails.KeybindHints()
+	case ContentModeArtifacts:
+		return m.artifacts.KeybindHints()
 	case ContentModePlanning, ContentModeSessionInteraction:
 		return m.sessionLog.KeybindHints()
 	default:

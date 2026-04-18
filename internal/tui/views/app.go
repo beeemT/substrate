@@ -69,6 +69,7 @@ const (
 const (
 	taskSidebarSourceDetailsID = "__source_details__"
 	taskSidebarForemanID       = "__foreman__"
+	taskSidebarArtifactsID     = "__artifacts__"
 )
 
 type mainFocusArea int
@@ -2060,6 +2061,14 @@ func (a *App) updateContentFromState() tea.Cmd {
 				}
 				return nil
 			}
+			if taskSessionID == taskSidebarArtifactsID {
+				a.content.artifacts.SetItems(a.buildArtifactItems(wi))
+				a.content.SetMode(ContentModeArtifacts)
+				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
+					a.tailingSessionIDs = make(map[string]bool)
+				}
+				return nil
+			}
 			if taskSessionID == taskSidebarForemanID {
 				if a.svcs.Foreman != nil {
 					// Prefer the live session ID; fall back to the last stopped session.
@@ -2573,6 +2582,17 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			ExternalID:   wi.ExternalID,
 			Title:        "Source details",
 			SubtitleText: sessionSourceSidebarSubtitle(wi),
+			LastActivity: wi.UpdatedAt,
+		})
+	}
+
+	if artifactItems := a.buildArtifactItems(wi); len(artifactItems) > 0 {
+		entries = append(entries, SidebarEntry{
+			Kind:         SidebarEntryTaskArtifacts,
+			WorkItemID:   workItemID,
+			SessionID:    taskSidebarArtifactsID,
+			Title:        "Pull requests & merge requests",
+			SubtitleText: fmt.Sprintf("%d artifact%s", len(artifactItems), pluralS(len(artifactItems))),
 			LastActivity: wi.UpdatedAt,
 		})
 	}

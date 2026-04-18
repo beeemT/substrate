@@ -1,0 +1,370 @@
+package views_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/beeemT/substrate/internal/tui/views"
+)
+
+func testArtifactItems() []views.ArtifactItem {
+	return []views.ArtifactItem{
+		{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  "acme/auth-svc",
+			Ref:       "#42",
+			URL:       "https://github.com/acme/auth-svc/pull/42",
+			State:     "open",
+			Branch:    "feat-config",
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  "acme/billing",
+			Ref:       "#43",
+			URL:       "https://github.com/acme/billing/pull/43",
+			State:     "draft",
+			Branch:    "feat-config",
+			Draft:     true,
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			Provider:  "github",
+			Kind:      "PR",
+			RepoName:  "acme/gateway",
+			Ref:       "#44",
+			URL:       "https://github.com/acme/gateway/pull/44",
+			State:     "merged",
+			Branch:    "feat-config",
+			MergedAt:  timePtr(time.Date(2024, 1, 4, 10, 0, 0, 0, time.UTC)),
+			CreatedAt: time.Date(2024, 1, 3, 4, 5, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 4, 10, 0, 0, 0, time.UTC),
+		},
+	}
+}
+
+func timePtr(t time.Time) *time.Time { return &t }
+
+func TestArtifactsViewFitsRequestedSize(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(72, 24)
+	m.SetItems(testArtifactItems())
+
+	rendered := m.View()
+	lines := strings.Split(rendered, "\n")
+	if got := len(lines); got != 24 {
+		t.Fatalf("line count = %d, want 24", got)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 72 {
+			t.Fatalf("line %d width = %d, want <= 72\nline: %q", i+1, got, line)
+		}
+	}
+}
+
+func TestArtifactsViewShowsHeaderAndItems(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"Artifacts", "Pull requests and merge requests", "#42", "acme/auth-svc", "#43", "acme/billing", "#44", "acme/gateway"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("view missing %q", want)
+		}
+	}
+}
+
+func TestArtifactsViewEmptyState(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(60, 20)
+	m.SetItems(nil)
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "No artifacts") {
+		t.Fatalf("empty state missing 'No artifacts', got: %q", plain)
+	}
+}
+
+func TestArtifactsViewSingleItemShowsDetailDirectly(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems()[:1])
+
+	plain := ansi.Strip(m.View())
+	// Single item should render expanded card directly — check for key-value pairs.
+	for _, want := range []string{"Kind: PR", "Repo: acme/auth-svc", "Ref: #42", "Branch: feat-config", "State: open"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("single-item detail missing %q", want)
+		}
+	}
+}
+
+func TestArtifactsViewExpandCollapse(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	m.SetItems(testArtifactItems())
+
+	// Initially collapsed — no detail card content.
+	plain := ansi.Strip(m.View())
+	if strings.Contains(plain, "Kind: PR") {
+		t.Fatal("expected collapsed state, but found expanded card content")
+	}
+
+	// Press space to expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "Kind: PR") {
+		t.Fatal("expected expanded card after space, missing 'Kind: PR'")
+	}
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("expected expanded card to show repo")
+	}
+
+	// Press space again to collapse.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if strings.Contains(plain, "Kind: PR") {
+		t.Fatal("expected collapsed after second space")
+	}
+}
+
+func TestArtifactsViewRightArrowExpands(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	m.SetItems(testArtifactItems())
+
+	// Right arrow on collapsed → expand.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Kind: PR") {
+		t.Fatal("right arrow did not expand item")
+	}
+
+	// Right arrow on already expanded → noop (still expanded, no crash).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "Kind: PR") {
+		t.Fatal("right arrow on expanded should be noop")
+	}
+}
+
+func TestArtifactsViewCursorNavigation(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	items := testArtifactItems()
+	m.SetItems(items)
+
+	// Cursor starts at 0. Move down.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	// Expand second item to verify cursor moved.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/billing") {
+		t.Fatal("cursor did not move to second item")
+	}
+	// acme/auth-svc should not be in an expanded card.
+	if strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("first item should not be expanded")
+	}
+
+	// Move up back to first.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("cursor did not move back to first item")
+	}
+}
+
+func TestArtifactsViewCursorClamps(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	m.SetItems(testArtifactItems())
+
+	// Move up past the beginning — should clamp at 0.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	// Expand — should show first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("cursor should clamp at first item")
+	}
+
+	// Move down past the end — should clamp at last.
+	for range 10 {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/gateway") {
+		t.Fatal("cursor should clamp at last item")
+	}
+}
+
+func TestArtifactsViewOpenURLCommand(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("expected command from 'o' key")
+	}
+	msg := cmd()
+	urlMsg, ok := msg.(views.OpenExternalURLMsg)
+	if !ok {
+		t.Fatalf("expected OpenExternalURLMsg, got %T", msg)
+	}
+	if urlMsg.URL != "https://github.com/acme/auth-svc/pull/42" {
+		t.Fatalf("URL = %q, want first item URL", urlMsg.URL)
+	}
+}
+
+func TestArtifactsViewNoCommandWhenEmptyURL(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems([]views.ArtifactItem{{
+		Provider: "github",
+		Kind:     "PR",
+		RepoName: "acme/test",
+		Ref:      "#1",
+		State:    "open",
+	}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd != nil {
+		t.Fatal("expected no command when URL is empty")
+	}
+}
+
+func TestArtifactsViewMergedAtShownInExpandedCard(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	// Use the third item which has MergedAt set.
+	m.SetItems(testArtifactItems()[2:3])
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Merged:") {
+		t.Fatal("expected Merged line in expanded card for merged PR")
+	}
+}
+
+func TestArtifactsViewKeybindHints(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+
+	// Empty — no hints.
+	hints := m.KeybindHints()
+	if len(hints) != 0 {
+		t.Fatalf("expected no hints for empty items, got %d", len(hints))
+	}
+
+	// With items — should have navigate + expand + open hints.
+	m.SetItems(testArtifactItems())
+	hints = m.KeybindHints()
+	if len(hints) < 2 {
+		t.Fatalf("expected at least 2 hints, got %d", len(hints))
+	}
+
+	keys := make([]string, len(hints))
+	for i, h := range hints {
+		keys[i] = h.Key
+	}
+	joined := strings.Join(keys, " ")
+	if !strings.Contains(joined, "↑↓") {
+		t.Error("hints missing navigate")
+	}
+	if !strings.Contains(joined, "Space") {
+		t.Error("hints missing expand/collapse")
+	}
+}
+
+func TestArtifactsViewNarrowWidthFits(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(30, 10)
+	m.SetItems(testArtifactItems())
+
+	rendered := m.View()
+	lines := strings.Split(rendered, "\n")
+	if got := len(lines); got != 10 {
+		t.Fatalf("line count = %d, want 10", got)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 30 {
+			t.Fatalf("line %d width = %d, want <= 30\nline: %q", i+1, got, line)
+		}
+	}
+}
+
+func TestArtifactsViewMultipleExpanded(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 60)
+	m.SetItems(testArtifactItems())
+
+	// Expand first.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	// Move to second and expand.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+
+	plain := ansi.Strip(m.View())
+	// Both should be expanded.
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("first expanded card missing")
+	}
+	if !strings.Contains(plain, "Repo: acme/billing") {
+		t.Fatal("second expanded card missing")
+	}
+}

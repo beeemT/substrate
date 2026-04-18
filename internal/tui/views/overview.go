@@ -128,10 +128,23 @@ type OverviewReviewRow struct {
 	State    string
 	Branch   string
 }
-
 type OverviewExternalLifecycle struct {
 	TrackerRefs []string
 	Reviews     []OverviewReviewRow
+}
+
+type ArtifactItem struct {
+	Provider  string
+	Kind      string // "PR" or "MR"
+	RepoName  string
+	Ref       string // "#42" or "!7"
+	URL       string
+	State     string // "draft" | "open" | "merged" | "closed"
+	Branch    string
+	Draft     bool
+	MergedAt  *time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type OverviewActivityItem struct {
@@ -1754,6 +1767,81 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
 	return external
+}
+
+func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
+	if wi == nil || wi.WorkspaceID == "" {
+		return nil
+	}
+	ctx := context.Background()
+	var items []ArtifactItem
+	if a.svcs.SessionArtifacts != nil {
+		links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
+		if err != nil {
+			slog.Error("failed to list session artifacts", "error", err, "workItemID", wi.ID)
+			return nil
+		}
+		for _, link := range links {
+			switch link.Provider {
+			case "github":
+				if a.svcs.GithubPRs != nil {
+					pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
+					if err != nil {
+						slog.Warn("failed to get github PR", "error", err, "id", link.ProviderArtifactID)
+						continue
+					}
+					state := pr.State
+					if pr.Draft && state != "merged" && state != "closed" {
+						state = "draft"
+					}
+					items = append(items, ArtifactItem{
+						Provider:  "github",
+						Kind:      "PR",
+						RepoName:  pr.Owner + "/" + pr.Repo,
+						Ref:       fmt.Sprintf("#%d", pr.Number),
+						URL:       pr.HTMLURL,
+						State:     state,
+						Branch:    pr.HeadBranch,
+						Draft:     pr.Draft,
+						MergedAt:  pr.MergedAt,
+						CreatedAt: pr.CreatedAt,
+						UpdatedAt: pr.UpdatedAt,
+					})
+				}
+			case providerGitlab:
+				if a.svcs.GitlabMRs != nil {
+					mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+					if err != nil {
+						slog.Warn("failed to get gitlab MR", "error", err, "id", link.ProviderArtifactID)
+						continue
+					}
+					state := mr.State
+					if mr.Draft && state != "merged" && state != "closed" {
+						state = "draft"
+					}
+					items = append(items, ArtifactItem{
+						Provider:  "gitlab",
+						Kind:      "MR",
+						RepoName:  mr.ProjectPath,
+						Ref:       fmt.Sprintf("!%d", mr.IID),
+						URL:       mr.WebURL,
+						State:     state,
+						Branch:    mr.SourceBranch,
+						Draft:     mr.Draft,
+						CreatedAt: mr.CreatedAt,
+						UpdatedAt: mr.UpdatedAt,
+					})
+				}
+			}
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].RepoName != items[j].RepoName {
+			return items[i].RepoName < items[j].RepoName
+		}
+		return items[i].Ref < items[j].Ref
+	})
+	return items
 }
 
 func reviewKindForProvider(provider string) string {
