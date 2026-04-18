@@ -15,6 +15,13 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+type workspaceInitMode int
+
+const (
+	workspaceInitModeCreate   workspaceInitMode = iota
+	workspaceInitModeNewRepos
+)
+
 // WorkspaceInitModal is shown at startup when no workspace is found.
 //
 //nolint:recvcheck // Bubble Tea convention
@@ -26,6 +33,8 @@ type WorkspaceInitModal struct {
 	styles       styles.Styles
 	width        int
 	height       int
+	mode         workspaceInitMode
+	gitClient    *gitwork.Client
 	workspaceSvc *service.WorkspaceService
 }
 
@@ -37,6 +46,18 @@ func NewWorkspaceInitModal(cwd string, st styles.Styles, workspaceSvc *service.W
 		active:       true,
 		styles:       st,
 		workspaceSvc: workspaceSvc,
+	}
+}
+
+// NewNewReposModal creates a WorkspaceInitModal for the new-repos-detected flow.
+func NewNewReposModal(workspaceDir string, st styles.Styles, gitClient *gitwork.Client) WorkspaceInitModal {
+	return WorkspaceInitModal{
+		cwd:       workspaceDir,
+		loading:   true,
+		active:    true,
+		styles:    st,
+		mode:      workspaceInitModeNewRepos,
+		gitClient: gitClient,
 	}
 }
 
@@ -62,6 +83,9 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 		}
 		m.check = msg.Check
 		m.loading = false
+		if m.mode == workspaceInitModeNewRepos && len(msg.Check.PlainGitClones) == 0 {
+			return m, func() tea.Msg { return CloseOverlayMsg{} }
+		}
 
 	case tea.KeyMsg:
 		if m.loading {
@@ -69,12 +93,21 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "y", keyEnter:
+			if m.mode == workspaceInitModeNewRepos {
+				return m, initNewReposCmd(m.gitClient, m.check.PlainGitClones)
+			}
 			return m, initWorkspaceCmd(m.cwd, m.workspaceSvc)
 		case "n", keyEsc:
+			if m.mode == workspaceInitModeNewRepos {
+				return m, func() tea.Msg { return CloseOverlayMsg{} }
+			}
 			return m, func() tea.Msg { return WorkspaceCancelMsg{} }
 		}
 
 	case WorkspaceInitDoneMsg:
+		m.active = false
+
+	case NewReposInitDoneMsg:
 		m.active = false
 	}
 
@@ -137,59 +170,88 @@ func (m WorkspaceInitModal) View() string {
 	w = min(w, 82)
 
 	var lines []string
-	lines = append(lines,
-		m.styles.Title.Render("Initialize Workspace"),
-		"",
-	)
 
-	if m.loading {
+	if m.mode == workspaceInitModeNewRepos {
 		lines = append(lines,
-			m.styles.Muted.Render("Scanning for git-work repos…"),
+			m.styles.Title.Render("New Repositories Detected"),
+			"",
 		)
+		if m.loading {
+			lines = append(lines,
+				m.styles.Muted.Render("Scanning for new repos…"),
+			)
+		} else if len(m.check.PlainGitClones) == 0 {
+			lines = append(lines, m.styles.Muted.Render("No uninitialized repositories found."))
+		} else {
+			lines = append(lines,
+				m.styles.Subtitle.Render("New plain git repositories were added to this workspace:"),
+				"",
+			)
+			for _, c := range m.check.PlainGitClones {
+				lines = append(lines, m.styles.Muted.Render("  • "+filepath.Base(c)+"/"))
+			}
+			lines = append(lines,
+				"",
+				m.styles.Muted.Render("Existing git-work repos will not be touched."),
+				"",
+				m.styles.KeybindAccent.Render("[y]")+m.styles.Subtitle.Render(" Initialize  ")+
+					m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Skip"),
+			)
+		}
 	} else {
 		lines = append(lines,
-			m.styles.Subtitle.Render("No workspace found at:"),
-			m.styles.Muted.Render("  "+m.cwd),
-			"",
-			m.styles.Subtitle.Render("Initialize this directory as a Substrate workspace?"),
-			"",
-			m.styles.Subtitle.Render("This will:"),
-			m.styles.Muted.Render("  • Create .substrate-workspace  (workspace identity file)"),
-			m.styles.Muted.Render("  • Detect git-work repos        (directories with .bare/)"),
-			m.styles.Muted.Render("  • Convert plain git repos      (child dirs with .git/)"),
-			m.styles.Muted.Render("  • Register workspace in        ~/.substrate/state.db"),
+			m.styles.Title.Render("Initialize Workspace"),
 			"",
 		)
-
-		if len(m.check.GitWorkRepos) > 0 {
-			repoNames := make([]string, len(m.check.GitWorkRepos))
-			for i, r := range m.check.GitWorkRepos {
-				repoNames[i] = filepath.Base(r) + "/"
-			}
+		if m.loading {
 			lines = append(lines,
-				m.styles.Success.Render("git-work repos detected: ")+
-					m.styles.Subtitle.Render(strings.Join(repoNames, ", ")),
+				m.styles.Muted.Render("Scanning for git-work repos…"),
 			)
 		} else {
-			lines = append(lines, m.styles.Muted.Render("No git-work repos detected."))
-		}
-
-		if len(m.check.PlainGitClones) > 0 {
-			cloneNames := make([]string, len(m.check.PlainGitClones))
-			for i, c := range m.check.PlainGitClones {
-				cloneNames[i] = filepath.Base(c) + "/"
-			}
 			lines = append(lines,
-				m.styles.Warning.Render("⚠ Plain git repos to initialize: ")+
-					m.styles.Subtitle.Render(strings.Join(cloneNames, ", ")),
+				m.styles.Subtitle.Render("No workspace found at:"),
+				m.styles.Muted.Render("  "+m.cwd),
+				"",
+				m.styles.Subtitle.Render("Initialize this directory as a Substrate workspace?"),
+				"",
+				m.styles.Subtitle.Render("This will:"),
+				m.styles.Muted.Render("  • Create .substrate-workspace  (workspace identity file)"),
+				m.styles.Muted.Render("  • Detect git-work repos        (directories with .bare/)"),
+				m.styles.Muted.Render("  • Convert plain git repos      (child dirs with .git/)"),
+				m.styles.Muted.Render("  • Register workspace in        ~/.substrate/state.db"),
+				"",
+			)
+
+			if len(m.check.GitWorkRepos) > 0 {
+				repoNames := make([]string, len(m.check.GitWorkRepos))
+				for i, r := range m.check.GitWorkRepos {
+					repoNames[i] = filepath.Base(r) + "/"
+				}
+				lines = append(lines,
+					m.styles.Success.Render("git-work repos detected: ")+
+						m.styles.Subtitle.Render(strings.Join(repoNames, ", ")),
+				)
+			} else {
+				lines = append(lines, m.styles.Muted.Render("No git-work repos detected."))
+			}
+
+			if len(m.check.PlainGitClones) > 0 {
+				cloneNames := make([]string, len(m.check.PlainGitClones))
+				for i, c := range m.check.PlainGitClones {
+					cloneNames[i] = filepath.Base(c) + "/"
+				}
+				lines = append(lines,
+					m.styles.Warning.Render("⚠ Plain git repos to initialize: ")+
+						m.styles.Subtitle.Render(strings.Join(cloneNames, ", ")),
+				)
+			}
+
+			lines = append(lines,
+				"",
+				m.styles.KeybindAccent.Render("[y]")+m.styles.Subtitle.Render(" Initialize  ")+
+					m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Cancel"),
 			)
 		}
-
-		lines = append(lines,
-			"",
-			m.styles.KeybindAccent.Render("[y]")+m.styles.Subtitle.Render(" Initialize  ")+
-				m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Cancel"),
-		)
 	}
 
 	content := strings.Join(lines, "\n")

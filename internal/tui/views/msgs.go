@@ -379,6 +379,9 @@ type WorkspaceInitDoneMsg struct {
 	WorkspaceDir  string
 }
 
+// NewReposInitDoneMsg is sent after new plain-git repos are converted to git-work layout.
+type NewReposInitDoneMsg struct{ Count int }
+
 // WorkspaceServicesReloadedMsg is sent after the app rebuilds services for a newly initialized workspace.
 type WorkspaceServicesReloadedMsg struct {
 	Reload  viewsServicesReload

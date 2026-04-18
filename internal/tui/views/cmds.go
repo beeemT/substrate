@@ -1307,3 +1307,21 @@ func InitRepoCmd(client *gitwork.Client, repoPath string) tea.Cmd {
 		return RepoInitializedMsg{RepoPath: repoPath}
 	}
 }
+
+// initNewReposCmd converts all given plain-git repos to the git-work layout.
+// It runs sequentially so failures are attributed to individual repos.
+// Returns NewReposInitDoneMsg on full success, ErrMsg on first failure.
+func initNewReposCmd(client *gitwork.Client, repos []string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			client = gitwork.NewClient("")
+		}
+		for _, repoPath := range repos {
+			if err := client.Init(context.Background(), repoPath); err != nil {
+				slog.Error("failed to initialize new git-work repo", "path", repoPath, "error", err)
+				return ErrMsg{Err: fmt.Errorf("initialize git-work repo %s: %w", filepath.Base(repoPath), err)}
+			}
+		}
+		return NewReposInitDoneMsg{Count: len(repos)}
+	}
+}

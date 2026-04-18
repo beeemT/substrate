@@ -115,6 +115,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	addRepo                     AddRepoOverlay
 	repoManager                 RepoManagerOverlay
 	hasWorkspace                bool
+	styles                      styles.Styles
 
 	// Toasts
 	toasts components.ToastModel
@@ -214,6 +215,7 @@ func NewApp(svcs Services) App {
 		pipelineCancels:                make(map[string]context.CancelFunc),
 		sessionsDir:                    sessionsDir,
 		hasWorkspace:                   svcs.WorkspaceID != "",
+		styles:                         st,
 		cachedBase:                     new(string),
 		sbHeight:                       1, // conservative default; updated on first WindowSizeMsg
 	}
@@ -267,6 +269,9 @@ func (a App) Init() tea.Cmd {
 
 	if a.activeOverlay == overlayWorkspaceInit {
 		cmds = append(cmds, a.workspaceModal.ScanCmd())
+	} else if a.svcs.WorkspaceID != "" && a.svcs.WorkspaceDir != "" {
+		// Scan for plain-git repos that were manually added since the workspace was initialised.
+		cmds = append(cmds, WorkspaceHealthCheckCmd(a.svcs.WorkspaceDir))
 	}
 
 	return tea.Batch(cmds...)
@@ -902,6 +907,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.activeOverlay == overlayWorkspaceInit {
 			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 			cmds = append(cmds, cmd)
+		} else if a.hasWorkspace && a.activeOverlay == overlayNone && len(msg.Check.PlainGitClones) > 0 {
+			// New uninitialized repos detected in an existing workspace.
+			a.workspaceModal = NewNewReposModal(a.svcs.WorkspaceDir, a.styles, a.svcs.GitClient)
+			a.workspaceModal.SetSize(a.windowWidth, a.windowHeight)
+			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
+			cmds = append(cmds, cmd)
+			a.activeOverlay = overlayWorkspaceInit
 		}
 		return a, tea.Batch(cmds...)
 
@@ -913,6 +925,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.WorkspaceName,
 			msg.WorkspaceDir,
 		))
+		return a, tea.Batch(cmds...)
+
+	case NewReposInitDoneMsg:
+		a.workspaceModal, cmd = a.workspaceModal.Update(msg)
+		cmds = append(cmds, cmd)
+		a.activeOverlay = overlayNone
+		a.toasts.AddToast(fmt.Sprintf("%d repo(s) initialized with git-work", msg.Count), components.ToastSuccess)
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceServicesReloadedMsg:

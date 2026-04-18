@@ -337,3 +337,90 @@ func TestApp_InitIncludesReconciliation(t *testing.T) {
 		t.Fatal("Init() must return commands when workspace is set (includes reconciliation)")
 	}
 }
+
+func TestApp_NewReposHealthCheckMsg_ActivatesModalWhenPlainReposFound(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		WorkspaceDir:  "/tmp/ws",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+
+	// Simulate the startup health check arriving with plain git repos.
+	msg := WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{
+			PlainGitClones: []string{"/tmp/ws/new-repo"},
+		},
+	}
+	model, _ := app.Update(msg)
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlayWorkspaceInit {
+		t.Fatalf("activeOverlay = %v, want overlayWorkspaceInit", updated.activeOverlay)
+	}
+	if !updated.workspaceModal.Active() {
+		t.Fatal("workspaceModal must be active after new repos detected")
+	}
+}
+
+func TestApp_NewReposHealthCheckMsg_IgnoredWhenNoPlainRepos(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		WorkspaceDir:  "/tmp/ws",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+
+	msg := WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{
+			GitWorkRepos: []string{"/tmp/ws/existing"},
+		},
+	}
+	model, _ := app.Update(msg)
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlayNone {
+		t.Fatalf("activeOverlay = %v, want overlayNone when no plain repos", updated.activeOverlay)
+	}
+}
+
+func TestApp_NewReposInitDoneMsg_ClearsOverlayAndShowsToast(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		WorkspaceDir:  "/tmp/ws",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+
+	// Put the app in new-repos modal state.
+	app.workspaceModal = NewNewReposModal("/tmp/ws", app.styles, nil)
+	app.activeOverlay = overlayWorkspaceInit
+
+	model, _ := app.Update(NewReposInitDoneMsg{Count: 2})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlayNone {
+		t.Fatalf("activeOverlay = %v, want overlayNone after init done", updated.activeOverlay)
+	}
+}
