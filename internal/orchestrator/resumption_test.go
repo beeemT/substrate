@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -603,3 +604,165 @@ func TestResumeSession_WithoutResumeInfo(t *testing.T) {
 		t.Errorf("expected 0 SendMessage calls in fallback path, got %d", len(sess.messages))
 	}
 }
+
+// ============================================================
+// FollowUpSession / WaitAndComplete tests
+// ============================================================
+
+// seedCompletedSession inserts a completed session with a sub-plan.
+func (f *phase9bFixture) seedCompletedSession(sessionID string) {
+	f.sessionRepo.sessions[sessionID] = domain.Task{
+		ID:             sessionID,
+		WorkItemID:     "wi-1",
+		WorkspaceID:    f.workspaceID,
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      "sub-plan-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   "/tmp/worktrees/repo-a",
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+	}
+}
+
+// seedFailedSession inserts a failed session with a sub-plan.
+func (f *phase9bFixture) seedFailedSession(sessionID string) {
+	f.sessionRepo.sessions[sessionID] = domain.Task{
+		ID:             sessionID,
+		WorkItemID:     "wi-1",
+		WorkspaceID:    f.workspaceID,
+		Phase:          domain.TaskPhaseImplementation,
+		SubPlanID:      "sub-plan-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   "/tmp/worktrees/repo-a",
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionFailed,
+	}
+}
+
+// TestFollowUpSession_WaitAndComplete_CompletesSessionInDB verifies that once
+// WaitAndComplete returns the session row is transitioned to completed.
+func TestFollowUpSession_WaitAndComplete_CompletesSessionInDB(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	sessionID := "sess-follow-up-complete"
+	fix.seedCompletedSession(sessionID)
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+
+	completedTask := fix.sessionRepo.sessions[sessionID]
+	result, err := r.FollowUpSession(ctx, completedTask, "please also add tests", "inst-1")
+	if err != nil {
+		t.Fatalf("FollowUpSession: %v", err)
+	}
+
+	// WaitAndComplete should transition the session to completed.
+	r.WaitAndComplete(ctx, result.Task.ID, &immediatelyCompletingSession{id: result.Task.ID})
+
+	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionCompleted {
+		t.Errorf("expected completed, got %q", got)
+	}
+}
+
+// TestFollowUpSession_WaitAndComplete_FailsSessionOnHarnessError verifies that when
+// the harness exits with an error the session row is transitioned to failed.
+func TestFollowUpSession_WaitAndComplete_FailsSessionOnHarnessError(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	sessionID := "sess-follow-up-fail"
+	fix.seedCompletedSession(sessionID)
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+
+	completedTask := fix.sessionRepo.sessions[sessionID]
+	result, err := r.FollowUpSession(ctx, completedTask, "retry with extra tests", "inst-2")
+	if err != nil {
+		t.Fatalf("FollowUpSession: %v", err)
+	}
+
+	// Inject a session that returns an error from Wait.
+	failingSession := newMockSession(result.Task.ID)
+	failingSession.waitErr = fmt.Errorf("harness crashed")
+
+	r.WaitAndComplete(ctx, result.Task.ID, failingSession)
+
+	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionFailed {
+		t.Errorf("expected failed, got %q", got)
+	}
+}
+
+// TestFollowUpFailedSession_WaitAndComplete_CompletesNewSessionInDB verifies that
+// a follow-up on a failed task creates a new session and WaitAndComplete completes it.
+func TestFollowUpFailedSession_WaitAndComplete_CompletesNewSessionInDB(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	origID := "sess-failed-orig"
+	fix.seedFailedSession(origID)
+
+	harness := &captureHarness{sessionsDir: sessionsDir}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+
+	failedTask := fix.sessionRepo.sessions[origID]
+	result, err := r.FollowUpFailedSession(ctx, failedTask, "fix the compilation error", "inst-3")
+	if err != nil {
+		t.Fatalf("FollowUpFailedSession: %v", err)
+	}
+
+	// The new task ID is different from the original failed task.
+	if result.Task.ID == origID {
+		t.Error("FollowUpFailedSession must create a new task, not reuse the failed one")
+	}
+
+	// WaitAndComplete transitions the new session to completed.
+	completingSession := &immediatelyCompletingSession{id: result.Task.ID}
+	r.WaitAndComplete(ctx, result.Task.ID, completingSession)
+
+	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionCompleted {
+		t.Errorf("expected new session to be completed, got %q", got)
+	}
+	// Original failed session must remain failed (audit trail).
+	if got := fix.getSessionStatus(origID); got != domain.AgentSessionFailed {
+		t.Errorf("original session must remain failed, got %q", got)
+	}
+}
+
+// immediatelyCompletingSession is an AgentSession stub whose Wait returns nil immediately,
+// simulating a session that finishes successfully without blocking.
+type immediatelyCompletingSession struct {
+	id string
+}
+
+func (s *immediatelyCompletingSession) ID() string                                    { return s.id }
+func (s *immediatelyCompletingSession) Wait(_ context.Context) error                  { return nil }
+func (s *immediatelyCompletingSession) Events() <-chan adapter.AgentEvent             { return nil }
+func (s *immediatelyCompletingSession) SendMessage(_ context.Context, _ string) error { return nil }
+func (s *immediatelyCompletingSession) Abort(_ context.Context) error                 { return nil }
+func (s *immediatelyCompletingSession) Steer(_ context.Context, _ string) error       { return nil }
+func (s *immediatelyCompletingSession) SendAnswer(_ context.Context, _ string) error  { return nil }
+func (s *immediatelyCompletingSession) Compact(_ context.Context) error               { return nil }
+func (s *immediatelyCompletingSession) ResumeInfo() map[string]string                 { return nil }

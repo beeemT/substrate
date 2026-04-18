@@ -1209,24 +1209,33 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
 			cmds = append(cmds, FollowUpSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
 			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
+			a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
 		}
 		return a, tea.Batch(cmds...)
-
-	case FollowUpSessionSentMsg:
-		a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
-		return a, nil
 
 	case FollowUpFailedSessionMsg:
 		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
 			cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
 			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
+			a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
 		}
 		return a, tea.Batch(cmds...)
 
-	case FollowUpFailedSessionSentMsg:
-		a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
-		return a, nil
+	case FollowUpSessionCompleteMsg:
+		a.cancelPipeline(msg.WorkItemID)
+		a.toasts.AddToast("Follow-up session complete", components.ToastSuccess)
+		// Stop the Foreman — follow-up work is done. foremanPlanID is intentionally
+		// preserved so the sidebar still shows the session log.
+		if a.svcs.Foreman != nil && a.foremanPlanID != "" {
+			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+		}
+		// Reload tasks immediately so the sidebar reflects the completed state
+		// without waiting for the next poll tick.
+		if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds, LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID))
+		}
+		return a, tea.Batch(cmds...)
 
 	case FollowUpPlanMsg:
 		if a.svcs.Planning == nil {

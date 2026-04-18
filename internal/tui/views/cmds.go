@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"net/url"
 	"strings"
 	"time"
 
@@ -1132,31 +1132,37 @@ func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message 
 	}
 }
 
-// FollowUpSessionCmd starts a follow-up agent session on a completed task.
+// FollowUpSessionCmd starts a follow-up agent session on a completed task and
+// blocks until the session finishes. Returns FollowUpSessionCompleteMsg when done.
 func FollowUpSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get task for follow-up: %w", err)}
 		}
-		if _, err := resumption.FollowUpSession(ctx, task, feedback, instanceID); err != nil {
+		result, err := resumption.FollowUpSession(ctx, task, feedback, instanceID)
+		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("start follow-up session: %w", err)}
 		}
-		return FollowUpSessionSentMsg{TaskID: taskID}
+		resumption.WaitAndComplete(ctx, result.Task.ID, result.HarnessSession)
+		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
 	}
 }
 
-// FollowUpFailedSessionCmd starts a follow-up agent session on a failed task.
+// FollowUpFailedSessionCmd starts a follow-up agent session on a failed task and
+// blocks until the session finishes. Returns FollowUpSessionCompleteMsg when done.
 func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get task for failed follow-up: %w", err)}
 		}
-		if _, err := resumption.FollowUpFailedSession(ctx, task, feedback, instanceID); err != nil {
+		result, err := resumption.FollowUpFailedSession(ctx, task, feedback, instanceID)
+		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("start failed follow-up session: %w", err)}
 		}
-		return FollowUpFailedSessionSentMsg{TaskID: taskID}
+		resumption.WaitAndComplete(ctx, result.Task.ID, result.HarnessSession)
+		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
 	}
 }
 

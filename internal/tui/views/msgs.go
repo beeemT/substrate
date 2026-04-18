@@ -451,20 +451,16 @@ type FollowUpSessionMsg struct {
 	Feedback string
 }
 
-// FollowUpSessionSentMsg confirms a follow-up session was started.
-type FollowUpSessionSentMsg struct {
-	TaskID string
-}
-
 // FollowUpFailedSessionMsg fires when the user submits a follow-up prompt for a failed session.
 type FollowUpFailedSessionMsg struct {
 	TaskID   string
 	Feedback string
 }
 
-// FollowUpFailedSessionSentMsg confirms a follow-up session was started for a failed task.
-type FollowUpFailedSessionSentMsg struct {
-	TaskID string
+// FollowUpSessionCompleteMsg signals that a follow-up agent session has finished.
+// Sent by both FollowUpSessionCmd and FollowUpFailedSessionCmd once the harness exits.
+type FollowUpSessionCompleteMsg struct {
+	WorkItemID string
 }
 
 // FollowUpPlanMsg requests a follow-up re-planning for a completed work item.

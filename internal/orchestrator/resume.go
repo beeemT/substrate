@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -278,12 +279,6 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.T
 
 	if r.registry != nil {
 		r.registry.Register(completedTask.ID, harnessSession)
-		go func() {
-			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
-				slog.Warn("harness session wait failed", "error", waitErr)
-			}
-			r.registry.Deregister(completedTask.ID)
-		}()
 	}
 
 	return FollowUpSessionResult{
@@ -366,7 +361,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-
 	if r.eventBus != nil {
 		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{
 			ID:          domain.NewID(),
@@ -385,12 +379,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 
 	if r.registry != nil {
 		r.registry.Register(newTask.ID, harnessSession)
-		go func() {
-			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
-				slog.Warn("harness session wait failed", "error", waitErr)
-			}
-			r.registry.Deregister(newTask.ID)
-		}()
 	}
 
 	return FollowUpSessionResult{
@@ -490,4 +478,43 @@ func readLastNLines(sessionID string, n int) (string, error) {
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// WaitAndComplete blocks until harnessSession finishes, then transitions
+// sessionID to the appropriate terminal state in the DB and saves resume info.
+// It deregisters the session from the registry on completion. Callers must
+// have previously registered the session via registry.Register.
+// Intended for follow-up sessions where the TUI command goroutine drives the wait.
+func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harnessSession adapter.AgentSession) {
+	if r.registry != nil {
+		defer r.registry.Deregister(sessionID)
+	}
+
+	waitErr := harnessSession.Wait(ctx)
+	if waitErr != nil {
+		if errors.Is(waitErr, context.Canceled) {
+			if err := interruptSessionDurably(ctx, r.sessionSvc, sessionID); err != nil {
+				slog.Warn("failed to interrupt follow-up session after cancellation",
+					"error", err, "session_id", sessionID)
+			}
+		} else {
+			if err := failSessionDurably(ctx, r.sessionSvc, sessionID, nil); err != nil {
+				slog.Warn("failed to fail follow-up session",
+					"error", err, "session_id", sessionID)
+			}
+		}
+		return
+	}
+
+	if err := completeSessionDurably(ctx, r.sessionSvc, sessionID); err != nil {
+		slog.Warn("failed to complete follow-up session",
+			"error", err, "session_id", sessionID)
+	}
+
+	if info := harnessSession.ResumeInfo(); len(info) > 0 {
+		if err := r.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
+			slog.Warn("failed to update resume info for follow-up session",
+				"error", err, "session_id", sessionID)
+		}
+	}
 }
