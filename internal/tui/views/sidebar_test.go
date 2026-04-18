@@ -433,6 +433,7 @@ func TestFilterSidebarEntries(t *testing.T) {
 		makeWorkItemEntry("d", "gh:issue:3", domain.SessionImplementing, "github", now, now),
 		makeWorkItemEntry("e", "gh:issue:4", domain.SessionPlanReview, "github", now, now),
 		makeWorkItemEntry("f", "gh:issue:5", domain.SessionIngested, "github", now, now),
+		makeWorkItemEntry("g", "gh:issue:6", domain.SessionMerged, "github", now, now),
 	}
 
 	t.Run("all", func(t *testing.T) {
@@ -475,14 +476,14 @@ func TestFilterSidebarEntries(t *testing.T) {
 
 	t.Run("completed", func(t *testing.T) {
 		got := views.FilterSidebarEntries(entries, views.SidebarFilterCompleted)
-		if len(got) != 2 {
-			t.Fatalf("expected 2 completed entries, got %d", len(got))
+		if len(got) != 3 {
+			t.Fatalf("expected 3 completed entries (completed+failed+merged), got %d", len(got))
 		}
 		for _, e := range got {
 			if e.Kind != views.SidebarEntryWorkItem {
 				continue
 			}
-			if e.State != domain.SessionCompleted && e.State != domain.SessionFailed {
+			if e.State != domain.SessionCompleted && e.State != domain.SessionFailed && e.State != domain.SessionMerged {
 				t.Fatalf("unexpected state in completed filter: %s", e.State)
 			}
 		}
@@ -783,5 +784,55 @@ func TestSidebarToggleDirection(t *testing.T) {
 	m.ToggleDirection()
 	if got := m.DirectionMode(); got != views.SidebarDirDesc {
 		t.Fatalf("expected Desc after second toggle, got %d", got)
+	}
+}
+
+func TestSidebarMergedStateRendersSuccessIcon(t *testing.T) {
+	st := makeSidebarStyles()
+	entry := views.SidebarEntry{
+		Kind:       views.SidebarEntryWorkItem,
+		WorkItemID: "wi-1",
+		State:      domain.SessionMerged,
+		Title:      "Merged item",
+	}
+	icon := entry.StatusIcon(st)
+	stripped := stripANSI(icon)
+	if stripped != "✓" {
+		t.Fatalf("expected ✓ icon for merged state, got %q", stripped)
+	}
+}
+
+func TestSidebarMergedStatusText(t *testing.T) {
+	entry := views.SidebarEntry{
+		Kind:       views.SidebarEntryWorkItem,
+		WorkItemID: "wi-1",
+		State:      domain.SessionMerged,
+		Title:      "Merged item",
+	}
+	text := entry.Subtitle()
+	if text != "Merged" {
+		t.Fatalf("expected 'Merged' status text, got %q", text)
+	}
+}
+
+func TestSidebarMergedGroupsWithCompleted(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionCompleted, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionMerged, "github", now, now),
+	}
+
+	got := views.ApplyDimensionAndDirection(entries, views.SidebarDimState, views.SidebarDirDesc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (both under Completed), got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Completed") {
+		t.Fatalf("expected group to be Completed, got %q", groups[0])
 	}
 }

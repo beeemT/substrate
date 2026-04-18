@@ -30,7 +30,7 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionApproved:     {domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionCompleted, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
-	domain.SessionCompleted:    {domain.SessionPlanning},
+	domain.SessionCompleted:    {domain.SessionPlanning, domain.SessionMerged},
 	domain.SessionFailed:       {domain.SessionImplementing},
 }
 
@@ -340,6 +340,11 @@ func (s *SessionService) SubmitForReview(ctx context.Context, id string) error {
 // CompleteWorkItem transitions a work item from reviewing to completed.
 func (s *SessionService) CompleteWorkItem(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.SessionCompleted)
+}
+
+// MergeWorkItem transitions a work item from completed to merged.
+func (s *SessionService) MergeWorkItem(ctx context.Context, id string) error {
+	return s.Transition(ctx, id, domain.SessionMerged)
 }
 
 // RequestReimplementation transitions a work item from reviewing to implementing.

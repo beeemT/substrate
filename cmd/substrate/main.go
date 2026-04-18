@@ -420,10 +420,12 @@ func buildAdapterSetup(
 			GithubPRs:        services.githubPR,
 			GitlabMRs:        services.gitlabMR,
 			SessionArtifacts: services.sessionArtifact,
-			GithubPRReviews: services.ghPRReview,
-			GitlabMRReviews: services.glMRReview,
-			GithubPRChecks:  services.ghPRCheck,
-			GitlabMRChecks:  services.glMRCheck,
+			Sessions:         services.workItem,
+			GithubPRReviews:  services.ghPRReview,
+			GitlabMRReviews:  services.glMRReview,
+			GithubPRChecks:   services.ghPRCheck,
+			GitlabMRChecks:   services.glMRCheck,
+			Bus:              bus,
 		},
 	)
 	repoSources := app.BuildRepoSources(ctx, cfg)
@@ -456,7 +458,7 @@ func subscribeWorkItemAdapters(
 	return subscribeAdapters(
 		bus,
 		"work-item-adapter",
-		[]domain.EventType{domain.EventPlanApproved, domain.EventWorkItemCompleted},
+		[]domain.EventType{domain.EventPlanApproved, domain.EventWorkItemCompleted, domain.EventPRMerged},
 		adapters,
 		adapterErrors,
 	)
@@ -474,6 +476,7 @@ func subscribeRepoLifecycleAdapters(
 			domain.EventWorktreeCreated,
 			domain.EventWorktreeReused,
 			domain.EventWorkItemCompleted,
+			domain.EventPRMerged,
 		},
 		adapters,
 		adapterErrors,

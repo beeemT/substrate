@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -17,10 +18,12 @@ type ReviewArtifactRepos struct {
 	GithubPRs        *service.GithubPRService
 	GitlabMRs        *service.GitlabMRService
 	SessionArtifacts *service.SessionReviewArtifactService
+	Sessions         *service.SessionService
 	GithubPRReviews  *service.GithubPRReviewService
 	GitlabMRReviews  *service.GitlabMRReviewService
-	GithubPRChecks  *service.GithubPRCheckService
-	GitlabMRChecks  *service.GitlabMRCheckService
+	GithubPRChecks   *service.GithubPRCheckService
+	GitlabMRChecks   *service.GitlabMRCheckService
+	Bus              *event.Bus
 }
 
 func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {

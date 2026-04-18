@@ -105,6 +105,10 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
 			slog.Warn("glab: work item completed handler failed", "error", err)
 		}
+	case domain.EventPRMerged:
+		if err := a.onPRMerged(ctx, event.Payload); err != nil {
+			slog.Warn("glab: post-merge issue close failed", "error", err)
+		}
 	}
 
 	return nil
@@ -787,6 +791,11 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 		a.refreshMRReviews(ctx, mr, repoDir)
 		a.refreshMRChecks(ctx, mr, repoDir)
 	}
+
+	// Detect merge transition: MR just became merged.
+	if glabArtifactState(fresh) == "merged" && mr.State != "merged" {
+		a.checkAllMerged(ctx, mr.ID)
+	}
 }
 
 // refreshMRReviews fetches approval state and unresolved discussions for a GitLab MR
@@ -960,4 +969,121 @@ func glabJobStatusMap(jobStatus string) (string, string) {
 	default:
 		return "queued", ""
 	}
+}
+
+
+// checkAllMerged transitions a work item to SessionMerged when all linked
+// review artifacts are merged, then publishes EventPRMerged.
+func (a *GlabAdapter) checkAllMerged(ctx context.Context, mrID string) {
+	if a.repos.SessionArtifacts == nil || a.repos.Sessions == nil || a.repos.Bus == nil {
+		return
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkspaceID(ctx, a.workspaceID)
+	if err != nil {
+		slog.Warn("glab: list artifacts for merge check failed", "error", err)
+		return
+	}
+	var workItemID string
+	for _, link := range links {
+		if link.ProviderArtifactID == mrID {
+			workItemID = link.WorkItemID
+			break
+		}
+	}
+	if workItemID == "" {
+		return
+	}
+	wi, err := a.repos.Sessions.Get(ctx, workItemID)
+	if err != nil {
+		slog.Warn("glab: get work item for merge check failed", "work_item_id", workItemID, "error", err)
+		return
+	}
+	if wi.State != domain.SessionCompleted {
+		return
+	}
+	for _, link := range links {
+		if link.WorkItemID != workItemID {
+			continue
+		}
+		switch link.Provider {
+		case "github":
+			if a.repos.GithubPRs == nil {
+				return
+			}
+			ghPR, err := a.repos.GithubPRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("glab: get github pr for merge check failed", "pr_id", link.ProviderArtifactID, "error", err)
+				return
+			}
+			if ghPR.State != "merged" {
+				return
+			}
+		case "gitlab":
+			glMR, err := a.repos.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("glab: get mr for merge check failed", "mr_id", link.ProviderArtifactID, "error", err)
+				return
+			}
+			if glMR.State != "merged" {
+				return
+			}
+		default:
+			return
+		}
+	}
+	if err := a.repos.Sessions.MergeWorkItem(ctx, workItemID); err != nil {
+		slog.Warn("glab: merge work item failed", "work_item_id", workItemID, "error", err)
+		return
+	}
+	payload, err := json.Marshal(map[string]string{
+		"workspace_id": a.workspaceID,
+		"work_item_id": workItemID,
+		"external_id":  wi.ExternalID,
+	})
+	if err != nil {
+		slog.Warn("glab: marshal pr.merged payload failed", "error", err)
+		return
+	}
+	if err := a.repos.Bus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPRMerged),
+		WorkspaceID: a.workspaceID,
+		Payload:     string(payload),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		slog.Warn("glab: publish pr.merged event failed", "error", err)
+	}
+}
+
+// onPRMerged closes the linked GitLab issue when PostMergeCloseIssue is enabled.
+func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
+	if !a.cfg.PostMergeCloseIssue {
+		return nil
+	}
+	var parsed struct {
+		ExternalID string `json:"external_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return fmt.Errorf("parse pr.merged payload: %w", err)
+	}
+	if parsed.ExternalID == "" || !strings.HasPrefix(parsed.ExternalID, "gl:issue:") {
+		return nil
+	}
+	raw := strings.TrimPrefix(parsed.ExternalID, "gl:issue:")
+	parts := strings.SplitN(raw, "#", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid gitlab external id %q", parsed.ExternalID)
+	}
+	projectID := parts[0]
+	issueIID := parts[1]
+	if projectID == "" || issueIID == "" {
+		return fmt.Errorf("invalid gitlab external id %q", parsed.ExternalID)
+	}
+	if a.workspaceDir == "" {
+		return fmt.Errorf("glab: no workspace dir for issue close")
+	}
+	_, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",
+		fmt.Sprintf("/projects/%s/issues/%s", url.PathEscape(projectID), issueIID),
+		"--field", "state_event=close")
+	return err
 }

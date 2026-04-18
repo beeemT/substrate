@@ -2138,6 +2138,13 @@ func (a *App) sourceDetailsNoticeForWorkItem(wi *domain.Session) *sourceDetailsN
 			Hint:    "Press [Enter] to open the overview and inspect the final status or review artifacts.",
 			Variant: components.CalloutCard,
 		}
+	case domain.SessionMerged:
+		return &sourceDetailsNotice{
+			Title:   "Work item merged",
+			Body:    "All pull requests for this work item have been merged.",
+			Hint:    "Press [Enter] to open the overview and inspect the final status.",
+			Variant: components.CalloutCard,
+		}
 	default:
 		return nil
 	}

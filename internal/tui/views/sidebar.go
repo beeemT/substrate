@@ -203,6 +203,8 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 		}
 	}
 	switch {
+	case e.State == domain.SessionMerged:
+		return st.Success.Render("✓")
 	case e.State == domain.SessionCompleted:
 		return st.Success.Render("✓")
 	case e.State == domain.SessionFailed:
@@ -252,6 +254,8 @@ func (e SidebarEntry) Subtitle() string {
 		status = "Completed"
 	case domain.SessionFailed:
 		status = "Failed"
+	case domain.SessionMerged:
+		status = "Merged"
 	}
 	if e.Kind != SidebarEntrySessionHistory {
 		return status
@@ -790,7 +794,7 @@ func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted
 		}
 		return false
 	case SidebarFilterCompleted:
-		return state == domain.SessionCompleted || state == domain.SessionFailed
+		return state == domain.SessionCompleted || state == domain.SessionFailed || state == domain.SessionMerged
 	default:
 		return true
 	}
@@ -864,7 +868,7 @@ func groupByState(entries []SidebarEntry, dir SidebarDirection) []groupedEntries
 			return "Review"
 		case domain.SessionApproved, domain.SessionIngested:
 			return "Waiting"
-		case domain.SessionCompleted:
+		case domain.SessionCompleted, domain.SessionMerged:
 			return "Completed"
 		case domain.SessionFailed:
 			return "Failed"

@@ -32,5 +32,6 @@ const (
 	SessionImplementing SessionState = "implementing"
 	SessionReviewing    SessionState = "reviewing"
 	SessionCompleted    SessionState = "completed"
+	SessionMerged       SessionState = "merged"
 	SessionFailed       SessionState = "failed"
 )

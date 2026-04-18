@@ -30,6 +30,7 @@ const (
 	overviewActionReviewing   OverviewActionKind = "reviewing"
 	overviewActionFailed      OverviewActionKind = "failed"
 	overviewActionCompleted   OverviewActionKind = "completed"
+	overviewActionMerged    OverviewActionKind = "merged"
 
 	providerGitlab       = "gitlab"
 	labelReviewArtifacts = "Review artifacts"
@@ -404,6 +405,10 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, nil
 				case overviewActionCompleted:
+					m.overlay = overviewOverlayCompleted
+
+					return m, nil
+				case overviewActionMerged:
 					m.overlay = overviewOverlayCompleted
 
 					return m, nil
@@ -817,6 +822,8 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		return []KeybindHint{{Key: "r", Label: "Retry"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionCompleted:
 		return []KeybindHint{{Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
+	case overviewActionMerged:
+		return []KeybindHint{{Key: "i", Label: "Inspect"}}
 	default:
 		return nil
 	}
@@ -1468,6 +1475,14 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	}
 	if completedAction := a.buildCompletedActionCard(wi, subPlans); completedAction != nil {
 		actions = append(actions, *completedAction)
+	}
+	if wi.State == domain.SessionMerged {
+		actions = append(actions, OverviewActionCard{
+			Kind:    overviewActionMerged,
+			Title:   "All PRs merged",
+			Blocked: "This work item has been merged and is now complete.",
+			Why:     "All linked pull requests have been merged. No further action is needed.",
+		})
 	}
 	// Build a set of sub-plan IDs (or work-item-scoped planning markers)
 	// that have an active (non-interrupted, non-terminal) session, so we

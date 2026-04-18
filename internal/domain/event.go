@@ -78,8 +78,9 @@ const (
 	EventCritiquesFound          EventType = "review.critiques_found"
 	EventReimplementationStarted EventType = "reimplementation.started"
 	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
-	EventPRReviewStateChanged   EventType = "pr.review_state_changed"
-	EventPRCIFailed          EventType = "pr.ci_failed"
+	EventPRReviewStateChanged    EventType = "pr.review_state_changed"
+	EventPRCIFailed              EventType = "pr.ci_failed"
+	EventPRMerged                EventType = "pr.merged"
 
 	// Adapter error events
 	EventAdapterError EventType = "adapter.error"

@@ -501,6 +501,14 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		}
 
 		return nil
+	case domain.EventPRMerged:
+		if a.cfg.PostMergeCloseIssue {
+			if err := a.onPRMerged(ctx, event.Payload); err != nil {
+				slog.Warn("github: post-merge issue close failed", "error", err)
+			}
+		}
+		return nil
+
 	default:
 		return nil
 	}
@@ -1667,6 +1675,11 @@ func (a *GithubAdapter) refreshPRs(ctx context.Context, workspaceID string) {
 				}
 			}
 		}
+
+		// Detect merge transition: PR just became merged.
+		if githubPRState(freshPull) == "merged" && pr.State != "merged" {
+			a.checkAllMerged(ctx, workspaceID, pr.ID)
+		}
 	}
 }
 
@@ -1751,4 +1764,102 @@ func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) 
 			}
 		}
 	}()
+}
+
+
+func (a *GithubAdapter) checkAllMerged(ctx context.Context, workspaceID, prID string) {
+	if a.repos.SessionArtifacts == nil || a.repos.Sessions == nil || a.repos.Bus == nil {
+		return
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkspaceID(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("github: list artifacts for merge check failed", "error", err)
+		return
+	}
+	// Find which work item this PR belongs to.
+	var workItemID string
+	for _, link := range links {
+		if link.ProviderArtifactID == prID {
+			workItemID = link.WorkItemID
+			break
+		}
+	}
+	if workItemID == "" {
+		return
+	}
+	// Check work item is in completed state.
+	wi, err := a.repos.Sessions.Get(ctx, workItemID)
+	if err != nil {
+		slog.Warn("github: get work item for merge check failed", "work_item_id", workItemID, "error", err)
+		return
+	}
+	if wi.State != domain.SessionCompleted {
+		return
+	}
+	// Collect all links for this work item and check each provider row.
+	for _, link := range links {
+		if link.WorkItemID != workItemID {
+			continue
+		}
+		switch link.Provider {
+		case "github":
+			ghPR, err := a.repos.GithubPRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("github: get pr for merge check failed", "pr_id", link.ProviderArtifactID, "error", err)
+				return
+			}
+			if ghPR.State != "merged" {
+				return
+			}
+		case "gitlab":
+			if a.repos.GitlabMRs == nil {
+				return
+			}
+			glMR, err := a.repos.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("github: get gitlab mr for merge check failed", "mr_id", link.ProviderArtifactID, "error", err)
+				return
+			}
+			if glMR.State != "merged" {
+				return
+			}
+		default:
+			return // Unknown provider, can't verify
+		}
+	}
+	// All merged — transition work item and emit event.
+	if err := a.repos.Sessions.MergeWorkItem(ctx, workItemID); err != nil {
+		slog.Warn("github: merge work item failed", "work_item_id", workItemID, "error", err)
+		return
+	}
+	payload, err := json.Marshal(map[string]string{
+		"workspace_id": workspaceID,
+		"work_item_id": workItemID,
+		"external_id":  wi.ExternalID,
+	})
+	if err != nil {
+		slog.Warn("github: marshal pr.merged payload failed", "error", err)
+		return
+	}
+	if err := a.repos.Bus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPRMerged),
+		WorkspaceID: workspaceID,
+		Payload:     string(payload),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		slog.Warn("github: publish pr.merged event failed", "error", err)
+	}
+}
+
+func (a *GithubAdapter) onPRMerged(ctx context.Context, payload string) error {
+	externalID := extractExternalID(payload)
+	if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
+		return nil
+	}
+	owner, repo, number, err := parseExternalID(externalID)
+	if err != nil {
+		return fmt.Errorf("parse external id for issue close: %w", err)
+	}
+	return a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]any{"state": "closed"}, nil)
 }

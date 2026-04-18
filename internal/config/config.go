@@ -147,6 +147,7 @@ type GitlabConfig struct {
 	PollInterval        string              `yaml:"poll_interval"` // default: 5m
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
+	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
 }
 
 type GithubConfig struct {
@@ -159,6 +160,7 @@ type GithubConfig struct {
 	Labels              []string            `yaml:"labels"`
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
+	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
 }
 
 type SentryConfig struct {
@@ -178,6 +180,8 @@ type GlabConfig struct {
 	Reviewers []string `yaml:"reviewers"`
 	// Labels is a list of GitLab label names added to created MRs.
 	Labels []string `yaml:"labels"`
+	// PostMergeCloseIssue closes the linked GitLab issue when all MRs for a work item are merged.
+	PostMergeCloseIssue bool `yaml:"post_merge_close_issue"`
 }
 
 // ValidThinkingLevels lists the accepted values for OhMyPiConfig.ThinkingLevel.
