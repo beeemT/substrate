@@ -1109,7 +1109,7 @@ BB1 (artifacts view) ← DONE
  │    │
  │    └─► BB7 (merge gate)      ← requires: BB2 reviews + BB4 checks + config
  │
- ├─► BB4 (CI/check status)      ← IN PROGRESS
+ ├─► BB4 (CI/check status)      ← DONE
  │    │
  │    └─► BB7 (merge gate)      ← requires: BB2 + BB4
  │
