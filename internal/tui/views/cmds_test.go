@@ -373,3 +373,76 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 		t.Fatalf("SessionID: want %q, got %q", sessionID, got.SessionID)
 	}
 }
+
+// TestTailSessionLogCmd_ArchivesOnly_NoActiveLog verifies that when only gzipped
+// rotations exist (no active .log file), TailSessionLogCmd returns a non-zero
+// NextOffset so that subsequent polls enter the continuation path instead of
+// re-triggering a full archive reload every cycle (which would cause unbounded
+// entry growth and O(n²) rendering cost).
+func TestTailSessionLogCmd_ArchivesOnly_NoActiveLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const sessionID = "tail-archives-only"
+
+	writeGZ := func(name, line string) {
+		t.Helper()
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gw := gzip.NewWriter(f)
+		if _, err := gw.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeGZ(sessionID+".log.1000000000.gz", "archived line 1")
+	writeGZ(sessionID+".log.2000000000.gz", "archived line 2")
+
+	// No active .log file exists — only the rotated archives above.
+	activePath := filepath.Join(dir, sessionID+".log")
+	msg := views.TailSessionLogCmd(activePath, sessionID, 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if got.SessionID != sessionID {
+		t.Errorf("SessionID: want %q, got %q", sessionID, got.SessionID)
+	}
+	if len(got.Entries) != 2 {
+		t.Fatalf("Entries: want 2, got %d (%v)", len(got.Entries), got.Entries)
+	}
+	if got.Entries[0].Text != "archived line 1" {
+		t.Errorf("Entries[0].Text: want %q, got %q", "archived line 1", got.Entries[0].Text)
+	}
+	if got.Entries[1].Text != "archived line 2" {
+		t.Errorf("Entries[1].Text: want %q, got %q", "archived line 2", got.Entries[1].Text)
+	}
+	// Critical: NextOffset must be non-zero so that a subsequent
+	// TailSessionLogCmd(logPath, sessionID, got.NextOffset) enters the
+	// continuation path and does NOT re-read all archives.
+	if got.NextOffset == 0 {
+		t.Fatalf("NextOffset must be non-zero when active .log is missing (got 0); " +
+			"this causes an infinite full-reload loop with unbounded entry growth")
+	}
+
+	// Second call with the returned offset should enter the continuation path,
+	// NOT re-read archives. Since the active .log still doesn't exist, it should
+	// return zero entries with the same non-zero offset.
+	msg2 := views.TailSessionLogCmd(activePath, sessionID, got.NextOffset)()
+	got2, ok := msg2.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg on second call, got %T", msg2)
+	}
+	if len(got2.Entries) != 0 {
+		t.Errorf("second call should return zero entries when .log is missing, got %d", len(got2.Entries))
+	}
+	if got2.NextOffset == 0 {
+		t.Fatalf("second call NextOffset must be non-zero to prevent re-entering initial load path")
+	}
+}

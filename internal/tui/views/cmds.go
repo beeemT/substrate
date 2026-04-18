@@ -526,9 +526,16 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 				}
 				// nextOffset = current size of the active file so the first
 				// continuation poll reads only bytes written after this load.
-				nextOffset := int64(0)
+				// When the active file does not exist (only rotated archives
+				// remain), use a sentinel offset of 1 so the next call enters
+				// the continuation path instead of re-triggering a full archive
+				// reload. The continuation path handles a missing file gracefully
+				// (sleeps, retries). When the file eventually appears, the
+				// rotation-detection check (stat.Size < since) resets offset to 0
+				// so we read from the beginning.
+				nextOffset := int64(1)
 				if stat, statErr := os.Stat(logPath); statErr == nil {
-					nextOffset = stat.Size()
+					nextOffset = max(1, stat.Size())
 				}
 
 				return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: nextOffset}
