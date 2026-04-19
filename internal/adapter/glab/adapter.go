@@ -109,6 +109,8 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onPRMerged(ctx, event.Payload); err != nil {
 			slog.Warn("glab: post-merge issue close failed", "error", err)
 		}
+	case domain.EventPlanApproved:
+		a.syncMRDescriptionsOnApproval(ctx, event.WorkspaceID, event.Payload)
 	}
 
 	return nil
@@ -971,7 +973,6 @@ func glabJobStatusMap(jobStatus string) (string, string) {
 	}
 }
 
-
 // checkAllMerged transitions a work item to SessionMerged when all linked
 // review artifacts are merged, then publishes EventPRMerged.
 func (a *GlabAdapter) checkAllMerged(ctx context.Context, mrID string) {
@@ -1055,6 +1056,48 @@ func (a *GlabAdapter) checkAllMerged(ctx context.Context, mrID string) {
 	}
 }
 
+// syncMRDescriptionsOnApproval updates the description of all open GitLab MRs
+// linked to the work item when a plan is approved.
+func (a *GlabAdapter) syncMRDescriptionsOnApproval(ctx context.Context, workspaceID, payload string) {
+	if a.repos.SessionArtifacts == nil || a.repos.GitlabMRs == nil || a.workspaceDir == "" {
+		return
+	}
+	var p struct {
+		WorkItemID  string `json:"work_item_id"`
+		CommentBody string `json:"comment_body"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("glab: unmarshal plan.approved payload for description sync", "error", err)
+		return
+	}
+	if p.WorkItemID == "" || strings.TrimSpace(p.CommentBody) == "" {
+		return
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkspaceID(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("glab: list artifacts for description sync", "error", err)
+		return
+	}
+	for _, link := range links {
+		if link.WorkItemID != p.WorkItemID || link.Provider != "gitlab" {
+			continue
+		}
+		mr, err := a.repos.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+		if err != nil {
+			slog.Warn("glab: get mr for description sync", "mr_id", link.ProviderArtifactID, "error", err)
+			continue
+		}
+		if mr.State != "opened" {
+			continue
+		}
+		if _, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",
+			fmt.Sprintf("/projects/%s/merge_requests/%d", url.PathEscape(mr.ProjectPath), mr.IID),
+			"--field", "description="+p.CommentBody); err != nil {
+			slog.Warn("glab: update MR description on plan approval", "project", mr.ProjectPath, "iid", mr.IID, "error", err)
+		}
+	}
+}
+
 // onPRMerged closes the linked GitLab issue when PostMergeCloseIssue is enabled.
 func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
 	if !a.cfg.PostMergeCloseIssue {
@@ -1083,7 +1126,7 @@ func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
 		return fmt.Errorf("glab: no workspace dir for issue close")
 	}
 	_, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",
-		fmt.Sprintf("/projects/%s/issues/%s", url.PathEscape(projectID), issueIID),
+		fmt.Sprintf("/projects/%s/issues/%s", url.PathEscape(projectID), url.PathEscape(issueIID)),
 		"--field", "state_event=close")
 	return err
 }

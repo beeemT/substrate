@@ -324,10 +324,6 @@ type ShowSettingsMsg struct{}
 // CloseOverlayMsg closes the active overlay.
 type CloseOverlayMsg struct{}
 
-// OpenSourceItemsOverlayMsg opens the source items overlay for multi-select browsing.
-type OpenSourceItemsOverlayMsg struct {
-	Items []domain.SourceSummary
-}
 
 // OpenOverviewLinksMsg opens the overview links overlay, showing the input
 // tickets and MR/PR links produced for the selected session.

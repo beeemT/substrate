@@ -477,6 +477,7 @@ func subscribeRepoLifecycleAdapters(
 			domain.EventWorktreeReused,
 			domain.EventWorkItemCompleted,
 			domain.EventPRMerged,
+			domain.EventPlanApproved,
 		},
 		adapters,
 		adapterErrors,

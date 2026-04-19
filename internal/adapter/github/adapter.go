@@ -466,6 +466,12 @@ func (a *GithubAdapter) AddComment(ctx context.Context, externalID string, body 
 func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
 	switch domain.EventType(event.EventType) {
 	case domain.EventPlanApproved:
+		// Repo-lifecycle instance (has repos): sync open PR descriptions.
+		// Work-item instance (no repos): post issue comments + update state.
+		if a.repos.SessionArtifacts != nil {
+			a.syncPRDescriptionsOnApproval(ctx, event.WorkspaceID, event.Payload)
+			return nil
+		}
 		if err := a.onPlanApproved(ctx, event.Payload); err != nil {
 			return err
 		}
@@ -473,7 +479,6 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
 			return nil
 		}
-
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
 	case domain.EventWorktreeCreated:
 		if err := a.onWorktreeCreated(ctx, event.Payload); err != nil {
@@ -652,6 +657,44 @@ func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) erro
 	}
 
 	return nil
+}
+
+// syncPRDescriptionsOnApproval updates the description of all open GitHub PRs
+// linked to the work item when a plan is approved. Only runs on the repo-lifecycle
+// adapter instance (which has repos populated).
+func (a *GithubAdapter) syncPRDescriptionsOnApproval(ctx context.Context, workspaceID, payload string) {
+	var p struct {
+		WorkItemID  string `json:"work_item_id"`
+		CommentBody string `json:"comment_body"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("github: unmarshal plan.approved payload for description sync", "error", err)
+		return
+	}
+	if p.WorkItemID == "" || strings.TrimSpace(p.CommentBody) == "" {
+		return
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkspaceID(ctx, workspaceID)
+	if err != nil {
+		slog.Warn("github: list artifacts for description sync", "error", err)
+		return
+	}
+	for _, link := range links {
+		if link.WorkItemID != p.WorkItemID || link.Provider != "github" {
+			continue
+		}
+		pr, err := a.repos.GithubPRs.Get(ctx, link.ProviderArtifactID)
+		if err != nil {
+			slog.Warn("github: get pr for description sync", "pr_id", link.ProviderArtifactID, "error", err)
+			continue
+		}
+		if pr.State != "open" {
+			continue
+		}
+		if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", pr.Owner, pr.Repo, pr.Number), map[string]any{"body": p.CommentBody}, nil); err != nil {
+			slog.Warn("github: update PR description on plan approval", "owner", pr.Owner, "repo", pr.Repo, "number", pr.Number, "error", err)
+		}
+	}
 }
 
 func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string) error {
@@ -1765,7 +1808,6 @@ func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) 
 		}
 	}()
 }
-
 
 func (a *GithubAdapter) checkAllMerged(ctx context.Context, workspaceID, prID string) {
 	if a.repos.SessionArtifacts == nil || a.repos.Sessions == nil || a.repos.Bus == nil {

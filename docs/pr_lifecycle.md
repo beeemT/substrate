@@ -1094,7 +1094,7 @@ BB1 (artifacts view) ← DONE
  │
  ├► BB6 (open PRs in browser)  ← DONE
  │
- └─► BB7 (description sync)     ← independent; requires: plan.approved payload extension
+ └─► BB7 (description sync)     ← DONE
 ```
 
 **Recommended implementation order:** BB6 → BB3 → BB7 → BB5.

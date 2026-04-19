@@ -147,7 +147,6 @@ type GitlabConfig struct {
 	PollInterval        string              `yaml:"poll_interval"` // default: 5m
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
-	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
 }
 
 type GithubConfig struct {

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -739,5 +742,264 @@ func TestListCreatedIssuesFiltersSearchByRepoPathWithoutOwner(t *testing.T) {
 	}
 	if len(res.Items) != 1 || res.Items[0].ID != "acme/rocket#3" {
 		t.Fatalf("items = %+v, want acme/rocket#3 only", res.Items)
+	}
+}
+
+
+// --- In-memory repos for PR description sync tests ---
+
+type inMemGithubPRRepo struct {
+	prs map[string]domain.GithubPullRequest
+}
+
+func (r *inMemGithubPRRepo) Upsert(_ context.Context, pr domain.GithubPullRequest) error {
+	r.prs[pr.ID] = pr
+	return nil
+}
+
+func (r *inMemGithubPRRepo) Get(_ context.Context, id string) (domain.GithubPullRequest, error) {
+	pr, ok := r.prs[id]
+	if !ok {
+		return domain.GithubPullRequest{}, fmt.Errorf("pr %q not found", id)
+	}
+	return pr, nil
+}
+
+func (r *inMemGithubPRRepo) GetByNumber(_ context.Context, owner, repo string, number int) (domain.GithubPullRequest, error) {
+	for _, pr := range r.prs {
+		if pr.Owner == owner && pr.Repo == repo && pr.Number == number {
+			return pr, nil
+		}
+	}
+	return domain.GithubPullRequest{}, fmt.Errorf("pr %s/%s#%d not found", owner, repo, number)
+}
+
+func (r *inMemGithubPRRepo) ListByWorkspaceID(_ context.Context, _ string) ([]domain.GithubPullRequest, error) {
+	out := make([]domain.GithubPullRequest, 0, len(r.prs))
+	for _, pr := range r.prs {
+		out = append(out, pr)
+	}
+	return out, nil
+}
+
+func (r *inMemGithubPRRepo) ListNonTerminal(_ context.Context, _ string) ([]domain.GithubPullRequest, error) {
+	var out []domain.GithubPullRequest
+	for _, pr := range r.prs {
+		if pr.State != "merged" && pr.State != "closed" {
+			out = append(out, pr)
+		}
+	}
+	return out, nil
+}
+
+type inMemArtifactLinkRepo struct {
+	links []domain.SessionReviewArtifact
+}
+
+func (r *inMemArtifactLinkRepo) Upsert(_ context.Context, link domain.SessionReviewArtifact) error {
+	r.links = append(r.links, link)
+	return nil
+}
+
+func (r *inMemArtifactLinkRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.SessionReviewArtifact, error) {
+	var out []domain.SessionReviewArtifact
+	for _, l := range r.links {
+		if l.WorkItemID == workItemID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (r *inMemArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error) {
+	var out []domain.SessionReviewArtifact
+	for _, l := range r.links {
+		if l.WorkspaceID == workspaceID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// --- Test helpers for PR description sync ---
+
+func newDescSyncAdapter(t *testing.T, repos adapter.ReviewArtifactRepos, rt roundTripFunc) *GithubAdapter {
+	t.Helper()
+	a, err := newWithDeps(context.Background(), config.GithubConfig{
+		PollInterval:  "10ms",
+		StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"},
+	}, repos, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
+	if err != nil {
+		t.Fatalf("newWithDeps: %v", err)
+	}
+	return a
+}
+
+func TestSyncPRDescriptionsOnApproval_UpdatesOpenPRs(t *testing.T) {
+	t.Parallel()
+
+	prRepo := &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{
+		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "open"},
+		"pr-2": {ID: "pr-2", Owner: "acme", Repo: "engine", Number: 43, State: "merged"},
+	}}
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
+		{ID: "a1", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "github", ProviderArtifactID: "pr-1"},
+		{ID: "a2", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "github", ProviderArtifactID: "pr-2"},
+	}}
+
+	type httpReq struct {
+		method string
+		path   string
+		body   string
+	}
+	var captured []httpReq
+
+	a := newDescSyncAdapter(t, adapter.ReviewArtifactRepos{
+		GithubPRs:        service.NewGithubPRService(repository.NoopTransacter{Res: repository.Resources{GithubPRs: prRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var bodyBytes []byte
+		if req.Body != nil {
+			bodyBytes, _ = io.ReadAll(req.Body)
+		}
+		captured = append(captured, httpReq{method: req.Method, path: req.URL.Path, body: string(bodyBytes)})
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload, _ := json.Marshal(map[string]any{
+		"work_item_id": "wi-1",
+		"comment_body": "Updated plan text",
+		"external_id":  "gh:issue:acme/rocket#10",
+		"external_ids": []string{"gh:issue:acme/rocket#10"},
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     string(payload),
+	})
+	if err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+
+	var patchedOpen, patchedMerged bool
+	var patchBody string
+	for _, r := range captured {
+		if r.method == http.MethodPatch && r.path == "/repos/acme/rocket/pulls/42" {
+			patchedOpen = true
+			patchBody = r.body
+		}
+		if r.method == http.MethodPatch && r.path == "/repos/acme/engine/pulls/43" {
+			patchedMerged = true
+		}
+	}
+	if !patchedOpen {
+		t.Fatalf("expected PATCH /repos/acme/rocket/pulls/42, got requests: %+v", captured)
+	}
+	if patchedMerged {
+		t.Fatalf("should not PATCH merged PR /repos/acme/engine/pulls/43, got requests: %+v", captured)
+	}
+	if !strings.Contains(patchBody, `"body":"Updated plan text"`) {
+		t.Fatalf("PATCH body = %q, want comment body in body field", patchBody)
+	}
+}
+
+func TestSyncPRDescriptionsOnApproval_SkipsEmptyCommentBody(t *testing.T) {
+	t.Parallel()
+
+	prRepo := &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{
+		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "open"},
+	}}
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
+		{ID: "a1", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "github", ProviderArtifactID: "pr-1"},
+	}}
+
+	var requests []string
+
+	a := newDescSyncAdapter(t, adapter.ReviewArtifactRepos{
+		GithubPRs:        service.NewGithubPRService(repository.NoopTransacter{Res: repository.Resources{GithubPRs: prRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload, _ := json.Marshal(map[string]any{
+		"work_item_id": "wi-1",
+		"comment_body": "",
+		"external_id":  "gh:issue:acme/rocket#10",
+		"external_ids": []string{"gh:issue:acme/rocket#10"},
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     string(payload),
+	})
+	if err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+
+	for _, r := range requests {
+		if strings.Contains(r, "pulls") {
+			t.Fatalf("expected no PATCH to pulls, got: %v", requests)
+		}
+	}
+}
+
+func TestSyncPRDescriptionsOnApproval_WorkItemInstancePostsComments(t *testing.T) {
+	t.Parallel()
+
+	var requests []string
+
+	a := newDescSyncAdapter(t, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload, _ := json.Marshal(map[string]any{
+		"comment_body": "Plan text",
+		"external_id":  "gh:issue:acme/rocket#10",
+		"external_ids": []string{"gh:issue:acme/rocket#10"},
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     string(payload),
+	})
+	if err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+
+	var postedComment, patchedPull bool
+	for _, r := range requests {
+		if r == "POST /repos/acme/rocket/issues/10/comments" {
+			postedComment = true
+		}
+		if strings.Contains(r, "PATCH") && strings.Contains(r, "pulls") {
+			patchedPull = true
+		}
+	}
+	if !postedComment {
+		t.Fatalf("expected POST /repos/acme/rocket/issues/10/comments, got: %v", requests)
+	}
+	if patchedPull {
+		t.Fatalf("work-item instance should not PATCH pulls, got: %v", requests)
 	}
 }

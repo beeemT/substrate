@@ -20,4 +20,6 @@ var (
 	_ repository.SessionReviewArtifactRepository = SessionReviewArtifactRepo{}
 	_ repository.GithubPRReviewRepository        = GithubPRReviewRepo{}
 	_ repository.GitlabMRReviewRepository        = GitlabMRReviewRepo{}
+	_ repository.GithubPRCheckRepository         = GithubPRCheckRepo{}
+	_ repository.GitlabMRCheckRepository         = GitlabMRCheckRepo{}
 )

@@ -1648,10 +1648,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OpenExternalURLMsg:
 		return a, OpenBrowserCmd(msg.URL)
 
-	case OpenSourceItemsOverlayMsg:
-		a.activeOverlay = overlaySourceItems
-		a.sourceItemsOverlay.Open(msg.Items)
-		return a, nil
 
 	case OpenOverviewLinksMsg:
 		a.activeOverlay = overlayOverviewLinks

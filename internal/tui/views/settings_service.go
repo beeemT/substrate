@@ -451,6 +451,10 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	ghPRSvc := service.NewGithubPRService(s.transacter)
 	glMRSvc := service.NewGitlabMRService(s.transacter)
 	sessionArtifactSvc := service.NewSessionReviewArtifactService(s.transacter)
+	ghPRReviewSvc := service.NewGithubPRReviewService(s.transacter)
+	glMRReviewSvc := service.NewGitlabMRReviewService(s.transacter)
+	ghPRCheckSvc := service.NewGithubPRCheckService(s.transacter)
+	glMRCheckSvc := service.NewGitlabMRCheckService(s.transacter)
 	newSessionFilterSvc := service.NewSessionFilterService(s.transacter)
 	newSessionFilterLockSvc := service.NewSessionFilterLockService(s.transacter)
 	bus := event.NewBus(event.BusConfig{EventRepo: s.eventRepo})
@@ -467,11 +471,17 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		GithubPRs:        ghPRSvc,
 		GitlabMRs:        glMRSvc,
 		SessionArtifacts: sessionArtifactSvc,
+		Sessions:         workItemSvc,
+		GithubPRReviews:  ghPRReviewSvc,
+		GitlabMRReviews:  glMRReviewSvc,
+		GithubPRChecks:   ghPRCheckSvc,
+		GitlabMRChecks:   glMRCheckSvc,
+		Bus:              bus,
 	})
 	adapterErrors := make(chan AdapterErrorMsg, 16)
 
 	for _, workItemAdapter := range adapters {
-		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted))
+		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted), string(domain.EventPRMerged))
 		if subErr != nil {
 			return viewsServicesReload{}, fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
 		}
@@ -519,7 +529,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		}(workItemAdapter, sub.C)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted))
+		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted), string(domain.EventPRMerged), string(domain.EventPlanApproved))
 		if subErr != nil {
 			return viewsServicesReload{}, fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
 		}

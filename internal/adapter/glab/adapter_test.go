@@ -10,6 +10,8 @@ import (
 	coreadapter "github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 // stubRunner returns a commandRunner that records calls and returns the configured
@@ -582,5 +584,207 @@ func TestOnEvent_WorktreeCreated_AddsCrossProjectGitLabResolvesFooter(t *testing
 	joined := strings.Join(stub.calls[1].args, " ")
 	if !strings.Contains(joined, "Resolves [other-group/other-project#40](https://gitlab.example.com/other-group/other-project/-/issues/40)") {
 		t.Fatalf("args %q missing cross-project gitlab resolves footer", joined)
+	}
+}
+
+
+// --- In-memory repos for syncMRDescriptionsOnApproval tests ---
+
+type inMemGitlabMRRepo struct {
+	data map[string]domain.GitlabMergeRequest
+}
+
+func (r *inMemGitlabMRRepo) Upsert(_ context.Context, mr domain.GitlabMergeRequest) error {
+	if r.data == nil {
+		r.data = make(map[string]domain.GitlabMergeRequest)
+	}
+	r.data[mr.ID] = mr
+	return nil
+}
+
+func (r *inMemGitlabMRRepo) Get(_ context.Context, id string) (domain.GitlabMergeRequest, error) {
+	mr, ok := r.data[id]
+	if !ok {
+		return domain.GitlabMergeRequest{}, errors.New("not found")
+	}
+	return mr, nil
+}
+
+func (r *inMemGitlabMRRepo) GetByIID(_ context.Context, projectPath string, iid int) (domain.GitlabMergeRequest, error) {
+	for _, mr := range r.data {
+		if mr.ProjectPath == projectPath && mr.IID == iid {
+			return mr, nil
+		}
+	}
+	return domain.GitlabMergeRequest{}, errors.New("not found")
+}
+
+func (r *inMemGitlabMRRepo) ListByWorkspaceID(_ context.Context, _ string) ([]domain.GitlabMergeRequest, error) {
+	out := make([]domain.GitlabMergeRequest, 0, len(r.data))
+	for _, mr := range r.data {
+		out = append(out, mr)
+	}
+	return out, nil
+}
+
+func (r *inMemGitlabMRRepo) ListNonTerminal(_ context.Context, _ string) ([]domain.GitlabMergeRequest, error) {
+	var out []domain.GitlabMergeRequest
+	for _, mr := range r.data {
+		if mr.State != "merged" && mr.State != "closed" {
+			out = append(out, mr)
+		}
+	}
+	return out, nil
+}
+
+type inMemArtifactLinkRepo struct {
+	links []domain.SessionReviewArtifact
+}
+
+func (r *inMemArtifactLinkRepo) Upsert(_ context.Context, link domain.SessionReviewArtifact) error {
+	r.links = append(r.links, link)
+	return nil
+}
+
+func (r *inMemArtifactLinkRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.SessionReviewArtifact, error) {
+	var out []domain.SessionReviewArtifact
+	for _, l := range r.links {
+		if l.WorkItemID == workItemID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (r *inMemArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error) {
+	var out []domain.SessionReviewArtifact
+	for _, l := range r.links {
+		if l.WorkspaceID == workspaceID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// --- syncMRDescriptionsOnApproval tests ---
+
+func TestSyncMRDescriptionsOnApproval_UpdatesOpenMRs(t *testing.T) {
+	t.Parallel()
+
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-1": {ID: "mr-1", ProjectPath: "group/project", IID: 10, State: "opened"},
+		"mr-2": {ID: "mr-2", ProjectPath: "group/project", IID: 11, State: "merged"},
+	}}
+
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
+		{ID: "link-1", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "gitlab", ProviderArtifactID: "mr-1"},
+		{ID: "link-2", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "gitlab", ProviderArtifactID: "mr-2"},
+	}}
+
+	stub := &stubRunner{}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, "/workspace", stub.run)
+
+	payload := mustJSON(map[string]any{
+		"work_item_id":  "wi-1",
+		"comment_body":  "Updated MR description",
+		"external_id":   "gl:issue:1234#5",
+		"external_ids":  []string{"gl:issue:1234#5"},
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expect exactly one glab api PUT call for the opened MR (iid=10).
+	var putCalls []stubCall
+	for _, c := range stub.calls {
+		joined := strings.Join(c.args, " ")
+		if strings.Contains(joined, "api -X PUT") {
+			putCalls = append(putCalls, c)
+		}
+	}
+	if len(putCalls) != 1 {
+		t.Fatalf("expected 1 PUT call, got %d: %+v", len(putCalls), stub.calls)
+	}
+
+	joined := strings.Join(putCalls[0].args, " ")
+	if !strings.Contains(joined, "/projects/group%2Fproject/merge_requests/10") {
+		t.Errorf("PUT call missing expected path: %q", joined)
+	}
+	if !strings.Contains(joined, "description=Updated MR description") {
+		t.Errorf("PUT call missing expected description field: %q", joined)
+	}
+}
+
+func TestSyncMRDescriptionsOnApproval_SkipsEmptyCommentBody(t *testing.T) {
+	t.Parallel()
+
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-1": {ID: "mr-1", ProjectPath: "group/project", IID: 10, State: "opened"},
+	}}
+
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
+		{ID: "link-1", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "gitlab", ProviderArtifactID: "mr-1"},
+	}}
+
+	stub := &stubRunner{}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, "/workspace", stub.run)
+
+	payload := mustJSON(map[string]any{
+		"work_item_id": "wi-1",
+		"comment_body": "",
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, c := range stub.calls {
+		joined := strings.Join(c.args, " ")
+		if strings.Contains(joined, "api -X PUT") && strings.Contains(joined, "merge_requests") {
+			t.Fatalf("expected no PUT calls for merge_requests, got: %q", joined)
+		}
+	}
+}
+
+func TestSyncMRDescriptionsOnApproval_NoRepos(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubRunner{}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "/workspace", stub.run)
+
+	payload := mustJSON(map[string]any{
+		"work_item_id": "wi-1",
+		"comment_body": "Updated MR description",
+	})
+
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: "ws-1",
+		Payload:     payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("expected no runner calls, got %d", len(stub.calls))
 	}
 }

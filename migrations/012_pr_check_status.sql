@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS github_pr_checks (
     name        TEXT NOT NULL,
     status      TEXT NOT NULL,
     conclusion  TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(pr_id, name)
 );
 
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS gitlab_mr_checks (
     name        TEXT NOT NULL,
     status      TEXT NOT NULL,
     conclusion  TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(mr_id, name)
 );

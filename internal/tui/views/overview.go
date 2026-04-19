@@ -30,7 +30,7 @@ const (
 	overviewActionReviewing   OverviewActionKind = "reviewing"
 	overviewActionFailed      OverviewActionKind = "failed"
 	overviewActionCompleted   OverviewActionKind = "completed"
-	overviewActionMerged    OverviewActionKind = "merged"
+	overviewActionMerged      OverviewActionKind = "merged"
 
 	providerGitlab       = "gitlab"
 	labelReviewArtifacts = "Review artifacts"
@@ -1933,6 +1933,11 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].RepoName != items[j].RepoName {
 			return items[i].RepoName < items[j].RepoName
+		}
+		ni, ei := strconv.Atoi(strings.TrimLeft(items[i].Ref, "#!"))
+		nj, ej := strconv.Atoi(strings.TrimLeft(items[j].Ref, "#!"))
+		if ei == nil && ej == nil {
+			return ni < nj
 		}
 		return items[i].Ref < items[j].Ref
 	})
