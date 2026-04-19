@@ -58,6 +58,53 @@ func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 	}
 }
 
+func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(App)
+
+	// Open repo manager via 'r'.
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated = model.(App)
+	if updated.activeOverlay != overlayRepoManager {
+		t.Fatalf("precondition: activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
+	}
+
+	// Transition to add-repo via ShowAddRepoMsg (what 'a' inside repo manager does).
+	model, _ = updated.Update(ShowAddRepoMsg{})
+	updated = model.(App)
+	if updated.activeOverlay != overlayAddRepo {
+		t.Fatalf("precondition: activeOverlay = %v, want overlayAddRepo", updated.activeOverlay)
+	}
+
+	// Esc in add-repo should produce CloseOverlayMsg.
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated = model.(App)
+	if cmd == nil {
+		t.Fatal("expected Esc to return a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(CloseOverlayMsg); !ok {
+		t.Fatalf("cmd() = %T, want CloseOverlayMsg", msg)
+	}
+
+	// Dispatching CloseOverlayMsg should return to repo manager, not home.
+	model, _ = updated.Update(msg)
+	returned := model.(App)
+
+	if returned.activeOverlay != overlayRepoManager {
+		t.Fatalf("activeOverlay = %v, want overlayRepoManager after Esc from add-repo opened via repo manager", returned.activeOverlay)
+	}
+	if !returned.repoManager.Active() {
+		t.Fatal("expected repoManager overlay to be active after returning from add-repo")
+	}
+	if returned.addRepo.Active() {
+		t.Fatal("expected add-repo overlay to be inactive after Esc")
+	}
+}
+
 func TestAppRepoClonedMsgShowsSuccessToast(t *testing.T) {
 	t.Parallel()
 
@@ -106,7 +153,6 @@ func TestAppAddRepoViewFitsWindowWhenOpen(t *testing.T) {
 	}
 }
 
-
 // TestAppManagedRepoSlugsRebuildOnScan asserts that dispatching ManagedReposLoadedMsg
 // populates managedRepoSlugs from the repos' RemoteURL fields.
 func TestAppManagedRepoSlugsRebuildOnScan(t *testing.T) {
@@ -118,12 +164,18 @@ func TestAppManagedRepoSlugsRebuildOnScan(t *testing.T) {
 
 	msg := ManagedReposLoadedMsg{
 		Repos: []managedRepo{
-			{Path: "/ws/substrate", Name: "substrate", Kind: repoKindGitWork,
-				RemoteURL: "https://github.com/beeemT/substrate.git"},
-			{Path: "/ws/cli", Name: "cli", Kind: repoKindGitWork,
-				RemoteURL: "git@github.com:beeemT/cli.git"},
-			{Path: "/ws/nouri", Name: "nouri", Kind: repoKindPlainGit,
-				RemoteURL: ""},
+			{
+				Path: "/ws/substrate", Name: "substrate", Kind: repoKindGitWork,
+				RemoteURL: "https://github.com/beeemT/substrate.git",
+			},
+			{
+				Path: "/ws/cli", Name: "cli", Kind: repoKindGitWork,
+				RemoteURL: "git@github.com:beeemT/cli.git",
+			},
+			{
+				Path: "/ws/nouri", Name: "nouri", Kind: repoKindPlainGit,
+				RemoteURL: "",
+			},
 		},
 	}
 	model, _ = updated.Update(msg)
@@ -191,8 +243,10 @@ func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 	// Now dispatch ManagedReposLoadedMsg with a known repo.
 	scanMsg := ManagedReposLoadedMsg{
 		Repos: []managedRepo{
-			{Path: "/ws/substrate", Name: "substrate", Kind: repoKindGitWork,
-				RemoteURL: "https://github.com/beeemT/substrate.git"},
+			{
+				Path: "/ws/substrate", Name: "substrate", Kind: repoKindGitWork,
+				RemoteURL: "https://github.com/beeemT/substrate.git",
+			},
 		},
 	}
 	model, _ = updated.Update(scanMsg)

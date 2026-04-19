@@ -151,6 +151,10 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// pendingCloneSlug is the slug of the repo currently being cloned; cleared on RepoClonedMsg.
 	pendingCloneSlug string
 
+	// addRepoOpenedFromRepoManager tracks whether the add-repo overlay was
+	// opened from inside the repo manager so Escape returns there instead of home.
+	addRepoOpenedFromRepoManager bool
+
 	// Duplicate-session dialog
 	duplicateSession       duplicateSessionDialogState
 	duplicateSessionActive bool
@@ -974,7 +978,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case CloseOverlayMsg:
+		// If add-repo was opened from the repo manager, return there instead of home.
+		if a.activeOverlay == overlayAddRepo && a.addRepoOpenedFromRepoManager {
+			a.addRepo.Close()
+			a.addRepoOpenedFromRepoManager = false
+			return a, a.openRepoManager()
+		}
 		a.activeOverlay = overlayNone
+		a.addRepoOpenedFromRepoManager = false
 		a.newSession.Close()
 		a.newSessionAutonomousOverlay.Close()
 		a.sessionSearch.Close()
@@ -1476,6 +1487,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AddRepoCloneMsg:
 		a.activeOverlay = overlayNone
 		a.addRepo.Close()
+		a.addRepoOpenedFromRepoManager = false
 		// Track the slug so we can update managedRepoSlugs when the clone succeeds.
 		if msg.Repo.FullName != "" {
 			a.pendingCloneSlug = strings.ToLower(msg.Repo.FullName)
@@ -1485,6 +1497,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ShowAddRepoMsg:
 		a.repoManager.Close()
+		a.addRepoOpenedFromRepoManager = true
 		return a, a.openAddRepo()
 
 	case ManagedReposLoadedMsg:
@@ -1647,7 +1660,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OpenExternalURLMsg:
 		return a, OpenBrowserCmd(msg.URL)
-
 
 	case OpenOverviewLinksMsg:
 		a.activeOverlay = overlayOverviewLinks
