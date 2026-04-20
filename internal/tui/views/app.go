@@ -1930,9 +1930,9 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "A":
 		return a, a.openNewSessionAutonomousOverlay()
 	case "r":
-		// ContentModeOverview uses 'r' for retry/restart when a work item is selected.
-		// Fall through to updateContentForKey in that case to preserve that binding.
-		if a.content.mode == ContentModeOverview && a.currentWorkItemID != "" {
+		// ContentModeOverview uses 'r' for retry/restart when a work item is focused.
+		// Only defer to the overview when the content panel has focus.
+		if a.mainFocus == mainFocusContent && a.content.mode == ContentModeOverview && a.currentWorkItemID != "" {
 			break
 		}
 		return a, a.openRepoManager()

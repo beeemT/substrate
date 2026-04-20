@@ -36,6 +36,32 @@ func TestAppRKeyOpensRepoManagerOverlay(t *testing.T) {
 	}
 }
 
+// TestAppRKeyOpensRepoManagerWithWorkItemSelected is a regression test:
+// pressing 'r' must open the repo manager even when a work item is selected
+// and the content panel is in ContentModeOverview, as long as the sidebar has focus.
+func TestAppRKeyOpensRepoManagerWithWorkItemSelected(t *testing.T) {
+	t.Parallel()
+
+	app := newRepoManagerTestApp(t)
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(App)
+
+	// Simulate a typical home-page state: work item selected, overview visible, sidebar focused.
+	updated.currentWorkItemID = "wi-1"
+	updated.content.SetMode(ContentModeOverview)
+	updated.mainFocus = mainFocusSidebar
+
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated = model.(App)
+
+	if updated.activeOverlay != overlayRepoManager {
+		t.Fatalf("activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
+	}
+	if !updated.repoManager.Active() {
+		t.Fatal("expected repoManager overlay to be active after 'r' key with work item selected")
+	}
+}
+
 // TestAppRepoManagerEscClosesOverlay asserts that Esc while the repo manager is
 // open produces CloseOverlayMsg and that processing it returns to overlayNone.
 func TestAppRepoManagerEscClosesOverlay(t *testing.T) {
