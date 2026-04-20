@@ -16,7 +16,7 @@ func newRepoManagerTestApp(t *testing.T) App {
 	return NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 }
 
-// TestAppRKeyOpensRepoManagerOverlay asserts that pressing 'r' on the main screen
+// TestAppRKeyOpensRepoManagerOverlay asserts that pressing 'R' on the main screen
 // opens the repo manager overlay.
 func TestAppRKeyOpensRepoManagerOverlay(t *testing.T) {
 	t.Parallel()
@@ -25,20 +25,20 @@ func TestAppRKeyOpensRepoManagerOverlay(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
 	}
 	if !updated.repoManager.Active() {
-		t.Fatal("expected repoManager overlay to be active after 'r' key")
+		t.Fatal("expected repoManager overlay to be active after 'R' key")
 	}
 }
 
 // TestAppRKeyOpensRepoManagerWithWorkItemSelected is a regression test:
-// pressing 'r' must open the repo manager even when a work item is selected
-// and the content panel is in ContentModeOverview, as long as the sidebar has focus.
+// pressing 'R' must open the repo manager even when a work item is selected
+// and the content panel is in ContentModeOverview.
 func TestAppRKeyOpensRepoManagerWithWorkItemSelected(t *testing.T) {
 	t.Parallel()
 
@@ -51,14 +51,14 @@ func TestAppRKeyOpensRepoManagerWithWorkItemSelected(t *testing.T) {
 	updated.content.SetMode(ContentModeOverview)
 	updated.mainFocus = mainFocusSidebar
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
 	}
 	if !updated.repoManager.Active() {
-		t.Fatal("expected repoManager overlay to be active after 'r' key with work item selected")
+		t.Fatal("expected repoManager overlay to be active after 'R' key with work item selected")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestAppRepoManagerEscClosesOverlay(t *testing.T) {
 	updated := model.(App)
 
 	// Open repo manager.
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	// Esc is routed to repoManager.Update, which returns CloseOverlayMsg as a cmd.
@@ -107,7 +107,7 @@ func TestAppRepoManagerViewFitsWindow(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	view := updated.View()
@@ -132,7 +132,7 @@ func TestAppRepoManagerShowAddRepoTransition(t *testing.T) {
 	updated := model.(App)
 
 	// Open repo manager.
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	if updated.activeOverlay != overlayRepoManager {
@@ -213,7 +213,7 @@ func TestAppRepoInitializedMsgShowsSuccessToast(t *testing.T) {
 }
 
 // TestAppAKeyNoLongerOpensAddRepoOverlay is a regression guard: pressing 'a' on the
-// main screen must NOT open the add-repo overlay directly. Use 'r' → 'a' instead.
+// main screen must NOT open the add-repo overlay directly. Use 'R' → 'a' instead.
 // (This test lives in app_add_repo_test.go; this comment documents the intent here.)
 
 // TestAppRepoManagerOpenDoesNotOpenAddRepo asserts that opening the repo manager
@@ -225,11 +225,11 @@ func TestAppRepoManagerOpenDoesNotOpenAddRepo(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 
 	if updated.activeOverlay == overlayAddRepo {
-		t.Fatal("'r' key must open repoManager, not addRepo overlay")
+		t.Fatal("'R' key must open repoManager, not addRepo overlay")
 	}
 	if updated.addRepo.Active() {
 		t.Fatal("addRepo overlay must not be active when repo manager opens")
