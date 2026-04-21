@@ -665,6 +665,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			GitClient:             gitClient,
 			Bus:                   bus,
 			AdapterErrors:         adapterErrors,
+			ReviewComments:        app.BuildReviewCommentFetcher(ctx, cfg, current.WorkspaceDir),
 			InstanceID:            current.InstanceID,
 			WorkspaceID:           current.WorkspaceID,
 			WorkspaceDir:          current.WorkspaceDir,

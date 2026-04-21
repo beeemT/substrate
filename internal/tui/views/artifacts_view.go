@@ -9,19 +9,22 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 // ArtifactsModel is an accordion list view for PR/MR artifacts.
 type ArtifactsModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
-	styles      styles.Styles
-	items       []ArtifactItem
-	cursor      int
-	expandedSet map[int]bool
-	viewport    viewport.Model
-	width       int
-	height      int
+	styles        styles.Styles
+	items         []ArtifactItem
+	cursor        int
+	expandedSet   map[int]bool
+	viewport      viewport.Model
+	width         int
+	height        int
+	workItemID    string
+	workItemState domain.SessionState
 }
 
 // NewArtifactsModel creates a new artifacts accordion model.
@@ -50,6 +53,26 @@ func (m *ArtifactsModel) SetItems(items []ArtifactItem) {
 		m.cursor = -1
 	}
 	m.syncViewport()
+}
+
+// SetWorkItem binds the artifacts view to a specific work item and its current
+// lifecycle state. The state drives which follow-up keybinds are enabled.
+func (m *ArtifactsModel) SetWorkItem(workItemID string, state domain.SessionState) {
+	m.workItemID = workItemID
+	m.workItemState = state
+}
+
+// reviewFollowupEnabled reports whether the review follow-up flow may be invoked
+// from the artifacts view.
+func (m ArtifactsModel) reviewFollowupEnabled() bool {
+	if len(m.items) == 0 {
+		return false
+	}
+	switch m.workItemState {
+	case domain.SessionCompleted, domain.SessionReviewing:
+		return true
+	}
+	return false
 }
 
 // syncViewport rebuilds the viewport content from the current state.
@@ -135,6 +158,14 @@ func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 				items := m.items
 				return m, func() tea.Msg { return OpenArtifactLinksMsg{Items: items} }
 			}
+		case "f":
+			if m.reviewFollowupEnabled() {
+				items := m.items
+				workItemID := m.workItemID
+				return m, func() tea.Msg {
+					return FetchReviewCommentsMsg{WorkItemID: workItemID, Items: items}
+				}
+			}
 		}
 		if changed {
 			m.syncViewport()
@@ -198,6 +229,9 @@ func (m ArtifactsModel) KeybindHints() []KeybindHint {
 		hints = append(hints, KeybindHint{Key: "o", Label: "Open in browser"})
 	}
 	hints = append(hints, KeybindHint{Key: "O", Label: "PR links"})
+	if m.reviewFollowupEnabled() {
+		hints = append(hints, KeybindHint{Key: "f", Label: "Follow up on review"})
+	}
 	return hints
 }
 

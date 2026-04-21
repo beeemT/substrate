@@ -135,6 +135,7 @@ type OverviewExternalLifecycle struct {
 }
 
 type ArtifactItem struct {
+	ID        string // stable composite key: "<provider>:<repoName>:<ref>"
 	Provider  string
 	Kind      string // "PR" or "MR"
 	RepoName  string
@@ -153,7 +154,7 @@ type ArtifactItem struct {
 // ArtifactReview is the view-layer projection of a PR/MR review.
 type ArtifactReview struct {
 	ReviewerLogin string
-	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+	State         string // "approved" | "changes_requested" | "commented" | "dismissed"
 	SubmittedAt   time.Time
 }
 
@@ -1856,6 +1857,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						}
 					}
 					items = append(items, ArtifactItem{
+						ID:        fmt.Sprintf("github:%s/%s:#%d", pr.Owner, pr.Repo, pr.Number),
 						Provider:  "github",
 						Kind:      "PR",
 						RepoName:  pr.Owner + "/" + pr.Repo,
@@ -1913,6 +1915,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						}
 					}
 					items = append(items, ArtifactItem{
+						ID:        fmt.Sprintf("gitlab:%s:!%d", mr.ProjectPath, mr.IID),
 						Provider:  "gitlab",
 						Kind:      "MR",
 						RepoName:  mr.ProjectPath,

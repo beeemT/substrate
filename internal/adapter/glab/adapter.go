@@ -1130,3 +1130,95 @@ func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
 		"--field", "state_event=close")
 	return err
 }
+
+
+type glabDiscussionFull struct {
+	ID    string         `json:"id"`
+	Notes []glabNoteFull `json:"notes"`
+}
+
+type glabNoteFull struct {
+	ID         int64              `json:"id"`
+	Body       string             `json:"body"`
+	Author     glabNoteFullAuthor `json:"author"`
+	CreatedAt  string             `json:"created_at"` // ISO8601
+	System     bool               `json:"system"`
+	Resolvable bool               `json:"resolvable"`
+	Resolved   bool               `json:"resolved"`
+	Position   *glabNotePosition  `json:"position,omitempty"`
+}
+
+type glabNoteFullAuthor struct {
+	Username string `json:"username"`
+}
+
+type glabNotePosition struct {
+	NewPath string `json:"new_path"`
+	NewLine int    `json:"new_line"`
+}
+
+// Provider returns the provider identifier for ReviewCommentFetcher.
+func (a *GlabAdapter) Provider() string { return "gitlab" }
+
+// FetchReviewComments returns unresolved review comments for the given MR.
+// projectPath is the GitLab project path (e.g. "group/sub/repo"); it is URL-escaped here.
+// iid is the merge request IID.
+func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath string, iid int) ([]coreadapter.ReviewComment, error) {
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions?per_page=100", url.PathEscape(projectPath), iid)
+	output, err := a.runner(ctx, a.workspaceDir, "glab", "api", endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("glab discussions for !%d: %w (output: %s)", iid, err, strings.TrimSpace(string(output)))
+	}
+
+	var discussions []glabDiscussionFull
+	if err := json.Unmarshal(output, &discussions); err != nil {
+		return nil, fmt.Errorf("parse glab discussions: %w", err)
+	}
+
+	comments := make([]coreadapter.ReviewComment, 0, len(discussions))
+	for _, d := range discussions {
+		// Take the first non-system note as the discussion's anchor comment.
+		var note *glabNoteFull
+		for i := range d.Notes {
+			if d.Notes[i].System {
+				continue
+			}
+			note = &d.Notes[i]
+			break
+		}
+		if note == nil {
+			continue
+		}
+		if note.Resolvable && note.Resolved {
+			continue
+		}
+
+		createdAt, parseErr := time.Parse(time.RFC3339Nano, note.CreatedAt)
+		if parseErr != nil {
+			createdAt, parseErr = time.Parse(time.RFC3339, note.CreatedAt)
+		}
+		if parseErr != nil {
+			slog.Warn("glab: failed to parse review comment timestamp", "created_at", note.CreatedAt, "error", parseErr)
+			createdAt = time.Time{}
+		}
+
+		path := ""
+		line := 0
+		if note.Position != nil {
+			path = note.Position.NewPath
+			line = note.Position.NewLine
+		}
+
+		comments = append(comments, coreadapter.ReviewComment{
+			ID:            fmt.Sprintf("%d", note.ID),
+			ReviewerLogin: note.Author.Username,
+			Body:          note.Body,
+			Path:          path,
+			Line:          line,
+			URL:           "",
+			CreatedAt:     createdAt,
+		})
+	}
+
+	return comments, nil
+}

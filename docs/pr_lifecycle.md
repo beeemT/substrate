@@ -460,121 +460,135 @@ type ArtifactReview struct {
 
 #### Goal
 
-When a PR has `changes_requested` and the work item is `completed`, let the user trigger a
-follow-up agent session that addresses the reviewer's feedback directly.
+When outstanding (unresolved) review comments exist on any PR/MR owned by the
+work item, let the user dispatch a follow-up agent session that addresses that
+feedback. Two dispatch modes cover the common case (implementation-only nudges)
+and the rare case (the feedback invalidates the plan).
+
+**Status:** DONE. See `docs/bb3_review_followup.md` for the implementation plan.
 
 #### Preconditions
 
-- BB2 must be implemented (review state available in the artifacts view).
-- The `FollowUpPlan` path in `internal/orchestrator/planning.go` already exists — this block
-  extends the artifact view to feed reviewer comments into that path.
+- BB1 and BB2 must be implemented (artifacts + review state).
+- `FollowUpPlan` (orchestrator/planning.go) and `FollowUpSession` (orchestrator/resume.go)
+  are the two dispatch endpoints.
+- Work item state must be `completed` or `reviewing`.
 
 #### UX flow
 
-1. User is on the Artifacts view, focused on a PR with `changes_requested` state.
-2. Keybind `f` appears in hints: "follow-up on review".
-3. On `f` press:
-   a. Emit a `FetchReviewCommentsMsg` (async tea.Cmd).
-   b. The cmd calls the adapter's new `FetchReviewComments` method — fetching bodies live.
-   c. On success, emit `ReviewCommentsFetchedMsg` with the comment data.
-4. The artifacts view transitions to a **review feedback overlay** showing:
-   - Per-reviewer sections with their comments/threads.
-   - Each thread has a checkbox (future: for selective inclusion).
-   - Initially: all feedback is included; the overlay is informational.
-5. User presses Enter to confirm → emit `FollowUpFromReviewMsg`.
-6. App handles `FollowUpFromReviewMsg`:
-   a. Formats the review comments into a structured follow-up context string.
-   b. Calls `PlanningService.FollowUpPlan` with the formatted feedback as the changes argument
-      (same path as the existing `c` flow, but with reviewer feedback instead of user-typed text).
-   c. Restarts the foreman.
+1. Artifacts view shows `[f] Follow up on review` in the status-bar hint when
+   ≥1 artifact exists and the work item state gate is satisfied.
+2. On `f`: overlay opens in loading state and fetches unresolved review comments
+   for every PR/MR in parallel. `fetchedAt` is recorded for staleness.
+3. Aggregate result:
+   - 0 PRs with unresolved comments → toast "No outstanding review comments" +
+     close overlay.
+   - 1 PR with unresolved comments → skip PR picker; go directly to comment
+     selection overlay.
+   - >1 PRs → PR picker (all checked by default).
+4. Comment selection overlay (split view): left pane is a hierarchical checklist
+   grouped by repo → file (with a `General` section per repo for top-level
+   comments); right pane previews the focused comment. All comments selected by
+   default.
+5. Dispatch:
+   - **Enter (Address, default)**: formats per-repo feedback; emits one
+     `FollowUpSessionMsg` per repo with a matching completed Task. Missing tasks
+     are reported via toast (partial dispatch).
+   - **`p` (Re-plan)**: confirmation modal, then emits a single `FollowUpPlanMsg`
+     with all selected comments concatenated. Plan is replaced; BB7 then syncs
+     PR descriptions.
+6. Staleness check at dispatch time: if `fetchedAt` older than 5 minutes, silent
+   re-fetch with spinner before proceeding; selections are reapplied by comment
+   ID (dropped comments counted in toast, new comments default deselected).
+
+#### Comment formatting
+
+Both modes use the same canonical template, grouped by repo → file:
+
+```
+## Review comments to address
+
+### acme/rocket
+
+#### General
+
+- alice: Please add tests for the error cases in the retry loop.
+
+#### internal/handler/process.go
+
+- Line 42: This retry loop doesn't respect the context deadline.
+- Line 78: Consider using a switch here.
+
+### acme/engine
+
+#### cmd/server/main.go
+
+- Line 15: Missing graceful shutdown.
+```
+
+Address mode sends one slice per repo (only that repo's `### repoName` block).
+Re-plan mode sends the full block.
+
+Reviewer identity is surfaced to the agent only in the `General` section (where
+file+line cannot disambiguate). Resolved comments are filtered out at fetch time.
 
 #### API calls (live fetch, not stored)
 
-**GitHub:**
+**GitHub:** GraphQL `repository.pullRequest.reviewThreads { isResolved, comments }`
+for a single call with resolution state. See `internal/adapter/github/adapter.go`.
 
-```
-GET /repos/:owner/:repo/pulls/:number/reviews     → review bodies (top-level comments)
-GET /repos/:owner/:repo/pulls/:number/comments     → inline review comments (file + line)
-```
-
-Map inline comments to their parent review via `pull_request_review_id`.
-Group by reviewer → by review → inline threads.
-
-**GitLab:**
-
-```
-GET /projects/:id/merge_requests/:iid/discussions  → threaded discussions with notes
-```
-
-Filter to unresolved discussions. Each discussion has notes; the first note is the opening comment.
-Group by author.
+**GitLab:** `glab api /projects/:projectPath/merge_requests/:iid/discussions` +
+filter to `resolved == false`. See `internal/adapter/glab/adapter.go`.
 
 #### Adapter interface
 
-Add to the GitHub and GitLab adapter public surfaces:
-
 ```go
-// ReviewComment represents a single review comment fetched live from the API.
+// internal/adapter/review_comment.go
 type ReviewComment struct {
+	ID            string    // provider-specific stable identifier
 	ReviewerLogin string
 	Body          string
-	Path          string // file path for inline comments; empty for top-level
-	Line          int    // 0 for top-level comments
+	Path          string    // empty for top-level
+	Line          int       // 0 for top-level
+	URL           string
 	CreatedAt     time.Time
 }
 
-// FetchReviewComments retrieves all review comments for the given PR/MR.
-// This is a live API call — results are not persisted.
-func (a *GithubAdapter) FetchReviewComments(ctx context.Context, owner, repo string, number int) ([]ReviewComment, error)
-func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath string, iid int) ([]ReviewComment, error)
-```
-
-The TUI calls these through a new `ReviewCommentFetcher` interface injected into `App.svcs`.
-This keeps the TUI adapter-agnostic — it receives `[]ReviewComment` regardless of provider.
-
-```go
 type ReviewCommentFetcher interface {
-	FetchReviewComments(ctx context.Context, provider, repoIdentifier string, number int) ([]ReviewComment, error)
+	Provider() string
+	FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
 }
+
+type ReviewCommentDispatcher struct{ /* ... */ }
 ```
 
-A dispatcher implementation routes to the appropriate adapter based on `provider`.
-
-#### Follow-up context format
-
-The review comments are formatted into a structured string for the agent:
-
-```
-## Review feedback to address
-
-### alice (changes_requested)
-
-**Top-level:** Please add error handling for the timeout case.
-
-**internal/handler/process.go:42:** This retry loop doesn't respect the context deadline.
-
-### bob (commented)
-
-**internal/handler/process.go:78:** Nit: consider using a switch here.
-```
-
-This string replaces the user-typed feedback in `FollowUpPlan`'s `changes` parameter.
+`ReviewCommentDispatcher` routes by `provider` to the registered fetcher.
 
 #### Messages
 
 ```go
 type FetchReviewCommentsMsg struct {
-	Item ArtifactItem // which PR/MR to fetch for
+	WorkItemID string
+	Items      []ArtifactItem
 }
 
 type ReviewCommentsFetchedMsg struct {
-	Item     ArtifactItem
-	Comments []ReviewComment
-	Err      error
+	WorkItemID string
+	Result     map[string][]adapter.ReviewComment // keyed by ArtifactItem.ID
+	FetchedAt  time.Time
+	Err        error
 }
 
-type FollowUpFromReviewMsg struct {
-	FormattedFeedback string
+type ReviewCommentsRefetchedMsg struct { /* Mode: "address" | "replan" */ }
+type ReviewFollowupRefetchMsg    struct { /* Mode: "address" | "replan" */ }
+type ReviewFollowupCancelMsg     struct{}
+type FollowUpFromReviewAddressMsg struct {
+	WorkItemID string
+	PerRepo    map[string]string // repoName → formatted feedback
+}
+type FollowUpFromReviewReplanMsg struct {
+	WorkItemID string
+	Feedback   string
 }
 ```
 
@@ -582,14 +596,17 @@ type FollowUpFromReviewMsg struct {
 
 | File | Change |
 |---|---|
-| `internal/adapter/github/adapter.go` | `FetchReviewComments` method |
-| `internal/adapter/glab/adapter.go` | `FetchReviewComments` method |
-| `internal/adapter/review_comment.go` (new) | `ReviewComment` type, `ReviewCommentFetcher` interface + dispatcher |
-| `internal/tui/views/artifacts_view.go` | `f` keybind; review feedback overlay rendering; `FetchReviewCommentsMsg` / `ReviewCommentsFetchedMsg` handling |
-| `internal/tui/views/msgs.go` | `FetchReviewCommentsMsg`, `ReviewCommentsFetchedMsg`, `FollowUpFromReviewMsg` |
-| `internal/tui/views/app.go` | Handle `FollowUpFromReviewMsg` → `FollowUpPlan`; wire `ReviewCommentFetcher` into svcs |
-| `cmd/substrate/main.go` | Wire `ReviewCommentFetcher` dispatcher |
-
+| `internal/adapter/review_comment.go` | Types + dispatcher (NEW) |
+| `internal/adapter/github/adapter.go` | `FetchReviewComments` via GraphQL |
+| `internal/adapter/glab/adapter.go` | `FetchReviewComments` via discussions API |
+| `internal/tui/views/overlay_review_followup.go` | Overlay with loading / picker / selector / confirm stages (NEW) |
+| `internal/tui/views/artifacts_view.go` | `f` keybind + work item state setter |
+| `internal/tui/views/msgs.go` | New messages |
+| `internal/tui/views/app.go` | Overlay wiring, handlers, address fan-out |
+| `internal/tui/views/cmds.go` | `FetchReviewCommentsCmd` |
+| `internal/app/wire.go` | `BuildReviewCommentFetcher` |
+| `cmd/substrate/main.go` | Wire dispatcher into `Services` |
+| `internal/tui/views/settings_service.go` | Mirror dispatcher in rebuild path |
 ---
 
 ### Building block 4 — CI/check status
@@ -1086,7 +1103,7 @@ BB1 (artifacts view) ← DONE
  │
  ├─► BB2 (review state)        ← DONE
  │    │
- │    └─► BB3 (review → agent)  ← requires: BB2 review data + follow-up path
+ │    └─► BB3 (review → agent)  ← DONE
  │
  ├─► BB4 (CI/check status)      ← DONE
  │

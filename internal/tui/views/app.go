@@ -43,6 +43,7 @@ const (
 	overlayAddRepo
 	overlayRepoManager
 	overlayOverviewLinks
+	overlayReviewFollowup
 )
 
 type sessionHistoryScope int
@@ -112,6 +113,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	helpOverlay                 HelpOverlay
 	sourceItemsOverlay          SourceItemsOverlay
 	overviewLinksOverlay        OverviewLinksOverlay
+	reviewFollowupOverlay       ReviewFollowupModel
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
 	repoManager                 RepoManagerOverlay
@@ -211,6 +213,7 @@ func NewApp(svcs Services) App {
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		overviewLinksOverlay:           NewOverviewLinksOverlay(st),
+		reviewFollowupOverlay:          NewReviewFollowupModel(st),
 		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
 		addRepo:                        NewAddRepoOverlay(svcs.RepoSources, svcs.WorkspaceDir, svcs.GitClient, st),
 		repoManager:                    NewRepoManagerOverlay(svcs.WorkspaceDir, svcs.GitClient, st),
@@ -914,6 +917,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.settingsPage.SetSize(msg.Width, msg.Height)
 		a.sourceItemsOverlay.SetSize(msg.Width, msg.Height)
 		a.overviewLinksOverlay.SetSize(msg.Width, msg.Height)
+		a.reviewFollowupOverlay.SetSize(msg.Width, msg.Height)
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		a.addRepo.SetSize(msg.Width, msg.Height)
 		a.repoManager.SetSize(msg.Width, msg.Height)
@@ -994,6 +998,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.addRepo.Close()
 		a.repoManager.Close()
 		a.overviewLinksOverlay.Close()
+		a.reviewFollowupOverlay.Close()
 		return a, nil
 
 	case PollTickMsg:
@@ -1262,6 +1267,80 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.toasts.AddToast("Follow-up planning started", components.ToastSuccess)
 		return a, nil
+
+	case FetchReviewCommentsMsg:
+		if a.svcs.ReviewComments == nil || len(msg.Items) == 0 {
+			return a, nil
+		}
+		a.activeOverlay = overlayReviewFollowup
+		a.reviewFollowupOverlay.SetSize(a.windowWidth, a.windowHeight)
+		spinnerCmd := a.reviewFollowupOverlay.OpenLoading(msg.WorkItemID, msg.Items)
+		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, ""))
+
+	case ReviewCommentsFetchedMsg:
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Failed to fetch review comments: %v", msg.Err), components.ToastError)
+			a.activeOverlay = overlayNone
+			a.reviewFollowupOverlay.Close()
+			return a, nil
+		}
+		if keep := a.reviewFollowupOverlay.ApplyFetchResult(msg.Result, msg.FetchedAt); !keep {
+			a.toasts.AddToast("No outstanding review comments", components.ToastInfo)
+			a.activeOverlay = overlayNone
+			a.reviewFollowupOverlay.Close()
+		}
+		return a, nil
+
+	case ReviewFollowupRefetchMsg:
+		if a.svcs.ReviewComments == nil {
+			return a, nil
+		}
+		return a, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, msg.Mode)
+
+	case ReviewCommentsRefetchedMsg:
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Failed to refresh review comments: %v", msg.Err), components.ToastError)
+			a.activeOverlay = overlayNone
+			a.reviewFollowupOverlay.Close()
+			return a, nil
+		}
+		dropped := a.reviewFollowupOverlay.MergeRefetch(msg.Result, msg.FetchedAt)
+		if dropped > 0 {
+			a.toasts.AddToast(fmt.Sprintf("%d selected comment(s) no longer available", dropped), components.ToastWarning)
+		}
+		// Resume dispatch via the requested mode.
+		switch msg.Mode {
+		case "address":
+			perRepo := a.reviewFollowupOverlay.FormatPerRepo()
+			return a, func() tea.Msg {
+				return FollowUpFromReviewAddressMsg{WorkItemID: msg.WorkItemID, PerRepo: perRepo}
+			}
+		case "replan":
+			feedback := a.reviewFollowupOverlay.FormatAllSelected()
+			return a, func() tea.Msg {
+				return FollowUpFromReviewReplanMsg{WorkItemID: msg.WorkItemID, Feedback: feedback}
+			}
+		}
+		return a, nil
+
+	case ReviewFollowupCancelMsg:
+		a.activeOverlay = overlayNone
+		a.reviewFollowupOverlay.Close()
+		return a, nil
+
+	case FollowUpFromReviewAddressMsg:
+		a.activeOverlay = overlayNone
+		a.reviewFollowupOverlay.Close()
+		return a, a.dispatchReviewAddress(msg)
+
+	case FollowUpFromReviewReplanMsg:
+		a.activeOverlay = overlayNone
+		a.reviewFollowupOverlay.Close()
+		if a.svcs.Planning == nil || strings.TrimSpace(msg.Feedback) == "" {
+			a.toasts.AddToast("Re-plan not dispatched: missing planning service or feedback", components.ToastWarning)
+			return a, nil
+		}
+		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID, msg.Feedback)
 
 	case SkipQuestionMsg:
 		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.Foreman, msg.QuestionID))
@@ -1825,6 +1904,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayOverviewLinks {
 		a.overviewLinksOverlay, cmd = a.overviewLinksOverlay.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayReviewFollowup {
+		a.reviewFollowupOverlay, cmd = a.reviewFollowupOverlay.Update(msg)
+		cmds = append(cmds, cmd)
 	} else {
 		a.content, cmd = a.content.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1904,6 +1986,10 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if a.activeOverlay == overlayOverviewLinks {
 		a.overviewLinksOverlay, cmd = a.overviewLinksOverlay.Update(msg)
+		return a, cmd
+	}
+	if a.activeOverlay == overlayReviewFollowup {
+		a.reviewFollowupOverlay, cmd = a.reviewFollowupOverlay.Update(msg)
 		return a, cmd
 	}
 	previousFocus := a.mainFocus
@@ -2071,6 +2157,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 			}
 			if taskSessionID == taskSidebarArtifactsID {
 				a.content.artifacts.SetItems(a.buildArtifactItems(wi))
+				a.content.artifacts.SetWorkItem(wi.ID, wi.State)
 				a.content.SetMode(ContentModeArtifacts)
 				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
@@ -2361,6 +2448,64 @@ func (a *App) pipelineCtxForTask(taskID string) context.Context {
 		}
 	}
 	return context.Background()
+}
+
+// dispatchReviewAddress resolves each repo in msg.PerRepo to a completed Task and
+// emits a FollowUpSessionMsg per match. Missing completed tasks are reported via
+// toast (partial dispatch).
+func (a *App) dispatchReviewAddress(msg FollowUpFromReviewAddressMsg) tea.Cmd {
+	if a.svcs.Task == nil {
+		a.toasts.AddToast("Task service unavailable; cannot dispatch review follow-up", components.ToastError)
+		return nil
+	}
+	tasks, err := a.svcs.Task.ListByWorkItemID(context.Background(), msg.WorkItemID)
+	if err != nil {
+		slog.Error("list tasks for review follow-up failed", "work_item_id", msg.WorkItemID, "error", err)
+		a.toasts.AddToast(fmt.Sprintf("Failed to dispatch review follow-up: %v", err), components.ToastError)
+		return nil
+	}
+	// Build repoName → completed task. Prefer the most recently updated.
+	completedByRepo := make(map[string]domain.Task)
+	for _, t := range tasks {
+		if t.Status != domain.AgentSessionCompleted || t.RepositoryName == "" {
+			continue
+		}
+		existing, ok := completedByRepo[t.RepositoryName]
+		if !ok || t.UpdatedAt.After(existing.UpdatedAt) {
+			completedByRepo[t.RepositoryName] = t
+		}
+	}
+	total := len(msg.PerRepo)
+	dispatched := 0
+	var skipped []string
+	var cmds []tea.Cmd
+	for repoName, feedback := range msg.PerRepo {
+		task, ok := completedByRepo[repoName]
+		if !ok {
+			skipped = append(skipped, repoName)
+			continue
+		}
+		taskID := task.ID
+		captured := feedback
+		cmds = append(cmds, func() tea.Msg {
+			return FollowUpSessionMsg{TaskID: taskID, Feedback: captured}
+		})
+		dispatched++
+	}
+	if total == 0 || dispatched == 0 {
+		if len(skipped) > 0 {
+			a.toasts.AddToast(fmt.Sprintf("No follow-up dispatched: no completed task for %s", strings.Join(skipped, ", ")), components.ToastWarning)
+		} else {
+			a.toasts.AddToast("No follow-up dispatched (no selection)", components.ToastWarning)
+		}
+		return nil
+	}
+	if len(skipped) == 0 {
+		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repo(s)", dispatched, total), components.ToastSuccess)
+	} else {
+		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repos (skipped: %s)", dispatched, total, strings.Join(skipped, ", ")), components.ToastWarning)
+	}
+	return tea.Batch(cmds...)
 }
 
 // restartForemanForTask stops the current foreman (if running) and starts a
@@ -2931,6 +3076,8 @@ func (a App) View() string {
 		result = renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayOverviewLinks:
 		result = renderOverlay(a.overviewLinksOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlayReviewFollowup:
+		result = renderOverlay(a.reviewFollowupOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayLogs:
 		result = renderOverlay(a.logsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayAddRepo:

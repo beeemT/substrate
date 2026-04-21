@@ -1905,3 +1905,176 @@ func (a *GithubAdapter) onPRMerged(ctx context.Context, payload string) error {
 	}
 	return a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]any{"state": "closed"}, nil)
 }
+
+
+func (a *GithubAdapter) Provider() string { return adapterName }
+
+const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!) {
+  repository(owner:$owner,name:$name) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100) {
+        nodes {
+          isResolved
+          comments(first:50) {
+            nodes {
+              id
+              body
+              path
+              line
+              url
+              createdAt
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+type githubReviewCommentNode struct {
+	ID        string  `json:"id"`
+	Body      string  `json:"body"`
+	Path      *string `json:"path"`
+	Line      *int    `json:"line"`
+	URL       string  `json:"url"`
+	CreatedAt string  `json:"createdAt"`
+	Author    *struct {
+		Login string `json:"login"`
+	} `json:"author"`
+}
+
+type githubReviewThreadsResponse struct {
+	Repository *struct {
+		PullRequest *struct {
+			ReviewThreads struct {
+				Nodes []struct {
+					IsResolved bool `json:"isResolved"`
+					Comments   struct {
+						Nodes []githubReviewCommentNode `json:"nodes"`
+					} `json:"comments"`
+				} `json:"nodes"`
+			} `json:"reviewThreads"`
+		} `json:"pullRequest"`
+	} `json:"repository"`
+}
+
+// FetchReviewComments returns the unresolved review comment threads for the
+// given PR. Only the opening (first) comment of each unresolved thread is
+// surfaced.
+func (a *GithubAdapter) FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]adapter.ReviewComment, error) {
+	owner, repo, ok := strings.Cut(repoIdentifier, "/")
+	if !ok || owner == "" || repo == "" {
+		return nil, fmt.Errorf("invalid github repo identifier %q (want owner/repo)", repoIdentifier)
+	}
+	var resp githubReviewThreadsResponse
+	vars := map[string]any{"owner": owner, "name": repo, "number": number}
+	if err := a.graphql(ctx, reviewThreadsQuery, vars, &resp); err != nil {
+		return nil, fmt.Errorf("fetch review comments: %w", err)
+	}
+	if resp.Repository == nil || resp.Repository.PullRequest == nil {
+		return nil, nil
+	}
+	threads := resp.Repository.PullRequest.ReviewThreads.Nodes
+	out := make([]adapter.ReviewComment, 0, len(threads))
+	for _, th := range threads {
+		if th.IsResolved {
+			continue
+		}
+		if len(th.Comments.Nodes) == 0 {
+			continue
+		}
+		c := th.Comments.Nodes[0]
+		var createdAt time.Time
+		if c.CreatedAt != "" {
+			parsed, err := time.Parse(time.RFC3339, c.CreatedAt)
+			if err != nil {
+				slog.Warn("github: invalid review comment createdAt", "value", c.CreatedAt, "error", err)
+			} else {
+				createdAt = parsed
+			}
+		}
+		var pathStr string
+		if c.Path != nil {
+			pathStr = *c.Path
+		}
+		var line int
+		if c.Line != nil && pathStr != "" {
+			line = *c.Line
+		}
+		var reviewer string
+		if c.Author != nil {
+			reviewer = c.Author.Login
+		}
+		out = append(out, adapter.ReviewComment{
+			ID:            c.ID,
+			ReviewerLogin: reviewer,
+			Body:          c.Body,
+			Path:          pathStr,
+			Line:          line,
+			URL:           c.URL,
+			CreatedAt:     createdAt,
+		})
+	}
+
+	return out, nil
+}
+
+// graphql posts a GraphQL query to GitHub's /graphql endpoint, decoding the
+// `data` payload into dst. Returns a wrapped error containing all GraphQL
+// error messages when the response includes any.
+func (a *GithubAdapter) graphql(ctx context.Context, query string, variables map[string]any, dst any) error {
+	endpoint := strings.TrimRight(a.baseURL, "/") + "/graphql"
+	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return fmt.Errorf("marshal graphql request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("create graphql request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("graphql request: %w", err)
+	}
+	defer resp.Body.Close()
+	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
+	data, readErr := io.ReadAll(limitedBody)
+	if readErr != nil {
+		return fmt.Errorf("read graphql response: %w", readErr)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: trimmed}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("github graphql status %d: %s", resp.StatusCode, trimmed)
+	}
+	var wrapper struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return fmt.Errorf("decode graphql response: %w", err)
+	}
+	if len(wrapper.Errors) > 0 {
+		msgs := make([]string, 0, len(wrapper.Errors))
+		for _, e := range wrapper.Errors {
+			msgs = append(msgs, e.Message)
+		}
+		return fmt.Errorf("graphql error: %s", strings.Join(msgs, "; "))
+	}
+	if dst == nil || len(wrapper.Data) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(wrapper.Data, dst); err != nil {
+		return fmt.Errorf("decode graphql data: %w", err)
+	}
+
+	return nil
+}

@@ -185,6 +185,7 @@ func run() error {
 		Resumption:            runtime.resumption,
 		Foreman:               runtime.foreman,
 		SessionRegistry:       runtime.registry,
+		ReviewComments:        app.BuildReviewCommentFetcher(ctx, cfg, workspace.Dir),
 	})
 }
 

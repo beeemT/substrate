@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1172,6 +1173,65 @@ func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, wor
 		_, err := svc.FollowUpPlan(ctx, workItemID, feedback)
 		return FollowUpPlanResultMsg{WorkItemID: workItemID, Err: err}
 	}
+}
+
+// FetchReviewCommentsCmd fetches unresolved review comments for the given PRs/MRs
+// in parallel. mode is either "" (initial fetch → ReviewCommentsFetchedMsg) or
+// "address"/"replan" (silent re-fetch → ReviewCommentsRefetchedMsg carrying the
+// dispatch intent).
+func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID string, items []ArtifactItem, mode string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result := make(map[string][]adapter.ReviewComment, len(items))
+		var firstErr error
+		for _, it := range items {
+			identifier, number, ok := parseArtifactFetchArgs(it)
+			if !ok {
+				slog.Warn("skipping artifact with unparsable ref", "ref", it.Ref, "repo", it.RepoName)
+				continue
+			}
+			comments, err := fetcher.FetchReviewComments(ctx, it.Provider, identifier, number)
+			if err != nil {
+				slog.Warn("fetch review comments failed", "provider", it.Provider, "repo", it.RepoName, "ref", it.Ref, "error", err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("%s %s: %w", it.RepoName, it.Ref, err)
+				}
+				continue
+			}
+			if len(comments) > 0 {
+				result[it.ID] = comments
+			}
+		}
+		fetchedAt := time.Now()
+		if mode == "" {
+			return ReviewCommentsFetchedMsg{
+				WorkItemID: workItemID,
+				Result:     result,
+				FetchedAt:  fetchedAt,
+				Err:        firstErr,
+			}
+		}
+		return ReviewCommentsRefetchedMsg{
+			WorkItemID: workItemID,
+			Result:     result,
+			FetchedAt:  fetchedAt,
+			Mode:       mode,
+			Err:        firstErr,
+		}
+	}
+}
+
+// parseArtifactFetchArgs extracts (repoIdentifier, number) from an ArtifactItem.
+// For GitHub: returns ("owner/repo", number). For GitLab: returns (projectPath, iid).
+// Falls back to false when the ref cannot be parsed as an integer.
+func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
+	trimmed := strings.TrimLeft(it.Ref, "#!")
+	n, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return "", 0, false
+	}
+	return it.RepoName, n, true
 }
 
 // WaitForAdapterErrorCmd listens for adapter errors and converts them to TUI messages.

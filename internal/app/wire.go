@@ -96,6 +96,32 @@ func BuildRepoSources(ctx context.Context, cfg *config.Config) []adapter.RepoSou
 	return sources
 }
 
+// BuildReviewCommentFetcher constructs a dispatcher capable of fetching unresolved
+// review comments from every configured provider. The dispatcher is safe to use
+// even when a provider is not configured — it returns a descriptive error for
+// unknown providers.
+func BuildReviewCommentFetcher(ctx context.Context, cfg *config.Config, workspaceDir string) *adapter.ReviewCommentDispatcher {
+	fetchers := make(map[string]adapter.ReviewCommentFetcher)
+	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
+		ghAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
+		if err != nil {
+			slog.Warn("skipping github review comment fetcher", "error", err)
+		} else {
+			fetchers[ghAdapter.Provider()] = ghAdapter
+		}
+	}
+	// GitLab adapter does not need network auth up front — it shells out to glab,
+	// which manages its own auth. Construct unconditionally.
+	glAdapter := gladapter.New(cfg.Adapters.Glab)
+	if workspaceDir != "" {
+		// Constructing via NewWithEventRepo primes workspaceDir so the fetcher can
+		// run glab from a stable directory.
+		glAdapter = gladapter.NewWithEventRepo(cfg.Adapters.Glab, adapter.ReviewArtifactRepos{}, workspaceDir)
+	}
+	fetchers[glAdapter.Provider()] = glAdapter
+	return adapter.NewReviewCommentDispatcher(fetchers)
+}
+
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
 func BuildRepoLifecycleAdapters(
 	ctx context.Context,

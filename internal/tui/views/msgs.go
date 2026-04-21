@@ -324,7 +324,6 @@ type ShowSettingsMsg struct{}
 // CloseOverlayMsg closes the active overlay.
 type CloseOverlayMsg struct{}
 
-
 // OpenOverviewLinksMsg opens the overview links overlay, showing the input
 // tickets and MR/PR links produced for the selected session.
 type OpenOverviewLinksMsg struct {
@@ -474,6 +473,49 @@ type FollowUpPlanMsg struct {
 type FollowUpPlanResultMsg struct {
 	WorkItemID string
 	Err        error
+}
+
+// FetchReviewCommentsMsg requests fetching unresolved review comments for every
+// PR/MR in the work item, in parallel. The handler dispatches
+// ReviewCommentsFetchedMsg when complete.
+type FetchReviewCommentsMsg struct {
+	WorkItemID string
+	Items      []ArtifactItem
+}
+
+// ReviewCommentsFetchedMsg delivers the result of FetchReviewCommentsMsg. Result
+// is keyed by ArtifactItem.ID and excludes resolved comments.
+type ReviewCommentsFetchedMsg struct {
+	WorkItemID string
+	Result     map[string][]adapter.ReviewComment
+	FetchedAt  time.Time
+	Err        error
+}
+
+// ReviewCommentsRefetchedMsg delivers the result of a silent re-fetch performed
+// at dispatch time when the original fetch became stale. Mode echoes the original
+// dispatch intent ("address" or "replan") so the handler can resume the dispatch.
+type ReviewCommentsRefetchedMsg struct {
+	WorkItemID string
+	Result     map[string][]adapter.ReviewComment
+	FetchedAt  time.Time
+	Mode       string
+	Err        error
+}
+
+// FollowUpFromReviewAddressMsg requests dispatching per-repo follow-up sessions
+// addressing the selected review comments. PerRepo is keyed by repo name (matches
+// Task.RepositoryName).
+type FollowUpFromReviewAddressMsg struct {
+	WorkItemID string
+	PerRepo    map[string]string
+}
+
+// FollowUpFromReviewReplanMsg requests a re-plan from the concatenated set of
+// selected review comments across all scoped repos.
+type FollowUpFromReviewReplanMsg struct {
+	WorkItemID string
+	Feedback   string
 }
 
 // InspectPlanMsg requests loading a plan by ID for read-only inspection.

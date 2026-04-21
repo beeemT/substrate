@@ -46,6 +46,7 @@ type Services struct {
 	GitClient       *gitwork.Client
 	Bus             *event.Bus
 	AdapterErrors   chan AdapterErrorMsg
+	ReviewComments  *adapter.ReviewCommentDispatcher
 	// StartupWarnings collects adapter initialisation warnings to surface
 	// as toasts when the TUI starts.
 	StartupWarnings []string

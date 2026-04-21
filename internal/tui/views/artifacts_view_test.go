@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
 
@@ -669,7 +670,6 @@ func TestArtifactsViewCIFitsWidth(t *testing.T) {
 	}
 }
 
-
 func TestArtifactsViewShiftOSingleItemOpensDirectly(t *testing.T) {
 	t.Parallel()
 
@@ -746,5 +746,62 @@ func TestArtifactsViewKeybindHintsIncludeShiftO(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("keybind hints missing O/PR links, got: %+v", hints)
+	}
+}
+
+func TestArtifactsViewFollowUpKeyDisabledWithoutState(t *testing.T) {
+	t.Parallel()
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+	// No SetWorkItem call → zero state value → follow-up disabled.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd != nil {
+		t.Fatalf("expected no command when work item state not set")
+	}
+}
+
+func TestArtifactsViewFollowUpKeyEmitsFetchMsg(t *testing.T) {
+	t.Parallel()
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+	m.SetWorkItem("wi-1", domain.SessionCompleted)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatal("expected command from 'f' when state is completed")
+	}
+	msg := cmd()
+	fetch, ok := msg.(views.FetchReviewCommentsMsg)
+	if !ok {
+		t.Fatalf("expected FetchReviewCommentsMsg, got %T", msg)
+	}
+	if fetch.WorkItemID != "wi-1" {
+		t.Fatalf("WorkItemID = %q", fetch.WorkItemID)
+	}
+	if len(fetch.Items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(fetch.Items))
+	}
+}
+
+func TestArtifactsViewFollowUpHintVisibleWhenEnabled(t *testing.T) {
+	t.Parallel()
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 30)
+	m.SetItems(testArtifactItems())
+	m.SetWorkItem("wi-1", domain.SessionReviewing)
+	hints := m.KeybindHints()
+	found := false
+	for _, h := range hints {
+		if h.Key == "f" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'f' keybind hint; got: %+v", hints)
 	}
 }
