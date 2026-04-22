@@ -22,15 +22,34 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 )
 
+// BuildGithubAdapter constructs a single shared *GithubAdapter that satisfies
+// WorkItemAdapter, RepoLifecycleAdapter, and ReviewCommentFetcher. Returns
+// (nil, warning) when GitHub auth is not configured or initialization fails.
+// Callers MUST surface the warning via Services.StartupWarnings.
+func BuildGithubAdapter(ctx context.Context, cfg *config.Config, repos adapter.ReviewArtifactRepos) (*githubadapter.GithubAdapter, string) {
+	if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
+		return nil, ""
+	}
+	a, err := githubadapter.NewRepoLifecycle(ctx, cfg.Adapters.GitHub, repos)
+	if err != nil {
+		slog.Warn("skipping github adapter", "err", err)
+		return nil, "GitHub: " + err.Error()
+	}
+	return a, ""
+}
+
 // BuildWorkItemAdapters constructs all available WorkItemAdapters for the given
 // configuration and workspace. The manual adapter is always included. The linear
 // adapter is included when an API key is present in configuration.
 // The second return value contains human-readable warnings for adapters that
 // were detected but could not be initialised (e.g. missing organisation).
+// The shared GitHub adapter (when non-nil) is appended; callers construct it via
+// BuildGithubAdapter and surface its warning separately via StartupWarnings.
 func BuildWorkItemAdapters(
 	cfg *config.Config,
 	workspaceID string,
 	workItemSvc *service.SessionService,
+	githubAdapter *githubadapter.GithubAdapter,
 ) ([]adapter.WorkItemAdapter, []string) {
 	store := manualadapter.NewWorkspaceStore(workItemSvc, workspaceID)
 	adapters := []adapter.WorkItemAdapter{
@@ -49,13 +68,8 @@ func BuildWorkItemAdapters(
 			adapters = append(adapters, gitlabAdapter)
 		}
 	}
-	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
-		githubAdapter, err := githubadapter.New(context.Background(), cfg.Adapters.GitHub)
-		if err != nil {
-			slog.Warn("skipping github work item adapter", "err", err)
-		} else {
-			adapters = append(adapters, githubAdapter)
-		}
+	if githubAdapter != nil {
+		adapters = append(adapters, githubAdapter)
 	}
 	if config.SentryAuthConfigured(cfg.Adapters.Sentry) {
 		sentryAdapter, err := sentryadapter.New(context.Background(), cfg.Adapters.Sentry)
@@ -99,20 +113,13 @@ func BuildRepoSources(ctx context.Context, cfg *config.Config) []adapter.RepoSou
 // BuildReviewCommentFetcher constructs a dispatcher capable of fetching unresolved
 // review comments from every configured provider. The dispatcher is safe to use
 // even when a provider is not configured — it returns a descriptive error for
-// unknown providers. The second return value contains human-readable warnings
-// for providers that were detected but could not be initialised; callers MUST
-// surface these via Services.StartupWarnings (matches BuildWorkItemAdapters).
-func BuildReviewCommentFetcher(ctx context.Context, cfg *config.Config, workspaceDir string) (*adapter.ReviewCommentDispatcher, []string) {
+// unknown providers. The shared GitHub adapter (when non-nil) is used for the
+// GitHub fetcher; callers construct it via BuildGithubAdapter and surface its
+// warning separately via StartupWarnings.
+func BuildReviewCommentFetcher(cfg *config.Config, workspaceDir string, githubAdapter *githubadapter.GithubAdapter) *adapter.ReviewCommentDispatcher {
 	fetchers := make(map[string]adapter.ReviewCommentFetcher)
-	var warnings []string
-	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
-		ghAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
-		if err != nil {
-			slog.Warn("skipping github review comment fetcher", "err", err)
-			warnings = append(warnings, "GitHub review comments: "+err.Error())
-		} else {
-			fetchers[ghAdapter.Provider()] = ghAdapter
-		}
+	if githubAdapter != nil {
+		fetchers[githubAdapter.Provider()] = githubAdapter
 	}
 	// GitLab adapter does not need network auth up front — it shells out to glab,
 	// which manages its own auth. Construct via NewWithEventRepo so workspaceDir
@@ -120,15 +127,18 @@ func BuildReviewCommentFetcher(ctx context.Context, cfg *config.Config, workspac
 	// runner with an empty workspaceDir as default.
 	glAdapter := gladapter.NewWithEventRepo(cfg.Adapters.Glab, adapter.ReviewArtifactRepos{}, workspaceDir)
 	fetchers[glAdapter.Provider()] = glAdapter
-	return adapter.NewReviewCommentDispatcher(fetchers), warnings
+	return adapter.NewReviewCommentDispatcher(fetchers)
 }
 
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.
+// The shared GitHub adapter (when non-nil) is used for the GitHub platform branch;
+// callers construct it via BuildGithubAdapter and surface its warning via StartupWarnings.
 func BuildRepoLifecycleAdapters(
 	ctx context.Context,
 	cfg *config.Config,
 	workspaceDir string,
 	repos adapter.ReviewArtifactRepos,
+	githubAdapter *githubadapter.GithubAdapter,
 ) []adapter.RepoLifecycleAdapter {
 	if workspaceDir == "" {
 		return nil
@@ -146,13 +156,7 @@ func BuildRepoLifecycleAdapters(
 		case remotedetect.PlatformGitLab:
 			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: gladapter.NewWithEventRepo(cfg.Adapters.Glab, repos, workspaceDir)})
 		case remotedetect.PlatformGitHub:
-			if !config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
-				slog.Warn("skipping github lifecycle adapter: no github auth configured")
-				continue
-			}
-			githubAdapter, err := githubadapter.NewRepoLifecycle(ctx, cfg.Adapters.GitHub, repos)
-			if err != nil {
-				slog.Warn("skipping github lifecycle adapter", "err", err)
+			if githubAdapter == nil {
 				continue
 			}
 			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: githubAdapter})

@@ -37,6 +37,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithEnvToken(t *testing.T) 
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		nil,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
@@ -64,6 +65,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		nil,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
@@ -88,6 +90,7 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		nil,
 	)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want manual-only when organization is missing", len(adapters))
@@ -117,7 +120,7 @@ func TestBuildRepoLifecycleAdapters_StillIgnoresSentryCLIAuth(t *testing.T) {
 	createWorkspaceRepo(t, workspaceDir+"/repo-one", "git@gitlab.com:group/repo.git")
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Organization = "acme"
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{})
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{}, nil)
 	if len(adapters) != 1 || adapters[0].Name() != "glab" {
 		t.Fatalf("repo lifecycle adapters = %#v, want only glab", adapters)
 	}

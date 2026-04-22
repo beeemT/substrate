@@ -462,11 +462,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 	if gitClient == nil {
 		gitClient = gitwork.NewClient("")
 	}
-	var adapters []adapter.WorkItemAdapter
-	if current.WorkspaceID != "" {
-		adapters, _ = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc)
-	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, adapter.ReviewArtifactRepos{
+	repos := adapter.ReviewArtifactRepos{
 		Events:           eventSvc,
 		GithubPRs:        ghPRSvc,
 		GitlabMRs:        glMRSvc,
@@ -477,7 +473,18 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		GithubPRChecks:   ghPRCheckSvc,
 		GitlabMRChecks:   glMRCheckSvc,
 		Bus:              bus,
-	})
+	}
+	githubAdapter, githubWarning := app.BuildGithubAdapter(ctx, cfg, repos)
+
+	var adapters []adapter.WorkItemAdapter
+	var adapterWarnings []string
+	if current.WorkspaceID != "" {
+		adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc, githubAdapter)
+	}
+	if githubWarning != "" {
+		adapterWarnings = append(adapterWarnings, githubWarning)
+	}
+	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, repos, githubAdapter)
 	adapterErrors := make(chan AdapterErrorMsg, 16)
 
 	for _, workItemAdapter := range adapters {
@@ -635,10 +642,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		return viewsServicesReload{}, err
 	}
 
-	reviewCommentDispatcher, reviewCommentWarnings := app.BuildReviewCommentFetcher(ctx, cfg, current.WorkspaceDir)
-	for _, w := range reviewCommentWarnings {
-		slog.Warn("settings rebuild: review comment fetcher init", "warning", w)
-	}
+	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
 
 	return viewsServicesReload{
 		ConfigPath:   cfgPath,
@@ -675,6 +679,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			Bus:                   bus,
 			AdapterErrors:         adapterErrors,
 			ReviewComments:        reviewCommentDispatcher,
+			StartupWarnings:       adapterWarnings,
 			InstanceID:            current.InstanceID,
 			WorkspaceID:           current.WorkspaceID,
 			WorkspaceDir:          current.WorkspaceDir,

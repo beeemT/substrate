@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
@@ -45,6 +46,10 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 	repo := stubWorkItemRepo{}
 	cfg := &config.Config{}
 	cfg.Adapters.GitHub.Token = "token"
+	ghAdapter, err := githubadapter.New(context.Background(), cfg.Adapters.GitHub)
+	if err != nil {
+		t.Fatalf("github adapter init: %v", err)
+	}
 
 	adapters, _ := BuildWorkItemAdapters(
 		cfg,
@@ -54,6 +59,7 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		ghAdapter,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
@@ -79,6 +85,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		nil,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
@@ -91,7 +98,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 func TestBuildRepoLifecycleAdapters_EmptyWorkspace(t *testing.T) {
 	cfg := &config.Config{}
 	// Provide a zero-value ReviewArtifactRepos because this test only covers platform detection.
-	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", adapter.ReviewArtifactRepos{}); len(adapters) != 0 {
+	if adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", adapter.ReviewArtifactRepos{}, nil); len(adapters) != 0 {
 		t.Fatalf("adapters len = %d, want 0", len(adapters))
 	}
 }
@@ -103,7 +110,7 @@ func TestBuildRepoLifecycleAdapters_UsesWorkspaceRepoPlatforms(t *testing.T) {
 	repoDir := filepath.Join(workspaceDir, "repo-one")
 	createWorkspaceRepo(t, repoDir, "git@gitlab.com:group/repo.git")
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir, adapter.ReviewArtifactRepos{})
+	adapters := BuildRepoLifecycleAdapters(context.Background(), &config.Config{}, workspaceDir, adapter.ReviewArtifactRepos{}, nil)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want 1", len(adapters))
 	}
@@ -140,7 +147,12 @@ func TestBuildRepoLifecycleAdapters_PreservesSupportedPlatformsInMixedWorkspace(
 	cfg.Adapters.GitHub.Token = "token"
 	cfg.Adapters.GitHub.BaseURL = server.URL
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{})
+	ghAdapter, err := githubadapter.NewRepoLifecycle(context.Background(), cfg.Adapters.GitHub, adapter.ReviewArtifactRepos{})
+	if err != nil {
+		t.Fatalf("github adapter init: %v", err)
+	}
+
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{}, ghAdapter)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
 	}
@@ -190,6 +202,11 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 	writeExecutable(t, binDir, "gh", "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'gh-cli-token\\n'\n  exit 0\nfi\nexit 1\n")
 	t.Setenv("PATH", binDir)
 
+	ghAdapter, err := githubadapter.New(context.Background(), cfg.Adapters.GitHub)
+	if err != nil {
+		t.Fatalf("github adapter init: %v", err)
+	}
+
 	adapters, _ := BuildWorkItemAdapters(
 		cfg,
 		"ws-1",
@@ -198,6 +215,7 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		ghAdapter,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))
@@ -223,6 +241,7 @@ func TestBuildWorkItemAdapters_RegistersGitLabAdapterWithGlabCLI(t *testing.T) {
 				Res: repository.Resources{Sessions: repo},
 			},
 		),
+		nil,
 	)
 	if len(adapters) != 2 {
 		t.Fatalf("adapters len = %d, want 2", len(adapters))

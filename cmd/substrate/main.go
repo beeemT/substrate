@@ -76,11 +76,12 @@ type coreServices struct {
 }
 
 type adapterSetup struct {
-	workItem      []adapter.WorkItemAdapter
-	repoLifecycle []adapter.RepoLifecycleAdapter
-	repoSources   []adapter.RepoSource
-	warnings      []string
-	adapterErrors chan views.AdapterErrorMsg
+	workItem       []adapter.WorkItemAdapter
+	repoLifecycle  []adapter.RepoLifecycleAdapter
+	repoSources    []adapter.RepoSource
+	reviewComments *adapter.ReviewCommentDispatcher
+	warnings       []string
+	adapterErrors  chan views.AdapterErrorMsg
 }
 
 type orchestrationRuntime struct {
@@ -145,9 +146,6 @@ func run() error {
 		return fmt.Errorf("load settings snapshot: %w", err)
 	}
 
-	reviewCommentDispatcher, reviewCommentWarnings := app.BuildReviewCommentFetcher(ctx, cfg, workspace.Dir)
-	startupWarnings := append(adapters.warnings, reviewCommentWarnings...)
-
 	return views.RunTUI(views.Services{
 		Session:               services.workItem,
 		Plan:                  services.plan,
@@ -175,7 +173,7 @@ func run() error {
 		GitClient:             runtime.gitClient,
 		Bus:                   bus,
 		AdapterErrors:         adapters.adapterErrors,
-		StartupWarnings:       startupWarnings,
+		StartupWarnings:       adapters.warnings,
 		LogStore:              logStore,
 		LogToasts:             logToasts,
 		InstanceID:            instanceID,
@@ -188,7 +186,7 @@ func run() error {
 		Resumption:            runtime.resumption,
 		Foreman:               runtime.foreman,
 		SessionRegistry:       runtime.registry,
-		ReviewComments:        reviewCommentDispatcher,
+		ReviewComments:        adapters.reviewComments,
 	})
 }
 
@@ -409,30 +407,38 @@ func buildAdapterSetup(
 	services coreServices,
 	bus *event.Bus,
 ) (adapterSetup, error) {
+	repos := adapter.ReviewArtifactRepos{
+		Events:           services.event,
+		GithubPRs:        services.githubPR,
+		GitlabMRs:        services.gitlabMR,
+		SessionArtifacts: services.sessionArtifact,
+		Sessions:         services.workItem,
+		GithubPRReviews:  services.ghPRReview,
+		GitlabMRReviews:  services.glMRReview,
+		GithubPRChecks:   services.ghPRCheck,
+		GitlabMRChecks:   services.glMRCheck,
+		Bus:              bus,
+	}
+	githubAdapter, githubWarning := app.BuildGithubAdapter(ctx, cfg, repos)
+
 	var workItemAdapters []adapter.WorkItemAdapter
 	var adapterWarnings []string
 	if workspace.ID != "" {
-		workItemAdapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, workspace.ID, services.workItem)
+		workItemAdapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, workspace.ID, services.workItem, githubAdapter)
+	}
+	if githubWarning != "" {
+		adapterWarnings = append(adapterWarnings, githubWarning)
 	}
 
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(
 		ctx,
 		cfg,
 		workspace.Dir,
-		adapter.ReviewArtifactRepos{
-			Events:           services.event,
-			GithubPRs:        services.githubPR,
-			GitlabMRs:        services.gitlabMR,
-			SessionArtifacts: services.sessionArtifact,
-			Sessions:         services.workItem,
-			GithubPRReviews:  services.ghPRReview,
-			GitlabMRReviews:  services.glMRReview,
-			GithubPRChecks:   services.ghPRCheck,
-			GitlabMRChecks:   services.glMRCheck,
-			Bus:              bus,
-		},
+		repos,
+		githubAdapter,
 	)
 	repoSources := app.BuildRepoSources(ctx, cfg)
+	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, workspace.Dir, githubAdapter)
 
 	adapterErrors := make(chan views.AdapterErrorMsg, 16)
 
@@ -446,11 +452,12 @@ func buildAdapterSetup(
 	startRepoLifecycleRefresh(ctx, repoLifecycleAdapters, workspace.ID)
 
 	return adapterSetup{
-		workItem:      workItemAdapters,
-		repoLifecycle: repoLifecycleAdapters,
-		repoSources:   repoSources,
-		warnings:      adapterWarnings,
-		adapterErrors: adapterErrors,
+		workItem:       workItemAdapters,
+		repoLifecycle:  repoLifecycleAdapters,
+		repoSources:    repoSources,
+		reviewComments: reviewCommentDispatcher,
+		warnings:       adapterWarnings,
+		adapterErrors:  adapterErrors,
 	}, nil
 }
 

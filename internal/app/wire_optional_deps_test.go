@@ -13,7 +13,7 @@ func TestBuildRepoLifecycleAdapters_SkipsGithubWhenTokenResolutionFails(t *testi
 	t.Parallel()
 	cfg := &config.Config{}
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", adapter.ReviewArtifactRepos{})
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, "", adapter.ReviewArtifactRepos{}, nil)
 	if adapters != nil {
 		t.Fatalf("expected nil adapters for empty workspace dir, got %d", len(adapters))
 	}
@@ -24,7 +24,7 @@ func TestBuildWorkItemAdapters_ManualOnlyWithoutCompleteOptionalProviders(t *tes
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Token = "token-without-organization"
 
-	adapters, _ := BuildWorkItemAdapters(cfg, "workspace-1", nil)
+	adapters, _ := BuildWorkItemAdapters(cfg, "workspace-1", nil, nil)
 	if len(adapters) != 1 {
 		t.Fatalf("expected only manual adapter, got %d", len(adapters))
 	}
@@ -43,7 +43,7 @@ func TestBuildRepoLifecycleAdapters_IgnoresSentryConfig(t *testing.T) {
 	cfg.Adapters.Sentry.Token = "token"
 	cfg.Adapters.Sentry.Organization = "acme"
 
-	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{})
+	adapters := BuildRepoLifecycleAdapters(context.Background(), cfg, workspaceDir, adapter.ReviewArtifactRepos{}, nil)
 	if len(adapters) != 1 {
 		t.Fatalf("adapters len = %d, want 1", len(adapters))
 	}
