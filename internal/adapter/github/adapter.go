@@ -688,7 +688,7 @@ func (a *GithubAdapter) syncPRDescriptionsOnApproval(ctx context.Context, worksp
 			slog.Warn("github: get pr for description sync", "pr_id", link.ProviderArtifactID, "error", err)
 			continue
 		}
-		if pr.State != "open" {
+		if pr.State == "merged" || pr.State == "closed" {
 			continue
 		}
 		if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", pr.Owner, pr.Repo, pr.Number), map[string]any{"body": p.CommentBody}, nil); err != nil {

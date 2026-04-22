@@ -1087,7 +1087,7 @@ func (a *GlabAdapter) syncMRDescriptionsOnApproval(ctx context.Context, workspac
 			slog.Warn("glab: get mr for description sync", "mr_id", link.ProviderArtifactID, "error", err)
 			continue
 		}
-		if mr.State != "opened" {
+		if mr.State == "merged" || mr.State == "closed" {
 			continue
 		}
 		if _, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",

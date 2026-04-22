@@ -587,7 +587,6 @@ func TestOnEvent_WorktreeCreated_AddsCrossProjectGitLabResolvesFooter(t *testing
 	}
 }
 
-
 // --- In-memory repos for syncMRDescriptionsOnApproval tests ---
 
 type inMemGitlabMRRepo struct {
@@ -672,7 +671,7 @@ func TestSyncMRDescriptionsOnApproval_UpdatesOpenMRs(t *testing.T) {
 	t.Parallel()
 
 	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
-		"mr-1": {ID: "mr-1", ProjectPath: "group/project", IID: 10, State: "opened"},
+		"mr-1": {ID: "mr-1", ProjectPath: "group/project", IID: 10, State: "ready"},
 		"mr-2": {ID: "mr-2", ProjectPath: "group/project", IID: 11, State: "merged"},
 	}}
 
@@ -689,10 +688,10 @@ func TestSyncMRDescriptionsOnApproval_UpdatesOpenMRs(t *testing.T) {
 	a := newWithRunner(config.GlabConfig{}, repos, "/workspace", stub.run)
 
 	payload := mustJSON(map[string]any{
-		"work_item_id":  "wi-1",
-		"comment_body":  "Updated MR description",
-		"external_id":   "gl:issue:1234#5",
-		"external_ids":  []string{"gl:issue:1234#5"},
+		"work_item_id": "wi-1",
+		"comment_body": "Updated MR description",
+		"external_id":  "gl:issue:1234#5",
+		"external_ids": []string{"gl:issue:1234#5"},
 	})
 
 	err := a.OnEvent(context.Background(), domain.SystemEvent{

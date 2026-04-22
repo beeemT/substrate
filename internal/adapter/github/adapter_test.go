@@ -745,7 +745,6 @@ func TestListCreatedIssuesFiltersSearchByRepoPathWithoutOwner(t *testing.T) {
 	}
 }
 
-
 // --- In-memory repos for PR description sync tests ---
 
 type inMemGithubPRRepo struct {
@@ -839,7 +838,7 @@ func TestSyncPRDescriptionsOnApproval_UpdatesOpenPRs(t *testing.T) {
 	t.Parallel()
 
 	prRepo := &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{
-		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "open"},
+		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "ready"},
 		"pr-2": {ID: "pr-2", Owner: "acme", Repo: "engine", Number: 43, State: "merged"},
 	}}
 	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
@@ -913,7 +912,7 @@ func TestSyncPRDescriptionsOnApproval_SkipsEmptyCommentBody(t *testing.T) {
 	t.Parallel()
 
 	prRepo := &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{
-		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "open"},
+		"pr-1": {ID: "pr-1", Owner: "acme", Repo: "rocket", Number: 42, State: "ready"},
 	}}
 	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{
 		{ID: "a1", WorkspaceID: "ws-1", WorkItemID: "wi-1", Provider: "github", ProviderArtifactID: "pr-1"},
