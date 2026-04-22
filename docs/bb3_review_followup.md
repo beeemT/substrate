@@ -143,6 +143,11 @@ are dropped, new ones default to deselected).
 Same template for both modes. Grouped by repo → file; `General` section per
 repo for top-level review comments.
 
+Note: for GitHub PRs the General section is typically empty because top-level
+review summary bodies (`/pulls/:n/reviews`) are not fetched in the current
+implementation; only inline thread comments populate the per-file sections.
+GitLab MR top-level discussions populate the General section as expected.
+
 ```
 ## Review comments to address
 
@@ -193,7 +198,8 @@ type ReviewComment struct {
 }
 
 type ReviewCommentFetcher interface {
-    FetchReviewComments(ctx context.Context, provider, repoIdentifier string, number int) ([]ReviewComment, error)
+    Provider() string
+    FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
 }
 ```
 
@@ -205,27 +211,25 @@ implement a per-provider `FetchReviewComments` method; dispatcher holds both.
 **GitHub (`internal/adapter/github/adapter.go`):**
 
 ```go
-func (a *Adapter) FetchReviewComments(ctx context.Context, owner, repo string, number int) ([]ReviewComment, error)
+func (a *Adapter) FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
 ```
 
-Calls:
-- `GET /repos/:owner/:repo/pulls/:number/reviews` — top-level review bodies.
-- `GET /repos/:owner/:repo/pulls/:number/comments` — inline review comments.
-- For each inline comment, use the GraphQL `pullRequestReview` API to get
-  `isResolved` on the parent thread, OR use the REST
-  `/repos/:owner/:repo/pulls/:number/reviews/:review_id/comments` ladder.
-  Decision: GraphQL single call is cleaner; we already have a token. Use
-  `repository.pullRequest.reviewThreads(first: 100) { nodes { isResolved, comments { nodes { id, body, path, line, author, createdAt, url } } } }`.
+`repoIdentifier` is `"owner/repo"` for GitHub. Uses GraphQL
+`repository.pullRequest.reviewThreads(first: 100) { nodes { isResolved, comments { nodes { id, body, path, line, author, createdAt, url } } } }`
+in a single call to fetch inline thread comments along with their resolution
+state.
 
-Filter to `isResolved == false`. Return the flat list.
+Filter to `isResolved == false`. Return the flat list. Note: top-level review
+summary bodies from `/pulls/:n/reviews` are intentionally not fetched, so the
+`General` section is empty for GitHub PRs in the current implementation.
 
 **GitLab (`internal/adapter/glab/adapter.go`):**
 
 ```go
-func (a *Adapter) FetchReviewComments(ctx context.Context, projectPath string, iid int) ([]ReviewComment, error)
+func (a *Adapter) FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
 ```
 
-Uses `glab api /projects/:id/merge_requests/:iid/discussions`. Filter to
+`repoIdentifier` is the GitLab `projectPath`. Uses `glab api /projects/:id/merge_requests/:iid/discussions`. Filter to
 `resolved == false`. Each discussion's notes flatten into review comments;
 for inline comments, take `position.new_path` and `position.new_line`. For
 top-level discussions, leave path/line empty.
@@ -262,8 +266,12 @@ type FollowUpFromReviewReplanMsg struct {
 
 **New view: `internal/tui/views/overlay_review_followup.go`** — owns the PR
 picker, comment selection (split view), and re-plan confirmation modal as
-internal sub-states (`stagePicker | stageSelector | stageConfirm`). Holds:
-
+picker, comment selection (split view), and re-plan confirmation modal as
+internal sub-states (`stageLoading | stagePicker | stageSelector | stageConfirm`).
+`stageLoading` is the initial spinner state shown while review comments are
+being fetched; the model transitions to `stagePicker` (>1 PR with unresolved
+comments) or directly to `stageSelector` (exactly 1 PR) once results arrive.
+Holds:
 ```go
 type ReviewFollowupModel struct {
     workItemID string

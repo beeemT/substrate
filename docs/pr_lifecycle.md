@@ -505,6 +505,11 @@ and the rare case (the feedback invalidates the plan).
 
 Both modes use the same canonical template, grouped by repo → file:
 
+Note: for GitHub PRs the General section is typically empty because top-level
+review summary bodies (`/pulls/:n/reviews`) are not fetched in the current
+implementation; only inline thread comments populate the per-file sections.
+GitLab MR top-level discussions populate the General section as expected.
+
 ```
 ## Review comments to address
 
