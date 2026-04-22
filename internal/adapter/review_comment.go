@@ -8,12 +8,12 @@ import (
 
 // ReviewComment is a normalized PR/MR review comment.
 type ReviewComment struct {
-	ID            string    // provider-specific stable identifier (string form)
+	ID            string // provider-specific stable identifier (string form)
 	ReviewerLogin string
 	Body          string
-	Path          string    // empty for top-level comments
-	Line          int       // 0 for top-level
-	URL           string    // direct link to the comment
+	Path          string // empty for top-level comments
+	Line          int    // 0 for top-level
+	URL           string // direct link to the comment
 	CreatedAt     time.Time
 }
 
@@ -53,5 +53,9 @@ func (d *ReviewCommentDispatcher) FetchReviewComments(ctx context.Context, provi
 	if !ok {
 		return nil, fmt.Errorf("no review comment fetcher registered for provider %q", provider)
 	}
-	return fetcher.FetchReviewComments(ctx, repoIdentifier, number)
+	comments, err := fetcher.FetchReviewComments(ctx, repoIdentifier, number)
+	if err != nil {
+		return nil, fmt.Errorf("fetch review comments for %s %s#%d: %w", provider, repoIdentifier, number, err)
+	}
+	return comments, nil
 }

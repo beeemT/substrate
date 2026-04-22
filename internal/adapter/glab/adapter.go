@@ -1228,6 +1228,22 @@ func (a *GlabAdapter) fetchMRWebURL(ctx context.Context, projectPath string, iid
 // shared adapter.ReviewComment values and appends them to dst.
 func appendGlabDiscussionComments(dst []coreadapter.ReviewComment, discussions []glabDiscussionFull, webURL string) []coreadapter.ReviewComment {
 	for _, d := range discussions {
+		// Resolution rule: a discussion is fully resolved iff it has at least one
+		// resolvable note and every resolvable note has Resolved==true. Skip those.
+		// Discussions with no resolvable notes (e.g. a lone system reply) are kept.
+		var resolvable, anyUnresolved bool
+		for i := range d.Notes {
+			if !d.Notes[i].Resolvable {
+				continue
+			}
+			resolvable = true
+			if !d.Notes[i].Resolved {
+				anyUnresolved = true
+			}
+		}
+		if resolvable && !anyUnresolved {
+			continue
+		}
 		// Take the first non-system note as the discussion's anchor comment.
 		var note *glabNoteFull
 		for i := range d.Notes {
@@ -1238,9 +1254,6 @@ func appendGlabDiscussionComments(dst []coreadapter.ReviewComment, discussions [
 			break
 		}
 		if note == nil {
-			continue
-		}
-		if note.Resolvable && note.Resolved {
 			continue
 		}
 		dst = append(dst, glabNoteToReviewComment(*note, webURL))
