@@ -234,18 +234,43 @@ func TestReviewFollowup_StaleDispatch_EmitsRefetch(t *testing.T) {
 	// Fetch stamped 10 minutes ago → stale.
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now().Add(-10*time.Minute))
 	m.ApplyPickerAllForTest()
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected dispatch cmd")
 	}
-	msg := cmd()
-	refetch, ok := msg.(views.ReviewFollowupRefetchMsg)
-	if !ok {
-		t.Fatalf("expected refetch msg when stale, got %T", msg)
-	}
+	// Stale dispatch returns a tea.Batch of (spinner.Tick, refetch). Find the
+	// refetch payload by executing every command and inspecting BatchMsg if needed.
+	refetch := findRefetchMsg(t, cmd)
 	if refetch.Mode != "address" {
 		t.Fatalf("expected mode=address, got %q", refetch.Mode)
 	}
+	// Stale dispatch also gates further input by transitioning to loading stage.
+	if m2.Stage() != views.ReviewFollowupStageLoading() {
+		t.Fatalf("expected loading stage during refetch, got %v", m2.Stage())
+	}
+}
+
+// findRefetchMsg drains the cmd (which may be a tea.Batch) and returns the
+// ReviewFollowupRefetchMsg buried inside.
+func findRefetchMsg(t *testing.T, cmd tea.Cmd) views.ReviewFollowupRefetchMsg {
+	t.Helper()
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if r, ok := sub().(views.ReviewFollowupRefetchMsg); ok {
+				return r
+			}
+		}
+		t.Fatalf("refetch msg not found in batch of %d", len(batch))
+	}
+	if r, ok := msg.(views.ReviewFollowupRefetchMsg); ok {
+		return r
+	}
+	t.Fatalf("expected refetch msg, got %T", msg)
+	return views.ReviewFollowupRefetchMsg{}
 }
 
 func TestReviewFollowup_SelectAll_SelectNone(t *testing.T) {

@@ -184,9 +184,12 @@ type ReviewComment struct {
     Body          string
     Path          string    // empty for top-level comments
     Line          int       // 0 for top-level
-    URL           string    // direct link to the comment
+    URL           string    // direct link to the comment (GitHub: always set;
+                            // GitLab: derived from <mr.web_url>#note_<id>, may be
+                            // empty if the MR detail fetch failed)
     CreatedAt     time.Time
-    Resolved      bool      // filtered out at fetch boundary, kept here for completeness
+    // Note: resolved comments are filtered at the fetch boundary and never
+    // surfaced to consumers, so the type carries no Resolved field.
 }
 
 type ReviewCommentFetcher interface {

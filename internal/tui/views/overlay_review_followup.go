@@ -245,10 +245,6 @@ func (m *ReviewFollowupModel) MergeRefetch(commentsByItem map[string][]adapter.R
 			scoped = append(scoped, it)
 		}
 	}
-	if len(scoped) == 0 {
-		// Fall back to all PRs with unresolved comments.
-		scoped = withUnresolved
-	}
 	m.scopedItems = scoped
 	m.rebuildSelectorRows()
 	if m.selectorCursor >= len(m.selectorRows) {
@@ -465,7 +461,7 @@ func (m ReviewFollowupModel) viewPicker() string {
 			mark = "[x]"
 		}
 		count := len(m.commentsByItem[it.ID])
-		line := fmt.Sprintf("%s  %s %s  (%d comment%s)", mark, it.RepoName, it.Ref, count, plural(count))
+		line := fmt.Sprintf("%s  %s %s  (%d comment%s)", mark, it.RepoName, it.Ref, count, pluralS(count))
 		if i == m.pickerCursor {
 			line = m.styles.Active.Render("▶ " + line)
 		} else {
@@ -555,7 +551,11 @@ func (m ReviewFollowupModel) renderSelectorList(width, height int) string {
 			}
 			line = "  " + m.styles.Subtitle.Render(label)
 		case rowKindComment:
-			c := m.findComment(row.itemID, row.commentID)
+			c, ok := m.findComment(row.itemID, row.commentID)
+			if !ok {
+				line = m.styles.Muted.Render("    [missing comment]")
+				break
+			}
 			mark := "[ ]"
 			if m.commentSelected[row.commentID] {
 				mark = "[x]"
@@ -581,7 +581,10 @@ func (m ReviewFollowupModel) renderPreview(width, height int) string {
 	if row == nil || row.kind != rowKindComment {
 		return m.styles.Muted.Render("Select a comment to preview")
 	}
-	c := m.findComment(row.itemID, row.commentID)
+	c, ok := m.findComment(row.itemID, row.commentID)
+	if !ok {
+		return m.styles.Muted.Render("Comment unavailable")
+	}
 	header := m.styles.Title.Render(c.ReviewerLogin)
 	if !c.CreatedAt.IsZero() {
 		header += m.styles.Muted.Render("  " + c.CreatedAt.Format("2006-01-02 15:04"))
@@ -718,13 +721,16 @@ func (m ReviewFollowupModel) currentRow() *reviewSelectorRow {
 	return &r
 }
 
-func (m ReviewFollowupModel) findComment(itemID, commentID string) adapter.ReviewComment {
+// findComment looks up a comment by item/id and reports whether it was found.
+// Returns the zero value with ok=false when the row is desynced from
+// commentsByItem (e.g. mid-MergeRefetch); callers MUST check ok before rendering.
+func (m ReviewFollowupModel) findComment(itemID, commentID string) (adapter.ReviewComment, bool) {
 	for _, c := range m.commentsByItem[itemID] {
 		if c.ID == commentID {
-			return c
+			return c, true
 		}
 	}
-	return adapter.ReviewComment{}
+	return adapter.ReviewComment{}, false
 }
 
 // toggleAtCursor toggles the focused row. For comment rows, flips that comment.
@@ -841,6 +847,11 @@ func (m ReviewFollowupModel) Update(msg tea.Msg) (ReviewFollowupModel, tea.Cmd) 
 	}
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
+		// Drop tick messages once the loading stage ends; otherwise the spinner
+		// keeps requesting fresh ticks for the lifetime of the overlay.
+		if m.stage != reviewFollowupStageLoading {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -931,7 +942,8 @@ func (m ReviewFollowupModel) handleKeySelector(msg tea.KeyMsg) (ReviewFollowupMo
 		if !m.HasAnySelection() {
 			return m, nil
 		}
-		return m, m.dispatchAddress()
+		cmd := m.dispatchAddress()
+		return m, cmd
 	case "p":
 		if !m.HasAnySelection() {
 			return m, nil
@@ -944,7 +956,8 @@ func (m ReviewFollowupModel) handleKeySelector(msg tea.KeyMsg) (ReviewFollowupMo
 func (m ReviewFollowupModel) handleKeyConfirm(msg tea.KeyMsg) (ReviewFollowupModel, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		return m, m.dispatchReplan()
+		cmd := m.dispatchReplan()
+		return m, cmd
 	case "n", "N", keyEsc:
 		m.stage = reviewFollowupStageSelector
 	}
@@ -952,14 +965,20 @@ func (m ReviewFollowupModel) handleKeyConfirm(msg tea.KeyMsg) (ReviewFollowupMod
 }
 
 // dispatchAddress emits a ReviewFollowupRefetchMsg if the data is stale, otherwise
-// a FollowUpFromReviewAddressMsg with the per-repo formatted feedback.
-func (m ReviewFollowupModel) dispatchAddress() tea.Cmd {
+// a FollowUpFromReviewAddressMsg with the per-repo formatted feedback. When stale,
+// the overlay also moves to the loading stage so input is gated and the spinner
+// resumes — preventing duplicate dispatches while the refetch is in flight.
+func (m *ReviewFollowupModel) dispatchAddress() tea.Cmd {
 	if m.IsStale(time.Now()) {
+		m.stage = reviewFollowupStageLoading
 		workItemID := m.workItemID
 		items := m.items
-		return func() tea.Msg {
-			return ReviewFollowupRefetchMsg{WorkItemID: workItemID, Items: items, Mode: "address"}
-		}
+		return tea.Batch(
+			m.spinner.Tick,
+			func() tea.Msg {
+				return ReviewFollowupRefetchMsg{WorkItemID: workItemID, Items: items, Mode: "address"}
+			},
+		)
 	}
 	perRepo := m.FormatPerRepo()
 	workItemID := m.workItemID
@@ -969,13 +988,18 @@ func (m ReviewFollowupModel) dispatchAddress() tea.Cmd {
 }
 
 // dispatchReplan emits a ReviewFollowupRefetchMsg if stale, else a single replan msg.
-func (m ReviewFollowupModel) dispatchReplan() tea.Cmd {
+// When stale, transitions to loading to gate further input.
+func (m *ReviewFollowupModel) dispatchReplan() tea.Cmd {
 	if m.IsStale(time.Now()) {
+		m.stage = reviewFollowupStageLoading
 		workItemID := m.workItemID
 		items := m.items
-		return func() tea.Msg {
-			return ReviewFollowupRefetchMsg{WorkItemID: workItemID, Items: items, Mode: "replan"}
-		}
+		return tea.Batch(
+			m.spinner.Tick,
+			func() tea.Msg {
+				return ReviewFollowupRefetchMsg{WorkItemID: workItemID, Items: items, Mode: "replan"}
+			},
+		)
 	}
 	feedback := m.FormatAllSelected()
 	workItemID := m.workItemID
@@ -985,13 +1009,6 @@ func (m ReviewFollowupModel) dispatchReplan() tea.Cmd {
 }
 
 // --- helpers ---
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
 
 func padRight(s string, w int) string {
 	if w <= 0 {

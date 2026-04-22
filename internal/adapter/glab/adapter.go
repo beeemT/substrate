@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1131,7 +1132,6 @@ func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
 	return err
 }
 
-
 type glabDiscussionFull struct {
 	ID    string         `json:"id"`
 	Notes []glabNoteFull `json:"notes"`
@@ -1152,30 +1152,81 @@ type glabNoteFullAuthor struct {
 	Username string `json:"username"`
 }
 
+// glabNotePosition includes both new_* and old_* anchors. Reviewer notes on
+// removed lines populate only old_path/old_line; new_line is null in that case.
 type glabNotePosition struct {
 	NewPath string `json:"new_path"`
 	NewLine int    `json:"new_line"`
+	OldPath string `json:"old_path"`
+	OldLine int    `json:"old_line"`
 }
+
+// glabMRRef is the minimal MR payload used to recover web_url for URL building.
+type glabMRRef struct {
+	WebURL string `json:"web_url"`
+}
+
+// glabDiscussionsPageSize controls per-page size for the discussions endpoint.
+// 100 is the GitLab API maximum.
+const glabDiscussionsPageSize = 100
 
 // Provider returns the provider identifier for ReviewCommentFetcher.
 func (a *GlabAdapter) Provider() string { return "gitlab" }
 
 // FetchReviewComments returns unresolved review comments for the given MR.
 // projectPath is the GitLab project path (e.g. "group/sub/repo"); it is URL-escaped here.
-// iid is the merge request IID.
+// iid is the merge request IID. The endpoint is paginated explicitly so MRs
+// with more than glabDiscussionsPageSize discussions are fully covered.
 func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath string, iid int) ([]coreadapter.ReviewComment, error) {
-	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions?per_page=100", url.PathEscape(projectPath), iid)
+	webURL, err := a.fetchMRWebURL(ctx, projectPath, iid)
+	if err != nil {
+		// Non-fatal: URL field is best-effort. Continue with empty webURL.
+		slog.Warn("glab: fetch MR web_url failed", "project", projectPath, "iid", iid, "error", err)
+	}
+
+	var comments []coreadapter.ReviewComment
+	for page := 1; ; page++ {
+		endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions?per_page=%d&page=%d",
+			url.PathEscape(projectPath), iid, glabDiscussionsPageSize, page)
+		output, runErr := a.runner(ctx, a.workspaceDir, "glab", "api", endpoint)
+
+		if runErr != nil {
+			return nil, fmt.Errorf("glab discussions for !%d page %d: %w (output: %s)", iid, page, runErr, strings.TrimSpace(string(output)))
+		}
+		var discussions []glabDiscussionFull
+		if jsonErr := json.Unmarshal(output, &discussions); jsonErr != nil {
+			return nil, fmt.Errorf("parse glab discussions page %d: %w", page, jsonErr)
+		}
+		if len(discussions) == 0 {
+			break
+		}
+		comments = appendGlabDiscussionComments(comments, discussions, webURL)
+		slog.Info("DEBUG glab discussions page", "page", page, "got", len(discussions), "comments_so_far", len(comments))
+		if len(discussions) < glabDiscussionsPageSize {
+			break
+		}
+	}
+	return comments, nil
+}
+
+// fetchMRWebURL queries the merge_request endpoint to recover web_url, used for
+// constructing per-note links. Empty result is treated as "unknown" by callers.
+func (a *GlabAdapter) fetchMRWebURL(ctx context.Context, projectPath string, iid int) (string, error) {
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d", url.PathEscape(projectPath), iid)
 	output, err := a.runner(ctx, a.workspaceDir, "glab", "api", endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("glab discussions for !%d: %w (output: %s)", iid, err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("glab api %s: %w (output: %s)", endpoint, err, strings.TrimSpace(string(output)))
 	}
-
-	var discussions []glabDiscussionFull
-	if err := json.Unmarshal(output, &discussions); err != nil {
-		return nil, fmt.Errorf("parse glab discussions: %w", err)
+	var ref glabMRRef
+	if jsonErr := json.Unmarshal(output, &ref); jsonErr != nil {
+		return "", fmt.Errorf("parse glab mr ref: %w", jsonErr)
 	}
+	return strings.TrimSpace(ref.WebURL), nil
+}
 
-	comments := make([]coreadapter.ReviewComment, 0, len(discussions))
+// appendGlabDiscussionComments converts unresolved discussions on a page into
+// shared adapter.ReviewComment values and appends them to dst.
+func appendGlabDiscussionComments(dst []coreadapter.ReviewComment, discussions []glabDiscussionFull, webURL string) []coreadapter.ReviewComment {
 	for _, d := range discussions {
 		// Take the first non-system note as the discussion's anchor comment.
 		var note *glabNoteFull
@@ -1192,33 +1243,51 @@ func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath strin
 		if note.Resolvable && note.Resolved {
 			continue
 		}
+		dst = append(dst, glabNoteToReviewComment(*note, webURL))
+	}
+	return dst
+}
 
-		createdAt, parseErr := time.Parse(time.RFC3339Nano, note.CreatedAt)
-		if parseErr != nil {
-			createdAt, parseErr = time.Parse(time.RFC3339, note.CreatedAt)
-		}
-		if parseErr != nil {
-			slog.Warn("glab: failed to parse review comment timestamp", "created_at", note.CreatedAt, "error", parseErr)
-			createdAt = time.Time{}
-		}
-
-		path := ""
-		line := 0
-		if note.Position != nil {
-			path = note.Position.NewPath
-			line = note.Position.NewLine
-		}
-
-		comments = append(comments, coreadapter.ReviewComment{
-			ID:            fmt.Sprintf("%d", note.ID),
-			ReviewerLogin: note.Author.Username,
-			Body:          note.Body,
-			Path:          path,
-			Line:          line,
-			URL:           "",
-			CreatedAt:     createdAt,
-		})
+// glabNoteToReviewComment normalizes a single non-system, non-resolved note.
+// Position fields prefer new_path/new_line; when those are absent (note anchors
+// to a removed line) it falls back to old_path/old_line.
+func glabNoteToReviewComment(note glabNoteFull, webURL string) coreadapter.ReviewComment {
+	createdAt, parseErr := time.Parse(time.RFC3339Nano, note.CreatedAt)
+	if parseErr != nil {
+		createdAt, parseErr = time.Parse(time.RFC3339, note.CreatedAt)
+	}
+	if parseErr != nil {
+		slog.Warn("glab: failed to parse review comment timestamp", "created_at", note.CreatedAt, "error", parseErr)
+		createdAt = time.Time{}
 	}
 
-	return comments, nil
+	path, line := "", 0
+	if note.Position != nil {
+		switch {
+		case note.Position.NewPath != "" && note.Position.NewLine != 0:
+			path = note.Position.NewPath
+			line = note.Position.NewLine
+		case note.Position.OldPath != "":
+			path = note.Position.OldPath
+			line = note.Position.OldLine
+		case note.Position.NewPath != "":
+			// new_line is zero/null but a new_path is present (rare).
+			path = note.Position.NewPath
+		}
+	}
+
+	noteURL := ""
+	if webURL != "" {
+		noteURL = webURL + "#note_" + strconv.FormatInt(note.ID, 10)
+	}
+
+	return coreadapter.ReviewComment{
+		ID:            strconv.FormatInt(note.ID, 10),
+		ReviewerLogin: note.Author.Username,
+		Body:          note.Body,
+		Path:          path,
+		Line:          line,
+		URL:           noteURL,
+		CreatedAt:     createdAt,
+	}
 }

@@ -635,6 +635,11 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 		return viewsServicesReload{}, err
 	}
 
+	reviewCommentDispatcher, reviewCommentWarnings := app.BuildReviewCommentFetcher(ctx, cfg, current.WorkspaceDir)
+	for _, w := range reviewCommentWarnings {
+		slog.Warn("settings rebuild: review comment fetcher init", "warning", w)
+	}
+
 	return viewsServicesReload{
 		ConfigPath:   cfgPath,
 		SessionsDir:  sessionsDir,
@@ -669,7 +674,7 @@ func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Confi
 			GitClient:             gitClient,
 			Bus:                   bus,
 			AdapterErrors:         adapterErrors,
-			ReviewComments:        app.BuildReviewCommentFetcher(ctx, cfg, current.WorkspaceDir),
+			ReviewComments:        reviewCommentDispatcher,
 			InstanceID:            current.InstanceID,
 			WorkspaceID:           current.WorkspaceID,
 			WorkspaceDir:          current.WorkspaceDir,

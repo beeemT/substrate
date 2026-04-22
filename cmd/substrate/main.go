@@ -145,6 +145,9 @@ func run() error {
 		return fmt.Errorf("load settings snapshot: %w", err)
 	}
 
+	reviewCommentDispatcher, reviewCommentWarnings := app.BuildReviewCommentFetcher(ctx, cfg, workspace.Dir)
+	startupWarnings := append(adapters.warnings, reviewCommentWarnings...)
+
 	return views.RunTUI(views.Services{
 		Session:               services.workItem,
 		Plan:                  services.plan,
@@ -172,7 +175,7 @@ func run() error {
 		GitClient:             runtime.gitClient,
 		Bus:                   bus,
 		AdapterErrors:         adapters.adapterErrors,
-		StartupWarnings:       adapters.warnings,
+		StartupWarnings:       startupWarnings,
 		LogStore:              logStore,
 		LogToasts:             logToasts,
 		InstanceID:            instanceID,
@@ -185,7 +188,7 @@ func run() error {
 		Resumption:            runtime.resumption,
 		Foreman:               runtime.foreman,
 		SessionRegistry:       runtime.registry,
-		ReviewComments:        app.BuildReviewCommentFetcher(ctx, cfg, workspace.Dir),
+		ReviewComments:        reviewCommentDispatcher,
 	})
 }
 

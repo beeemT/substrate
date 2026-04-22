@@ -99,27 +99,28 @@ func BuildRepoSources(ctx context.Context, cfg *config.Config) []adapter.RepoSou
 // BuildReviewCommentFetcher constructs a dispatcher capable of fetching unresolved
 // review comments from every configured provider. The dispatcher is safe to use
 // even when a provider is not configured — it returns a descriptive error for
-// unknown providers.
-func BuildReviewCommentFetcher(ctx context.Context, cfg *config.Config, workspaceDir string) *adapter.ReviewCommentDispatcher {
+// unknown providers. The second return value contains human-readable warnings
+// for providers that were detected but could not be initialised; callers MUST
+// surface these via Services.StartupWarnings (matches BuildWorkItemAdapters).
+func BuildReviewCommentFetcher(ctx context.Context, cfg *config.Config, workspaceDir string) (*adapter.ReviewCommentDispatcher, []string) {
 	fetchers := make(map[string]adapter.ReviewCommentFetcher)
+	var warnings []string
 	if config.GitHubAuthConfigured(cfg.Adapters.GitHub) {
 		ghAdapter, err := githubadapter.New(ctx, cfg.Adapters.GitHub)
 		if err != nil {
-			slog.Warn("skipping github review comment fetcher", "error", err)
+			slog.Warn("skipping github review comment fetcher", "err", err)
+			warnings = append(warnings, "GitHub review comments: "+err.Error())
 		} else {
 			fetchers[ghAdapter.Provider()] = ghAdapter
 		}
 	}
 	// GitLab adapter does not need network auth up front — it shells out to glab,
-	// which manages its own auth. Construct unconditionally.
-	glAdapter := gladapter.New(cfg.Adapters.Glab)
-	if workspaceDir != "" {
-		// Constructing via NewWithEventRepo primes workspaceDir so the fetcher can
-		// run glab from a stable directory.
-		glAdapter = gladapter.NewWithEventRepo(cfg.Adapters.Glab, adapter.ReviewArtifactRepos{}, workspaceDir)
-	}
+	// which manages its own auth. Construct via NewWithEventRepo so workspaceDir
+	// (when present) is wired up; both constructors fall through to the same
+	// runner with an empty workspaceDir as default.
+	glAdapter := gladapter.NewWithEventRepo(cfg.Adapters.Glab, adapter.ReviewArtifactRepos{}, workspaceDir)
 	fetchers[glAdapter.Provider()] = glAdapter
-	return adapter.NewReviewCommentDispatcher(fetchers)
+	return adapter.NewReviewCommentDispatcher(fetchers), warnings
 }
 
 // BuildRepoLifecycleAdapters constructs repo lifecycle adapters for the current workspace.

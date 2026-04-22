@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1179,28 +1180,58 @@ func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, wor
 // in parallel. mode is either "" (initial fetch → ReviewCommentsFetchedMsg) or
 // "address"/"replan" (silent re-fetch → ReviewCommentsRefetchedMsg carrying the
 // dispatch intent).
+//
+// Per-item failures are captured in the message's Err but partial successes are
+// preserved in Result; callers MUST check len(Result) before treating Err as
+// fatal so a transient failure on one repo does not discard data from others.
 func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID string, items []ArtifactItem, mode string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		result := make(map[string][]adapter.ReviewComment, len(items))
-		var firstErr error
+		type fetchOutcome struct {
+			itemID   string
+			repoName string
+			ref      string
+			comments []adapter.ReviewComment
+			err      error
+		}
+		outcomes := make(chan fetchOutcome, len(items))
+		var wg sync.WaitGroup
 		for _, it := range items {
 			identifier, number, ok := parseArtifactFetchArgs(it)
 			if !ok {
 				slog.Warn("skipping artifact with unparsable ref", "ref", it.Ref, "repo", it.RepoName)
 				continue
 			}
-			comments, err := fetcher.FetchReviewComments(ctx, it.Provider, identifier, number)
-			if err != nil {
-				slog.Warn("fetch review comments failed", "provider", it.Provider, "repo", it.RepoName, "ref", it.Ref, "error", err)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				comments, err := fetcher.FetchReviewComments(ctx, it.Provider, identifier, number)
+				outcomes <- fetchOutcome{
+					itemID:   it.ID,
+					repoName: it.RepoName,
+					ref:      it.Ref,
+					comments: comments,
+					err:      err,
+				}
+			}()
+		}
+		go func() {
+			wg.Wait()
+			close(outcomes)
+		}()
+		result := make(map[string][]adapter.ReviewComment, len(items))
+		var firstErr error
+		for o := range outcomes {
+			if o.err != nil {
+				slog.Warn("fetch review comments failed", "repo", o.repoName, "ref", o.ref, "error", o.err)
 				if firstErr == nil {
-					firstErr = fmt.Errorf("%s %s: %w", it.RepoName, it.Ref, err)
+					firstErr = fmt.Errorf("%s %s: %w", o.repoName, o.ref, o.err)
 				}
 				continue
 			}
-			if len(comments) > 0 {
-				result[it.ID] = comments
+			if len(o.comments) > 0 {
+				result[o.itemID] = o.comments
 			}
 		}
 		fetchedAt := time.Now()

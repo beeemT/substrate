@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -31,11 +33,21 @@ func graphqlRespRoundTripper(t *testing.T, body any) roundTripFunc {
 }
 
 func graphqlReviewThreadsResp(threads []map[string]any) map[string]any {
+	return graphqlReviewThreadsRespPaged(threads, false, "")
+}
+
+// graphqlReviewThreadsRespPaged emits a payload with explicit pageInfo so
+// pagination tests can assert hasNextPage / endCursor handling.
+func graphqlReviewThreadsRespPaged(threads []map[string]any, hasNextPage bool, endCursor string) map[string]any {
 	return map[string]any{
 		"data": map[string]any{
 			"repository": map[string]any{
 				"pullRequest": map[string]any{
 					"reviewThreads": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": hasNextPage,
+							"endCursor":   endCursor,
+						},
 						"nodes": threads,
 					},
 				},
@@ -160,5 +172,64 @@ func TestFetchReviewComments_NilPR(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("comments = %+v, want nil", got)
+	}
+}
+
+// TestFetchReviewComments_Paginates verifies the loop continues until pageInfo
+// reports no further pages, ensuring PRs with >100 review threads are fully
+// surfaced rather than silently truncated.
+func TestFetchReviewComments_Paginates(t *testing.T) {
+	var gqlCalls int
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/graphql":
+			gqlCalls++
+			var req1 struct {
+				Variables struct {
+					Cursor *string `json:"cursor"`
+				} `json:"variables"`
+			}
+			buf := new(strings.Builder)
+			_, _ = io.Copy(buf, req.Body)
+			if err := json.Unmarshal([]byte(buf.String()), &req1); err != nil {
+				t.Fatalf("decode graphql request body: %v", err)
+			}
+			if gqlCalls == 1 {
+				if req1.Variables.Cursor != nil {
+					t.Fatalf("first call cursor = %v, want nil", *req1.Variables.Cursor)
+				}
+				resp := graphqlReviewThreadsRespPaged([]map[string]any{
+					thread(false, comment("c1", "first", "a.go", 1, "alice")),
+				}, true, "CURSOR_A")
+				return jsonResp(t, http.StatusOK, resp), nil
+			}
+			if req1.Variables.Cursor == nil || *req1.Variables.Cursor != "CURSOR_A" {
+				t.Fatalf("second call cursor = %v, want CURSOR_A", req1.Variables.Cursor)
+			}
+			resp := graphqlReviewThreadsRespPaged([]map[string]any{
+				thread(false, comment("c2", "second", "b.go", 2, "bob")),
+				thread(true, comment("c3", "resolved", "c.go", 3, "carol")),
+			}, false, "")
+			return jsonResp(t, http.StatusOK, resp), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+			return nil, nil
+		}
+	})
+	a := newTestAdapter(t, rt)
+	got, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	if err != nil {
+		t.Fatalf("FetchReviewComments: %v", err)
+	}
+	if gqlCalls != 2 {
+		t.Fatalf("graphql call count = %d, want 2", gqlCalls)
+	}
+	if len(got) != 2 {
+		t.Fatalf("comments = %d, want 2 (pagination merged): %+v", len(got), got)
+	}
+	if got[0].ID != "c1" || got[1].ID != "c2" {
+		t.Fatalf("ids = %s,%s want c1,c2", got[0].ID, got[1].ID)
 	}
 }

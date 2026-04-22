@@ -1284,11 +1284,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, ""))
 
 	case ReviewCommentsFetchedMsg:
-		if msg.Err != nil {
+		if msg.Err != nil && len(msg.Result) == 0 {
 			a.toasts.AddToast(fmt.Sprintf("Failed to fetch review comments: %v", msg.Err), components.ToastError)
 			a.activeOverlay = overlayNone
 			a.reviewFollowupOverlay.Close()
 			return a, nil
+		}
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Some review comments unavailable: %v", msg.Err), components.ToastWarning)
 		}
 		if keep := a.reviewFollowupOverlay.ApplyFetchResult(msg.Result, msg.FetchedAt); !keep {
 			a.toasts.AddToast("No outstanding review comments", components.ToastInfo)
@@ -1304,11 +1307,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, msg.Mode)
 
 	case ReviewCommentsRefetchedMsg:
-		if msg.Err != nil {
+		if msg.Err != nil && len(msg.Result) == 0 {
 			a.toasts.AddToast(fmt.Sprintf("Failed to refresh review comments: %v", msg.Err), components.ToastError)
 			a.activeOverlay = overlayNone
 			a.reviewFollowupOverlay.Close()
 			return a, nil
+		}
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Some review comments unavailable: %v", msg.Err), components.ToastWarning)
 		}
 		dropped := a.reviewFollowupOverlay.MergeRefetch(msg.Result, msg.FetchedAt)
 		if dropped > 0 {

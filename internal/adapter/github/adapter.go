@@ -1906,16 +1906,21 @@ func (a *GithubAdapter) onPRMerged(ctx context.Context, payload string) error {
 	return a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]any{"state": "closed"}, nil)
 }
 
-
 func (a *GithubAdapter) Provider() string { return adapterName }
 
-const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!) {
+const reviewThreadsPageSize = 100
+
+// reviewThreadsQuery paginates over review threads using GraphQL cursors.
+// Inner comments(first:1) is sufficient — only the opening comment of each
+// thread is surfaced, so requesting more would be wasted work.
+const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
   repository(owner:$owner,name:$name) {
     pullRequest(number:$number) {
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
-          comments(first:50) {
+          comments(first:1) {
             nodes {
               id
               body
@@ -1944,16 +1949,22 @@ type githubReviewCommentNode struct {
 	} `json:"author"`
 }
 
+type githubReviewThreadNode struct {
+	IsResolved bool `json:"isResolved"`
+	Comments   struct {
+		Nodes []githubReviewCommentNode `json:"nodes"`
+	} `json:"comments"`
+}
+
 type githubReviewThreadsResponse struct {
 	Repository *struct {
 		PullRequest *struct {
 			ReviewThreads struct {
-				Nodes []struct {
-					IsResolved bool `json:"isResolved"`
-					Comments   struct {
-						Nodes []githubReviewCommentNode `json:"nodes"`
-					} `json:"comments"`
-				} `json:"nodes"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+				Nodes []githubReviewThreadNode `json:"nodes"`
 			} `json:"reviewThreads"`
 		} `json:"pullRequest"`
 	} `json:"repository"`
@@ -1961,64 +1972,80 @@ type githubReviewThreadsResponse struct {
 
 // FetchReviewComments returns the unresolved review comment threads for the
 // given PR. Only the opening (first) comment of each unresolved thread is
-// surfaced.
+// surfaced. The query paginates through all review threads via GraphQL cursors
+// so PRs with more than reviewThreadsPageSize threads are fully covered.
 func (a *GithubAdapter) FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]adapter.ReviewComment, error) {
 	owner, repo, ok := strings.Cut(repoIdentifier, "/")
 	if !ok || owner == "" || repo == "" {
 		return nil, fmt.Errorf("invalid github repo identifier %q (want owner/repo)", repoIdentifier)
 	}
-	var resp githubReviewThreadsResponse
-	vars := map[string]any{"owner": owner, "name": repo, "number": number}
-	if err := a.graphql(ctx, reviewThreadsQuery, vars, &resp); err != nil {
-		return nil, fmt.Errorf("fetch review comments: %w", err)
-	}
-	if resp.Repository == nil || resp.Repository.PullRequest == nil {
-		return nil, nil
-	}
-	threads := resp.Repository.PullRequest.ReviewThreads.Nodes
-	out := make([]adapter.ReviewComment, 0, len(threads))
-	for _, th := range threads {
-		if th.IsResolved {
-			continue
+	var (
+		out    []adapter.ReviewComment
+		cursor *string
+	)
+	for {
+		var resp githubReviewThreadsResponse
+		vars := map[string]any{"owner": owner, "name": repo, "number": number, "cursor": cursor}
+		if err := a.graphql(ctx, reviewThreadsQuery, vars, &resp); err != nil {
+			return nil, fmt.Errorf("fetch review comments: %w", err)
 		}
-		if len(th.Comments.Nodes) == 0 {
-			continue
+		if resp.Repository == nil || resp.Repository.PullRequest == nil {
+			return out, nil
 		}
-		c := th.Comments.Nodes[0]
-		var createdAt time.Time
-		if c.CreatedAt != "" {
-			parsed, err := time.Parse(time.RFC3339, c.CreatedAt)
-			if err != nil {
-				slog.Warn("github: invalid review comment createdAt", "value", c.CreatedAt, "error", err)
-			} else {
-				createdAt = parsed
+		threads := resp.Repository.PullRequest.ReviewThreads.Nodes
+		for _, th := range threads {
+			if th.IsResolved || len(th.Comments.Nodes) == 0 {
+				continue
 			}
+			out = append(out, githubThreadToReviewComment(th.Comments.Nodes[0]))
 		}
-		var pathStr string
-		if c.Path != nil {
-			pathStr = *c.Path
+		pageInfo := resp.Repository.PullRequest.ReviewThreads.PageInfo
+		if !pageInfo.HasNextPage || pageInfo.EndCursor == "" {
+			return out, nil
 		}
-		var line int
-		if c.Line != nil && pathStr != "" {
-			line = *c.Line
-		}
-		var reviewer string
-		if c.Author != nil {
-			reviewer = c.Author.Login
-		}
-		out = append(out, adapter.ReviewComment{
-			ID:            c.ID,
-			ReviewerLogin: reviewer,
-			Body:          c.Body,
-			Path:          pathStr,
-			Line:          line,
-			URL:           c.URL,
-			CreatedAt:     createdAt,
-		})
+		next := pageInfo.EndCursor
+		cursor = &next
 	}
-
-	return out, nil
 }
+
+// githubThreadToReviewComment normalizes a GraphQL comment node into the
+// shared adapter.ReviewComment type.
+func githubThreadToReviewComment(c githubReviewCommentNode) adapter.ReviewComment {
+	var createdAt time.Time
+	if c.CreatedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, c.CreatedAt)
+		if err != nil {
+			slog.Warn("github: invalid review comment createdAt", "value", c.CreatedAt, "error", err)
+		} else {
+			createdAt = parsed
+		}
+	}
+	var pathStr string
+	if c.Path != nil {
+		pathStr = *c.Path
+	}
+	var line int
+	if c.Line != nil && pathStr != "" {
+		line = *c.Line
+	}
+	var reviewer string
+	if c.Author != nil {
+		reviewer = c.Author.Login
+	}
+	return adapter.ReviewComment{
+		ID:            c.ID,
+		ReviewerLogin: reviewer,
+		Body:          c.Body,
+		Path:          pathStr,
+		Line:          line,
+		URL:           c.URL,
+		CreatedAt:     createdAt,
+	}
+}
+
+// maxGraphQLErrorBodyBytes caps the body slice embedded in error strings to
+// keep log/UI surfaces sane when an upstream proxy returns a large HTML page.
+const maxGraphQLErrorBodyBytes = 4 * 1024
 
 // graphql posts a GraphQL query to GitHub's /graphql endpoint, decoding the
 // `data` payload into dst. Returns a wrapped error containing all GraphQL
@@ -2048,10 +2075,10 @@ func (a *GithubAdapter) graphql(ctx context.Context, query string, variables map
 	}
 	trimmed := strings.TrimSpace(string(data))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: trimmed}
+		return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: truncateForError(trimmed)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("github graphql status %d: %s", resp.StatusCode, trimmed)
+		return fmt.Errorf("github graphql status %d: %s", resp.StatusCode, truncateForError(trimmed))
 	}
 	var wrapper struct {
 		Data   json.RawMessage `json:"data"`
@@ -2075,6 +2102,15 @@ func (a *GithubAdapter) graphql(ctx context.Context, query string, variables map
 	if err := json.Unmarshal(wrapper.Data, dst); err != nil {
 		return fmt.Errorf("decode graphql data: %w", err)
 	}
-
 	return nil
+}
+
+// truncateForError clamps a string to maxGraphQLErrorBodyBytes so error values
+// embedded in slog/UI surfaces do not balloon when an upstream proxy returns
+// a large HTML payload.
+func truncateForError(s string) string {
+	if len(s) <= maxGraphQLErrorBodyBytes {
+		return s
+	}
+	return s[:maxGraphQLErrorBodyBytes] + "…(truncated)"
 }
