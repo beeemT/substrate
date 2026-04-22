@@ -63,6 +63,13 @@ type ReviewFollowupModel struct {
 	stage      reviewFollowupStage
 	workItemID string
 
+	// generation increments on every Close/OpenLoading. In-flight fetches
+	// capture the value at launch and the App handler drops fetched/refetched
+	// messages whose Generation does not match the current overlay, so a fetch
+	// completing after the user cancels the overlay (or opens a new one) cannot
+	// mutate stale state.
+	generation int
+
 	// items is the ORIGINAL set of artifacts the fetch was launched for; preserved
 	// so re-fetch can replay against the same scope.
 	items []ArtifactItem
@@ -108,6 +115,10 @@ func (m ReviewFollowupModel) Active() bool { return m.active }
 // Stage exposes the current sub-view (used by tests / status hints).
 func (m ReviewFollowupModel) Stage() reviewFollowupStage { return m.stage }
 
+// Generation returns the current overlay generation. Bumped on every Close()
+// and OpenLoading() so async fetches can detect when their result is stale.
+func (m ReviewFollowupModel) Generation() int { return m.generation }
+
 // FetchedAt exposes the fetch timestamp; zero when never fetched.
 func (m ReviewFollowupModel) FetchedAt() time.Time { return m.fetchedAt }
 
@@ -126,9 +137,11 @@ func (m *ReviewFollowupModel) SetSize(w, h int) {
 	m.height = h
 }
 
-// Close hides the overlay and clears transient state.
+// Close hides the overlay and clears transient state. Bumps the generation so
+// any in-flight fetch's result message is recognized as stale by the App handler.
 func (m *ReviewFollowupModel) Close() {
 	m.active = false
+	m.generation++
 	m.stage = reviewFollowupStageLoading
 	m.workItemID = ""
 	m.items = nil
@@ -143,15 +156,16 @@ func (m *ReviewFollowupModel) Close() {
 	m.selectorCursor = 0
 }
 
-// OpenLoading puts the overlay into the loading stage for the given work item and
-// returns the spinner-tick command to start animation.
-func (m *ReviewFollowupModel) OpenLoading(workItemID string, items []ArtifactItem) tea.Cmd {
+// OpenLoading puts the overlay into the loading stage for the given work item.
+// Returns the captured generation (so the caller can tag the in-flight fetch)
+// alongside the spinner-tick command to start animation.
+func (m *ReviewFollowupModel) OpenLoading(workItemID string, items []ArtifactItem) (int, tea.Cmd) {
 	m.Close()
 	m.active = true
 	m.stage = reviewFollowupStageLoading
 	m.workItemID = workItemID
 	m.items = items
-	return m.spinner.Tick
+	return m.generation, m.spinner.Tick
 }
 
 // ApplyFetchResult populates the overlay with fetched comments, deciding the next stage.
@@ -207,6 +221,14 @@ func (m *ReviewFollowupModel) ApplyFetchResult(commentsByItem map[string][]adapt
 // Returns the count of previously-selected comments that no longer exist.
 func (m *ReviewFollowupModel) MergeRefetch(commentsByItem map[string][]adapter.ReviewComment, fetchedAt time.Time) int {
 	prevSelected := m.commentSelected
+	// Capture the comment ID under the cursor before rebuilding rows so we can
+	// re-anchor on it when it survives the refetch. Falling back to a positional
+	// clamp would silently land on a header row, where Space cascades a toggle
+	// across the whole repo/file — a destructive surprise after a refresh.
+	var prevCursorCommentID string
+	if row := m.currentRow(); row != nil && row.kind == rowKindComment {
+		prevCursorCommentID = row.commentID
+	}
 	m.commentsByItem = commentsByItem
 	m.fetchedAt = fetchedAt
 
@@ -247,10 +269,23 @@ func (m *ReviewFollowupModel) MergeRefetch(commentsByItem map[string][]adapter.R
 	}
 	m.scopedItems = scoped
 	m.rebuildSelectorRows()
-	if m.selectorCursor >= len(m.selectorRows) {
-		m.selectorCursor = m.firstCommentRow()
-	}
+	m.selectorCursor = m.cursorAfterRefetch(prevCursorCommentID)
 	return dropped
+}
+
+// cursorAfterRefetch returns the cursor index to use after MergeRefetch.
+// If the previously focused comment ID still exists, snap the cursor to that
+// row. Otherwise fall back to the first comment row so the cursor never lands
+// on a header (where Space cascades a toggle across the whole group).
+func (m ReviewFollowupModel) cursorAfterRefetch(prevCommentID string) int {
+	if prevCommentID != "" {
+		for i, r := range m.selectorRows {
+			if r.kind == rowKindComment && r.commentID == prevCommentID {
+				return i
+			}
+		}
+	}
+	return m.firstCommentRow()
 }
 
 // SelectedComments returns the user's current selection grouped by ArtifactItem.ID.
@@ -394,7 +429,7 @@ func (m ReviewFollowupModel) frameWidth() int {
 	if m.width <= 0 {
 		return reviewFollowupMaxFrameWidth
 	}
-	return min(max(60, m.width-4), reviewFollowupMaxFrameWidth)
+	return min(max(1, m.width-4), reviewFollowupMaxFrameWidth)
 }
 
 func (m ReviewFollowupModel) innerWidth() int {
@@ -408,7 +443,7 @@ func (m ReviewFollowupModel) frameHeight() int {
 		return 16
 	}
 	const chromeRows = 6
-	return max(8, m.height-chromeRows)
+	return max(1, m.height-chromeRows)
 }
 
 // View renders the active stage. Returns "" when inactive.
@@ -489,9 +524,11 @@ func (m ReviewFollowupModel) viewSelector() string {
 		components.RenderOverlayDivider(m.styles, iw),
 	}
 	bodyHeight := m.frameHeight()
-	// Split width 50/50 with 1 col separator.
-	leftWidth := max(20, (iw-1)/2)
-	rightWidth := max(20, iw-leftWidth-1)
+	// Split width 50/50 with 1 col separator. When the inner width is too narrow
+	// to honor a 20-col floor on each pane, divide what we have evenly so rows
+	// never exceed the frame and force lipgloss to wrap.
+	leftWidth := max(1, (iw-1)/2)
+	rightWidth := max(1, iw-leftWidth-1)
 
 	leftBody := m.renderSelectorList(leftWidth, bodyHeight)
 	rightBody := m.renderPreview(rightWidth, bodyHeight)
@@ -518,7 +555,7 @@ func (m ReviewFollowupModel) viewSelector() string {
 		iw, ""))
 	return components.RenderOverlayFrame(m.styles, fw, components.OverlayFrameSpec{
 		HeaderLines: header,
-		Body:        body,
+		Body:        fitViewHeight(body, bodyHeight),
 		Footer:      footer,
 		Focused:     true,
 	})

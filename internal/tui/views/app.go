@@ -1280,10 +1280,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.activeOverlay = overlayReviewFollowup
 		a.reviewFollowupOverlay.SetSize(a.windowWidth, a.windowHeight)
-		spinnerCmd := a.reviewFollowupOverlay.OpenLoading(msg.WorkItemID, msg.Items)
-		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, ""))
+		gen, spinnerCmd := a.reviewFollowupOverlay.OpenLoading(msg.WorkItemID, msg.Items)
+		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, "", gen))
 
 	case ReviewCommentsFetchedMsg:
+		// Drop results from a previous overlay session (user cancelled or reopened).
+		if msg.Generation != a.reviewFollowupOverlay.Generation() || !a.reviewFollowupOverlay.Active() {
+			return a, nil
+		}
 		if msg.Err != nil && len(msg.Result) == 0 {
 			a.toasts.AddToast(fmt.Sprintf("Failed to fetch review comments: %v", msg.Err), components.ToastError)
 			a.activeOverlay = overlayNone
@@ -1304,9 +1308,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.ReviewComments == nil {
 			return a, nil
 		}
-		return a, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, msg.Mode)
+		return a, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, msg.Mode, a.reviewFollowupOverlay.Generation())
 
 	case ReviewCommentsRefetchedMsg:
+		// Drop refetch results from a previous overlay session.
+		if msg.Generation != a.reviewFollowupOverlay.Generation() || !a.reviewFollowupOverlay.Active() {
+			return a, nil
+		}
 		if msg.Err != nil && len(msg.Result) == 0 {
 			a.toasts.AddToast(fmt.Sprintf("Failed to refresh review comments: %v", msg.Err), components.ToastError)
 			a.activeOverlay = overlayNone
@@ -1344,6 +1352,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.activeOverlay = overlayNone
 		a.reviewFollowupOverlay.Close()
 		return a, a.dispatchReviewAddress(msg)
+
+	case ReviewAddressDispatchResultMsg:
+		return a, a.applyReviewAddressDispatchResult(msg)
 
 	case FollowUpFromReviewReplanMsg:
 		a.activeOverlay = overlayNone
@@ -2462,60 +2473,46 @@ func (a *App) pipelineCtxForTask(taskID string) context.Context {
 	return context.Background()
 }
 
-// dispatchReviewAddress resolves each repo in msg.PerRepo to a completed Task and
-// emits a FollowUpSessionMsg per match. Missing completed tasks are reported via
-// toast (partial dispatch).
+// dispatchReviewAddress kicks off an off-thread DB lookup that resolves each
+// repo in msg.PerRepo to a completed Task. The actual FollowUpSessionMsg dispatch
+// and toast surfacing happens when the resulting ReviewAddressDispatchResultMsg
+// is received.
 func (a *App) dispatchReviewAddress(msg FollowUpFromReviewAddressMsg) tea.Cmd {
 	if a.svcs.Task == nil {
 		a.toasts.AddToast("Task service unavailable; cannot dispatch review follow-up", components.ToastError)
 		return nil
 	}
-	tasks, err := a.svcs.Task.ListByWorkItemID(context.Background(), msg.WorkItemID)
-	if err != nil {
-		slog.Error("list tasks for review follow-up failed", "work_item_id", msg.WorkItemID, "error", err)
-		a.toasts.AddToast(fmt.Sprintf("Failed to dispatch review follow-up: %v", err), components.ToastError)
+	return ResolveReviewAddressDispatchCmd(context.Background(), a.svcs.Task, msg.WorkItemID, msg.PerRepo)
+}
+
+// applyReviewAddressDispatchResult emits per-task FollowUpSessionMsg commands and
+// surfaces the success/skip toast. Runs on the UI thread (cheap; no IO).
+func (a *App) applyReviewAddressDispatchResult(msg ReviewAddressDispatchResultMsg) tea.Cmd {
+	if msg.Err != nil {
+		slog.Error("list tasks for review follow-up failed", "work_item_id", msg.WorkItemID, "err", msg.Err)
+		a.toasts.AddToast(fmt.Sprintf("Failed to dispatch review follow-up: %v", msg.Err), components.ToastError)
 		return nil
 	}
-	// Build repoName → completed task. Prefer the most recently updated.
-	completedByRepo := make(map[string]domain.Task)
-	for _, t := range tasks {
-		if t.Status != domain.AgentSessionCompleted || t.RepositoryName == "" {
-			continue
-		}
-		existing, ok := completedByRepo[t.RepositoryName]
-		if !ok || t.UpdatedAt.After(existing.UpdatedAt) {
-			completedByRepo[t.RepositoryName] = t
-		}
-	}
-	total := len(msg.PerRepo)
-	dispatched := 0
-	var skipped []string
-	var cmds []tea.Cmd
-	for repoName, feedback := range msg.PerRepo {
-		task, ok := completedByRepo[repoName]
-		if !ok {
-			skipped = append(skipped, repoName)
-			continue
-		}
-		taskID := task.ID
-		captured := feedback
+	dispatched := len(msg.Dispatched)
+	cmds := make([]tea.Cmd, 0, dispatched)
+	for taskID, feedback := range msg.Dispatched {
+		taskID, feedback := taskID, feedback
 		cmds = append(cmds, func() tea.Msg {
-			return FollowUpSessionMsg{TaskID: taskID, Feedback: captured}
+			return FollowUpSessionMsg{TaskID: taskID, Feedback: feedback}
 		})
-		dispatched++
 	}
-	if total == 0 || dispatched == 0 {
-		if len(skipped) > 0 {
-			a.toasts.AddToast(fmt.Sprintf("No follow-up dispatched: no completed task for %s", strings.Join(skipped, ", ")), components.ToastWarning)
+	if msg.Total == 0 || dispatched == 0 {
+		if len(msg.Skipped) > 0 {
+			a.toasts.AddToast(fmt.Sprintf("No follow-up dispatched: no completed task for %s", strings.Join(msg.Skipped, ", ")), components.ToastWarning)
 		} else {
 			a.toasts.AddToast("No follow-up dispatched (no selection)", components.ToastWarning)
 		}
 		return nil
 	}
-	if len(skipped) == 0 {
-		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repo(s)", dispatched, total), components.ToastSuccess)
+	if len(msg.Skipped) == 0 {
+		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repo(s)", dispatched, msg.Total), components.ToastSuccess)
 	} else {
-		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repos (skipped: %s)", dispatched, total, strings.Join(skipped, ", ")), components.ToastWarning)
+		a.toasts.AddToast(fmt.Sprintf("Addressed %d of %d repos (skipped: %s)", dispatched, msg.Total, strings.Join(msg.Skipped, ", ")), components.ToastWarning)
 	}
 	return tea.Batch(cmds...)
 }

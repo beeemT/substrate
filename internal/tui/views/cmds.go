@@ -1176,15 +1176,60 @@ func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, wor
 	}
 }
 
+// ResolveReviewAddressDispatchCmd looks up completed tasks for the given work
+// item and matches each entry in perRepo (repoName -> feedback) to the most
+// recently updated completed Task for that repository. Runs off the UI thread
+// so a slow DB query does not block Bubble Tea's Update loop. The returned
+// message carries Task.ID -> feedback for matched repos and a list of skipped
+// repo names with no completed task.
+func ResolveReviewAddressDispatchCmd(ctx context.Context, svc *service.TaskService, workItemID string, perRepo map[string]string) tea.Cmd {
+	return func() tea.Msg {
+		total := len(perRepo)
+		tasks, err := svc.ListByWorkItemID(ctx, workItemID)
+		if err != nil {
+			return ReviewAddressDispatchResultMsg{WorkItemID: workItemID, Total: total, Err: err}
+		}
+		// Build repoName -> most-recently-updated completed task.
+		completedByRepo := make(map[string]domain.Task)
+		for _, t := range tasks {
+			if t.Status != domain.AgentSessionCompleted || t.RepositoryName == "" {
+				continue
+			}
+			existing, ok := completedByRepo[t.RepositoryName]
+			if !ok || t.UpdatedAt.After(existing.UpdatedAt) {
+				completedByRepo[t.RepositoryName] = t
+			}
+		}
+		dispatched := make(map[string]string, len(perRepo))
+		var skipped []string
+		for repoName, feedback := range perRepo {
+			task, ok := completedByRepo[repoName]
+			if !ok {
+				skipped = append(skipped, repoName)
+				continue
+			}
+			dispatched[task.ID] = feedback
+		}
+		return ReviewAddressDispatchResultMsg{
+			WorkItemID: workItemID,
+			Dispatched: dispatched,
+			Skipped:    skipped,
+			Total:      total,
+		}
+	}
+}
+
 // FetchReviewCommentsCmd fetches unresolved review comments for the given PRs/MRs
 // in parallel. mode is either "" (initial fetch → ReviewCommentsFetchedMsg) or
 // "address"/"replan" (silent re-fetch → ReviewCommentsRefetchedMsg carrying the
-// dispatch intent).
+// dispatch intent). generation tags the resulting message with the overlay
+// generation captured at launch so the App handler can drop stale results from
+// a cancelled/replaced overlay session.
 //
 // Per-item failures are captured in the message's Err but partial successes are
 // preserved in Result; callers MUST check len(Result) before treating Err as
 // fatal so a transient failure on one repo does not discard data from others.
-func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID string, items []ArtifactItem, mode string) tea.Cmd {
+func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID string, items []ArtifactItem, mode string, generation int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1224,7 +1269,7 @@ func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID
 		var firstErr error
 		for o := range outcomes {
 			if o.err != nil {
-				slog.Warn("fetch review comments failed", "repo", o.repoName, "ref", o.ref, "error", o.err)
+				slog.Warn("fetch review comments failed", "repo", o.repoName, "ref", o.ref, "err", o.err)
 				if firstErr == nil {
 					firstErr = fmt.Errorf("%s %s: %w", o.repoName, o.ref, o.err)
 				}
@@ -1238,6 +1283,7 @@ func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID
 		if mode == "" {
 			return ReviewCommentsFetchedMsg{
 				WorkItemID: workItemID,
+				Generation: generation,
 				Result:     result,
 				FetchedAt:  fetchedAt,
 				Err:        firstErr,
@@ -1245,6 +1291,7 @@ func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID
 		}
 		return ReviewCommentsRefetchedMsg{
 			WorkItemID: workItemID,
+			Generation: generation,
 			Result:     result,
 			FetchedAt:  fetchedAt,
 			Mode:       mode,
@@ -1254,10 +1301,28 @@ func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID
 }
 
 // parseArtifactFetchArgs extracts (repoIdentifier, number) from an ArtifactItem.
-// For GitHub: returns ("owner/repo", number). For GitLab: returns (projectPath, iid).
-// Falls back to false when the ref cannot be parsed as an integer.
+// For GitHub: returns ("owner/repo", number); the ref is `#<n>`.
+// For GitLab: returns (projectPath, iid); the ref is `!<n>`.
+// Returns ok=false when the ref does not have the expected provider sigil or
+// the trailing digits do not parse as an integer; callers MUST log/skip.
 func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
-	trimmed := strings.TrimLeft(it.Ref, "#!")
+	var trimmed string
+	switch it.Provider {
+	case "github":
+		var ok bool
+		trimmed, ok = strings.CutPrefix(it.Ref, "#")
+		if !ok {
+			return "", 0, false
+		}
+	case "gitlab":
+		var ok bool
+		trimmed, ok = strings.CutPrefix(it.Ref, "!")
+		if !ok {
+			return "", 0, false
+		}
+	default:
+		return "", 0, false
+	}
 	n, err := strconv.Atoi(trimmed)
 	if err != nil {
 		return "", 0, false

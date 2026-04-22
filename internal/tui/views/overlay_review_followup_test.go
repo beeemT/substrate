@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestReviewFollowup_OpenLoading_Active(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	if !m.Active() {
 		t.Fatal("expected overlay active after OpenLoading")
 	}
@@ -49,7 +50,7 @@ func TestReviewFollowup_ApplyFetch_NoUnresolved_ReturnsFalse(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	if keep := m.ApplyFetchResult(map[string][]adapter.ReviewComment{}, time.Now()); keep {
 		t.Fatal("expected ApplyFetchResult to return false when no unresolved")
 	}
@@ -59,7 +60,7 @@ func TestReviewFollowup_ApplyFetch_SinglePR_GoesToSelector(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	comments := map[string][]adapter.ReviewComment{
 		"github:acme/api:#7": {{ID: "a-1", ReviewerLogin: "alice", Body: "fix it"}},
 	}
@@ -75,7 +76,7 @@ func TestReviewFollowup_ApplyFetch_MultiPR_GoesToPicker(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	if keep := m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now()); !keep {
 		t.Fatal("expected overlay retained")
 	}
@@ -88,7 +89,7 @@ func TestReviewFollowup_IsStale(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	if m.IsStale(time.Now()) {
 		t.Fatal("fresh fetch should not be stale")
@@ -102,7 +103,7 @@ func TestReviewFollowup_FormatPerRepo_GroupsByRepo(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	// Advance past picker so every PR is scoped.
 	m.ApplyPickerAllForTest()
@@ -133,7 +134,7 @@ func TestReviewFollowup_FormatAllSelected_SingleBlock(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	m.ApplyPickerAllForTest()
 
@@ -148,7 +149,7 @@ func TestReviewFollowup_Layout_FitsNarrowWidth(t *testing.T) {
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	// Narrow terminal.
 	m.SetSize(80, 24)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	// Force into picker stage (multi-PR default) then selector.
 	view := m.View()
@@ -177,11 +178,47 @@ func TestReviewFollowup_Layout_FitsNarrowWidth(t *testing.T) {
 	}
 }
 
+// TestReviewFollowup_Layout_FitsBelowFloor exercises the floor-less frame math:
+// at terminal sizes smaller than the historic 60w/8h floors, the overlay must
+// shrink to fit rather than overflow.
+func TestReviewFollowup_Layout_FitsBelowFloor(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ w, h int }{
+		{50, 12},
+		{40, 10},
+		{30, 8},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(fmt.Sprintf("%dx%d", tc.w, tc.h), func(t *testing.T) {
+			t.Parallel()
+			m := views.NewReviewFollowupModel(newTestStyles(t))
+			m.SetSize(tc.w, tc.h)
+			_, _ = m.OpenLoading("wi-1", reviewItems())
+			m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
+			for _, label := range []string{"picker", "selector"} {
+				if label == "selector" {
+					m.ApplyPickerAllForTest()
+				}
+				lines := strings.Split(m.View(), "\n")
+				for i, line := range lines {
+					if w := ansi.StringWidth(line); w > tc.w {
+						t.Fatalf("%s line %d exceeds width %d: %d (%q)", label, i, tc.w, w, line)
+					}
+				}
+				if len(lines) > tc.h {
+					t.Fatalf("%s view taller than %d lines: %d", label, tc.h, len(lines))
+				}
+			}
+		})
+	}
+}
+
 func TestReviewFollowup_ConfirmStage_EmitsReplan(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	m.ApplyPickerAllForTest()
 	// In selector: press "p" to reach confirm.
@@ -205,7 +242,7 @@ func TestReviewFollowup_Address_EmitsPerRepoMsg(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	m.ApplyPickerAllForTest()
 	// Enter → address.
@@ -230,7 +267,7 @@ func TestReviewFollowup_StaleDispatch_EmitsRefetch(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	// Fetch stamped 10 minutes ago → stale.
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now().Add(-10*time.Minute))
 	m.ApplyPickerAllForTest()
@@ -277,7 +314,7 @@ func TestReviewFollowup_SelectAll_SelectNone(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
 	m.ApplyPickerAllForTest()
 	// Deselect all.
@@ -296,7 +333,7 @@ func TestReviewFollowup_MergeRefetch_DropsMissing(t *testing.T) {
 	t.Parallel()
 	m := views.NewReviewFollowupModel(newTestStyles(t))
 	m.SetSize(120, 30)
-	_ = m.OpenLoading("wi-1", reviewItems())
+	_, _ = m.OpenLoading("wi-1", reviewItems())
 	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now().Add(-10*time.Minute))
 	m.ApplyPickerAllForTest()
 

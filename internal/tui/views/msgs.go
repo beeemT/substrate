@@ -484,9 +484,13 @@ type FetchReviewCommentsMsg struct {
 }
 
 // ReviewCommentsFetchedMsg delivers the result of FetchReviewCommentsMsg. Result
-// is keyed by ArtifactItem.ID and excludes resolved comments.
+// is keyed by ArtifactItem.ID and excludes resolved comments. Generation matches
+// the overlay generation captured when the fetch was launched; the handler MUST
+// drop messages whose Generation does not match the current overlay so a fetch
+// completing after the user closed the overlay cannot mutate stale state.
 type ReviewCommentsFetchedMsg struct {
 	WorkItemID string
+	Generation int
 	Result     map[string][]adapter.ReviewComment
 	FetchedAt  time.Time
 	Err        error
@@ -495,8 +499,10 @@ type ReviewCommentsFetchedMsg struct {
 // ReviewCommentsRefetchedMsg delivers the result of a silent re-fetch performed
 // at dispatch time when the original fetch became stale. Mode echoes the original
 // dispatch intent ("address" or "replan") so the handler can resume the dispatch.
+// Generation has the same semantics as ReviewCommentsFetchedMsg.
 type ReviewCommentsRefetchedMsg struct {
 	WorkItemID string
+	Generation int
 	Result     map[string][]adapter.ReviewComment
 	FetchedAt  time.Time
 	Mode       string
@@ -509,6 +515,18 @@ type ReviewCommentsRefetchedMsg struct {
 type FollowUpFromReviewAddressMsg struct {
 	WorkItemID string
 	PerRepo    map[string]string
+}
+
+// ReviewAddressDispatchResultMsg is the off-thread result of resolving the
+// PerRepo map to completed tasks. Dispatched keys are Task.IDs whose value is
+// the captured per-repo feedback. Skipped lists repo names with no completed
+// task. Err is set when the DB lookup itself failed.
+type ReviewAddressDispatchResultMsg struct {
+	WorkItemID string
+	Dispatched map[string]string
+	Skipped    []string
+	Total      int
+	Err        error
 }
 
 // FollowUpFromReviewReplanMsg requests a re-plan from the concatenated set of

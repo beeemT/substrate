@@ -15,6 +15,7 @@ import (
 func testArtifactItems() []views.ArtifactItem {
 	return []views.ArtifactItem{
 		{
+			ID:        "github:acme/auth-svc:#42",
 			Provider:  "github",
 			Kind:      "PR",
 			RepoName:  "acme/auth-svc",
@@ -26,6 +27,7 @@ func testArtifactItems() []views.ArtifactItem {
 			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
 		},
 		{
+			ID:        "github:acme/billing:#43",
 			Provider:  "github",
 			Kind:      "PR",
 			RepoName:  "acme/billing",
@@ -38,6 +40,7 @@ func testArtifactItems() []views.ArtifactItem {
 			UpdatedAt: time.Date(2024, 1, 3, 6, 0, 0, 0, time.UTC),
 		},
 		{
+			ID:        "github:acme/gateway:#44",
 			Provider:  "github",
 			Kind:      "PR",
 			RepoName:  "acme/gateway",
@@ -783,6 +786,9 @@ func TestArtifactsViewFollowUpKeyEmitsFetchMsg(t *testing.T) {
 	}
 	if len(fetch.Items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(fetch.Items))
+	}
+	if fetch.Items[0].ID != "github:acme/auth-svc:#42" {
+		t.Fatalf("Items[0].ID = %q, want %q", fetch.Items[0].ID, "github:acme/auth-svc:#42")
 	}
 }
 
