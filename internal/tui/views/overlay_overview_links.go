@@ -96,7 +96,10 @@ func (m *OverviewLinksOverlay) OpenFromArtifacts(items []ArtifactItem) {
 	m.tickets = nil
 	m.mrs = make([]overviewLinksItem, 0, len(items))
 	for _, item := range items {
-		label := item.RepoName + " · " + item.Ref
+		label := item.RepoName
+		if item.Ref != "" {
+			label = item.RepoName + " · " + item.Ref
+		}
 		metaParts := filterEmptyStrings([]string{item.State, item.Branch})
 		m.mrs = append(m.mrs, overviewLinksItem{
 			label: label,

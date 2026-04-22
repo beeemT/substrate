@@ -1957,7 +1957,10 @@ func reviewKindForProvider(provider string) string {
 }
 
 func reviewArtifactOverlayLabel(state domain.SessionState) string {
-	if state == domain.SessionCompleted {
+	switch state {
+	case domain.SessionMerged:
+		return "✓ Merged"
+	case domain.SessionCompleted:
 		return "✓ Completed"
 	}
 
