@@ -925,6 +925,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
+		if msg.Error != nil && a.activeOverlay != overlayWorkspaceInit {
+			// Existing-workspace background scan failure: log and skip.
+			// Workspace-init overlay handles its own error display.
+			slog.Error("workspace health check failed", "error", msg.Error)
+			return a, nil
+		}
 		if a.activeOverlay == overlayWorkspaceInit {
 			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 			cmds = append(cmds, cmd)
@@ -2898,7 +2904,7 @@ func aggregateCIState(items []ArtifactItem) string {
 	for _, item := range items {
 		for _, c := range item.Checks {
 			hasChecks = true
-			if c.Conclusion == "failure" {
+			if c.Conclusion != "" && c.Conclusion != "success" && c.Conclusion != "neutral" && c.Conclusion != "skipped" {
 				return "failure"
 			}
 		}
