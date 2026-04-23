@@ -65,8 +65,8 @@ func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(App)
 
-	// Open repo manager via 'r'.
-	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	// Open repo manager via 'R'.
+	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	updated = model.(App)
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("precondition: activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
