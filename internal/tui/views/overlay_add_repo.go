@@ -31,7 +31,12 @@ const (
 )
 
 const (
-	addRepoPageSize      = 30
+	// addRepoPageSize is the per-request page size sent to repo sources.
+	// 100 is the documented maximum for both GitHub and GitLab.
+	addRepoPageSize = 100
+	// addRepoMaxPages caps how many pages LoadReposCmd will walk per reload.
+	// At addRepoPageSize=100 this yields up to 500 repos before stopping.
+	addRepoMaxPages      = 5
 	addRepoDebounceDelay = 200 * time.Millisecond
 )
 
@@ -363,7 +368,7 @@ func (m *AddRepoOverlay) reloadRepos() tea.Cmd {
 	m.loading = true
 	m.allRepos = nil
 	m.repoList.SetItems(nil)
-	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize, m.nextRequestID(), m.ownedOnly)
+	return LoadReposCmd(m.sources, m.sourceIndex, m.searchInput.Value(), addRepoPageSize, addRepoMaxPages, m.nextRequestID(), m.ownedOnly)
 }
 
 // browserLayout computes the split overlay geometry (2-pass like NewSession).

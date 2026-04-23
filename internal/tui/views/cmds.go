@@ -1374,9 +1374,10 @@ func WaitForLogToastCmd(ch <-chan tuilog.ToastEntry) tea.Cmd {
 	}
 }
 
-// LoadReposCmd fetches repos from the repo source at sourceIndex.
+// LoadReposCmd fetches repos from the repo source at sourceIndex, walking
+// pagination up to maxPages or until the source signals no more results.
 // requestID is stamped onto the response so the overlay can discard stale results.
-func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, limit int, requestID int, ownedOnly bool) tea.Cmd {
+func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, pageSize, maxPages, requestID int, ownedOnly bool) tea.Cmd {
 	return func() tea.Msg {
 		if len(sources) == 0 {
 			return RepoListLoadedMsg{RequestID: requestID, Repos: []adapter.RepoItem{}}
@@ -1385,14 +1386,35 @@ func LoadReposCmd(sources []adapter.RepoSource, sourceIndex int, search string, 
 		if idx < 0 || idx >= len(sources) {
 			idx = 0
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		opts := adapter.RepoListOpts{Search: search, Limit: limit, Page: 1, OwnedOnly: ownedOnly}
-		result, err := sources[idx].ListRepos(ctx, opts)
-		if err != nil {
-			return RepoListLoadedMsg{RequestID: requestID, Errs: []error{err}}
+		if pageSize <= 0 {
+			pageSize = 30
 		}
-		return RepoListLoadedMsg{RequestID: requestID, Repos: result.Repos, HasMore: result.HasMore}
+		if maxPages <= 0 {
+			maxPages = 1
+		}
+		// Allow more wall-clock time when paginating across multiple pages.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var aggregated []adapter.RepoItem
+		hasMore := false
+		for page := 1; page <= maxPages; page++ {
+			opts := adapter.RepoListOpts{Search: search, Limit: pageSize, Page: page, OwnedOnly: ownedOnly}
+			result, err := sources[idx].ListRepos(ctx, opts)
+			if err != nil {
+				// Surface the error but keep any results gathered so far.
+				return RepoListLoadedMsg{RequestID: requestID, Repos: aggregated, Errs: []error{err}}
+			}
+			if result == nil {
+				break
+			}
+			aggregated = append(aggregated, result.Repos...)
+			hasMore = result.HasMore
+			if !result.HasMore {
+				break
+			}
+		}
+		return RepoListLoadedMsg{RequestID: requestID, Repos: aggregated, HasMore: hasMore}
 	}
 }
 

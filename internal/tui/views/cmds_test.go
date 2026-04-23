@@ -2,11 +2,13 @@ package views_test
 
 import (
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
@@ -444,5 +446,80 @@ func TestTailSessionLogCmd_ArchivesOnly_NoActiveLog(t *testing.T) {
 	}
 	if got2.NextOffset == 0 {
 		t.Fatalf("second call NextOffset must be non-zero to prevent re-entering initial load path")
+	}
+}
+
+// pagingRepoSource emits up to TotalPages pages, each with PageSize repos,
+// signalling HasMore until the last page. It records every call.
+type pagingRepoSource struct {
+	name       string
+	totalPages int
+	pageSize   int
+	calls      []adapter.RepoListOpts
+}
+
+func (p *pagingRepoSource) Name() string { return p.name }
+
+func (p *pagingRepoSource) ListRepos(_ context.Context, opts adapter.RepoListOpts) (*adapter.RepoListResult, error) {
+	p.calls = append(p.calls, opts)
+	repos := make([]adapter.RepoItem, p.pageSize)
+	for i := range repos {
+		repos[i] = adapter.RepoItem{Name: "r", FullName: "o/r", Source: p.name}
+	}
+	return &adapter.RepoListResult{Repos: repos, HasMore: opts.Page < p.totalPages}, nil
+}
+
+// TestLoadReposCmd_AggregatesPagesUntilNoMore asserts that LoadReposCmd walks
+// pagination, calling the source once per page until HasMore is false, and that
+// the aggregated result contains every page's repos.
+func TestLoadReposCmd_AggregatesPagesUntilNoMore(t *testing.T) {
+	t.Parallel()
+	src := &pagingRepoSource{name: "gitlab", totalPages: 3, pageSize: 100}
+	cmd := views.LoadReposCmd([]adapter.RepoSource{src}, 0, "", 100, 5, 1, true)
+	msg, ok := cmd().(views.RepoListLoadedMsg)
+	if !ok {
+		t.Fatalf("expected RepoListLoadedMsg, got %T", cmd())
+	}
+	if len(msg.Errs) != 0 {
+		t.Fatalf("unexpected errs: %v", msg.Errs)
+	}
+	if len(src.calls) != 3 {
+		t.Fatalf("ListRepos calls = %d, want 3", len(src.calls))
+	}
+	for i, c := range src.calls {
+		if c.Page != i+1 {
+			t.Errorf("call %d Page = %d, want %d", i, c.Page, i+1)
+		}
+		if c.Limit != 100 {
+			t.Errorf("call %d Limit = %d, want 100", i, c.Limit)
+		}
+	}
+	if len(msg.Repos) != 300 {
+		t.Fatalf("aggregated repos = %d, want 300", len(msg.Repos))
+	}
+	if msg.HasMore {
+		t.Errorf("HasMore = true, want false (source exhausted)")
+	}
+}
+
+// TestLoadReposCmd_StopsAtMaxPages asserts the loader caps at maxPages even when
+// the source still signals HasMore, and reports HasMore=true so the UI can hint
+// that more results exist upstream.
+func TestLoadReposCmd_StopsAtMaxPages(t *testing.T) {
+	t.Parallel()
+	src := &pagingRepoSource{name: "github", totalPages: 100, pageSize: 100}
+	cmd := views.LoadReposCmd([]adapter.RepoSource{src}, 0, "", 100, 5, 1, false)
+	msg, ok := cmd().(views.RepoListLoadedMsg)
+	if !ok {
+		t.Fatalf("expected RepoListLoadedMsg, got %T", cmd())
+	}
+	if len(src.calls) != 5 {
+		t.Fatalf("ListRepos calls = %d, want 5 (maxPages cap)", len(src.calls))
+	}
+	if len(msg.Repos) != 500 {
+		t.Fatalf("aggregated repos = %d, want 500", len(msg.Repos))
+	}
+	if !msg.HasMore {
+		t.Error("HasMore = false, want true (source still has more after cap)")
 	}
 }
