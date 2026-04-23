@@ -280,3 +280,52 @@ func TestRepoManagerOverlayStaleWorktreeDiscarded(t *testing.T) {
 		t.Fatalf("worktrees = %v, want empty after stale response discarded", m.worktrees)
 	}
 }
+
+// TestRepoManagerOverlayArrowsToggleFocus asserts that left and right arrow keys
+// toggle focus between the list and the detail viewport, mirroring Tab behavior,
+// instead of falling through to the bubbles list and paging the selection.
+func TestRepoManagerOverlayArrowsToggleFocus(t *testing.T) {
+	t.Parallel()
+
+	repos := []managedRepo{
+		{Name: "alpha", Path: "/tmp/workspace/alpha", Kind: repoKindGitWork},
+		{Name: "beta", Path: "/tmp/workspace/beta", Kind: repoKindGitWork},
+	}
+
+	cases := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"right", tea.KeyMsg{Type: tea.KeyRight}},
+		{"left", tea.KeyMsg{Type: tea.KeyLeft}},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestRepoManagerOverlay()
+			m.SetSize(120, 40)
+			_ = m.Open()
+			m = loadTestRepos(m, repos)
+
+			if m.focus != repoManagerFocusList {
+				t.Fatalf("initial focus = %v, want repoManagerFocusList", m.focus)
+			}
+			prevIdx := m.repoList.Index()
+
+			m, _ = m.Update(tc.key)
+			if m.focus != repoManagerFocusDetails {
+				t.Fatalf("after %s focus = %v, want repoManagerFocusDetails", tc.name, m.focus)
+			}
+			if m.repoList.Index() != prevIdx {
+				t.Fatalf("after %s list selection moved from %d to %d, want unchanged", tc.name, prevIdx, m.repoList.Index())
+			}
+
+			m, _ = m.Update(tc.key)
+			if m.focus != repoManagerFocusList {
+				t.Fatalf("after second %s focus = %v, want repoManagerFocusList", tc.name, m.focus)
+			}
+		})
+	}
+}

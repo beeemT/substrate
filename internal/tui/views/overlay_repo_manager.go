@@ -52,7 +52,7 @@ func (i repoManagerItem) FilterValue() string { return i.repo.Name }
 //	a          – open Add Repo overlay
 //	d          – confirm-delete selected repo
 //	i          – init plain git repo with git-work (only for plain git repos)
-//	Tab        – toggle focus between list and detail viewport
+//	Tab/←/→   – toggle focus between list and detail viewport
 //	↑/k ↓/j   – navigate list (list focused) or scroll viewport (detail focused)
 //	Esc        – close overlay (when no confirm pending)
 type RepoManagerOverlay struct { //nolint:recvcheck
@@ -334,7 +334,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 	case "esc":
 		return *m, func() tea.Msg { return CloseOverlayMsg{} }
 
-	case "tab":
+	case "tab", "left", "right":
 		if m.focus == repoManagerFocusList {
 			m.focus = repoManagerFocusDetails
 		} else {
