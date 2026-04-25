@@ -296,7 +296,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, cmd
 				case overviewOverlayPlan:
-					if m.planReview.inputMode != planReviewNormal {
+					if m.planReview.IsFeedbackActive() {
 						var cmd tea.Cmd
 						m.planReview, cmd = m.planReview.Update(msg)
 
@@ -309,20 +309,15 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 			// If the plan review had mouse reporting disabled (feedback
 			// textarea was focused), restore it now that the overlay is closing.
-			if m.planReview.inputMode != planReviewNormal {
-				m.planReview.inputMode = planReviewNormal
-				m.planReview.feedbackHeight = 1
-				m.planReview.feedbackInput.SetHeight(1)
-				m.planReview.feedbackInput.SetValue("")
-				m.planReview.feedbackInput.Blur()
-				return m, tea.EnableMouseCellMotion
+			if cmd := m.planReview.CloseFeedback(); cmd != nil {
+				return m, cmd
 			}
 
 			return m, nil
 		}
 		switch m.overlay {
 		case overviewOverlayPlan:
-			if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.planReview.inputMode != planReviewNormal {
+			if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.planReview.IsFeedbackActive() {
 				var cmd tea.Cmd
 				m.planReview, cmd = m.planReview.Update(msg)
 				m.overlay = overviewOverlayNone
@@ -390,9 +385,9 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
 				case overviewActionPlanReview:
-					m.openPlanOverlayForChanges()
+					cmd := m.openPlanOverlayForChanges()
 
-					return m, nil
+					return m, cmd
 				case overviewActionQuestion:
 					m.overlay = overviewOverlayQuestion
 
@@ -465,9 +460,9 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
 				case overviewActionPlanReview:
-					m.openPlanOverlayForChanges()
+					cmd := m.openPlanOverlayForChanges()
 
-					return m, nil
+					return m, cmd
 				case overviewActionCompleted:
 					return m, m.openCompletedOverlayForChanges()
 				}
@@ -538,24 +533,19 @@ func (m *SessionOverviewModel) syncViewport(reset bool) {
 
 // openPlanOverlayForChanges resets the feedback input, enters request-changes
 // mode, and opens the plan overlay. Both the [c] and [i] shortcuts for a
-// plan-review action call this so the overlay always opens with the prompt ready.
-func (m *SessionOverviewModel) openPlanOverlayForChanges() {
-	m.planReview.feedbackHeight = 1
-	m.planReview.feedbackInput.SetHeight(1)
-	m.planReview.feedbackInput.SetValue("")
-	m.planReview.inputMode = planReviewChanges
-	m.planReview.feedbackInput.Placeholder = "Describe the changes needed\u2026"
-	m.planReview.feedbackInput.Focus()
-	m.planReview.syncViewportSize()
+// plan-review action call this so the overlay always opens with the prompt
+// ready. Returns the cmd that focuses the feedback input and disables mouse
+// reporting; callers MUST batch it into their reply.
+func (m *SessionOverviewModel) openPlanOverlayForChanges() tea.Cmd {
+	cmd := m.planReview.OpenFeedback("Describe the changes needed\u2026")
 	m.overlay = overviewOverlayPlan
+	return cmd
 }
 
 // openCompletedOverlayForChanges resets the follow-up feedback input,
 // activates it, and opens the completed overlay.
 func (m *SessionOverviewModel) openCompletedOverlayForChanges() tea.Cmd {
-	m.completed.feedbackInput.SetValue("")
-	m.completed.inputActive = true
-	cmd := m.completed.feedbackInput.Focus()
+	cmd := m.completed.OpenFeedback()
 	m.overlay = overviewOverlayCompleted
 	return cmd
 }

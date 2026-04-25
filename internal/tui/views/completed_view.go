@@ -3,13 +3,19 @@ package views
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
+
+// completedScrollSource identifies GrowingTextAreaScrollMsg events from the
+// completed-view follow-up input so they route to the plan viewport.
+const completedScrollSource = "completed-feedback"
+
+// completedFeedbackMaxLines caps the visual height of the follow-up textarea.
+const completedFeedbackMaxLines = 6
 
 // CompletedModel shows the implemented plan and hosts the follow-up feedback
 // input when the user requests additional changes. Completion metadata (timestamp,
@@ -25,18 +31,19 @@ type CompletedModel struct {
 	height        int
 	viewport      viewport.Model
 	workItemID    string
-	feedbackInput textinput.Model
+	feedbackInput components.GrowingTextArea
 	inputActive   bool
 }
 
 func NewCompletedModel(st styles.Styles) CompletedModel {
-	ti := components.NewTextInput()
-	ti.Placeholder = "Describe what needs to change..."
-	ti.CharLimit = 2000
+	ta := components.NewGrowingTextArea(completedScrollSource)
+	ta.SetMaxLines(completedFeedbackMaxLines)
+	ta.SetPlaceholder("Describe what needs to change...")
+	ta.SetCharLimit(2000)
 	return CompletedModel{
 		styles:        st,
 		statusLabel:   "Review artifacts",
-		feedbackInput: ti,
+		feedbackInput: ta,
 		viewport:      viewport.New(0, 0),
 	}
 }
@@ -62,12 +69,13 @@ func (m *CompletedModel) SetPlan(content string) {
 }
 
 // syncViewportSize recomputes the viewport dimensions from current model state.
-// Reserved rows: 2 (header + divider) + [2 if feedback active (divider + input)].
+// Reserved rows: 2 (header + divider) + [1 + textarea height] when feedback active.
 func (m *CompletedModel) syncViewportSize() {
 	reserved := 2 // header + divider
 	if m.inputActive {
-		reserved += 2 // divider + input line
+		reserved += 1 + m.feedbackInput.Height() // divider + textarea rows
 	}
+	m.feedbackInput.SetWidth(max(1, m.width))
 	m.viewport.Width = max(1, m.width)
 	m.viewport.Height = max(1, m.height-reserved)
 	m.refreshViewportContent()
@@ -81,6 +89,16 @@ func (m *CompletedModel) refreshViewportContent() {
 		return
 	}
 	m.viewport.SetContent(renderPlanReviewContent(m.styles, m.planContent, m.viewport.Width))
+}
+
+// OpenFeedback enters request-changes mode and focuses the follow-up textarea.
+// Returns the cmd that focuses the input and disables mouse reporting; callers
+// MUST batch it into their reply.
+func (m *CompletedModel) OpenFeedback() tea.Cmd {
+	m.inputActive = true
+	cmd := m.feedbackInput.Focus()
+	m.syncViewportSize()
+	return cmd
 }
 
 func (m CompletedModel) InputCaptured() bool { return m.inputActive }
@@ -105,27 +123,41 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 
 func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case components.GrowingTextAreaScrollMsg:
+		if msg.Source != completedScrollSource {
+			return m, nil
+		}
+		switch {
+		case msg.Delta < 0:
+			m.viewport.ScrollUp(-msg.Delta)
+		case msg.Delta > 0:
+			m.viewport.ScrollDown(msg.Delta)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.inputActive {
 			switch msg.String() {
 			case "enter":
+				m.feedbackInput.Flush()
 				feedback := m.feedbackInput.Value()
-				m.feedbackInput.SetValue("")
+				resetCmd := m.feedbackInput.Reset()
 				m.inputActive = false
-				m.feedbackInput.Blur()
 				m.syncViewportSize()
-				return m, func() tea.Msg {
-					return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
-				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
+					},
+					resetCmd,
+				)
 			case "esc":
-				m.feedbackInput.SetValue("")
+				resetCmd := m.feedbackInput.Reset()
 				m.inputActive = false
-				m.feedbackInput.Blur()
 				m.syncViewportSize()
-				return m, nil
+				return m, resetCmd
 			default:
 				var cmd tea.Cmd
 				m.feedbackInput, cmd = m.feedbackInput.Update(msg)
+				m.syncViewportSize()
 				return m, cmd
 			}
 		}
@@ -141,8 +173,9 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 			// [c] is the keyboard shortcut consistent with the action card.
 			if m.workItemID != "" {
 				m.inputActive = true
+				cmd := m.feedbackInput.Focus()
 				m.syncViewportSize()
-				return m, m.feedbackInput.Focus()
+				return m, cmd
 			}
 		}
 

@@ -770,8 +770,20 @@ func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected DisableMouse cmd from 'c', got nil")
 	}
-	if msg := cmd(); msg != tea.DisableMouse() {
-		t.Fatalf("expected DisableMouse msg, got %T", msg)
+	disableMouseSeen := false
+	switch v := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range v {
+			if c != nil && c() == tea.DisableMouse() {
+				disableMouseSeen = true
+				break
+			}
+		}
+	default:
+		disableMouseSeen = v == tea.DisableMouse()
+	}
+	if !disableMouseSeen {
+		t.Fatalf("expected DisableMouse in cmd batch, got %T", cmd())
 	}
 	if updated.activeOverlay == overlaySettings {
 		t.Fatal("expected c to stay within the plan review flow instead of opening settings")
@@ -1040,8 +1052,8 @@ func TestInspectKeyOpensPlanOverlayWithChangesInput(t *testing.T) {
 	})
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	if cmd != nil {
-		t.Fatalf("[i] returned cmd %v, want nil", cmd)
+	if cmd == nil {
+		t.Fatal("[i] returned nil cmd, want focus+DisableMouse cmd from openPlanOverlayForChanges")
 	}
 	if updated.overlay != overviewOverlayPlan {
 		t.Fatalf("overlay = %v, want overviewOverlayPlan", updated.overlay)

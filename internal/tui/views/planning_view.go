@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -21,6 +20,13 @@ const (
 	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
 	sessionLogPlaceholderFailed    = "Send follow-up to restart failed session..."
 	sessionLogPlaceholderCompleted = "Send follow-up to completed session..."
+
+	// sessionLogScrollSource identifies GrowingTextAreaScrollMsg events from
+	// the steering textarea so they route to the session log viewport.
+	sessionLogScrollSource = "session-log-steer"
+
+	// sessionLogSteerMaxLines caps the visual height of the steering textarea.
+	sessionLogSteerMaxLines = 6
 )
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.
@@ -58,7 +64,7 @@ type SessionLogModel struct {
 	renderedVerbose    bool
 	renderedCollapse   bool
 
-	steerInput         textinput.Model
+	steerInput         components.GrowingTextArea
 	steerActive        bool
 	failedSessionID    string // non-empty when viewing a failed session's log
 	completedSessionID string // non-empty when viewing a completed session's log
@@ -86,11 +92,12 @@ type SessionLogModel struct {
 func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	vp := viewport.New(0, 0)
 
-	ti := components.NewTextInput()
-	ti.Placeholder = sessionLogPlaceholderDefault
-	ti.CharLimit = 2000
+	ta := components.NewGrowingTextArea(sessionLogScrollSource)
+	ta.SetMaxLines(sessionLogSteerMaxLines)
+	ta.SetPlaceholder(sessionLogPlaceholderDefault)
+	ta.SetCharLimit(2000)
 
-	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction", steerInput: ti}
+	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction", steerInput: ta}
 }
 
 func (m *SessionLogModel) SetSize(width, height int) {
@@ -102,10 +109,11 @@ func (m *SessionLogModel) SetSize(width, height int) {
 func (m *SessionLogModel) syncViewportSize() {
 	m.rebuildHeader()
 	m.viewport.Width = m.width
+	m.steerInput.SetWidth(max(1, m.width))
 	headerLines := len(strings.Split(m.cachedHeader, "\n"))
 	reserved := headerLines
 	if m.steerActive {
-		reserved += 2 // divider + input row
+		reserved += 1 + m.steerInput.Height() // divider + textarea rows
 	}
 	m.viewport.Height = max(1, m.height-reserved)
 	if len(m.entries) > 0 && m.transcriptNeedsRebuild() {
@@ -192,29 +200,29 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 func (m *SessionLogModel) SetFailedSession(sessionID string) {
 	m.failedSessionID = sessionID
 	if sessionID != "" {
-		m.steerInput.Placeholder = sessionLogPlaceholderFailed
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderFailed)
 	} else {
-		m.steerInput.Placeholder = sessionLogPlaceholderDefault
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
 	}
 }
 
 func (m *SessionLogModel) ClearFailedSession() {
 	m.failedSessionID = ""
-	m.steerInput.Placeholder = sessionLogPlaceholderDefault
+	m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
 }
 
 func (m *SessionLogModel) SetCompletedSession(sessionID string) {
 	m.completedSessionID = sessionID
 	if sessionID != "" {
-		m.steerInput.Placeholder = sessionLogPlaceholderCompleted
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderCompleted)
 	} else {
-		m.steerInput.Placeholder = sessionLogPlaceholderDefault
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
 	}
 }
 
 func (m *SessionLogModel) ClearCompletedSession() {
 	m.completedSessionID = ""
-	m.steerInput.Placeholder = sessionLogPlaceholderDefault
+	m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
 }
 
 // SetAgentActive controls the activity spinner. It should be set to true when
@@ -297,6 +305,17 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case components.GrowingTextAreaScrollMsg:
+		if msg.Source != sessionLogScrollSource {
+			return m, nil
+		}
+		switch {
+		case msg.Delta < 0:
+			m.viewport.ScrollUp(-msg.Delta)
+		case msg.Delta > 0:
+			m.viewport.ScrollDown(msg.Delta)
+		}
+		return m, nil
 	case SessionLogLinesMsg:
 		if !m.live || msg.SessionID != m.sessionID {
 			return m, nil
@@ -331,41 +350,54 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		if m.steerActive {
 			switch msg.String() {
 			case "enter":
+				m.steerInput.Flush()
 				text := m.steerInput.Value()
-				m.steerInput.SetValue("")
+				resetCmd := m.steerInput.Reset()
 				m.steerActive = false
-				m.steerInput.Blur()
 				m.syncViewportSize()
 				if text != "" {
 					if m.failedSessionID != "" {
 						fid := m.failedSessionID
 						m.failedSessionID = ""
-						return m, func() tea.Msg {
-							return FollowUpFailedSessionMsg{TaskID: fid, Feedback: text}
-						}
+						return m, tea.Batch(
+							func() tea.Msg {
+								return FollowUpFailedSessionMsg{TaskID: fid, Feedback: text}
+							},
+							resetCmd,
+						)
 					}
 					if m.completedSessionID != "" {
 						cid := m.completedSessionID
 						m.completedSessionID = ""
-						return m, func() tea.Msg {
-							return FollowUpSessionMsg{TaskID: cid, Feedback: text}
-						}
+						return m, tea.Batch(
+							func() tea.Msg {
+								return FollowUpSessionMsg{TaskID: cid, Feedback: text}
+							},
+							resetCmd,
+						)
 					}
 					sid := m.sessionID
-					return m, func() tea.Msg {
-						return SteerSessionMsg{SessionID: sid, Message: text}
-					}
+					return m, tea.Batch(
+						func() tea.Msg {
+							return SteerSessionMsg{SessionID: sid, Message: text}
+						},
+						resetCmd,
+					)
 				}
+				return m, resetCmd
 			case keyEsc:
 				if m.steerInput.Value() != "" {
 					m.steerInput.SetValue("")
-				} else {
-					m.steerActive = false
-					m.steerInput.Blur()
 					m.syncViewportSize()
+				} else {
+					resetCmd := m.steerInput.Reset()
+					m.steerActive = false
+					m.syncViewportSize()
+					return m, resetCmd
 				}
 			default:
 				m.steerInput, cmd = m.steerInput.Update(msg)
+				m.syncViewportSize()
 			}
 			return m, cmd
 		}
@@ -373,9 +405,9 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		case "p":
 			if m.live || m.failedSessionID != "" || m.completedSessionID != "" {
 				m.steerActive = true
-				m.steerInput.Focus()
+				focusCmd := m.steerInput.Focus()
 				m.syncViewportSize()
-				return m, m.steerInput.Focus()
+				return m, focusCmd
 			}
 		case "f":
 			m.viewport.GotoBottom()

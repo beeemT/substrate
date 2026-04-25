@@ -10,6 +10,28 @@ import (
 	"github.com/beeemT/substrate/internal/tui/views"
 )
 
+// cmdContains returns true if cmd resolves to target, or to a tea.BatchMsg
+// containing a sub-cmd that resolves to target.
+func cmdContains(cmd tea.Cmd, target tea.Msg) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if msg == target {
+		return true
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return false
+	}
+	for _, c := range batch {
+		if cmdContains(c, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPlanReviewModel_SetPlanDocument(t *testing.T) {
 	st := newTestStyles(t)
 	m := views.NewPlanReviewModel(st)
@@ -397,8 +419,8 @@ func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected DisableMouse cmd from 'c', got nil")
 	}
-	if msg := cmd(); msg != tea.DisableMouse() {
-		t.Fatalf("expected DisableMouse msg, got %T", msg)
+	if !cmdContains(cmd, tea.DisableMouse()) {
+		t.Fatalf("expected DisableMouse in cmd batch, got %T", cmd())
 	}
 
 	// Type some legitimate text — should be accepted.
@@ -412,8 +434,8 @@ func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected EnableMouseCellMotion cmd from esc, got nil")
 	}
-	if msg := cmd(); msg != tea.EnableMouseCellMotion() {
-		t.Fatalf("expected EnableMouseCellMotion msg, got %T", msg)
+	if !cmdContains(cmd, tea.EnableMouseCellMotion()) {
+		t.Fatalf("expected EnableMouseCellMotion in cmd batch, got %T", cmd())
 	}
 }
 
