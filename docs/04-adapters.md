@@ -50,12 +50,74 @@ The type comment still mentions `created` / `updated` / `deleted`, but the runti
 - `GithubPRs` (`GithubPRService`) — GitHub PR table
 - `GitlabMRs` (`GitlabMRService`) — GitLab MR table
 - `SessionArtifacts` (`SessionReviewArtifactService`) — cross-provider link table
+- `GithubPRReviews`, `GitlabMRReviews` — per-reviewer review state, populated by the refresh loop
+- `GithubPRChecks`, `GitlabMRChecks` — per-check CI status, populated by the refresh loop
 
 Each PR/MR persistence function performs three writes:
 
 1. `PersistReviewArtifact(...)` — writes a `ReviewArtifactRecorded` event (audit trail)
 2. Upsert into the provider-specific table (`GithubPRs` or `GitlabMRs`)
 3. Upsert into the session review artifact link table (`SessionArtifacts`) connecting the work item to the provider artifact
+
+### PR/MR refresh loop
+
+A 120-second ticker (`StartPRRefresh` for GitHub, `StartMRRefresh` for GitLab) is the **only inbound channel from the remote platform** — there are no webhooks. On each tick the adapter calls `ListNonTerminal` (state NOT IN `merged`, `closed`) and re-fetches per-PR/MR state, plus reviews and CI checks.
+
+Per non-terminal PR/MR the loop performs:
+
+1. **Top-level state** — PATCH the provider row from `/repos/:o/:r/pulls/:n` or `glab mr view`.
+2. **Reviews** — fetch the per-reviewer review list and upsert `GithubPRReviews` / `GitlabMRReviews`. GitHub uses `/pulls/:n/reviews` (deduplicated by `user.login`, latest non-PENDING wins, lowercased state). GitLab uses the approval-state endpoint plus a synthetic `__unresolved_threads__` row sourced from the discussions endpoint when any thread is unresolved.
+3. **Checks** — fetch CI/check status. GitHub: `/repos/:o/:r/commits/:headBranch/check-runs`. GitLab: latest pipeline + jobs (`/projects/:id/pipelines?ref=...`, `/projects/:id/pipelines/:id/jobs`).
+4. **Event emission** — if a reviewer's stored state differs from the freshly fetched value, emit `pr.review_state_changed`. If any check transitions to `conclusion = failure`, emit `pr.ci_failed`.
+5. **Terminal-state cleanup** — when the PR/MR transitions to `merged`/`closed`, call `DeleteByPRID` / `DeleteByMRID` on the review and check repos to discard stale rows.
+6. **Post-merge detection** — when a PR/MR transitions to `merged`, the adapter checks every `SessionReviewArtifact` link for the work item. If all linked PRs/MRs are merged and the work item is still `SessionCompleted`, the adapter transitions it to `SessionMerged` and emits `pr.merged` (once per work item; suppressed by the work item state guard on subsequent ticks).
+
+Failures are logged at WARN and do not block the workflow.
+
+### Review-comment fetcher (live, not stored)
+
+Review comment **bodies** are intentionally never persisted. They are fetched on demand at follow-up time by `internal/adapter/review_comment.go`:
+
+```go
+type ReviewComment struct {
+	ID            string    // provider-specific stable identifier
+	ReviewerLogin string
+	Body          string
+	Path          string    // empty for top-level
+	Line          int       // 0 for top-level
+	URL           string
+	CreatedAt     time.Time
+}
+
+type ReviewCommentFetcher interface {
+	Provider() string
+	FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
+}
+```
+
+`ReviewCommentDispatcher` routes by `provider` to the registered fetcher and is wired into the TUI as `Services.ReviewComments`.
+
+- **GitHub** uses GraphQL `repository.pullRequest.reviewThreads { isResolved, comments { nodes { id, body, path, line, author, createdAt, url } } }` in a single call. Threads with `isResolved == true` are filtered out at the fetch boundary, so resolved comments never reach consumers. Top-level review summary bodies (`/pulls/:n/reviews`) are intentionally not fetched, so the `General` section is empty for GitHub PRs in the current implementation.
+- **GitLab** uses `glab api /projects/:id/merge_requests/:iid/discussions`, filtered to `resolved == false`. Inline notes use `position.new_path` and `position.new_line`; top-level discussions populate the `General` section.
+
+### Post-merge automation
+
+Both `GithubConfig` and `GlabConfig` accept:
+
+```yaml
+post_merge_close_issue: true
+```
+
+When `true`, the adapter subscribes to `pr.merged` and closes the linked tracker issue parsed from the work item's external ID (`gh:issue:owner/repo#42` -> `PATCH /repos/:o/:r/issues/:n {state: closed}`; `gl:issue:project/path#42` -> `PUT /projects/:id/issues/:iid {state_event: close}`). If the issue is already closed, both APIs return 200 (no-op).
+
+### Plan-approval description sync
+
+`onPlanApproved` does two things:
+
+1. Posts the approved plan as a comment on the source issue (existing behavior).
+2. For each open PR/MR linked to the work item (via `SessionReviewArtifact`), calls the shared `updatePRDescription` (GitHub) / `updateMRDescription` (GitLab) helper to patch the description with the approved plan text. Closed and merged PRs/MRs are skipped defensively.
+
+The `plan.approved` event payload includes `work_item_id` so the handler can look up the linked artifacts.
 
 `domain.SourceSummary` is a durable per-source-item snapshot stored on `domain.Session.Metadata` under the `source_summaries` key. Each adapter populates these during resolve so the session retains structured metadata about its source items (title, state, URL, container, labels, timestamps).
 

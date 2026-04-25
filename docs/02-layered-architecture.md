@@ -68,6 +68,10 @@ Current top-level split:
 | `GithubPullRequestRepository` | CRUD for GitHub pull requests | `domain.GithubPullRequest` |
 | `GitlabMergeRequestRepository` | CRUD for GitLab merge requests | `domain.GitlabMergeRequest` |
 | `SessionReviewArtifactRepository` | CRUD for session-artifact links | `domain.SessionReviewArtifact` |
+| `GithubPRReviewRepository` | Per-reviewer review state for GitHub PRs | `domain.GithubPRReview` |
+| `GitlabMRReviewRepository` | Per-reviewer review state for GitLab MRs | `domain.GitlabMRReview` |
+| `GithubPRCheckRepository` | Per-check CI status for GitHub PRs | `domain.GithubPRCheck` |
+| `GitlabMRCheckRepository` | Per-check CI status for GitLab MRs | `domain.GitlabMRCheck` |
 
 Representative interface shapes:
 
@@ -116,6 +120,10 @@ Concrete implementations live under `internal/repository/sqlite/`:
 - `GithubPRRepo`
 - `GitlabMRRepo`
 - `SessionReviewArtifactRepo`
+- `GithubPRReviewRepo`
+- `GitlabMRReviewRepo`
+- `GithubPRCheckRepo`
+- `GitlabMRCheckRepo`
 
 All of them accept `generic.SQLXRemote`, which lets the same repo code work with either:
 
@@ -150,6 +158,10 @@ type Resources struct {
 	GithubPRs              GithubPullRequestRepository
 	GitlabMRs              GitlabMergeRequestRepository
 	SessionReviewArtifacts SessionReviewArtifactRepository
+	GithubPRReviews        GithubPRReviewRepository
+	GitlabMRReviews        GitlabMRReviewRepository
+	GithubPRChecks         GithubPRCheckRepository
+	GitlabMRChecks         GitlabMRCheckRepository
 }
 ```
 
@@ -197,6 +209,10 @@ Current services:
 | `GithubPRService` | `GithubPullRequest` | upsert, lookup by number, list non-terminal |
 | `GitlabMRService` | `GitlabMergeRequest` | upsert, lookup by IID, list non-terminal |
 | `SessionReviewArtifactService` | `SessionReviewArtifact` | upsert, list by work item / workspace |
+| `GithubPRReviewService` | `GithubPRReview` | upsert by `(pr_id, reviewer_login)`, list by PR, delete on PR terminal transition |
+| `GitlabMRReviewService` | `GitlabMRReview` | upsert by `(mr_id, reviewer_login)`, list by MR, delete on MR terminal transition |
+| `GithubPRCheckService` | `GithubPRCheck` | upsert by `(pr_id, name)`, list by PR, delete on PR terminal transition |
+| `GitlabMRCheckService` | `GitlabMRCheck` | upsert by `(mr_id, name)`, list by MR, delete on MR terminal transition |
 
 All constructors follow the same signature: `NewXxxService(transacter atomic.Transacter[repository.Resources]) *XxxService`.
 
@@ -263,6 +279,10 @@ The canonical base schema is `migrations/001_initial.sql`. Subsequent migrations
 - `006_session_resume_info.sql` — migrates OMP-specific session metadata to a generic `resume_info` map column and drops the old columns
 - `007_plan_supersede.sql` — plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with a partial unique index on non-superseded plans, adds `superseded` to the plan status CHECK constraint, and adds `plan_id` to `agent_sessions`
 - `008_drop_planning_round.sql` — drops obsolete `sub_plans.planning_round` column
+- `009_new_session_filters_and_locks.sql` — saved new-session filters with per-instance lease locks (`new_session_filters`, `new_session_filter_locks`)
+- `010_work_item_extra_context.sql` — adds `work_items.extra_context` for follow-up planning addenda
+- `011_pr_review_state.sql` — adds `github_pr_reviews` and `gitlab_mr_reviews` for per-reviewer triage state, uniqueness on `(pr_id|mr_id, reviewer_login)`
+- `012_pr_check_status.sql` — adds `github_pr_checks` and `gitlab_mr_checks` for per-check CI status, uniqueness on `(pr_id|mr_id, name)`
 
 ### Naming note
 
@@ -287,7 +307,7 @@ CREATE TABLE work_items (
     assignee_id     TEXT,
     state           TEXT NOT NULL CHECK (state IN (
                         'ingested','planning','plan_review','approved',
-                        'implementing','reviewing','completed','failed')),
+                        'implementing','reviewing','completed','merged','failed')),
     labels          TEXT,
     source_item_ids TEXT,
     metadata        TEXT,
@@ -403,6 +423,50 @@ CREATE TABLE session_review_artifacts (
     provider_artifact_id TEXT NOT NULL,
     created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE github_pr_reviews (
+    id              TEXT PRIMARY KEY,
+    pr_id           TEXT NOT NULL REFERENCES github_pull_requests(id) ON DELETE CASCADE,
+    reviewer_login  TEXT NOT NULL,
+    state           TEXT NOT NULL,  -- approved | changes_requested | commented | dismissed
+    submitted_at    TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(pr_id, reviewer_login)
+);
+
+CREATE TABLE gitlab_mr_reviews (
+    id              TEXT PRIMARY KEY,
+    mr_id           TEXT NOT NULL REFERENCES gitlab_merge_requests(id) ON DELETE CASCADE,
+    reviewer_login  TEXT NOT NULL,
+    state           TEXT NOT NULL,  -- approved | changes_requested | unapproved
+    submitted_at    TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(mr_id, reviewer_login)
+);
+
+CREATE TABLE github_pr_checks (
+    id          TEXT PRIMARY KEY,
+    pr_id       TEXT NOT NULL REFERENCES github_pull_requests(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL,  -- queued | in_progress | completed
+    conclusion  TEXT NOT NULL DEFAULT '',  -- success | failure | neutral | ...
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(pr_id, name)
+);
+
+CREATE TABLE gitlab_mr_checks (
+    id          TEXT PRIMARY KEY,
+    mr_id       TEXT NOT NULL REFERENCES gitlab_merge_requests(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    conclusion  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(mr_id, name)
 );
 ```
 

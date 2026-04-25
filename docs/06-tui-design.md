@@ -46,16 +46,16 @@ The default sidebar shows work-item overviews. The content pane renders the sele
 
 Fixed 34 characters wide. The default title is `Sessions`. Entries are **work-item overviews**, not a flat list of individual agent sessions. Each row summarizes the work item state plus the latest child-task metadata that should be visible at a glance: current status, repo progress, and whether the work item currently has an open question or interruption.
 
-Press `→` on a selected work item to drill into a second sidebar pane titled `{externalID} · Tasks`. That pane contains the work-item overview row, an optional `Source details` row when the work item has non-manual source metadata, and the child agent-task sessions for that work item in sub-plan order. Selecting a task row opens that task's log in the content pane. Selecting `Source details` opens the source-details content mode. Press `←`/`Esc` from the task pane to return to the top-level sessions list; press `→` from the task pane to move focus into the content pane.
+Press `→` on a selected work item to drill into a second sidebar pane titled `{externalID} · Tasks`. That pane contains the work-item overview row, an optional `Source details` row when the work item has non-manual source metadata, an optional `Artifacts` row when the work item has at least one PR/MR, and the child agent-task sessions for that work item in sub-plan order. Selecting a task row opens that task's log in the content pane. Selecting `Source details` opens the source-details content mode; selecting `Artifacts` opens the artifacts content mode (see §3f). Press `←`/`Esc` from the task pane to return to the top-level sessions list; press `→` from the task pane to move focus into the content pane.
 
 Historical search is separate from the live sidebar list: `/` opens the session-history overlay, which can search within the current workspace or across all workspaces and then open either the live work item or a historical interaction transcript/summary.
 
 **Status icons:**
 - `●` running/active (green)
-- `◐` pending human action (amber) — plan review needed, open question, or similar attention state
-- `✓` completed (dim green)
+- `◐` pending human action (amber) — plan review needed, open question, similar attention state, or any PR with `changes_requested`
+- `✓` completed (dim green) — also used for `merged` work items (label distinguishes them)
 - `⊘` interrupted (amber)
-- `✗` failed (red)
+- `✗` failed (red) — also used when any PR has failing CI
 - `◌` inactive/default (muted)
 
 **Entry layout** (three rendered lines plus a blank separator row):
@@ -111,6 +111,7 @@ const (
     ContentModeEmpty              ContentMode = iota // no session selected
     ContentModeOverview                              // canonical root-session overview/control surface
     ContentModeSourceDetails                         // task-pane source metadata for the selected work item
+    ContentModeArtifacts                             // PR/MR artifacts for the selected work item
     ContentModePlanning                              // planning/task session log tailing
     ContentModeSessionInteraction                    // historical or task session interaction view
 )
@@ -118,7 +119,7 @@ const (
 
 `ContentModeOverview` is the default when a work item is selected — it handles all root states (ingested, planning, plan_review, approved, implementing, reviewing, completed, failed). When the session is blocked on a human action, the overview surfaces that action inline or through an overlay. The operator never has to navigate to a state-specific page to unblock progress.
 
-`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModePlanning` renders the live planning transcript while a planning child session is active.
+`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeArtifacts` renders the artifacts accordion for the work item's PRs/MRs (see §3f). `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModePlanning` renders the live planning transcript while a planning child session is active.
 
 ---
 
@@ -284,6 +285,106 @@ The renderer groups raw session-log entries into higher-level blocks:
 
 ---
 
+### 3f. Artifacts Mode
+
+Renders the work item's PRs/MRs as an accordion list. Reached from the `Artifacts` row in the `{externalID} · Tasks` sidebar (only emitted when the work item has at least one linked PR/MR). When exactly one artifact exists, the accordion chrome is skipped and the detail card is rendered directly.
+
+**Per-row collapsed display:**
+
+```
+  #42  acme/auth-svc    feat: distribute config    [open]     ✗ CI  ◐ review
+  #43  acme/billing     feat: distribute config    [open]     ✓ CI  ✓ review
+  #44  acme/gateway     feat: distribute config    [draft]    ○ CI  —
+```
+
+**Expanded card:**
+
+```
+  ┌─ #42  acme/auth-svc ────────────────────────────────── [open] ──┐
+  │  feat: distribute config                                       │
+  │  feature/distribute-config → main                             │
+  │  opened 2d ago · updated 3h ago                               │
+  │                                                                │
+  │  Review                                                        │
+  │    ✓ alice    approved          2d ago                         │
+  │    ✗ bob      changes requested  1h ago                        │
+  │                                                                │
+  │  CI                                                            │
+  │    ✗ test     3 failures                                       │
+  │    ✓ build                                                     │
+  │    ✓ lint                                                      │
+  └────────────────────────────────────────────────────────────────┘
+```
+
+Multiple items can be expanded simultaneously; the content area becomes scrollable when expanded cards overflow.
+
+**View model:**
+
+```go
+type ArtifactItem struct {
+    Provider   string     // "github" | "gitlab"
+    Kind       string     // "pr" | "mr"
+    ProviderID string     // FK into github_pull_requests / gitlab_merge_requests
+    RepoName   string
+    Number     int
+    Title      string
+    Ref        string     // "#42" or "!7"
+    URL        string
+    State      string     // "draft" | "open" | "merged" | "closed"
+    HeadBranch string
+    BaseBranch string
+    Draft      bool
+    MergedAt   *time.Time
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+    Reviews    []ArtifactReview
+    Checks     []ArtifactCheck
+}
+
+type ArtifactReview struct {
+    ReviewerLogin string
+    State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+    SubmittedAt   time.Time
+}
+
+type ArtifactCheck struct {
+    Name       string
+    Status     string    // "queued" | "in_progress" | "completed"
+    Conclusion string    // "success" | "failure" | ...
+}
+```
+
+`buildArtifactItems(wi)` queries the provider tables plus the review and check repos and returns `[]ArtifactItem`. It listens for `pr.review_state_changed` and `pr.ci_failed` events to refresh without waiting for the next UI tick.
+
+**Sidebar Artifacts node icon** reflects the worst-case state across the work item's PRs:
+
+| Condition | Icon |
+|---|---|
+| Any PR has `changes_requested` | `◐` (warning) |
+| Any PR has failing CI | `✗` (error) |
+| All PRs merged | `✓` (success) |
+| Otherwise | `◌` (muted) |
+
+**Keybinds:**
+
+| Key | Behaviour |
+|---|---|
+| `↑` / `↓` | Move cursor |
+| `→` / `Space` | Expand focused collapsed item |
+| `Space` | Collapse focused expanded item |
+| `←` | Return focus to sidebar |
+| `o` | Open focused PR/MR URL in browser |
+| `O` | Open links dialog (open all with `a`, single PR/MR opens directly) |
+| `f` | Open review-comment follow-up overlay (§4h) when work item state is `SessionCompleted` or `SessionReviewing` |
+
+### 3g. SessionMerged Handling
+
+When a work item reaches `SessionMerged` (set by the post-merge handler in `04-adapters.md`):
+
+- Sidebar shows the `✓` icon with a `merged` badge instead of `completed`.
+- The overview's `c` (follow-up re-plan) keybind is hidden — you do not re-plan on a merged PR.
+- The `i` (inspect) keybind remains available.
+
 ## 4. Overlays
 
 ### 4a. Session History Search Overlay
@@ -401,6 +502,57 @@ When a source is selected, the adapter fetches repositories via the `RepoSource.
 Cloning delegates to `gitwork.Client.Clone()` and creates a git-work managed repository in the workspace.
 
 **Keys:** `Tab` / `Shift-Tab` cycle focus, `↑` / `↓` navigate, `Enter` clone, `Esc` close.
+
+### 4h. Review-Comment Follow-Up Overlay
+
+Triggered by `f` from the artifacts view (§3f) when the work item is in `SessionCompleted` or `SessionReviewing`. Lets the operator turn outstanding (unresolved) PR/MR review comments into agent follow-up work without leaving the TUI. Two dispatch modes:
+
+- **Address (Enter, default)** — implementation-only follow-up; the existing plan stays intact. One `FollowUpSession` per affected repo.
+- **Re-plan (`p`)** — escape hatch when feedback is architectural; replaces the plan via `FollowUpPlan`. PR/MR descriptions then sync to the new plan via the existing `plan.approved` path.
+
+**Stages** (one model with internal sub-states):
+
+1. `stageLoading` — spinner while `Services.ReviewComments` fans out `FetchReviewComments` calls in parallel for every PR/MR on the work item. Records `fetchedAt`. Resolved comments are filtered at the fetch boundary.
+2. Aggregate routing:
+   - 0 PRs with unresolved comments → toast `No outstanding review comments`, close.
+   - exactly 1 PR with unresolved comments → skip picker, jump to `stageSelector`.
+   - >1 PRs → `stagePicker` (PR checklist, all checked by default).
+3. `stageSelector` — split view: left pane is a hierarchical checklist grouped by repo → file (with a `General` section per repo for top-level review comments); right pane previews the focused comment (body, author, timestamp, URL). Toggling a header cascades to its children. All comments selected by default.
+4. `stageConfirm` — only when re-plan is chosen; modal warning that the plan will be replaced and PR descriptions will resync.
+
+**Comment formatting** (canonical template, both modes):
+
+```
+## Review comments to address
+
+### acme/rocket
+
+#### General
+
+- alice: Please add tests for the error cases in the retry loop.
+
+#### internal/handler/process.go
+
+- Line 42: This retry loop doesn't respect the context deadline.
+- Line 78: Consider using a switch here.
+
+### acme/engine
+
+#### cmd/server/main.go
+
+- Line 15: Missing graceful shutdown.
+```
+
+Address-mode sends one slice per repo (only that repo's `### repoName` block) into per-repo `FollowUpSessionMsg`. Re-plan mode concatenates everything into a single `FollowUpPlanMsg`. Reviewer identity is surfaced only in the `General` section, where file+line cannot disambiguate.
+
+Note: GitHub's `General` section is typically empty because top-level review summary bodies (`/pulls/:n/reviews`) are not fetched; only inline thread comments populate the per-file sections. GitLab MR top-level discussions populate the `General` section as expected.
+
+**Dispatch correctness:**
+
+- **Staleness re-fetch** — if `time.Since(fetchedAt) > 5min` at dispatch time, the overlay silently re-fetches with a spinner, re-applies the prior selection by comment ID, and toasts `N comment(s) selected were no longer available` if any disappeared. New comments default to deselected.
+- **Partial dispatch on missing tasks** — if a repo has selected comments but no completed task to attach to, that repo is skipped and the result is surfaced in a toast: `Addressed N of M repos (K skipped: no active task)`.
+
+**Keys:** `↑`/`↓` move, `Space` toggle, `a` all, `n` none, `Enter` Address, `p` Re-plan, `Esc` cancel.
 ---
 
 ## 5. Layout System

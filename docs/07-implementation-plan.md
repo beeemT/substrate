@@ -37,6 +37,13 @@ migrations/
     003_omp_session_meta.sql
     004_sub_plan_planning_round.sql
     005_review_artifacts.sql
+    006_session_resume_info.sql
+    007_plan_supersede.sql
+    008_drop_planning_round.sql
+    009_new_session_filters_and_locks.sql
+    010_work_item_extra_context.sql
+    011_pr_review_state.sql
+    012_pr_check_status.sql
 ~/.substrate/state.db
 ```
 
@@ -91,6 +98,10 @@ Current schema details worth preserving:
 - `sub_plans.planning_round` tracked which planning round last modified each sub-plan (migration 004; dropped in migration 008)- migration 006 migrates OMP-specific session metadata to generic `resume_info`
 - migration 007 adds plan supersede model (partial unique index on non-superseded plans) and `plan_id` to `agent_sessions` pointing at `plans(id)`
 - migration 008 drops `sub_plans.planning_round`
+- migration 009 adds `new_session_filters` and `new_session_filter_locks` for saved new-session filters with per-instance lease locks
+- migration 010 adds `work_items.extra_context` for follow-up planning addenda
+- migration 011 adds `github_pr_reviews` and `gitlab_mr_reviews` for per-reviewer triage state, populated by the 120-second refresh loop
+- migration 012 adds `github_pr_checks` and `gitlab_mr_checks` for per-check CI status, populated by the 120-second refresh loop
 - `agent_sessions.resume_info` tracks native harness session state as generic resume metadata
 
 SQLite implementations live in `internal/repository/sqlite/` and accept `generic.SQLXRemote`. `resources.go` still groups transaction-bound repos into a `Resources` bundle for tests / transactional construction.
@@ -112,6 +123,8 @@ Current services and names:
 - `GithubPRService`
 - `GitlabMRService`
 - `SessionReviewArtifactService`
+- `GithubPRReviewService`, `GitlabMRReviewService`
+- `GithubPRCheckService`, `GitlabMRCheckService`
 Important current behavior:
 
 - `SessionService` enforces root-session uniqueness and lifecycle transitions

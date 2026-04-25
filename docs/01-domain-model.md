@@ -41,6 +41,7 @@ const (
 	SessionImplementing SessionState = "implementing"
 	SessionReviewing    SessionState = "reviewing"
 	SessionCompleted    SessionState = "completed"
+	SessionMerged       SessionState = "merged"
 	SessionFailed       SessionState = "failed"
 )
 ```
@@ -51,6 +52,7 @@ Important invariants owned by `SessionService`:
 - Initial state must be `ingested`.
 - `external_id` uniqueness is enforced per workspace when applicable.
 - `SourceItemIDs` are used to prevent duplicate ingestion of the same scoped tracker item set.
+- `SessionMerged` is a terminal success state distinct from `SessionCompleted`. The transition `SessionCompleted -> SessionMerged` is set by the GitHub/GitLab refresh loop once every PR/MR linked to the work item reaches `merged`. Follow-up re-planning is hidden for merged sessions; inspection remains available.
 
 ### Selection Model
 
@@ -210,6 +212,60 @@ type SessionReviewArtifact struct {
 ```
 
 `ReviewArtifactEventPayload` is the payload shape stored in `system_events` rows with event type `review.artifact_recorded`. `GithubPullRequest` and `GitlabMergeRequest` are the provider-normalized rows backfilled from those events. `SessionReviewArtifact` is the link table connecting a work item to its PR/MR records.
+
+### PR Review and CI Check Types
+
+Per-reviewer review state and per-check CI status are stored alongside the provider PR/MR rows. The 120-second refresh loop maintains them; the TUI artifacts view consumes them.
+
+```go
+type GithubPRReview struct {
+	ID            string
+	PRID          string
+	ReviewerLogin string
+	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+	SubmittedAt   time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type GitlabMRReview struct {
+	ID            string
+	MRID          string
+	ReviewerLogin string
+	State         string    // "approved" | "changes_requested" | "unapproved"
+	SubmittedAt   time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type GithubPRCheck struct {
+	ID         string
+	PRID       string
+	Name       string
+	Status     string // "queued" | "in_progress" | "completed"
+	Conclusion string // "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | ...
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type GitlabMRCheck struct {
+	ID         string
+	MRID       string
+	Name       string
+	Status     string
+	Conclusion string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+```
+
+GitHub review states normalize to lowercase on storage; `PENDING` reviews are dropped. When the same reviewer submits multiple reviews, only the latest non-pending entry is kept (uniqueness enforced by `(pr_id, reviewer_login)`).
+
+GitLab has no native `changes_requested` signal. The adapter derives one synthetically: when the merge-request discussions endpoint reports any unresolved thread, a row with `reviewer_login = "__unresolved_threads__"` and `state = "changes_requested"` is upserted. Per-user approval state is sourced from the approval-state endpoint.
+
+Check rows are uniqued by `(pr_id, name)` / `(mr_id, name)` so re-runs replace the prior state. When a PR/MR transitions to a terminal state, the adapter calls `DeleteByPRID` / `DeleteByMRID` to clean up stale rows.
+
+Review-comment **bodies** are not stored. They are fetched live at follow-up time only (see `04-adapters.md` and `06-tui-design.md`).
 
 ### SourceSummary
 
@@ -551,6 +607,10 @@ erDiagram
     Session ||--o{ SessionReviewArtifact : has
     SessionReviewArtifact }o--|| GithubPullRequest : links
     SessionReviewArtifact }o--|| GitlabMergeRequest : links
+    GithubPullRequest ||--o{ GithubPRReview : has
+    GithubPullRequest ||--o{ GithubPRCheck : has
+    GitlabMergeRequest ||--o{ GitlabMRReview : has
+    GitlabMergeRequest ||--o{ GitlabMRCheck : has
 ```
 
 Relationship rules that matter in practice:
@@ -579,12 +639,18 @@ Migrations are applied sequentially from `migrations/`. The initial schema is in
 | 006 | `agent_sessions` migrates OMP-specific session metadata to generic `resume_info` map column |
 | 007 | Plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with partial unique index on non-superseded plans, adds `plan_id` to `agent_sessions` |
 | 008 | Drops obsolete `sub_plans.planning_round` column |
+| 009 | New session filters and locks |
+| 010 | `work_items` adds extra context column for follow-up planning |
+| 011 | `github_pr_reviews`, `gitlab_mr_reviews` tables for per-reviewer review state |
+| 012 | `github_pr_checks`, `gitlab_mr_checks` tables for per-check CI status |
 
 New tables introduced since initial schema:
 
 - `github_pull_requests` — durable rows for GitHub PRs with unique index on `(owner, repo, number)`.
 - `gitlab_merge_requests` — durable rows for GitLab MRs with unique index on `(project_path, iid)`.
 - `session_review_artifacts` — link table connecting work items to provider PR/MR records with unique dedup index on `(workspace_id, work_item_id, provider, provider_artifact_id)`.
+- `github_pr_reviews`, `gitlab_mr_reviews` — per-reviewer review state with `UNIQUE(pr_id, reviewer_login)` / `UNIQUE(mr_id, reviewer_login)` enabling upsert-on-latest.
+- `github_pr_checks`, `gitlab_mr_checks` — per-check CI status with `UNIQUE(pr_id, name)` / `UNIQUE(mr_id, name)`.
 
 Migration 002 rewrote `agent_sessions` to add canonical columns (`work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`) and migration 003 added generic resume metadata storage so harnesses can persist `ResumeInfo` without separate harness file/id columns.
 

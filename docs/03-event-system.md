@@ -103,6 +103,11 @@ const (
 	// Review artifact events
 	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
 
+	// PR/MR lifecycle events emitted by the GitHub/GitLab refresh loops
+	EventPRReviewStateChanged    EventType = "pr.review_state_changed"
+	EventPRCIFailed              EventType = "pr.ci_failed"
+	EventPRMerged                EventType = "pr.merged"
+
 	// Adapter error events
 	EventAdapterError EventType = "adapter.error"
 )
@@ -124,6 +129,7 @@ These call `EventService.Create(...)` which persists directly via the repository
 |---|---|
 | `PlanningService` | `work_item.planning`, `plan.generated`, `plan.failed` |
 | `adapter.PersistReviewArtifact` (GitHub/GitLab adapters) | `review.artifact_recorded` |
+| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.review_state_changed`, `pr.ci_failed`, `pr.merged` (each emitted only on observed state change) |
 
 Representative payload shapes:
 
@@ -472,6 +478,32 @@ Published by `adapter.PersistReviewArtifact` (called from GitHub and GitLab adap
 ```
 
 The payload shape is `domain.ReviewArtifactEventPayload` containing a `WorkItemID` and a `ReviewArtifact` struct.
+
+### `pr.review_state_changed`
+
+Emitted by the GitHub `refreshPRs` and GitLab `refreshSingleMR` loops when a stored reviewer's state differs from the freshly fetched value. Persisted via `EventService.Create`. Subscribers (notably the TUI) use this to invalidate cached artifact data without waiting for the next UI tick:
+
+```json
+{"pr_id":"...","reviewer":"alice","old_state":"commented","new_state":"approved"}
+```
+
+### `pr.ci_failed`
+
+Emitted when any check transitions to `conclusion = failure`:
+
+```json
+{"pr_id":"...","check_name":"test","conclusion":"failure"}
+```
+
+Reserved for future automation (e.g. optional auto-follow-up agent session). Currently informational.
+
+### `pr.merged`
+
+Emitted **once per work item** when the refresh loop observes that every PR/MR linked to a work item has reached `merged` state and the work item itself is still `SessionCompleted`. The handler transitions the work item to `SessionMerged` and may trigger configured post-merge hooks (see `04-adapters.md`). The refresh loop suppresses re-emission by checking the current work item state:
+
+```json
+{"work_item_id":"...","workspace_id":"..."}
+```
 
 ### `adapter.error`
 
