@@ -1139,8 +1139,8 @@ func TestPlanOverlayEnterSubmitClosesOverlay(t *testing.T) {
 }
 
 // TestCompletedOverlayEnterSubmitPreservesLongFeedback verifies that completed
-// follow-up feedback accepts pasted research beyond the old 2000-character cap,
-// emits the full FollowUpPlanMsg, and still renders inside a narrow terminal.
+// follow-up feedback accepts pasted research beyond the previous 5000-character
+// cap, emits the full FollowUpPlanMsg, and still renders inside a narrow terminal.
 func TestCompletedOverlayEnterSubmitPreservesLongFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -1164,7 +1164,7 @@ func TestCompletedOverlayEnterSubmitPreservesLongFeedback(t *testing.T) {
 		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with feedback input", m.overlay, m.completed.inputActive)
 	}
 
-	longFeedback := strings.Repeat("research result line with enough detail\n", 80) // > 2000 chars.
+	longFeedback := strings.Repeat("research result line with enough detail\n", 160) // > 5000 chars.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longFeedback)})
 
 	view := m.overlayView(80, 24)

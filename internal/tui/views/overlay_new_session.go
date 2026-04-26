@@ -298,13 +298,13 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	md.SetPlaceholder("Description (optional)…")
 	md.SetWidth(60)
 	md.SetMaxLines(newSessionManualDescMaxLines)
-	md.SetCharLimit(5000)
+	md.SetCharLimit(20000)
 
 	ec := components.NewGrowingTextArea(newSessionExtraContextScrollSource)
 	ec.SetPlaceholder("Additional context (optional)…")
 	ec.SetWidth(60)
 	ec.SetMaxLines(newSessionExtraContextFallbackLines)
-	ec.SetCharLimit(5000)
+	ec.SetCharLimit(20000)
 
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true

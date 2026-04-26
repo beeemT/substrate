@@ -635,6 +635,44 @@ func TestNewSessionOverlayAdditionalContextEnterIncludesInput(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayAdditionalContextPreservesLongPaste(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-1", Provider: "github", Title: "Selected issue"}))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	longContext := strings.Repeat("research result line with enough detail\n", 160) // > 5000 chars.
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longContext)})
+	view := stripBrowseANSI(overlay.extraContextModalView())
+	assertOverlayFits(t, view, 100, 15)
+
+	_, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected session command")
+	}
+
+	var msg NewSessionBrowseMsg
+	found := false
+	for _, raw := range runOverlayCmd(t, cmd) {
+		if got, ok := raw.(NewSessionBrowseMsg); ok {
+			msg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("cmd did not include NewSessionBrowseMsg")
+	}
+	if msg.ExtraContext != longContext {
+		t.Fatalf("ExtraContext length = %d, want %d", len(msg.ExtraContext), len(longContext))
+	}
+}
+
 func TestNewSessionOverlayAdditionalContextSuppressesBrowseWheel(t *testing.T) {
 	t.Parallel()
 
@@ -2096,6 +2134,48 @@ func TestNewSessionOverlayManualShortcutDispatchesManualSession(t *testing.T) {
 	}
 	if sessionMsg.Title != "Manual task" {
 		t.Fatalf("title = %q, want Manual task", sessionMsg.Title)
+	}
+}
+
+func TestNewSessionOverlayManualDescriptionPreservesLongPaste(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{manualTestAdapter{}, githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	updated.manualTitle.SetValue("Manual task")
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !updated.manualDesc.Focused() {
+		t.Fatal("description not focused after Down from title")
+	}
+
+	longDesc := strings.Repeat("research result line with enough detail\n", 160) // > 5000 chars.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longDesc)})
+	view := stripBrowseANSI(updated.View())
+	assertOverlayFits(t, view, 100, 30)
+
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected manual session command")
+	}
+
+	var sessionMsg NewSessionManualMsg
+	found := false
+	for _, msg := range runOverlayCmd(t, cmd) {
+		if got, ok := msg.(NewSessionManualMsg); ok {
+			sessionMsg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("cmd did not include NewSessionManualMsg")
+	}
+	if sessionMsg.Desc != longDesc {
+		t.Fatalf("desc length = %d, want %d", len(sessionMsg.Desc), len(longDesc))
 	}
 }
 

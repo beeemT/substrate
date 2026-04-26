@@ -29,7 +29,7 @@ const (
 	// sessionLogSteerCharLimit keeps long pasted research usable while still bounding
 	// pathological input size; display height remains capped separately.
 	sessionLogSteerMaxLines  = 6
-	sessionLogSteerCharLimit = 5000
+	sessionLogSteerCharLimit = 20000
 )
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.

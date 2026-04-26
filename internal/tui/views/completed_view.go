@@ -19,7 +19,7 @@ const completedScrollSource = "completed-feedback"
 // pathological input size; display height remains capped separately.
 const (
 	completedFeedbackMaxLines  = 6
-	completedFeedbackCharLimit = 5000
+	completedFeedbackCharLimit = 20000
 )
 
 // CompletedModel shows the implemented plan and hosts the follow-up feedback

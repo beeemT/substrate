@@ -229,3 +229,20 @@ func TestGrowingTextAreaViewRendersLineNumbersAsChrome(t *testing.T) {
 		t.Fatalf("value unexpectedly contains rendered gutter chrome: %q", g.Value())
 	}
 }
+
+func TestGrowingTextAreaLargePasteShowsTailImmediately(t *testing.T) {
+	t.Parallel()
+
+	g := components.NewGrowingTextArea("")
+	g.SetMaxLines(6)
+	g.SetWidth(24)
+	g = focused(g)
+
+	pasted := strings.TrimSuffix(strings.Repeat("head line\n", 5), "\n") + "\nTAIL SENTINEL"
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+
+	view := g.View()
+	if !strings.Contains(view, "TAIL SENTINEL") {
+		t.Fatalf("large one-shot paste view did not scroll to tail immediately:\n%s", view)
+	}
+}

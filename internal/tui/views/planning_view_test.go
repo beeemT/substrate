@@ -136,7 +136,7 @@ func TestSessionLogSteerInputPreservesLongFeedback(t *testing.T) {
 		t.Fatal("p should activate steering input for a completed session")
 	}
 
-	longFeedback := strings.Repeat("research result line with enough detail\n", 80) // > 2000 chars.
+	longFeedback := strings.Repeat("research result line with enough detail\n", 160) // > 5000 chars.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longFeedback)})
 
 	view := m.View()

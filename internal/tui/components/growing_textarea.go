@@ -54,6 +54,12 @@ type GrowingTextArea struct {
 	maxLines int
 	height   int
 
+	// forceTailOnNextView is set after focused bulk input changes the textarea
+	// height. Bubbles resets its internal viewport to the top in that path; the
+	// next View() copy scrolls to the cursor before rendering so the paste tail is
+	// visible immediately in the same frame.
+	forceTailOnNextView bool
+
 	// pendingBracket holds a buffered '[' rune that may start an SGR mouse
 	// fragment. Resolved on the next event: real fragment → discarded as
 	// scroll; unrelated input → flushed into the textarea.
@@ -152,6 +158,7 @@ func (g GrowingTextArea) Value() string { return g.model.Value() }
 // SetValue replaces the textarea content and re-syncs visual height.
 func (g *GrowingTextArea) SetValue(s string) {
 	g.model.SetValue(s)
+	g.forceTailOnNextView = false
 	g.syncHeight()
 }
 
@@ -168,7 +175,13 @@ func (g *GrowingTextArea) Reset() tea.Cmd {
 }
 
 // View renders the textarea.
-func (g GrowingTextArea) View() string { return g.model.View() }
+func (g GrowingTextArea) View() string {
+	if g.forceTailOnNextView {
+		g.model, _ = g.model.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+		g.model, _ = g.model.Update(tea.KeyMsg{Type: tea.KeyRunes})
+	}
+	return g.model.View()
+}
 
 // Update forwards the message to the embedded textarea and grows the visual
 // height to fit. SGR mouse fragments are intercepted: matched wheel events
@@ -204,8 +217,10 @@ func (g *GrowingTextArea) Flush() {
 
 // syncHeight updates the visual row count from the wrapped content, capped
 // at maxLines. SetValue is re-issued after SetHeight so the textarea's
-// internal viewport resets to row 0 and content stays visible as it grows
-// (textarea.SetHeight alone does not move the viewport).
+// internal viewport is rebuilt for the new height. For focused inputs, temporarily
+// lift Bubbles' MaxHeight before re-inserting the existing value so large pastes
+// retain all logical lines and the viewport can follow the real cursor tail
+// immediately.
 func (g *GrowingTextArea) syncHeight() {
 	width := g.model.Width()
 	if width <= 0 {
@@ -219,13 +234,18 @@ func (g *GrowingTextArea) syncHeight() {
 		want = g.maxLines
 	}
 	if want == g.height {
+		g.forceTailOnNextView = g.forceTailOnNextView || g.model.Focused()
 		return
 	}
 	g.height = want
 	g.model.SetHeight(want)
-	// SetHeight only changes the viewport box; SetValue forces the internal
-	// viewport to reset to row 0 and re-insert content with the cursor at end.
+	previousMaxHeight := g.model.MaxHeight
+	if g.model.Focused() {
+		g.model.MaxHeight = 0
+	}
 	g.model.SetValue(g.model.Value())
+	g.model.MaxHeight = previousMaxHeight
+	g.forceTailOnNextView = g.model.Focused()
 }
 
 // wrappedRowCount returns the number of visual rows occupied by value when
