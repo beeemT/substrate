@@ -174,3 +174,37 @@ func TestGrowingTextAreaFocusReturnsCmd(t *testing.T) {
 		t.Fatal("Focus did not focus the textarea")
 	}
 }
+
+func TestGrowingTextAreaVerticalBoundaries(t *testing.T) {
+	t.Parallel()
+
+	g := components.NewGrowingTextArea("")
+	g.SetWidth(40)
+	g = focused(g)
+
+	if !g.AtTop() {
+		t.Fatal("empty textarea should start at top")
+	}
+	if !g.AtBottom() {
+		t.Fatal("empty textarea should start at bottom")
+	}
+
+	g = typeRunes(g, "first")
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	g = typeRunes(g, "second")
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if !g.AtTop() {
+		t.Fatal("cursor should be at top after SetValue")
+	}
+	if g.AtBottom() {
+		t.Fatal("top of multi-line textarea reported bottom")
+	}
+
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if g.AtTop() {
+		t.Fatal("after Down, textarea still reported top")
+	}
+	if !g.AtBottom() {
+		t.Fatal("after Down to final line, textarea should report bottom")
+	}
+}

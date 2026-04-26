@@ -115,6 +115,18 @@ func (g GrowingTextArea) Width() int { return g.model.Width() }
 // Height returns the current visual row count (1..MaxLines).
 func (g GrowingTextArea) Height() int { return g.height }
 
+// AtTop reports whether an up-arrow would leave the textarea instead of moving within it.
+func (g GrowingTextArea) AtTop() bool {
+	li := g.model.LineInfo()
+	return g.model.Line() == 0 && li.RowOffset <= 0
+}
+
+// AtBottom reports whether a down-arrow would leave the textarea instead of moving within it.
+func (g GrowingTextArea) AtBottom() bool {
+	li := g.model.LineInfo()
+	return g.model.Line() >= g.model.LineCount()-1 && li.RowOffset >= li.Height-1
+}
+
 // Focused reports whether the textarea is focused.
 func (g GrowingTextArea) Focused() bool { return g.model.Focused() }
 

@@ -2001,6 +2001,76 @@ func TestNewSessionOverlayManualShortcutDispatchesManualSession(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayManualEscReturnsToBrowse(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{manualTestAdapter{}, githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	manual, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	manual.manualTitle.SetValue("Manual task")
+	if !manual.showManual {
+		t.Fatal("expected manual form after ctrl+n")
+	}
+
+	updated, cmd := manual.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	for _, msg := range runOverlayCmd(t, cmd) {
+		if _, ok := msg.(CloseOverlayMsg); ok {
+			t.Fatal("Esc from manual form emitted CloseOverlayMsg")
+		}
+	}
+	if updated.showManual {
+		t.Fatal("manual form still shown after Esc")
+	}
+	if !updated.Active() {
+		t.Fatal("new session overlay closed after Esc from manual form")
+	}
+	if updated.manualTitle.Value() != "" {
+		t.Fatalf("manual title = %q, want cleared", updated.manualTitle.Value())
+	}
+	if updated.browseFocus != browseFocusControls || updated.browseControl != browseControlSearch {
+		t.Fatalf("browse focus = (%v, %v), want search control", updated.browseFocus, updated.browseControl)
+	}
+}
+
+func TestNewSessionOverlayManualArrowKeysMoveBetweenFields(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{manualTestAdapter{}, githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+
+	manual, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if manual.manualFocus != 0 {
+		t.Fatalf("manual focus = %d, want title", manual.manualFocus)
+	}
+
+	manual, cmd := manual.Update(tea.KeyMsg{Type: tea.KeyDown})
+	for range runOverlayCmd(t, cmd) {
+		// Drain focus commands so the test mirrors Bubble Tea dispatch without asserting on cursor ticks.
+	}
+	if manual.manualFocus != 1 {
+		t.Fatalf("manual focus after Down = %d, want description", manual.manualFocus)
+	}
+	if !manual.manualDesc.Focused() {
+		t.Fatal("description not focused after Down from title")
+	}
+
+	manual, cmd = manual.Update(tea.KeyMsg{Type: tea.KeyUp})
+	for range runOverlayCmd(t, cmd) {
+		// Drain blur commands.
+	}
+	if manual.manualFocus != 0 {
+		t.Fatalf("manual focus after Up at description top = %d, want title", manual.manualFocus)
+	}
+	if !manual.manualTitle.Focused() {
+		t.Fatal("title not focused after Up from description top")
+	}
+}
+
 func TestNewSessionOverlayAdapterErrorClearsLoading(t *testing.T) {
 	t.Parallel()
 

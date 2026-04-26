@@ -1897,12 +1897,34 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		if m.showManual {
 			switch msg.String() {
 			case keyEsc:
-				return m, func() tea.Msg { return CloseOverlayMsg{} }
+				m.showManual = false
+				m.manualTitle.SetValue("")
+				m.manualTitle.Blur()
+				cmds = append(cmds, m.manualDesc.Reset())
+				m.setBrowseControlFocus(browseControlSearch)
 			case "backtab", keyShiftTab:
 				if m.manualFocus == 1 {
 					cmds = append(cmds, m.manualDesc.Blur())
 					m.manualFocus = 0
 					m.manualTitle.Focus()
+				}
+			case "up":
+				if m.manualFocus == 1 && m.manualDesc.AtTop() {
+					cmds = append(cmds, m.manualDesc.Blur())
+					m.manualFocus = 0
+					m.manualTitle.Focus()
+				} else if m.manualFocus == 1 {
+					m.manualDesc, cmd = m.manualDesc.Update(msg)
+					cmds = append(cmds, cmd)
+				}
+			case keyDown:
+				if m.manualFocus == 0 {
+					m.manualTitle.Blur()
+					m.manualFocus = 1
+					cmds = append(cmds, m.manualDesc.Focus())
+				} else if !m.manualDesc.AtBottom() {
+					m.manualDesc, cmd = m.manualDesc.Update(msg)
+					cmds = append(cmds, cmd)
 				}
 			case keyTab:
 				if m.manualFocus == 0 {
