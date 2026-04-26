@@ -1781,7 +1781,10 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if !m.showManual && msg.Action == tea.MouseActionPress {
+		if m.showManual || m.showExtraContext {
+			break
+		}
+		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 				switch m.browseFocus {
@@ -2191,9 +2194,7 @@ func (m *NewSessionOverlay) View() string {
 
 	var body string
 	footer := ""
-	if m.showExtraContext {
-		body = m.extraContextView(renderWidth)
-	} else if m.showManual {
+	if m.showManual {
 		body = m.manualView(renderWidth)
 	} else {
 		body = m.browserView(layout)
@@ -2206,6 +2207,9 @@ func (m *NewSessionOverlay) View() string {
 		Footer:      footer,
 		Focused:     true,
 	})
+	if modal := m.extraContextModalView(); modal != "" {
+		return renderCenteredOverlay(base, modal, m.width, m.height)
+	}
 	if modal := m.filterModalView(); modal != "" {
 		return renderCenteredOverlay(base, modal, m.width, m.height)
 	}
@@ -2372,10 +2376,23 @@ func (m NewSessionOverlay) manualView(width int) string {
 	}, "\n")
 }
 
-func (m NewSessionOverlay) extraContextView(width int) string {
+func (m NewSessionOverlay) extraContextModalView() string {
+	if !m.showExtraContext {
+		return ""
+	}
+	maxFrameWidth := maxInt(1, m.width-4)
+	if maxFrameWidth <= 0 {
+		return ""
+	}
+	frameWidth := minInt(78, maxFrameWidth)
+	if frameWidth < 40 {
+		frameWidth = maxFrameWidth
+	}
+	contentWidth := maxInt(1, frameWidth-4)
+
 	label := m.styles.Label.Render("Additional context")
 	hints := m.styles.Hint.Render(
-		truncate("[Enter] Start session  [Esc] Back to selection", maxInt(1, width)))
+		truncate("[Enter] Start session  [Alt+Enter] Newline  [Esc] Back to selection", contentWidth))
 
 	selectedLabel := m.styles.Label.Render("Selected:")
 	selectedLines := make([]string, 0, len(m.selectedIDs))
@@ -2387,13 +2404,22 @@ func (m NewSessionOverlay) extraContextView(width int) string {
 		if item.Identifier != "" {
 			title = item.Identifier + "  " + title
 		}
-		selectedLines = append(selectedLines, "  • "+title)
+		selectedLines = append(selectedLines, "  • "+truncate(title, maxInt(1, contentWidth-4)))
 	}
+
+	input := m.extraContextInput
+	input.SetWidth(contentWidth)
 
 	parts := []string{selectedLabel}
 	parts = append(parts, selectedLines...)
-	parts = append(parts, "", label, m.extraContextInput.View(), "", hints)
-	return strings.Join(parts, "\n")
+	parts = append(parts, "", label, input.View())
+
+	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
+		HeaderLines: []string{m.styles.Title.Render("Add Session Context")},
+		Body:        strings.Join(parts, "\n"),
+		Footer:      hints,
+		Focused:     true,
+	})
 }
 
 // SetSize stores the available terminal dimensions for responsive rendering.
@@ -2401,6 +2427,9 @@ func (m *NewSessionOverlay) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.syncDetailViewport(false)
-	inputWidth := maxInt(20, w-8)
-	m.extraContextInput.SetWidth(inputWidth)
+	modalFrameWidth := minInt(78, maxInt(1, w-4))
+	if modalFrameWidth < 40 {
+		modalFrameWidth = maxInt(1, w-4)
+	}
+	m.extraContextInput.SetWidth(maxInt(1, modalFrameWidth-4))
 }

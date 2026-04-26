@@ -531,6 +531,119 @@ func TestNewSessionOverlayDispatchesSelectedProvider(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayAdditionalContextModalKeepsBrowseBackground(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Identifier: "#1", Title: "Background issue"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Identifier: "#2", Title: "Selected issue"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !overlay.showExtraContext {
+		t.Fatal("expected extra context modal after Enter")
+	}
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	for _, want := range []string{"Browse Work Items", "Work Items", "Add Session Context", "Selected:", "#1  Background issue", "#2"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want %q", view, want)
+		}
+	}
+}
+
+func TestNewSessionOverlayAdditionalContextEscReturnsToBrowse(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-1", Provider: "github", Title: "Selected issue"}))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			t.Fatalf("Esc command = %T, want nil/no-op while returning to browse", msg)
+		}
+	}
+	if updated.showExtraContext {
+		t.Fatal("expected Esc to close only the extra context modal")
+	}
+	view := stripBrowseANSI(updated.View())
+	assertOverlayFits(t, view, 100, 30)
+	if strings.Contains(view, "Add Session Context") {
+		t.Fatalf("view = %q, want modal closed", view)
+	}
+	if !strings.Contains(view, "Browse Work Items") || !strings.Contains(view, "Selected issue") {
+		t.Fatalf("view = %q, want browse overlay restored", view)
+	}
+}
+
+func TestNewSessionOverlayAdditionalContextEnterIncludesInput(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-1", Provider: "github", Title: "Selected issue"}))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	overlay.extraContextInput.SetValue("use the deployment notes")
+
+	_, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected session command")
+	}
+	raw := cmd()
+	msg, ok := raw.(NewSessionBrowseMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want NewSessionBrowseMsg", raw)
+	}
+	if msg.ExtraContext != "use the deployment notes" {
+		t.Fatalf("ExtraContext = %q, want input value", msg.ExtraContext)
+	}
+}
+
+func TestNewSessionOverlayAdditionalContextSuppressesBrowseWheel(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 24)
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{
+		ID:          "gh-1",
+		Provider:    "github",
+		Identifier:  "#1",
+		Title:       "Selected issue",
+		Description: strings.Repeat("Detail line that should not scroll while modal is open.\n", 48),
+	}))
+	overlay.setBrowseDetailsFocus()
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if overlay.detailViewport.YOffset == 0 {
+		t.Fatal("expected detail viewport to move before opening modal")
+	}
+	before := overlay.detailViewport.YOffset
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	updated, _ := overlay.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if updated.detailViewport.YOffset != before {
+		t.Fatalf("detail viewport YOffset = %d, want unchanged %d while modal is open", updated.detailViewport.YOffset, before)
+	}
+}
+
 func TestNewSessionOverlaySearchChangeTriggersReload(t *testing.T) {
 	t.Parallel()
 
@@ -952,6 +1065,21 @@ func TestNewSessionOverlayViewFitsRequestedSize(t *testing.T) {
 	overlay.SetSize(80, 20)
 	manual, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	assertOverlayFits(t, manual.View(), 80, 20)
+
+	modal, _ := overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	modal, _ = modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, tc := range []struct {
+		width  int
+		height int
+	}{
+		{width: 44, height: 16},
+		{width: 80, height: 20},
+	} {
+		t.Run(fmt.Sprintf("extra-context-%dx%d", tc.width, tc.height), func(t *testing.T) {
+			modal.SetSize(tc.width, tc.height)
+			assertOverlayFits(t, modal.View(), tc.width, tc.height)
+		})
+	}
 }
 
 func TestNewSessionOverlayKeepsStablePaneGeometryAcrossLoadingAndLoadedState(t *testing.T) {
