@@ -50,9 +50,13 @@ type githubOwner struct {
 }
 
 type githubRepository struct {
-	FullName string       `json:"full_name"`
-	Owner    *githubOwner `json:"owner"`
-	Name     string       `json:"name"`
+	FullName      string            `json:"full_name"`
+	Owner         *githubOwner      `json:"owner"`
+	Name          string            `json:"name"`
+	HTMLURL       string            `json:"html_url"`
+	Fork          bool              `json:"fork"`
+	Parent        *githubRepository `json:"parent,omitempty"`
+	DefaultBranch string            `json:"default_branch"`
 }
 
 type githubIssue struct {
@@ -463,15 +467,25 @@ func (a *GithubAdapter) AddComment(ctx context.Context, externalID string, body 
 	return a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number), map[string]any{"body": body}, nil)
 }
 
-func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
+type WorkItemAdapter struct {
+	*GithubAdapter
+}
+
+type RepoLifecycleAdapter struct {
+	*GithubAdapter
+}
+
+func (a *GithubAdapter) WorkItemAdapter() WorkItemAdapter {
+	return WorkItemAdapter{GithubAdapter: a}
+}
+
+func (a *GithubAdapter) RepoLifecycleAdapter() RepoLifecycleAdapter {
+	return RepoLifecycleAdapter{GithubAdapter: a}
+}
+
+func (a WorkItemAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
 	switch domain.EventType(event.EventType) {
 	case domain.EventPlanApproved:
-		// Repo-lifecycle instance (has repos): sync open PR descriptions.
-		// Work-item instance (no repos): post issue comments + update state.
-		if a.repos.SessionArtifacts != nil {
-			a.syncPRDescriptionsOnApproval(ctx, event.WorkspaceID, event.Payload)
-			return nil
-		}
 		if err := a.onPlanApproved(ctx, event.Payload); err != nil {
 			return err
 		}
@@ -480,40 +494,48 @@ func (a *GithubAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 			return nil
 		}
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
+	case domain.EventWorkItemCompleted:
+		externalID := extractExternalID(event.Payload)
+		if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
+			return nil
+		}
+		if updateErr := a.UpdateState(ctx, externalID, domain.TrackerStateInReview); updateErr != nil {
+			slog.Warn("failed to update tracker state to in_review", "error", updateErr, "external_id", externalID)
+		}
+		return nil
+	case domain.EventPRMerged:
+		if !a.cfg.PostMergeCloseIssue {
+			return nil
+		}
+		if err := a.onPRMerged(ctx, event.Payload); err != nil {
+			slog.Warn("github: post-merge issue close failed", "error", err)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (a RepoLifecycleAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
+	switch domain.EventType(event.EventType) {
+	case domain.EventPlanApproved:
+		a.syncPRDescriptionsOnApproval(ctx, event.WorkspaceID, event.Payload)
+		return nil
 	case domain.EventWorktreeCreated:
 		if err := a.onWorktreeCreated(ctx, event.Payload); err != nil {
 			slog.Warn("github: worktree created handler failed", "err", err)
 		}
-
 		return nil
-
 	case domain.EventWorktreeReused:
 		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
 			slog.Warn("github: worktree reused handler failed", "err", err)
 		}
-
 		return nil
-
 	case domain.EventWorkItemCompleted:
-		externalID := extractExternalID(event.Payload)
-		if externalID != "" && strings.HasPrefix(externalID, "gh:") {
-			if updateErr := a.UpdateState(ctx, externalID, domain.TrackerStateInReview); updateErr != nil {
-				slog.Warn("failed to update tracker state to in_review", "error", updateErr, "external_id", externalID)
-			}
-		}
 		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
 			slog.Warn("github: work item completed handler failed", "err", err)
 		}
-
 		return nil
-	case domain.EventPRMerged:
-		if a.cfg.PostMergeCloseIssue {
-			if err := a.onPRMerged(ctx, event.Payload); err != nil {
-				slog.Warn("github: post-merge issue close failed", "error", err)
-			}
-		}
-		return nil
-
 	default:
 		return nil
 	}
@@ -526,6 +548,9 @@ func (a *GithubAdapter) onWorktreeCreated(ctx context.Context, payload string) e
 	}
 	if p.Branch == "" {
 		return errors.New("missing branch in worktree payload")
+	}
+	if err := a.resolveForkBase(ctx, &p.Review); err != nil {
+		return err
 	}
 	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
 	headOwner := p.Review.HeadRepo.Owner
@@ -615,6 +640,9 @@ func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) er
 	}
 	if p.Branch == "" {
 		return errors.New("missing branch in worktree reused payload")
+	}
+	if err := a.resolveForkBase(ctx, &p.Review); err != nil {
+		return err
 	}
 	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
 	headOwner := p.Review.HeadRepo.Owner
@@ -711,6 +739,9 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		slog.Warn("github: work_item.completed payload has no branch; skipping pr update")
 
 		return nil
+	}
+	if err := a.resolveForkBase(ctx, &p.Review); err != nil {
+		return err
 	}
 	artifacts := a.artifactsForCompletion(ctx, p)
 	if len(artifacts) == 0 {
@@ -1052,6 +1083,69 @@ func filterGitHubIssuesByLabels(issues []githubIssue, labels []string) []githubI
 	}
 
 	return filtered
+}
+
+func (a *GithubAdapter) resolveForkBase(ctx context.Context, review *domain.ReviewRef) error {
+	if review == nil {
+		return nil
+	}
+	baseOwner := strings.TrimSpace(review.BaseRepo.Owner)
+	baseRepo := strings.TrimSpace(review.BaseRepo.Repo)
+	headOwner := strings.TrimSpace(review.HeadRepo.Owner)
+	headRepo := strings.TrimSpace(review.HeadRepo.Repo)
+	if baseOwner == "" || baseRepo == "" || headOwner == "" || headRepo == "" {
+		return nil
+	}
+	if !strings.EqualFold(baseOwner, headOwner) || !strings.EqualFold(baseRepo, headRepo) {
+		return nil
+	}
+	if provider := strings.TrimSpace(review.BaseRepo.Provider); provider != "" && !strings.EqualFold(provider, adapterName) {
+		return nil
+	}
+
+	repo, err := a.fetchRepository(ctx, headOwner, headRepo)
+	if err != nil {
+		return fmt.Errorf("resolve github fork parent for %s/%s: %w", headOwner, headRepo, err)
+	}
+	if !repo.Fork || repo.Parent == nil {
+		return nil
+	}
+	parentOwner, parentRepo := githubRepositoryOwnerRepo(*repo.Parent)
+	if parentOwner == "" || parentRepo == "" {
+		return nil
+	}
+
+	review.BaseRepo.Provider = adapterName
+	review.BaseRepo.Owner = parentOwner
+	review.BaseRepo.Repo = parentRepo
+	review.BaseRepo.Host = review.HeadRepo.Host
+	review.BaseRepo.URL = strings.TrimSpace(repo.Parent.HTMLURL)
+	if branch := strings.TrimSpace(repo.Parent.DefaultBranch); branch != "" {
+		review.BaseBranch = branch
+	}
+	return nil
+}
+
+func (a *GithubAdapter) fetchRepository(ctx context.Context, owner, repo string) (githubRepository, error) {
+	var out githubRepository
+	if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s", owner, repo), nil, &out); err != nil {
+		return githubRepository{}, err
+	}
+	return out, nil
+}
+
+func githubRepositoryOwnerRepo(repo githubRepository) (string, string) {
+	if repo.Owner != nil && repo.Owner.Login != "" && repo.Name != "" {
+		return repo.Owner.Login, repo.Name
+	}
+	if repo.FullName == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(repo.FullName, "/", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }
 
 func (a *GithubAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]githubMilestone, error) {

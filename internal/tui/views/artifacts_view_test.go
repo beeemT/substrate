@@ -156,6 +156,48 @@ func TestArtifactsViewExpandCollapse(t *testing.T) {
 	}
 }
 
+func TestArtifactsViewExpansionSurvivesSetItemsRefresh(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	items := testArtifactItems()
+	m.SetItems(items)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	items[0].State = "merged"
+	m.SetItems(items)
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("expanded item collapsed after refreshed SetItems")
+	}
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatalf("expanded row missing down-caret indicator; view: %q", plain)
+	}
+}
+
+func TestArtifactsViewCollapsedAndExpandedIndicators(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	m.SetItems(testArtifactItems())
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "> #42") {
+		t.Fatalf("collapsed row missing > indicator; view: %q", plain)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatalf("expanded row missing down-caret indicator; view: %q", plain)
+	}
+}
+
 func TestArtifactsViewRightArrowExpands(t *testing.T) {
 	t.Parallel()
 

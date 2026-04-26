@@ -69,7 +69,7 @@ func BuildWorkItemAdapters(
 		}
 	}
 	if githubAdapter != nil {
-		adapters = append(adapters, githubAdapter)
+		adapters = append(adapters, githubAdapter.WorkItemAdapter())
 	}
 	if config.SentryAuthConfigured(cfg.Adapters.Sentry) {
 		sentryAdapter, err := sentryadapter.New(context.Background(), cfg.Adapters.Sentry)
@@ -159,7 +159,7 @@ func BuildRepoLifecycleAdapters(
 			if githubAdapter == nil {
 				continue
 			}
-			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: githubAdapter})
+			adapters = append(adapters, routedRepoLifecycleAdapter{provider: platform, adapter: githubAdapter.RepoLifecycleAdapter()})
 		default:
 			slog.Warn("skipping repo lifecycle adapters: remote platform is unknown", "workspace_dir", workspaceDir)
 		}

@@ -19,7 +19,7 @@ type ArtifactsModel struct { //nolint:recvcheck // Bubble Tea: Update returns va
 	styles        styles.Styles
 	items         []ArtifactItem
 	cursor        int
-	expandedSet   map[int]bool
+	expandedSet   map[string]bool
 	viewport      viewport.Model
 	width         int
 	height        int
@@ -32,7 +32,7 @@ func NewArtifactsModel(st styles.Styles) ArtifactsModel {
 	return ArtifactsModel{
 		styles:      st,
 		cursor:      -1,
-		expandedSet: make(map[int]bool),
+		expandedSet: make(map[string]bool),
 	}
 }
 
@@ -43,16 +43,35 @@ func (m *ArtifactsModel) SetSize(w, h int) {
 	m.syncViewport()
 }
 
-// SetItems replaces the current item list and resets cursor state.
+// SetItems replaces the current item list while preserving expansion state for
+// stable artifact IDs across periodic refreshes.
 func (m *ArtifactsModel) SetItems(items []ArtifactItem) {
+	previousExpanded := m.expandedSet
 	m.items = items
-	m.expandedSet = make(map[int]bool)
+	m.expandedSet = make(map[string]bool, len(previousExpanded))
+	for _, item := range items {
+		key := artifactExpansionKey(item)
+		if previousExpanded[key] {
+			m.expandedSet[key] = true
+		}
+	}
 	if len(items) > 0 {
-		m.cursor = 0
+		if m.cursor < 0 {
+			m.cursor = 0
+		} else if m.cursor >= len(items) {
+			m.cursor = len(items) - 1
+		}
 	} else {
 		m.cursor = -1
 	}
 	m.syncViewport()
+}
+
+func artifactExpansionKey(item ArtifactItem) string {
+	if item.ID != "" {
+		return item.ID
+	}
+	return strings.Join([]string{item.Provider, item.RepoName, item.Ref}, "\x00")
 }
 
 // SetWorkItem binds the artifacts view to a specific work item and its current
@@ -138,12 +157,14 @@ func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 				changed = true
 			}
 		case "right", "l":
-			if !m.expandedSet[m.cursor] {
-				m.expandedSet[m.cursor] = true
+			key := artifactExpansionKey(m.items[m.cursor])
+			if !m.expandedSet[key] {
+				m.expandedSet[key] = true
 				changed = true
 			}
 		case " ":
-			m.expandedSet[m.cursor] = !m.expandedSet[m.cursor]
+			key := artifactExpansionKey(m.items[m.cursor])
+			m.expandedSet[key] = !m.expandedSet[key]
 			changed = true
 		case "o":
 			if url := m.items[m.cursor].URL; url != "" {
@@ -195,7 +216,7 @@ func (m *ArtifactsModel) ensureCursorVisible() {
 	linesBefore := 0
 	for i := 0; i < m.cursor; i++ {
 		linesBefore++ // collapsed row
-		if m.expandedSet[i] {
+		if m.expandedSet[artifactExpansionKey(m.items[i])] {
 			linesBefore += strings.Count(m.renderExpandedCard(i), "\n") + 1
 		}
 	}
@@ -239,7 +260,7 @@ func (m ArtifactsModel) renderAccordion() string {
 	var rows []string
 	for i, item := range m.items {
 		rows = append(rows, m.renderCollapsedRow(i, item))
-		if m.expandedSet[i] {
+		if m.expandedSet[artifactExpansionKey(item)] {
 			rows = append(rows, m.renderExpandedCard(i))
 		}
 	}
@@ -252,7 +273,11 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 		stateTag = "draft"
 	}
 	reviewSummary := m.reviewSummaryText(item)
-	line := fmt.Sprintf("  %s  %s  %s  [%s]", item.Ref, item.RepoName, item.Branch, stateTag)
+	indicator := ">"
+	if m.expandedSet[artifactExpansionKey(item)] {
+		indicator = "⌄"
+	}
+	line := fmt.Sprintf("%s %s  %s  %s  [%s]", indicator, item.Ref, item.RepoName, item.Branch, stateTag)
 	if reviewSummary != "" {
 		line += "  " + reviewSummary
 	}

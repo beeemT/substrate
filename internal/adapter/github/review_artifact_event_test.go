@@ -84,7 +84,7 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 		t.Fatalf("newWithDeps: %v", err)
 	}
 	payload := `{"workspace_id":"ws-1","work_item_id":"wi-1","branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"sub-branch"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
 	}
 	if len(repo.events) != 1 {
@@ -136,7 +136,7 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 		t.Fatalf("newWithDeps: %v", err)
 	}
 	payload := `{"workspace_id":"ws-1","work_item_id":"wi-1","branch":"sub-branch","external_id":"gh:issue:acme/rocket#42"}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: payload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
 	}
 	seenRocket, seenEngine := false, false

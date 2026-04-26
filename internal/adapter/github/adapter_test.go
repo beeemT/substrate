@@ -229,11 +229,11 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 		}
 	}))
 	createPayload := `{"branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: createPayload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: createPayload}); err != nil {
 		t.Fatalf("worktree created: %v", err)
 	}
 	completePayload := `{"branch":"sub-branch","external_id":"gh:issue:acme/rocket#42","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
 		t.Fatalf("work item completed: %v", err)
 	}
 	seenCreate, seenReady := false, false
@@ -379,7 +379,7 @@ func TestPlanApprovedAddsComments(t *testing.T) {
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
 		}
 	}))
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventPlanApproved), Payload: `{"external_id":"gh:issue:acme/rocket#42","comment_body":"Overall plan text","external_ids":["gh:issue:acme/rocket#42","gh:issue:acme/rocket#43"]}`}); err != nil {
+	if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventPlanApproved), Payload: `{"external_id":"gh:issue:acme/rocket#42","comment_body":"Overall plan text","external_ids":["gh:issue:acme/rocket#42","gh:issue:acme/rocket#43"]}`}); err != nil {
 		t.Fatalf("plan approved: %v", err)
 	}
 	if len(commentPaths) != 2 {
@@ -405,7 +405,7 @@ func TestLifecycleCreateAddsGitHubResolvesFooter(t *testing.T) {
 		}
 	}))
 	payload := `{"branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","tracker_refs":[{"provider":"github","kind":"issue","id":"40","owner":"acme","repo":"rocket","number":40}],"review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"sub-branch"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("worktree created: %v", err)
 	}
 	if !strings.Contains(createBody, `"body":"Repo specific implementation plan\n\nResolves #40"`) {
@@ -431,7 +431,7 @@ func TestLifecycleCreateAddsLinearResolvesFooter(t *testing.T) {
 		}
 	}))
 	payload := `{"branch":"sub-branch","work_item_title":"Feature title","sub_plan":"Repo specific implementation plan","tracker_refs":[{"provider":"linear","kind":"issue","id":"FOO-123","url":"https://linear.app/acme/issue/FOO-123"}],"review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"sub-branch"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("worktree created: %v", err)
 	}
 	if !strings.Contains(createBody, `Resolves [FOO-123](https://linear.app/acme/issue/FOO-123)`) {
@@ -505,7 +505,7 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 		}
 	}))
 	completePayload := `{"external_id":"gh:issue:acme/rocket#42"}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
+	if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
 	}
 	if !patchFired {
@@ -546,7 +546,7 @@ func TestWorkItemCompleted_GitLabProvider_IsIgnored(t *testing.T) {
 			},
 		},
 	})
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{
 		EventType: string(domain.EventWorkItemCompleted),
 		Payload:   string(payload),
 	}); err != nil {
@@ -616,7 +616,7 @@ func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
 	}
 
 	payload := `{"branch":"feat/x","work_item_title":"Feature","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"feat/x"}}`
-	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent worktree created: %v", err)
 	}
 
@@ -628,6 +628,72 @@ func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
 	}
 	if len(appliedLabels) != 1 || appliedLabels[0] != "needs-review" {
 		t.Fatalf("appliedLabels = %v, want [needs-review]", appliedLabels)
+	}
+}
+
+func TestWorkItemViewDoesNotCreatePullRequest(t *testing.T) {
+	pullEndpointCalled := false
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/repos/acme/rocket/issues/42":
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 42}), nil
+		case "/repos/acme/rocket/pulls":
+			pullEndpointCalled = true
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload := `{"branch":"sub-branch","external_id":"gh:issue:acme/rocket#42","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"main","head_branch":"sub-branch"}}`
+	if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if pullEndpointCalled {
+		t.Fatal("work-item GitHub view must not call pull request endpoints")
+	}
+}
+
+func TestLifecycleResolvesForkParentAsBase(t *testing.T) {
+	var createBody string
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/beeemT/rtk":
+			return jsonResp(t, http.StatusOK, map[string]any{
+				"full_name":      "beeemT/rtk",
+				"name":           "rtk",
+				"fork":           true,
+				"default_branch": "master",
+				"owner":          map[string]any{"login": "beeemT"},
+				"parent": map[string]any{
+					"full_name":      "rtk-ai/rtk",
+					"name":           "rtk",
+					"html_url":       "https://github.com/rtk-ai/rtk",
+					"default_branch": "master",
+					"owner":          map[string]any{"login": "rtk-ai"},
+				},
+			}), nil
+		case req.URL.Path == "/repos/rtk-ai/rtk/pulls" && req.Method == http.MethodGet && strings.Contains(req.URL.RawQuery, "head=beeemT%3Asub-branch") && strings.Contains(req.URL.RawQuery, "base=master"):
+			return jsonResp(t, http.StatusOK, []any{}), nil
+		case req.URL.Path == "/repos/rtk-ai/rtk/pulls" && req.Method == http.MethodPost:
+			data, _ := io.ReadAll(req.Body)
+			createBody = string(data)
+			return jsonResp(t, http.StatusCreated, map[string]any{"number": 11, "draft": true, "html_url": "https://github.com/rtk-ai/rtk/pull/11"}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload := `{"branch":"sub-branch","work_item_title":"Feature","review":{"base_repo":{"provider":"github","owner":"beeemT","repo":"rtk"},"head_repo":{"provider":"github","owner":"beeemT","repo":"rtk"},"base_branch":"master","head_branch":"sub-branch"}}`
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if !strings.Contains(createBody, `"head":"beeemT:sub-branch"`) || !strings.Contains(createBody, `"base":"master"`) {
+		t.Fatalf("create body = %s, want upstream base and fork head", createBody)
 	}
 }
 
@@ -643,7 +709,7 @@ func TestOnEvent_IgnoresForeignExternalID_PlanApproved(t *testing.T) {
 	}))
 	for _, foreignID := range []string{"gl:issue:83#4796", "LIN-TEAM-42", "SEN-acme-12345"} {
 		payload := `{"external_id":"` + foreignID + `"}`
-		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+		if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{
 			EventType: string(domain.EventPlanApproved),
 			Payload:   payload,
 		}); err != nil {
@@ -662,7 +728,7 @@ func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
 	}))
 	for _, foreignID := range []string{"gl:issue:83#4796", "LIN-TEAM-42"} {
 		payload := `{"external_id":"` + foreignID + `"}`
-		if err := a.OnEvent(context.Background(), domain.SystemEvent{
+		if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{
 			EventType: string(domain.EventWorkItemCompleted),
 			Payload:   payload,
 		}); err != nil {
@@ -877,7 +943,7 @@ func TestSyncPRDescriptionsOnApproval_UpdatesOpenPRs(t *testing.T) {
 		"external_ids": []string{"gh:issue:acme/rocket#10"},
 	})
 
-	err := a.OnEvent(context.Background(), domain.SystemEvent{
+	err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{
 		EventType:   string(domain.EventPlanApproved),
 		WorkspaceID: "ws-1",
 		Payload:     string(payload),
@@ -940,7 +1006,7 @@ func TestSyncPRDescriptionsOnApproval_SkipsEmptyCommentBody(t *testing.T) {
 		"external_ids": []string{"gh:issue:acme/rocket#10"},
 	})
 
-	err := a.OnEvent(context.Background(), domain.SystemEvent{
+	err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{
 		EventType:   string(domain.EventPlanApproved),
 		WorkspaceID: "ws-1",
 		Payload:     string(payload),
@@ -977,7 +1043,7 @@ func TestSyncPRDescriptionsOnApproval_WorkItemInstancePostsComments(t *testing.T
 		"external_ids": []string{"gh:issue:acme/rocket#10"},
 	})
 
-	err := a.OnEvent(context.Background(), domain.SystemEvent{
+	err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{
 		EventType:   string(domain.EventPlanApproved),
 		WorkspaceID: "ws-1",
 		Payload:     string(payload),
