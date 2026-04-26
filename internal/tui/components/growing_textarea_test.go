@@ -208,3 +208,24 @@ func TestGrowingTextAreaVerticalBoundaries(t *testing.T) {
 		t.Fatal("after Down to final line, textarea should report bottom")
 	}
 }
+
+func TestGrowingTextAreaViewRendersLineNumbersAsChrome(t *testing.T) {
+	t.Parallel()
+
+	g := components.NewGrowingTextArea("")
+	g.SetWidth(24)
+	g.SetValue("alpha beta gamma delta\nsecond line")
+
+	view := g.View()
+	if got := g.Value(); got != "alpha beta gamma delta\nsecond line" {
+		t.Fatalf("value = %q, want content without rendered line numbers", got)
+	}
+	for _, want := range []string{"1", "2"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view = %q, want rendered line number %q", view, want)
+		}
+	}
+	if strings.Contains(g.Value(), "1") || strings.Contains(g.Value(), "│") {
+		t.Fatalf("value unexpectedly contains rendered gutter chrome: %q", g.Value())
+	}
+}

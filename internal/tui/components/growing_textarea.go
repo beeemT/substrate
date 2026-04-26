@@ -65,11 +65,12 @@ type GrowingTextArea struct {
 // components; pass "" if you only have one.
 func NewGrowingTextArea(id string) GrowingTextArea {
 	ta := NewTextArea()
-	ta.ShowLineNumbers = false
+	ta.ShowLineNumbers = true
 	ta.Prompt = ""
 	ta.EndOfBufferCharacter = 0
 	ta.MaxHeight = DefaultGrowingTextAreaMaxLines
 	ta.SetHeight(1)
+	ta.SetWidth(1)
 
 	return GrowingTextArea{
 		id:       id,
