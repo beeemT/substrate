@@ -557,6 +557,17 @@ func TestNewSessionOverlayAdditionalContextModalKeepsBrowseBackground(t *testing
 		t.Fatal("expected extra context modal after Enter")
 	}
 
+	modal := stripBrowseANSI(overlay.extraContextModalView())
+	modalLines := strings.Split(modal, "\n")
+	if got, want := len(modalLines), 15; got != want {
+		t.Fatalf("modal line count = %d, want %d\nmodal:\n%s", got, want, modal)
+	}
+	for i, line := range modalLines {
+		if got, want := ansi.StringWidth(line), 50; got != want {
+			t.Fatalf("modal line %d width = %d, want %d\nline: %q", i+1, got, want, line)
+		}
+	}
+
 	view := stripBrowseANSI(overlay.View())
 	assertOverlayFits(t, view, 100, 30)
 	for _, want := range []string{"Browse Work Items", "Work Items", "Add Session Context", "Selected:", "#1  Background issue", "#2"} {
@@ -1454,6 +1465,93 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 		if strings.Contains(afterView, avoid) {
 			t.Fatalf("view = %q, must not show %q for Sentry", afterView, avoid)
 		}
+	}
+}
+
+func TestNewSessionOverlayDoesNotPadEmptyAdvancedFiltersBeforeList(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				States:         []string{"open", "closed"},
+				SupportsSearch: true,
+				SupportsLabels: true,
+				SupportsOwner:  true,
+				SupportsRepo:   true,
+			},
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 40)
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 120, 40)
+
+	lines := strings.Split(view, "\n")
+	repoLine := -1
+	workItemsLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Repo:") {
+			repoLine = i
+		}
+		if repoLine >= 0 && strings.Contains(line, "Work Items") {
+			workItemsLine = i
+			break
+		}
+	}
+	if repoLine < 0 || workItemsLine < 0 {
+		t.Fatalf("view missing Repo or Work Items rows\nview:\n%s", view)
+	}
+
+	const wantGap = 3 // divider row, pane top border, then the Work Items title.
+	if got := workItemsLine - repoLine; got != wantGap {
+		t.Fatalf("rows between Repo and Work Items = %d, want %d\nview:\n%s", got, wantGap, view)
+	}
+}
+
+func TestNewSessionOverlayGrowingAdvancedFilterShrinksBrowsePanes(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				States:         []string{"open", "closed"},
+				SupportsSearch: true,
+				SupportsLabels: true,
+				SupportsOwner:  true,
+				SupportsRepo:   true,
+			},
+		},
+	}
+
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(72, 30)
+
+	baseLayout := overlay.browserLayout()
+	overlay.repoInput.SetValue("github.com/very-long-organization-name/very-long-repository-name-for-layout")
+	wrappedLayout := overlay.browserLayout()
+
+	if wrappedLayout.ViewportHeight >= baseLayout.ViewportHeight {
+		t.Fatalf("wrapped viewport height = %d, want smaller than base %d", wrappedLayout.ViewportHeight, baseLayout.ViewportHeight)
+	}
+	if got, want := baseLayout.ViewportHeight-wrappedLayout.ViewportHeight, overlay.repoInput.Height()-1; got != want {
+		t.Fatalf("viewport height delta = %d, want %d for wrapped repo input height %d", got, want, overlay.repoInput.Height())
+	}
+
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 72, 30)
+	if !strings.Contains(view, "very-long-organization-name") {
+		t.Fatalf("view = %q, want wrapped repo value visible", view)
 	}
 }
 

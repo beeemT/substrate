@@ -29,8 +29,8 @@ const (
 	newSessionManualDescScrollSource   = "new-session-manual-desc"
 	newSessionExtraContextScrollSource = "new-session-extra-context"
 
-	newSessionManualDescMaxLines   = 6
-	newSessionExtraContextMaxLines = 6
+	newSessionManualDescMaxLines        = 6
+	newSessionExtraContextFallbackLines = 6
 )
 
 type providerOption struct {
@@ -303,7 +303,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	ec := components.NewGrowingTextArea(newSessionExtraContextScrollSource)
 	ec.SetPlaceholder("Additional context (optional)…")
 	ec.SetWidth(60)
-	ec.SetMaxLines(newSessionExtraContextMaxLines)
+	ec.SetMaxLines(newSessionExtraContextFallbackLines)
 	ec.SetCharLimit(5000)
 
 	delegate := list.NewDefaultDelegate()
@@ -1326,7 +1326,6 @@ type browseChromeBudget struct {
 	hasStates        bool
 	hasStatusMessage bool
 	advancedRows     int
-	advancedMaxLines int
 }
 
 func (m NewSessionOverlay) stableBrowseChromeBudget() browseChromeBudget {
@@ -1350,15 +1349,12 @@ func (m NewSessionOverlay) stableBrowseChromeBudget() browseChromeBudget {
 			if rows := countAdvancedBrowseFilterRows(filters); rows > budget.advancedRows {
 				budget.advancedRows = rows
 			}
-			if filters.SupportsLabels || filters.SupportsOwner || filters.SupportsRepo || filters.SupportsGroup || filters.SupportsTeam {
-				budget.advancedMaxLines = components.DefaultGrowingTextInputMaxLines
-			}
 		}
 	}
 	return budget
 }
 
-func (m NewSessionOverlay) browserChromeLines(renderWidth int) int {
+func (m *NewSessionOverlay) browserChromeLines(renderWidth int) int {
 	budget := m.stableBrowseChromeBudget()
 	headerLines := 3
 	if budget.hasViews {
@@ -1370,15 +1366,17 @@ func (m NewSessionOverlay) browserChromeLines(renderWidth int) int {
 	if budget.hasStatusMessage {
 		headerLines++
 	}
-	advancedRows := budget.advancedRows
-	if budget.advancedMaxLines > 1 {
-		advancedRows *= budget.advancedMaxLines
-	}
-	return headerLines + advancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
+
+	advancedRows := m.advancedFilterRows()
+	visibleAdvancedRows := renderedLineCount(advancedRows)
+	reservedAdvancedRows := maxInt(budget.advancedRows, visibleAdvancedRows)
+	return headerLines + reservedAdvancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
 }
 
-func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
+func (m *NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
 	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
+	inputWidth := maxInt(1, baseLayout.ContentWidth-browseSizingSpec.InputWidthOffset)
+	m.resizeInputs(inputWidth)
 	chromeLines := m.browserChromeLines(maxInt(1, baseLayout.ContentWidth-4))
 	return components.ComputeSplitOverlayLayout(m.width, m.height, chromeLines, browseSizingSpec)
 }
@@ -2167,7 +2165,6 @@ func (m *NewSessionOverlay) View() string {
 
 	layout := m.browserLayout()
 	renderWidth := maxInt(1, layout.ContentWidth-4)
-	m.resizeInputs(layout.InputWidth)
 	m.syncDetailViewportWithLayout(layout, false)
 
 	budget := m.stableBrowseChromeBudget()
@@ -2297,7 +2294,7 @@ func (m *NewSessionOverlay) filterModalView() string {
 
 func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) string {
 	budget := m.stableBrowseChromeBudget()
-	lines := make([]string, 0, 5+budget.advancedRows*maxInt(1, budget.advancedMaxLines))
+	lines := make([]string, 0, 5+budget.advancedRows)
 	advancedRows := m.advancedFilterRows()
 	filterRow := m.controlLabel("Search: ", browseControlSearch) + m.filterInput.View()
 	lines = append(lines, filterRow)
@@ -2305,9 +2302,6 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 		lines = append(lines, advancedRows...)
 	}
 	reservedAdvancedRows := budget.advancedRows
-	if budget.advancedMaxLines > 1 {
-		reservedAdvancedRows *= budget.advancedMaxLines
-	}
 	for renderedAdvancedRows := renderedLineCount(advancedRows); renderedAdvancedRows < reservedAdvancedRows; renderedAdvancedRows++ {
 		lines = append(lines, "")
 	}
@@ -2442,15 +2436,11 @@ func (m NewSessionOverlay) extraContextModalView() string {
 	if !m.showExtraContext {
 		return ""
 	}
-	maxFrameWidth := maxInt(1, m.width-4)
-	if maxFrameWidth <= 0 {
+	frameWidth, bodyHeight := m.extraContextModalSize()
+	if frameWidth <= 0 || bodyHeight <= 0 {
 		return ""
 	}
-	frameWidth := minInt(78, maxFrameWidth)
-	if frameWidth < 40 {
-		frameWidth = maxFrameWidth
-	}
-	contentWidth := maxInt(1, frameWidth-4)
+	contentWidth := maxInt(1, m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth))
 
 	label := m.styles.Label.Render("Additional context")
 	hints := m.styles.Hint.Render(
@@ -2469,28 +2459,49 @@ func (m NewSessionOverlay) extraContextModalView() string {
 		selectedLines = append(selectedLines, "  • "+truncate(title, maxInt(1, contentWidth-4)))
 	}
 
+	inputLines := maxInt(1, bodyHeight-3-len(selectedLines)) // selected label + blank + input label
+	m.extraContextInput.SetMaxLines(inputLines)
 	m.extraContextInput.SetWidth(contentWidth)
 
 	parts := []string{selectedLabel}
 	parts = append(parts, selectedLines...)
 	parts = append(parts, "", label, m.extraContextInput.View())
+	body := fitViewHeight(strings.Join(parts, "\n"), bodyHeight)
 
 	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
 		HeaderLines: []string{m.styles.Title.Render("Add Session Context")},
-		Body:        strings.Join(parts, "\n"),
+		Body:        body,
 		Footer:      hints,
 		Focused:     true,
 	})
+}
+
+func (m NewSessionOverlay) extraContextModalSize() (frameWidth, bodyHeight int) {
+	if m.width <= 0 {
+		frameWidth = 78
+	} else {
+		frameWidth = maxInt(1, m.width/2-m.styles.Chrome.OverlayFrame.BorderLeft-m.styles.Chrome.OverlayFrame.BorderRight)
+		frameWidth = minInt(frameWidth, maxInt(1, m.width-m.styles.Chrome.OverlayFrame.BorderLeft-m.styles.Chrome.OverlayFrame.BorderRight))
+	}
+
+	if m.height <= 0 {
+		bodyHeight = newSessionExtraContextFallbackLines
+	} else {
+		// Half-height is the whole modal budget; body gets what remains after border, title, blank separator, and footer.
+		bodyHeight = maxInt(1, m.height/2-m.styles.Chrome.OverlayFrame.VerticalFrame()-3)
+	}
+
+	return frameWidth, bodyHeight
 }
 
 // SetSize stores the available terminal dimensions for responsive rendering.
 func (m *NewSessionOverlay) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
+	m.resizeInputs(maxInt(1, baseLayout.ContentWidth-browseSizingSpec.InputWidthOffset))
 	m.syncDetailViewport(false)
-	modalFrameWidth := minInt(78, maxInt(1, w-4))
-	if modalFrameWidth < 40 {
-		modalFrameWidth = maxInt(1, w-4)
-	}
-	m.extraContextInput.SetWidth(maxInt(1, modalFrameWidth-4))
+	modalFrameWidth, modalBodyHeight := m.extraContextModalSize()
+	m.extraContextInput.SetMaxLines(maxInt(1, modalBodyHeight-3))
+	m.extraContextInput.SetWidth(maxInt(1, m.styles.Chrome.OverlayFrame.InnerWidth(modalFrameWidth)))
 }
