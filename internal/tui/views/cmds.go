@@ -362,38 +362,53 @@ func ApprovePlanCmd(
 	}
 }
 
-// AnswerQuestionCmd approves a human answer for an escalated question.
-// When foreman is non-nil, ResolveEscalated is used so the blocked sub-agent goroutine
-// is unblocked via its answer channel in addition to the DB write.
-// Falls back to direct questionSvc.Answer on ErrQuestionNotEscalated (Foreman was
-// restarted and cleared in-flight channels, or no Foreman is configured).
-// sessionSvc is used in the fallback path to resume the session from waiting_for_answer.
-func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
+// AnswerQuestionCmd delivers a human answer through the route required by the question's stage.
+func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
-		if foreman != nil {
-			err := foreman.ResolveEscalated(context.Background(), questionID, answer)
-			if err == nil {
-				return ActionDoneMsg{Message: "Answer submitted"}
+		q, err := svc.Get(context.Background(), questionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		switch q.Stage {
+		case domain.TaskPhasePlanning:
+			if registry == nil {
+				return ErrMsg{Err: fmt.Errorf("answer planning question %s: live answer delivery is not configured", questionID)}
 			}
-			// If the channel is gone (Foreman restarted), fall through to direct write.
-			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
+			if err := registry.SendAnswer(context.Background(), q.AgentSessionID, answer); err != nil {
+				return ErrMsg{Err: fmt.Errorf("answer planning question %s: %w", questionID, err)}
+			}
+			if sessionSvc != nil {
+				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
+					slog.Warn("failed to resume planning session after answer", "error", err, "question_id", questionID, "session_id", q.AgentSessionID)
+				}
+			}
+			if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
 				return ErrMsg{Err: err}
 			}
-		}
-		// Foreman was restarted or not configured: resume the session directly so the TUI
-		// clears the action-required state before persisting the answer.
-		if sessionSvc != nil {
-			if q, err := svc.Get(context.Background(), questionID); err == nil && q.AgentSessionID != "" {
+			return ActionDoneMsg{Message: "Answer sent to planner"}
+
+		case domain.TaskPhaseImplementation, domain.TaskPhaseReview, "":
+			if foreman != nil {
+				err := foreman.ResolveEscalated(context.Background(), questionID, answer)
+				if err == nil {
+					return ActionDoneMsg{Message: "Answer submitted"}
+				}
+				if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
+					return ErrMsg{Err: err}
+				}
+			}
+			if sessionSvc != nil && q.AgentSessionID != "" {
 				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
 					slog.Warn("failed to resume session on answer fallback", "error", err, "question_id", questionID)
 				}
 			}
+			if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
+				return ErrMsg{Err: err}
+			}
+			return ActionDoneMsg{Message: "Answer submitted"}
+		default:
+			return ErrMsg{Err: fmt.Errorf("answer question %s: unsupported stage %q", questionID, q.Stage)}
 		}
-		if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		return ActionDoneMsg{Message: "Answer submitted"}
 	}
 }
 
@@ -1025,13 +1040,21 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 	return ids
 }
 
-// SkipQuestionCmd marks a question as skipped — the sub-agent continues without an answer.
-// Calls ResolveEscalated with an empty string so the blocked goroutine is unblocked.
-// Falls back to direct questionSvc.Answer when Foreman channels are not available.
-// sessionSvc is used in the fallback path to resume the session from waiting_for_answer.
-func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
+// SkipQuestionCmd marks a question as skipped and unblocks the pending live harness when possible.
+func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
 	return func() tea.Msg {
-		if foreman != nil {
+		q, err := svc.Get(context.Background(), questionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		if q.Stage == domain.TaskPhasePlanning {
+			if registry == nil {
+				return ErrMsg{Err: fmt.Errorf("skip planning question %s: live answer delivery is not configured", questionID)}
+			}
+			if err := registry.SendAnswer(context.Background(), q.AgentSessionID, ""); err != nil {
+				return ErrMsg{Err: fmt.Errorf("skip planning question %s: %w", questionID, err)}
+			}
+		} else if foreman != nil {
 			err := foreman.ResolveEscalated(context.Background(), questionID, "")
 			if err == nil {
 				return ActionDoneMsg{Message: "Question skipped"}
@@ -1040,13 +1063,9 @@ func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskServi
 				return ErrMsg{Err: err}
 			}
 		}
-		// Foreman was restarted or not configured: resume the session directly so the TUI
-		// clears the action-required state before persisting the skip.
-		if sessionSvc != nil {
-			if q, err := svc.Get(context.Background(), questionID); err == nil && q.AgentSessionID != "" {
-				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
-					slog.Warn("failed to resume session on skip fallback", "error", err, "question_id", questionID)
-				}
+		if sessionSvc != nil && q.AgentSessionID != "" {
+			if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
+				slog.Warn("failed to resume session on skip fallback", "error", err, "question_id", questionID)
 			}
 		}
 		if err := svc.Answer(context.Background(), questionID, "", "human"); err != nil {

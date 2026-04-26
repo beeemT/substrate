@@ -181,6 +181,11 @@ func mapQuestionAsked(evt SessionEvent, now time.Time) []adapter.AgentEvent {
 		Type:      "question",
 		Timestamp: now,
 		Payload:   evt.Question.Question,
-		Metadata:  map[string]any{"request_id": evt.Question.RequestID},
+		Metadata:  map[string]any{"request_id": evt.Question.RequestID, "source": string(adapter.AgentQuestionSourceOpenCodeQuestion)},
+		Question: &adapter.AgentQuestion{
+			Source:              adapter.AgentQuestionSourceOpenCodeQuestion,
+			FreeText:            evt.Question.Question,
+			PendingAnswerHandle: evt.Question.RequestID,
+		},
 	}}
 }

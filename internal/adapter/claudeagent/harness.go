@@ -46,7 +46,7 @@ func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 		SupportsNativeResume: true,
 		SupportedTools: []string{
 			"Read", "Write", "Edit", "Bash", "Glob", "Grep",
-			"WebSearch", "WebFetch", "mcp__substrate__ask_foreman",
+			"WebSearch", "WebFetch", "AskUserQuestion", "mcp__substrate__ask_foreman",
 		},
 	}
 }

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/beeemT/go-atomic/generic"
@@ -12,9 +13,13 @@ import (
 type questionRow struct {
 	ID             string  `db:"id"`
 	AgentSessionID string  `db:"agent_session_id"`
+	Stage          *string `db:"stage"`
+	Source         *string `db:"source"`
 	Content        string  `db:"content"`
 	Context        *string `db:"context"`
+	Structured     *string `db:"structured"`
 	Answer         *string `db:"answer"`
+	AnswerData     *string `db:"answer_data"`
 	AnsweredBy     *string `db:"answered_by"`
 	Status         string  `db:"status"`
 	CreatedAt      string  `db:"created_at"`
@@ -31,13 +36,33 @@ func (r *questionRow) toDomain() (domain.Question, error) {
 	if err != nil {
 		return domain.Question{}, fmt.Errorf("answered_at: %w", err)
 	}
+	var structured *domain.StructuredQuestionSet
+	if r.Structured != nil && *r.Structured != "" {
+		var parsed domain.StructuredQuestionSet
+		if err := json.Unmarshal([]byte(*r.Structured), &parsed); err != nil {
+			return domain.Question{}, fmt.Errorf("structured: %w", err)
+		}
+		structured = &parsed
+	}
+	var answerData *domain.AgentQuestionAnswer
+	if r.AnswerData != nil && *r.AnswerData != "" {
+		var parsed domain.AgentQuestionAnswer
+		if err := json.Unmarshal([]byte(*r.AnswerData), &parsed); err != nil {
+			return domain.Question{}, fmt.Errorf("answer_data: %w", err)
+		}
+		answerData = &parsed
+	}
 
 	return domain.Question{
 		ID:             r.ID,
 		AgentSessionID: r.AgentSessionID,
+		Stage:          domain.TaskPhase(derefStr(r.Stage)),
+		Source:         domain.QuestionSource(derefStr(r.Source)),
 		Content:        r.Content,
 		Context:        derefStr(r.Context),
+		Structured:     structured,
 		Answer:         derefStr(r.Answer),
+		AnswerData:     answerData,
 		AnsweredBy:     derefStr(r.AnsweredBy),
 		ProposedAnswer: derefStr(r.ProposedAnswer),
 		Status:         domain.QuestionStatus(r.Status),
@@ -47,12 +72,29 @@ func (r *questionRow) toDomain() (domain.Question, error) {
 }
 
 func rowFromQuestion(q domain.Question) questionRow {
+	structured := ""
+	if q.Structured != nil {
+		if data, err := json.Marshal(q.Structured); err == nil {
+			structured = string(data)
+		}
+	}
+	answerData := ""
+	if q.AnswerData != nil {
+		if data, err := json.Marshal(q.AnswerData); err == nil {
+			answerData = string(data)
+		}
+	}
+
 	return questionRow{
 		ID:             q.ID,
 		AgentSessionID: q.AgentSessionID,
+		Stage:          strPtr(string(q.Stage)),
+		Source:         strPtr(string(q.Source)),
 		Content:        q.Content,
 		Context:        strPtr(q.Context),
+		Structured:     strPtr(structured),
 		Answer:         strPtr(q.Answer),
+		AnswerData:     strPtr(answerData),
 		AnsweredBy:     strPtr(q.AnsweredBy),
 		ProposedAnswer: strPtr(q.ProposedAnswer),
 		Status:         string(q.Status),
@@ -97,8 +139,8 @@ func (r QuestionRepo) ListBySessionID(ctx context.Context, sessionID string) ([]
 func (r QuestionRepo) Create(ctx context.Context, q domain.Question) error {
 	row := rowFromQuestion(q)
 	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO questions (id, agent_session_id, content, context, answer, proposed_answer, answered_by, status, created_at, answered_at)
-		 VALUES (:id, :agent_session_id, :content, :context, :answer, :proposed_answer, :answered_by, :status, :created_at, :answered_at)`, row)
+		`INSERT INTO questions (id, agent_session_id, stage, source, content, context, structured, answer, answer_data, proposed_answer, answered_by, status, created_at, answered_at)
+		 VALUES (:id, :agent_session_id, :stage, :source, :content, :context, :structured, :answer, :answer_data, :proposed_answer, :answered_by, :status, :created_at, :answered_at)`, row)
 	if err != nil {
 		return fmt.Errorf("create question %s: %w", q.ID, err)
 	}
@@ -109,8 +151,8 @@ func (r QuestionRepo) Create(ctx context.Context, q domain.Question) error {
 func (r QuestionRepo) Update(ctx context.Context, q domain.Question) error {
 	row := rowFromQuestion(q)
 	res, err := r.remote.NamedExecContext(ctx,
-		`UPDATE questions SET agent_session_id = :agent_session_id, content = :content,
-		 context = :context, answer = :answer, proposed_answer = :proposed_answer, answered_by = :answered_by, status = :status,
+		`UPDATE questions SET agent_session_id = :agent_session_id, stage = :stage, source = :source, content = :content,
+		 context = :context, structured = :structured, answer = :answer, answer_data = :answer_data, proposed_answer = :proposed_answer, answered_by = :answered_by, status = :status,
 		 answered_at = :answered_at WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update question %s: %w", q.ID, err)

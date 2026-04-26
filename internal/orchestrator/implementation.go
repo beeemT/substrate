@@ -39,6 +39,7 @@ type ImplementationService struct {
 	foreman        *Foreman
 	questionSvc    *service.QuestionService
 	reviewSvc      *service.ReviewService
+	questionRouter *QuestionRouter
 	sessTimeout    time.Duration
 }
 
@@ -70,6 +71,7 @@ func NewImplementationService(
 	reviewSvc *service.ReviewService,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, eventBus)
 	return &ImplementationService{
 		cfg:            cfg,
 		harness:        harness,
@@ -84,6 +86,7 @@ func NewImplementationService(
 		foreman:        foreman,
 		questionSvc:    questionSvc,
 		reviewSvc:      reviewSvc,
+		questionRouter: questionRouter,
 		sessTimeout:    implCfg.SessionTimeout,
 	}
 }
@@ -1118,9 +1121,10 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 				return
 			}
 
-			// Route question events to the foreman when available.
-			if evt.Type == "question" && s.foreman != nil {
-				s.routeQuestionToForeman(ctx, evt, sessionID)
+			if evt.Type == "question" {
+				if err := s.questionRouter.Route(ctx, domain.TaskPhaseImplementation, evt, sessionID); err != nil {
+					slog.Error("failed to route implementation question", "error", err, "session_id", sessionID)
+				}
 				continue
 			}
 
@@ -1137,76 +1141,6 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			}
 		}
 	}
-}
-
-// routeQuestionToForeman persists a question, submits it to the foreman,
-// and delivers the answer back to the originating agent session via SendAnswer.
-func (s *ImplementationService) routeQuestionToForeman(ctx context.Context, evt adapter.AgentEvent, sessionID string) {
-	questionText := evt.Payload
-	questionCtx := ""
-	if evt.Metadata != nil {
-		if c, ok := evt.Metadata["context"].(string); ok {
-			questionCtx = c
-		}
-	}
-
-	q := domain.Question{
-		ID:             domain.NewID(),
-		AgentSessionID: sessionID,
-		Content:        questionText,
-		Context:        questionCtx,
-		Status:         domain.QuestionPending,
-	}
-
-	// Persist the question.
-	if err := s.questionSvc.Create(ctx, q); err != nil {
-		slog.Error("failed to persist question for foreman", "error", err, "session_id", sessionID)
-		return
-	}
-
-	// Also publish the canonical event so the TUI can display the question.
-	if err := s.eventBus.Publish(ctx, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentQuestionRaised),
-		WorkspaceID: "",
-		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "session_id": sessionID, "question": questionText}),
-		CreatedAt:   time.Now(),
-	}); err != nil {
-		slog.Warn("failed to publish question raised event", "error", err)
-	}
-
-	// Submit to the foreman and wait for the answer in a goroutine.
-	// This must not block forwardEvents — other events keep flowing.
-	answerCh := s.foreman.Ask(ctx, q)
-	go func() {
-		select {
-		case answer, ok := <-answerCh:
-			if !ok || answer == "" {
-				slog.Warn("foreman answer channel closed without answer", "question_id", q.ID)
-				return
-			}
-			// Deliver the answer back to the agent session via stdin.
-			if s.registry != nil {
-				if err := s.registry.SendAnswer(ctx, sessionID, answer); err != nil {
-					slog.Error("failed to send foreman answer to agent session",
-						"error", err, "question_id", q.ID, "session_id", sessionID)
-					return
-				}
-			}
-			// Publish the canonical answered event.
-			if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
-				ID:          domain.NewID(),
-				EventType:   string(domain.EventAgentQuestionAnswered),
-				WorkspaceID: "",
-				Payload:     marshalJSONOrEmpty("agent_question.answered", map[string]string{"id": q.ID, "session_id": sessionID}),
-				CreatedAt:   time.Now(),
-			}); pubErr != nil {
-				slog.Warn("failed to publish question answered event", "error", pubErr)
-			}
-		case <-ctx.Done():
-			slog.Warn("context cancelled while waiting for foreman answer", "question_id", q.ID)
-		}
-	}()
 }
 
 // discoverRepoPaths discovers repo paths in the workspace.

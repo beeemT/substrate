@@ -124,7 +124,7 @@ func TestNewHarness(t *testing.T) {
 		t.Error("expected SupportsMessaging to be true")
 	}
 
-	expectedTools := []string{"read", "grep", "find", "edit", "write", "bash", "ask_foreman"}
+	expectedTools := []string{"read", "grep", "find", "edit", "write", "bash", "ask", "ask_foreman"}
 	if len(caps.SupportedTools) != len(expectedTools) {
 		t.Errorf("SupportedTools count mismatch: got %d, want %d", len(caps.SupportedTools), len(expectedTools))
 	}

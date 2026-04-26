@@ -50,8 +50,8 @@ func (h HelpOverlay) View() string {
 			{"p", "Pause / unpause"},
 			{"↑↓", "Scroll"},
 		}},
-		{"Question (Foreman)", []entry{
-			{"A", "Approve Foreman answer"},
+		{"Question", []entry{
+			{"A", "Send or approve answer"},
 			{"Enter", "Send message to Foreman"},
 			{"Esc", "Skip question"},
 		}},

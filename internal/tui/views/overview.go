@@ -1269,7 +1269,7 @@ func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waitin
 		if latest == nil {
 			latest = &task
 		}
-		if waiting == nil && task.Status == domain.AgentSessionWaitingForAnswer && hasEscalatedQuestion(a.questions[task.ID]) {
+		if waiting == nil && task.Status == domain.AgentSessionWaitingForAnswer && hasOpenQuestion(a.questions[task.ID]) {
 			waiting = &task
 		}
 		if interrupted == nil && task.Status == domain.AgentSessionInterrupted {
@@ -1330,7 +1330,7 @@ func humanReviewCycleStatus(status domain.ReviewCycleStatus) string {
 
 func buildQuestionNote(questions []domain.Question) string {
 	for _, question := range questions {
-		if question.Status == domain.QuestionEscalated {
+		if isOpenQuestion(question) {
 			return "Waiting for answer: " + summarizeText(question.Content, 72)
 		}
 	}
@@ -1338,14 +1338,18 @@ func buildQuestionNote(questions []domain.Question) string {
 	return "Waiting for answer"
 }
 
-func hasEscalatedQuestion(questions []domain.Question) bool {
+func hasOpenQuestion(questions []domain.Question) bool {
 	for _, question := range questions {
-		if question.Status == domain.QuestionEscalated {
+		if isOpenQuestion(question) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func isOpenQuestion(question domain.Question) bool {
+	return question.Status == domain.QuestionPending || question.Status == domain.QuestionEscalated
 }
 
 func humanTaskPlanStatus(status domain.TaskPlanStatus) string {
@@ -1509,7 +1513,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	for _, session := range wiSessions {
 		if session.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[session.ID] {
-				if question.Status != domain.QuestionEscalated {
+				if !isOpenQuestion(question) {
 					continue
 				}
 				context := []string{
@@ -1519,11 +1523,17 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				if strings.TrimSpace(question.Context) != "" {
 					context = append(context, summarizeText(question.Context, 160))
 				}
+				title := "Question waiting for answer"
+				why := "This repo task is paused until a human answers the escalated question."
+				if session.Phase == domain.TaskPhasePlanning {
+					title = "Planning question"
+					why = "The planner is paused until you answer this question."
+				}
 				actions = append(actions, OverviewActionCard{
 					Kind:           overviewActionQuestion,
-					Title:          "Question waiting for answer",
+					Title:          title,
 					Blocked:        summarizeText(question.Content, 120),
-					Why:            "This repo task is paused until a human answers the escalated question.",
+					Why:            why,
 					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)), taskSidebarSessionTitle(&session))},
 					Context:        context,
 					Question:       ptrQuestion(question),
@@ -1966,7 +1976,8 @@ func (a *App) buildOverviewActivity(wi *domain.Session, plan *domain.Plan) []Ove
 		summary := ""
 		switch session.Status {
 		case domain.AgentSessionWaitingForAnswer:
-			if hasEscalatedQuestion(a.questions[session.ID]) {
+
+			if hasOpenQuestion(a.questions[session.ID]) {
 				summary = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)) + " asked a question"
 			}
 		case domain.AgentSessionInterrupted:

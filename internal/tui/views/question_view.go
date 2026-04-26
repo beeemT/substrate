@@ -31,7 +31,7 @@ type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns val
 // NewQuestionModel constructs a QuestionModel with the given styles.
 func NewQuestionModel(st styles.Styles) QuestionModel {
 	ti := components.NewGrowingTextArea(questionReplyScrollSource)
-	ti.SetPlaceholder("Type reply to Foreman…")
+	ti.SetPlaceholder("Type reply…")
 	ti.SetCharLimit(1000)
 	ti.SetMaxLines(questionReplyMaxLines)
 
@@ -66,6 +66,9 @@ func (m *QuestionModel) SetQuestion(q domain.Question, proposed string, uncertai
 
 // KeybindHints returns the keybind hints for the status bar.
 func (m QuestionModel) KeybindHints() []KeybindHint {
+	if m.question.Stage == domain.TaskPhasePlanning {
+		return []KeybindHint{{Key: "A", Label: "Send answer"}, {Key: "Esc", Label: "Skip"}}
+	}
 	return []KeybindHint{
 		{Key: "A", Label: "Approve Foreman answer"},
 		{Key: "Enter", Label: "Send to Foreman"},
@@ -109,6 +112,9 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 			)
 
 		case keyEnter:
+			if m.question.Stage == domain.TaskPhasePlanning {
+				break
+			}
 			if m.inputActive {
 				m.input.Flush()
 				text := m.input.Value()
@@ -138,15 +144,29 @@ func (m QuestionModel) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+	stageLabel := "Implementing"
+	questionLabelText := "Agent question:"
+	intro := ""
+	showForeman := m.question.Stage != domain.TaskPhasePlanning
+	if m.question.Stage == domain.TaskPhasePlanning {
+		stageLabel = "Planning"
+		questionLabelText = "Planning question"
+		intro = m.styles.Subtitle.Render("The planner needs your input before it can continue.")
+	}
+
 	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
-		Title:   m.title + " · Implementing  ◐ Question",
+		Title:   m.title + " · " + stageLabel + "  ◐ Question",
 		Width:   m.width,
 		Divider: true,
 	})
 
-	questionLabel := m.styles.Warning.Render("Agent question:")
+	questionLabel := m.styles.Warning.Render(questionLabelText)
+	questionBody := m.question.Content
+	if m.question.Structured != nil && len(m.question.Structured.Questions) > 0 {
+		questionBody = renderStructuredQuestionSummary(*m.question.Structured)
+	}
 	questionBox := components.RenderCallout(m.styles, components.CalloutSpec{
-		Body:    m.question.Content,
+		Body:    questionBody,
 		Width:   m.width,
 		Variant: components.CalloutWarning,
 	})
@@ -166,16 +186,24 @@ func (m QuestionModel) View() string {
 		Width: m.width,
 	})
 
-	replyLabel := m.styles.Subtitle.Render("Your reply (or press ") +
-		m.styles.KeybindAccent.Render("[A]") +
-		m.styles.Subtitle.Render(" to approve):")
+	replyLabel := m.styles.Subtitle.Render("Reply to planner:")
+	if showForeman {
+		replyLabel = m.styles.Subtitle.Render("Your reply (or press ") +
+			m.styles.KeybindAccent.Render("[A]") +
+			m.styles.Subtitle.Render(" to approve):")
+	}
 	m.input.SetWidth(max(1, m.width))
 	headerLines := strings.Split(header, "\n")
 	middleBlocks := []string{questionLabel, questionBox}
+	if intro != "" {
+		middleBlocks = append([]string{intro, ""}, middleBlocks...)
+	}
 	if ctxBlock != "" {
 		middleBlocks = append(middleBlocks, ctxBlock)
 	}
-	middleBlocks = append(middleBlocks, "", foremanLabel, foremanBox)
+	if showForeman {
+		middleBlocks = append(middleBlocks, "", foremanLabel, foremanBox)
+	}
 	footerBlocks := []string{"", replyLabel, m.input.View()}
 	reserved := len(headerLines)
 	for _, block := range footerBlocks {
@@ -190,4 +218,33 @@ func (m QuestionModel) View() string {
 	parts = append(parts, footerBlocks...)
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
+}
+
+func renderStructuredQuestionSummary(set domain.StructuredQuestionSet) string {
+	var b strings.Builder
+	for i, q := range set.Questions {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		if q.Header != "" {
+			b.WriteString(q.Header)
+			b.WriteString(": ")
+		}
+		b.WriteString(q.Question)
+		for idx, opt := range q.Options {
+			b.WriteString("\n  - ")
+			b.WriteString(opt.Label)
+			if q.RecommendedIndex != nil && *q.RecommendedIndex == idx {
+				b.WriteString(" (recommended)")
+			}
+			if opt.Description != "" {
+				b.WriteString(" — ")
+				b.WriteString(opt.Description)
+			}
+		}
+		if q.MultiSelect {
+			b.WriteString("\n  Multi-select allowed.")
+		}
+	}
+	return b.String()
 }

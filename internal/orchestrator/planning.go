@@ -46,18 +46,20 @@ func PlanningConfigFromConfig(cfg *config.Config) *PlanningConfig {
 
 // PlanningService orchestrates the planning pipeline.
 type PlanningService struct {
-	cfg          *PlanningConfig
-	discoverer   *Discoverer
-	gitClient    *gitwork.Client
-	harness      adapter.AgentHarness
-	planSvc      *service.PlanService
-	workItemSvc  *service.SessionService
-	sessionSvc   *service.TaskService
-	eventSvc     *service.EventService
-	workspaceSvc *service.WorkspaceService
-	registry     *SessionRegistry
-	globalCfg    *config.Config
-	templates    *PlanningTemplates
+	cfg            *PlanningConfig
+	discoverer     *Discoverer
+	gitClient      *gitwork.Client
+	harness        adapter.AgentHarness
+	planSvc        *service.PlanService
+	workItemSvc    *service.SessionService
+	sessionSvc     *service.TaskService
+	eventSvc       *service.EventService
+	workspaceSvc   *service.WorkspaceService
+	registry       *SessionRegistry
+	globalCfg      *config.Config
+	questionSvc    *service.QuestionService
+	questionRouter *QuestionRouter
+	templates      *PlanningTemplates
 }
 
 // PlanningTemplates holds compiled templates.
@@ -109,6 +111,7 @@ func NewPlanningService(
 	eventSvc *service.EventService,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
+	questionSvc *service.QuestionService,
 	globalCfg *config.Config,
 ) (*PlanningService, error) {
 	templates, err := NewPlanningTemplates()
@@ -116,19 +119,22 @@ func NewPlanningService(
 		return nil, fmt.Errorf("create templates: %w", err)
 	}
 
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, nil)
 	return &PlanningService{
-		cfg:          cfg,
-		discoverer:   discoverer,
-		gitClient:    gitClient,
-		harness:      harness,
-		planSvc:      planSvc,
-		workItemSvc:  workItemSvc,
-		sessionSvc:   sessionSvc,
-		eventSvc:     eventSvc,
-		workspaceSvc: workspaceSvc,
-		registry:     registry,
-		globalCfg:    globalCfg,
-		templates:    templates,
+		cfg:            cfg,
+		discoverer:     discoverer,
+		gitClient:      gitClient,
+		harness:        harness,
+		planSvc:        planSvc,
+		workItemSvc:    workItemSvc,
+		sessionSvc:     sessionSvc,
+		eventSvc:       eventSvc,
+		workspaceSvc:   workspaceSvc,
+		registry:       registry,
+		questionSvc:    questionSvc,
+		questionRouter: questionRouter,
+		globalCfg:      globalCfg,
+		templates:      templates,
 	}, nil
 }
 
@@ -771,6 +777,13 @@ func (s *PlanningService) waitForPlanningTurn(ctx context.Context, session adapt
 				return errors.New("agent session ended before planner signaled completion")
 			}
 			switch evt.Type {
+			case "question":
+				if s.questionRouter == nil {
+					return errors.New("planner asked a question but question routing is not configured")
+				}
+				if err := s.questionRouter.Route(ctx, domain.TaskPhasePlanning, evt, session.ID()); err != nil {
+					return fmt.Errorf("route planning question: %w", err)
+				}
 			case "done":
 				return nil
 			case "error":

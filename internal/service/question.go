@@ -62,6 +62,12 @@ func (s *QuestionService) ListBySessionID(ctx context.Context, sessionID string)
 
 // Create creates a new question in pending status.
 func (s *QuestionService) Create(ctx context.Context, q domain.Question) error {
+	if q.Stage == "" {
+		q.Stage = domain.TaskPhaseImplementation
+	}
+	if q.Source == "" {
+		q.Source = domain.QuestionSourceAskForeman
+	}
 	// Set initial status if not set
 	if q.Status == "" {
 		q.Status = domain.QuestionPending
@@ -103,6 +109,11 @@ func (s *QuestionService) Transition(ctx context.Context, id string, to domain.Q
 
 // Answer transitions a question from pending to answered and records the answer.
 func (s *QuestionService) Answer(ctx context.Context, id string, answer string, answeredBy string) error {
+	return s.AnswerWithData(ctx, id, domain.AgentQuestionAnswer{Text: answer}, answeredBy)
+}
+
+// AnswerWithData records a normalized answer and preserves structured answer data when present.
+func (s *QuestionService) AnswerWithData(ctx context.Context, id string, answer domain.AgentQuestionAnswer, answeredBy string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		q, err := res.Questions.Get(ctx, id)
 		if err != nil {
@@ -119,7 +130,8 @@ func (s *QuestionService) Answer(ctx context.Context, id string, answer string, 
 
 		now := time.Now()
 		q.Status = domain.QuestionAnswered
-		q.Answer = answer
+		q.Answer = answer.Text
+		q.AnswerData = &answer
 		q.AnsweredBy = answeredBy
 		q.AnsweredAt = &now
 

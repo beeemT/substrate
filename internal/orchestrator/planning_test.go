@@ -158,6 +158,7 @@ type scriptedPlanningSession struct {
 	id          string
 	events      chan adapter.AgentEvent
 	sendMessage func(context.Context, string) error
+	sendAnswer  func(context.Context, string) error
 }
 
 func (s *scriptedPlanningSession) ID() string                        { return s.id }
@@ -175,7 +176,10 @@ func (s *scriptedPlanningSession) Steer(context.Context, string) error {
 	return adapter.ErrSteerNotSupported
 }
 
-func (s *scriptedPlanningSession) SendAnswer(context.Context, string) error {
+func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string) error {
+	if s.sendAnswer != nil {
+		return s.sendAnswer(ctx, answer)
+	}
 	return adapter.ErrSendAnswerNotSupported
 }
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
@@ -248,6 +252,77 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 	}
 	if rawContent != finalPlan {
 		t.Fatalf("runPlanningWithCorrectionLoop() returned intermediate draft:\n%s", rawContent)
+	}
+}
+
+func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
+	t.Parallel()
+
+	questionRepo := newMockQuestionRepo()
+	sessionRepo := newMockSessionRepo()
+	sessionRepo.sessions["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
+
+	registry := NewSessionRegistry()
+	svc := &PlanningService{
+		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}),
+		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		registry:    registry,
+	}
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, nil)
+
+	answered := make(chan string, 1)
+	events := make(chan adapter.AgentEvent, 2)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+		sendAnswer: func(_ context.Context, answer string) error {
+			answered <- answer
+			return nil
+		},
+	}
+	registry.Register("plan-session", sess)
+	defer registry.Deregister("plan-session")
+
+	events <- adapter.AgentEvent{Type: "question", Payload: "Full cutover?", Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)}}
+	routeCtx, routeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	if err := svc.waitForPlanningTurn(routeCtx, sess); err == nil {
+		t.Fatal("waitForPlanningTurn returned nil before planner done")
+	}
+	routeCancel()
+
+	questions, err := svc.questionSvc.ListBySessionID(context.Background(), "plan-session")
+	if err != nil {
+		t.Fatalf("ListBySessionID: %v", err)
+	}
+	if len(questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(questions))
+	}
+	if questions[0].Stage != domain.TaskPhasePlanning || questions[0].Source != domain.QuestionSourceAskForeman {
+		t.Fatalf("question stage/source = %s/%s", questions[0].Stage, questions[0].Source)
+	}
+	gotTask, err := svc.sessionSvc.Get(context.Background(), "plan-session")
+	if err != nil {
+		t.Fatalf("Get task: %v", err)
+	}
+	if gotTask.Status != domain.AgentSessionWaitingForAnswer {
+		t.Fatalf("task status = %s, want waiting_for_answer", gotTask.Status)
+	}
+
+	if err := registry.SendAnswer(context.Background(), "plan-session", "Cut over"); err != nil {
+		t.Fatalf("SendAnswer: %v", err)
+	}
+	select {
+	case got := <-answered:
+		if got != "Cut over" {
+			t.Fatalf("answer = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for answer delivery")
+	}
+
+	events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+	if err := svc.waitForPlanningTurn(context.Background(), sess); err != nil {
+		t.Fatalf("waitForPlanningTurn after answer: %v", err)
 	}
 }
 
@@ -759,7 +834,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -879,7 +954,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}

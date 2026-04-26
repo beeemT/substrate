@@ -353,6 +353,22 @@ func (s *BridgeSession) CloseLogAndCompress() {
 	go CompressFile(s.LogPath, compressedPath) //nolint:errcheck // best-effort async compression
 }
 
+func bridgeStructuredQuestionSet(value any) *adapter.StructuredQuestionSet {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var set adapter.StructuredQuestionSet
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(data, &set); err != nil {
+		return nil
+	}
+	return &set
+}
+
 // MapBridgeEvent maps a bridge event envelope to an adapter.AgentEvent.
 func MapBridgeEvent(raw struct {
 	Type  string          `json:"type"`
@@ -442,11 +458,22 @@ func MapBridgeEvent(raw struct {
 			return nil, errors.New("missing question text")
 		}
 		ctx, _ := eventMap["context"].(string)
+		source := adapter.AgentQuestionSourceAskForeman
+		if src, ok := eventMap["source"].(string); ok && src != "" {
+			source = adapter.AgentQuestionSource(src)
+		}
+		structured := bridgeStructuredQuestionSet(eventMap["structured"])
 		return &adapter.AgentEvent{
 			Type:      "question",
 			Timestamp: time.Now(),
 			Payload:   question,
-			Metadata:  map[string]any{"context": ctx},
+			Metadata:  map[string]any{"context": ctx, "source": string(source)},
+			Question: &adapter.AgentQuestion{
+				Source:     source,
+				FreeText:   question,
+				Context:    ctx,
+				Structured: structured,
+			},
 		}, nil
 
 	case "foreman_proposed":

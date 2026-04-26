@@ -1,6 +1,6 @@
 # Electron App Plan for Substrate
 
-> **Status:** Ready for implementation.
+> **Status:** Ready for implementation. Last refreshed against the live TUI on 2026-04-25 — reflects the current `views.Services` shape (with `NewSessionFilters`, `NewSessionFilterLocks`, GitHub/GitLab review + check services, `ReviewComments` dispatcher), the `R` Repos / `A` Autonomous / `f`/`g`/`o` sidebar bindings, the `overlayRepoManager` / `overlayOverviewLinks` / `overlayReviewFollowup` overlay slots, and the `ContentModeArtifacts` / `SidebarEntryTaskArtifacts` content+sidebar entries. The `internal/app/services.go` extraction in Phase 0 is still pending — `views.Services` is currently the only services bundle.
 
 ## Executive Summary
 
@@ -69,7 +69,7 @@ The TUI is not deprecated. Both UIs are first-class. The Go API server is new sh
 
 A new package that wraps the existing service and orchestration layers and exposes them over WebSocket + HTTP.
 
-**Refactor:** The `Services` struct currently lives in `internal/tui/views/services.go`. The TUI-agnostic subset of its fields (services, orchestration, config, bus, adapters, identity) must be extracted into a shared location. `internal/app/` already exists with `wire.go` and `harness.go` — the shared services bundle belongs there. The TUI `views.Services` retains TUI-specific fields (`LogStore`, `LogToasts`, `Settings`, `SettingsData`, `AdapterErrors`, `StartupWarnings`) and embeds or references the shared bundle.
+**Refactor (still pending — `internal/app/services.go` does not exist yet; `views.Services` in `internal/tui/views/services.go` is the only bundle today):** The TUI-agnostic subset of `views.Services` (services, orchestration, config, bus, adapters, identity, `ReviewComments` dispatcher) must be extracted into `internal/app/`. The package already holds `wire.go`, `harness.go`, and `remotedetect/` — the shared services bundle belongs there. The TUI `views.Services` retains TUI-specific fields (`LogStore`, `LogToasts`, `Settings`, `SettingsData`, `AdapterErrors`, `StartupWarnings`) and embeds or references the shared bundle. The autonomous-mode runtime (`NewSessionAutonomousRuntime`) currently lives in `internal/tui/views` and must move with it (or be split: a runtime core in `internal/app` and a TUI adapter that bridges into `tea.Msg`).
 
 ```go
 // internal/app/services.go
@@ -84,8 +84,14 @@ type Services struct {
     Review           *service.ReviewService
     Events           *service.EventService
     GithubPRs        *service.GithubPRService
+    GithubPRReviews  *service.GithubPRReviewService
+    GithubPRChecks   *service.GithubPRCheckService
     GitlabMRs        *service.GitlabMRService
+    GitlabMRReviews  *service.GitlabMRReviewService
+    GitlabMRChecks   *service.GitlabMRCheckService
     SessionArtifacts *service.SessionReviewArtifactService
+    NewSessionFilters     *service.SessionFilterService
+    NewSessionFilterLocks *service.SessionFilterLockService
 
     // Orchestration pipelines
     Planning        *orchestrator.PlanningService
@@ -96,12 +102,13 @@ type Services struct {
     SessionRegistry *orchestrator.SessionRegistry
 
     // Runtime
-    Cfg         *config.Config
-    Adapters    []adapter.WorkItemAdapter
-    RepoSources []adapter.RepoSource
-    Harnesses   AgentHarnesses
-    GitClient   *gitwork.Client
-    Bus         *event.Bus
+    Cfg            *config.Config
+    Adapters       []adapter.WorkItemAdapter
+    RepoSources    []adapter.RepoSource
+    Harnesses      app.AgentHarnesses
+    GitClient      *gitwork.Client
+    Bus            *event.Bus
+    ReviewComments *adapter.ReviewCommentDispatcher
 
     // Identity
     InstanceID    string
@@ -156,7 +163,8 @@ The API mirrors the existing `views/cmds.go` surface. Every command function tha
 | `HeartbeatCmd` | `instances.heartbeat` | Instance keepalive |
 | `LoadLiveInstancesCmd` | `instances.listLive` | Active instances |
 | `WorkspaceHealthCheckCmd` | `workspace.healthCheck` | Workspace status |
-| `LoadReposCmd` | `repos.list` | Available repositories |
+| `LoadReposCmd` | `repos.list` | Paginated client-side aggregation (`pageSize<=100`, `maxPages=5`); preserves `HasMore` for the UI. |
+| `LoadManagedReposCmd` / `LoadWorktreesCmd` / `RemoveRepoCmd` / `InitRepoCmd` | `repos.managed.list` / `repos.worktrees.list` / `repos.remove` / `repos.init` | Repo Manager overlay backing |
 | `CloneRepoCmd` | `repos.clone` | Clone a repository |
 | `OpenBrowserCmd` | `system.openURL` | Open URL in browser |
 | Adapter browse (overlay_new_session) | `adapters.browse` | Unified work browser |
@@ -170,6 +178,12 @@ The API mirrors the existing `views/cmds.go` surface. Every command function tha
 | Settings apply | `settings.apply` | Apply settings changes |
 | Settings test provider | `settings.testProvider` | Provider auth test |
 | Settings login | `settings.login` | Provider login flow |
+| `FetchReviewCommentsCmd` | `reviewComments.fetch` | Live aggregation across PR/MR adapters with partial-success handling, generation-token guarded |
+| `ResolveReviewAddressDispatchCmd` | `reviewComments.resolveAddress` | Per-repo address dispatch for follow-up replanning |
+| `OverrideAcceptCmd` | `review.overrideAccept` | Operator override that marks a review accepted |
+| `ReconcileOrphanedTasksCmd` | `orchestrator.reconcileOrphans` | Reconcile orphaned tasks across instances on startup |
+| `InspectPlanMsg` -> `LoadPlanByIDCmd` | `plans.getByID` | Plan inspection from any state |
+| `WaitForAdapterErrorCmd` / `WaitForLogToastCmd` / `WaitForNewSessionAutonomousEventCmd` | `events.subscribe` (channel multiplexed) | Long-poll-style channels collapse into the WS event stream |
 
 ### 2.3 Event Streaming
 
@@ -250,6 +264,7 @@ desktop/
         CompletedView.tsx    # Mirrors completed_view.go — MR/PR links + follow-up
         ReviewingView.tsx    # Mirrors reviewing_view.go — critique list + repo tabs
         SourceDetails.tsx    # Mirrors source_details_view.go — metadata pane
+        Artifacts.tsx        # Mirrors artifacts_view.go — PR/MR artifact accordion list
         SessionTranscript.tsx # Mirrors session_transcript.go — block rendering
       overlays/
         NewSession.tsx       # Mirrors overlay_new_session.go — work browser + manual
@@ -257,7 +272,10 @@ desktop/
 
         SessionSearch.tsx    # Mirrors overlay_session_search.go — search + preview
         SourceItems.tsx      # Mirrors overlay_source_items.go — split-pane items
-        AddRepo.tsx          # Mirrors overlay_add_repo.go — repo browser/clone
+        AddRepo.tsx          # Mirrors overlay_add_repo.go — repo browser/clone (parent-aware: returns to RepoManager when nested)
+        RepoManager.tsx      # Mirrors overlay_repo_manager.go — workspace repo list + worktree details, inline a/d/i actions
+        OverviewLinks.tsx    # Mirrors overlay_overview_links.go — ticket + MR/PR link picker for the current work item
+        ReviewFollowup.tsx   # Mirrors overlay_review_followup.go — staged Loading→Picker→Selector→Confirm review-comment dispatch
         Settings.tsx         # Mirrors settings_page.go — section/field editor
         Help.tsx             # Mirrors overlay_help.go — keybind cheat sheet
         Logs.tsx             # Mirrors overlay_logs.go — scrollable slog entries
@@ -416,6 +434,7 @@ Create `design/tokens.json` as the shared source of truth, derived from the curr
     "settingsText": { "ansi": null, "hex": "#cbd5e1" },
     "settingsTextStrong": { "ansi": null, "hex": "#f8fafc" },
     "settingsBreadcrumb": { "ansi": null, "hex": "#93c5fd" },
+    "settingsSelectionInactiveText": { "ansi": null, "hex": "#dbeafe" },
     "scrollbarTrack": { "ansi": null, "hex": "#64748b" },
     "scrollbarThumb": { "ansi": null, "hex": "#cbd5e1" },
     "scrollbarThumbFocused": { "ansi": null, "hex": "#60a5fa" },
@@ -488,19 +507,17 @@ Every shortcut below **MUST** work identically in the Electron app. When a text 
 |-----|--------|
 | `n` | Open New Session overlay |
 | `A` | Open New Session Autonomous overlay |
-| `a` | Open Add Repo overlay |
+| `R` | Open Repo Manager overlay (was `a` Add Repo; `a` is now contextual inside the Repo Manager and opens the nested Add Repo overlay) |
 | `s` | Open Settings (full-screen) |
 | `/` | Open Session Search overlay |
 | `?` | Open Help overlay |
-| `L` | Open Logs overlay |
+| `L` | Open Logs overlay (handled but not advertised in the status bar) |
 | `j` / `↓` | Navigate down in sidebar |
 | `k` / `↑` | Navigate up in sidebar |
-| `g` | Go to top of sidebar |
-| `G` | Go to bottom of sidebar |
 | `f` | Cycle sidebar filter (sessions mode only) |
-| `o` | Cycle sidebar dimension (sessions mode only) |
-| `t` | Toggle sort direction (sessions mode only) |
-| `d` | Delete session (only when a deletable session is selected) |
+| `g` | Cycle sidebar grouping dimension (sessions mode only — was `o` in the prior plan) |
+| `o` | Toggle sort direction (sessions mode only — was `t` in the prior plan) |
+| `d` | Delete session (dynamically prepended to the global hint set when a deletable session is selected) |
 | `Esc` / `←` | Back: content→sidebar focus, exit task sidebar, close overlay |
 | `→` / `Enter` | Enter content or drill into task sidebar |
 | `q` | Quit |
@@ -727,6 +744,7 @@ Any key closes it.
 | `SessionHistory` | 3-line card | Search results |
 | `TaskOverview` | 3-line card | Task drill-in header |
 | `TaskSourceDetails` | 3-line card | Task source metadata |
+| `TaskArtifacts` | 3-line card | PR/MR artifact list entry under a work item |
 | `TaskSession` | 3-line card | Individual agent session |
 | `GroupHeader` | 1-line header | Dimension group separator |
 
@@ -777,7 +795,7 @@ Group headers render as a single line with spacing.
 | NeedsAttention | PlanReview, or has open question, or has interruption |
 | Completed | Completed or Failed |
 
-##### Grouping Dimensions (cycle with `o`)
+##### Grouping Dimensions (cycle with `g`)
 
 `None` → `State` → `Source` → `Created` → `Activity` → `None`
 
@@ -789,7 +807,7 @@ Group headers render as a single line with spacing.
 | Created | Today, Yesterday, This Week, This Month, Last 3 Months, Earlier |
 | Activity | Today, Yesterday, This Week, This Month, Last 3 Months, Earlier |
 
-##### Sort Direction (toggle with `t`)
+##### Sort Direction (toggle with `o`)
 
 Descending ↔ Ascending. Indicator shown in sidebar header as `▲` / `▼`.
 
@@ -822,6 +840,7 @@ The content pane switches between exactly these modes based on the selected side
 | **Empty** | No session selected or no sessions exist | Animated idle state (TUI shows ASCII bunny; Electron uses Aceternity background-gradient with "No sessions yet" / "Select a session" text) |
 | **Overview** | WorkItem or TaskOverview selected | Session overview with nested overlay state machine |
 | **SourceDetails** | TaskSourceDetails selected | Source metadata pane with optional notice callout |
+| **Artifacts** | TaskArtifacts selected | Accordion list of PR/MR artifacts (review comments, checks, lifecycle) with inline expand/collapse and follow-up actions |
 | **Planning** | TaskSession selected + session is live | Live log streaming with spinner, steering input, plan inspection overlay |
 | **SessionInteraction** | TaskSession selected + session is historical | Static transcript rendering (same component as Planning, different data source) |
 
@@ -860,7 +879,10 @@ The Overview has its own overlay state machine. Exactly one sub-overlay can be a
 | **New Session Autonomous** | Centered split-pane (sizing-parity with New Session) | Saved filter selector + filter details pane + runtime status line. Starts/stops autonomous watch mode and shows active filter ownership state. |
 | **Session Search** | Centered split-pane, ~60% height | Search input + scope toggle (workspace/global) + results list + preview pane. Debounced search with spinner. |
 | **Source Items** | Centered split-pane | List + preview. Multi-select with Space, batch URL opening with Enter/o. |
-| **Add Repo** | Centered split-pane (same pattern as New Session) | Repo browser + search + manual clone URL entry + detail pane. |
+| **Repo Manager** | Centered split-pane (shared sizing with browse overlays) | Workspace repo list + worktree details pane. Inline `a` opens nested Add Repo, `d` confirms delete, `i` runs `git-work init` for plain git repos. |
+| **Add Repo** | Centered split-pane (same pattern as New Session) | Repo browser + search + manual clone URL entry + detail pane. Opened either from the global `R` Repo Manager (via `a`) or directly. Closing returns to the parent (Repo Manager remembers the parent). |
+| **Overview Links** | Centered scrollable card | Aggregated input tickets + MR/PR link picker for the current work item; `↑/↓` select, `Enter` opens. |
+| **Review Followup** | Centered split-pane | Live-fetched review comments (generation-token guarded, partial-success handling). Stages: Loading → PR picker (when >1 PR has unresolved comments) → Comment selector → Re-plan confirmation. Stale results older than `ReviewCommentsStaleMaxAge` (5 min) silently re-fetch. |
 | **Settings** | Full-screen | Left: section navigation tree. Right: scrollable field editor with sticky header. Provider status badges, secret management, harness actions (login, auth test). |
 | **Help** | Centered read-only card | Keyboard shortcut reference. Any key closes. |
 | **Logs** | Centered scrollable viewport | slog entries with clipboard copy. Level filtering. |
@@ -871,15 +893,15 @@ The Overview has its own overlay state machine. Exactly one sub-overlay can be a
 #### 4.2.6 Status Bar
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ [n] New session  [A] Autonomous  [d] Delete  [/] Search  [s] Settings  ...  │  workspace · N active sessions
+┌────────────────────────────────────────────────────────────────┐
+│ [n] New session  [A] Autonomous  [d] Delete  [R] Repos  [/] Search  [s] Settings  ...  │  workspace · N active sessions
 │ [?] Help  [q] Quit                                          │  (overflow line, if needed)
-└──────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────┘
 ```
 
 - **Line 1:** Left = key hints as `[key] label`. Right = `workspace · N active sessions` (muted).
 - **Line 2 (overflow):** Additional hints when line 1 overflows.
-- **Hint order:** Contextual hints first, then global (`n` New session, `A` Autonomous, `a` Add repo, `/` Search, `s` Settings, `?` Help, `q` Quit).
+- **Hint order:** Contextual hints first, then global (`n` New session, `A` Autonomous, `R` Repos, `/` Search sessions, `s` Settings, `?` Help, `q` Quit). The `L` Logs binding is handled but is not advertised in the status bar.
 - **Delete hint** is reordered to appear immediately after `New session` when a deletable session is selected.
 
 ---
@@ -1041,6 +1063,7 @@ User presses `s`
 | WorkItem | Overview |
 | TaskOverview | Overview |
 | TaskSourceDetails | SourceDetails |
+| TaskArtifacts | Artifacts |
 | TaskSession (live) | Planning |
 | TaskSession (historical) | SessionInteraction |
 | GroupHeader | Not selectable |
@@ -1074,7 +1097,42 @@ User presses `A`
   → User presses `x` to stop runtime (or runtime stops when no active filters remain)
 ```
 
-##### 14. Focus Model
+##### 14. Repo Manager + Add Repo Workflow
+
+```
+User presses `R`
+  → Repo Manager overlay opens, scans the workspace for managed repos and plain git clones
+  → List pane on the left, worktree details viewport on the right (Tab/←/→ toggles focus)
+  → Plain git clones show inline `i` action to run `git-work init` (live status while in flight)
+  → `a` opens the Add Repo overlay nested under Repo Manager (parent restored on close)
+  → `d` opens an inline confirm-delete prompt for the selected repo
+  → `Esc` closes the overlay (or cancels the pending confirm/init)
+```
+
+##### 15. Review Followup Workflow
+
+```
+Work item has artifacts and review comments to address
+  → Artifacts content mode shows the artifact list with `f` Follow up on review
+  → Review Followup overlay opens (stage = Loading)
+  → Live fetch across PR/MR adapters with partial-success handling and a generation token
+  → If multiple PRs have unresolved comments → PR picker stage; otherwise jump to Comment selector
+  → User selects which comments to address (multi-select), Enter → Re-plan confirmation stage
+  → Confirmation triggers `ResolveReviewAddressDispatchCmd` per repo, then re-plans the work item
+  → Stale results older than `ReviewCommentsStaleMaxAge` (5 min) silently re-fetch before dispatch
+```
+
+##### 16. Overview Links Workflow
+
+```
+Overview shows linked tickets / MR / PR references
+  → User presses `o` (or selects "Links" from the action card)
+  → Overview Links overlay opens with input tickets first, then MRs/PRs
+  → `↑/↓` selects, `Enter` opens via `OpenBrowserCmd`
+  → `Esc` closes
+```
+
+##### 17. Focus Model
 
 - `Tab` / arrow keys move focus between sidebar and content.
 - Overlays capture all input — global shortcuts do not fire.
@@ -1203,6 +1261,7 @@ JSON-RPC request/response types are also generated from Go handler signatures. T
 7. **QuestionView** — Question display with foreman proposed answer, approve/send/skip buttons.
 8. **SessionTranscript** — Historical transcript rendering with callout cards, thinking blocks, tool call grouping.
 9. **SourceDetails** — Source metadata pane with notice callout.
+10. **Artifacts** — PR/MR artifact accordion list with inline expand/collapse, status pills, and per-row "open in browser" actions.
 
 **Validation:** Every content mode renders with real data. Visual comparison against TUI screenshots for parity.
 
@@ -1218,11 +1277,14 @@ JSON-RPC request/response types are also generated from Go handler signatures. T
 6. **New Session Autonomous overlay** — saved-filter selector + runtime status/details panes, `Enter` start, `x` stop, and live status/detected-work-item updates.
 7. **Session Search overlay** — Command palette with debounced search, result list, preview pane, workspace/global scope toggle.
 8. **Source Items overlay** — Split-pane with list selection and detail, multi-select URL opening.
-9. **Add Repo overlay** — Repository browser/clone with search and manual URL entry.
-10. **Resume/Abandon** — Interrupted session actions with restart-planning option.
-11. **Delete** — Work item deletion with shadcn AlertDialog confirmation.
-12. **Duplicate session dialog** — Cancel, open-existing, create-session options.
-13. **Toast notifications** — Sonner-based toasts matching TUI toast levels (Info/Success/Warning/Error), including autonomous lifecycle/status warnings.
+9. **Repo Manager overlay** — Workspace repo list + worktree details viewport. Inline `a` opens nested Add Repo, `d` confirms delete, `i` runs `git-work init` for plain git clones; parent overlay restored on close.
+10. **Add Repo overlay** — Repository browser/clone with search and manual URL entry. Parent-aware (returns to Repo Manager when nested).
+11. **Overview Links overlay** — Aggregated input tickets + MR/PR link picker for the current work item, opened from the Overview action card.
+12. **Review Followup overlay** — Staged Loading→Picker→Selector→Confirm flow over `FetchReviewCommentsCmd`/`ResolveReviewAddressDispatchCmd`, with generation-token guarding and 5 min staleness re-fetch.
+13. **Resume/Abandon** — Interrupted session actions with restart-planning option.
+14. **Delete** — Work item deletion with shadcn AlertDialog confirmation.
+15. **Duplicate session dialog** — Cancel, open-existing, create-session options.
+16. **Toast notifications** — Sonner-based toasts matching TUI toast levels (Info/Success/Warning/Error), including autonomous lifecycle/status warnings and `LogToastMsg` (slog warn/error) entries.
 
 **Validation:** Complete a full workflow: create session, save/load New Session Filters, start/stop autonomous mode, plan, approve, implement, answer question, review, complete — all from the Electron app.
 

@@ -45,7 +45,7 @@ func (h *OhMyPiHarness) Capabilities() adapter.HarnessCapabilities {
 		SupportsStreaming:    true,
 		SupportsMessaging:    true,
 		SupportsNativeResume: true,
-		SupportedTools:       []string{"read", "grep", "find", "edit", "write", "bash", "ask_foreman"},
+		SupportedTools:       []string{"read", "grep", "find", "edit", "write", "bash", "ask", "ask_foreman"},
 	}
 }
 

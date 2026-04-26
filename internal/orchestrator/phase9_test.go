@@ -484,8 +484,16 @@ func (r *mockQuestionRepo) Get(_ context.Context, id string) (domain.Question, e
 	return domain.Question{}, repository.ErrNotFound
 }
 
-func (r *mockQuestionRepo) ListBySessionID(_ context.Context, _ string) ([]domain.Question, error) {
-	return nil, nil
+func (r *mockQuestionRepo) ListBySessionID(_ context.Context, sessionID string) ([]domain.Question, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.Question
+	for _, q := range r.questions {
+		if q.AgentSessionID == sessionID {
+			result = append(result, q)
+		}
+	}
+	return result, nil
 }
 
 func (r *mockQuestionRepo) Create(_ context.Context, q domain.Question) error {

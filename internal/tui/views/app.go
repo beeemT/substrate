@@ -1206,7 +1206,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
-		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.Foreman, msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.SessionRegistry, a.svcs.Foreman, msg.QuestionID, msg.Answer, msg.AnsweredBy))
 		return a, tea.Batch(cmds...)
 
 	case SendToForemanMsg:
@@ -1366,7 +1366,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID, msg.Feedback)
 
 	case SkipQuestionMsg:
-		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.Foreman, msg.QuestionID))
+		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.SessionRegistry, a.svcs.Foreman, msg.QuestionID))
 		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:
@@ -2281,8 +2281,10 @@ func sourceDetailsNoticeFromOverviewAction(action OverviewActionCard) *sourceDet
 			notice.Body = fmt.Sprintf("%s Affected repos: %d.", notice.Body, len(action.Affected))
 		}
 	case overviewActionQuestion:
+
 		target := firstNonEmptyString(strings.TrimSpace(action.QuestionRepo), firstSourceDetailsAffected(action.Affected), "A repo task")
-		notice.Body = target + " is paused until someone answers the escalated question."
+
+		notice.Body = target + " is paused until someone answers the question."
 		if question := strings.TrimSpace(action.Blocked); question != "" {
 			notice.Body += " Question: " + question
 		}
@@ -2665,7 +2667,7 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 					}
 					if s.Status == domain.AgentSessionWaitingForAnswer {
 						for _, q := range a.questions[s.ID] {
-							if q.Status == domain.QuestionEscalated {
+							if q.Status == domain.QuestionPending || q.Status == domain.QuestionEscalated {
 								entry.HasOpenQuestion = true
 							}
 						}

@@ -17,6 +17,7 @@
 
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
@@ -28,6 +29,7 @@ let modelPattern: string | undefined;
 const agentToolNames =
   mode === "agent" ? ["read", "grep", "find", "edit", "write", "bash"] : ["read", "grep", "find"];
 
+let pendingStructuredAnswerResolve: ((answer: any) => void) | null = null;
 let pendingAnswerResolve: ((text: string) => void) | null = null;
 let lastAssistantText = "";
 let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
@@ -77,6 +79,34 @@ function safeJson(value: unknown): string {
 function truncateText(text: string, max = 8_000): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]`;
+}
+
+function parseAnswerMessage(msg: Record<string, unknown>): any {
+  if (typeof msg.answer === "object" && msg.answer !== null) return msg.answer;
+  const raw = typeof msg.text === "string" ? msg.text : "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+    // plain text answer
+  }
+  return { text: raw };
+}
+
+function toOMPAskResult(answer: any): any {
+  const structured = Array.isArray(answer?.structured_answers) ? answer.structured_answers : [];
+  const results = structured.map((a: any) => ({
+    id: String(a.question_id ?? ""),
+    question: String(a.question ?? ""),
+    options: Array.isArray(a.selected_options) ? a.selected_options.map(String) : [],
+    multi: Array.isArray(a.selected_options) && a.selected_options.length > 1,
+    selectedOptions: Array.isArray(a.selected_options) ? a.selected_options.map(String) : [],
+    ...(a.custom_answer ? { customInput: String(a.custom_answer) } : {}),
+  }));
+  if (results.length > 0) {
+    return { results };
+  }
+  return { results: [{ id: "", question: "", options: [], multi: false, selectedOptions: [], customInput: String(answer?.text ?? "") }] };
 }
 
 function extractTextPayload(value: unknown): string {
@@ -269,6 +299,56 @@ function createAskForemanTool(): any {
   };
 }
 
+const optionItemSchema = Type.Object({
+  label: Type.String(),
+});
+
+const questionItemSchema = Type.Object({
+  id: Type.String(),
+  question: Type.String(),
+  options: Type.Array(optionItemSchema),
+  multi: Type.Optional(Type.Boolean()),
+  recommended: Type.Optional(Type.Number()),
+});
+
+const askSchema = Type.Object({
+  questions: Type.Array(questionItemSchema, { minItems: 1 }),
+});
+
+function createNativeAskTool(): any {
+  return {
+    name: "ask",
+    label: "Ask",
+    description: "Ask the user one or more structured questions and wait for answers.",
+    parameters: askSchema,
+    async execute(_toolCallId: string, params: any) {
+      const questions = Array.isArray(params?.questions) ? params.questions : [];
+      const structured = {
+        questions: questions.map((q: any) => ({
+          id: String(q.id ?? ""),
+          question: String(q.question ?? ""),
+          options: Array.isArray(q.options) ? q.options.map((o: any) => ({ label: String(o?.label ?? "") })) : [],
+          multi_select: Boolean(q.multi),
+          recommended_index: typeof q.recommended === "number" ? q.recommended : undefined,
+        })),
+        supports_custom_answer: true,
+        supports_annotations: false,
+        native_response_format: "omp_ask",
+      };
+      emit({
+        type: "question",
+        question: questions[0]?.question ? String(questions[0].question) : "Structured question",
+        context: "",
+        source: "omp_ask",
+        structured,
+      });
+      return await new Promise<any>((resolve) => {
+        pendingStructuredAnswerResolve = resolve;
+      });
+    },
+  };
+}
+
 async function initSession(): Promise<void> {
   const { createAgentSession, SessionManager, Settings } = await import(
     "@oh-my-pi/pi-coding-agent"
@@ -281,7 +361,7 @@ async function initSession(): Promise<void> {
       : resumeSessionFile
         ? await SessionManager.open(resumeSessionFile)
         : SessionManager.create(worktreePath);
-  const customTools = mode === "agent" ? [createAskForemanTool()] : [];
+  const customTools = mode === "agent" ? [createAskForemanTool(), createNativeAskTool()] : [];
 
   const sessionOpts: NonNullable<Parameters<typeof createAgentSession>[0]> = {
     cwd: worktreePath,
@@ -401,6 +481,13 @@ async function handleLine(line: string): Promise<void> {
       process.exit(0);
       break;
     case "answer":
+      if (pendingStructuredAnswerResolve) {
+        const parsed = parseAnswerMessage(msg);
+        emitInput("answer", parsed.text);
+        pendingStructuredAnswerResolve(toOMPAskResult(parsed));
+        pendingStructuredAnswerResolve = null;
+        break;
+      }
       if (pendingAnswerResolve) {
         const answer = String(msg.text ?? "");
         emitInput("answer", answer);

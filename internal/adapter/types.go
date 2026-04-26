@@ -159,6 +159,72 @@ type AgentEvent struct {
 	Timestamp time.Time
 	Payload   string // text payload for the event type
 	Metadata  map[string]any
+	Question  *AgentQuestion
+	Answer    *AgentQuestionAnswer
+}
+
+// AgentQuestionSource identifies the harness mechanism that produced a question event.
+type AgentQuestionSource string
+
+const (
+	AgentQuestionSourceAskForeman            AgentQuestionSource = "ask_foreman"
+	AgentQuestionSourceClaudeAsk             AgentQuestionSource = "claude_ask"
+	AgentQuestionSourceOMPAsk                AgentQuestionSource = "omp_ask"
+	AgentQuestionSourceOpenCodeQuestion      AgentQuestionSource = "opencode_question"
+	AgentQuestionSourceFutureHarnessQuestion AgentQuestionSource = "future_harness_question"
+)
+
+// AgentQuestion is the normalized adapter payload for any live agent question.
+type AgentQuestion struct {
+	ID                  string
+	SessionID           string
+	Stage               SessionMode
+	Source              AgentQuestionSource
+	FreeText            string
+	Context             string
+	Structured          *StructuredQuestionSet
+	PendingAnswerHandle string
+	Metadata            map[string]any
+}
+
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
+}
+
+type StructuredQuestion struct {
+	ID               string           `json:"id,omitempty"`
+	Question         string           `json:"question"`
+	Header           string           `json:"header,omitempty"`
+	Options          []QuestionOption `json:"options,omitempty"`
+	MultiSelect      bool             `json:"multi_select"`
+	RecommendedIndex *int             `json:"recommended_index,omitempty"`
+}
+
+type StructuredQuestionSet struct {
+	Questions            []StructuredQuestion `json:"questions"`
+	SupportsCustomAnswer bool                 `json:"supports_custom_answer"`
+	SupportsAnnotations  bool                 `json:"supports_annotations"`
+	NativeResponseFormat string               `json:"native_response_format,omitempty"`
+}
+
+type AgentQuestionAnnotation struct {
+	Preview string `json:"preview,omitempty"`
+	Notes   string `json:"notes,omitempty"`
+}
+
+type StructuredQuestionAnswer struct {
+	QuestionID      string   `json:"question_id,omitempty"`
+	Question        string   `json:"question"`
+	SelectedOptions []string `json:"selected_options,omitempty"`
+	CustomAnswer    string   `json:"custom_answer,omitempty"`
+}
+
+type AgentQuestionAnswer struct {
+	Text              string                             `json:"text,omitempty"`
+	StructuredAnswers []StructuredQuestionAnswer         `json:"structured_answers,omitempty"`
+	Annotations       map[string]AgentQuestionAnnotation `json:"annotations,omitempty"`
 }
 
 // HarnessCapabilities describes what an agent harness supports.
