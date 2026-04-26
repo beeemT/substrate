@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +23,14 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
+)
+
+const (
+	newSessionManualDescScrollSource   = "new-session-manual-desc"
+	newSessionExtraContextScrollSource = "new-session-extra-context"
+
+	newSessionManualDescMaxLines   = 6
+	newSessionExtraContextMaxLines = 6
 )
 
 type providerOption struct {
@@ -231,11 +238,11 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	loading                        bool
 	hasMore                        bool
 	manualTitle                    textinput.Model
-	manualDesc                     textarea.Model
+	manualDesc                     components.GrowingTextArea
 	manualFocus                    int
 	showManual                     bool
 	showExtraContext               bool
-	extraContextInput              textarea.Model
+	extraContextInput              components.GrowingTextArea
 	browseFocus                    browseFocusArea
 	browseControl                  browseControl
 	detailViewport                 viewport.Model
@@ -287,17 +294,17 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	mt.Placeholder = "Work item title…"
 	mt.CharLimit = 200
 
-	md := components.NewTextArea()
-	md.Placeholder = "Description (optional)…"
+	md := components.NewGrowingTextArea(newSessionManualDescScrollSource)
+	md.SetPlaceholder("Description (optional)…")
 	md.SetWidth(60)
-	md.SetHeight(3)
-	md.CharLimit = 5000
+	md.SetMaxLines(newSessionManualDescMaxLines)
+	md.SetCharLimit(5000)
 
-	ec := components.NewTextArea()
-	ec.Placeholder = "Additional context (optional)…"
+	ec := components.NewGrowingTextArea(newSessionExtraContextScrollSource)
+	ec.SetPlaceholder("Additional context (optional)…")
 	ec.SetWidth(60)
-	ec.SetHeight(5)
-	ec.CharLimit = 5000
+	ec.SetMaxLines(newSessionExtraContextMaxLines)
+	ec.SetCharLimit(5000)
 
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
@@ -368,8 +375,7 @@ func (m *NewSessionOverlay) Open() {
 	m.active = true
 	m.showManual = false
 	m.showExtraContext = false
-	m.extraContextInput.SetValue("")
-	m.extraContextInput.Blur()
+	m.extraContextInput.Reset()
 	m.filterModalMode = newSessionFilterModalNone
 	m.saveFilterNameInput.SetValue("")
 	m.saveFilterNameInput.Blur()
@@ -406,11 +412,9 @@ func (m *NewSessionOverlay) Close() {
 	m.blurBrowseInputs()
 	m.manualTitle.SetValue("")
 	m.manualTitle.Blur()
-	m.manualDesc.SetValue("")
-	m.manualDesc.Blur()
+	m.manualDesc.Reset()
 	m.showExtraContext = false
-	m.extraContextInput.SetValue("")
-	m.extraContextInput.Blur()
+	m.extraContextInput.Reset()
 	m.saveFilterNameInput.SetValue("")
 	m.saveFilterNameInput.Blur()
 	m.loadFilterList.SetItems(nil)
@@ -1758,6 +1762,8 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 	forceDetailTop := false
 
 	switch msg := msg.(type) {
+	case components.GrowingTextAreaScrollMsg:
+		return m, nil
 	case browseDebounceMsg:
 		if msg.seq == m.browseDebounceSeq {
 			cmds = append(cmds, m.reloadItems())
@@ -1867,16 +1873,20 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			switch msg.String() {
 			case keyEsc:
 				m.showExtraContext = false
-				m.extraContextInput.Blur()
+				cmds = append(cmds, m.extraContextInput.Reset())
 			case keyEnter:
 				a, sel, err := m.confirmBrowseSelection()
 				if err != nil {
 					return m, func() tea.Msg { return ErrMsg{Err: err} }
 				}
+				m.extraContextInput.Flush()
 				extraCtx := m.extraContextInput.Value()
-				return m, func() tea.Msg {
-					return NewSessionBrowseMsg{Adapter: a, Selection: sel, ExtraContext: extraCtx}
-				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						return NewSessionBrowseMsg{Adapter: a, Selection: sel, ExtraContext: extraCtx}
+					},
+					m.extraContextInput.Reset(),
+				)
 			default:
 				m.extraContextInput, cmd = m.extraContextInput.Update(msg)
 				cmds = append(cmds, cmd)
@@ -1890,7 +1900,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				return m, func() tea.Msg { return CloseOverlayMsg{} }
 			case "backtab", keyShiftTab:
 				if m.manualFocus == 1 {
-					m.manualDesc.Blur()
+					cmds = append(cmds, m.manualDesc.Blur())
 					m.manualFocus = 0
 					m.manualTitle.Focus()
 				}
@@ -1898,10 +1908,10 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				if m.manualFocus == 0 {
 					m.manualTitle.Blur()
 					m.manualFocus = 1
-					m.manualDesc.Focus()
+					cmds = append(cmds, m.manualDesc.Focus())
 				} else {
 					m.showManual = false
-					m.manualDesc.Blur()
+					cmds = append(cmds, m.manualDesc.Reset())
 					m.setBrowseControlFocus(browseControlSearch)
 				}
 			case keyEnter:
@@ -1910,10 +1920,14 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 					if title == "" {
 						break
 					}
+					m.manualDesc.Flush()
 					desc := m.manualDesc.Value()
 					for _, a := range m.adapters {
 						if a.Name() == providerManual {
-							return m, func() tea.Msg { return NewSessionManualMsg{Adapter: a, Title: title, Desc: desc} }
+							return m, tea.Batch(
+								func() tea.Msg { return NewSessionManualMsg{Adapter: a, Title: title, Desc: desc} },
+								m.manualDesc.Reset(),
+							)
 						}
 					}
 					return m, func() tea.Msg { return ErrMsg{Err: errors.New("no manual adapter configured")} }
@@ -2082,7 +2096,7 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 				}
 				m.showExtraContext = true
 				m.extraContextInput.SetValue("")
-				m.extraContextInput.Focus()
+				cmds = append(cmds, m.extraContextInput.Focus())
 			}
 		case " ":
 			if m.browseFocus == browseFocusControls {
@@ -2367,7 +2381,7 @@ func (m NewSessionOverlay) manualView(width int) string {
 	titleLabel := m.styles.Label.Render("Title:       ")
 	descLabel := m.styles.Label.Render("Description: ")
 	hints := m.styles.Hint.Render(
-		truncate("[Tab] Next field  [Enter] Start  [Tab on desc] Return to browser  [Esc] Cancel", maxInt(1, width)))
+		truncate("[Tab] Next field  [Enter] Start  [Alt+Enter] Newline  [Tab on desc] Return to browser  [Esc] Cancel", maxInt(1, width)))
 	return strings.Join([]string{
 		titleLabel + m.manualTitle.View(),
 		descLabel + m.manualDesc.View(),
@@ -2407,12 +2421,11 @@ func (m NewSessionOverlay) extraContextModalView() string {
 		selectedLines = append(selectedLines, "  • "+truncate(title, maxInt(1, contentWidth-4)))
 	}
 
-	input := m.extraContextInput
-	input.SetWidth(contentWidth)
+	m.extraContextInput.SetWidth(contentWidth)
 
 	parts := []string{selectedLabel}
 	parts = append(parts, selectedLines...)
-	parts = append(parts, "", label, input.View())
+	parts = append(parts, "", label, m.extraContextInput.View())
 
 	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
 		HeaderLines: []string{m.styles.Title.Render("Add Session Context")},

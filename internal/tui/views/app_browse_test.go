@@ -515,10 +515,17 @@ func TestNewSessionOverlayDispatchesSelectedProvider(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected session command")
 	}
-	msg := cmd()
-	sessionMsg, ok := msg.(NewSessionBrowseMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want NewSessionBrowseMsg", msg)
+	var sessionMsg NewSessionBrowseMsg
+	found := false
+	for _, msg := range runOverlayCmd(t, cmd) {
+		if got, ok := msg.(NewSessionBrowseMsg); ok {
+			sessionMsg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cmd did not include NewSessionBrowseMsg")
 	}
 	if sessionMsg.Adapter.Name() != "gitlab" {
 		t.Fatalf("adapter = %q, want gitlab", sessionMsg.Adapter.Name())
@@ -570,12 +577,7 @@ func TestNewSessionOverlayAdditionalContextEscReturnsToBrowse(t *testing.T) {
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			t.Fatalf("Esc command = %T, want nil/no-op while returning to browse", msg)
-		}
-	}
+	updated, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if updated.showExtraContext {
 		t.Fatal("expected Esc to close only the extra context modal")
 	}
@@ -605,10 +607,17 @@ func TestNewSessionOverlayAdditionalContextEnterIncludesInput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected session command")
 	}
-	raw := cmd()
-	msg, ok := raw.(NewSessionBrowseMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want NewSessionBrowseMsg", raw)
+	var msg NewSessionBrowseMsg
+	found := false
+	for _, raw := range runOverlayCmd(t, cmd) {
+		if got, ok := raw.(NewSessionBrowseMsg); ok {
+			msg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cmd did not include NewSessionBrowseMsg")
 	}
 	if msg.ExtraContext != "use the deployment notes" {
 		t.Fatalf("ExtraContext = %q, want input value", msg.ExtraContext)
@@ -1972,10 +1981,17 @@ func TestNewSessionOverlayManualShortcutDispatchesManualSession(t *testing.T) {
 		t.Fatal("expected manual session command")
 	}
 
-	msg := cmd()
-	sessionMsg, ok := msg.(NewSessionManualMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want NewSessionManualMsg", msg)
+	var sessionMsg NewSessionManualMsg
+	found := false
+	for _, msg := range runOverlayCmd(t, cmd) {
+		if got, ok := msg.(NewSessionManualMsg); ok {
+			sessionMsg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cmd did not include NewSessionManualMsg")
 	}
 	if sessionMsg.Adapter.Name() != "manual" {
 		t.Fatalf("adapter = %q, want manual", sessionMsg.Adapter.Name())

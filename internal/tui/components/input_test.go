@@ -1,12 +1,28 @@
 package components_test
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/tui/components"
 )
+
+func TestNewTextAreaCursorLineHasNoBackground(t *testing.T) {
+	t.Parallel()
+
+	m := components.NewTextArea()
+	m.SetWidth(20)
+	m.SetHeight(3)
+	m.Focus()
+	m.SetValue("first\nsecond")
+
+	view := m.View()
+	if strings.Contains(view, "\x1b[48;") {
+		t.Fatalf("textarea cursor line rendered background color: %q", view)
+	}
+}
 
 // TestNewTextAreaAltBWordBackward verifies alt+b (the sequence Warp sends for
 // ⌥+←) triggers WordBackward.  This uses Key{Type:KeyRunes,Runes:['b'],Alt:true}
@@ -203,5 +219,82 @@ func TestNewTextInputReturnsUsableModel(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h', 'i'}})
 	if got := m.Value(); got != "hi" {
 		t.Fatalf("value = %q, want %q", got, "hi")
+	}
+}
+
+// TestNewTextAreaEnterDoesNotInsertNewline verifies that plain Enter no longer
+// inserts a newline. Overlays such as New Session use Enter as the submit key,
+// so the textarea must not consume it as a newline insert.
+func TestNewTextAreaEnterDoesNotInsertNewline(t *testing.T) {
+	t.Parallel()
+
+	m := components.NewTextArea()
+	m.SetWidth(80)
+	m.SetHeight(3)
+	m.Focus()
+	for _, r := range "foo" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, r := range "bar" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	got := m.Value()
+	want := "foobar"
+	if got != want {
+		t.Fatalf("after enter+text: got %q, want %q", got, want)
+	}
+}
+
+// TestNewTextAreaAltEnterInsertsNewline verifies that alt+enter inserts a
+// newline. bubbletea v1 does not surface a distinct shift+enter key event
+// (terminals typically collapse it to bare \r); alt+enter is the reliable
+// modifier-friendly binding most macOS terminals (Warp, Terminal.app, iTerm2)
+// produce when the user presses ⌥+Return.
+func TestNewTextAreaAltEnterInsertsNewline(t *testing.T) {
+	t.Parallel()
+
+	m := components.NewTextArea()
+	m.SetWidth(80)
+	m.SetHeight(3)
+	m.Focus()
+	for _, r := range "foo" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	for _, r := range "bar" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	got := m.Value()
+	want := "foo\nbar"
+	if got != want {
+		t.Fatalf("after alt+enter+text: got %q, want %q", got, want)
+	}
+}
+
+// TestNewTextAreaCtrlJInsertsNewline verifies the ctrl+j fallback inserts a
+// newline. Many terminals collapse shift+enter to a bare enter sequence;
+// ctrl+j is a reliable fallback that works everywhere.
+func TestNewTextAreaCtrlJInsertsNewline(t *testing.T) {
+	t.Parallel()
+
+	m := components.NewTextArea()
+	m.SetWidth(80)
+	m.SetHeight(3)
+	m.Focus()
+	for _, r := range "foo" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	for _, r := range "bar" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	got := m.Value()
+	want := "foo\nbar"
+	if got != want {
+		t.Fatalf("after ctrl+j+text: got %q, want %q", got, want)
 	}
 }

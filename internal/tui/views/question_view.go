@@ -3,7 +3,6 @@ package views
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -11,12 +10,17 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+const (
+	questionReplyScrollSource = "question-reply"
+	questionReplyMaxLines     = 6
+)
+
 // QuestionModel handles human-in-the-loop question resolution.
 type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 	question         domain.Question
 	foremanProposed  string
 	foremanUncertain bool
-	input            textinput.Model
+	input            components.GrowingTextArea
 	inputActive      bool
 	title            string
 	styles           styles.Styles
@@ -26,9 +30,10 @@ type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns val
 
 // NewQuestionModel constructs a QuestionModel with the given styles.
 func NewQuestionModel(st styles.Styles) QuestionModel {
-	ti := components.NewTextInput()
-	ti.Placeholder = "Type reply to Foreman…"
-	ti.CharLimit = 1000
+	ti := components.NewGrowingTextArea(questionReplyScrollSource)
+	ti.SetPlaceholder("Type reply to Foreman…")
+	ti.SetCharLimit(1000)
+	ti.SetMaxLines(questionReplyMaxLines)
 
 	return QuestionModel{input: ti, styles: st}
 }
@@ -56,6 +61,7 @@ func (m *QuestionModel) SetQuestion(q domain.Question, proposed string, uncertai
 	m.input.SetValue("")
 	m.inputActive = true
 	m.input.Focus()
+	m.input.SetWidth(max(1, m.width))
 }
 
 // KeybindHints returns the keybind hints for the status bar.
@@ -70,42 +76,56 @@ func (m QuestionModel) KeybindHints() []KeybindHint {
 // Update handles messages and input for QuestionModel.
 func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 	var cmd tea.Cmd
+	if msg, ok := msg.(components.GrowingTextAreaScrollMsg); ok {
+		if msg.Source == questionReplyScrollSource {
+			return m, nil
+		}
+	}
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "A":
+			m.input.Flush()
 			answer := m.foremanProposed
 			if answer == "" {
 				answer = m.input.Value()
 			}
 			qID := m.question.ID
 			m.inputActive = false
-			m.input.Blur()
 
-			return m, func() tea.Msg {
-				return AnswerQuestionMsg{QuestionID: qID, Answer: answer, AnsweredBy: "human"}
-			}
+			return m, tea.Batch(
+				func() tea.Msg {
+					return AnswerQuestionMsg{QuestionID: qID, Answer: answer, AnsweredBy: "human"}
+				},
+				m.input.Reset(),
+			)
 
 		case keyEsc:
 			qID := m.question.ID
 			m.inputActive = false
-			m.input.Blur()
 
-			return m, func() tea.Msg { return SkipQuestionMsg{QuestionID: qID} }
+			return m, tea.Batch(
+				func() tea.Msg { return SkipQuestionMsg{QuestionID: qID} },
+				m.input.Reset(),
+			)
 
 		case keyEnter:
 			if m.inputActive {
+				m.input.Flush()
 				text := m.input.Value()
-				m.input.SetValue("")
 				qID := m.question.ID
 
-				return m, func() tea.Msg {
-					return SendToForemanMsg{QuestionID: qID, Message: text}
-				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						return SendToForemanMsg{QuestionID: qID, Message: text}
+					},
+					m.input.Reset(),
+				)
 			}
 
 		default:
 			if m.inputActive {
 				m.input, cmd = m.input.Update(msg)
+				m.input.SetWidth(max(1, m.width))
 			}
 		}
 	}
@@ -149,6 +169,7 @@ func (m QuestionModel) View() string {
 	replyLabel := m.styles.Subtitle.Render("Your reply (or press ") +
 		m.styles.KeybindAccent.Render("[A]") +
 		m.styles.Subtitle.Render(" to approve):")
+	m.input.SetWidth(max(1, m.width))
 	headerLines := strings.Split(header, "\n")
 	middleBlocks := []string{questionLabel, questionBox}
 	if ctxBlock != "" {
