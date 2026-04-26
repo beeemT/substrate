@@ -185,6 +185,38 @@ func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string)
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
 func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return nil }
 
+func TestRenderPlanRunFeedbackIncludesFollowUpDraftPath(t *testing.T) {
+	templates, err := NewPlanningTemplates()
+	if err != nil {
+		t.Fatalf("NewPlanningTemplates(): %v", err)
+	}
+
+	draftPath := filepath.Join(t.TempDir(), ".substrate", "sessions", "plan-follow-up", "plan-draft.md")
+	svc := &PlanningService{templates: templates}
+	feedback := svc.renderPlanRunFeedback(planRunRequest{
+		followUpFeedback: "Only plan the missing review fixes.",
+		currentPlanText:  "Current approved plan",
+		repoResults: []RepoResultSummary{{
+			RepoName: "rtk",
+			Status:   "completed",
+			LogTail:  "implementation finished",
+		}},
+	}, draftPath)
+
+	if !strings.Contains(feedback, draftPath) {
+		t.Fatalf("follow-up feedback missing draft path %q\nfeedback:\n%s", draftPath, feedback)
+	}
+	if !strings.Contains(feedback, "This work item was previously implemented") {
+		t.Fatalf("follow-up feedback missing completed-work context:\n%s", feedback)
+	}
+	if !strings.Contains(feedback, "explicitly requested") || !strings.Contains(feedback, "feasible and correct") {
+		t.Fatalf("follow-up feedback missing explicit-user-request feasibility wording:\n%s", feedback)
+	}
+	if strings.Contains(feedback, "Write the revised plan to ``") {
+		t.Fatalf("follow-up feedback rendered an empty draft path:\n%s", feedback)
+	}
+}
+
 func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {

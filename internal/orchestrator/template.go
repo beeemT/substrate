@@ -39,7 +39,7 @@ type FollowUpData struct {
 }
 
 var followUpPromptTemplate = "Your role is still to plan only. " +
-	"This work item was previously implemented and the human has requested changes based on the results:\n" + `
+	"This work item was previously implemented. The user explicitly requested this follow-up change based on the results; evaluate it against the repo state and reflect it in the revised plan when it is feasible and correct:\n" + `
 
 {{.Feedback}}
 
