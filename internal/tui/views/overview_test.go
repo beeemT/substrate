@@ -1138,6 +1138,86 @@ func TestPlanOverlayEnterSubmitClosesOverlay(t *testing.T) {
 	}
 }
 
+// TestCompletedOverlayEnterSubmitPreservesLongFeedback verifies that completed
+// follow-up feedback accepts pasted research beyond the old 2000-character cap,
+// emits the full FollowUpPlanMsg, and still renders inside a narrow terminal.
+func TestCompletedOverlayEnterSubmitPreservesLongFeedback(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(80, 24)
+	m.SetSize(72, 18)
+	plan := domain.Plan{ID: "plan-done", WorkItemID: "wi-1", OrchestratorPlan: strings.Repeat("plan line\n", 8)}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Completed", StatusLabel: "Completed", UpdatedAt: now},
+		Actions: []OverviewActionCard{{
+			Kind: overviewActionCompleted,
+		}},
+		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
+	})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.overlay != overviewOverlayCompleted || !m.completed.inputActive {
+		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with feedback input", m.overlay, m.completed.inputActive)
+	}
+
+	longFeedback := strings.Repeat("research result line with enough detail\n", 80) // > 2000 chars.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longFeedback)})
+
+	view := m.overlayView(80, 24)
+	lines := strings.Split(view, "\n")
+	if got, want := len(lines), 24; got > want {
+		t.Fatalf("overlay line count = %d, want <= %d\nview:\n%s", got, want, view)
+	}
+	for i, line := range lines {
+		if got, want := ansi.StringWidth(line), 80; got > want {
+			t.Fatalf("overlay line %d width = %d, want <= %d; line = %q", i+1, got, want, line)
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.overlay != overviewOverlayCompleted || updated.completed.inputActive {
+		t.Fatalf("overlay/inputActive = %v/%v after Enter, want completed overlay with inactive input", updated.overlay, updated.completed.inputActive)
+	}
+	if cmd == nil {
+		t.Fatal("Enter submit must return a command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", cmd())
+	}
+
+	var followUpMsg FollowUpPlanMsg
+	foundAction := false
+	foundMouse := false
+	for _, c := range batch {
+		switch msg := c().(type) {
+		case FollowUpPlanMsg:
+			followUpMsg = msg
+			foundAction = true
+		default:
+			if msg == tea.EnableMouseCellMotion() {
+				foundMouse = true
+			}
+		}
+	}
+	if !foundAction {
+		t.Fatal("batch did not contain FollowUpPlanMsg")
+	}
+	if !foundMouse {
+		t.Fatal("batch did not contain EnableMouseCellMotion")
+	}
+	if followUpMsg.WorkItemID != "wi-1" {
+		t.Fatalf("FollowUpPlanMsg.WorkItemID = %q, want wi-1", followUpMsg.WorkItemID)
+	}
+	if followUpMsg.Feedback != longFeedback {
+		t.Fatalf("FollowUpPlanMsg.Feedback length = %d, want %d", len(followUpMsg.Feedback), len(longFeedback))
+	}
+}
+
 // TestInspectKeyForCompletedPlanOpensNormalMode verifies that pressing [i] on an
 // overview with a completed/existing plan (no active plan-review action) opens
 // the overlay in normal mode — no request-changes input.

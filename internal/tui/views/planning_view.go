@@ -26,7 +26,10 @@ const (
 	sessionLogScrollSource = "session-log-steer"
 
 	// sessionLogSteerMaxLines caps the visual height of the steering textarea.
-	sessionLogSteerMaxLines = 6
+	// sessionLogSteerCharLimit keeps long pasted research usable while still bounding
+	// pathological input size; display height remains capped separately.
+	sessionLogSteerMaxLines  = 6
+	sessionLogSteerCharLimit = 5000
 )
 
 // sessionLogSpinnerFrames are braille animation frames for the activity spinner.
@@ -95,7 +98,7 @@ func NewSessionLogModel(st styles.Styles) SessionLogModel {
 	ta := components.NewGrowingTextArea(sessionLogScrollSource)
 	ta.SetMaxLines(sessionLogSteerMaxLines)
 	ta.SetPlaceholder(sessionLogPlaceholderDefault)
-	ta.SetCharLimit(2000)
+	ta.SetCharLimit(sessionLogSteerCharLimit)
 
 	return SessionLogModel{viewport: vp, styles: st, modeLabel: "Session interaction", steerInput: ta}
 }

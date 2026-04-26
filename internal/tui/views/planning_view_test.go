@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -119,6 +120,73 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 		if got := ansi.StringWidth(line); got > 48 {
 			t.Fatalf("line %d width = %d, want <= 48\nline: %q", i+1, got, line)
 		}
+	}
+}
+
+func TestSessionLogSteerInputPreservesLongFeedback(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(48, 12)
+	m.SetCompletedSession("task-1")
+	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "completed session output"}})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if !m.steerActive {
+		t.Fatal("p should activate steering input for a completed session")
+	}
+
+	longFeedback := strings.Repeat("research result line with enough detail\n", 80) // > 2000 chars.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longFeedback)})
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if got, want := len(lines), 12; got != want {
+		t.Fatalf("line count = %d, want %d\nview:\n%s", got, want, view)
+	}
+	for i, line := range lines {
+		if got, want := ansi.StringWidth(line), 48; got > want {
+			t.Fatalf("line %d width = %d, want <= %d\nline: %q", i+1, got, want, line)
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.steerActive {
+		t.Fatal("steering input should be inactive after Enter submit")
+	}
+	if cmd == nil {
+		t.Fatal("Enter submit must return a command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", cmd())
+	}
+
+	var followUpMsg FollowUpSessionMsg
+	foundAction := false
+	foundMouse := false
+	for _, c := range batch {
+		switch msg := c().(type) {
+		case FollowUpSessionMsg:
+			followUpMsg = msg
+			foundAction = true
+		default:
+			if msg == tea.EnableMouseCellMotion() {
+				foundMouse = true
+			}
+		}
+	}
+	if !foundAction {
+		t.Fatal("batch did not contain FollowUpSessionMsg")
+	}
+	if !foundMouse {
+		t.Fatal("batch did not contain EnableMouseCellMotion")
+	}
+	if followUpMsg.TaskID != "task-1" {
+		t.Fatalf("FollowUpSessionMsg.TaskID = %q, want task-1", followUpMsg.TaskID)
+	}
+	if followUpMsg.Feedback != longFeedback {
+		t.Fatalf("FollowUpSessionMsg.Feedback length = %d, want %d", len(followUpMsg.Feedback), len(longFeedback))
 	}
 }
 

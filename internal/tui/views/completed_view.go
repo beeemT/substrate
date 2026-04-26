@@ -15,7 +15,12 @@ import (
 const completedScrollSource = "completed-feedback"
 
 // completedFeedbackMaxLines caps the visual height of the follow-up textarea.
-const completedFeedbackMaxLines = 6
+// completedFeedbackCharLimit keeps long pasted research usable while still bounding
+// pathological input size; display height remains capped separately.
+const (
+	completedFeedbackMaxLines  = 6
+	completedFeedbackCharLimit = 5000
+)
 
 // CompletedModel shows the implemented plan and hosts the follow-up feedback
 // input when the user requests additional changes. Completion metadata (timestamp,
@@ -39,7 +44,7 @@ func NewCompletedModel(st styles.Styles) CompletedModel {
 	ta := components.NewGrowingTextArea(completedScrollSource)
 	ta.SetMaxLines(completedFeedbackMaxLines)
 	ta.SetPlaceholder("Describe what needs to change...")
-	ta.SetCharLimit(2000)
+	ta.SetCharLimit(completedFeedbackCharLimit)
 	return CompletedModel{
 		styles:        st,
 		statusLabel:   "Review artifacts",
