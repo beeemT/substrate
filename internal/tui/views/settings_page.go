@@ -11,7 +11,6 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -101,7 +100,7 @@ type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
 	editOptionCursor   int
 	revealSecrets      bool
 	dirty              bool
-	editInput          textinput.Model
+	editInput          components.GrowingTextInput
 	styles             styles.Styles
 	errorText          string
 	statusText         string
@@ -109,9 +108,9 @@ type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
 }
 
 func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
-	ti := components.NewTextInput()
-	ti.CharLimit = 1000
-	ti.Prompt = ""
+	ti := components.NewGrowingTextInput()
+	ti.SetCharLimit(1000)
+	ti.SetPrompt("")
 	vp := viewport.New(0, 0)
 	return SettingsPage{
 		service:          svc,
@@ -1162,11 +1161,10 @@ func (m SettingsPage) renderEditModal() string {
 }
 
 func (m SettingsPage) renderTextEditBody(width int, field *SettingsField) string {
-	input := m.editInput
-	input.Width = max(1, width-4)
+	m.editInput.SetWidth(max(1, width-4))
 	lines := []string{
 		m.styles.Subtitle.Render("Value"),
-		input.View(),
+		m.editInput.View(),
 	}
 	if field != nil && field.DefaultValue != "" {
 		lines = append(lines, "", m.styles.Muted.Render(truncate("Default: "+field.DefaultValue, width)))

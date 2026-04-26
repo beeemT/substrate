@@ -66,7 +66,7 @@ type AddRepoOverlay struct { //nolint:recvcheck
 	allRepos          []adapter.RepoItem
 	loading           bool
 	hasMore           bool
-	manualURL         textinput.Model
+	manualURL         components.GrowingTextInput
 	showManual        bool
 	cloning           bool
 	cloneError        string
@@ -173,9 +173,9 @@ func NewAddRepoOverlay(sources []adapter.RepoSource, workspaceDir string, gitCli
 	si.Placeholder = "Search repositories…"
 	si.CharLimit = 200
 
-	mu := components.NewTextInput()
-	mu.Placeholder = "Paste git clone URL (https:// or git@)…"
-	mu.CharLimit = 500
+	mu := components.NewGrowingTextInput()
+	mu.SetPlaceholder("Paste git clone URL (https:// or git@)…")
+	mu.SetCharLimit(500)
 
 	rl := list.New([]list.Item{}, newAddRepoItemDelegate(st), 60, 10)
 	rl.Title = "Repositories"
@@ -395,7 +395,7 @@ func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
 func (m *AddRepoOverlay) resizeInputs(inputWidth int) {
 	inputWidth = maxInt(1, inputWidth)
 	m.searchInput.Width = inputWidth
-	m.manualURL.Width = inputWidth
+	m.manualURL.SetWidth(inputWidth)
 }
 
 // isAddRepoControlFocused reports whether a specific control within addRepoFocusControls is active.

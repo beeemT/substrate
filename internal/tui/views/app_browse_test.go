@@ -1393,14 +1393,14 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter, sentryAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	overlay.Open()
-	overlay.SetSize(120, 30)
+	overlay.SetSize(120, 40)
 	overlay.providerIndex = providerOptionIndex("github")
 	overlay.normalizeSelectionOptions()
 	overlay.setBrowseControlFocus(browseControlSource)
 	overlay.repoInput.SetValue("acme/rocket")
 
 	beforeView := stripBrowseANSI(overlay.View())
-	assertOverlayFits(t, beforeView, 120, 30)
+	assertOverlayFits(t, beforeView, 120, 40)
 	beforeLayout := overlay.browserLayout()
 	beforeLines := len(strings.Split(beforeView, "\n"))
 	for _, want := range []string{"Labels:", "Owner:", "Repo:"} {
@@ -1433,12 +1433,12 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 	if sentryAdapter.lastListOpts.Repo != "" {
 		t.Fatalf("repo filter = %q, want cleared on sentry reload", sentryAdapter.lastListOpts.Repo)
 	}
-	if updated.repoInput.Placeholder != "Repository / Project…" {
-		t.Fatalf("repo placeholder = %q, want Repository / Project…", updated.repoInput.Placeholder)
+	if updated.repoInput.Placeholder() != "Repository / Project…" {
+		t.Fatalf("repo placeholder = %q, want Repository / Project…", updated.repoInput.Placeholder())
 	}
 
 	afterView := stripBrowseANSI(updated.View())
-	assertOverlayFits(t, afterView, 120, 30)
+	assertOverlayFits(t, afterView, 120, 40)
 	if updatedLayout := updated.browserLayout(); updatedLayout != beforeLayout {
 		t.Fatalf("layout after source change = %+v, want stable layout %+v", updatedLayout, beforeLayout)
 	}
@@ -1639,7 +1639,7 @@ func TestNewSessionOverlayCtrlRClearsBrowseStateAndReloadsDefaults(t *testing.T)
 	}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{linearAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	overlay.Open()
-	overlay.SetSize(120, 30)
+	overlay.SetSize(120, 40)
 	overlay.providerIndex = providerOptionIndex("linear")
 	overlay.viewIndex = 1
 	overlay.stateIndex = 1
@@ -1670,7 +1670,7 @@ func TestNewSessionOverlayCtrlRClearsBrowseStateAndReloadsDefaults(t *testing.T)
 	overlay.issueList.Select(1)
 
 	view := stripBrowseANSI(overlay.View())
-	assertOverlayFits(t, view, 120, 30)
+	assertOverlayFits(t, view, 120, 40)
 	if !strings.Contains(view, "✓ First") {
 		t.Fatalf("view = %q, want selected marker before clear", view)
 	}
@@ -1708,7 +1708,7 @@ func TestNewSessionOverlayCtrlRClearsBrowseStateAndReloadsDefaults(t *testing.T)
 	}
 
 	view = stripBrowseANSI(updated.View())
-	assertOverlayFits(t, view, 120, 30)
+	assertOverlayFits(t, view, 120, 40)
 	if strings.Contains(view, "✓ First") || strings.Contains(view, "First") || strings.Contains(view, "Second") {
 		t.Fatalf("view = %q, want stale browse items and markers cleared before reload completes", view)
 	}

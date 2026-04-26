@@ -226,18 +226,18 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	viewIndex                      int
 	stateIndex                     int
 	filterInput                    textinput.Model
-	labelsInput                    textinput.Model
-	ownerInput                     textinput.Model
-	repoInput                      textinput.Model
-	groupInput                     textinput.Model
-	teamInput                      textinput.Model
+	labelsInput                    components.GrowingTextInput
+	ownerInput                     components.GrowingTextInput
+	repoInput                      components.GrowingTextInput
+	groupInput                     components.GrowingTextInput
+	teamInput                      components.GrowingTextInput
 	issueList                      list.Model
 	allItems                       []adapter.ListItem
 	browsePages                    map[string]browsePageState
 	selectedIDs                    map[string]bool
 	loading                        bool
 	hasMore                        bool
-	manualTitle                    textinput.Model
+	manualTitle                    components.GrowingTextInput
 	manualDesc                     components.GrowingTextArea
 	manualFocus                    int
 	showManual                     bool
@@ -270,29 +270,29 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	fi.Placeholder = "Search work items…"
 	fi.CharLimit = 200
 
-	labels := components.NewTextInput()
-	labels.Placeholder = "Labels (comma-separated)…"
-	labels.CharLimit = 200
+	labels := components.NewGrowingTextInput()
+	labels.SetPlaceholder("Labels (comma-separated)…")
+	labels.SetCharLimit(200)
 
-	owner := components.NewTextInput()
-	owner.Placeholder = "Owner…"
-	owner.CharLimit = 200
+	owner := components.NewGrowingTextInput()
+	owner.SetPlaceholder("Owner…")
+	owner.SetCharLimit(200)
 
-	repo := components.NewTextInput()
-	repo.Placeholder = "Repository / Project…"
-	repo.CharLimit = 200
+	repo := components.NewGrowingTextInput()
+	repo.SetPlaceholder("Repository / Project…")
+	repo.SetCharLimit(200)
 
-	group := components.NewTextInput()
-	group.Placeholder = "Group…"
-	group.CharLimit = 200
+	group := components.NewGrowingTextInput()
+	group.SetPlaceholder("Group…")
+	group.SetCharLimit(200)
 
-	team := components.NewTextInput()
-	team.Placeholder = "Team…"
-	team.CharLimit = 200
+	team := components.NewGrowingTextInput()
+	team.SetPlaceholder("Team…")
+	team.SetCharLimit(200)
 
-	mt := components.NewTextInput()
-	mt.Placeholder = "Work item title…"
-	mt.CharLimit = 200
+	mt := components.NewGrowingTextInput()
+	mt.SetPlaceholder("Work item title…")
+	mt.SetCharLimit(200)
 
 	md := components.NewGrowingTextArea(newSessionManualDescScrollSource)
 	md.SetPlaceholder("Description (optional)…")
@@ -1292,12 +1292,12 @@ func (m NewSessionOverlay) advancedFilterRows() []string {
 func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
 	inputWidth = maxInt(1, inputWidth)
 	m.filterInput.Width = inputWidth
-	m.labelsInput.Width = inputWidth
-	m.ownerInput.Width = inputWidth
-	m.repoInput.Width = inputWidth
-	m.groupInput.Width = inputWidth
-	m.teamInput.Width = inputWidth
-	m.manualTitle.Width = inputWidth
+	m.labelsInput.SetWidth(inputWidth)
+	m.ownerInput.SetWidth(inputWidth)
+	m.repoInput.SetWidth(inputWidth)
+	m.groupInput.SetWidth(inputWidth)
+	m.teamInput.SetWidth(inputWidth)
+	m.manualTitle.SetWidth(inputWidth)
 	m.manualDesc.SetWidth(inputWidth)
 }
 
@@ -1326,6 +1326,7 @@ type browseChromeBudget struct {
 	hasStates        bool
 	hasStatusMessage bool
 	advancedRows     int
+	advancedMaxLines int
 }
 
 func (m NewSessionOverlay) stableBrowseChromeBudget() browseChromeBudget {
@@ -1349,6 +1350,9 @@ func (m NewSessionOverlay) stableBrowseChromeBudget() browseChromeBudget {
 			if rows := countAdvancedBrowseFilterRows(filters); rows > budget.advancedRows {
 				budget.advancedRows = rows
 			}
+			if filters.SupportsLabels || filters.SupportsOwner || filters.SupportsRepo || filters.SupportsGroup || filters.SupportsTeam {
+				budget.advancedMaxLines = components.DefaultGrowingTextInputMaxLines
+			}
 		}
 	}
 	return budget
@@ -1366,7 +1370,11 @@ func (m NewSessionOverlay) browserChromeLines(renderWidth int) int {
 	if budget.hasStatusMessage {
 		headerLines++
 	}
-	return headerLines + budget.advancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
+	advancedRows := budget.advancedRows
+	if budget.advancedMaxLines > 1 {
+		advancedRows *= budget.advancedMaxLines
+	}
+	return headerLines + advancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
 }
 
 func (m NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
@@ -2289,16 +2297,19 @@ func (m *NewSessionOverlay) filterModalView() string {
 
 func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) string {
 	budget := m.stableBrowseChromeBudget()
-	lines := make([]string, 0, 5+budget.advancedRows)
+	lines := make([]string, 0, 5+budget.advancedRows*maxInt(1, budget.advancedMaxLines))
 	advancedRows := m.advancedFilterRows()
 	filterRow := m.controlLabel("Search: ", browseControlSearch) + m.filterInput.View()
 	lines = append(lines, filterRow)
 	if len(advancedRows) > 0 {
 		lines = append(lines, advancedRows...)
 	}
-	for len(advancedRows) < budget.advancedRows {
+	reservedAdvancedRows := budget.advancedRows
+	if budget.advancedMaxLines > 1 {
+		reservedAdvancedRows *= budget.advancedMaxLines
+	}
+	for renderedAdvancedRows := renderedLineCount(advancedRows); renderedAdvancedRows < reservedAdvancedRows; renderedAdvancedRows++ {
 		lines = append(lines, "")
-		advancedRows = append(advancedRows, "")
 	}
 	lines = append(lines, components.RenderOverlayDivider(m.styles, maxInt(1, layout.ContentWidth-4)))
 
@@ -2381,6 +2392,21 @@ func wrapBrowserHintParts(parts []string, width int) string {
 		lines = append(lines, current)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderedLineCount(lines []string) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	count := 0
+	for _, line := range lines {
+		if line == "" {
+			count++
+			continue
+		}
+		count += len(strings.Split(line, "\n"))
+	}
+	return count
 }
 
 func browserHintLineCountForParts(parts []string, width int) int {
