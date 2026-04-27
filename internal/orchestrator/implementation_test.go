@@ -2112,7 +2112,9 @@ func TestCommitAndPushRepos_SkipsCleanWorktrees(t *testing.T) {
 
 	// No remote configured, so push will warn but not fail.
 	// The key assertion: no safety-net commit is attempted on a clean worktree.
-	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
+		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	}
 
 	// No work_item.completed event should be emitted (that's a separate method).
 	for _, evt := range eventRepo.events {
@@ -2141,7 +2143,9 @@ func TestCommitAndPushRepos_CommitsDirtyWorktree(t *testing.T) {
 	}}
 	repoPaths := map[string]string{"repo-a": bareDir}
 
-	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
+		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	}
 
 	// Verify the worktree is now clean.
 	dirty, err := gitStatusDirty(context.Background(), worktreeDir)
@@ -2187,7 +2191,9 @@ func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
 	}}
 	repoPaths := map[string]string{"repo-a": bareDir}
 
-	svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
+		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	}
 
 	// The agent session was attempted.
 	if capturedOpts.SystemPrompt == "" {
@@ -2335,6 +2341,56 @@ func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *
 	}
 	if got.State != domain.SessionCompleted {
 		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionCompleted)
+	}
+}
+
+func TestFinalizeWorkItemKeepsImplementingWhenFinalizationFails(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	worktreeDir := t.TempDir()
+	svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+	svc.cfg = &config.Config{}
+
+	workItem := workItemRepo.items["wi-1"]
+	workItem.State = domain.SessionImplementing
+	workItemRepo.items["wi-1"] = workItem
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	subPlan.Status = domain.SubPlanCompleted
+	subPlanRepo.subPlans["sp-1"] = subPlan
+
+	now := time.Now()
+	sessionRepo.sessions["impl-1"] = domain.Task{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+		WorktreePath:   worktreeDir,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	_, err := svc.FinalizeWorkItem(context.Background(), "wi-1")
+	if err == nil {
+		t.Fatal("expected FinalizeWorkItem to return finalization error")
+	}
+	if !strings.Contains(err.Error(), "bare repo path missing") {
+		t.Fatalf("expected missing repo path error, got %v", err)
+	}
+
+	got, getErr := workItemRepo.Get(context.Background(), "wi-1")
+	if getErr != nil {
+		t.Fatalf("get work item: %v", getErr)
+	}
+	if got.State != domain.SessionImplementing {
+		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionImplementing)
+	}
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemCompleted) {
+			t.Fatal("FinalizeWorkItem emitted work_item.completed after failed finalization")
+		}
 	}
 }
 

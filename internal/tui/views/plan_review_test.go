@@ -96,6 +96,27 @@ func TestPlanReviewModel_Update_Approve(t *testing.T) {
 	}
 }
 
+func TestPlanReviewModel_Update_RequestChangesKey(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 30)
+	m.SetPlanDocument("p1", "## Orchestration\n\n# My Plan")
+	m.SetWorkItemID("wi1")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+
+	if !updated.IsFeedbackActive() {
+		t.Fatal("expected i to open request-changes feedback")
+	}
+	if cmd == nil {
+		t.Fatal("expected focus command after pressing i")
+	}
+	if cmdEmitsPlanRequestChanges(cmd) {
+		t.Fatal("expected i to open feedback without submitting request changes")
+	}
+}
+
 func TestPlanReviewModel_WrapsAndNumbersPlanLines(t *testing.T) {
 	t.Parallel()
 

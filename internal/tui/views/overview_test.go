@@ -106,6 +106,48 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 	}
 }
 
+func TestArtifactItemFromReviewArtifactPopulatesStableID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		artifact domain.ReviewArtifact
+		wantID   string
+	}{
+		{
+			name: "github",
+			artifact: domain.ReviewArtifact{
+				Provider: "github",
+				Kind:     "PR",
+				RepoName: "acme/api",
+				Ref:      "#42",
+			},
+			wantID: "github:acme/api:#42",
+		},
+		{
+			name: "gitlab",
+			artifact: domain.ReviewArtifact{
+				Provider: "gitlab",
+				Kind:     "MR",
+				RepoName: "group/project",
+				Ref:      "!7",
+			},
+			wantID: "gitlab:group/project:!7",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			item := artifactItemFromReviewArtifact(tt.artifact)
+			if item.ID != tt.wantID {
+				t.Fatalf("ID = %q, want %q", item.ID, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestOverviewUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
 	t.Parallel()
 

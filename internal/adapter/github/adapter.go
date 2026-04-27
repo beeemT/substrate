@@ -942,8 +942,17 @@ func (a *GithubAdapter) fetchIssueTimeline(ctx context.Context, owner, repo stri
 	query.Set("per_page", "100")
 	var events []githubTimelineEvent
 	endpoint := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline", url.PathEscape(owner), url.PathEscape(repo), issueNumber)
-	if err := a.getJSON(ctx, endpoint, query, &events); err != nil {
-		return nil, err
+	for page := 1; ; page++ {
+		var pageEvents []githubTimelineEvent
+		header, err := a.getJSONWithHeaders(ctx, endpoint, query, &pageEvents)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, pageEvents...)
+		if !githubLinkHasRelNext(header.Get("Link")) {
+			break
+		}
+		query.Set("page", strconv.Itoa(page+1))
 	}
 
 	return events, nil
@@ -1403,8 +1412,26 @@ func (a *GithubAdapter) findOpenPullByBranch(ctx context.Context, baseOwner, bas
 	return &pulls[0], nil
 }
 
+func githubLinkHasRelNext(linkHeader string) bool {
+	for _, link := range strings.Split(linkHeader, ",") {
+		for _, part := range strings.Split(link, ";") {
+			if strings.EqualFold(strings.TrimSpace(part), `rel="next"`) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (a *GithubAdapter) getJSON(ctx context.Context, endpoint string, query url.Values, dst any) error {
-	return a.doJSON(ctx, http.MethodGet, endpoint, query, nil, dst)
+	_, err := a.getJSONWithHeaders(ctx, endpoint, query, dst)
+
+	return err
+}
+
+func (a *GithubAdapter) getJSONWithHeaders(ctx context.Context, endpoint string, query url.Values, dst any) (http.Header, error) {
+	return a.doJSONWithHeaders(ctx, http.MethodGet, endpoint, query, nil, dst)
 }
 
 func (a *GithubAdapter) postJSON(ctx context.Context, endpoint string, body any, dst any) error {
@@ -1416,9 +1443,15 @@ func (a *GithubAdapter) patchJSON(ctx context.Context, endpoint string, body any
 }
 
 func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) error {
+	_, err := a.doJSONWithHeaders(ctx, method, endpoint, query, body, dst)
+
+	return err
+}
+
+func (a *GithubAdapter) doJSONWithHeaders(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) (http.Header, error) {
 	fullURL, err := url.Parse(a.baseURL)
 	if err != nil {
-		return fmt.Errorf("parse base url: %w", err)
+		return nil, fmt.Errorf("parse base url: %w", err)
 	}
 	fullURL.Path = path.Join(fullURL.Path, endpoint)
 	fullURL.RawQuery = query.Encode()
@@ -1426,13 +1459,13 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL.String(), bodyReader)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -1441,7 +1474,7 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
@@ -1449,18 +1482,18 @@ func (a *GithubAdapter) doJSON(ctx context.Context, method, endpoint string, que
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
+			return nil, &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
 		}
-		return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
+		return nil, fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
 	if dst == nil {
-		return nil
+		return resp.Header.Clone(), nil
 	}
 	if err := json.NewDecoder(limitedBody).Decode(dst); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return nil
+	return resp.Header.Clone(), nil
 }
 
 func filterIssues(issues []githubIssue) []githubIssue {

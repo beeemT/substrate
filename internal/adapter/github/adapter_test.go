@@ -322,19 +322,31 @@ func TestListIssuesIncludesLinkedPullRequestsFromTimeline(t *testing.T) {
 				map[string]any{"number": 42, "title": "Issue", "state": "open", "labels": []any{}, "body": "body", "html_url": "https://github.com/acme/rocket/issues/42", "repository_url": "https://api.github.com/repos/acme/rocket"},
 			}}), nil
 		case "/repos/acme/rocket/issues/42/timeline":
-			return jsonResp(t, http.StatusOK, []any{
-				map[string]any{
-					"event": "cross-referenced",
-					"source": map[string]any{"issue": map[string]any{
-						"number":         7,
-						"title":          "Fix issue",
-						"state":          "closed",
-						"html_url":       "https://github.com/acme/rocket/pull/7",
-						"repository_url": "https://api.github.com/repos/acme/rocket",
-						"pull_request":   map[string]any{"merged_at": "2026-04-01T12:00:00Z", "html_url": "https://github.com/acme/rocket/pull/7"},
-					}},
-				},
-			}), nil
+			switch req.URL.Query().Get("page") {
+			case "", "1":
+				resp := jsonResp(t, http.StatusOK, []any{})
+				resp.Header.Set("Link", `<https://api.github.com/repos/acme/rocket/issues/42/timeline?per_page=100&page=2>; rel="next"`)
+
+				return resp, nil
+			case "2":
+				return jsonResp(t, http.StatusOK, []any{
+					map[string]any{
+						"event": "cross-referenced",
+						"source": map[string]any{"issue": map[string]any{
+							"number":         7,
+							"title":          "Fix issue",
+							"state":          "closed",
+							"html_url":       "https://github.com/acme/rocket/pull/7",
+							"repository_url": "https://api.github.com/repos/acme/rocket",
+							"pull_request":   map[string]any{"merged_at": "2026-04-01T12:00:00Z", "html_url": "https://github.com/acme/rocket/pull/7"},
+						}},
+					},
+				}), nil
+			default:
+				t.Fatalf("unexpected timeline page: %s", req.URL.RawQuery)
+
+				return nil, nil
+			}
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 

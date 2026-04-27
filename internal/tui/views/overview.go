@@ -1878,6 +1878,7 @@ func reviewRowFromReviewArtifact(artifact domain.ReviewArtifact) OverviewReviewR
 
 func artifactItemFromReviewArtifact(artifact domain.ReviewArtifact) ArtifactItem {
 	return ArtifactItem{
+		ID:        reviewArtifactID(artifact.Provider, artifact.RepoName, artifact.Branch, artifact.Ref),
 		Provider:  artifact.Provider,
 		Kind:      firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
 		RepoName:  artifact.RepoName,
@@ -1888,6 +1889,17 @@ func artifactItemFromReviewArtifact(artifact domain.ReviewArtifact) ArtifactItem
 		Draft:     artifact.Draft,
 		UpdatedAt: artifact.UpdatedAt,
 	}
+}
+
+func reviewArtifactID(provider, repoName, branch, ref string) string {
+	provider = strings.TrimSpace(provider)
+	repoName = strings.TrimSpace(repoName)
+	ref = strings.TrimSpace(ref)
+	if provider != "" && repoName != "" && ref != "" {
+		return strings.Join([]string{provider, repoName, ref}, ":")
+	}
+
+	return strings.Join([]string{provider, repoName, strings.TrimSpace(branch), ref}, ":")
 }
 
 func reviewArtifactKey(repoName, branch, ref string) string {

@@ -229,6 +229,44 @@ func TestListSelectableIssuesIncludesRelatedMergeRequests(t *testing.T) {
 	}
 }
 
+func TestGitlabReviewArtifactsFromRelatedMRsPreservesTerminalDraftStates(t *testing.T) {
+	mrs := []relatedMergeRequest{
+		{
+			IID:          8,
+			State:        "closed",
+			WebURL:       "https://gitlab.example.com/group/project/-/merge_requests/8",
+			SourceBranch: "closed-draft",
+			Draft:        true,
+		},
+		{
+			IID:            9,
+			State:          "merged",
+			WebURL:         "https://gitlab.example.com/group/project/-/merge_requests/9",
+			SourceBranch:   "merged-wip",
+			WorkInProgress: true,
+		},
+	}
+
+	artifacts := gitlabReviewArtifactsFromRelatedMRs(mrs, "group/project")
+	if len(artifacts) != 2 {
+		t.Fatalf("artifacts = %#v, want two", artifacts)
+	}
+
+	wants := []struct {
+		state  string
+		draft  bool
+		branch string
+	}{
+		{state: "closed", draft: true, branch: "closed-draft"},
+		{state: "merged", draft: true, branch: "merged-wip"},
+	}
+	for i, want := range wants {
+		if artifacts[i].State != want.state || artifacts[i].Draft != want.draft || artifacts[i].Branch != want.branch || artifacts[i].RepoName != "group/project" {
+			t.Fatalf("artifact[%d] = %+v, want state=%q draft=%t branch=%q fallback repo", i, artifacts[i], want.state, want.draft, want.branch)
+		}
+	}
+}
+
 func TestListSelectableIssuesFiltersToProjectByPath(t *testing.T) {
 	var gotPath string
 	var gotQuery string

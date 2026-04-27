@@ -1303,8 +1303,11 @@ func (s *ImplementationService) FinalizeWorkItem(ctx context.Context, workItemID
 
 func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, workItem *domain.Session, workspaceID string, sessions []SessionResult, repoPaths map[string]string, branch string, subPlans []domain.TaskPlan) error {
 	finalizationCtx, finalizationCancel := durableFinalizationContext(ctx)
-	s.commitAndPushRepos(finalizationCtx, sessions, repoPaths, branch)
+	finalizationErr := s.commitAndPushRepos(finalizationCtx, sessions, repoPaths, branch)
 	finalizationCancel()
+	if finalizationErr != nil {
+		return fmt.Errorf("finalize repos: %w", finalizationErr)
+	}
 
 	completeCtx, completeCancel := durableCleanupContext(ctx)
 	if completeErr := s.workItemSvc.CompleteWorkItem(completeCtx, workItem.ID); completeErr != nil {
@@ -1378,7 +1381,8 @@ func isActiveAgentSession(status domain.TaskStatus) bool {
 // uncommitted changes, commits them as a safety net if present, then pushes the branch.
 // Agent sessions are already completed and deregistered by this point, so we
 // commit directly rather than sending a follow-up message to the agent.
-func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) {
+func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) error {
+	var errs []error
 	seen := make(map[string]bool, len(repoPaths))
 	for _, sess := range sessions {
 		repo := sess.Repository
@@ -1389,7 +1393,9 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 
 		bareRepo, ok := repoPaths[repo]
 		if !ok {
-			slog.Warn("no bare repo path for repository, skipping commit/push", "repo", repo)
+			err := fmt.Errorf("repo %s: bare repo path missing", repo)
+			slog.Warn("no bare repo path for repository, skipping commit/push", "repo", repo, "error", err)
+			errs = append(errs, err)
 			continue
 		}
 
@@ -1401,11 +1407,35 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 
 		// Check for residual uncommitted changes in the worktree.
 		if sess.WorktreePath != "" {
-			if dirty, _ := gitStatusDirty(ctx, sess.WorktreePath); dirty {
+			dirty, statusErr := gitStatusDirty(ctx, sess.WorktreePath)
+			if statusErr != nil {
+				err := fmt.Errorf("repo %s: check worktree status: %w", repo, statusErr)
+				slog.Error("failed to check worktree status before finalization", "repo", repo, "worktree", sess.WorktreePath, "error", err)
+				errs = append(errs, err)
+				continue
+			}
+			if dirty {
 				slog.Warn("agent left uncommitted changes in worktree; spinning up commit session",
 					"repo", repo, "worktree", sess.WorktreePath, "session_id", sess.SessionID)
 				if commitErr := s.commitViaAgent(ctx, sess.WorktreePath, repo, sess.SessionID); commitErr != nil {
-					slog.Error("failed to commit residual changes", "repo", repo, "error", commitErr)
+					err := fmt.Errorf("repo %s: commit residual changes: %w", repo, commitErr)
+					slog.Error("failed to commit residual changes", "repo", repo, "error", err)
+					errs = append(errs, err)
+					continue
+				}
+
+				dirtyAfterCommit, statusErr := gitStatusDirty(ctx, sess.WorktreePath)
+				if statusErr != nil {
+					err := fmt.Errorf("repo %s: check worktree status after commit: %w", repo, statusErr)
+					slog.Error("failed to check worktree status after residual commit", "repo", repo, "worktree", sess.WorktreePath, "error", err)
+					errs = append(errs, err)
+					continue
+				}
+				if dirtyAfterCommit {
+					err := fmt.Errorf("repo %s: residual changes remain after commit finalization", repo)
+					slog.Error("residual changes remain after commit finalization", "repo", repo, "worktree", sess.WorktreePath, "error", err)
+					errs = append(errs, err)
+					continue
 				}
 			}
 		}
@@ -1415,28 +1445,38 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 			if pushErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); pushErr != nil {
 				if isPreReceiveRejection(pushErr.Error()) {
 					// A server-side hook declined the push (commit message policy,
-					// secrets scan, etc.).  Attempt a local fix and retry.
+					// secrets scan, etc.). Attempt a local fix and retry.
 					if sess.WorktreePath == "" {
+						err := fmt.Errorf("repo %s: push rejected by pre-receive hook and no worktree available: %w", repo, pushErr)
 						slog.Error("push rejected by pre-receive hook; no worktree available to fix",
-							"repo", repo, "branch", branch, "err", pushErr)
+							"repo", repo, "branch", branch, "error", err)
+						errs = append(errs, err)
 					} else {
 						slog.Warn("push rejected by pre-receive hook; attempting local fix",
-							"repo", repo, "branch", branch)
+							"repo", repo, "branch", branch, "error", pushErr)
 						if fixErr := s.fixPreReceiveRejectionViaAgent(ctx, sess.WorktreePath, pushErr.Error()); fixErr != nil {
+							err := fmt.Errorf("repo %s: fix pre-receive rejection after push failure: %w", repo, errors.Join(pushErr, fixErr))
 							slog.Error("failed to fix pre-receive hook rejection",
-								"repo", repo, "branch", branch, "error", fixErr)
+								"repo", repo, "branch", branch, "error", err)
+							errs = append(errs, err)
 						} else if retryErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); retryErr != nil {
+							err := fmt.Errorf("repo %s: push after pre-receive fix: %w", repo, errors.Join(pushErr, retryErr))
 							slog.Error("push still failed after fixing pre-receive hook rejection",
-								"repo", repo, "branch", branch, "error", retryErr)
+								"repo", repo, "branch", branch, "error", err)
+							errs = append(errs, err)
 						}
 					}
 				} else {
+					err := fmt.Errorf("repo %s: push branch %s: %w", repo, branch, pushErr)
 					slog.Warn("failed to push branch to remote after review pass",
-						"repo", repo, "branch", branch, "err", pushErr)
+						"repo", repo, "branch", branch, "error", err)
+					errs = append(errs, err)
 				}
 			}
 		}
 	}
+
+	return errors.Join(errs...)
 }
 
 // gitStatusDirty returns true if the working tree at dir has uncommitted changes.

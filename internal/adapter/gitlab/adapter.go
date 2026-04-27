@@ -627,10 +627,7 @@ func gitlabReviewArtifactsFromRelatedMRs(mrs []relatedMergeRequest, fallbackProj
 			continue
 		}
 		seen[key] = struct{}{}
-		state := strings.TrimSpace(mr.State)
-		if mr.Draft || mr.WorkInProgress {
-			state = "draft"
-		}
+		state := gitlabRelatedMRArtifactState(mr)
 		artifacts = append(artifacts, domain.ReviewArtifact{
 			Provider:  adapterName,
 			Kind:      "MR",
@@ -645,6 +642,15 @@ func gitlabReviewArtifactsFromRelatedMRs(mrs []relatedMergeRequest, fallbackProj
 	}
 
 	return artifacts
+}
+
+func gitlabRelatedMRArtifactState(mr relatedMergeRequest) string {
+	state := strings.TrimSpace(mr.State)
+	if (mr.Draft || mr.WorkInProgress) && state != "merged" && state != "closed" {
+		return "draft"
+	}
+
+	return state
 }
 
 func gitlabMergeRequestProjectPath(mr relatedMergeRequest, fallback string) string {

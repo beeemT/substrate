@@ -410,6 +410,8 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			return m, func() tea.Msg {
 				return PlanApproveMsg{PlanID: m.planID, WorkItemID: m.workItemID}
 			}
+		case "i":
+			return m, m.OpenFeedback("Describe the changes needed…")
 		case "c":
 			if clipErr := clipboard.WriteAll(m.planContent); clipErr != nil {
 				slog.Warn("failed to copy plan to clipboard", "error", clipErr)
