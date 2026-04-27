@@ -44,6 +44,7 @@ migrations/
     010_work_item_extra_context.sql
     011_pr_review_state.sql
     012_pr_check_status.sql
+    013_question_routing_metadata.sql
 ~/.substrate/state.db
 ```
 

@@ -302,6 +302,12 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 						return m, cmd
 					}
+				case overviewOverlayCompleted:
+					cmd := m.completed.CloseFeedback()
+					m.overlay = overviewOverlayNone
+					m.syncViewport(false)
+
+					return m, cmd
 				}
 			}
 			m.overlay = overviewOverlayNone

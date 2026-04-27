@@ -3,15 +3,226 @@ package views_test
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
+	"github.com/beeemT/substrate/internal/orchestrator"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/views"
 )
+
+func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t *testing.T) {
+	t.Parallel()
+
+	questionRepo := newCmdQuestionRepo()
+	taskRepo := newCmdTaskRepo()
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}})
+	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}})
+	bus := event.NewBus(event.BusConfig{})
+	defer bus.Close()
+	sub, err := bus.Subscribe("planning-answer-test", string(domain.EventAgentQuestionAnswered))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+
+	msg := views.AnswerQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, bus, "q-plan", "use full cutover", "human")()
+	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Answer sent to planner" {
+		t.Fatalf("message = %T %#v, want ActionDoneMsg", msg, msg)
+	}
+
+	gotQuestion := questionRepo.questions["q-plan"]
+	if gotQuestion.Status != domain.QuestionAnswered {
+		t.Fatalf("question status = %s, want %s", gotQuestion.Status, domain.QuestionAnswered)
+	}
+	if gotQuestion.Answer != "use full cutover" || gotQuestion.AnsweredBy != "human" {
+		t.Fatalf("answer = %q by %q, want answer persisted by human", gotQuestion.Answer, gotQuestion.AnsweredBy)
+	}
+	if gotTask := taskRepo.tasks["plan-session"]; gotTask.Status != domain.AgentSessionRunning {
+		t.Fatalf("task status = %s, want %s", gotTask.Status, domain.AgentSessionRunning)
+	}
+
+	select {
+	case evt := <-sub.C:
+		if evt.EventType != string(domain.EventAgentQuestionAnswered) {
+			t.Fatalf("event type = %q, want %q", evt.EventType, domain.EventAgentQuestionAnswered)
+		}
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if payload["id"] != "q-plan" || payload["session_id"] != "plan-session" {
+			t.Fatalf("payload = %#v, want id/session_id", payload)
+		}
+	default:
+		t.Fatal("expected planning answered event")
+	}
+}
+
+func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
+	t.Parallel()
+
+	questionRepo := newCmdQuestionRepo()
+	taskRepo := newCmdTaskRepo()
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}})
+	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}})
+
+	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+
+	msg := views.SkipQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, nil, "q-skip")()
+	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Question skipped" {
+		t.Fatalf("message = %T %#v, want ActionDoneMsg", msg, msg)
+	}
+
+	gotQuestion := questionRepo.questions["q-skip"]
+	if gotQuestion.Status != domain.QuestionAnswered {
+		t.Fatalf("question status = %s, want %s", gotQuestion.Status, domain.QuestionAnswered)
+	}
+	if gotQuestion.Answer != "" || gotQuestion.AnsweredBy != "human" {
+		t.Fatalf("skip answer = %q by %q, want empty answer by human", gotQuestion.Answer, gotQuestion.AnsweredBy)
+	}
+	if gotTask := taskRepo.tasks["plan-session"]; gotTask.Status != domain.AgentSessionRunning {
+		t.Fatalf("task status = %s, want %s", gotTask.Status, domain.AgentSessionRunning)
+	}
+}
+
+type cmdQuestionRepo struct {
+	questions map[string]domain.Question
+	bySession map[string][]string
+}
+
+func newCmdQuestionRepo() *cmdQuestionRepo {
+	return &cmdQuestionRepo{questions: make(map[string]domain.Question), bySession: make(map[string][]string)}
+}
+
+func (r *cmdQuestionRepo) Get(_ context.Context, id string) (domain.Question, error) {
+	q, ok := r.questions[id]
+	if !ok {
+		return domain.Question{}, repository.ErrNotFound
+	}
+	return q, nil
+}
+
+func (r *cmdQuestionRepo) ListBySessionID(_ context.Context, sessionID string) ([]domain.Question, error) {
+	var questions []domain.Question
+	for _, id := range r.bySession[sessionID] {
+		questions = append(questions, r.questions[id])
+	}
+	return questions, nil
+}
+
+func (r *cmdQuestionRepo) Create(_ context.Context, q domain.Question) error {
+	r.questions[q.ID] = q
+	r.bySession[q.AgentSessionID] = append(r.bySession[q.AgentSessionID], q.ID)
+	return nil
+}
+
+func (r *cmdQuestionRepo) Update(_ context.Context, q domain.Question) error {
+	if _, ok := r.questions[q.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.questions[q.ID] = q
+	return nil
+}
+
+func (r *cmdQuestionRepo) UpdateProposedAnswer(_ context.Context, id, proposedAnswer string) error {
+	q, ok := r.questions[id]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	q.ProposedAnswer = proposedAnswer
+	r.questions[id] = q
+	return nil
+}
+
+type cmdTaskRepo struct {
+	tasks       map[string]domain.Task
+	byWorkItem  map[string][]string
+	bySubPlan   map[string][]string
+	byWorkspace map[string][]string
+}
+
+func newCmdTaskRepo() *cmdTaskRepo {
+	return &cmdTaskRepo{
+		tasks:       make(map[string]domain.Task),
+		byWorkItem:  make(map[string][]string),
+		bySubPlan:   make(map[string][]string),
+		byWorkspace: make(map[string][]string),
+	}
+}
+
+func (r *cmdTaskRepo) Get(_ context.Context, id string) (domain.Task, error) {
+	task, ok := r.tasks[id]
+	if !ok {
+		return domain.Task{}, repository.ErrNotFound
+	}
+	return task, nil
+}
+
+func (r *cmdTaskRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+	return r.list(r.byWorkItem[workItemID]), nil
+}
+
+func (r *cmdTaskRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+	return r.list(r.bySubPlan[subPlanID]), nil
+}
+
+func (r *cmdTaskRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+	return r.list(r.byWorkspace[workspaceID]), nil
+}
+
+func (r *cmdTaskRepo) ListByOwnerInstanceID(_ context.Context, _ string) ([]domain.Task, error) {
+	return nil, nil
+}
+
+func (r *cmdTaskRepo) SearchHistory(_ context.Context, _ domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+	return nil, nil
+}
+
+func (r *cmdTaskRepo) Create(_ context.Context, task domain.Task) error {
+	r.tasks[task.ID] = task
+	r.byWorkItem[task.WorkItemID] = append(r.byWorkItem[task.WorkItemID], task.ID)
+	if task.SubPlanID != "" {
+		r.bySubPlan[task.SubPlanID] = append(r.bySubPlan[task.SubPlanID], task.ID)
+	}
+	r.byWorkspace[task.WorkspaceID] = append(r.byWorkspace[task.WorkspaceID], task.ID)
+	return nil
+}
+
+func (r *cmdTaskRepo) Update(_ context.Context, task domain.Task) error {
+	if _, ok := r.tasks[task.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.tasks[task.ID] = task
+	return nil
+}
+
+func (r *cmdTaskRepo) Delete(_ context.Context, id string) error {
+	if _, ok := r.tasks[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(r.tasks, id)
+	return nil
+}
+
+func (r *cmdTaskRepo) list(ids []string) []domain.Task {
+	tasks := make([]domain.Task, 0, len(ids))
+	for _, id := range ids {
+		tasks = append(tasks, r.tasks[id])
+	}
+	return tasks
+}
 
 // TestTailSessionLogCmd_Basic verifies that reading a freshly-written file from
 // offset 0 returns all lines and advances NextOffset to the file size.

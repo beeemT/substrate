@@ -363,26 +363,21 @@ func ApprovePlanCmd(
 }
 
 // AnswerQuestionCmd delivers a human answer through the route required by the question's stage.
-func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, questionID, answer, answeredBy string) tea.Cmd {
+func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
-		q, err := svc.Get(context.Background(), questionID)
+		ctx := context.Background()
+		q, err := svc.Get(ctx, questionID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
 		switch q.Stage {
 		case domain.TaskPhasePlanning:
-			if registry == nil {
-				return ErrMsg{Err: fmt.Errorf("answer planning question %s: live answer delivery is not configured", questionID)}
-			}
-			if err := registry.SendAnswer(context.Background(), q.AgentSessionID, answer); err != nil {
-				return ErrMsg{Err: fmt.Errorf("answer planning question %s: %w", questionID, err)}
-			}
-			if sessionSvc != nil {
-				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
-					slog.Warn("failed to resume planning session after answer", "error", err, "question_id", questionID, "session_id", q.AgentSessionID)
+			if registry != nil {
+				if err := registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
+					return ErrMsg{Err: fmt.Errorf("answer planning question %s: %w", questionID, err)}
 				}
 			}
-			if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
+			if err := answerPlanningQuestion(ctx, svc, sessionSvc, bus, q, answer, answeredBy); err != nil {
 				return ErrMsg{Err: err}
 			}
 			return ActionDoneMsg{Message: "Answer sent to planner"}
@@ -410,6 +405,21 @@ func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskSer
 			return ErrMsg{Err: fmt.Errorf("answer question %s: unsupported stage %q", questionID, q.Stage)}
 		}
 	}
+}
+
+func answerPlanningQuestion(ctx context.Context, svc *service.QuestionService, sessionSvc *service.TaskService, bus *event.Bus, q domain.Question, answer, answeredBy string) error {
+	if err := svc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
+		return err
+	}
+	if sessionSvc != nil && q.AgentSessionID != "" {
+		if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
+			return fmt.Errorf("resume planning session after answer: %w", err)
+		}
+	}
+	if err := orchestrator.PublishQuestionAnswered(ctx, bus, q.ID, q.AgentSessionID); err != nil {
+		return fmt.Errorf("publish planning question answered event: %w", err)
+	}
+	return nil
 }
 
 // HeartbeatCmd sends a heartbeat for the current instance.
@@ -1041,21 +1051,25 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 }
 
 // SkipQuestionCmd marks a question as skipped and unblocks the pending live harness when possible.
-func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, questionID string) tea.Cmd {
+func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID string) tea.Cmd {
 	return func() tea.Msg {
-		q, err := svc.Get(context.Background(), questionID)
+		ctx := context.Background()
+		q, err := svc.Get(ctx, questionID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
 		if q.Stage == domain.TaskPhasePlanning {
-			if registry == nil {
-				return ErrMsg{Err: fmt.Errorf("skip planning question %s: live answer delivery is not configured", questionID)}
+			if registry != nil {
+				if err := registry.SendAnswer(ctx, q.AgentSessionID, ""); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
+					return ErrMsg{Err: fmt.Errorf("skip planning question %s: %w", questionID, err)}
+				}
 			}
-			if err := registry.SendAnswer(context.Background(), q.AgentSessionID, ""); err != nil {
-				return ErrMsg{Err: fmt.Errorf("skip planning question %s: %w", questionID, err)}
+			if err := answerPlanningQuestion(ctx, svc, sessionSvc, bus, q, "", "human"); err != nil {
+				return ErrMsg{Err: err}
 			}
+			return ActionDoneMsg{Message: "Question skipped"}
 		} else if foreman != nil {
-			err := foreman.ResolveEscalated(context.Background(), questionID, "")
+			err := foreman.ResolveEscalated(ctx, questionID, "")
 			if err == nil {
 				return ActionDoneMsg{Message: "Question skipped"}
 			}
@@ -1064,11 +1078,11 @@ func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskServi
 			}
 		}
 		if sessionSvc != nil && q.AgentSessionID != "" {
-			if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
+			if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
 				slog.Warn("failed to resume session on skip fallback", "error", err, "question_id", questionID)
 			}
 		}
-		if err := svc.Answer(context.Background(), questionID, "", "human"); err != nil {
+		if err := svc.Answer(ctx, questionID, "", "human"); err != nil {
 			return ErrMsg{Err: err}
 		}
 

@@ -106,6 +106,16 @@ func (m *CompletedModel) OpenFeedback() tea.Cmd {
 	return cmd
 }
 
+func (m *CompletedModel) CloseFeedback() tea.Cmd {
+	if !m.inputActive && m.feedbackInput.Value() == "" {
+		return nil
+	}
+	resetCmd := m.feedbackInput.Reset()
+	m.inputActive = false
+	m.syncViewportSize()
+	return resetCmd
+}
+
 func (m CompletedModel) InputCaptured() bool { return m.inputActive }
 
 func (m CompletedModel) KeybindHints() []KeybindHint {

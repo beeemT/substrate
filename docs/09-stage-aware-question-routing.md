@@ -246,9 +246,9 @@ It supports:
 - configurable timeout;
 - timeout disabled in plan mode.
 
-OMP's plan-mode prompt and enforcement refer to the native tool name `ask`. The planner is expected to use `ask` or `exit_plan_mode` during planning. In current Substrate bridge wiring, OMP's native `ask` appears not to be exposed because the bridge allows a selected tool list plus the custom `ask_foreman` tool. That must change for native/default OMP question support.
+OMP's plan-mode prompt and enforcement refer to the native tool name `ask`. The planner is expected to use `ask` or `exit_plan_mode` during planning. Substrate's OMP bridge now exposes the native `ask` tool alongside Substrate-specific tooling, so native OMP questions can be intercepted as first-class question events.
 
-Product implication: OMP's `ask` should be exposed and intercepted as a first-class question source. In planning it routes directly to the human. In implementation it routes through Foreman.
+Product implication: OMP's `ask` is exposed and should be routed as a first-class question source. In planning it routes directly to the human. In implementation it routes through Foreman.
 
 ### OpenCode
 

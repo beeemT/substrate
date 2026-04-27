@@ -15,13 +15,15 @@
  *   - {"type":"event","event":{...}} — canonical session transcript entry
  */
 
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
-const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_LEVEL as ThinkingLevel | undefined;
+const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_LEVEL as
+  | ThinkingLevel
+  | undefined;
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 let systemPrompt: string | undefined;
 let modelPattern: string | undefined;
@@ -99,20 +101,39 @@ function parseAnswerMessage(msg: Record<string, unknown>): any {
   return { text: raw };
 }
 
-function toOMPAskResult(answer: any): any {
+function toOMPAskResult(
+  answer: any,
+  questionMetaByID: Map<string, { question: string; multi: boolean }> = new Map(),
+): any {
   const structured = Array.isArray(answer?.structured_answers) ? answer.structured_answers : [];
-  const results = structured.map((a: any) => ({
-    id: String(a.question_id ?? ""),
-    question: String(a.question ?? ""),
-    options: Array.isArray(a.selected_options) ? a.selected_options.map(String) : [],
-    multi: Array.isArray(a.selected_options) && a.selected_options.length > 1,
-    selectedOptions: Array.isArray(a.selected_options) ? a.selected_options.map(String) : [],
-    ...(a.custom_answer ? { customInput: String(a.custom_answer) } : {}),
-  }));
+  const results = structured.map((a: any) => {
+    const id = String(a.question_id ?? "");
+    const meta = questionMetaByID.get(id);
+    const selectedOptions = Array.isArray(a.selected_options) ? a.selected_options.map(String) : [];
+    return {
+      id,
+      question: String(a.question ?? meta?.question ?? ""),
+      options: selectedOptions,
+      multi: meta?.multi ?? false,
+      selectedOptions,
+      ...(a.custom_answer ? { customInput: String(a.custom_answer) } : {}),
+    };
+  });
   if (results.length > 0) {
     return { results };
   }
-  return { results: [{ id: "", question: "", options: [], multi: false, selectedOptions: [], customInput: String(answer?.text ?? "") }] };
+  return {
+    results: [
+      {
+        id: "",
+        question: "",
+        options: [],
+        multi: false,
+        selectedOptions: [],
+        customInput: String(answer?.text ?? ""),
+      },
+    ],
+  };
 }
 
 function extractTextPayload(value: unknown): string {
@@ -332,14 +353,23 @@ function createNativeAskTool(): any {
     parameters: askSchema,
     async execute(_toolCallId: string, params: any) {
       const questions = Array.isArray(params?.questions) ? params.questions : [];
+      const questionMetaByID = new Map<string, { question: string; multi: boolean }>();
       const structured = {
-        questions: questions.map((q: any) => ({
-          id: String(q.id ?? ""),
-          question: String(q.question ?? ""),
-          options: Array.isArray(q.options) ? q.options.map((o: any) => ({ label: String(o?.label ?? "") })) : [],
-          multi_select: Boolean(q.multi),
-          recommended_index: typeof q.recommended === "number" ? q.recommended : undefined,
-        })),
+        questions: questions.map((q: any) => {
+          const id = String(q.id ?? "");
+          const question = String(q.question ?? "");
+          const multi = Boolean(q.multi);
+          questionMetaByID.set(id, { question, multi });
+          return {
+            id,
+            question,
+            options: Array.isArray(q.options)
+              ? q.options.map((o: any) => ({ label: String(o?.label ?? "") }))
+              : [],
+            multi_select: multi,
+            recommended_index: typeof q.recommended === "number" ? q.recommended : undefined,
+          };
+        }),
         supports_custom_answer: true,
         supports_annotations: false,
         native_response_format: "omp_ask",
@@ -352,7 +382,22 @@ function createNativeAskTool(): any {
         structured,
       });
       return await new Promise<any>((resolve) => {
-        pendingStructuredAnswerResolve = resolve;
+        const resolveStructuredAnswer = (answer: any) =>
+          resolve(toOMPAskResult(answer, questionMetaByID));
+        pendingStructuredAnswerResolve = resolveStructuredAnswer;
+        if (answerTimeoutMs > 0) {
+          setTimeout(() => {
+            if (pendingStructuredAnswerResolve === resolveStructuredAnswer) {
+              pendingStructuredAnswerResolve = null;
+              resolve(
+                toOMPAskResult(
+                  { text: "[No answer received within timeout. Proceed with your best judgment.]" },
+                  questionMetaByID,
+                ),
+              );
+            }
+          }, answerTimeoutMs);
+        }
       });
     },
   };
@@ -483,6 +528,10 @@ async function handleLine(line: string): Promise<void> {
 
   switch (msg.type) {
     case "abort":
+      if (pendingStructuredAnswerResolve) {
+        pendingStructuredAnswerResolve({ text: "[Session aborted]" });
+        pendingStructuredAnswerResolve = null;
+      }
       if (pendingAnswerResolve) {
         pendingAnswerResolve("[Session aborted]");
         pendingAnswerResolve = null;
@@ -493,7 +542,7 @@ async function handleLine(line: string): Promise<void> {
       if (pendingStructuredAnswerResolve) {
         const parsed = parseAnswerMessage(msg);
         emitInput("answer", parsed.text);
-        pendingStructuredAnswerResolve(toOMPAskResult(parsed));
+        pendingStructuredAnswerResolve(parsed);
         pendingStructuredAnswerResolve = null;
         break;
       }

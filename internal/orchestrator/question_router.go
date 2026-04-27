@@ -112,17 +112,21 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 	return nil
 }
 
-func (r *QuestionRouter) publishAnswered(ctx context.Context, questionID, sessionID string) error {
-	if r.eventBus == nil {
+func PublishQuestionAnswered(ctx context.Context, eventBus *event.Bus, questionID, sessionID string) error {
+	if eventBus == nil {
 		return nil
 	}
-	return r.eventBus.Publish(ctx, domain.SystemEvent{
+	return eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionAnswered),
 		WorkspaceID: "",
 		Payload:     marshalJSONOrEmpty("agent_question.answered", map[string]string{"id": questionID, "session_id": sessionID}),
 		CreatedAt:   time.Now(),
 	})
+}
+
+func (r *QuestionRouter) publishAnswered(ctx context.Context, questionID, sessionID string) error {
+	return PublishQuestionAnswered(ctx, r.eventBus, questionID, sessionID)
 }
 
 func questionFromEvent(evt adapter.AgentEvent, sessionID string, stage domain.TaskPhase) domain.Question {

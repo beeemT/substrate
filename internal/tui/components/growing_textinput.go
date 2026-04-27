@@ -94,20 +94,37 @@ func (g GrowingTextInput) View() string {
 	}
 
 	value := g.model.Value()
+	valueRunes := []rune(value)
+	cursor := g.model.Position()
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(valueRunes) {
+		cursor = len(valueRunes)
+	}
+
+	visibleStart := 0
+	wrappedBeforeCursor := wrapScalarInputValue(string(valueRunes[:cursor]), width)
+	lineIndex := 0
+	if wrappedBeforeCursor != "" {
+		lineIndex = strings.Count(wrappedBeforeCursor, "\n")
+	}
+
 	wrapped := wrapScalarInputValue(value, width)
 	lines := strings.Split(wrapped, "\n")
-	if len(lines) <= g.maxLines {
-		return g.viewLines(lines, width)
+	if len(lines) > g.maxLines {
+		visibleStart = len(lines) - g.maxLines
+		lines = lines[visibleStart:]
+		if len(lines) > 0 {
+			lines[0] = ansi.TruncateLeft(lines[0], width, "…")
+		}
 	}
+	cursorLine := lineIndex - visibleStart
 
-	lines = lines[len(lines)-g.maxLines:]
-	if len(lines) > 0 {
-		lines[0] = ansi.TruncateLeft(lines[0], width, "…")
-	}
-	return g.viewLines(lines, width)
+	return g.viewLines(lines, width, cursorLine, cursor)
 }
 
-func (g GrowingTextInput) viewLines(lines []string, width int) string {
+func (g GrowingTextInput) viewLines(lines []string, width int, cursorLine int, cursor int) string {
 	if len(lines) == 0 {
 		return ""
 	}
@@ -115,11 +132,23 @@ func (g GrowingTextInput) viewLines(lines []string, width int) string {
 		lines[i] = padScalarInputLine(lines[i], width)
 	}
 	if g.model.Focused() {
-		last := lines[len(lines)-1]
-		if ansi.StringWidth(last) >= width {
-			last = ansi.Truncate(last, max(0, width-1), "")
+		if cursorLine < 0 {
+			cursorLine = 0
 		}
-		lines[len(lines)-1] = last + g.model.Cursor.View()
+		if cursorLine >= len(lines) {
+			cursorLine = len(lines) - 1
+		}
+		line := lines[cursorLine]
+		wrappedBeforeCursor := wrapScalarInputValue(string([]rune(g.model.Value())[:cursor]), width)
+		cursorColumn := ansi.StringWidth(lastScalarInputWrappedLine(wrappedBeforeCursor))
+		if cursorColumn >= width {
+			cursorColumn = width - 1
+		}
+		g.model.Cursor.SetChar(scalarInputCharAtColumn(line, cursorColumn))
+		if g.model.Cursor.Blink {
+			g.model.Cursor.Blink = false
+		}
+		lines[cursorLine] = renderScalarInputCursor(line, width, cursorColumn, g.model.Cursor.View())
 	}
 	return strings.Join(lines, "\n")
 }
@@ -153,6 +182,43 @@ func sanitizeScalarInput(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	return s
+}
+
+func lastScalarInputWrappedLine(s string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	return lines[len(lines)-1]
+}
+
+func scalarInputCharAtColumn(line string, column int) string {
+	if column < 0 {
+		return " "
+	}
+	runes := []rune(line)
+	if column >= len(runes) {
+		return " "
+	}
+	return string(runes[column])
+}
+
+func renderScalarInputCursor(line string, width int, column int, cursor string) string {
+	if width <= 0 {
+		return line + cursor
+	}
+	if column < 0 {
+		column = 0
+	}
+	if column >= width {
+		column = width - 1
+	}
+
+	runes := []rune(line)
+	if column >= len(runes) {
+		return line + cursor
+	}
+	return string(runes[:column]) + cursor + string(runes[column+1:])
 }
 
 func scalarInputWrappedRowCount(value string, width int) int {

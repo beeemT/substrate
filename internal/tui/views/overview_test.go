@@ -462,6 +462,51 @@ func TestCompletedActionCardIOpensOverlayInNormalMode(t *testing.T) {
 	}
 }
 
+func TestCompletedOverlayEscClosesAndResetsFeedback(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionCompleted,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Done", StatusLabel: "Completed", UpdatedAt: time.Now()},
+		Actions:    []OverviewActionCard{{Kind: overviewActionCompleted}},
+	})
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated.completed.feedbackInput.SetValue("stale feedback")
+	if updated.overlay != overviewOverlayCompleted || !updated.completed.inputActive {
+		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with active feedback", updated.overlay, updated.completed.inputActive)
+	}
+
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want closed after esc", updated.overlay)
+	}
+	if updated.completed.inputActive {
+		t.Fatal("inputActive = true after esc close, want false")
+	}
+	if got := updated.completed.feedbackInput.Value(); got != "" {
+		t.Fatalf("feedback input = %q, want reset after esc close", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected esc close to return reset command")
+	}
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if updated.overlay != overviewOverlayCompleted {
+		t.Fatalf("overlay after reopen = %v, want completed", updated.overlay)
+	}
+	if updated.completed.inputActive {
+		t.Fatal("inputActive = true after reopen via inspect, want false")
+	}
+	if got := updated.completed.feedbackInput.Value(); got != "" {
+		t.Fatalf("feedback input after reopen = %q, want empty", got)
+	}
+}
+
 // TestCompletedOverlayShowsPlanContent verifies that pressing [i] on a completed
 // action card renders the plan document inside the overlay. This is the primary
 // regression test for the bug where only the completion timestamp was shown.

@@ -106,3 +106,28 @@ func TestGrowingTextInputRenderedLinesStayWithinWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestGrowingTextInputCursorFollowsNonTailPosition(t *testing.T) {
+	t.Parallel()
+
+	g := components.NewGrowingTextInput()
+	g.SetWidth(5)
+	g.SetMaxLines(3)
+	g.SetValue("abcdefghij")
+	g.SetCursor(2)
+	g = focusedGrowingTextInput(g)
+
+	lines := strings.Split(g.View(), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rendered lines = %d, want 2; view=%q", len(lines), g.View())
+	}
+	if ansi.StringWidth(lines[0]) > 5 || ansi.StringWidth(lines[1]) > 5 {
+		t.Fatalf("rendered line overflow: widths = %d/%d view=%q", ansi.StringWidth(lines[0]), ansi.StringWidth(lines[1]), g.View())
+	}
+	if ansi.StringWidth(lines[0]) != 5 {
+		t.Fatalf("first line width = %d, want 5 after cursor replacement; line=%q", ansi.StringWidth(lines[0]), lines[0])
+	}
+	if lines[1] != "fghij" {
+		t.Fatalf("second line = %q, want unchanged tail line", lines[1])
+	}
+}
