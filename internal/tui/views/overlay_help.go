@@ -41,7 +41,8 @@ func (h HelpOverlay) View() string {
 	panels := []section{
 		{"Plan Review", []entry{
 			{"a", "Approve plan"},
-			{"c", "Request changes"},
+			{"i", "Inspect / Request changes"},
+			{"c", "Copy plan"},
 			{"e", "Edit in $EDITOR"},
 			{"↑↓", "Scroll"},
 		}},
@@ -51,9 +52,9 @@ func (h HelpOverlay) View() string {
 			{"↑↓", "Scroll"},
 		}},
 		{"Question", []entry{
-			{"A", "Send or approve answer"},
-			{"Enter", "Send message to Foreman"},
-			{"Esc", "Skip question"},
+			{"Enter", "Send typed answer"},
+			{"PgUp/PgDn", "Scroll question"},
+			{"Esc", "Close modal"},
 		}},
 		{"Reviewing", []entry{
 			{"j/k", "Navigate critiques"},

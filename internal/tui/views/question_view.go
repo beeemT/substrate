@@ -3,7 +3,9 @@ package views
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
@@ -20,6 +22,7 @@ type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns val
 	question         domain.Question
 	foremanProposed  string
 	foremanUncertain bool
+	viewport         viewport.Model
 	input            components.GrowingTextArea
 	inputActive      bool
 	title            string
@@ -31,15 +34,19 @@ type QuestionModel struct { //nolint:recvcheck // Bubble Tea: Update returns val
 // NewQuestionModel constructs a QuestionModel with the given styles.
 func NewQuestionModel(st styles.Styles) QuestionModel {
 	ti := components.NewGrowingTextArea(questionReplyScrollSource)
-	ti.SetPlaceholder("Type reply…")
+	ti.SetPlaceholder("Type answer…")
 	ti.SetCharLimit(1000)
 	ti.SetMaxLines(questionReplyMaxLines)
 
-	return QuestionModel{input: ti, styles: st}
+	return QuestionModel{viewport: viewport.New(0, 0), input: ti, styles: st}
 }
 
 // SetSize updates the layout dimensions.
-func (m *QuestionModel) SetSize(w, h int) { m.width = w; m.height = h }
+func (m *QuestionModel) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+	m.syncViewportSize(false)
+}
 
 // SetTitle sets the work-item title shown in the question view.
 func (m *QuestionModel) SetTitle(t string) { m.title = t }
@@ -55,24 +62,29 @@ func (m *QuestionModel) SetQuestion(q domain.Question, proposed string, uncertai
 			m.inputActive = true
 			m.input.Focus()
 		}
+		m.syncViewportSize(false)
 
 		return
 	}
 	m.input.SetValue("")
 	m.inputActive = true
 	m.input.Focus()
-	m.input.SetWidth(max(1, m.width))
+	m.syncViewportSize(true)
+}
+
+// Close clears the draft answer and deactivates the input without resolving the question.
+func (m *QuestionModel) Close() tea.Cmd {
+	m.inputActive = false
+	m.viewport.GotoTop()
+	return m.input.Reset()
 }
 
 // KeybindHints returns the keybind hints for the status bar.
 func (m QuestionModel) KeybindHints() []KeybindHint {
-	if m.question.Stage == domain.TaskPhasePlanning {
-		return []KeybindHint{{Key: "A", Label: "Send answer"}, {Key: "Esc", Label: "Skip"}}
-	}
 	return []KeybindHint{
-		{Key: "A", Label: "Approve Foreman answer"},
-		{Key: "Enter", Label: "Send to Foreman"},
-		{Key: "Esc", Label: "Skip"},
+		{Key: "Enter", Label: "Send answer"},
+		{Key: "PgUp/PgDn", Label: "Scroll"},
+		{Key: "Esc", Label: "Close"},
 	}
 }
 
@@ -80,17 +92,30 @@ func (m QuestionModel) KeybindHints() []KeybindHint {
 func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 	var cmd tea.Cmd
 	if msg, ok := msg.(components.GrowingTextAreaScrollMsg); ok {
-		if msg.Source == questionReplyScrollSource {
+		if msg.Source != questionReplyScrollSource {
 			return m, nil
 		}
+		switch {
+		case msg.Delta < 0:
+			m.viewport.ScrollUp(-msg.Delta)
+		case msg.Delta > 0:
+			m.viewport.ScrollDown(msg.Delta)
+		}
+
+		return m, nil
 	}
-	if msg, ok := msg.(tea.KeyMsg); ok {
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
 		switch msg.String() {
-		case "A":
+		case keyEnter:
+			if !m.inputActive {
+				return m, nil
+			}
 			m.input.Flush()
-			answer := m.foremanProposed
+			answer := strings.TrimSpace(m.input.Value())
 			if answer == "" {
-				answer = m.input.Value()
+				return m, nil
 			}
 			qID := m.question.ID
 			m.inputActive = false
@@ -103,37 +128,54 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 			)
 
 		case keyEsc:
-			qID := m.question.ID
-			m.inputActive = false
+			return m, m.Close()
 
-			return m, tea.Batch(
-				func() tea.Msg { return SkipQuestionMsg{QuestionID: qID} },
-				m.input.Reset(),
-			)
+		case keyPgUp, keyPgDown:
+			m.viewport, cmd = m.viewport.Update(msg)
 
-		case keyEnter:
-			if m.question.Stage == domain.TaskPhasePlanning {
-				break
+		case "up", "k":
+			if m.inputActive && m.input.AtTop() {
+				m.viewport.ScrollUp(1)
+
+				return m, nil
 			}
 			if m.inputActive {
-				m.input.Flush()
-				text := m.input.Value()
-				qID := m.question.ID
+				m.input, cmd = m.input.Update(msg)
+				m.syncViewportSize(false)
+			}
 
-				return m, tea.Batch(
-					func() tea.Msg {
-						return SendToForemanMsg{QuestionID: qID, Message: text}
-					},
-					m.input.Reset(),
-				)
+		case keyDown, "j":
+			if m.inputActive && m.input.AtBottom() {
+				m.viewport.ScrollDown(1)
+
+				return m, nil
+			}
+			if m.inputActive {
+				m.input, cmd = m.input.Update(msg)
+				m.syncViewportSize(false)
 			}
 
 		default:
 			if m.inputActive {
 				m.input, cmd = m.input.Update(msg)
-				m.input.SetWidth(max(1, m.width))
+				m.syncViewportSize(false)
 			}
 		}
+
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				m.viewport, cmd = m.viewport.Update(msg)
+			}
+		}
+
+	case tea.WindowSizeMsg:
+		m.syncViewportSize(false)
+		m.viewport, cmd = m.viewport.Update(msg)
+
+	default:
+		m.viewport, cmd = m.viewport.Update(msg)
 	}
 
 	return m, cmd
@@ -144,80 +186,127 @@ func (m QuestionModel) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
-	stageLabel := "Implementing"
-	questionLabelText := "Agent question:"
-	intro := ""
-	showForeman := m.question.Stage != domain.TaskPhasePlanning
-	if m.question.Stage == domain.TaskPhasePlanning {
-		stageLabel = "Planning"
-		questionLabelText = "Planning question"
-		intro = m.styles.Subtitle.Render("The planner needs your input before it can continue.")
+	if m.viewport.Width != max(1, m.width-1) || m.viewport.Height != m.viewportHeight() || m.viewport.TotalLineCount() == 0 {
+		m.syncViewportSize(false)
 	}
 
-	header := components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
+	header := m.renderHeader()
+	body := m.viewport.View()
+	if strings.TrimSpace(body) == "" {
+		body = m.styles.Muted.Render("No question content available.")
+	} else if sb := renderViewportScrollbar(m.styles, m.viewport, m.viewport.Height, true); sb != "" {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, sb)
+	}
+
+	parts := append(strings.Split(header, "\n"), body, "", m.replyLabel(), m.input.View())
+
+	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
+}
+
+func (m *QuestionModel) syncViewportSize(reset bool) {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+	m.input.SetWidth(max(1, m.width))
+	m.viewport.Width = max(1, m.width-1)
+	m.viewport.Height = m.viewportHeight()
+	m.refreshViewportContent(reset)
+}
+
+func (m QuestionModel) viewportHeight() int {
+	if m.width <= 0 || m.height <= 0 {
+		return 1
+	}
+	reserved := len(strings.Split(m.renderHeader(), "\n"))
+	reserved += 1 // blank line before answer input
+	reserved += len(strings.Split(m.replyLabel(), "\n"))
+	reserved += m.input.Height()
+
+	return max(1, m.height-reserved)
+}
+
+func (m *QuestionModel) refreshViewportContent(reset bool) {
+	if m.viewport.Width <= 0 {
+		return
+	}
+	previousOffset := m.viewport.YOffset
+	m.viewport.SetContent(m.renderScrollableContent(m.viewport.Width))
+	if reset {
+		m.viewport.GotoTop()
+
+		return
+	}
+	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
+	if previousOffset > maxOffset {
+		previousOffset = maxOffset
+	}
+	if previousOffset < 0 {
+		previousOffset = 0
+	}
+	m.viewport.YOffset = previousOffset
+}
+
+func (m QuestionModel) renderHeader() string {
+	stageLabel := "Implementing"
+	if m.question.Stage == domain.TaskPhasePlanning {
+		stageLabel = "Planning"
+	}
+
+	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{
 		Title:   m.title + " · " + stageLabel + "  ◐ Question",
 		Width:   m.width,
 		Divider: true,
 	})
+}
 
-	questionLabel := m.styles.Warning.Render(questionLabelText)
+func (m QuestionModel) replyLabel() string {
+	if m.question.Stage == domain.TaskPhasePlanning {
+		return m.styles.Subtitle.Render("Reply to planner:")
+	}
+
+	return m.styles.Subtitle.Render("Your answer:")
+}
+
+func (m QuestionModel) renderScrollableContent(width int) string {
+	stageLabel := "Agent question:"
+	intro := ""
+	showForeman := m.question.Stage != domain.TaskPhasePlanning
+	if m.question.Stage == domain.TaskPhasePlanning {
+		stageLabel = "Planning question"
+		intro = m.styles.Subtitle.Render("The planner needs your input before it can continue.")
+	}
+
 	questionBody := m.question.Content
 	if m.question.Structured != nil && len(m.question.Structured.Questions) > 0 {
 		questionBody = renderStructuredQuestionSummary(*m.question.Structured)
 	}
 	questionBox := components.RenderCallout(m.styles, components.CalloutSpec{
 		Body:    questionBody,
-		Width:   m.width,
+		Width:   width,
 		Variant: components.CalloutWarning,
 	})
 
-	ctxBlock := ""
-	if m.question.Context != "" {
-		ctxBlock = m.styles.Subtitle.Render("Context: " + m.question.Context)
-	}
-
-	uncertainLabel := ""
-	if m.foremanUncertain {
-		uncertainLabel = m.styles.Warning.Render(" (uncertain)")
-	}
-	foremanLabel := m.styles.Subtitle.Render("Foreman's proposed answer") + uncertainLabel
-	foremanBox := components.RenderCallout(m.styles, components.CalloutSpec{
-		Body:  m.foremanProposed,
-		Width: m.width,
-	})
-
-	replyLabel := m.styles.Subtitle.Render("Reply to planner:")
-	if showForeman {
-		replyLabel = m.styles.Subtitle.Render("Your reply (or press ") +
-			m.styles.KeybindAccent.Render("[A]") +
-			m.styles.Subtitle.Render(" to approve):")
-	}
-	m.input.SetWidth(max(1, m.width))
-	headerLines := strings.Split(header, "\n")
-	middleBlocks := []string{questionLabel, questionBox}
+	middleBlocks := []string{m.styles.Warning.Render(stageLabel), questionBox}
 	if intro != "" {
 		middleBlocks = append([]string{intro, ""}, middleBlocks...)
 	}
-	if ctxBlock != "" {
-		middleBlocks = append(middleBlocks, ctxBlock)
+	if m.question.Context != "" {
+		middleBlocks = append(middleBlocks, m.styles.Subtitle.Render("Context: "+m.question.Context))
 	}
-	if showForeman {
+	if showForeman && strings.TrimSpace(m.foremanProposed) != "" {
+		uncertainLabel := ""
+		if m.foremanUncertain {
+			uncertainLabel = m.styles.Warning.Render(" (uncertain)")
+		}
+		foremanLabel := m.styles.Subtitle.Render("Foreman's proposed answer") + uncertainLabel
+		foremanBox := components.RenderCallout(m.styles, components.CalloutSpec{
+			Body:  m.foremanProposed,
+			Width: width,
+		})
 		middleBlocks = append(middleBlocks, "", foremanLabel, foremanBox)
 	}
-	footerBlocks := []string{"", replyLabel, m.input.View()}
-	reserved := len(headerLines)
-	for _, block := range footerBlocks {
-		reserved += len(strings.Split(block, "\n"))
-	}
-	middleHeight := max(0, m.height-reserved)
-	middle := fitViewHeight(strings.Join(middleBlocks, "\n"), middleHeight)
-	parts := append([]string{}, headerLines...)
-	if middle != "" {
-		parts = append(parts, strings.Split(middle, "\n")...)
-	}
-	parts = append(parts, footerBlocks...)
 
-	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
+	return strings.Join(middleBlocks, "\n")
 }
 
 func renderStructuredQuestionSummary(set domain.StructuredQuestionSet) string {

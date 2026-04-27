@@ -3,6 +3,7 @@ package views
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -48,6 +49,39 @@ func fitViewBox(rendered string, width, height int) string {
 	}
 
 	return fitViewHeight(strings.Join(fitted, "\n"), height)
+}
+
+func renderViewportScrollbar(st styles.Styles, vp viewport.Model, height int, focused bool) string {
+	if height <= 0 {
+		return ""
+	}
+	total := vp.TotalLineCount()
+	if total <= height {
+		return ""
+	}
+
+	lines := make([]string, height)
+	thumbHeight := max(1, (height*height)/max(1, total))
+	thumbHeight = min(thumbHeight, height)
+	thumbRange := max(0, height-thumbHeight)
+	scrollRange := max(1, total-height)
+	thumbTop := 0
+	if thumbRange > 0 {
+		thumbTop = (vp.YOffset*thumbRange + scrollRange/2) / scrollRange
+	}
+
+	thumbStyle := st.ScrollbarThumb
+	if focused {
+		thumbStyle = st.ScrollbarThumbFocused
+	}
+	for i := range lines {
+		lines[i] = st.ScrollbarTrack.Render("▏")
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			lines[i] = thumbStyle.Render("▐")
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // overlaySpinner places a styled spinner frame at the bottom-right corner of

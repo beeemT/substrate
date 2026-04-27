@@ -82,7 +82,7 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 		t.Fatalf("overview actions = %d, want 1", got)
 	}
 	hints := app.content.KeybindHints()
-	for _, want := range []string{"Approve", "Changes", "Inspect"} {
+	for _, want := range []string{"Approve", "Inspect / Request changes"} {
 		found := false
 		for _, hint := range hints {
 			if hint.Label == want {
@@ -244,20 +244,14 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 	}
 	// Verify the completed action card is built and shows the correct hints.
 	hints := app.content.KeybindHints()
-	var foundChanges, foundInspect bool
+	foundInspectRequestChanges := false
 	for _, h := range hints {
-		if h.Key == "c" && h.Label == "Changes" {
-			foundChanges = true
-		}
-		if h.Key == "i" && h.Label == "Inspect" {
-			foundInspect = true
+		if h.Key == "i" && h.Label == "Inspect / Request changes" {
+			foundInspectRequestChanges = true
 		}
 	}
-	if !foundChanges {
-		t.Fatalf("expected 'c Changes' hint, got %v", hints)
-	}
-	if !foundInspect {
-		t.Fatalf("expected 'i Inspect' hint, got %v", hints)
+	if !foundInspectRequestChanges {
+		t.Fatalf("expected 'i Inspect / Request changes' hint, got %v", hints)
 	}
 }
 
@@ -403,10 +397,10 @@ func TestCompletedOverviewOpensCompletionDetailsOverlay(t *testing.T) {
 	}
 }
 
-// TestCompletedActionCardCOpensFollowUpInput verifies that pressing [c] on a
-// completed action card opens the completed overlay with the follow-up feedback
-// input already active.
-func TestCompletedActionCardCOpensFollowUpInput(t *testing.T) {
+// TestCompletedActionCardCNoLongerOpensFollowUpInput verifies that pressing [c] on a
+// completed action card no longer opens the request-changes input; [c] is reserved
+// for copying the plan inside the overlay.
+func TestCompletedActionCardCNoLongerOpensFollowUpInput(t *testing.T) {
 	t.Parallel()
 
 	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
@@ -420,21 +414,21 @@ func TestCompletedActionCardCOpensFollowUpInput(t *testing.T) {
 	})
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if cmd == nil {
-		t.Fatal("[c] should return Focus cmd for the feedback input, got nil")
+	if cmd != nil {
+		t.Fatalf("[c] returned cmd %v, want nil", cmd)
 	}
-	if updated.overlay != overviewOverlayCompleted {
-		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)
+	if updated.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want overviewOverlayNone", updated.overlay)
 	}
-	if !updated.completed.inputActive {
-		t.Fatal("expected inputActive to be true after [c]")
+	if updated.completed.inputActive {
+		t.Fatal("expected inputActive to stay false after [c]")
 	}
 }
 
-// TestCompletedActionCardIOpensOverlayInNormalMode verifies that pressing [i] on a
-// completed action card opens the completed overlay without the feedback input,
-// allowing the user to inspect PR/MR links.
-func TestCompletedActionCardIOpensOverlayInNormalMode(t *testing.T) {
+// TestCompletedActionCardIOpensOverlayWithFollowUpInput verifies that pressing [i] on a
+// completed action card opens the completed overlay with the feedback input active,
+// matching the Inspect / Request changes label.
+func TestCompletedActionCardIOpensOverlayWithFollowUpInput(t *testing.T) {
 	t.Parallel()
 
 	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
@@ -451,14 +445,14 @@ func TestCompletedActionCardIOpensOverlayInNormalMode(t *testing.T) {
 	})
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	if cmd != nil {
-		t.Fatalf("[i] returned cmd %v, want nil", cmd)
+	if cmd == nil {
+		t.Fatal("[i] returned nil cmd, want focus cmd")
 	}
 	if updated.overlay != overviewOverlayCompleted {
 		t.Fatalf("overlay = %v, want overviewOverlayCompleted", updated.overlay)
 	}
-	if updated.completed.inputActive {
-		t.Fatal("expected inputActive to be false after [i]")
+	if !updated.completed.inputActive {
+		t.Fatal("expected inputActive to be true after [i]")
 	}
 }
 
@@ -475,7 +469,7 @@ func TestCompletedOverlayEscClosesAndResetsFeedback(t *testing.T) {
 		Actions:    []OverviewActionCard{{Kind: overviewActionCompleted}},
 	})
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	updated.completed.feedbackInput.SetValue("stale feedback")
 	if updated.overlay != overviewOverlayCompleted || !updated.completed.inputActive {
 		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with active feedback", updated.overlay, updated.completed.inputActive)
@@ -499,8 +493,8 @@ func TestCompletedOverlayEscClosesAndResetsFeedback(t *testing.T) {
 	if updated.overlay != overviewOverlayCompleted {
 		t.Fatalf("overlay after reopen = %v, want completed", updated.overlay)
 	}
-	if updated.completed.inputActive {
-		t.Fatal("inputActive = true after reopen via inspect, want false")
+	if !updated.completed.inputActive {
+		t.Fatal("inputActive = false after reopen via inspect, want true")
 	}
 	if got := updated.completed.feedbackInput.Value(); got != "" {
 		t.Fatalf("feedback input after reopen = %q, want empty", got)
@@ -571,6 +565,107 @@ func TestOverviewTabRebindsQuestionToSelectedAction(t *testing.T) {
 	}
 }
 
+func TestOverviewQuestionHintsRequireModalAnswer(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionImplementing,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Question routing", StatusLabel: "Implementing", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind:           overviewActionQuestion,
+			Title:          "Question waiting for answer",
+			Question:       &domain.Question{ID: "q-1", Content: "Question?"},
+			ProposedAnswer: "proposal should not be approved directly",
+		}},
+	})
+
+	for _, hint := range m.KeybindHints() {
+		if hint.Label == "Approve answer" {
+			t.Fatalf("keybind hints = %#v, want no approve-answer action", m.KeybindHints())
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	if cmd != nil {
+		for _, msg := range runOverlayCmd(t, cmd) {
+			if _, ok := msg.(AnswerQuestionMsg); ok {
+				t.Fatalf("uppercase A emitted AnswerQuestionMsg: %#v", msg)
+			}
+		}
+	}
+	if updated.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want no hidden approve/open action for A", updated.overlay)
+	}
+}
+
+func TestOverviewQuestionEscClosesWithoutResolving(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(120, 40)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionImplementing,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Question routing", StatusLabel: "Implementing", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind:           overviewActionQuestion,
+			Title:          "Question waiting for answer",
+			Question:       &domain.Question{ID: "q-esc", Content: "Question?"},
+			ProposedAnswer: "proposal",
+		}},
+	})
+
+	opened, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("opening question overlay cmd = %v, want nil", cmd)
+	}
+	if opened.overlay != overviewOverlayQuestion {
+		t.Fatalf("overlay = %v, want question overlay", opened.overlay)
+	}
+	opened.question.input.SetValue("draft answer")
+
+	closed, cmd := opened.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if closed.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want closed", closed.overlay)
+	}
+	for _, msg := range runOverlayCmd(t, cmd) {
+		switch msg.(type) {
+		case AnswerQuestionMsg, SkipQuestionMsg:
+			t.Fatalf("esc emitted resolving message %T", msg)
+		}
+	}
+}
+
+func TestOverviewQuestionOverlayUsesExpandedHalfScreenSize(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(240, 80)
+	m.SetSize(120, 40)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		State:      domain.SessionImplementing,
+		Header:     OverviewHeader{ExternalID: "SUB-1", Title: "Question routing", StatusLabel: "Implementing", UpdatedAt: time.Now()},
+		Actions: []OverviewActionCard{{
+			Kind:     overviewActionQuestion,
+			Title:    "Question waiting for answer",
+			Question: &domain.Question{ID: "q-size", Content: "Question?"},
+		}},
+	})
+
+	if m.question.height < 40 {
+		t.Fatalf("question overlay body height = %d, want at least half terminal height", m.question.height)
+	}
+	if m.question.width < 112 {
+		t.Fatalf("question overlay body width = %d, want expanded half-screen width", m.question.width)
+	}
+}
+
 func TestOverviewRefreshPreservesViewportPlanAndQuestionState(t *testing.T) {
 	t.Parallel()
 
@@ -625,7 +720,7 @@ func TestOverviewPlanOverlayEscapeCancelsInputWithoutClosing(t *testing.T) {
 		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
 	})
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	updated.planReview.feedbackInput.SetValue("needs changes")
 	if updated.overlay != overviewOverlayPlan || updated.planReview.inputMode != planReviewChanges {
 		t.Fatalf("overlay/input mode = %v/%v, want plan overlay in changes mode", updated.overlay, updated.planReview.inputMode)
@@ -791,7 +886,7 @@ func TestAppSidebarPlanOverlayLeftRestoresSidebar(t *testing.T) {
 	}
 }
 
-func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
+func TestAppPlanReviewUsesIForRequestChanges(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
@@ -802,6 +897,9 @@ func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
 		WorkItemID:       "wi-1",
 		OrchestratorPlan: strings.Repeat("plan line\n", 4),
 	}
+	if cmd := app.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
 	app.mainFocus = mainFocusContent
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
@@ -810,28 +908,8 @@ func TestAppPlanReviewUsesCForRequestChangesInsteadOfSettings(t *testing.T) {
 		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
 	}
 
-	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	updated = model.(App)
-	if cmd == nil {
-		t.Fatal("expected DisableMouse cmd from 'c', got nil")
-	}
-	disableMouseSeen := false
-	switch v := cmd().(type) {
-	case tea.BatchMsg:
-		for _, c := range v {
-			if c != nil && c() == tea.DisableMouse() {
-				disableMouseSeen = true
-				break
-			}
-		}
-	default:
-		disableMouseSeen = v == tea.DisableMouse()
-	}
-	if !disableMouseSeen {
-		t.Fatalf("expected DisableMouse in cmd batch, got %T", cmd())
-	}
 	if updated.activeOverlay == overlaySettings {
-		t.Fatal("expected c to stay within the plan review flow instead of opening settings")
+		t.Fatal("expected i to stay within the plan review flow instead of opening settings")
 	}
 	if updated.content.overview.planReview.inputMode != planReviewChanges {
 		t.Fatalf("input mode = %v, want %v", updated.content.overview.planReview.inputMode, planReviewChanges)
@@ -1161,7 +1239,7 @@ func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 
 // TestInspectKeyOpensPlanOverlayWithChangesInput verifies that pressing [i] on a
 // plan-review action card opens the overlay with the request-changes input
-// already active, mirroring the behaviour of [c].
+// already active.
 func TestInspectKeyOpensPlanOverlayWithChangesInput(t *testing.T) {
 	t.Parallel()
 
@@ -1183,7 +1261,7 @@ func TestInspectKeyOpensPlanOverlayWithChangesInput(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	if cmd == nil {
-		t.Fatal("[i] returned nil cmd, want focus+DisableMouse cmd from openPlanOverlayForChanges")
+		t.Fatal("[i] returned nil cmd, want focus cmd from openPlanOverlayForChanges")
 	}
 	if updated.overlay != overviewOverlayPlan {
 		t.Fatalf("overlay = %v, want overviewOverlayPlan", updated.overlay)
@@ -1215,7 +1293,7 @@ func TestPlanOverlayEnterSubmitClosesOverlay(t *testing.T) {
 	})
 
 	// Open overlay (changes mode).
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	if m.overlay != overviewOverlayPlan || m.planReview.inputMode != planReviewChanges {
 		t.Fatalf("overlay=%v inputMode=%v, want plan overlay in changes mode", m.overlay, m.planReview.inputMode)
 	}
@@ -1289,7 +1367,7 @@ func TestCompletedOverlayEnterSubmitPreservesLongFeedback(t *testing.T) {
 		Plan: OverviewPlan{Exists: true, Document: &plan, FullDocument: domain.ComposePlanDocument(plan, nil)},
 	})
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	if m.overlay != overviewOverlayCompleted || !m.completed.inputActive {
 		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with feedback input", m.overlay, m.completed.inputActive)
 	}

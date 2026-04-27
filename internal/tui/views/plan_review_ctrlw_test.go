@@ -12,8 +12,8 @@ func TestPlanReviewCtrlWDeletesWord(t *testing.T) {
 	m.SetSize(80, 40)
 	m.SetPlanDocument("p1", "# Test Plan\nSome content.")
 
-	// Press "c" to enter changes mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	// Enter changes mode.
+	_ = m.OpenFeedback("Describe changes…")
 	if m.inputMode != planReviewChanges {
 		t.Fatalf("inputMode = %v, want %v", m.inputMode, planReviewChanges)
 	}

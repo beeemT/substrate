@@ -1113,19 +1113,6 @@ func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskServi
 	}
 }
 
-// SendToForemanCmd sends human follow-up text to the running Foreman session and
-// returns a ForemanReplyMsg carrying the refreshed proposed answer.
-func SendToForemanCmd(foreman *orchestrator.Foreman, questionID, text string) tea.Cmd {
-	return func() tea.Msg {
-		newProposal, uncertain, err := foreman.SendUserMessage(context.Background(), questionID, text)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		return ForemanReplyMsg{QuestionID: questionID, NewProposal: newProposal, Uncertain: uncertain}
-	}
-}
-
 // StartForemanCmd starts the Foreman session for a given plan.
 // Uses a background context; Stop() is the proper shutdown mechanism.
 // followUpContext is optional; when non-empty it is forwarded to the foreman's

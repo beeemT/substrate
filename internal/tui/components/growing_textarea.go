@@ -139,6 +139,13 @@ func (g *GrowingTextArea) Focus() tea.Cmd {
 	return tea.Batch(c, tea.DisableMouse)
 }
 
+// FocusKeepMouse focuses the textarea without changing terminal mouse reporting.
+// Use this when the host view must keep receiving wheel events while the input
+// is focused.
+func (g *GrowingTextArea) FocusKeepMouse() tea.Cmd {
+	return g.model.Focus()
+}
+
 // Blur blurs the textarea and re-enables cell-motion mouse reporting.
 func (g *GrowingTextArea) Blur() tea.Cmd {
 	g.model.Blur()

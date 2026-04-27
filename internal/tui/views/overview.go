@@ -216,6 +216,26 @@ func (m *SessionOverviewModel) defaultOverlayInnerSize() (innerWidth, innerHeigh
 	return
 }
 
+func (m *SessionOverviewModel) questionOverlayInnerSize() (innerWidth, innerHeight int) {
+	frameWidth, bodyHeight := questionOverlayFrameSize(m.termWidth, m.termHeight)
+	innerHeight = bodyHeight
+	innerWidth = m.styles.Chrome.OverlayFrame.InnerWidth(frameWidth)
+
+	return
+}
+
+func questionOverlayFrameSize(width, height int) (frameWidth, bodyHeight int) {
+	availableWidth := max(1, width-2)
+	targetWidth := max(112, width/2)
+	frameWidth = min(max(64, targetWidth), availableWidth)
+
+	availableHeight := max(1, height-4)
+	targetHeight := max(26, height/2)
+	bodyHeight = max(12, min(targetHeight, availableHeight))
+
+	return
+}
+
 func (m *SessionOverviewModel) SetTerminalSize(w, h int) {
 	m.termWidth = w
 	m.termHeight = h
@@ -224,8 +244,9 @@ func (m *SessionOverviewModel) SetTerminalSize(w, h int) {
 	// completed also uses the plan-overlay size: it now shows the full plan in a
 	// scrollable viewport and needs the wider/taller frame.
 	m.completed.SetSize(pw, ph)
+	qw, qh := m.questionOverlayInnerSize()
+	m.question.SetSize(qw, qh)
 	dw, dh := m.defaultOverlayInnerSize()
-	m.question.SetSize(dw, dh)
 	m.interrupted.SetSize(dw, dh)
 	m.reviewing.SetSize(dw, dh)
 }
@@ -292,8 +313,9 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			if key.String() == keyEsc {
 				switch m.overlay {
 				case overviewOverlayQuestion:
-					var cmd tea.Cmd
-					m.question, cmd = m.question.Update(msg)
+					cmd := m.question.Close()
+					m.overlay = overviewOverlayNone
+					m.syncViewport(false)
 
 					return m, cmd
 				case overviewOverlayPlan:
@@ -314,8 +336,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 			m.overlay = overviewOverlayNone
 			m.syncViewport(false)
 
-			// If the plan review had mouse reporting disabled (feedback
-			// textarea was focused), restore it now that the overlay is closing.
+			// If plan feedback was active, clear it before the overlay closes and
+			// return the textarea reset cmd.
 			if cmd := m.planReview.CloseFeedback(); cmd != nil {
 				return m, cmd
 			}
@@ -339,6 +361,10 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 		case overviewOverlayQuestion:
 			var cmd tea.Cmd
 			m.question, cmd = m.question.Update(msg)
+			if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && cmd != nil {
+				m.overlay = overviewOverlayNone
+				m.syncViewport(false)
+			}
 
 			return m, cmd
 		case overviewOverlayInterrupted:
@@ -417,9 +443,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, nil
 				case overviewActionCompleted:
-					m.overlay = overviewOverlayCompleted
-
-					return m, nil
+					return m, m.openCompletedOverlayForChanges()
 				case overviewActionMerged:
 					m.overlay = overviewOverlayCompleted
 
@@ -458,29 +482,6 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 						return m, func() tea.Msg { return ConfirmAbandonMsg{SessionID: sessionID} }
 					}
-				}
-			}
-		case "A":
-			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionQuestion && action.Question != nil {
-				answer := strings.TrimSpace(action.ProposedAnswer)
-				if answer == "" {
-					m.overlay = overviewOverlayQuestion
-
-					return m, nil
-				}
-				questionID := action.Question.ID
-
-				return m, func() tea.Msg { return AnswerQuestionMsg{QuestionID: questionID, Answer: answer, AnsweredBy: "human"} }
-			}
-		case "c":
-			if action := m.selectedActionCard(); action != nil {
-				switch action.Kind {
-				case overviewActionPlanReview:
-					cmd := m.openPlanOverlayForChanges()
-
-					return m, cmd
-				case overviewActionCompleted:
-					return m, m.openCompletedOverlayForChanges()
 				}
 			}
 		case "f":
@@ -553,10 +554,10 @@ func (m *SessionOverviewModel) syncViewport(reset bool) {
 }
 
 // openPlanOverlayForChanges resets the feedback input, enters request-changes
-// mode, and opens the plan overlay. Both the [c] and [i] shortcuts for a
-// plan-review action call this so the overlay always opens with the prompt
-// ready. Returns the cmd that focuses the feedback input and disables mouse
-// reporting; callers MUST batch it into their reply.
+// mode, and opens the plan overlay. The inspect action calls this so the
+// overlay opens with the prompt ready. Returns the cmd that focuses the
+// feedback input while preserving mouse reporting; callers MUST batch it into
+// their reply.
 func (m *SessionOverviewModel) openPlanOverlayForChanges() tea.Cmd {
 	cmd := m.planReview.OpenFeedback("Describe the changes needed\u2026")
 	m.overlay = overviewOverlayPlan
@@ -787,6 +788,8 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	if m.overlay == overviewOverlayPlan || m.overlay == overviewOverlayCompleted {
 		frameWidth = min(max(72, width-12), 220)
 		innerHeight = max(12, height-2)
+	} else if m.overlay == overviewOverlayQuestion {
+		frameWidth, innerHeight = questionOverlayFrameSize(width, height)
 	}
 	var body string
 	switch m.overlay {
@@ -814,9 +817,9 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 	switch action.Kind {
 	case overviewActionPlanReview:
-		return []KeybindHint{{Key: "a", Label: "Approve"}, {Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
+		return []KeybindHint{{Key: "a", Label: "Approve"}, {Key: "i", Label: "Inspect / Request changes"}}
 	case overviewActionQuestion:
-		return []KeybindHint{{Key: "A", Label: "Approve answer"}, {Key: "Enter", Label: "Answer"}, {Key: "i", Label: "Inspect"}}
+		return []KeybindHint{{Key: "Enter", Label: "Answer"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionInterrupted:
 		hints := []KeybindHint{{Key: "i", Label: "Inspect"}}
 		if action.CanAct {
@@ -835,7 +838,7 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 	case overviewActionFinalize:
 		return []KeybindHint{{Key: "f", Label: "Finalize"}}
 	case overviewActionCompleted:
-		return []KeybindHint{{Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
+		return []KeybindHint{{Key: "i", Label: "Inspect / Request changes"}}
 	case overviewActionMerged:
 		return []KeybindHint{{Key: "i", Label: "Inspect"}}
 	default:

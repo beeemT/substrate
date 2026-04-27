@@ -2,11 +2,13 @@ package views
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,7 +22,7 @@ type planReviewInputMode int
 
 const (
 	planReviewNormal  planReviewInputMode = iota
-	planReviewChanges                     // user pressed [c]: request changes
+	planReviewChanges                     // request-changes mode opened from the inspect action
 )
 
 const feedbackMaxLines = 6
@@ -73,8 +75,8 @@ func (m *PlanReviewModel) syncViewportSize() {
 }
 
 // resetFeedback returns the feedback textarea to its initial state and
-// switches the input mode back to normal. Returns the cmd that re-enables
-// mouse cell-motion reporting; callers MUST batch it into their reply.
+// switches the input mode back to normal. Returns the textarea reset cmd;
+// callers MUST batch it into their reply.
 func (m *PlanReviewModel) resetFeedback() tea.Cmd {
 	cmd := m.feedbackInput.Reset()
 	m.inputMode = planReviewNormal
@@ -84,8 +86,7 @@ func (m *PlanReviewModel) resetFeedback() tea.Cmd {
 
 // CloseFeedback is invoked by the parent overview when the plan overlay is
 // being closed externally. It clears any in-progress feedback text, blurs the
-// input, and returns the cmd that re-enables mouse reporting (or nil if the
-// feedback was not active).
+// input, and returns the textarea reset cmd (or nil if feedback was not active).
 func (m *PlanReviewModel) CloseFeedback() tea.Cmd {
 	if m.inputMode == planReviewNormal {
 		return nil
@@ -94,12 +95,12 @@ func (m *PlanReviewModel) CloseFeedback() tea.Cmd {
 }
 
 // OpenFeedback enters request-changes mode with the given placeholder. Returns
-// the cmd that focuses the input and disables mouse reporting; callers MUST
+// the cmd that focuses the input while preserving mouse reporting; callers MUST
 // batch it into their reply.
 func (m *PlanReviewModel) OpenFeedback(placeholder string) tea.Cmd {
 	m.inputMode = planReviewChanges
 	m.feedbackInput.SetPlaceholder(placeholder)
-	cmd := m.feedbackInput.Focus()
+	cmd := m.feedbackInput.FocusKeepMouse()
 	m.syncViewportSize()
 	return cmd
 }
@@ -359,7 +360,7 @@ func (m *PlanReviewModel) KeybindHints() []KeybindHint {
 
 	return []KeybindHint{
 		{Key: "a", Label: "Approve"},
-		{Key: "c", Label: "Request changes"},
+		{Key: "c", Label: "Copy"},
 		{Key: "e", Label: "Edit in $EDITOR"},
 		{Key: "↑↓", Label: "Scroll"},
 		{Key: "Esc", Label: "Close"},
@@ -387,6 +388,9 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				m.feedbackInput.Flush()
 				text := strings.TrimSpace(m.feedbackInput.Value())
 				resetCmd := m.resetFeedback()
+				if text == "" {
+					return m, resetCmd
+				}
 				return m, tea.Batch(
 					func() tea.Msg {
 						return PlanRequestChangesMsg{PlanID: m.planID, Feedback: text}
@@ -407,16 +411,17 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 				return PlanApproveMsg{PlanID: m.planID, WorkItemID: m.workItemID}
 			}
 		case "c":
-			return m, m.OpenFeedback("Describe the orchestration or sub-plan changes needed\u2026")
+			if clipErr := clipboard.WriteAll(m.planContent); clipErr != nil {
+				slog.Warn("failed to copy plan to clipboard", "error", clipErr)
+			}
+			return m, func() tea.Msg { return ActionDoneMsg{Message: "Plan copied to clipboard"} }
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
 		case "up", "k", keyDown, "j", "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 	case tea.MouseMsg:
-		// Scroll the plan viewport on wheel events. Mouse reporting is
-		// disabled while the feedback textarea is focused (inputMode != normal),
-		// so these only arrive in normal/read mode.
+		// Scroll the plan viewport on wheel events in both read and feedback modes.
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
@@ -444,7 +449,7 @@ func (m PlanReviewModel) View() string {
 	if strings.TrimSpace(body) == "" {
 		body = m.styles.Muted.Render("No plan content available.")
 	} else {
-		if sb := m.renderScrollbar(m.viewport, m.viewport.Height); sb != "" {
+		if sb := renderViewportScrollbar(m.styles, m.viewport, m.viewport.Height, true); sb != "" {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, body, sb)
 		}
 	}
@@ -461,33 +466,6 @@ func (m PlanReviewModel) View() string {
 	}
 
 	return fitViewBox(strings.Join(parts, "\n"), m.width, m.height)
-}
-
-func (m PlanReviewModel) renderScrollbar(vp viewport.Model, height int) string {
-	if height <= 0 {
-		return ""
-	}
-	total := vp.TotalLineCount()
-	if total <= height {
-		return ""
-	}
-	lines := make([]string, height)
-	thumbHeight := max(1, (height*height)/max(1, total))
-	thumbHeight = min(thumbHeight, height)
-	thumbRange := max(0, height-thumbHeight)
-	scrollRange := max(1, total-height)
-	thumbTop := 0
-	if thumbRange > 0 {
-		thumbTop = (vp.YOffset*thumbRange + scrollRange/2) / scrollRange
-	}
-	for i := range lines {
-		lines[i] = m.styles.ScrollbarTrack.Render("▏")
-		if i >= thumbTop && i < thumbTop+thumbHeight {
-			lines[i] = m.styles.ScrollbarThumbFocused.Render("▐")
-		}
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 // editPlanInEditorCmd opens the full plan document in $EDITOR.

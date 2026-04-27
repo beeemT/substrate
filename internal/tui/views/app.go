@@ -1225,14 +1225,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.SessionRegistry, a.svcs.Foreman, a.svcs.Bus, msg.QuestionID, msg.Answer, msg.AnsweredBy))
 		return a, tea.Batch(cmds...)
 
-	case SendToForemanMsg:
-		if a.svcs.Foreman != nil {
-			cmds = append(cmds, SendToForemanCmd(a.svcs.Foreman, msg.QuestionID, msg.Message))
-		} else {
-			a.toasts.AddToast("Foreman not configured", components.ToastError)
-		}
-		return a, tea.Batch(cmds...)
-
 	case SteerSessionMsg:
 		if a.svcs.SessionRegistry != nil && msg.SessionID != "" && msg.Message != "" {
 			cmds = append(cmds, SteerSessionCmd(a.svcs.SessionRegistry, msg.SessionID, msg.Message))
@@ -1706,19 +1698,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		return a, tea.Batch(cmds...)
-
-	case ForemanReplyMsg:
-		// Find the question in the session-keyed map and refresh the model.
-	questionLoop:
-		for _, qs := range a.questions {
-			for _, q := range qs {
-				if q.ID == msg.QuestionID {
-					a.content.UpdateQuestionProposal(q, msg.NewProposal, msg.Uncertain)
-					break questionLoop
-				}
-			}
-		}
-		return a, nil
 
 	case SessionCreatedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)

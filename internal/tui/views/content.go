@@ -144,10 +144,6 @@ func (m *ContentModel) SetOverviewData(data SessionOverviewData) {
 	m.overview.SetData(data)
 }
 
-func (m *ContentModel) UpdateQuestionProposal(q domain.Question, proposed string, uncertain bool) {
-	m.overview.question.SetQuestion(q, proposed, uncertain)
-}
-
 func (m *ContentModel) SetSessionInteraction(title, meta string, entries []sessionlog.Entry) {
 	m.currentWorkItem = nil
 	m.sessionLog.SetTitle(title)

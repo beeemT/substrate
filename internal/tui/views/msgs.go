@@ -91,26 +91,20 @@ type PlanApprovedMsg struct {
 	WorkItemID string
 }
 
-// PlanRequestChangesMsg fires when user submits feedback with [c].
+// PlanRequestChangesMsg fires when user submits plan feedback.
 type PlanRequestChangesMsg struct {
 	PlanID   string
 	Feedback string
 }
 
-// AnswerQuestionMsg fires when the human approves a foreman answer.
+// AnswerQuestionMsg fires when the human submits a typed answer.
 type AnswerQuestionMsg struct {
 	QuestionID string
 	Answer     string
 	AnsweredBy string // "human" or "foreman"
 }
 
-// SendToForemanMsg fires when the human sends a message to foreman (iterating on answer).
-type SendToForemanMsg struct {
-	QuestionID string
-	Message    string
-}
-
-// SkipQuestionMsg fires when the human presses Esc to skip a question.
+// SkipQuestionMsg fires when an explicit skip action resolves a question without an answer.
 type SkipQuestionMsg struct{ QuestionID string }
 
 // ResumeSessionMsg fires when the user presses [r] on interrupted.
@@ -427,14 +421,6 @@ type ImplementationCompleteMsg struct {
 	PlanID     string
 	WorkItemID string
 	SessionIDs []string // completed session IDs; may be empty on partial failure
-}
-
-// ForemanReplyMsg delivers a refreshed Foreman proposal after a human follow-up message.
-// The TUI should update the QuestionModel with the new proposal without clearing the question.
-type ForemanReplyMsg struct {
-	QuestionID  string
-	NewProposal string
-	Uncertain   bool
 }
 
 // SteerSessionMsg fires when the user submits a steering prompt for a running session.

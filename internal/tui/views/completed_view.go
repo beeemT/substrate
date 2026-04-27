@@ -1,8 +1,10 @@
 package views
 
 import (
+	"log/slog"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -97,11 +99,11 @@ func (m *CompletedModel) refreshViewportContent() {
 }
 
 // OpenFeedback enters request-changes mode and focuses the follow-up textarea.
-// Returns the cmd that focuses the input and disables mouse reporting; callers
-// MUST batch it into their reply.
+// Returns the cmd that focuses the input while preserving mouse reporting;
+// callers MUST batch it into their reply.
 func (m *CompletedModel) OpenFeedback() tea.Cmd {
 	m.inputActive = true
-	cmd := m.feedbackInput.Focus()
+	cmd := m.feedbackInput.FocusKeepMouse()
 	m.syncViewportSize()
 	return cmd
 }
@@ -128,6 +130,7 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 	var hints []KeybindHint
 	if strings.TrimSpace(m.planContent) != "" {
 		hints = append(hints, KeybindHint{Key: "↑↓", Label: "Scroll"})
+		hints = append(hints, KeybindHint{Key: "c", Label: "Copy"})
 	}
 	if m.workItemID != "" {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Request changes"})
@@ -156,8 +159,12 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 				m.feedbackInput.Flush()
 				feedback := m.feedbackInput.Value()
 				resetCmd := m.feedbackInput.Reset()
+				trimmedFeedback := strings.TrimSpace(feedback)
 				m.inputActive = false
 				m.syncViewportSize()
+				if trimmedFeedback == "" {
+					return m, resetCmd
+				}
 				return m, tea.Batch(
 					func() tea.Msg {
 						return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
@@ -182,21 +189,20 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
-		case "enter", "c":
-			// Both Enter and [c] open the follow-up feedback input.
-			// Enter is the primary CTA visible in the hint bar;
-			// [c] is the keyboard shortcut consistent with the action card.
+		case "enter":
 			if m.workItemID != "" {
-				m.inputActive = true
-				cmd := m.feedbackInput.Focus()
-				m.syncViewportSize()
-				return m, cmd
+				return m, m.OpenFeedback()
 			}
+		case "c":
+			if clipErr := clipboard.WriteAll(m.planContent); clipErr != nil {
+				slog.Warn("failed to copy plan to clipboard", "error", clipErr)
+			}
+			return m, func() tea.Msg { return ActionDoneMsg{Message: "Plan copied to clipboard"} }
 		}
 
 	case tea.MouseMsg:
 		// Forward wheel events to the plan viewport so trackpad/mouse scrolling
-		// works while the overlay is open and the feedback input is not active.
+		// works while the overlay is open, including while feedback is active.
 		if msg.Action == tea.MouseActionPress {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:

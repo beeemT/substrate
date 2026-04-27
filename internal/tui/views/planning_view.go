@@ -1,9 +1,11 @@
 package views
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -278,6 +280,7 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	}
 	if m.planOverlay {
 		return []KeybindHint{
+			{Key: "c", Label: "Copy"},
 			{Key: keyEsc, Label: "Close"},
 			{Key: "↑↓", Label: "Scroll"},
 		}
@@ -345,6 +348,11 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			case keyEsc, "i", "q":
 				m.planOverlay = false
 				return m, nil
+			case "c":
+				if clipErr := clipboard.WriteAll(m.planDocument); clipErr != nil {
+					slog.Warn("failed to copy plan to clipboard", "error", clipErr)
+				}
+				return m, func() tea.Msg { return ActionDoneMsg{Message: "Plan copied to clipboard"} }
 			default:
 				m.planViewport, cmd = m.planViewport.Update(msg)
 				return m, cmd
@@ -537,7 +545,7 @@ func (m SessionLogModel) View() string {
 
 	if m.planOverlay && m.planDocument != "" {
 		headerLine := m.styles.Muted.Render("Plan (read-only)")
-		footerLine := m.styles.Muted.Render("esc close  ↑↓ scroll")
+		footerLine := m.styles.Muted.Render("c copy  esc close  ↑↓ scroll")
 		body := m.planViewport.View()
 		frameWidth := m.width
 		innerHeight := max(1, m.height-m.styles.Chrome.OverlayFrame.VerticalFrame()-2) // header + footer

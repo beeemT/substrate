@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -29,6 +30,27 @@ func cmdContains(cmd tea.Cmd, target tea.Msg) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func cmdEmitsPlanRequestChanges(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if _, ok := msg.(views.PlanRequestChangesMsg); ok {
+		return true
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return false
+	}
+	for _, c := range batch {
+		if cmdEmitsPlanRequestChanges(c) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -198,10 +220,10 @@ func TestPlanReviewFeedbackInputGrowsAndScrolls(t *testing.T) {
 	m.SetTitle("TEST")
 
 	// Enter request-changes mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	checkFeedbackViewBounds(t, "after c (1-row)", m.View(), width, height)
+	_ = m.OpenFeedback("Describe changes…")
+	checkFeedbackViewBounds(t, "after open (1-row)", m.View(), width, height)
 	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
-		t.Errorf("after c: plan lines = %d, want %d", got, want)
+		t.Errorf("after open: plan lines = %d, want %d", got, want)
 	}
 
 	// Type text that word-wraps to exactly 3 display rows.
@@ -236,7 +258,7 @@ func TestPlanReviewFeedbackInputNarrowTerminal(t *testing.T) {
 	m.SetPlanDocument("p1", planContent)
 	m.SetTitle("N")
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	_ = m.OpenFeedback("Describe changes…")
 	checkFeedbackViewBounds(t, "narrow 1-row", m.View(), width, height)
 	if got, want := countPlanLines(m.View()), wantViewport(height, 1); got != want {
 		t.Errorf("narrow 1-row: plan lines = %d, want %d", got, want)
@@ -404,9 +426,10 @@ func TestPlanReviewModel_TablePreservesTrailingBlankLine(t *testing.T) {
 	}
 }
 
-// TestPlanReviewDisablesMouseDuringFeedbackInput verifies that entering
-// changes mode returns tea.DisableMouse and leaving it returns tea.EnableMouseCellMotion.
-func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
+// TestPlanReviewKeepsMouseDuringFeedbackInput verifies that entering changes mode
+// does not disable mouse reporting, while leaving it still returns the textarea
+// reset cmd.
+func TestPlanReviewKeepsMouseDuringFeedbackInput(t *testing.T) {
 	t.Parallel()
 
 	m := views.NewPlanReviewModel(newTestStyles(t))
@@ -414,13 +437,9 @@ func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	m.SetPlanDocument("p1", "plan content")
 	m.SetTitle("T")
 
-	// Entering changes mode must return DisableMouse.
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if cmd == nil {
-		t.Fatal("expected DisableMouse cmd from 'c', got nil")
-	}
-	if !cmdContains(cmd, tea.DisableMouse()) {
-		t.Fatalf("expected DisableMouse in cmd batch, got %T", cmd())
+	cmd := m.OpenFeedback("Describe changes…")
+	if cmdContains(cmd, tea.DisableMouse()) {
+		t.Fatalf("OpenFeedback returned DisableMouse, want mouse reporting preserved")
 	}
 
 	// Type some legitimate text — should be accepted.
@@ -436,6 +455,55 @@ func TestPlanReviewDisablesMouseDuringFeedbackInput(t *testing.T) {
 	}
 	if !cmdContains(cmd, tea.EnableMouseCellMotion()) {
 		t.Fatalf("expected EnableMouseCellMotion in cmd batch, got %T", cmd())
+	}
+}
+
+func TestPlanReviewModel_WheelScrollsWhileFeedbackActive(t *testing.T) {
+	t.Parallel()
+
+	planLines := make([]string, 0, 40)
+	for i := 1; i <= 40; i++ {
+		planLines = append(planLines, fmt.Sprintf("line %02d", i))
+	}
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 12)
+	m.SetPlanDocument("p1", strings.Join(planLines, "\n"))
+	m.SetTitle("T")
+	_ = m.OpenFeedback("Describe changes…")
+
+	before := ansi.Strip(m.View())
+	if !strings.Contains(before, " 1 │ line 01") {
+		t.Fatalf("before view = %q, want first plan line visible", before)
+	}
+
+	m, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	after := ansi.Strip(m.View())
+	if before == after {
+		t.Fatalf("wheel-down while feedback active did not change rendered view")
+	}
+	if strings.Contains(after, " 1 │ line 01") {
+		t.Fatalf("after view = %q, want plan viewport scrolled past first line", after)
+	}
+}
+
+func TestPlanReviewModel_EmptyFeedbackDiscarded(t *testing.T) {
+	t.Parallel()
+
+	m := views.NewPlanReviewModel(newTestStyles(t))
+	m.SetSize(80, 24)
+	m.SetPlanDocument("p1", "plan content")
+	m.SetTitle("T")
+	m.SetWorkItemID("w1")
+	_ = m.OpenFeedback("Describe changes…")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("   ")})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmdEmitsPlanRequestChanges(cmd) {
+		t.Fatal("empty feedback emitted PlanRequestChangesMsg")
+	}
+	if m.IsFeedbackActive() {
+		t.Fatal("feedback remained active after empty submission")
 	}
 }
 
@@ -456,7 +524,7 @@ func TestPlanReviewFeedbackInterceptsMouseFragments(t *testing.T) {
 	m.SetTitle("T")
 
 	// Enter changes mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	_ = m.OpenFeedback("Describe changes…")
 
 	// Type legitimate text.
 	for _, r := range "fix the bug" {
@@ -503,7 +571,7 @@ func TestPlanReviewFeedbackPreservesLegitBrackets(t *testing.T) {
 	m.SetTitle("T")
 
 	// Enter changes mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	_ = m.OpenFeedback("Describe changes…")
 
 	// Type "[fix]" one character at a time.
 	for _, r := range "[fix]" {
@@ -527,7 +595,7 @@ func TestPlanReviewPendingBracketFlushedOnSubmit(t *testing.T) {
 	m.SetWorkItemID("w1")
 
 	// Enter changes mode.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	_ = m.OpenFeedback("Describe changes…")
 
 	// Type "not good [" — the trailing '[' will be pending.
 	for _, r := range "not good [" {
