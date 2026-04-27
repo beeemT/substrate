@@ -789,6 +789,29 @@ func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationS
 	}
 }
 
+// FinalizeWorkItemCmd retries final commit/push/completion for an implementing work item whose repo tasks are complete.
+func FinalizeWorkItemCmd(ctx context.Context, svc *orchestrator.ImplementationService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := svc.FinalizeWorkItem(ctx, workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		var sessionIDs []string
+		for _, s := range result.Sessions {
+			if s.Status == domain.AgentSessionCompleted {
+				sessionIDs = append(sessionIDs, s.SessionID)
+			}
+		}
+
+		return ImplementationCompleteMsg{
+			PlanID:     result.PlanID,
+			WorkItemID: result.WorkItemID,
+			SessionIDs: sessionIDs,
+		}
+	}
+}
+
 // ResumeSessionCmd resumes an interrupted agent session.
 func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {

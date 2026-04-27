@@ -29,6 +29,7 @@ const (
 	overviewActionInterrupted OverviewActionKind = "interrupted"
 	overviewActionReviewing   OverviewActionKind = "reviewing"
 	overviewActionFailed      OverviewActionKind = "failed"
+	overviewActionFinalize    OverviewActionKind = "finalize"
 	overviewActionCompleted   OverviewActionKind = "completed"
 	overviewActionMerged      OverviewActionKind = "merged"
 
@@ -482,6 +483,11 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					return m, m.openCompletedOverlayForChanges()
 				}
 			}
+		case "f":
+
+			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionFinalize {
+				return m, func() tea.Msg { return FinalizeWorkItemMsg{WorkItemID: m.data.WorkItemID} }
+			}
 		case "r":
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {
@@ -826,6 +832,8 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
 	case overviewActionFailed:
 		return []KeybindHint{{Key: "r", Label: "Retry"}, {Key: "i", Label: "Inspect"}}
+	case overviewActionFinalize:
+		return []KeybindHint{{Key: "f", Label: "Finalize"}}
 	case overviewActionCompleted:
 		return []KeybindHint{{Key: "c", Label: "Changes"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionMerged:
@@ -1483,6 +1491,9 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	if failedAction := a.buildFailedActionCard(wi, subPlans); failedAction != nil {
 		actions = append(actions, *failedAction)
 	}
+	if finalizeAction := a.buildFinalizeActionCard(wi, subPlans); finalizeAction != nil {
+		actions = append(actions, *finalizeAction)
+	}
 	if completedAction := a.buildCompletedActionCard(wi, subPlans); completedAction != nil {
 		actions = append(actions, *completedAction)
 	}
@@ -1663,6 +1674,47 @@ func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPl
 		Affected:    affected,
 		Context:     context,
 		ReviewRepos: reviewRepos,
+	}
+}
+
+func (a *App) buildFinalizeActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {
+	if wi.State != domain.SessionImplementing || len(subPlans) == 0 {
+		return nil
+	}
+
+	affected := make([]string, 0, len(subPlans))
+	for _, subPlan := range subPlans {
+		if subPlan.Status != domain.SubPlanCompleted {
+			return nil
+		}
+		affected = append(affected, subPlan.RepositoryName)
+	}
+
+	for _, session := range a.sessionsForWorkItem(wi.ID) {
+		if isOverviewActiveAgentSession(session.Status) {
+			return nil
+		}
+	}
+
+	return &OverviewActionCard{
+		Kind:     overviewActionFinalize,
+		Title:    "Finalization needed",
+		Blocked:  "Repo work finished, but the work item is still marked implementing",
+		Why:      "Finalize retries the commit/push/completion step without rerunning implementation agents.",
+		Affected: affected,
+		Context: []string{
+			fmt.Sprintf("Completed repos: %d of %d", len(affected), len(subPlans)),
+			"Use this after verifying the worktree and remote branch are correct.",
+		},
+	}
+}
+
+func isOverviewActiveAgentSession(status domain.TaskStatus) bool {
+	switch status {
+	case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+		return true
+	default:
+		return false
 	}
 }
 

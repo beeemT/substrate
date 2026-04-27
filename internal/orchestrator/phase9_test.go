@@ -144,7 +144,15 @@ func (r *mockPlanRepo) Get(_ context.Context, id string) (domain.Plan, error) {
 	return domain.Plan{}, repository.ErrNotFound
 }
 
-func (r *mockPlanRepo) GetByWorkItemID(_ context.Context, _ string) (domain.Plan, error) {
+func (r *mockPlanRepo) GetByWorkItemID(_ context.Context, workItemID string) (domain.Plan, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.plans {
+		if p.WorkItemID == workItemID {
+			return p, nil
+		}
+	}
+
 	return domain.Plan{}, repository.ErrNotFound
 }
 

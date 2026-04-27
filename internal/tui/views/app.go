@@ -1453,6 +1453,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case FinalizeWorkItemMsg:
+		a.toasts.AddToast("Finalizing completed work item...", components.ToastInfo)
+		if a.svcs.Implementation != nil {
+			cmds = append(cmds, FinalizeWorkItemCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, msg.WorkItemID))
+		} else {
+			a.toasts.AddToast("Implementation service not configured", components.ToastError)
+		}
+		return a, tea.Batch(cmds...)
+
 	case OverrideAcceptMsg:
 		cmds = append(cmds, OverrideAcceptCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Task, a.svcs.Bus, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
@@ -2310,6 +2319,9 @@ func sourceDetailsNoticeFromOverviewAction(action OverviewActionCard) *sourceDet
 			notice.Body = "Review critiques are waiting for a human decision."
 		}
 		notice.Hint = "Press [Enter] to open the overview and inspect the review."
+	case overviewActionFinalize:
+		notice.Body = "Repo tasks are complete, but final commit/push/completion did not finish. Finalize from the overview to retry without rerunning agents."
+		notice.Hint = "Press [Enter] to open the overview and finalize."
 	case overviewActionCompleted:
 		notice.Title = "Work item completed"
 		notice.Body = "This work item completed while you were focused on a task view."

@@ -2282,6 +2282,101 @@ func TestDurableFinalizationContextOutlivesAgentFixBudget(t *testing.T) {
 	}
 }
 
+func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	repoRoot := filepath.Join(workspaceRoot, "repo-a")
+	bareDir := filepath.Join(repoRoot, ".bare")
+	worktreeDir := t.TempDir()
+	if err := os.MkdirAll(bareDir, 0o755); err != nil {
+		t.Fatalf("mkdir bare repo: %v", err)
+	}
+	initBareRepo(t, bareDir)
+	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+
+	svc, workItemRepo, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+	svc.cfg = &config.Config{}
+
+	workItem := workItemRepo.items["wi-1"]
+	workItem.State = domain.SessionImplementing
+	workItemRepo.items["wi-1"] = workItem
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	subPlan.Status = domain.SubPlanCompleted
+	subPlanRepo.subPlans["sp-1"] = subPlan
+
+	now := time.Now()
+	sessionRepo.sessions["impl-1"] = domain.Task{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+		WorktreePath:   worktreeDir,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	result, err := svc.FinalizeWorkItem(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("FinalizeWorkItem returned error: %v", err)
+	}
+	if result.WorkItemID != "wi-1" {
+		t.Fatalf("result.WorkItemID = %q, want wi-1", result.WorkItemID)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].SessionID != "impl-1" {
+		t.Fatalf("result sessions = %#v, want impl-1", result.Sessions)
+	}
+
+	got, err := workItemRepo.Get(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("get work item: %v", err)
+	}
+	if got.State != domain.SessionCompleted {
+		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionCompleted)
+	}
+}
+
+func TestFinalizeWorkItemRejectsIncompleteSubPlan(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	svc, workItemRepo, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+
+	workItem := workItemRepo.items["wi-1"]
+	workItem.State = domain.SessionImplementing
+	workItemRepo.items["wi-1"] = workItem
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	subPlan.Status = domain.SubPlanInProgress
+	subPlanRepo.subPlans["sp-1"] = subPlan
+
+	sessionRepo.sessions["impl-1"] = domain.Task{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionRunning,
+	}
+
+	_, err := svc.FinalizeWorkItem(context.Background(), "wi-1")
+	if err == nil {
+		t.Fatal("expected FinalizeWorkItem to reject incomplete sub-plan")
+	}
+	if !strings.Contains(err.Error(), "not ready to finalize") {
+		t.Fatalf("expected not ready error, got %v", err)
+	}
+
+	got, getErr := workItemRepo.Get(context.Background(), "wi-1")
+	if getErr != nil {
+		t.Fatalf("get work item: %v", getErr)
+	}
+	if got.State != domain.SessionImplementing {
+		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionImplementing)
+	}
+}
+
 func TestEmitWorkItemCompleted(t *testing.T) {
 	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	workItem := &domain.Session{

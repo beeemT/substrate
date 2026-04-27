@@ -1074,6 +1074,91 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	}
 }
 
+func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	workItem := domain.Session{
+		ID:          "wi-stuck",
+		WorkspaceID: "ws-local",
+		Title:       "Finalize stuck work",
+		State:       domain.SessionImplementing,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-stuck", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
+	app.plans["wi-stuck"] = plan
+	app.subPlans["plan-1"] = subPlans
+	app.sessions = []domain.Task{{
+		ID:             "impl-1",
+		WorkItemID:     "wi-stuck",
+		WorkspaceID:    "ws-local",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Phase:          domain.TaskPhaseImplementation,
+		Status:         domain.AgentSessionCompleted,
+		UpdatedAt:      now,
+	}}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	if len(actions) != 1 {
+		t.Fatalf("actions len = %d, want 1: %#v", len(actions), actions)
+	}
+	if actions[0].Kind != overviewActionFinalize {
+		t.Fatalf("action kind = %q, want %q", actions[0].Kind, overviewActionFinalize)
+	}
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(100, 30)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-stuck",
+		State:      domain.SessionImplementing,
+		Actions:    actions,
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatal("pressing f on finalize action must return a command")
+	}
+	msg := cmd()
+	finalizeMsg, ok := msg.(FinalizeWorkItemMsg)
+	if !ok {
+		t.Fatalf("expected FinalizeWorkItemMsg, got %T", msg)
+	}
+	if finalizeMsg.WorkItemID != "wi-stuck" {
+		t.Fatalf("FinalizeWorkItemMsg.WorkItemID = %q, want wi-stuck", finalizeMsg.WorkItemID)
+	}
+}
+
+func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := NewApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	workItem := domain.Session{ID: "wi-active", WorkspaceID: "ws-local", State: domain.SessionImplementing, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-active", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
+	app.sessions = []domain.Task{{
+		ID:          "impl-1",
+		WorkItemID:  "wi-active",
+		WorkspaceID: "ws-local",
+		SubPlanID:   "sp-1",
+		Phase:       domain.TaskPhaseImplementation,
+		Status:      domain.AgentSessionRunning,
+		UpdatedAt:   now,
+	}}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	for _, action := range actions {
+		if action.Kind == overviewActionFinalize {
+			t.Fatalf("unexpected finalize action while agent is active: %#v", action)
+		}
+	}
+}
+
 // TestInspectKeyOpensPlanOverlayWithChangesInput verifies that pressing [i] on a
 // plan-review action card opens the overlay with the request-changes input
 // already active, mirroring the behaviour of [c].

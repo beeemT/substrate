@@ -317,21 +317,9 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	default:
 		// All repos passed review (or no review pipeline).
 		// Commit any residual changes, push to remote, then complete.
-		finalizationCtx, finalizationCancel := durableFinalizationContext(ctx)
-		s.commitAndPushRepos(finalizationCtx, result.Sessions, repoPaths, branch)
-		finalizationCancel()
-
-		completeCtx, completeCancel := durableCleanupContext(ctx)
-		if completeErr := s.workItemSvc.CompleteWorkItem(completeCtx, workItem.ID); completeErr != nil {
-			slog.Warn("failed to transition work item to completed", "error", completeErr)
+		if err := s.finalizeCompletedWorkItem(ctx, &workItem, workspace.ID, result.Sessions, repoPaths, branch, subPlans); err != nil {
+			slog.Warn("failed to finalize completed work item", "error", err)
 		}
-		completeCancel()
-
-		eventCtx, eventCancel := durableCleanupContext(ctx)
-		if emitErr := s.emitWorkItemCompleted(eventCtx, &workItem, workspace.ID, result.Sessions, repoPaths, branch, subPlans); emitErr != nil {
-			slog.Warn("failed to emit work item completed event", "error", emitErr)
-		}
-		eventCancel()
 	}
 
 	return result, nil
@@ -1245,6 +1233,143 @@ func newSessionEventPayload(session *domain.Task) sessionEventPayload {
 		SubPlanID:    session.SubPlanID,
 		Repository:   session.RepositoryName,
 		WorktreePath: session.WorktreePath,
+	}
+}
+
+// FinalizeWorkItem retries the final commit/push/completion step for a work item whose repo tasks already finished.
+func (s *ImplementationService) FinalizeWorkItem(ctx context.Context, workItemID string) (*ImplementResult, error) {
+	workItem, err := s.workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("get work item: %w", err)
+	}
+	if workItem.State != domain.SessionImplementing {
+		return nil, fmt.Errorf("work item %s is %s, expected %s", workItemID, workItem.State, domain.SessionImplementing)
+	}
+
+	workspace, err := s.workspaceSvc.Get(ctx, workItem.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("get workspace: %w", err)
+	}
+
+	plan, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("get plan for work item: %w", err)
+	}
+	subPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get sub-plans: %w", err)
+	}
+	if len(subPlans) == 0 {
+		return nil, fmt.Errorf("work item %s has no sub-plans to finalize", workItemID)
+	}
+
+	for _, subPlan := range subPlans {
+		if subPlan.Status != domain.SubPlanCompleted {
+			return nil, fmt.Errorf("work item %s is not ready to finalize: sub-plan %s is %s", workItemID, subPlan.ID, subPlan.Status)
+		}
+	}
+
+	tasks, err := s.sessionSvc.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("list agent sessions: %w", err)
+	}
+	for _, task := range tasks {
+		if isActiveAgentSession(task.Status) {
+			return nil, fmt.Errorf("work item %s still has active agent session %s (%s)", workItemID, task.ID, task.Status)
+		}
+	}
+
+	repoPaths, err := s.discoverRepoPaths(ctx, workspace.RootPath)
+	if err != nil {
+		return nil, fmt.Errorf("discover repo paths: %w", err)
+	}
+
+	branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
+	sessions, err := completedSessionResultsForSubPlans(subPlans, tasks, branch)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.finalizeCompletedWorkItem(ctx, &workItem, workspace.ID, sessions, repoPaths, branch, subPlans); err != nil {
+		return nil, err
+	}
+
+	return &ImplementResult{
+		PlanID:     plan.ID,
+		WorkItemID: workItemID,
+		Sessions:   sessions,
+	}, nil
+}
+
+func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, workItem *domain.Session, workspaceID string, sessions []SessionResult, repoPaths map[string]string, branch string, subPlans []domain.TaskPlan) error {
+	finalizationCtx, finalizationCancel := durableFinalizationContext(ctx)
+	s.commitAndPushRepos(finalizationCtx, sessions, repoPaths, branch)
+	finalizationCancel()
+
+	completeCtx, completeCancel := durableCleanupContext(ctx)
+	if completeErr := s.workItemSvc.CompleteWorkItem(completeCtx, workItem.ID); completeErr != nil {
+		completeCancel()
+
+		return fmt.Errorf("complete work item: %w", completeErr)
+	}
+	completeCancel()
+
+	eventCtx, eventCancel := durableCleanupContext(ctx)
+	if emitErr := s.emitWorkItemCompleted(eventCtx, workItem, workspaceID, sessions, repoPaths, branch, subPlans); emitErr != nil {
+		slog.Warn("failed to emit work item completed event", "error", emitErr)
+	}
+	eventCancel()
+
+	return nil
+}
+
+func completedSessionResultsForSubPlans(subPlans []domain.TaskPlan, tasks []domain.Task, branch string) ([]SessionResult, error) {
+	latestBySubPlan := make(map[string]domain.Task, len(subPlans))
+	for _, task := range tasks {
+		if task.Phase != domain.TaskPhaseImplementation || task.Status != domain.AgentSessionCompleted || task.SubPlanID == "" {
+			continue
+		}
+		previous, ok := latestBySubPlan[task.SubPlanID]
+		if !ok || taskSortTime(task).After(taskSortTime(previous)) {
+			latestBySubPlan[task.SubPlanID] = task
+		}
+	}
+
+	sessions := make([]SessionResult, 0, len(subPlans))
+	for _, subPlan := range subPlans {
+		task, ok := latestBySubPlan[subPlan.ID]
+		if !ok {
+			return nil, fmt.Errorf("no completed implementation session found for sub-plan %s", subPlan.ID)
+		}
+		if strings.TrimSpace(task.WorktreePath) == "" {
+			return nil, fmt.Errorf("completed implementation session %s has no worktree path", task.ID)
+		}
+		sessions = append(sessions, SessionResult{
+			SubPlanID:    subPlan.ID,
+			Repository:   subPlan.RepositoryName,
+			Branch:       branch,
+			Status:       domain.AgentSessionCompleted,
+			SessionID:    task.ID,
+			WorktreePath: task.WorktreePath,
+		})
+	}
+
+	return sessions, nil
+}
+
+func taskSortTime(task domain.Task) time.Time {
+	if !task.UpdatedAt.IsZero() {
+		return task.UpdatedAt
+	}
+	return task.CreatedAt
+}
+
+func isActiveAgentSession(status domain.TaskStatus) bool {
+	switch status {
+	case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+		return true
+	default:
+		return false
 	}
 }
 
