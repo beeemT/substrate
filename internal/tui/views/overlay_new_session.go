@@ -120,7 +120,7 @@ const (
 	newSessionFilterModalLoadPicker
 )
 
-const browseDebounceDelay = 200 * time.Millisecond
+const browseDebounceDelay = 500 * time.Millisecond
 
 // browseDebounceMsg is delivered by a tea.Tick scheduled when the user types
 // in a browse control. Only the tick matching the current browseDebounceSeq
