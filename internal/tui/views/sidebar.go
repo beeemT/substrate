@@ -69,22 +69,22 @@ type SidebarEntry struct {
 	// ExternalLabel overrides the display form of ExternalID when non-empty.
 	// Use this to show a human-readable identifier (e.g. "acme/rocket#42")
 	// without altering the canonical ExternalID value.
-	ExternalLabel   string
-	Source          string
-	Title           string
-	SubtitleText    string
-	State           domain.SessionState
-	SessionStatus   domain.TaskStatus
-	RepositoryName  string
-	LastActivity    time.Time
-	CreatedAt       time.Time
-	TotalSubPlans   int
-	DoneSubPlans    int
-	HasOpenQuestion bool
-	HasInterrupted  bool
+	ExternalLabel                string
+	Source                       string
+	Title                        string
+	SubtitleText                 string
+	State                        domain.SessionState
+	SessionStatus                domain.TaskStatus
+	RepositoryName               string
+	LastActivity                 time.Time
+	CreatedAt                    time.Time
+	TotalSubPlans                int
+	DoneSubPlans                 int
+	HasOpenQuestion              bool
+	HasInterrupted               bool
 	ArtifactAggregateReviewState string // "approved" | "changes_requested" | "" (none)
 	ArtifactAggregateCIState     string // "success" | "failure" | "in_progress" | "" (none)
-	GroupTitle      string
+	GroupTitle                   string
 }
 
 func (e SidebarEntry) titlePrefix() string {
@@ -296,6 +296,38 @@ func NewSidebarModel(st styles.Styles) SidebarModel {
 		cursor:     -1,
 		cachedView: new(string),
 		viewDirty:  &dirty,
+	}
+}
+
+// sidebarFilterFromString converts a ui.default_filter config value to a SidebarFilter.
+// An empty or unrecognised value returns SidebarFilterAll.
+func sidebarFilterFromString(s string) SidebarFilter {
+	switch s {
+	case "active":
+		return SidebarFilterActive
+	case "attention":
+		return SidebarFilterNeedsAttention
+	case "completed":
+		return SidebarFilterCompleted
+	default:
+		return SidebarFilterAll
+	}
+}
+
+// sidebarDimFromString converts a ui.default_group config value to a SidebarDimension.
+// An empty or unrecognised value returns SidebarDimState.
+func sidebarDimFromString(s string) SidebarDimension {
+	switch s {
+	case "none":
+		return SidebarDimNone
+	case "source":
+		return SidebarDimSource
+	case "created":
+		return SidebarDimCreated
+	case "activity":
+		return SidebarDimActivity
+	default: // "state" or any unrecognised value
+		return SidebarDimState
 	}
 }
 

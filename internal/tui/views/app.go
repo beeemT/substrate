@@ -237,6 +237,13 @@ func NewApp(svcs Services) App {
 
 	app.syncNewSessionFilterOverlays()
 
+	// Apply config-based defaults for the home view.
+	if svcs.Cfg != nil {
+		app.sidebar.filter = sidebarFilterFromString(svcs.Cfg.UI.DefaultFilter)
+		app.sidebar.dimension = sidebarDimFromString(svcs.Cfg.UI.DefaultGroup)
+		*app.sidebar.viewDirty = true
+	}
+
 	if !app.hasWorkspace {
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, svcs.Workspace)
 		app.activeOverlay = overlayWorkspaceInit

@@ -707,6 +707,15 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 	}
 	sections := []SettingsSection{
 		{
+			ID:          "ui",
+			Title:       "Home View",
+			Description: "Default filter and grouping for the sessions list",
+			Fields: []SettingsField{
+				{Section: "ui", Key: "default_filter", Label: "Default Filter", Type: SettingsFieldEnum, Value: cfg.UI.DefaultFilter, Options: []string{"all", "active", "attention", "completed"}},
+				{Section: "ui", Key: "default_group", Label: "Default Group", Type: SettingsFieldEnum, Value: cfg.UI.DefaultGroup, Options: []string{"none", "state", "source", "created", "activity"}},
+			},
+		},
+		{
 			ID:          "commit",
 			Title:       "Commit",
 			Description: "Agent commit behavior",
@@ -1068,6 +1077,10 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.Glab.Labels = parseList(value)
 	case "repos.doc_paths":
 		cfg.Repos = parseRepos(value)
+	case "ui.default_filter":
+		cfg.UI.DefaultFilter = value
+	case "ui.default_group":
+		cfg.UI.DefaultGroup = value
 	}
 
 	return nil
@@ -1244,6 +1257,10 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Default GitLab merge request labels added by the glab lifecycle adapter.", statusEmpty
 	case "repos.doc_paths":
 		return "File paths to project documentation the planning agent reads before writing a plan for this repository. Use this to surface architecture guides, conventions, or other reference material the agent should consult during planning.", statusEmpty
+	case "ui.default_filter":
+		return "Default filter applied to the sessions list when the app starts.", "all"
+	case "ui.default_group":
+		return "Default grouping dimension applied to the sessions list when the app starts.", "state"
 	default:
 		return "", ""
 	}

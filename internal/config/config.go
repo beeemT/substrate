@@ -59,6 +59,16 @@ const (
 	IssueCommentFullPlan IssueCommentContent = "full_plan"
 )
 
+// UIConfig controls TUI presentation defaults.
+type UIConfig struct {
+	// DefaultFilter sets the initial filter mode for the sessions list.
+	// Valid values: "all", "active", "attention", "completed".
+	DefaultFilter string `yaml:"default_filter"`
+	// DefaultGroup sets the initial grouping dimension for the sessions list.
+	// Valid values: "none", "state", "source", "created", "activity".
+	DefaultGroup string `yaml:"default_group"`
+}
+
 // Config is the top-level configuration loaded from config.yaml.
 type Config struct {
 	Commit   CommitConfig          `yaml:"commit"`
@@ -68,6 +78,7 @@ type Config struct {
 	Adapters AdaptersConfig        `yaml:"adapters"`
 	Foreman  ForemanConfig         `yaml:"foreman"`
 	Repos    map[string]RepoConfig `yaml:"repos"`
+	UI       UIConfig              `yaml:"ui"`
 }
 
 // CommitConfig controls agent commit behavior.
@@ -467,6 +478,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.Sentry.PollInterval == "" {
 		cfg.Adapters.Sentry.PollInterval = defaultPollInterval
 	}
+	if cfg.UI.DefaultFilter == "" {
+		cfg.UI.DefaultFilter = "all"
+	}
+	if cfg.UI.DefaultGroup == "" {
+		cfg.UI.DefaultGroup = "state"
+	}
 }
 
 func validate(cfg *Config) error {
@@ -559,6 +576,15 @@ func validate(cfg *Config) error {
 	}
 	if err := ValidateThinkingLevel(cfg.Adapters.OhMyPi.ThinkingLevel); err != nil {
 		return fmt.Errorf("invalid adapters.ohmypi.thinking_level: %w", err)
+	}
+
+	validUIFilters := map[string]bool{"all": true, "active": true, "attention": true, "completed": true}
+	if !validUIFilters[cfg.UI.DefaultFilter] {
+		return fmt.Errorf("invalid ui.default_filter: %q (must be all, active, attention, or completed)", cfg.UI.DefaultFilter)
+	}
+	validUIGroups := map[string]bool{"none": true, "state": true, "source": true, "created": true, "activity": true}
+	if !validUIGroups[cfg.UI.DefaultGroup] {
+		return fmt.Errorf("invalid ui.default_group: %q (must be none, state, source, created, or activity)", cfg.UI.DefaultGroup)
 	}
 
 	return nil

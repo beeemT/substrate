@@ -222,6 +222,33 @@ func displaySettingsOption(field *SettingsField, value string) string {
 		case config.HarnessOpenCode:
 			return "OpenCode"
 		}
+	case "ui":
+		switch field.Key {
+		case "default_filter":
+			switch value {
+			case "all":
+				return "All"
+			case "active":
+				return "Active"
+			case "attention":
+				return "Needs Attention"
+			case "completed":
+				return "Completed"
+			}
+		case "default_group":
+			switch value {
+			case "none":
+				return "None"
+			case "state":
+				return "By State"
+			case "source":
+				return "By Source"
+			case "created":
+				return "By Created"
+			case "activity":
+				return "By Activity"
+			}
+		}
 	}
 	return value
 }
