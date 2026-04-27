@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/beeemT/substrate/internal/adapter"
 )
 
 func TestBridgeMsgJSONRoundTrip(t *testing.T) {
@@ -38,6 +41,7 @@ func TestBridgeMsgJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
 func TestDedupePaths(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -354,6 +358,48 @@ func TestMapBridgeEvent(t *testing.T) {
 				tt.checkMeta(t, got.Metadata)
 			}
 		})
+	}
+}
+
+func TestBridgeSessionDoesNotDropTerminalEventsWhenChannelIsFull(t *testing.T) {
+	t.Parallel()
+
+	s := NewBridgeSession("test-session", "agent")
+	defer s.CloseEvents()
+
+	for i := 0; i < cap(s.Events); i++ {
+		s.emitEvent(adapter.AgentEvent{Type: "text_delta", Payload: "filler"})
+	}
+
+	doneSent := make(chan struct{})
+	go func() {
+		defer close(doneSent)
+		s.emitEvent(adapter.AgentEvent{Type: "done", Payload: "complete"})
+	}()
+
+	select {
+	case <-doneSent:
+		t.Fatal("done event send completed while the channel was full; terminal events must wait for a reader instead of dropping")
+	default:
+	}
+
+	for i := 0; i < cap(s.Events); i++ {
+		<-s.Events
+	}
+
+	select {
+	case <-doneSent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for done event send after draining channel")
+	}
+
+	select {
+	case evt := <-s.Events:
+		if evt.Type != "done" {
+			t.Fatalf("event type = %q, want done", evt.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for done event")
 	}
 }
 

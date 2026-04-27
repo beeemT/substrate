@@ -1271,7 +1271,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toasts.AddToast(fmt.Sprintf("Follow-up planning failed: %v", msg.Err), components.ToastError)
 			return a, nil
 		}
-		a.toasts.AddToast("Follow-up planning started", components.ToastSuccess)
+		a.toasts.AddToast("Follow-up plan ready for review", components.ToastSuccess)
 		return a, nil
 
 	case FetchReviewCommentsMsg:

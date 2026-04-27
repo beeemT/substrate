@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,12 +158,19 @@ func (h *scriptedPlanningHarness) StartSession(_ context.Context, opts adapter.S
 type scriptedPlanningSession struct {
 	id          string
 	events      chan adapter.AgentEvent
+	wait        func(context.Context) error
 	sendMessage func(context.Context, string) error
 	sendAnswer  func(context.Context, string) error
 }
 
-func (s *scriptedPlanningSession) ID() string                        { return s.id }
-func (s *scriptedPlanningSession) Wait(context.Context) error        { return nil }
+func (s *scriptedPlanningSession) ID() string { return s.id }
+func (s *scriptedPlanningSession) Wait(ctx context.Context) error {
+	if s.wait != nil {
+		return s.wait(ctx)
+	}
+
+	return nil
+}
 func (s *scriptedPlanningSession) Events() <-chan adapter.AgentEvent { return s.events }
 func (s *scriptedPlanningSession) SendMessage(ctx context.Context, msg string) error {
 	if s.sendMessage != nil {
@@ -284,6 +292,73 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 	}
 	if rawContent != finalPlan {
 		t.Fatalf("runPlanningWithCorrectionLoop() returned intermediate draft:\n%s", rawContent)
+	}
+}
+
+func TestWaitForPlanningTurnTreatsCleanProcessExitAsCompletion(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan adapter.AgentEvent)
+	close(events)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+		wait: func(context.Context) error {
+			return nil
+		},
+	}
+	svc := &PlanningService{}
+
+	if err := svc.waitForPlanningTurn(context.Background(), sess); err != nil {
+		t.Fatalf("waitForPlanningTurn(): %v", err)
+	}
+}
+
+func TestWaitForPlanningTurnPrefersClosedCleanSessionOverCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	events := make(chan adapter.AgentEvent)
+	close(events)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+		wait: func(ctx context.Context) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	svc := &PlanningService{}
+
+	if err := svc.waitForPlanningTurn(ctx, sess); err != nil {
+		t.Fatalf("waitForPlanningTurn(): %v", err)
+	}
+}
+
+func TestWaitForPlanningTurnReportsProcessFailureWhenStreamEndsWithoutDone(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan adapter.AgentEvent)
+	close(events)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+		wait: func(context.Context) error {
+			return errors.New("exit status 1")
+		},
+	}
+	svc := &PlanningService{}
+
+	err := svc.waitForPlanningTurn(context.Background(), sess)
+	if err == nil {
+		t.Fatal("waitForPlanningTurn() returned nil, want process failure")
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("waitForPlanningTurn() error = %v, want exit status", err)
 	}
 }
 
@@ -510,6 +585,9 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 	}
 	if !strings.Contains(capturedMessages[0], feedback) {
 		t.Errorf("first SendMessage = %q, want it to contain feedback %q", capturedMessages[0], feedback)
+	}
+	if !strings.Contains(capturedMessages[0], draftPath) {
+		t.Errorf("first SendMessage = %q, want it to contain draft path %q", capturedMessages[0], draftPath)
 	}
 }
 
@@ -1014,6 +1092,74 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	}
 }
 
+func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
+	const (
+		workItemID  = "wi-plan-fail-event"
+		workspaceID = "ws-plan-fail-event"
+	)
+
+	workspaceRoot := t.TempDir()
+	planRepo := newUniqueWorkItemPlanRepo()
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: newMockSubPlanRepo()}})
+	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionPlanning},
+	}}
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
+	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
+	}}
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	sessionRepo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	eventRepo := &planTestEventRepo{}
+	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
+
+	repoName := "test-repo"
+	repoDir := filepath.Join(workspaceRoot, repoName)
+	mainDir := filepath.Join(repoDir, "main")
+	for _, dir := range []string{filepath.Join(repoDir, ".bare"), mainDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create dir %s: %v", dir, err)
+		}
+	}
+	wtJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"worktrees": []map[string]any{{"dir": mainDir, "branch": "main", "current": true}}}})
+	fakeGitWork := filepath.Join(t.TempDir(), "git-work")
+	if err := os.WriteFile(fakeGitWork, fmt.Appendf(nil, "#!/bin/sh\nprintf '%%s\n' %q\n", string(wtJSON)), 0o755); err != nil {
+		t.Fatalf("write fake git-work: %v", err)
+	}
+
+	if err := planRepo.Create(context.Background(), domain.Plan{ID: "active-plan", WorkItemID: workItemID, Status: domain.PlanApproved, Version: 1}); err != nil {
+		t.Fatalf("seed active plan: %v", err)
+	}
+	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate safely.", "Implement safely.")}
+	globalCfg := &config.Config{}
+	globalCfg.Plan.MaxParseRetries = ptrInt(0)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
+	if err != nil {
+		t.Fatalf("NewPlanningService: %v", err)
+	}
+
+	_, planErr := svc.planRun(context.Background(), planRunRequest{workItemID: workItemID})
+	if planErr == nil {
+		t.Fatal("planRun succeeded; want active-plan persistence failure")
+	}
+
+	events, err := eventRepo.ListByType(context.Background(), string(domain.EventPlanFailed), 10)
+	if err != nil {
+		t.Fatalf("ListByType: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("plan.failed event count = %d, want 1", len(events))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(events[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal plan.failed payload: %v", err)
+	}
+	if got, ok := payload["error"].(string); !ok || !strings.Contains(got, "persist plan") {
+		t.Fatalf("plan.failed error = %#v, want persistence detail", payload["error"])
+	}
+}
+
 // validPlanningPlanWithRepo returns a complete valid substrate plan for the named repo.
 func validPlanningPlanWithRepo(repoName, orchestration, goal string) string {
 	return "```substrate-plan\nexecution_groups:\n  - [" + repoName + "]\n```\n\n## Orchestration\n" +
@@ -1078,14 +1224,32 @@ func (r *planTestWorkspaceRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// planTestEventRepo is a no-op EventRepository for planning tests.
-type planTestEventRepo struct{}
-
-func (r *planTestEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
-func (r *planTestEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
-	return nil, nil
+// planTestEventRepo is an in-memory EventRepository for planning tests.
+type planTestEventRepo struct {
+	events []domain.SystemEvent
 }
 
-func (r *planTestEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
-	return nil, nil
+func (r *planTestEventRepo) Create(_ context.Context, event domain.SystemEvent) error {
+	r.events = append(r.events, event)
+	return nil
+}
+
+func (r *planTestEventRepo) ListByType(_ context.Context, eventType string, _ int) ([]domain.SystemEvent, error) {
+	var events []domain.SystemEvent
+	for _, event := range r.events {
+		if event.EventType == eventType {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (r *planTestEventRepo) ListByWorkspaceID(_ context.Context, workspaceID string, _ int) ([]domain.SystemEvent, error) {
+	var events []domain.SystemEvent
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID {
+			events = append(events, event)
+		}
+	}
+	return events, nil
 }

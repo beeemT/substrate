@@ -316,11 +316,7 @@ func (s *BridgeSession) readEvents() {
 		}
 
 		if event != nil {
-			select {
-			case s.Events <- *event:
-			default:
-				slog.Warn("event channel full, dropping event", "type", event.Type)
-			}
+			s.emitEvent(*event)
 		}
 	}
 
@@ -331,6 +327,19 @@ func (s *BridgeSession) readEvents() {
 	// Signal that all events have been drained.
 	s.CloseEvents()
 	close(s.readDone)
+}
+
+func (s *BridgeSession) emitEvent(event adapter.AgentEvent) {
+	if event.Type == "done" || event.Type == "error" || event.Type == "question" {
+		s.Events <- event
+		return
+	}
+
+	select {
+	case s.Events <- event:
+	default:
+		slog.Warn("event channel full, dropping event", "type", event.Type)
+	}
 }
 
 // readStderr reads stderr and logs it for debugging.

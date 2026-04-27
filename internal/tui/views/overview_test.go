@@ -1179,8 +1179,9 @@ func TestCompletedOverlayEnterSubmitPreservesLongFeedback(t *testing.T) {
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if updated.overlay != overviewOverlayCompleted || updated.completed.inputActive {
-		t.Fatalf("overlay/inputActive = %v/%v after Enter, want completed overlay with inactive input", updated.overlay, updated.completed.inputActive)
+
+	if updated.overlay != overviewOverlayNone || updated.completed.inputActive {
+		t.Fatalf("overlay/inputActive = %v/%v after Enter, want no overlay and inactive input", updated.overlay, updated.completed.inputActive)
 	}
 	if cmd == nil {
 		t.Fatal("Enter submit must return a command")

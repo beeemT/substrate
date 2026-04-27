@@ -234,7 +234,7 @@ func TestGrowingTextAreaLargePasteShowsTailImmediately(t *testing.T) {
 	t.Parallel()
 
 	g := components.NewGrowingTextArea("")
-	g.SetMaxLines(6)
+	g.SetMaxLines(3)
 	g.SetWidth(24)
 	g = focused(g)
 
@@ -244,5 +244,34 @@ func TestGrowingTextAreaLargePasteShowsTailImmediately(t *testing.T) {
 	view := g.View()
 	if !strings.Contains(view, "TAIL SENTINEL") {
 		t.Fatalf("large one-shot paste view did not scroll to tail immediately:\n%s", view)
+	}
+	if firstLine := strings.Split(view, "\n")[0]; strings.Contains(firstLine, "1 ") {
+		t.Fatalf("large one-shot paste view still starts at rendered line 1 instead of the cursor tail:\n%s", view)
+	}
+	if !strings.Contains(view, "6 TAIL SENTINEL") {
+		t.Fatalf("view = %q, want Bubbles line-number rendering for the cursor row", view)
+	}
+}
+
+func TestGrowingTextAreaViewFollowsCursorAfterMovement(t *testing.T) {
+	t.Parallel()
+
+	g := components.NewGrowingTextArea("")
+	g.SetMaxLines(3)
+	g.SetWidth(24)
+	g = focused(g)
+
+	pasted := strings.TrimSuffix(strings.Repeat("top line\n", 5), "\n") + "\nTAIL SENTINEL"
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted)})
+	for range 5 {
+		g, _ = g.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+
+	view := g.View()
+	if !strings.Contains(view, "1 top line") {
+		t.Fatalf("view should follow cursor back to top, got:\n%s", view)
+	}
+	if strings.Contains(view, "TAIL SENTINEL") {
+		t.Fatalf("view should not stay pinned to tail after cursor moves up, got:\n%s", view)
 	}
 }

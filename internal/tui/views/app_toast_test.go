@@ -402,3 +402,18 @@ func TestAppUpdate_QuitConfirmedStopsActiveNewSessionAutonomousRuntime(t *testin
 		t.Fatal("expected teardown to sync overlay runtime state to stopped")
 	}
 }
+
+func TestAppUpdate_FollowUpPlanResultSuccessToastSaysReadyForReview(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app = updateToastTestApp(t, app, FollowUpPlanResultMsg{WorkItemID: "wi-1"})
+
+	view := strings.ReplaceAll(stripToastANSI(app.toasts.StackView()), "\n", "")
+	if !strings.Contains(view, "Follow-up plan") || !strings.Contains(view, "ready for review") {
+		t.Fatalf("toast view = %q, want ready-for-review copy", view)
+	}
+	if strings.Contains(view, "Follow-up planning started") {
+		t.Fatalf("toast view = %q, must not claim planning merely started after blocking command completed", view)
+	}
+}

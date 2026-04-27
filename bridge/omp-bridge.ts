@@ -44,6 +44,12 @@ function emit(event: object): void {
   process.stdout.write(JSON.stringify({ type: "event", event }) + "\n");
 }
 
+async function flushStdout(): Promise<void> {
+  if (process.stdout.writableNeedDrain) {
+    await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+  }
+}
+
 function emitLifecycle(
   stage: "started" | "completed" | "failed",
   payload: Record<string, unknown> = {},
@@ -241,12 +247,14 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
       emitLifecycle("failed", {
         message: "Rate limit retries exhausted — session produced no work",
       });
+      await flushStdout();
       process.exit(1);
     } else {
       emitLifecycle("completed", { summary: "Session complete" });
       // Agent sessions are single-use: exit so BridgeSession.Wait() can return.
       // Without this the process waits for more stdin and Wait() hangs until
       // sessTimeout fires, leaving the sub-plan stranded in_progress.
+      await flushStdout();
       process.exit(0);
     }
   } catch (err) {
@@ -256,6 +264,7 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
       // Agent sessions are single-use: exit so BridgeSession.Wait() can return.
       // Without this the process returns to runLineLoop and blocks on stdin,
       // leaving the sub-plan stranded in_progress until sessTimeout fires.
+      await flushStdout();
       process.exit(1);
     }
   }

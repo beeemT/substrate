@@ -340,6 +340,15 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 			return m, cmd
 		case overviewOverlayCompleted:
+			if key, ok := msg.(tea.KeyMsg); ok && key.String() == keyEnter && m.completed.InputCaptured() {
+				var cmd tea.Cmd
+				m.completed, cmd = m.completed.Update(msg)
+				m.overlay = overviewOverlayNone
+				m.syncViewport(false)
+
+				return m, cmd
+			}
+
 			var cmd tea.Cmd
 			m.completed, cmd = m.completed.Update(msg)
 

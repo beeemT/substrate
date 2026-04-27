@@ -144,6 +144,8 @@ type planRunRequest struct {
 	workItemID       string
 	revisionFeedback string
 	currentPlanText  string
+	followUpFeedback string
+	repoResults      []RepoResultSummary
 	priorSessionID   string
 	priorResumeInfo  map[string]string
 	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
@@ -228,28 +230,19 @@ func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback
 	// 4. Build repo result summaries from session logs
 	repoResults := s.buildRepoResultSummaries(ctx, currentPlan.ID)
 
-	// 5. Render the follow-up prompt
-	var buf bytes.Buffer
-	if err := s.templates.followUp.Execute(&buf, FollowUpData{
-		Feedback:    feedback,
-		CurrentPlan: currentPlanText,
-		RepoResults: repoResults,
-	}); err != nil {
-		return nil, fmt.Errorf("render follow-up template: %w", err)
-	}
-	followUpContext := buf.String()
-
-	// 6. Transition work item to planning for follow-up
+	// 5. Transition work item to planning for follow-up.
 	if err := s.workItemSvc.StartFollowUpPlanning(ctx, workItemID); err != nil {
 		return nil, fmt.Errorf("transition work item to planning: %w", err)
 	}
 
-	// 7. Run planning with the follow-up context as the revision feedback.
-	// Pass empty currentPlanText to planRun since the follow-up template already
-	// embeds the plan; this avoids double-rendering via the revision template.
+	// 6. Run planning with a dedicated completed-work follow-up prompt. The draft
+	// path is only known after planRun allocates the new planning session, so render
+	// the prompt there instead of pre-rendering it here with an empty path.
 	return s.planRun(ctx, planRunRequest{
 		workItemID:       workItemID,
-		revisionFeedback: followUpContext,
+		followUpFeedback: feedback,
+		currentPlanText:  currentPlanText,
+		repoResults:      repoResults,
 		// replacePlanID supersedes the old approved plan when the new one is persisted.
 		replacePlanID: currentPlan.ID,
 	})
@@ -489,7 +482,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		SessionID:         sessionID,
 		SessionDraftPath:  sessionDir.DraftPath,
 		MaxParseRetries:   s.cfg.MaxParseRetries,
-		RevisionFeedback:  req.revisionFeedback,
+		RevisionFeedback:  s.renderPlanRunFeedback(req, sessionDir.DraftPath),
 		CurrentPlanText:   req.currentPlanText,
 		PriorSessionID:    req.priorSessionID,
 		PriorResumeInfo:   req.priorResumeInfo,
@@ -512,7 +505,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 				slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
 			}
-			if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors); emitErr != nil {
+			if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors, nil); emitErr != nil {
 				slog.Warn("failed to emit plan failed event", "error", emitErr)
 			}
 			if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
@@ -534,7 +527,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors, nil); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
@@ -553,7 +546,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("persist plan: %w", err)); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
@@ -572,7 +565,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition plan to pending review: %w", err)); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
@@ -586,7 +579,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil); emitErr != nil {
+		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition work item to plan review: %w", err)); emitErr != nil {
 			slog.Warn("failed to emit plan failed event", "error", emitErr)
 		}
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
@@ -682,10 +675,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	// Send revision feedback as a follow-up message when resuming a previous session.
 	// This triggers the model's turn while preserving the conversation history.
 	if len(planningCtx.PriorResumeInfo) > 0 && planningCtx.RevisionFeedback != "" {
-		triggerMsg := fmt.Sprintf(
-			"The human requested changes to the plan:\n\n%s\n\nWrite your revised plan to %s.",
-			planningCtx.RevisionFeedback, draftPath,
-		)
+		triggerMsg := fmt.Sprintf("%s\n\nWrite the revised plan to `%s`.", planningCtx.RevisionFeedback, draftPath)
 		if err := session.SendMessage(sessionCtx, triggerMsg); err != nil {
 			slog.Warn("failed to send revision feedback to resumed planning session", "error", err, "session_id", planningCtx.SessionID)
 		}
@@ -763,37 +753,65 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 }
 
 // waitForPlanningTurn waits for the planner to signal that its current turn is complete.
-// It returns nil on a done event.
+// It returns nil on a done event or on clean process completion after the event stream closes.
 // It returns an error if the context is cancelled, the session emits an error, or the
-// session closes before signaling completion.
+// session process exits unsuccessfully before signaling completion.
 func (s *PlanningService) waitForPlanningTurn(ctx context.Context, session adapter.AgentSession) error {
 	events := session.Events()
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
 		case evt, ok := <-events:
 			if !ok {
-				return errors.New("agent session ended before planner signaled completion")
+				return waitForClosedPlanningSession(session)
 			}
-			switch evt.Type {
-			case "question":
-				if s.questionRouter == nil {
-					return errors.New("planner asked a question but question routing is not configured")
-				}
-				if err := s.questionRouter.Route(ctx, domain.TaskPhasePlanning, evt, session.ID()); err != nil {
-					return fmt.Errorf("route planning question: %w", err)
-				}
-			case "done":
+			if done, err := s.handlePlanningTurnEvent(ctx, session, evt); err != nil {
+				return err
+			} else if done {
 				return nil
-			case "error":
-				if strings.TrimSpace(evt.Payload) == "" {
-					return errors.New("planner session failed")
+			}
+		case <-ctx.Done():
+			select {
+			case evt, ok := <-events:
+				if !ok {
+					return waitForClosedPlanningSession(session)
 				}
-				return fmt.Errorf("planner session failed: %s", evt.Payload)
+				if done, err := s.handlePlanningTurnEvent(ctx, session, evt); err != nil {
+					return err
+				} else if done {
+					return nil
+				}
+			default:
+				return ctx.Err()
 			}
 		}
 	}
+}
+
+func waitForClosedPlanningSession(session adapter.AgentSession) error {
+	if err := session.Wait(context.Background()); err != nil {
+		return fmt.Errorf("planner session ended: %w", err)
+	}
+	return nil
+}
+
+func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, session adapter.AgentSession, evt adapter.AgentEvent) (bool, error) {
+	switch evt.Type {
+	case "question":
+		if s.questionRouter == nil {
+			return false, errors.New("planner asked a question but question routing is not configured")
+		}
+		if err := s.questionRouter.Route(ctx, domain.TaskPhasePlanning, evt, session.ID()); err != nil {
+			return false, fmt.Errorf("route planning question: %w", err)
+		}
+	case "done":
+		return true, nil
+	case "error":
+		if strings.TrimSpace(evt.Payload) == "" {
+			return false, errors.New("planner session failed")
+		}
+		return false, fmt.Errorf("planner session failed: %s", evt.Payload)
+	}
+	return false, nil
 }
 
 // buildCorrectionMessage builds a correction message for the agent.
@@ -811,8 +829,26 @@ func (s *PlanningService) buildCorrectionMessage(errors domain.ParseErrors, disc
 	return buf.String()
 }
 
+func (s *PlanningService) renderPlanRunFeedback(req planRunRequest, draftPath string) string {
+	if req.followUpFeedback == "" {
+		return req.revisionFeedback
+	}
+	var buf bytes.Buffer
+	if err := s.templates.followUp.Execute(&buf, FollowUpData{
+		Feedback:            req.followUpFeedback,
+		CurrentPlan:         req.currentPlanText,
+		RepoResults:         req.repoResults,
+		NewSessionDraftPath: draftPath,
+	}); err != nil {
+		// NewPlanningTemplates compiles this template at startup, so execution over string data should not fail.
+		slog.Warn("failed to render follow-up planning feedback", "error", err)
+		return req.followUpFeedback
+	}
+	return buf.String()
+}
+
 // renderPlanningPrompt renders the planning prompt.
-// When ctx.RevisionFeedback is set, it renders the revision prompt instead.
+// When ctx.RevisionFeedback is set, it renders the in-review revision prompt instead.
 func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (string, error) {
 	if ctx.RevisionFeedback != "" {
 		var buf bytes.Buffer
@@ -902,16 +938,21 @@ func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, wo
 }
 
 // emitPlanFailedEvent emits a PlanFailed event.
-func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors) error {
+func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors, cause error) error {
 	type planFailedPayload struct {
 		WorkItemID  string  `json:"work_item_id"`
 		SessionID   string  `json:"session_id"`
 		ParseErrors *string `json:"parse_errors,omitempty"`
+		Error       *string `json:"error,omitempty"`
 	}
 	p := planFailedPayload{WorkItemID: workItemID, SessionID: sessionID}
 	if parseErrors != nil {
 		errStr := parseErrors.Error()
 		p.ParseErrors = &errStr
+	}
+	if cause != nil {
+		errStr := cause.Error()
+		p.Error = &errStr
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
