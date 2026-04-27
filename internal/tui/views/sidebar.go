@@ -281,6 +281,7 @@ type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
 	height     int
 	cachedView *string // render cache; pointer survives value-receiver copies
 	viewDirty  *bool   // true when state changed since last View()
+	paneMode   sidebarPaneMode
 	filter     SidebarFilter
 	dimension  SidebarDimension
 	direction  SidebarDirection
@@ -380,6 +381,13 @@ func (m *SidebarModel) SetTitle(title string) {
 	*m.viewDirty = true
 }
 
+// SetPaneMode sets the current pane mode, which controls whether the status label
+// (filter/dimension/direction) is displayed.
+func (m *SidebarModel) SetPaneMode(mode sidebarPaneMode) {
+	m.paneMode = mode
+	*m.viewDirty = true
+}
+
 // CycleFilter advances to the next filter mode.
 func (m *SidebarModel) CycleFilter() {
 	m.filter = (m.filter + 1) % 4
@@ -412,8 +420,12 @@ func (m *SidebarModel) DimensionMode() SidebarDimension { return m.dimension }
 func (m *SidebarModel) DirectionMode() SidebarDirection { return m.direction }
 
 // StatusLabel returns the sidebar status line showing active filter/dimension/direction.
-// Returns empty string when all settings are at their defaults.
+// Returns empty string when all settings are at their defaults or when in tasks pane mode
+// (where these concepts do not apply).
 func (m *SidebarModel) StatusLabel() string {
+	if m.paneMode == sidebarPaneTasks {
+		return ""
+	}
 	var parts []string
 	switch m.filter {
 	case SidebarFilterActive:

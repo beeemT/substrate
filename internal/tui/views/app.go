@@ -2941,6 +2941,7 @@ func (a *App) rebuildSidebar() {
 	if a.sidebarMode == sidebarPaneTasks && a.currentWorkItemID != "" && a.workItemByID(a.currentWorkItemID) != nil {
 		wi := a.workItemByID(a.currentWorkItemID)
 		a.sidebar.SetTitle(firstNonEmptyString(wi.Title, wi.ExternalID, wi.ID) + " \u00b7 Tasks")
+		a.sidebar.SetPaneMode(sidebarPaneTasks)
 		a.sidebar.SetEntries(a.taskSidebarEntries(a.currentWorkItemID))
 		selectedSessionID := a.selectedTaskSessionID()
 		if selectedSessionID == "" {
@@ -2957,6 +2958,7 @@ func (a *App) rebuildSidebar() {
 	}
 	a.sidebarMode = sidebarPaneSessions
 	a.sidebar.SetTitle("Sessions")
+	a.sidebar.SetPaneMode(sidebarPaneSessions)
 	entries := a.sessionSidebarEntries()
 	entries = FilterSidebarEntries(entries, a.sidebar.FilterMode())
 	entries = ApplyDimensionAndDirection(entries, a.sidebar.DimensionMode(), a.sidebar.DirectionMode())
