@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -60,19 +61,35 @@ type GitlabAdapter struct {
 }
 
 type issue struct {
-	ID          int64    `json:"id"`
-	IID         int64    `json:"iid"`
-	ProjectID   int64    `json:"project_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	State       string   `json:"state"`
-	Labels      []string `json:"labels"`
-	WebURL      string   `json:"web_url"`
-	References  struct {
+	ID                 int64    `json:"id"`
+	IID                int64    `json:"iid"`
+	ProjectID          int64    `json:"project_id"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description"`
+	State              string   `json:"state"`
+	Labels             []string `json:"labels"`
+	WebURL             string   `json:"web_url"`
+	MergeRequestsCount int64    `json:"merge_requests_count"`
+	References         struct {
 		Full string `json:"full"`
 	} `json:"references"`
 	CreatedAt *time.Time `json:"created_at"`
 	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+type relatedMergeRequest struct {
+	IID            int64      `json:"iid"`
+	ProjectID      int64      `json:"project_id"`
+	State          string     `json:"state"`
+	WebURL         string     `json:"web_url"`
+	SourceBranch   string     `json:"source_branch"`
+	Draft          bool       `json:"draft"`
+	WorkInProgress bool       `json:"work_in_progress"`
+	UpdatedAt      *time.Time `json:"updated_at"`
+	References     struct {
+		Short string `json:"short"`
+		Full  string `json:"full"`
+	} `json:"references"`
 }
 
 type milestone struct {
@@ -197,7 +214,7 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
 			itemID := gitlabIssueSelectionID(0, iss)
-			items = append(items, adapter.ListItem{
+			item := adapter.ListItem{
 				ID:           itemID,
 				Identifier:   fmt.Sprintf("#%d", iss.IID),
 				Title:        iss.Title,
@@ -208,7 +225,11 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 				URL:          iss.WebURL,
 				CreatedAt:    derefTime(iss.CreatedAt),
 				UpdatedAt:    derefTime(iss.UpdatedAt),
-			})
+			}
+			if artifacts := a.issueReviewArtifacts(ctx, iss); len(artifacts) > 0 {
+				item.Metadata = map[string]any{adapter.ListItemReviewArtifactsMetadataKey: artifacts}
+			}
+			items = append(items, item)
 		}
 
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
@@ -568,6 +589,73 @@ func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (i
 	}
 
 	return iss, nil
+}
+
+func (a *GitlabAdapter) issueReviewArtifacts(ctx context.Context, iss issue) []domain.ReviewArtifact {
+	if iss.MergeRequestsCount <= 0 || iss.ProjectID == 0 || iss.IID == 0 {
+		return nil
+	}
+	mrs, err := a.fetchRelatedMergeRequests(ctx, iss.ProjectID, iss.IID)
+	if err != nil {
+		slog.Warn("gitlab: fetch related merge requests failed", "project_id", iss.ProjectID, "issue_iid", iss.IID, "error", err)
+		return nil
+	}
+
+	return gitlabReviewArtifactsFromRelatedMRs(mrs, gitlabProjectPath(iss))
+}
+
+func (a *GitlabAdapter) fetchRelatedMergeRequests(ctx context.Context, projectID, issueIID int64) ([]relatedMergeRequest, error) {
+	var mrs []relatedMergeRequest
+	endpoint := fmt.Sprintf("/api/v4/projects/%d/issues/%d/related_merge_requests", projectID, issueIID)
+	if err := a.getJSON(ctx, endpoint, nil, &mrs); err != nil {
+		return nil, err
+	}
+
+	return mrs, nil
+}
+
+func gitlabReviewArtifactsFromRelatedMRs(mrs []relatedMergeRequest, fallbackProjectPath string) []domain.ReviewArtifact {
+	artifacts := make([]domain.ReviewArtifact, 0, len(mrs))
+	seen := make(map[string]struct{}, len(mrs))
+	for _, mr := range mrs {
+		if mr.IID <= 0 {
+			continue
+		}
+		projectPath := gitlabMergeRequestProjectPath(mr, fallbackProjectPath)
+		key := projectPath + "!" + strconv.FormatInt(mr.IID, 10)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		state := strings.TrimSpace(mr.State)
+		if mr.Draft || mr.WorkInProgress {
+			state = "draft"
+		}
+		artifacts = append(artifacts, domain.ReviewArtifact{
+			Provider:  adapterName,
+			Kind:      "MR",
+			RepoName:  projectPath,
+			Ref:       fmt.Sprintf("!%d", mr.IID),
+			URL:       strings.TrimSpace(mr.WebURL),
+			State:     state,
+			Branch:    strings.TrimSpace(mr.SourceBranch),
+			Draft:     mr.Draft || mr.WorkInProgress,
+			UpdatedAt: derefTime(mr.UpdatedAt),
+		})
+	}
+
+	return artifacts
+}
+
+func gitlabMergeRequestProjectPath(mr relatedMergeRequest, fallback string) string {
+	if strings.TrimSpace(mr.References.Full) != "" {
+		parts := strings.SplitN(strings.TrimSpace(mr.References.Full), "!", 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	return strings.TrimSpace(fallback)
 }
 
 func (a *GitlabAdapter) fetchMilestone(ctx context.Context, projectID, id int64) (milestone, error) {

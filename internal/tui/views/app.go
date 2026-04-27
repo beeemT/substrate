@@ -113,6 +113,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	helpOverlay                 HelpOverlay
 	sourceItemsOverlay          SourceItemsOverlay
 	overviewLinksOverlay        OverviewLinksOverlay
+	overviewLinksReturnOverlay  overlayKind
 	reviewFollowupOverlay       ReviewFollowupModel
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
@@ -994,6 +995,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.addRepoOpenedFromRepoManager = false
 			return a, a.openRepoManager()
 		}
+		if a.activeOverlay == overlayOverviewLinks && a.overviewLinksReturnOverlay != overlayNone {
+			returnOverlay := a.overviewLinksReturnOverlay
+			a.overviewLinksReturnOverlay = overlayNone
+			a.overviewLinksOverlay.Close()
+			a.activeOverlay = returnOverlay
+			return a, nil
+		}
 		a.activeOverlay = overlayNone
 		a.addRepoOpenedFromRepoManager = false
 		a.newSession.Close()
@@ -1004,6 +1012,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.addRepo.Close()
 		a.repoManager.Close()
 		a.overviewLinksOverlay.Close()
+		a.overviewLinksReturnOverlay = overlayNone
 		a.reviewFollowupOverlay.Close()
 		return a, nil
 
@@ -1764,6 +1773,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, OpenBrowserCmd(msg.URL)
 
 	case OpenOverviewLinksMsg:
+		if a.activeOverlay != overlayOverviewLinks {
+			a.overviewLinksReturnOverlay = a.activeOverlay
+		}
 		a.activeOverlay = overlayOverviewLinks
 		a.overviewLinksOverlay.Open(msg.Sources, msg.Reviews)
 		return a, nil

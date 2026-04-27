@@ -1731,23 +1731,31 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	if wi.WorkspaceID == "" {
 		return external
 	}
-	ctx := context.Background()
-	// Query from indexed tables when available.
-	if a.svcs.SessionArtifacts != nil {
-		links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
+	external.Reviews = reviewRowsForWorkItem(context.Background(), a.svcs, wi)
+
+	return external
+}
+
+func reviewRowsForWorkItem(ctx context.Context, svcs Services, wi *domain.Session) []OverviewReviewRow {
+	if wi == nil || wi.WorkspaceID == "" {
+		return nil
+	}
+	var reviews []OverviewReviewRow
+	if svcs.SessionArtifacts != nil {
+		links, err := svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
 		if err != nil {
 			slog.Warn("failed to list session artifacts for overview", "error", err, "workItemID", wi.ID)
 		} else {
 			for _, link := range links {
 				switch link.Provider {
 				case "github":
-					if a.svcs.GithubPRs != nil {
-						pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
+					if svcs.GithubPRs != nil {
+						pr, err := svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
 						if err != nil {
 							slog.Warn("failed to get github PR for overview", "error", err, "id", link.ProviderArtifactID)
 							continue
 						}
-						external.Reviews = append(external.Reviews, OverviewReviewRow{
+						reviews = append(reviews, OverviewReviewRow{
 							Kind:     "PR",
 							RepoName: pr.Owner + "/" + pr.Repo,
 							Ref:      fmt.Sprintf("#%d", pr.Number),
@@ -1757,13 +1765,13 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 						})
 					}
 				case providerGitlab:
-					if a.svcs.GitlabMRs != nil {
-						mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+					if svcs.GitlabMRs != nil {
+						mr, err := svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
 						if err != nil {
 							slog.Warn("failed to get gitlab MR for overview", "error", err, "id", link.ProviderArtifactID)
 							continue
 						}
-						external.Reviews = append(external.Reviews, OverviewReviewRow{
+						reviews = append(reviews, OverviewReviewRow{
 							Kind:     "MR",
 							RepoName: mr.ProjectPath,
 							Ref:      fmt.Sprintf("!%d", mr.IID),
@@ -1776,29 +1784,30 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 			}
 		}
 	}
-	reviewKeys := make(map[string]struct{}, len(external.Reviews))
-	for _, row := range external.Reviews {
+	reviewKeys := make(map[string]struct{}, len(reviews))
+	for _, row := range reviews {
 		reviewKeys[reviewArtifactKey(row.RepoName, row.Branch, row.Ref)] = struct{}{}
 	}
-	for _, artifact := range a.recordedReviewArtifacts(ctx, wi) {
+	for _, artifact := range recordedReviewArtifacts(ctx, svcs, wi) {
 		row := reviewRowFromReviewArtifact(artifact)
 		key := reviewArtifactKey(row.RepoName, row.Branch, row.Ref)
 		if _, ok := reviewKeys[key]; ok {
 			continue
 		}
 		reviewKeys[key] = struct{}{}
-		external.Reviews = append(external.Reviews, row)
+		reviews = append(reviews, row)
 	}
-	sort.SliceStable(external.Reviews, func(i, j int) bool {
-		if external.Reviews[i].RepoName != external.Reviews[j].RepoName {
-			return external.Reviews[i].RepoName < external.Reviews[j].RepoName
+	sort.SliceStable(reviews, func(i, j int) bool {
+		if reviews[i].RepoName != reviews[j].RepoName {
+			return reviews[i].RepoName < reviews[j].RepoName
 		}
-		if external.Reviews[i].Branch != external.Reviews[j].Branch {
-			return external.Reviews[i].Branch < external.Reviews[j].Branch
+		if reviews[i].Branch != reviews[j].Branch {
+			return reviews[i].Branch < reviews[j].Branch
 		}
-		return external.Reviews[i].Ref < external.Reviews[j].Ref
+		return reviews[i].Ref < reviews[j].Ref
 	})
-	return external
+
+	return reviews
 }
 
 func reviewRowFromReviewArtifact(artifact domain.ReviewArtifact) OverviewReviewRow {
@@ -1830,11 +1839,11 @@ func reviewArtifactKey(repoName, branch, ref string) string {
 	return strings.Join([]string{strings.TrimSpace(repoName), strings.TrimSpace(branch), strings.TrimSpace(ref)}, ":")
 }
 
-func (a *App) recordedReviewArtifacts(ctx context.Context, wi *domain.Session) []domain.ReviewArtifact {
-	if wi == nil || wi.WorkspaceID == "" || a.svcs.Events == nil {
+func recordedReviewArtifacts(ctx context.Context, svcs Services, wi *domain.Session) []domain.ReviewArtifact {
+	if wi == nil || wi.WorkspaceID == "" || svcs.Events == nil {
 		return nil
 	}
-	events, err := a.svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
+	events, err := svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
 	if err != nil {
 		slog.Warn("failed to list review artifact events", "error", err, "workspaceID", wi.WorkspaceID)
 		return nil
@@ -1866,6 +1875,7 @@ func (a *App) recordedReviewArtifacts(ctx context.Context, wi *domain.Session) [
 	for _, artifact := range latestByKey {
 		artifacts = append(artifacts, artifact)
 	}
+
 	return artifacts
 }
 
@@ -2005,7 +2015,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 	for _, item := range items {
 		itemKeys[reviewArtifactKey(item.RepoName, item.Branch, item.Ref)] = struct{}{}
 	}
-	for _, artifact := range a.recordedReviewArtifacts(ctx, wi) {
+	for _, artifact := range recordedReviewArtifacts(ctx, a.svcs, wi) {
 		item := artifactItemFromReviewArtifact(artifact)
 		key := reviewArtifactKey(item.RepoName, item.Branch, item.Ref)
 		if _, ok := itemKeys[key]; ok {

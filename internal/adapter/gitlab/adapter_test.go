@@ -180,6 +180,55 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 	}
 }
 
+func TestListSelectableIssuesIncludesRelatedMergeRequests(t *testing.T) {
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/v4/issues":
+			return jsonResponse(t, http.StatusOK, []map[string]any{{
+				"iid":                  42,
+				"project_id":           5678,
+				"title":                "Cross-project issue",
+				"description":          "body",
+				"state":                "opened",
+				"web_url":              "https://gitlab.example.com/other-group/other-project/-/issues/42",
+				"references":           map[string]any{"full": "other-group/other-project#42"},
+				"merge_requests_count": 1,
+			}}), nil
+		case "/api/v4/projects/5678/issues/42/related_merge_requests":
+			return jsonResponse(t, http.StatusOK, []map[string]any{{
+				"iid":           7,
+				"project_id":    5678,
+				"state":         "opened",
+				"web_url":       "https://gitlab.example.com/other-group/other-project/-/merge_requests/7",
+				"source_branch": "fix-issue",
+				"draft":         true,
+				"references":    map[string]any{"short": "!7", "full": "other-group/other-project!7"},
+				"updated_at":    "2026-04-01T12:00:00Z",
+			}}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+
+			return nil, nil
+		}
+	}))
+
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "created_by_me"})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("items = %+v, want one", res.Items)
+	}
+	artifacts, ok := res.Items[0].Metadata[adapter.ListItemReviewArtifactsMetadataKey].([]domain.ReviewArtifact)
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("review artifacts = %#v, want one", res.Items[0].Metadata[adapter.ListItemReviewArtifactsMetadataKey])
+	}
+	artifact := artifacts[0]
+	if artifact.Kind != "MR" || artifact.Ref != "!7" || artifact.URL != "https://gitlab.example.com/other-group/other-project/-/merge_requests/7" || artifact.State != "draft" || artifact.Branch != "fix-issue" {
+		t.Fatalf("artifact = %+v, want draft MR !7", artifact)
+	}
+}
+
 func TestListSelectableIssuesFiltersToProjectByPath(t *testing.T) {
 	var gotPath string
 	var gotQuery string

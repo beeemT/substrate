@@ -1420,6 +1420,19 @@ func (m *NewSessionOverlay) syncDetailViewportWithLayout(layout components.Split
 	m.detailWidth = viewportWidth
 }
 
+func reviewRowsForItem(item adapter.ListItem) []OverviewReviewRow {
+	artifacts, ok := item.Metadata[adapter.ListItemReviewArtifactsMetadataKey].([]domain.ReviewArtifact)
+	if !ok || len(artifacts) == 0 {
+		return nil
+	}
+	rows := make([]OverviewReviewRow, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		rows = append(rows, reviewRowFromReviewArtifact(artifact))
+	}
+
+	return rows
+}
+
 func renderDetailContent(st styles.Styles, item adapter.ListItem, width int) string {
 	if width < 20 {
 		width = 20
@@ -1484,13 +1497,44 @@ func detailProviderLabel(provider string) string {
 	return cases.Title(language.English).String(provider)
 }
 
-func detailPaneTitle(st styles.Styles, item adapter.ListItem, width int) string {
+func detailPaneTitle(st styles.Styles, item adapter.ListItem, reviews []OverviewReviewRow, width int) string {
 	availableWidth := maxInt(1, width-st.Title.GetHorizontalFrameSize())
-	title := ansi.Truncate(strings.TrimSpace(detailTitle(item)), availableWidth, "…")
-	if title == "" {
-		return "Details"
+	base := strings.TrimSpace(detailTitle(item))
+	if base == "" {
+		base = "Details"
 	}
-	return title
+	badge := detailReviewBadge(reviews)
+	if badge == "" {
+		badge = "No PR/MR"
+	}
+	separator := " · "
+	badgeWidth := ansi.StringWidth(badge)
+	if availableWidth <= badgeWidth {
+		return ansi.Truncate(badge, availableWidth, "…")
+	}
+	baseWidth := maxInt(1, availableWidth-badgeWidth-ansi.StringWidth(separator))
+
+	return ansi.Truncate(base, baseWidth, "…") + separator + badge
+}
+
+func detailReviewBadge(reviews []OverviewReviewRow) string {
+	if len(reviews) == 0 {
+		return ""
+	}
+	if len(reviews) > 1 {
+		return fmt.Sprintf("%d PR/MRs", len(reviews))
+	}
+	review := reviews[0]
+	kind := strings.ToUpper(strings.TrimSpace(review.Kind))
+	if kind == "" {
+		kind = "PR/MR"
+	}
+	ref := strings.TrimSpace(review.Ref)
+	if ref == "" {
+		return kind + " attached"
+	}
+
+	return kind + " " + ref
 }
 
 func detailTitle(item adapter.ListItem) string {
@@ -1620,6 +1664,10 @@ func (m NewSessionOverlay) openCurrentItemInBrowserCmd() tea.Cmd {
 	if !ok {
 		return func() tea.Msg { return ErrMsg{Err: errors.New("no work item selected")} }
 	}
+	if reviews := reviewRowsForItem(item); len(reviews) > 0 {
+		source := overviewSourceForListItem(item)
+		return func() tea.Msg { return OpenOverviewLinksMsg{Sources: []OverviewSourceItem{source}, Reviews: reviews} }
+	}
 	if strings.TrimSpace(item.URL) == "" {
 		return func() tea.Msg { return ErrMsg{Err: errors.New("selected work item has no URL")} }
 	}
@@ -1628,6 +1676,24 @@ func (m NewSessionOverlay) openCurrentItemInBrowserCmd() tea.Cmd {
 		openBrowserCmd = OpenBrowserCmd
 	}
 	return openBrowserCmd(item.URL)
+}
+
+func overviewSourceForListItem(item adapter.ListItem) OverviewSourceItem {
+	ref := strings.TrimSpace(item.ID)
+	identifier := strings.TrimSpace(item.Identifier)
+	container := strings.TrimSpace(item.ContainerRef)
+	if container != "" && identifier != "" {
+		ref = container + identifier
+	} else if identifier != "" {
+		ref = identifier
+	}
+
+	return OverviewSourceItem{
+		Provider: detailProviderLabel(item.Provider),
+		Ref:      ref,
+		Title:    strings.TrimSpace(item.Title),
+		URL:      strings.TrimSpace(item.URL),
+	}
 }
 
 func (m *NewSessionOverlay) maybeLoadMore() tea.Cmd {
@@ -2322,7 +2388,7 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	leftPaneTitle := "Work Items"
 	rightPaneTitle := "Details"
 	if item, ok := m.currentListItem(); ok {
-		rightPaneTitle = detailPaneTitle(m.styles, item, layout.RightInnerWidth)
+		rightPaneTitle = detailPaneTitle(m.styles, item, reviewRowsForItem(item), layout.RightInnerWidth)
 	}
 
 	panes := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{

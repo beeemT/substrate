@@ -72,7 +72,20 @@ type githubIssue struct {
 	Labels        []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
-	PullReq *struct{} `json:"pull_request,omitempty"`
+	PullReq *githubIssuePullRequest `json:"pull_request,omitempty"`
+}
+
+type githubIssuePullRequest struct {
+	MergedAt *time.Time `json:"merged_at"`
+	HTMLURL  string     `json:"html_url"`
+	URL      string     `json:"url"`
+}
+
+type githubTimelineEvent struct {
+	Event  string `json:"event"`
+	Source struct {
+		Issue githubIssue `json:"issue"`
+	} `json:"source"`
 }
 
 type githubIssueSearchResult struct {
@@ -277,7 +290,7 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 		}
 		items := make([]adapter.ListItem, 0, len(issues))
 		for _, iss := range issues {
-			items = append(items, adapter.ListItem{
+			item := adapter.ListItem{
 				ID:          issueSelectionID(iss),
 				Title:       issueListTitle(iss),
 				Description: iss.Body,
@@ -287,7 +300,11 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 				ParentRef:   issueParentRef(iss),
 				CreatedAt:   derefTime(iss.CreatedAt),
 				UpdatedAt:   derefTime(iss.UpdatedAt),
-			})
+			}
+			if artifacts := a.issueReviewArtifacts(ctx, iss); len(artifacts) > 0 {
+				item.Metadata = map[string]any{adapter.ListItemReviewArtifactsMetadataKey: artifacts}
+			}
+			items = append(items, item)
 		}
 
 		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
@@ -904,6 +921,72 @@ func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOp
 	})
 
 	return filtered, nil
+}
+
+func (a *GithubAdapter) issueReviewArtifacts(ctx context.Context, iss githubIssue) []domain.ReviewArtifact {
+	owner, repo := issueOwnerRepo(iss)
+	if owner == "" || repo == "" || iss.Number <= 0 {
+		return nil
+	}
+	events, err := a.fetchIssueTimeline(ctx, owner, repo, iss.Number)
+	if err != nil {
+		slog.Warn("github: fetch issue timeline failed", "owner", owner, "repo", repo, "issue", iss.Number, "error", err)
+		return nil
+	}
+
+	return githubReviewArtifactsFromTimeline(events)
+}
+
+func (a *GithubAdapter) fetchIssueTimeline(ctx context.Context, owner, repo string, issueNumber int64) ([]githubTimelineEvent, error) {
+	query := url.Values{}
+	query.Set("per_page", "100")
+	var events []githubTimelineEvent
+	endpoint := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline", url.PathEscape(owner), url.PathEscape(repo), issueNumber)
+	if err := a.getJSON(ctx, endpoint, query, &events); err != nil {
+		return nil, err
+	}
+
+	return events, nil
+}
+
+func githubReviewArtifactsFromTimeline(events []githubTimelineEvent) []domain.ReviewArtifact {
+	artifacts := make([]domain.ReviewArtifact, 0)
+	seen := make(map[string]struct{})
+	for _, event := range events {
+		if event.Event != "cross-referenced" || event.Source.Issue.PullReq == nil {
+			continue
+		}
+		issue := event.Source.Issue
+		normalizeGitHubIssueRepository(&issue, "", "")
+		owner, repo := issueOwnerRepo(issue)
+		if owner == "" || repo == "" || issue.Number <= 0 {
+			continue
+		}
+		key := formatIssueSelectionID(owner, repo, issue.Number)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		state := strings.TrimSpace(issue.State)
+		if issue.PullReq.MergedAt != nil {
+			state = "merged"
+		}
+		rawURL := strings.TrimSpace(issue.HTMLURL)
+		if rawURL == "" {
+			rawURL = strings.TrimSpace(issue.PullReq.HTMLURL)
+		}
+		artifacts = append(artifacts, domain.ReviewArtifact{
+			Provider:  adapterName,
+			Kind:      "PR",
+			RepoName:  owner + "/" + repo,
+			Ref:       fmt.Sprintf("#%d", issue.Number),
+			URL:       rawURL,
+			State:     state,
+			UpdatedAt: derefTime(issue.UpdatedAt),
+		})
+	}
+
+	return artifacts
 }
 
 func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {

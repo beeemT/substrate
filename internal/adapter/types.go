@@ -59,6 +59,8 @@ type ListResult struct {
 	NextCursor string
 }
 
+const ListItemReviewArtifactsMetadataKey = "review_artifacts"
+
 // ListItem represents a single selectable item in browse results.
 type ListItem struct {
 	ID           string

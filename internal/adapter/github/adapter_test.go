@@ -265,6 +265,9 @@ func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t
 				map[string]any{"number": 7, "title": "Shared bug", "state": "closed", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "html_url": "https://github.com/other/engine/issues/7", "repository_url": "https://api.github.com/repos/other/engine"},
 				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "html_url": "https://github.com/acme/rocket/pull/8", "repository_url": "https://api.github.com/repos/acme/rocket"},
 			}}), nil
+		case "/repos/other/engine/issues/7/timeline":
+
+			return jsonResp(t, http.StatusOK, []any{}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 
@@ -306,6 +309,53 @@ func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t
 	}
 	if item.ParentRef == nil || item.ParentRef.ID != "other/engine" || item.ParentRef.Type != "repository" {
 		t.Fatalf("parent ref = %+v, want repository other/engine", item.ParentRef)
+	}
+}
+
+func TestListIssuesIncludesLinkedPullRequestsFromTimeline(t *testing.T) {
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case "/search/issues":
+			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
+				map[string]any{"number": 42, "title": "Issue", "state": "open", "labels": []any{}, "body": "body", "html_url": "https://github.com/acme/rocket/issues/42", "repository_url": "https://api.github.com/repos/acme/rocket"},
+			}}), nil
+		case "/repos/acme/rocket/issues/42/timeline":
+			return jsonResp(t, http.StatusOK, []any{
+				map[string]any{
+					"event": "cross-referenced",
+					"source": map[string]any{"issue": map[string]any{
+						"number":         7,
+						"title":          "Fix issue",
+						"state":          "closed",
+						"html_url":       "https://github.com/acme/rocket/pull/7",
+						"repository_url": "https://api.github.com/repos/acme/rocket",
+						"pull_request":   map[string]any{"merged_at": "2026-04-01T12:00:00Z", "html_url": "https://github.com/acme/rocket/pull/7"},
+					}},
+				},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+
+			return nil, nil
+		}
+	}))
+
+	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, View: "created_by_me"})
+	if err != nil {
+		t.Fatalf("ListSelectable: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("items = %+v, want one", res.Items)
+	}
+	artifacts, ok := res.Items[0].Metadata[adapter.ListItemReviewArtifactsMetadataKey].([]domain.ReviewArtifact)
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("review artifacts = %#v, want one", res.Items[0].Metadata[adapter.ListItemReviewArtifactsMetadataKey])
+	}
+	artifact := artifacts[0]
+	if artifact.Kind != "PR" || artifact.Ref != "#7" || artifact.URL != "https://github.com/acme/rocket/pull/7" || artifact.State != "merged" {
+		t.Fatalf("artifact = %+v, want merged PR #7", artifact)
 	}
 }
 
@@ -470,6 +520,8 @@ func TestListIssuesFiltersByLabels(t *testing.T) {
 				map[string]any{"number": 7, "title": "Bug A", "state": "open", "labels": []any{map[string]any{"name": "bug"}, map[string]any{"name": "backend"}}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
 				map[string]any{"number": 8, "title": "Bug B", "state": "open", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
 			}), nil
+		case "/repos/other/engine/issues/7/timeline":
+			return jsonResp(t, http.StatusOK, []any{}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
 		}
@@ -753,6 +805,8 @@ func TestListIssuesFiltersInboxByRepoPathWithoutOwner(t *testing.T) {
 				// Issue from a different repo — must be filtered out.
 				map[string]any{"number": 2, "title": "Drop me", "state": "open", "labels": []any{}, "body": "", "html_url": "https://github.com/other/engine/issues/2", "repository": map[string]any{"full_name": "other/engine", "owner": map[string]any{"login": "other"}, "name": "engine"}},
 			}), nil
+		case "/repos/acme/rocket/issues/1/timeline":
+			return jsonResp(t, http.StatusOK, []any{}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 			return nil, nil
@@ -790,6 +844,8 @@ func TestListCreatedIssuesFiltersSearchByRepoPathWithoutOwner(t *testing.T) {
 			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
 				map[string]any{"number": 3, "title": "My fix", "state": "open", "labels": []any{}, "body": "", "html_url": "https://github.com/acme/rocket/issues/3", "repository_url": "https://api.github.com/repos/acme/rocket"},
 			}}), nil
+		case "/repos/acme/rocket/issues/3/timeline":
+			return jsonResp(t, http.StatusOK, []any{}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 			return nil, nil

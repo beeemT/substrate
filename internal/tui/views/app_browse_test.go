@@ -1075,6 +1075,106 @@ func TestNewSessionOverlayViewRendersDetailsMarkdownAndMermaid(t *testing.T) {
 	})
 }
 
+func TestNewSessionOverlayAttachedReviewShowsInDetailsTitleAndOpensChooser(t *testing.T) {
+	t.Parallel()
+
+	const issueURL = "https://github.com/acme/rocket/issues/42"
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(140, 28)
+	item := adapter.ListItem{
+		ID:          "acme/rocket#42",
+		Provider:    "github",
+		Identifier:  "#42",
+		Title:       "Issue title",
+		Description: "Details",
+		URL:         issueURL,
+		Metadata: map[string]any{
+			adapter.ListItemReviewArtifactsMetadataKey: []domain.ReviewArtifact{{Provider: "github", Kind: "PR", RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "open"}},
+		},
+	}
+	overlay, _ = overlay.Update(issueListLoadedMsg{
+		pages: map[string]browsePageState{"github": {Items: []adapter.ListItem{item}}},
+	})
+
+	view := stripBrowseANSI(overlay.View())
+	if !strings.Contains(view, "PR #7") {
+		t.Fatalf("view = %q, want attached PR badge in details title", view)
+	}
+
+	msgs := runOverlayCmd(t, overlay.openCurrentItemInBrowserCmd())
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d, want 1", len(msgs))
+	}
+	openMsg, ok := msgs[0].(OpenOverviewLinksMsg)
+	if !ok {
+		t.Fatalf("message = %T, want OpenOverviewLinksMsg", msgs[0])
+	}
+	if len(openMsg.Sources) != 1 || openMsg.Sources[0].URL != issueURL || openMsg.Sources[0].Ref != "#42" {
+		t.Fatalf("sources = %+v, want selected ticket link", openMsg.Sources)
+	}
+	if len(openMsg.Reviews) != 1 || openMsg.Reviews[0].Ref != "#7" {
+		t.Fatalf("reviews = %+v, want attached PR", openMsg.Reviews)
+	}
+}
+
+func TestNewSessionOverlayOpenLinkUsesBrowserWithoutAttachedReview(t *testing.T) {
+	t.Parallel()
+
+	const issueURL = "https://github.com/acme/rocket/issues/42"
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "acme/rocket#42", Provider: "github", Title: "Issue title", URL: issueURL}))
+	var opened string
+	overlay.openBrowserCmd = func(rawURL string) tea.Cmd {
+		opened = rawURL
+
+		return nil
+	}
+
+	if cmd := overlay.openCurrentItemInBrowserCmd(); cmd != nil {
+		t.Fatalf("cmd = %v, want nil from test browser opener", cmd)
+	}
+	if opened != issueURL {
+		t.Fatalf("opened URL = %q, want %q", opened, issueURL)
+	}
+}
+
+func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
+		Settings:      &SettingsService{},
+	})
+	app.activeOverlay = overlayNewSession
+	model, _ := app.Update(OpenOverviewLinksMsg{
+		Sources: []OverviewSourceItem{{Provider: "GitHub", Ref: "#42", URL: "https://github.com/acme/rocket/issues/42"}},
+		Reviews: []OverviewReviewRow{{Kind: "PR", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7"}},
+	})
+	updated, ok := model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlayOverviewLinks {
+		t.Fatalf("active overlay = %v, want overview links", updated.activeOverlay)
+	}
+
+	model, _ = updated.Update(CloseOverlayMsg{})
+	updated, ok = model.(App)
+	if !ok {
+		t.Fatalf("model = %T, want App", model)
+	}
+	if updated.activeOverlay != overlayNewSession {
+		t.Fatalf("active overlay = %v, want new session", updated.activeOverlay)
+	}
+}
+
 func TestNewSessionOverlayLargeScreensUseMoreAvailableSpace(t *testing.T) {
 	t.Parallel()
 
