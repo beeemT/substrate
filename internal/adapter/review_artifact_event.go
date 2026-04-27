@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +111,7 @@ func PersistGitlabMR(
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
+	iid = gitlabMRIID(iid, artifact)
 	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil || iid == 0 || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
@@ -145,4 +147,35 @@ func PersistGitlabMR(
 		return fmt.Errorf("upsert gitlab review artifact link: %w", err)
 	}
 	return nil
+}
+
+func gitlabMRIID(iid int, artifact domain.ReviewArtifact) int {
+	if iid > 0 {
+		return iid
+	}
+	if parsed := parsePositiveGitlabIID(strings.TrimPrefix(strings.TrimSpace(artifact.Ref), "!")); parsed > 0 {
+		return parsed
+	}
+	marker := "/-/merge_requests/"
+	idx := strings.LastIndex(strings.TrimSpace(artifact.URL), marker)
+	if idx == -1 {
+		return 0
+	}
+	return parsePositiveGitlabIID(artifact.URL[idx+len(marker):])
+}
+
+func parsePositiveGitlabIID(value string) int {
+	value = strings.TrimSpace(value)
+	end := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value[:end])
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
 }

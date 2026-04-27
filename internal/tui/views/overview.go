@@ -1734,75 +1734,60 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	ctx := context.Background()
 	// Query from indexed tables when available.
 	if a.svcs.SessionArtifacts != nil {
-		if links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID); err == nil {
+		links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
+		if err != nil {
+			slog.Warn("failed to list session artifacts for overview", "error", err, "workItemID", wi.ID)
+		} else {
 			for _, link := range links {
 				switch link.Provider {
 				case "github":
 					if a.svcs.GithubPRs != nil {
-						if pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID); err == nil {
-							external.Reviews = append(external.Reviews, OverviewReviewRow{
-								Kind:     "PR",
-								RepoName: pr.Owner + "/" + pr.Repo,
-								Ref:      fmt.Sprintf("#%d", pr.Number),
-								URL:      pr.HTMLURL,
-								State:    pr.State,
-								Branch:   pr.HeadBranch,
-							})
+						pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
+						if err != nil {
+							slog.Warn("failed to get github PR for overview", "error", err, "id", link.ProviderArtifactID)
+							continue
 						}
+						external.Reviews = append(external.Reviews, OverviewReviewRow{
+							Kind:     "PR",
+							RepoName: pr.Owner + "/" + pr.Repo,
+							Ref:      fmt.Sprintf("#%d", pr.Number),
+							URL:      pr.HTMLURL,
+							State:    pr.State,
+							Branch:   pr.HeadBranch,
+						})
 					}
 				case providerGitlab:
 					if a.svcs.GitlabMRs != nil {
-						if mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID); err == nil {
-							external.Reviews = append(external.Reviews, OverviewReviewRow{
-								Kind:     "MR",
-								RepoName: mr.ProjectPath,
-								Ref:      fmt.Sprintf("!%d", mr.IID),
-								URL:      mr.WebURL,
-								State:    mr.State,
-								Branch:   mr.SourceBranch,
-							})
+						mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+						if err != nil {
+							slog.Warn("failed to get gitlab MR for overview", "error", err, "id", link.ProviderArtifactID)
+							continue
 						}
+						external.Reviews = append(external.Reviews, OverviewReviewRow{
+							Kind:     "MR",
+							RepoName: mr.ProjectPath,
+							Ref:      fmt.Sprintf("!%d", mr.IID),
+							URL:      mr.WebURL,
+							State:    mr.State,
+							Branch:   mr.SourceBranch,
+						})
 					}
 				}
 			}
 		}
-	} else if a.svcs.Events != nil {
-		// Fallback to event replay if repos not available (e.g. tests).
-		events, err := a.svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
-		if err == nil {
-			latestByKey := make(map[string]domain.ReviewArtifact)
-			for _, event := range events {
-				if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
-					continue
-				}
-				var payload domain.ReviewArtifactEventPayload
-				if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
-					continue
-				}
-				if payload.WorkItemID != wi.ID {
-					continue
-				}
-				artifact := payload.Artifact
-				if artifact.UpdatedAt.IsZero() {
-					artifact.UpdatedAt = event.CreatedAt
-				}
-				key := strings.Join([]string{strings.TrimSpace(artifact.Provider), strings.TrimSpace(artifact.RepoName), strings.TrimSpace(artifact.Branch)}, ":")
-				if current, ok := latestByKey[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
-					continue
-				}
-				latestByKey[key] = artifact
-			}
-			for _, artifact := range latestByKey {
-				external.Reviews = append(external.Reviews, OverviewReviewRow{
-					Kind:     firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
-					RepoName: artifact.RepoName,
-					Ref:      artifact.Ref,
-					URL:      artifact.URL,
-					State:    artifact.State,
-					Branch:   artifact.Branch,
-				})
-			}
+	}
+	reviewKeys := make(map[string]struct{}, len(external.Reviews))
+	for _, row := range external.Reviews {
+		reviewKeys[reviewArtifactKey(row.RepoName, row.Branch, row.Ref)] = struct{}{}
+	}
+	for _, artifact := range a.recordedReviewArtifacts(ctx, wi) {
+		row := reviewRowFromReviewArtifact(artifact)
+		key := reviewArtifactKey(row.RepoName, row.Branch, row.Ref)
+		if _, ok := reviewKeys[key]; ok {
+			continue
 		}
+		reviewKeys[key] = struct{}{}
+		external.Reviews = append(external.Reviews, row)
 	}
 	sort.SliceStable(external.Reviews, func(i, j int) bool {
 		if external.Reviews[i].RepoName != external.Reviews[j].RepoName {
@@ -1814,6 +1799,74 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
 	return external
+}
+
+func reviewRowFromReviewArtifact(artifact domain.ReviewArtifact) OverviewReviewRow {
+	return OverviewReviewRow{
+		Kind:     firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
+		RepoName: artifact.RepoName,
+		Ref:      artifact.Ref,
+		URL:      artifact.URL,
+		State:    artifact.State,
+		Branch:   artifact.Branch,
+	}
+}
+
+func artifactItemFromReviewArtifact(artifact domain.ReviewArtifact) ArtifactItem {
+	return ArtifactItem{
+		Provider:  artifact.Provider,
+		Kind:      firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
+		RepoName:  artifact.RepoName,
+		Ref:       artifact.Ref,
+		URL:       artifact.URL,
+		State:     artifact.State,
+		Branch:    artifact.Branch,
+		Draft:     artifact.Draft,
+		UpdatedAt: artifact.UpdatedAt,
+	}
+}
+
+func reviewArtifactKey(repoName, branch, ref string) string {
+	return strings.Join([]string{strings.TrimSpace(repoName), strings.TrimSpace(branch), strings.TrimSpace(ref)}, ":")
+}
+
+func (a *App) recordedReviewArtifacts(ctx context.Context, wi *domain.Session) []domain.ReviewArtifact {
+	if wi == nil || wi.WorkspaceID == "" || a.svcs.Events == nil {
+		return nil
+	}
+	events, err := a.svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
+	if err != nil {
+		slog.Warn("failed to list review artifact events", "error", err, "workspaceID", wi.WorkspaceID)
+		return nil
+	}
+	latestByKey := make(map[string]domain.ReviewArtifact)
+	for _, event := range events {
+		if domain.EventType(event.EventType) != domain.EventReviewArtifactRecorded {
+			continue
+		}
+		var payload domain.ReviewArtifactEventPayload
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			slog.Debug("failed to unmarshal review artifact event", "error", err, "eventID", event.ID)
+			continue
+		}
+		if payload.WorkItemID != wi.ID {
+			continue
+		}
+		artifact := payload.Artifact
+		if artifact.UpdatedAt.IsZero() {
+			artifact.UpdatedAt = event.CreatedAt
+		}
+		key := reviewArtifactKey(artifact.RepoName, artifact.Branch, artifact.Ref)
+		if current, ok := latestByKey[key]; ok && !artifact.UpdatedAt.After(current.UpdatedAt) {
+			continue
+		}
+		latestByKey[key] = artifact
+	}
+	artifacts := make([]domain.ReviewArtifact, 0, len(latestByKey))
+	for _, artifact := range latestByKey {
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts
 }
 
 func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
@@ -1947,6 +2000,19 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 				}
 			}
 		}
+	}
+	itemKeys := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		itemKeys[reviewArtifactKey(item.RepoName, item.Branch, item.Ref)] = struct{}{}
+	}
+	for _, artifact := range a.recordedReviewArtifacts(ctx, wi) {
+		item := artifactItemFromReviewArtifact(artifact)
+		key := reviewArtifactKey(item.RepoName, item.Branch, item.Ref)
+		if _, ok := itemKeys[key]; ok {
+			continue
+		}
+		itemKeys[key] = struct{}{}
+		items = append(items, item)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].RepoName != items[j].RepoName {

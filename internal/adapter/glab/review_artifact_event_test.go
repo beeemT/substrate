@@ -87,6 +87,45 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreatedPersistsGitlabMRLinkFromCreatedURL(t *testing.T) {
+	t.Parallel()
+
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
+	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, "", stub.run)
+	payload := mustJSON(worktreePayload{
+		WorkspaceID:  "ws-1",
+		WorkItemID:   "wi-1",
+		Repository:   "group/repo",
+		Branch:       "sub-GL-137-1015-fix-bug",
+		WorktreePath: "/tmp/wt",
+	})
+
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+
+	mr, err := mrRepo.GetByIID(context.Background(), "group/repo", 5)
+	if err != nil {
+		t.Fatalf("GetByIID persisted MR: %v", err)
+	}
+	if mr.WebURL != "https://gitlab.com/org/repo/-/merge_requests/5" || mr.SourceBranch != "sub-GL-137-1015-fix-bug" {
+		t.Fatalf("persisted MR = %+v", mr)
+	}
+	if len(artifactRepo.links) != 1 {
+		t.Fatalf("artifact links = %d, want 1", len(artifactRepo.links))
+	}
+	link := artifactRepo.links[0]
+	if link.WorkItemID != "wi-1" || link.Provider != "gitlab" || link.ProviderArtifactID != mr.ID {
+		t.Fatalf("artifact link = %+v, MR ID %q", link, mr.ID)
+	}
+}
+
 func TestExistingDraftMergeRequestRemainsDraft(t *testing.T) {
 	t.Parallel()
 
