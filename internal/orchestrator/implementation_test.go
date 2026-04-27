@@ -2205,6 +2205,9 @@ func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
 	if capturedOpts.AllowPush {
 		t.Fatal("expected AllowPush to be false for commit session")
 	}
+	if capturedOpts.SessionID == "" {
+		t.Fatal("expected commit agent session to have a session ID")
+	}
 
 	// The agent failed, so the fallback should have committed.
 	dirty, err := gitStatusDirty(context.Background(), worktreeDir)
@@ -2213,6 +2216,69 @@ func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
 	}
 	if dirty {
 		t.Fatal("expected worktree to be clean after fallback commit")
+	}
+}
+
+func TestFixPreReceiveRejectionViaAgent_AttemptsAgentSession(t *testing.T) {
+	bareDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	initBareRepo(t, bareDir)
+	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+
+	var capturedOpts adapter.SessionOpts
+	harness := &mockAgentHarness{
+		onStartSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			capturedOpts = opts
+
+			return &completingMockSession{
+				id:     opts.SessionID,
+				events: make(chan adapter.AgentEvent, 1),
+			}, nil
+		},
+	}
+
+	svc, _, _, _, _ := newImplementationServiceForTest(bareDir, "repo-a")
+	svc.harness = harness
+
+	if err := svc.fixPreReceiveRejectionViaAgent(context.Background(), worktreeDir, "remote: pre-receive hook declined"); err != nil {
+		t.Fatalf("fixPreReceiveRejectionViaAgent returned error: %v", err)
+	}
+
+	if capturedOpts.SessionID == "" {
+		t.Fatal("expected pre-receive fix agent session to have a session ID")
+	}
+	if capturedOpts.WorktreePath != worktreeDir {
+		t.Fatalf("WorktreePath = %q, want %q", capturedOpts.WorktreePath, worktreeDir)
+	}
+	if capturedOpts.AllowPush {
+		t.Fatal("expected AllowPush to be false for pre-receive fix session")
+	}
+	if !strings.Contains(capturedOpts.UserPrompt, "remote: pre-receive hook declined") {
+		t.Fatalf("expected user prompt to include hook output, got: %s", capturedOpts.UserPrompt)
+	}
+}
+
+func TestDurableFinalizationContextOutlivesAgentFixBudget(t *testing.T) {
+	ctx, cancel := durableFinalizationContext(context.Background())
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected durable finalization context to have a deadline")
+	}
+	minimumBudget := commitAgentTimeout + preReceiveFixAgentTimeout
+	if remaining := time.Until(deadline); remaining <= minimumBudget {
+		t.Fatalf("durable finalization budget = %s, want more than agent budgets %s", remaining, minimumBudget)
+	}
+
+	cleanupCtx, cleanupCancel := durableCleanupContext(context.Background())
+	defer cleanupCancel()
+	cleanupDeadline, ok := cleanupCtx.Deadline()
+	if !ok {
+		t.Fatal("expected durable cleanup context to have a deadline")
+	}
+	if !deadline.After(cleanupDeadline) {
+		t.Fatalf("finalization deadline %s should be after cleanup deadline %s", deadline, cleanupDeadline)
 	}
 }
 

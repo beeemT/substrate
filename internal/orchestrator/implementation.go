@@ -288,8 +288,6 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	result.CompletedAt = time.Now()
 
 	// Determine final work item state based on review outcomes.
-	cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
-	defer cleanupCancel()
 
 	hasEscalated := false
 	hasFailed := false
@@ -304,26 +302,36 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 
 	switch {
 	case hasFailed || !state.AllWavesCompleted():
+		cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
 		if failErr := s.workItemSvc.FailWorkItem(cleanupCtx, workItem.ID); failErr != nil {
 			slog.Warn("failed to transition work item to failed", "error", failErr)
 		}
+		cleanupCancel()
 	case hasEscalated:
 		// At least one repo needs human decision. Transition to reviewing.
+		cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
 		if reviewErr := s.workItemSvc.SubmitForReview(cleanupCtx, workItem.ID); reviewErr != nil {
 			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
 		}
+		cleanupCancel()
 	default:
 		// All repos passed review (or no review pipeline).
 		// Commit any residual changes, push to remote, then complete.
-		s.commitAndPushRepos(cleanupCtx, result.Sessions, repoPaths, branch)
+		finalizationCtx, finalizationCancel := durableFinalizationContext(ctx)
+		s.commitAndPushRepos(finalizationCtx, result.Sessions, repoPaths, branch)
+		finalizationCancel()
 
-		if completeErr := s.workItemSvc.CompleteWorkItem(cleanupCtx, workItem.ID); completeErr != nil {
+		completeCtx, completeCancel := durableCleanupContext(ctx)
+		if completeErr := s.workItemSvc.CompleteWorkItem(completeCtx, workItem.ID); completeErr != nil {
 			slog.Warn("failed to transition work item to completed", "error", completeErr)
 		}
+		completeCancel()
 
-		if emitErr := s.emitWorkItemCompleted(cleanupCtx, &workItem, workspace.ID, result.Sessions, repoPaths, branch, subPlans); emitErr != nil {
+		eventCtx, eventCancel := durableCleanupContext(ctx)
+		if emitErr := s.emitWorkItemCompleted(eventCtx, &workItem, workspace.ID, result.Sessions, repoPaths, branch, subPlans); emitErr != nil {
 			slog.Warn("failed to emit work item completed event", "error", emitErr)
 		}
+		eventCancel()
 	}
 
 	return result, nil
@@ -1359,6 +1367,7 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 	systemPrompt := buildCommitAgentSystemPrompt(commitCfg) + "\n\n" + commitInstructions
 
 	opts := adapter.SessionOpts{
+		SessionID:    domain.NewID(),
 		Mode:         adapter.SessionModeAgent,
 		WorktreePath: worktreePath,
 		SystemPrompt: systemPrompt,
@@ -1375,7 +1384,7 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 
 	go s.forwardEvents(ctx, sess.Events(), "", "")
 
-	commitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	commitCtx, cancel := context.WithTimeout(ctx, commitAgentTimeout)
 	defer cancel()
 	if err := sess.Wait(commitCtx); err != nil {
 		slog.Warn("commit agent session failed, falling back to generic message",
@@ -1570,10 +1579,19 @@ func (s *ImplementationService) persistSubPlanStatus(ctx context.Context, sp *do
 
 // Helper functions
 
-const durableCleanupTimeout = 30 * time.Second
+const (
+	durableCleanupTimeout      = 30 * time.Second
+	commitAgentTimeout         = 5 * time.Minute
+	preReceiveFixAgentTimeout  = 5 * time.Minute
+	durableFinalizationTimeout = commitAgentTimeout + preReceiveFixAgentTimeout + time.Minute
+)
 
 func durableCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), durableCleanupTimeout)
+}
+
+func durableFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), durableFinalizationTimeout)
 }
 
 func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) {
@@ -1675,6 +1693,7 @@ func (s *ImplementationService) fixPreReceiveRejectionViaAgent(ctx context.Conte
 		"Hook output:\n" + hookOutput
 
 	opts := adapter.SessionOpts{
+		SessionID:    domain.NewID(),
 		Mode:         adapter.SessionModeAgent,
 		WorktreePath: worktreePath,
 		SystemPrompt: "You are a git expert. Fix the pre-receive hook rejection using only local commit history edits; never modify file content or interact with the remote.",
@@ -1688,8 +1707,7 @@ func (s *ImplementationService) fixPreReceiveRejectionViaAgent(ctx context.Conte
 	defer sess.Abort(ctx)
 
 	go s.forwardEvents(ctx, sess.Events(), "", "")
-
-	fixCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	fixCtx, cancel := context.WithTimeout(ctx, preReceiveFixAgentTimeout)
 	defer cancel()
 	if err := sess.Wait(fixCtx); err != nil {
 		if abortErr := sess.Abort(ctx); abortErr != nil {
