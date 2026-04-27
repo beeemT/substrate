@@ -15,12 +15,12 @@ func RenderProgressBar(st styles.Styles, done, total, width int) string {
 	countStr := fmt.Sprintf(" %d/%d", done, total)
 	barWidth := width - len(countStr) - 1
 	if barWidth <= 0 {
-		return fmt.Sprintf("%d/%d", done, total)
+		return st.Muted.Render(fmt.Sprintf("%d/%d", done, total))
 	}
 	filled := barWidth * done / total
 	filled = min(filled, barWidth)
 	empty := barWidth - filled
 	bar := st.Active.Render(strings.Repeat("█", filled)) + st.Divider.Render(strings.Repeat("░", empty))
 
-	return bar + st.Muted.Render(countStr)
+	return bar + " " + st.Muted.Render(countStr)
 }

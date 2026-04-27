@@ -11,6 +11,7 @@ import (
 	"github.com/beeemT/substrate/internal/tui/views"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func makeSidebarStyles() styles.Styles {
@@ -214,6 +215,47 @@ func TestSidebarSelected_Empty(t *testing.T) {
 	sel := m.Selected()
 	if sel != nil {
 		t.Fatalf("expected nil Selected() with no sessions, got %+v", sel)
+	}
+}
+
+func TestSidebarSelectedRowHasUniformBackground(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(30)
+	m.SetHeight(10)
+	m.SetEntries([]views.SidebarEntry{
+		{
+			Kind:       views.SidebarEntryWorkItem,
+			WorkItemID: "WI-1",
+			ExternalID: "gh:issue:42",
+			Title:      "Implement feature",
+			State:      domain.SessionImplementing,
+		},
+	})
+	m.MoveDown() // select the entry
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	// A selected entry spans 4 rendered rows: icon/title/subtitle/blank separator.
+	// Extract the content rows (after the 2-line header); skip the trailing blank row.
+	if len(lines) < 5 {
+		t.Fatalf("sidebar view lines = %d, want at least 5", len(lines))
+	}
+
+	selectedRows := lines[2:5] // icon, title, subtitle (skip blank separator)
+	bgPattern := regexp.MustCompile(`\x1b\[48[;:]`)
+	for i, row := range selectedRows {
+		// Count how many background-color sequences appear in this row.
+		// A uniform row should have exactly one background segment (SidebarSelected wraps everything).
+		// If there are gaps without background, we see multiple segments or bare foreground escapes.
+		bgStarts := len(bgPattern.FindAllStringIndex(row, -1))
+		if bgStarts != 1 {
+			t.Errorf("selected row[%d] has %d background segments, want 1 (uniform background)\nrow: %q", i, bgStarts, row)
+		}
 	}
 }
 
@@ -836,3 +878,4 @@ func TestSidebarMergedGroupsWithCompleted(t *testing.T) {
 		t.Fatalf("expected group to be Completed, got %q", groups[0])
 	}
 }
+

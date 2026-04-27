@@ -654,7 +654,8 @@ func (m SidebarModel) View() string {
 		}
 		block := strings.Join([]string{line1, titleLine, line3}, "\n")
 		if selected {
-			lines = append(lines, m.styles.SidebarSelected.Width(contentWidth).Render(block))
+			// Apply foreground so gaps and un-styled spaces inherit a visible base color.
+			lines = append(lines, m.styles.SidebarSelected.Width(contentWidth).Foreground(lipgloss.Color(m.styles.Theme.Title)).Render(block))
 		} else {
 			lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(block))
 		}
