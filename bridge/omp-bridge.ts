@@ -36,6 +36,7 @@ let pendingAnswerResolve: ((text: string) => void) | null = null;
 let lastAssistantText = "";
 let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 let session: AgentSession | null = null;
+let activePromptRun: Promise<void> | null = null;
 
 // Set when the SDK exhausts all rate-limit retries (auto_retry_end with
 // success: false). prompt() resolves without throwing in this case, so the
@@ -43,7 +44,7 @@ let session: AgentSession | null = null;
 let retryExhausted = false;
 
 function emit(event: object): void {
-  process.stdout.write(JSON.stringify({ type: "event", event }) + "\n");
+  process.stdout.write(`${JSON.stringify({ type: "event", event })}\n`);
 }
 
 async function flushStdout(): Promise<void> {
@@ -291,6 +292,32 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
   }
 }
 
+function schedulePrompt(text: string, inputKind: "prompt" | "message"): void {
+  const previous = activePromptRun;
+  const run = async () => {
+    if (previous) {
+      await previous;
+    }
+    await runPrompt(text, inputKind);
+  };
+
+  const scheduled = run()
+    .catch(async (err: unknown) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      emitLifecycle("failed", { message: errorMessage });
+      if (mode !== "foreman") {
+        await flushStdout();
+        process.exit(1);
+      }
+    })
+    .finally(() => {
+      if (activePromptRun === scheduled) {
+        activePromptRun = null;
+      }
+    });
+  activePromptRun = scheduled;
+}
+
 function createAskForemanTool(): any {
   return {
     name: "ask_foreman",
@@ -441,11 +468,11 @@ async function initSession(): Promise<void> {
   // Emit session metadata for the Go harness to persist.
   try {
     process.stdout.write(
-      JSON.stringify({
+      `${JSON.stringify({
         type: "session_meta",
         omp_session_id: sessionManager.getSessionId(),
         omp_session_file: sessionManager.getSessionFile() ?? "",
-      }) + "\n",
+      })}\n`,
     );
   } catch {
     // Best-effort: session metadata is non-critical.
@@ -565,10 +592,10 @@ async function handleLine(line: string): Promise<void> {
       }
       break;
     case "prompt":
-      await runPrompt(String(msg.text ?? ""), "prompt");
+      schedulePrompt(String(msg.text ?? ""), "prompt");
       break;
     case "message":
-      await runPrompt(String(msg.text ?? ""), "message");
+      schedulePrompt(String(msg.text ?? ""), "message");
       break;
     case "steer":
       if (session) {

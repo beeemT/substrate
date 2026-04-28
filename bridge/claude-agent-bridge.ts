@@ -38,7 +38,7 @@ let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 // ---------------------------------------------------------------------------
 
 function emit(event: object): void {
-  process.stdout.write(JSON.stringify({ type: "event", event }) + "\n");
+  process.stdout.write(`${JSON.stringify({ type: "event", event })}\n`);
 }
 
 function emitLifecycle(
@@ -157,6 +157,42 @@ class LineQueue {
   }
 }
 
+class TurnQueue {
+  #queue: any[] = [];
+  #waiters: ((turn: any | null) => void)[] = [];
+  #closed = false;
+
+  push(turn: any): void {
+    if (this.#closed) {
+      return;
+    }
+    if (this.#waiters.length > 0) {
+      this.#waiters.shift()!(turn);
+    } else {
+      this.#queue.push(turn);
+    }
+  }
+
+  close(): void {
+    this.#closed = true;
+    for (const waiter of this.#waiters.splice(0)) {
+      waiter(null);
+    }
+  }
+
+  next(): Promise<any | null> {
+    if (this.#queue.length > 0) {
+      return Promise.resolve(this.#queue.shift()!);
+    }
+    if (this.#closed) {
+      return Promise.resolve(null);
+    }
+    return new Promise<any | null>((resolve) => {
+      this.#waiters.push(resolve);
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ask_foreman MCP tool + server (module-level; only wired in agent mode)
 // ---------------------------------------------------------------------------
@@ -200,7 +236,7 @@ function mapSDKMessage(msg: any): void {
     claudeSessionID = msg.session_id ?? "";
     // Emit session_meta (top-level, not wrapped in "event")
     process.stdout.write(
-      JSON.stringify({ type: "session_meta", session_id: claudeSessionID }) + "\n",
+      `${JSON.stringify({ type: "session_meta", session_id: claudeSessionID })}\n`,
     );
     emitLifecycle("started");
     return;
@@ -269,10 +305,23 @@ function mapSDKMessage(msg: any): void {
 // Streaming user turns generator
 // ---------------------------------------------------------------------------
 
-async function* userTurns(lines: LineQueue): AsyncGenerator<any> {
+function makeUserTurn(text: string): any {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+    },
+  };
+}
+
+async function runProtocolLines(lines: LineQueue, turns: TurnQueue): Promise<void> {
   while (true) {
     const line = await lines.next();
-    if (line === null) return; // stdin closed
+    if (line === null) {
+      turns.close();
+      return;
+    }
 
     let msg: Record<string, unknown>;
     try {
@@ -301,13 +350,7 @@ async function* userTurns(lines: LineQueue): AsyncGenerator<any> {
 
     if (msg.type === "compact") {
       emit({ type: "lifecycle", stage: "compaction_start", message: "Compacting context…" });
-      yield {
-        type: "user",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "/compact" }],
-        },
-      };
+      turns.push(makeUserTurn("/compact"));
       // /compact is processed within the SDK turn; no explicit end event.
       // The SDK handles compaction internally — auto_compaction events may
       // fire, which mapSDKMessage already ignores (they're Claude-internal).
@@ -316,13 +359,7 @@ async function* userTurns(lines: LineQueue): AsyncGenerator<any> {
     }
     if (msg.type === "prompt" || msg.type === "message") {
       emitInput(msg.type as "prompt" | "message", String(msg.text ?? ""));
-      yield {
-        type: "user",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: String(msg.text ?? "") }],
-        },
-      };
+      turns.push(makeUserTurn(String(msg.text ?? "")));
     }
 
     if (msg.type === "steer") {
@@ -330,14 +367,16 @@ async function* userTurns(lines: LineQueue): AsyncGenerator<any> {
       if (activeQuery) {
         await activeQuery.interrupt();
       }
-      yield {
-        type: "user",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: String(msg.text ?? "") }],
-        },
-      };
+      turns.push(makeUserTurn(String(msg.text ?? "")));
     }
+  }
+}
+
+async function* userTurns(turns: TurnQueue): AsyncGenerator<any> {
+  while (true) {
+    const turn = await turns.next();
+    if (turn === null) return;
+    yield turn;
   }
 }
 
@@ -377,8 +416,7 @@ async function main(): Promise<void> {
   const model = typeof initMsg.model === "string" && initMsg.model ? initMsg.model : undefined;
   const thinking =
     typeof initMsg.thinking === "string" && initMsg.thinking ? initMsg.thinking : undefined;
-  const effort =
-    typeof initMsg.effort === "string" && initMsg.effort ? initMsg.effort : undefined;
+  const effort = typeof initMsg.effort === "string" && initMsg.effort ? initMsg.effort : undefined;
   if (typeof initMsg.answer_timeout_ms === "number" && initMsg.answer_timeout_ms >= 0) {
     answerTimeoutMs = initMsg.answer_timeout_ms;
   }
@@ -414,8 +452,15 @@ async function main(): Promise<void> {
     options.mcpServers = { substrate: substrateMcpServer };
   }
 
-  const generator = userTurns(lines);
-
+  const turnQueue = new TurnQueue();
+  let protocolFailed = false;
+  void runProtocolLines(lines, turnQueue).catch((err: unknown) => {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    emitLifecycle("failed", { message: errorMessage });
+    protocolFailed = true;
+    turnQueue.close();
+  });
+  const generator = userTurns(turnQueue);
   let queryFailed = false;
   try {
     activeQuery = query({ prompt: generator as any, options: options as any });
@@ -430,7 +475,7 @@ async function main(): Promise<void> {
 
   // After the query loop completes, emit foreman_proposed if in foreman mode.
   // lifecycle/completed was already emitted inside mapSDKMessage for result/success.
-  if (mode === "foreman" && lastResultText !== "" && !queryFailed) {
+  if (mode === "foreman" && lastResultText !== "" && !queryFailed && !protocolFailed) {
     const { text, uncertain } = extractConfidence(lastResultText);
     emit({ type: "foreman_proposed", text, uncertain });
   }
@@ -438,7 +483,7 @@ async function main(): Promise<void> {
   // Exit explicitly — the readline interface on stdin would keep the event loop alive.
   // Exit 1 when the catch above fired so Go's cmd.Wait() sees a non-zero code and
   // treats the subprocess as unexpectedly terminated, not as a clean abort.
-  process.exit(queryFailed ? 1 : 0);
+  process.exit(queryFailed || protocolFailed ? 1 : 0);
 }
 
 // Handle --version before entering the stdin event loop so that the binary
