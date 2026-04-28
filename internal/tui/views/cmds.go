@@ -1357,6 +1357,9 @@ func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
 		if !ok {
 			return "", 0, false
 		}
+		if repoName := gitHubRepoNameFromPullURL(it.URL); repoName != "" {
+			it.RepoName = repoName
+		}
 	case "gitlab":
 		var ok bool
 		trimmed, ok = strings.CutPrefix(it.Ref, "!")
@@ -1375,6 +1378,25 @@ func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
 		return "", 0, false
 	}
 	return it.RepoName, n, true
+}
+
+func gitHubRepoNameFromPullURL(rawURL string) string {
+	s := strings.TrimSpace(rawURL)
+	if s == "" {
+		return ""
+	}
+
+	u, err := url.Parse(s)
+	if err != nil {
+		slog.Debug("falling back to artifact repo name after parsing GitHub PR URL failed", "url", rawURL, "error", err)
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[0] == "" || parts[1] == "" || parts[2] != "pull" {
+		return ""
+	}
+
+	return parts[0] + "/" + parts[1]
 }
 
 func gitLabProjectPathFromMRURL(rawURL string) string {

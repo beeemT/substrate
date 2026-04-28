@@ -113,7 +113,7 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 
 	now := time.Now()
 	repo := &githubArtifactEventRepo{events: []domain.SystemEvent{
-		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
+		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
 		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "acme/engine", Ref: "#9", URL: "https://github.com/acme/engine/pull/9", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
 	}}
 	var requests []string

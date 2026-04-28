@@ -1307,6 +1307,7 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 	}
 	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
 	if err != nil {
+		slog.Warn("github: list review artifact events for completion failed", "workspace_id", p.WorkspaceID, "error", err)
 		return nil
 	}
 	latest := make(map[string]domain.ReviewArtifact)
@@ -1316,9 +1317,13 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 		}
 		var payload domain.ReviewArtifactEventPayload
 		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			slog.Warn("github: unmarshal review artifact event for completion failed", "event_id", event.ID, "error", err)
 			continue
 		}
 		artifact := payload.Artifact
+		if repoName := githubRepoNameFromPullURL(artifact.URL); repoName != "" {
+			artifact.RepoName = repoName
+		}
 		if payload.WorkItemID != p.WorkItemID ||
 			artifact.Provider != adapterName ||
 			strings.TrimSpace(artifact.Branch) != strings.TrimSpace(p.Branch) ||
@@ -1345,6 +1350,19 @@ func (a *GithubAdapter) artifactsForCompletion(ctx context.Context, p completedP
 	})
 
 	return artifacts
+}
+
+func githubRepoNameFromPullURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Path == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 4 || parts[0] == "" || parts[1] == "" || parts[2] != "pull" {
+		return ""
+	}
+
+	return parts[0] + "/" + parts[1]
 }
 
 func splitGitHubRepoName(raw string) (string, string, bool) {
