@@ -248,7 +248,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	}()
 
 	// Detect the "Server running on http://..." line from stdout.
-	serverURL, err := detectServerURL(stdoutPipe, time.After(15*time.Second))
+	serverURL, err := detectServerURL(ctx, stdoutPipe)
 	if err != nil {
 		return nil, fmt.Errorf("detect server URL: %w", err)
 	}
@@ -393,8 +393,8 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 }
 
 // detectServerURL reads stdout until the "Server running on ..." line appears
-// or the timeout fires.
-func detectServerURL(stdout io.Reader, timeout <-chan time.Time) (string, error) {
+// or ctx is cancelled.
+func detectServerURL(ctx context.Context, stdout io.Reader) (string, error) {
 	type result struct {
 		url string
 		err error
@@ -421,8 +421,8 @@ func detectServerURL(stdout io.Reader, timeout <-chan time.Time) (string, error)
 	select {
 	case r := <-ch:
 		return r.url, r.err
-	case <-timeout:
-		return "", errors.New("timed out waiting for opencode server to start")
+	case <-ctx.Done():
+		return "", fmt.Errorf("detect server URL: %w", ctx.Err())
 	}
 }
 
