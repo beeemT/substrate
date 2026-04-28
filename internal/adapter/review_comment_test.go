@@ -13,17 +13,15 @@ type fakeFetcher struct {
 	comments []ReviewComment
 	err      error
 
-	gotRepo   string
-	gotNumber int
+	gotTarget ReviewCommentTarget
 	calls     int
 }
 
 func (f *fakeFetcher) Provider() string { return f.provider }
 
-func (f *fakeFetcher) FetchReviewComments(_ context.Context, repoIdentifier string, number int) ([]ReviewComment, error) {
+func (f *fakeFetcher) FetchReviewComments(_ context.Context, target ReviewCommentTarget) ([]ReviewComment, error) {
 	f.calls++
-	f.gotRepo = repoIdentifier
-	f.gotNumber = number
+	f.gotTarget = target
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -51,8 +49,8 @@ func TestReviewCommentDispatcher_RoutesByProvider(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "gh-1" {
 		t.Fatalf("github fetch: unexpected comments: %+v", got)
 	}
-	if gh.calls != 1 || gh.gotRepo != "owner/repo" || gh.gotNumber != 42 {
-		t.Fatalf("github fetcher not invoked correctly: calls=%d repo=%q number=%d", gh.calls, gh.gotRepo, gh.gotNumber)
+	if gh.calls != 1 || gh.gotTarget.Provider != "github" || gh.gotTarget.RepoIdentifier != "owner/repo" || gh.gotTarget.Number != 42 {
+		t.Fatalf("github fetcher not invoked correctly: calls=%d target=%+v", gh.calls, gh.gotTarget)
 	}
 	if gl.calls != 0 {
 		t.Fatalf("gitlab fetcher should not have been called, got calls=%d", gl.calls)
@@ -65,8 +63,26 @@ func TestReviewCommentDispatcher_RoutesByProvider(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "gl-1" {
 		t.Fatalf("gitlab fetch: unexpected comments: %+v", got)
 	}
-	if gl.calls != 1 || gl.gotRepo != "group/proj" || gl.gotNumber != 7 {
-		t.Fatalf("gitlab fetcher not invoked correctly: calls=%d repo=%q number=%d", gl.calls, gl.gotRepo, gl.gotNumber)
+	if gl.calls != 1 || gl.gotTarget.Provider != "gitlab" || gl.gotTarget.RepoIdentifier != "group/proj" || gl.gotTarget.Number != 7 {
+		t.Fatalf("gitlab fetcher not invoked correctly: calls=%d target=%+v", gl.calls, gl.gotTarget)
+	}
+}
+
+func TestReviewCommentDispatcher_RoutesFullTargetContext(t *testing.T) {
+	gl := &fakeFetcher{provider: "gitlab"}
+	d := NewReviewCommentDispatcher(map[string]ReviewCommentFetcher{"gitlab": gl})
+
+	_, err := d.FetchReviewCommentsForTarget(context.Background(), ReviewCommentTarget{
+		Provider:       "gitlab",
+		RepoIdentifier: "group/proj",
+		Number:         7,
+		WorktreePath:   "/workspace/proj",
+	})
+	if err != nil {
+		t.Fatalf("gitlab fetch: unexpected error: %v", err)
+	}
+	if gl.gotTarget.WorktreePath != "/workspace/proj" {
+		t.Fatalf("worktree path = %q, want /workspace/proj", gl.gotTarget.WorktreePath)
 	}
 }
 

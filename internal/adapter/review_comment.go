@@ -17,16 +17,26 @@ type ReviewComment struct {
 	CreatedAt     time.Time
 }
 
+// ReviewCommentTarget identifies a PR/MR and optional local repository context.
+// WorktreePath is used by CLI-backed providers whose host/auth resolution depends
+// on the current repository directory.
+type ReviewCommentTarget struct {
+	Provider       string
+	RepoIdentifier string
+	Number         int
+	WorktreePath   string
+}
+
 // ReviewCommentFetcher fetches unresolved review comments for one PR/MR.
-// repoIdentifier is provider-specific:
+// target.RepoIdentifier is provider-specific:
 //   - GitHub: "owner/repo"
 //   - GitLab: project path (URL-escaped by adapter)
 //
-// number is the PR number / MR IID. Implementations MUST filter out resolved
-// comments before returning.
+// target.Number is the PR number / MR IID. Implementations MUST filter out
+// resolved comments before returning.
 type ReviewCommentFetcher interface {
 	Provider() string
-	FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]ReviewComment, error)
+	FetchReviewComments(ctx context.Context, target ReviewCommentTarget) ([]ReviewComment, error)
 }
 
 // ReviewCommentDispatcher routes review-comment fetches to a per-provider
@@ -46,16 +56,26 @@ func NewReviewCommentDispatcher(fetchers map[string]ReviewCommentFetcher) *Revie
 // delegates. Returns an error when no fetcher is registered, including when
 // the dispatcher or its fetcher map is nil.
 func (d *ReviewCommentDispatcher) FetchReviewComments(ctx context.Context, provider, repoIdentifier string, number int) ([]ReviewComment, error) {
+	return d.FetchReviewCommentsForTarget(ctx, ReviewCommentTarget{
+		Provider:       provider,
+		RepoIdentifier: repoIdentifier,
+		Number:         number,
+	})
+}
+
+// FetchReviewCommentsForTarget looks up the fetcher for target.Provider and
+// delegates with the full target context.
+func (d *ReviewCommentDispatcher) FetchReviewCommentsForTarget(ctx context.Context, target ReviewCommentTarget) ([]ReviewComment, error) {
 	if d == nil || d.fetchers == nil {
-		return nil, fmt.Errorf("no review comment fetcher registered for provider %q", provider)
+		return nil, fmt.Errorf("no review comment fetcher registered for provider %q", target.Provider)
 	}
-	fetcher, ok := d.fetchers[provider]
+	fetcher, ok := d.fetchers[target.Provider]
 	if !ok {
-		return nil, fmt.Errorf("no review comment fetcher registered for provider %q", provider)
+		return nil, fmt.Errorf("no review comment fetcher registered for provider %q", target.Provider)
 	}
-	comments, err := fetcher.FetchReviewComments(ctx, repoIdentifier, number)
+	comments, err := fetcher.FetchReviewComments(ctx, target)
 	if err != nil {
-		return nil, fmt.Errorf("fetch review comments for %s %s#%d: %w", provider, repoIdentifier, number, err)
+		return nil, fmt.Errorf("fetch review comments for %s %s#%d: %w", target.Provider, target.RepoIdentifier, target.Number, err)
 	}
 	return comments, nil
 }

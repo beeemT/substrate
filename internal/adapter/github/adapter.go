@@ -2202,11 +2202,13 @@ type githubReviewThreadsResponse struct {
 // given PR. Only the opening (first) comment of each unresolved thread is
 // surfaced. The query paginates through all review threads via GraphQL cursors
 // so PRs with more than reviewThreadsPageSize threads are fully covered.
-func (a *GithubAdapter) FetchReviewComments(ctx context.Context, repoIdentifier string, number int) ([]adapter.ReviewComment, error) {
+func (a *GithubAdapter) FetchReviewComments(ctx context.Context, target adapter.ReviewCommentTarget) ([]adapter.ReviewComment, error) {
+	repoIdentifier := target.RepoIdentifier
 	owner, repo, ok := strings.Cut(repoIdentifier, "/")
 	if !ok || owner == "" || repo == "" {
 		return nil, fmt.Errorf("invalid github repo identifier %q (want owner/repo)", repoIdentifier)
 	}
+	number := target.Number
 	var (
 		out    []adapter.ReviewComment
 		cursor *string

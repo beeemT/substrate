@@ -136,20 +136,21 @@ type OverviewExternalLifecycle struct {
 }
 
 type ArtifactItem struct {
-	ID        string // stable composite key: "<provider>:<repoName>:<ref>"
-	Provider  string
-	Kind      string // "PR" or "MR"
-	RepoName  string
-	Ref       string // "#42" or "!7"
-	URL       string
-	State     string // "draft" | "open" | "merged" | "closed"
-	Branch    string
-	Draft     bool
-	MergedAt  *time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Reviews   []ArtifactReview
-	Checks    []ArtifactCheck
+	ID           string // stable composite key: "<provider>:<repoName>:<ref>"
+	Provider     string
+	Kind         string // "PR" or "MR"
+	RepoName     string
+	Ref          string // "#42" or "!7"
+	URL          string
+	State        string // "draft" | "open" | "merged" | "closed"
+	Branch       string
+	Draft        bool
+	WorktreePath string
+	MergedAt     *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Reviews      []ArtifactReview
+	Checks       []ArtifactCheck
 }
 
 // ArtifactReview is the view-layer projection of a PR/MR review.
@@ -1878,16 +1879,17 @@ func reviewRowFromReviewArtifact(artifact domain.ReviewArtifact) OverviewReviewR
 
 func artifactItemFromReviewArtifact(artifact domain.ReviewArtifact) ArtifactItem {
 	return ArtifactItem{
-		ID:        reviewArtifactID(artifact.Provider, artifact.RepoName, artifact.Branch, artifact.Ref),
-		Provider:  artifact.Provider,
-		Kind:      firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
-		RepoName:  artifact.RepoName,
-		Ref:       artifact.Ref,
-		URL:       artifact.URL,
-		State:     artifact.State,
-		Branch:    artifact.Branch,
-		Draft:     artifact.Draft,
-		UpdatedAt: artifact.UpdatedAt,
+		ID:           reviewArtifactID(artifact.Provider, artifact.RepoName, artifact.Branch, artifact.Ref),
+		Provider:     artifact.Provider,
+		Kind:         firstNonEmptyString(artifact.Kind, reviewKindForProvider(artifact.Provider)),
+		RepoName:     artifact.RepoName,
+		Ref:          artifact.Ref,
+		URL:          artifact.URL,
+		State:        artifact.State,
+		Branch:       artifact.Branch,
+		WorktreePath: artifact.WorktreePath,
+		Draft:        artifact.Draft,
+		UpdatedAt:    artifact.UpdatedAt,
 	}
 }
 
@@ -2078,17 +2080,20 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 			}
 		}
 	}
-	itemKeys := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		itemKeys[reviewArtifactKey(item.RepoName, item.Branch, item.Ref)] = struct{}{}
+	itemIndexByKey := make(map[string]int, len(items))
+	for i, item := range items {
+		itemIndexByKey[reviewArtifactKey(item.RepoName, item.Branch, item.Ref)] = i
 	}
 	for _, artifact := range recordedReviewArtifacts(ctx, a.svcs, wi) {
 		item := artifactItemFromReviewArtifact(artifact)
 		key := reviewArtifactKey(item.RepoName, item.Branch, item.Ref)
-		if _, ok := itemKeys[key]; ok {
+		if idx, ok := itemIndexByKey[key]; ok {
+			if items[idx].WorktreePath == "" {
+				items[idx].WorktreePath = item.WorktreePath
+			}
 			continue
 		}
-		itemKeys[key] = struct{}{}
+		itemIndexByKey[key] = len(items)
 		items = append(items, item)
 	}
 	sort.SliceStable(items, func(i, j int) bool {

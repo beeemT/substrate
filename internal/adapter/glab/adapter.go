@@ -1236,11 +1236,16 @@ const glabDiscussionsPageSize = 100
 func (a *GlabAdapter) Provider() string { return "gitlab" }
 
 // FetchReviewComments returns unresolved review comments for the given MR.
-// projectPath is the GitLab project path (e.g. "group/sub/repo"); it is URL-escaped here.
-// iid is the merge request IID. The endpoint is paginated explicitly so MRs
-// with more than glabDiscussionsPageSize discussions are fully covered.
-func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath string, iid int) ([]coreadapter.ReviewComment, error) {
-	webURL, err := a.fetchMRWebURL(ctx, projectPath, iid)
+// target.RepoIdentifier is the GitLab project path (e.g. "group/sub/repo");
+// it is URL-escaped here. target.WorktreePath, when set, is used as the glab
+// working directory so glab resolves the correct GitLab host and credentials.
+// The endpoint is paginated explicitly so MRs with more than
+// glabDiscussionsPageSize discussions are fully covered.
+func (a *GlabAdapter) FetchReviewComments(ctx context.Context, target coreadapter.ReviewCommentTarget) ([]coreadapter.ReviewComment, error) {
+	projectPath := target.RepoIdentifier
+	iid := target.Number
+	commandDir := a.reviewCommentCommandDir(target.WorktreePath)
+	webURL, err := a.fetchMRWebURL(ctx, commandDir, projectPath, iid)
 	if err != nil {
 		// Non-fatal: URL field is best-effort. Continue with empty webURL.
 		slog.Warn("glab: fetch MR web_url failed", "project", projectPath, "iid", iid, "error", err)
@@ -1250,7 +1255,7 @@ func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath strin
 	for page := 1; ; page++ {
 		endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions?per_page=%d&page=%d",
 			url.PathEscape(projectPath), iid, glabDiscussionsPageSize, page)
-		output, runErr := a.runner(ctx, a.workspaceDir, "glab", "api", endpoint)
+		output, runErr := a.runner(ctx, commandDir, "glab", "api", endpoint)
 
 		if runErr != nil {
 			return nil, fmt.Errorf("glab discussions for !%d page %d: %w (output: %s)", iid, page, runErr, strings.TrimSpace(string(output)))
@@ -1271,11 +1276,19 @@ func (a *GlabAdapter) FetchReviewComments(ctx context.Context, projectPath strin
 	return comments, nil
 }
 
+func (a *GlabAdapter) reviewCommentCommandDir(worktreePath string) string {
+	if dir := strings.TrimSpace(worktreePath); dir != "" {
+		return dir
+	}
+
+	return a.workspaceDir
+}
+
 // fetchMRWebURL queries the merge_request endpoint to recover web_url, used for
 // constructing per-note links. Empty result is treated as "unknown" by callers.
-func (a *GlabAdapter) fetchMRWebURL(ctx context.Context, projectPath string, iid int) (string, error) {
+func (a *GlabAdapter) fetchMRWebURL(ctx context.Context, commandDir, projectPath string, iid int) (string, error) {
 	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d", url.PathEscape(projectPath), iid)
-	output, err := a.runner(ctx, a.workspaceDir, "glab", "api", endpoint)
+	output, err := a.runner(ctx, commandDir, "glab", "api", endpoint)
 	if err != nil {
 		return "", fmt.Errorf("glab api %s: %w (output: %s)", endpoint, err, strings.TrimSpace(string(output)))
 	}

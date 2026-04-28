@@ -222,6 +222,139 @@ func (r *overviewEventRepo) ListByWorkspaceID(_ context.Context, workspaceID str
 	return filtered, nil
 }
 
+type overviewArtifactLinkRepo struct {
+	links []domain.SessionReviewArtifact
+}
+
+func (r *overviewArtifactLinkRepo) Upsert(_ context.Context, link domain.SessionReviewArtifact) error {
+	r.links = append(r.links, link)
+	return nil
+}
+
+func (r *overviewArtifactLinkRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.SessionReviewArtifact, error) {
+	out := make([]domain.SessionReviewArtifact, 0, len(r.links))
+	for _, link := range r.links {
+		if link.WorkItemID == workItemID {
+			out = append(out, link)
+		}
+	}
+	return out, nil
+}
+
+func (r *overviewArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error) {
+	out := make([]domain.SessionReviewArtifact, 0, len(r.links))
+	for _, link := range r.links {
+		if link.WorkspaceID == workspaceID {
+			out = append(out, link)
+		}
+	}
+	return out, nil
+}
+
+type overviewGitlabMRRepo struct {
+	mrs map[string]domain.GitlabMergeRequest
+}
+
+func (r *overviewGitlabMRRepo) Upsert(_ context.Context, mr domain.GitlabMergeRequest) error {
+	if r.mrs == nil {
+		r.mrs = make(map[string]domain.GitlabMergeRequest)
+	}
+	r.mrs[mr.ID] = mr
+	return nil
+}
+
+func (r *overviewGitlabMRRepo) Get(_ context.Context, id string) (domain.GitlabMergeRequest, error) {
+	return r.mrs[id], nil
+}
+
+func (r *overviewGitlabMRRepo) GetByIID(_ context.Context, projectPath string, iid int) (domain.GitlabMergeRequest, error) {
+	for _, mr := range r.mrs {
+		if mr.ProjectPath == projectPath && mr.IID == iid {
+			return mr, nil
+		}
+	}
+	return domain.GitlabMergeRequest{}, nil
+}
+
+func (r *overviewGitlabMRRepo) ListByWorkspaceID(_ context.Context, _ string) ([]domain.GitlabMergeRequest, error) {
+	return nil, nil
+}
+
+func (r *overviewGitlabMRRepo) ListNonTerminal(_ context.Context, _ string) ([]domain.GitlabMergeRequest, error) {
+	return nil, nil
+}
+
+func TestBuildArtifactItemsMergesRecordedGitLabWorktreePath(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	projectPath := "justtrack/backend/postback-service"
+	worktreePath := "/workspace/backend.postback-service"
+	payload, err := json.Marshal(domain.ReviewArtifactEventPayload{
+		WorkItemID: "wi-1",
+		Artifact: domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     projectPath,
+			Ref:          "!421",
+			URL:          "https://gitlab.example.com/justtrack/backend/postback-service/-/merge_requests/421",
+			State:        "ready",
+			Branch:       "sub-LIN-421-fix-postback",
+			WorktreePath: worktreePath,
+			UpdatedAt:    now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	artifactRepo := &overviewArtifactLinkRepo{links: []domain.SessionReviewArtifact{{
+		ID:                 "link-1",
+		WorkspaceID:        "ws-local",
+		WorkItemID:         "wi-1",
+		Provider:           "gitlab",
+		ProviderArtifactID: "mr-1",
+	}}}
+	mrRepo := &overviewGitlabMRRepo{mrs: map[string]domain.GitlabMergeRequest{
+		"mr-1": {
+			ID:           "mr-1",
+			ProjectPath:  projectPath,
+			IID:          421,
+			State:        "ready",
+			SourceBranch: "sub-LIN-421-fix-postback",
+			WebURL:       "https://gitlab.example.com/justtrack/backend/postback-service/-/merge_requests/421",
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		},
+	}}
+	eventRepo := &overviewEventRepo{events: []domain.SystemEvent{{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventReviewArtifactRecorded),
+		WorkspaceID: "ws-local",
+		Payload:     string(payload),
+		CreatedAt:   now,
+	}}}
+	app := NewApp(Services{
+		WorkspaceID:      "ws-local",
+		WorkspaceName:    "local",
+		Settings:         &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
+	})
+
+	items := app.buildArtifactItems(&domain.Session{
+		ID:          "wi-1",
+		WorkspaceID: "ws-local",
+	})
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1: %+v", len(items), items)
+	}
+	if items[0].WorktreePath != worktreePath {
+		t.Fatalf("worktree path = %q, want %q", items[0].WorktreePath, worktreePath)
+	}
+}
+
 func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 	t.Parallel()
 

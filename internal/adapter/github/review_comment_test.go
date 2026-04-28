@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	coreadapter "github.com/beeemT/substrate/internal/adapter"
 )
 
 // graphqlRespRoundTripper builds a roundTripFunc that serves /user with an
@@ -89,7 +91,7 @@ func TestFetchReviewComments_FiltersResolved(t *testing.T) {
 		thread(false, comment("c3", "third body", "c.go", 30, "dave"), comment("c3b", "second of thread", "c.go", 31, "dave")),
 	})
 	a := newTestAdapter(t, graphqlRespRoundTripper(t, resp))
-	got, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "acme/rocket", Number: 1})
 	if err != nil {
 		t.Fatalf("FetchReviewComments: %v", err)
 	}
@@ -110,7 +112,7 @@ func TestFetchReviewComments_TopLevelAndInline(t *testing.T) {
 		thread(false, comment("inl", "inline", "src/x.go", 42, "carol")),
 	})
 	a := newTestAdapter(t, graphqlRespRoundTripper(t, resp))
-	got, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "acme/rocket", Number: 1})
 	if err != nil {
 		t.Fatalf("FetchReviewComments: %v", err)
 	}
@@ -133,7 +135,7 @@ func TestFetchReviewComments_InvalidIdentifier(t *testing.T) {
 		t.Fatalf("unexpected request: %s", req.URL.Path)
 		return nil, nil
 	}))
-	_, err := a.FetchReviewComments(context.Background(), "no-slash", 1)
+	_, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "no-slash", Number: 1})
 	if err == nil {
 		t.Fatal("expected error for invalid identifier")
 	}
@@ -148,7 +150,7 @@ func TestFetchReviewComments_GraphQLErrorSurfaces(t *testing.T) {
 		"errors": []any{map[string]any{"message": "bad"}},
 	}
 	a := newTestAdapter(t, graphqlRespRoundTripper(t, resp))
-	_, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	_, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "acme/rocket", Number: 1})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -166,7 +168,7 @@ func TestFetchReviewComments_NilPR(t *testing.T) {
 		},
 	}
 	a := newTestAdapter(t, graphqlRespRoundTripper(t, resp))
-	got, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "acme/rocket", Number: 1})
 	if err != nil {
 		t.Fatalf("FetchReviewComments: %v", err)
 	}
@@ -219,7 +221,7 @@ func TestFetchReviewComments_Paginates(t *testing.T) {
 		}
 	})
 	a := newTestAdapter(t, rt)
-	got, err := a.FetchReviewComments(context.Background(), "acme/rocket", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "acme/rocket", Number: 1})
 	if err != nil {
 		t.Fatalf("FetchReviewComments: %v", err)
 	}

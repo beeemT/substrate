@@ -75,8 +75,12 @@ func pageFromEndpoint(endpoint string) int {
 	return 1
 }
 
-func newReviewAdapter(stub *glabReviewStub) *GlabAdapter {
-	return newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "/tmp/ws", stub.run)
+func newReviewAdapter(stub *glabReviewStub, workspaceDir ...string) *GlabAdapter {
+	dir := "/tmp/ws"
+	if len(workspaceDir) > 0 {
+		dir = workspaceDir[0]
+	}
+	return newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, dir, stub.run)
 }
 
 func TestFetchReviewComments_FiltersResolved(t *testing.T) {
@@ -88,7 +92,7 @@ func TestFetchReviewComments_FiltersResolved(t *testing.T) {
 	stub := &glabReviewStub{web: "https://gitlab.example.com/group/repo/-/merge_requests/7", discussionsRaw: [][]byte{payload}}
 	a := newReviewAdapter(stub)
 
-	got, err := a.FetchReviewComments(context.Background(), "group/repo", 7)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "group/repo", Number: 7})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,6 +118,33 @@ func TestFetchReviewComments_FiltersResolved(t *testing.T) {
 	if !strings.Contains(discussionArgs, "/projects/group%2Frepo/merge_requests/7/discussions") {
 		t.Errorf("unexpected discussions call args: %q", discussionArgs)
 	}
+	for _, call := range stub.calls {
+		if call.dir != "/tmp/ws" {
+			t.Errorf("glab call dir = %q, want fallback workspace dir", call.dir)
+		}
+	}
+}
+
+func TestFetchReviewComments_UsesTargetWorktreePathForGlabContext(t *testing.T) {
+	stub := &glabReviewStub{discussionsRaw: [][]byte{[]byte("[]")}}
+	a := newReviewAdapter(stub)
+
+	_, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{
+		RepoIdentifier: "group/repo",
+		Number:         7,
+		WorktreePath:   "/tmp/ws/repo-worktree",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.calls) == 0 {
+		t.Fatal("expected glab calls")
+	}
+	for _, call := range stub.calls {
+		if call.dir != "/tmp/ws/repo-worktree" {
+			t.Fatalf("glab call dir = %q, want target worktree path", call.dir)
+		}
+	}
 }
 
 func TestFetchReviewComments_SkipsSystemNotes(t *testing.T) {
@@ -123,7 +154,7 @@ func TestFetchReviewComments_SkipsSystemNotes(t *testing.T) {
 	stub := &glabReviewStub{discussionsRaw: [][]byte{payload}}
 	a := newReviewAdapter(stub)
 
-	got, err := a.FetchReviewComments(context.Background(), "g/r", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +170,7 @@ func TestFetchReviewComments_PositionMapping(t *testing.T) {
 	stub := &glabReviewStub{discussionsRaw: [][]byte{payload}}
 	a := newReviewAdapter(stub)
 
-	got, err := a.FetchReviewComments(context.Background(), "g/r", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,7 +195,7 @@ func TestFetchReviewComments_OldLineFallback(t *testing.T) {
 	stub := &glabReviewStub{discussionsRaw: [][]byte{payload}}
 	a := newReviewAdapter(stub)
 
-	got, err := a.FetchReviewComments(context.Background(), "g/r", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -195,7 +226,7 @@ func TestFetchReviewComments_Paginates(t *testing.T) {
 	stub := &glabReviewStub{discussionsRaw: [][]byte{[]byte(page1.String()), page2}}
 	a := newReviewAdapter(stub)
 
-	got, err := a.FetchReviewComments(context.Background(), "g/r", 1)
+	got, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +251,7 @@ func TestFetchReviewComments_RunnerError(t *testing.T) {
 	stub := &glabReviewStub{discussionsErr: errors.New("boom")}
 	a := newReviewAdapter(stub)
 
-	_, err := a.FetchReviewComments(context.Background(), "g/r", 99)
+	_, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 99})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -233,7 +264,7 @@ func TestFetchReviewComments_BadJSON(t *testing.T) {
 	stub := &glabReviewStub{discussionsRaw: [][]byte{[]byte("[")}}
 	a := newReviewAdapter(stub)
 
-	_, err := a.FetchReviewComments(context.Background(), "g/r", 1)
+	_, err := a.FetchReviewComments(context.Background(), coreadapter.ReviewCommentTarget{RepoIdentifier: "g/r", Number: 1})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

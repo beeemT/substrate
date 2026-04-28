@@ -1294,7 +1294,12 @@ func FetchReviewCommentsCmd(fetcher *adapter.ReviewCommentDispatcher, workItemID
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				comments, err := fetcher.FetchReviewComments(ctx, it.Provider, identifier, number)
+				comments, err := fetcher.FetchReviewCommentsForTarget(ctx, adapter.ReviewCommentTarget{
+					Provider:       it.Provider,
+					RepoIdentifier: identifier,
+					Number:         number,
+					WorktreePath:   it.WorktreePath,
+				})
 				outcomes <- fetchOutcome{
 					itemID:   it.ID,
 					repoName: it.RepoName,
