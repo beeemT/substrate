@@ -1752,6 +1752,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
+		if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds,
+				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
+				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
+			)
+		}
 		return a, tea.Batch(cmds...)
 
 	case PlanningRestartedMsg:

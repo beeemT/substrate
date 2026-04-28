@@ -424,3 +424,46 @@ func TestApp_NewReposInitDoneMsg_ClearsOverlayAndShowsToast(t *testing.T) {
 		t.Fatalf("activeOverlay = %v, want overlayNone after init done", updated.activeOverlay)
 	}
 }
+
+// TestApp_SessionResumedMsg_ReloadsWorkItemsAndSessions verifies that resuming
+// an interrupted session triggers a reload of both work items and tasks so the
+// UI reflects the new session state without relying on stale in-memory data.
+func TestApp_SessionResumedMsg_ReloadsWorkItemsAndSessions(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
+	app := NewApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Settings:      &SettingsService{},
+		SettingsData:  snapshot,
+	})
+
+	// Simulate an interrupted work item that is currently viewed.
+	app.workItems = []domain.Session{
+		{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing},
+	}
+	app.sessions = []domain.Task{
+		{ID: "sess-old", WorkspaceID: "ws-1", Status: domain.AgentSessionInterrupted},
+	}
+	app.currentWorkItemID = "wi-1"
+
+	_, cmd := app.Update(SessionResumedMsg{Message: "Session resumed"})
+
+	// Must dispatch load commands so the next render picks up the DB state
+	// (work item may have been re-transitioned by ResumeSession).
+	// The fix adds LoadSessionsCmd and LoadTasksCmd when WorkspaceID is set.
+	// We verify a BatchMsg was returned containing at least the two load commands.
+	if cmd == nil {
+		t.Fatal("SessionResumedMsg must return commands when WorkspaceID is set")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("SessionResumedMsg must return a BatchMsg, got %T", msg)
+	}
+	if len(batch) < 2 {
+		t.Fatalf("SessionResumedMsg BatchMsg must contain at least 2 commands (sessions + tasks load), got %d", len(batch))
+	}
+}

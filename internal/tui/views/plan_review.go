@@ -44,6 +44,13 @@ type PlanReviewModel struct { //nolint:recvcheck // Bubble Tea: Update returns v
 	styles        styles.Styles
 	width         int
 	height        int
+
+	// Rebuild guard: track the parameters used in the last refreshViewportContent
+	// call so that syncViewportSize can skip the expensive re-render when only
+	// layout dimensions changed (header line count differs) but the plan content
+	// itself is unchanged.
+	renderedPlanID string
+	renderedWidth  int
 }
 
 func NewPlanReviewModel(st styles.Styles) PlanReviewModel {
@@ -63,14 +70,25 @@ func (m *PlanReviewModel) SetSize(width, height int) {
 	m.syncViewportSize()
 }
 
+// viewportContentStale reports whether the plan viewport needs re-rendering.
+func (m *PlanReviewModel) viewportContentStale() bool {
+	return m.renderedPlanID != m.planID || m.renderedWidth != m.viewport.Width
+}
+
 func (m *PlanReviewModel) syncViewportSize() {
 	reservedRows := 2 // title + divider (header)
 	if m.inputMode != planReviewNormal {
 		reservedRows += 1 + m.feedbackInput.Height() // label row + textarea rows
 	}
 	m.feedbackInput.SetWidth(max(1, m.width))
-	m.viewport.Width = max(1, m.width-1)
-	m.viewport.Height = max(1, m.height-reservedRows)
+	newViewportWidth := max(1, m.width-1)
+	newViewportHeight := max(1, m.height-reservedRows)
+	// Skip the expensive content re-render when neither dimensions nor content changed.
+	if m.viewport.Width == newViewportWidth && m.viewport.Height == newViewportHeight && !m.viewportContentStale() {
+		return
+	}
+	m.viewport.Width = newViewportWidth
+	m.viewport.Height = newViewportHeight
 	m.refreshViewportContent(false)
 }
 
@@ -117,10 +135,9 @@ func (m *PlanReviewModel) SetPlanDocument(planID, content string) {
 	if m.planID == planID && m.planContent == content {
 		return
 	}
-	reset := m.planID != planID
 	m.planID = planID
 	m.planContent = content
-	m.refreshViewportContent(reset)
+	m.refreshViewportContent(true) // plan changed: scroll to top
 }
 
 func (m *PlanReviewModel) refreshViewportContent(reset bool) {
@@ -129,6 +146,8 @@ func (m *PlanReviewModel) refreshViewportContent(reset bool) {
 		return
 	}
 	m.viewport.SetContent(renderPlanReviewContent(m.styles, m.planContent, m.viewport.Width))
+	m.renderedPlanID = m.planID
+	m.renderedWidth = m.viewport.Width
 	if reset {
 		m.viewport.GotoTop()
 
