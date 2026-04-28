@@ -141,7 +141,7 @@ func TestRenderOverlayFrameChangesWhenFocused(t *testing.T) {
 func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
-	pane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
+	pane := RenderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
 		Title:        "Preview",
 		DividerWidth: layout.ViewportWidth,
 		Body:         "details",
@@ -166,7 +166,7 @@ func TestRenderSplitOverlayBodyUsesConfiguredDividerWidth(t *testing.T) {
 func TestRenderOverlayPaneClipsBodyToRequestedHeight(t *testing.T) {
 	st := testOverlayStyles()
 	layout := ComputeSplitOverlayLayout(72, 18, 11, testSplitOverlaySpec)
-	pane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
+	pane := RenderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, OverlayPaneSpec{
 		Title: "Preview",
 		Body:  strings.Repeat("overflow line that must stay inside the pane\n", layout.BodyHeight+4) + "tail",
 	})
@@ -192,7 +192,7 @@ func assertFits(t *testing.T, view string, width, height int) {
 
 func TestRenderSplitOverlayBodySeparatorWidth(t *testing.T) {
 	// In lipgloss v1, Width(w) sets the inner area including padding; visual width = w + border(2).
-	// renderOverlayPane passes Width(InnerWidth(paneWidth)) where InnerWidth removes border+padding.
+	// RenderOverlayPane passes Width(InnerWidth(paneWidth)) where InnerWidth removes border+padding.
 	// So each pane renders at visual = InnerWidth(paneWidth) + border(2) = paneWidth - paddingH.
 	// With paddingH=2, each pane is paneWidth-2 visually. The separator must be exactly 1 char.
 	st := testOverlayStyles()

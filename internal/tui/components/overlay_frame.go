@@ -121,8 +121,8 @@ func RenderOverlayFrame(st styles.Styles, frameWidth int, spec OverlayFrameSpec)
 
 // RenderSplitOverlayBody renders a split left/right pane body using a computed layout.
 func RenderSplitOverlayBody(st styles.Styles, layout SplitOverlayLayout, spec SplitOverlaySpec) string {
-	leftPane := renderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
-	rightPane := renderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
+	leftPane := RenderOverlayPane(st, layout.LeftPaneWidth, layout.BodyHeight, spec.LeftPane)
+	rightPane := RenderOverlayPane(st, layout.RightPaneWidth, layout.BodyHeight, spec.RightPane)
 	sep := strings.TrimSuffix(strings.Repeat(" \n", layout.BodyHeight), "\n")
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
@@ -133,7 +133,8 @@ func RenderOverlayDivider(st styles.Styles, width int) string {
 	return st.Divider.Render(strings.Repeat("─", maxInt(1, width)))
 }
 
-func renderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec) string {
+// RenderOverlayPane renders a bordered pane with an optional title row and divider.
+func RenderOverlayPane(st styles.Styles, width, height int, spec OverlayPaneSpec) string {
 	paneStyle := st.OverlayPane
 	if spec.Focused {
 		paneStyle = st.OverlayPaneFocused
