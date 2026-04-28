@@ -524,63 +524,38 @@ func (m ReviewFollowupModel) viewSelector() string {
 		components.RenderOverlayDivider(m.styles, iw),
 	}
 	bodyHeight := m.frameHeight()
-	// Vertical split: list pane on top, preview pane on bottom.
-	// Pass bodyHeight as the content height target; the panes render naturally and
-	// fitViewHeight pads/clamps the body to exactly bodyHeight rows.
-	topHeight := max(2, (bodyHeight+1)/2)
-	bottomHeight := max(2, bodyHeight-topHeight)
+	// Split width 50/50 with 1 col separator.
+	leftWidth := max(1, (iw-1)/2)
+	rightWidth := max(1, iw-leftWidth-1)
 
-	topPane := m.renderSelectorPane(iw, topHeight)
-	bottomPane := m.renderPreviewPane(iw, bottomHeight)
-	// The "\n" between panes adds 1 separator row; both panes grow naturally.
-	body := fitViewHeight(topPane+"\n"+bottomPane, bodyHeight)
+	leftBody := m.renderSelectorList(leftWidth, bodyHeight)
+	rightBody := m.renderPreview(rightWidth, bodyHeight)
+
+	rows := make([]string, 0, bodyHeight)
+	leftLines := strings.Split(leftBody, "\n")
+	rightLines := strings.Split(rightBody, "\n")
+	for i := 0; i < bodyHeight; i++ {
+		var l, r string
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		l = padRight(ansi.Truncate(l, leftWidth, "…"), leftWidth)
+		r = ansi.Truncate(r, rightWidth, "…")
+		rows = append(rows, l+" "+r)
+	}
+	body := strings.Join(rows, "\n")
 
 	footer := m.styles.Hint.Render(ansi.Truncate(
-		" [↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [Esc] Cancel",
+		"[↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [Esc] Cancel",
 		iw, ""))
 	return components.RenderOverlayFrame(m.styles, fw, components.OverlayFrameSpec{
 		HeaderLines: header,
 		Body:        fitViewHeight(body, bodyHeight),
 		Footer:      footer,
 		Focused:     true,
-	})
-}
-
-// renderSelectorPane renders the comment selection list in a bordered pane.
-// height is the total visual height of the pane (including title row).
-// contentHeight = height - 1 (title row). lipgloss Height(contentHeight) expands
-// short content to contentHeight rows, so the total pane height equals height.
-func (m ReviewFollowupModel) renderSelectorPane(width, height int) string {
-	focused := true
-	if len(m.selectorRows) == 0 {
-		focused = false
-	}
-	// contentHeight is the height available for list rows (excludes title row).
-	// lipgloss Height(contentHeight) pads short content to contentHeight rows,
-	// giving a total pane height of contentHeight + 1 (title) = height.
-	contentHeight := max(1, height-1)
-	content := m.renderSelectorList(width, contentHeight)
-	return components.RenderOverlayPane(m.styles, width, contentHeight, components.OverlayPaneSpec{
-		Title:        "Comments",
-		DividerWidth: 0,
-		Body:         content,
-		Focused:      focused,
-	})
-}
-
-// renderPreviewPane renders the comment preview in a bordered pane.
-// height is the total visual height (including title row); contentHeight = height - 1.
-// See renderSelectorPane for why contentHeight is passed to lipgloss.
-func (m ReviewFollowupModel) renderPreviewPane(width, height int) string {
-	row := m.currentRow()
-	focused := row != nil && row.kind == rowKindComment
-	contentHeight := max(1, height-1)
-	content := m.renderPreview(width, contentHeight)
-	return components.RenderOverlayPane(m.styles, width, contentHeight, components.OverlayPaneSpec{
-		Title:        "Preview",
-		DividerWidth: 0,
-		Body:         content,
-		Focused:      focused,
 	})
 }
 

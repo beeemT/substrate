@@ -18,6 +18,7 @@ type SplitOverlaySizingSpec struct {
 	LeftWeight        int
 	RightWeight       int
 	MinBodyHeight     int
+	MaxBodyHeight     int // 0 means no upper limit
 	DefaultBodyHeight int
 	HeightRatioNum    int
 	HeightRatioDen    int
