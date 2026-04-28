@@ -124,6 +124,7 @@ func PersistGitlabMR(
 		Draft:        artifact.Draft,
 		SourceBranch: artifact.Branch,
 		WebURL:       artifact.URL,
+		WorktreePath: artifact.WorktreePath,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

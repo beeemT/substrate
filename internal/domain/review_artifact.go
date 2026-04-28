@@ -46,6 +46,7 @@ type GitlabMergeRequest struct {
 	Draft        bool
 	SourceBranch string
 	WebURL       string
+	WorktreePath string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -61,13 +62,12 @@ type SessionReviewArtifact struct {
 	UpdatedAt          time.Time
 }
 
-
 // GithubPRReview is the durable row for a GitHub PR review.
 type GithubPRReview struct {
 	ID            string
 	PRID          string
 	ReviewerLogin string
-	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
+	State         string // "approved" | "changes_requested" | "commented" | "dismissed"
 	SubmittedAt   time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -78,7 +78,7 @@ type GitlabMRReview struct {
 	ID            string
 	MRID          string
 	ReviewerLogin string
-	State         string    // "approved" | "changes_requested" | "unapproved"
+	State         string // "approved" | "changes_requested" | "unapproved"
 	SubmittedAt   time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

@@ -114,7 +114,7 @@ func TestWorktreeCreatedPersistsGitlabMRLinkFromCreatedURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByIID persisted MR: %v", err)
 	}
-	if mr.WebURL != "https://gitlab.com/org/repo/-/merge_requests/5" || mr.SourceBranch != "sub-GL-137-1015-fix-bug" {
+	if mr.WebURL != "https://gitlab.com/org/repo/-/merge_requests/5" || mr.SourceBranch != "sub-GL-137-1015-fix-bug" || mr.WorktreePath != "/tmp/wt" {
 		t.Fatalf("persisted MR = %+v", mr)
 	}
 	if len(artifactRepo.links) != 1 {

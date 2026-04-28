@@ -16,6 +16,7 @@ type gitlabMRRow struct {
 	Draft        int    `db:"draft"`
 	SourceBranch string `db:"source_branch"`
 	WebURL       string `db:"web_url"`
+	WorktreePath string `db:"worktree_path"`
 	CreatedAt    string `db:"created_at"`
 	UpdatedAt    string `db:"updated_at"`
 }
@@ -38,6 +39,7 @@ func (r *gitlabMRRow) toDomain() (domain.GitlabMergeRequest, error) {
 		Draft:        r.Draft != 0,
 		SourceBranch: r.SourceBranch,
 		WebURL:       r.WebURL,
+		WorktreePath: r.WorktreePath,
 		CreatedAt:    createdAt,
 		UpdatedAt:    updatedAt,
 	}, nil
@@ -57,6 +59,7 @@ func rowFromGitlabMR(mr domain.GitlabMergeRequest) gitlabMRRow {
 		Draft:        draft,
 		SourceBranch: mr.SourceBranch,
 		WebURL:       mr.WebURL,
+		WorktreePath: mr.WorktreePath,
 		CreatedAt:    formatTime(mr.CreatedAt),
 		UpdatedAt:    formatTime(mr.UpdatedAt),
 	}
@@ -72,13 +75,14 @@ func NewGitlabMRRepo(remote generic.SQLXRemote) GitlabMRRepo {
 func (r GitlabMRRepo) Upsert(ctx context.Context, mr domain.GitlabMergeRequest) error {
 	row := rowFromGitlabMR(mr)
 	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO gitlab_merge_requests (id, project_path, iid, state, draft, source_branch, web_url, created_at, updated_at)
-		 VALUES (:id, :project_path, :iid, :state, :draft, :source_branch, :web_url, :created_at, :updated_at)
+		`INSERT INTO gitlab_merge_requests (id, project_path, iid, state, draft, source_branch, web_url, worktree_path, created_at, updated_at)
+		 VALUES (:id, :project_path, :iid, :state, :draft, :source_branch, :web_url, :worktree_path, :created_at, :updated_at)
 		 ON CONFLICT(project_path, iid) DO UPDATE SET
 		   state = excluded.state,
 		   draft = excluded.draft,
 		   source_branch = excluded.source_branch,
 		   web_url = excluded.web_url,
+		   worktree_path = CASE WHEN excluded.worktree_path != '' THEN excluded.worktree_path ELSE gitlab_merge_requests.worktree_path END,
 		   updated_at = excluded.updated_at`, row)
 	if err != nil {
 		return fmt.Errorf("upsert gitlab mr %s: %w", mr.ID, err)

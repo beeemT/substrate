@@ -665,6 +665,44 @@ func (r *inMemArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspaceID
 	return out, nil
 }
 
+func TestRefreshSingleMRUsesPersistedWorktreePath(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	stub := &stubRunner{output: []byte(`{"iid":3977,"state":"opened","web_url":"https://gitlab.com/justtrack/frontend/paket/-/merge_requests/3977","draft":false}`)}
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-1": {
+			ID:           "mr-1",
+			ProjectPath:  "justtrack/frontend/paket",
+			IID:          3977,
+			State:        "draft",
+			SourceBranch: "sub-LIN-APP-1-fix",
+			WorktreePath: worktreeDir,
+		},
+	}}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs: service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, workspaceDir, stub.run)
+
+	a.refreshSingleMR(context.Background(), mrRepo.data["mr-1"])
+
+	if len(stub.calls) != 1 {
+		t.Fatalf("glab calls = %d, want 1", len(stub.calls))
+	}
+	if stub.calls[0].dir != worktreeDir {
+		t.Fatalf("refresh dir = %q, want persisted worktree path %q", stub.calls[0].dir, worktreeDir)
+	}
+	updated := mrRepo.data["mr-1"]
+	if updated.State != "ready" || updated.WebURL != "https://gitlab.com/justtrack/frontend/paket/-/merge_requests/3977" {
+		t.Fatalf("updated MR = %+v", updated)
+	}
+	if updated.WorktreePath != worktreeDir {
+		t.Fatalf("updated worktree path = %q, want %q", updated.WorktreePath, worktreeDir)
+	}
+}
+
 // --- syncMRDescriptionsOnApproval tests ---
 
 func TestSyncMRDescriptionsOnApproval_UpdatesOpenMRs(t *testing.T) {

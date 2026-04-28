@@ -411,6 +411,7 @@ CREATE TABLE gitlab_merge_requests (
     draft         INTEGER NOT NULL DEFAULT 0,
     source_branch TEXT NOT NULL DEFAULT '',
     web_url       TEXT NOT NULL DEFAULT '',
+    worktree_path TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

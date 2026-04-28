@@ -812,12 +812,8 @@ func (a *GlabAdapter) refreshMRs(ctx context.Context) {
 }
 
 func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMergeRequest) {
-	if a.workspaceDir == "" {
-		return
-	}
-	repoDir := filepath.Join(a.workspaceDir, mr.ProjectPath)
-	if _, err := os.Stat(repoDir); err != nil {
-		slog.Warn("glab: refresh mr repo dir not found", "dir", repoDir, "iid", mr.IID)
+	repoDir, ok := a.refreshMRRepoDir(mr)
+	if !ok {
 		return
 	}
 	fresh, ok := a.mrView(ctx, repoDir, mr.SourceBranch)
@@ -832,6 +828,7 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 		Draft:        fresh.Draft || fresh.WorkInProgress,
 		SourceBranch: mr.SourceBranch,
 		WebURL:       strings.TrimSpace(fresh.WebURL),
+		WorktreePath: mr.WorktreePath,
 		CreatedAt:    mr.CreatedAt,
 		UpdatedAt:    time.Now(),
 	}
@@ -861,6 +858,48 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 	if glabArtifactState(fresh) == "merged" && mr.State != "merged" {
 		a.checkAllMerged(ctx, mr.ID)
 	}
+}
+
+func (a *GlabAdapter) refreshMRRepoDir(mr domain.GitlabMergeRequest) (string, bool) {
+	candidates := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	addCandidate := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		candidates = append(candidates, dir)
+	}
+
+	addCandidate(mr.WorktreePath)
+	if strings.TrimSpace(a.workspaceDir) != "" && strings.TrimSpace(mr.ProjectPath) != "" {
+		addCandidate(filepath.Join(a.workspaceDir, mr.ProjectPath))
+	}
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	var lastDir string
+	var lastErr error
+	for i, dir := range candidates {
+		if _, err := os.Stat(dir); err == nil {
+			return dir, true
+		} else {
+			lastDir = dir
+			lastErr = err
+			if i < len(candidates)-1 {
+				slog.Debug("glab: refresh mr repo dir candidate unavailable", "dir", dir, "iid", mr.IID, "error", err)
+			}
+		}
+	}
+
+	slog.Warn("glab: refresh mr repo dir not found", "dir", lastDir, "iid", mr.IID, "error", lastErr)
+
+	return "", false
 }
 
 // refreshMRReviews fetches approval state and unresolved discussions for a GitLab MR
