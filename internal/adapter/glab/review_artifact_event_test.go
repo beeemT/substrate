@@ -126,6 +126,53 @@ func TestWorktreeCreatedPersistsGitlabMRLinkFromCreatedURL(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreatedPersistsGitlabMRUsingReviewProjectPath(t *testing.T) {
+	t.Parallel()
+
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
+	eventRepo := &glabArtifactEventRepo{}
+	stub := &stubRunner{output: []byte("https://gitlab.com/backend/postback-service/-/merge_requests/421\n")}
+	repos := coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, "", stub.run)
+	payload := mustJSON(worktreePayload{
+		WorkspaceID:  "ws-1",
+		WorkItemID:   "wi-1",
+		Repository:   "postback-service",
+		Branch:       "sub-GL-421-fix-comments",
+		WorktreePath: "/tmp/wt",
+		Review: domain.ReviewRef{
+			BaseRepo: domain.RepoRef{Provider: "gitlab", Owner: "backend", Repo: "postback-service"},
+		},
+	})
+
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+
+	mr, err := mrRepo.GetByIID(context.Background(), "backend/postback-service", 421)
+	if err != nil {
+		t.Fatalf("GetByIID persisted MR under review project path: %v", err)
+	}
+	if mr.ProjectPath != "backend/postback-service" || mr.SourceBranch != "sub-GL-421-fix-comments" {
+		t.Fatalf("persisted MR = %+v", mr)
+	}
+	if len(eventRepo.events) != 1 {
+		t.Fatalf("persisted events = %d, want 1", len(eventRepo.events))
+	}
+	var recorded domain.ReviewArtifactEventPayload
+	if err := json.Unmarshal([]byte(eventRepo.events[0].Payload), &recorded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if recorded.Artifact.RepoName != "backend/postback-service" {
+		t.Fatalf("artifact repo = %q, want backend/postback-service", recorded.Artifact.RepoName)
+	}
+}
+
 func TestExistingDraftMergeRequestRemainsDraft(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +204,7 @@ func TestWorkItemCompletedUsesPersistedArtifactAfterRestart(t *testing.T) {
 		Artifact: domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
-			RepoName:     "group/repo",
+			RepoName:     "repo",
 			Ref:          "!5",
 			URL:          "https://gitlab.com/org/repo/-/merge_requests/5",
 			State:        "draft",
@@ -195,7 +242,7 @@ func TestWorkItemCompletedUsesPersistedArtifactAfterRestart(t *testing.T) {
 	if err := json.Unmarshal([]byte(repo.events[1].Payload), &recorded); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if recorded.Artifact.State != "ready" || recorded.Artifact.WorktreePath != "/tmp/wt" {
+	if recorded.Artifact.State != "ready" || recorded.Artifact.WorktreePath != "/tmp/wt" || recorded.Artifact.RepoName != "org/repo" {
 		t.Fatalf("artifact = %+v", recorded.Artifact)
 	}
 }

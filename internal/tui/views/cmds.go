@@ -1363,6 +1363,10 @@ func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
 		if !ok {
 			return "", 0, false
 		}
+		projectPath := gitLabProjectPathFromMRURL(it.URL)
+		if projectPath != "" {
+			it.RepoName = projectPath
+		}
 	default:
 		return "", 0, false
 	}
@@ -1371,6 +1375,31 @@ func parseArtifactFetchArgs(it ArtifactItem) (string, int, bool) {
 		return "", 0, false
 	}
 	return it.RepoName, n, true
+}
+
+func gitLabProjectPathFromMRURL(rawURL string) string {
+	s := strings.TrimSpace(rawURL)
+	if s == "" {
+		return ""
+	}
+
+	u, err := url.Parse(s)
+	if err != nil {
+		slog.Debug("falling back to artifact repo name after parsing GitLab MR URL failed", "url", rawURL, "error", err)
+		return ""
+	}
+
+	path, unescapeErr := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
+	if unescapeErr != nil {
+		slog.Debug("falling back to escaped GitLab MR URL path", "url", rawURL, "error", unescapeErr)
+		path = strings.TrimPrefix(u.Path, "/")
+	}
+	projectPath, _, ok := strings.Cut(path, "/-/merge_requests/")
+	if !ok || projectPath == "" {
+		return ""
+	}
+
+	return projectPath
 }
 
 // WaitForAdapterErrorCmd listens for adapter errors and converts them to TUI messages.

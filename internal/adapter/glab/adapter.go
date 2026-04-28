@@ -128,6 +128,7 @@ type worktreePayload struct {
 	WorkItemTitle string                    `json:"work_item_title"`
 	SubPlan       string                    `json:"sub_plan"`
 	TrackerRefs   []domain.TrackerReference `json:"tracker_refs"`
+	Review        domain.ReviewRef          `json:"review"`
 }
 
 // completedPayload is the expected shape of EventWorkItemCompleted.
@@ -152,6 +153,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 		return errors.New("worktree payload missing branch or worktree_path")
 	}
 
+	projectPath := gitlabProjectPathFromReview(p.Review, p.Repository)
 	title := mrTitle(p.WorkItemTitle, p.Branch)
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
 	var artifact *domain.ReviewArtifact
@@ -162,7 +164,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 		artifact = &domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
-			RepoName:     p.Repository,
+			RepoName:     projectPath,
 			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
 			URL:          strings.TrimSpace(mr.WebURL),
 			State:        glabArtifactState(mr),
@@ -171,7 +173,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 			UpdatedAt:    time.Now(),
 		}
 	} else if url, err := a.createMR(ctx, p.WorktreePath, p.Branch, title, description); err != nil {
-		slog.Warn("glab: mr create failed", "repo", p.Repository, "branch", p.Branch, "error", err)
+		slog.Warn("glab: mr create failed", "repo", projectPath, "branch", p.Branch, "error", err)
 	} else {
 		// Try to get the IID of the newly created MR.
 		if created, ok := a.mrView(ctx, p.WorktreePath, p.Branch); ok {
@@ -180,7 +182,7 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 		artifact = &domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
-			RepoName:     p.Repository,
+			RepoName:     projectPath,
 			Ref:          glabArtifactRef(url, iid),
 			URL:          url,
 			State:        "draft",
@@ -199,14 +201,14 @@ func (a *GlabAdapter) onWorktreeCreated(ctx context.Context, payload string) err
 	}
 	a.mu.Lock()
 	a.tracked[p.Branch] = append(a.tracked[p.Branch], branchEntry{
-		repo:         p.Repository,
+		repo:         projectPath,
 		worktreePath: p.WorktreePath,
 		ref:          trackedRef,
 		url:          trackedURL,
 	})
 	a.mu.Unlock()
 	if artifact != nil {
-		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, *artifact, p.Repository, iid)
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, *artifact, projectPath, iid)
 	}
 
 	return nil
@@ -484,11 +486,15 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 	a.mu.RLock()
 	tracked := append([]branchEntry(nil), a.tracked[p.Branch]...)
 	a.mu.RUnlock()
+	if projectPath := gitlabProjectPathFromReview(p.Review, ""); projectPath != "" && len(tracked) == 1 {
+		tracked[0].repo = projectPath
+	}
 	if a.repos.Events == nil || strings.TrimSpace(p.WorkspaceID) == "" || strings.TrimSpace(p.WorkItemID) == "" {
 		return tracked
 	}
 	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
 	if err != nil {
+		slog.Warn("glab: list review artifact events for completion failed", "workspace_id", p.WorkspaceID, "error", err)
 		return tracked
 	}
 	seen := make(map[string]branchEntry)
@@ -498,6 +504,7 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 		}
 		var payload domain.ReviewArtifactEventPayload
 		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			slog.Warn("glab: unmarshal review artifact event for completion failed", "event_id", event.ID, "error", err)
 			continue
 		}
 		artifact := payload.Artifact
@@ -506,8 +513,12 @@ func (a *GlabAdapter) entriesForCompletion(ctx context.Context, p completedPaylo
 			strings.TrimSpace(artifact.WorktreePath) == "" {
 			continue
 		}
-		seen[artifact.RepoName+"|"+artifact.WorktreePath] = branchEntry{
-			repo: artifact.RepoName, worktreePath: artifact.WorktreePath,
+		projectPath := gitlabProjectPathFromMRURL(artifact.URL)
+		if projectPath == "" {
+			projectPath = strings.TrimSpace(artifact.RepoName)
+		}
+		seen[projectPath+"|"+artifact.WorktreePath] = branchEntry{
+			repo: projectPath, worktreePath: artifact.WorktreePath,
 			ref: artifact.Ref, url: artifact.URL,
 		}
 	}
@@ -539,6 +550,7 @@ func (a *GlabAdapter) worktreePathsForCompletion(ctx context.Context, p complete
 	}
 	events, err := a.repos.Events.ListByWorkspaceID(ctx, p.WorkspaceID, 0)
 	if err != nil {
+		slog.Warn("glab: list worktree events for completion failed", "workspace_id", p.WorkspaceID, "error", err)
 		return nil
 	}
 	var entries []branchEntry
@@ -548,13 +560,15 @@ func (a *GlabAdapter) worktreePathsForCompletion(ctx context.Context, p complete
 		}
 		var wt worktreePayload
 		if err := json.Unmarshal([]byte(event.Payload), &wt); err != nil {
+			slog.Warn("glab: unmarshal worktree event for completion failed", "event_id", event.ID, "error", err)
 			continue
 		}
 		if wt.WorkItemID != p.WorkItemID || wt.Branch != p.Branch || wt.WorktreePath == "" {
 			continue
 		}
+		projectPath := gitlabProjectPathFromReview(wt.Review, wt.Repository)
 		entries = append(entries, branchEntry{
-			repo:         wt.Repository,
+			repo:         projectPath,
 			worktreePath: wt.WorktreePath,
 		})
 	}
@@ -568,7 +582,55 @@ func (a *GlabAdapter) worktreePathsForCompletion(ctx context.Context, p complete
 	return entries
 }
 
+func gitlabProjectPathFromReview(review domain.ReviewRef, fallback string) string {
+	if projectPath := gitlabProjectPathFromRepoRef(review.BaseRepo); projectPath != "" {
+		return projectPath
+	}
+	if projectPath := gitlabProjectPathFromRepoRef(review.HeadRepo); projectPath != "" {
+		return projectPath
+	}
+
+	return strings.TrimSpace(fallback)
+}
+
+func gitlabProjectPathFromRepoRef(ref domain.RepoRef) string {
+	owner := strings.Trim(strings.TrimSpace(ref.Owner), "/")
+	repo := strings.Trim(strings.TrimSpace(ref.Repo), "/")
+	switch {
+	case owner != "" && repo != "":
+		return owner + "/" + repo
+	case owner == "" && strings.Contains(repo, "/"):
+		return repo
+	default:
+		return ""
+	}
+}
+
+func gitlabProjectPathFromMRURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Path == "" {
+		return ""
+	}
+	path, err := url.PathUnescape(strings.Trim(parsed.EscapedPath(), "/"))
+	if err != nil {
+		path = strings.Trim(parsed.Path, "/")
+	}
+	projectPath, _, ok := strings.Cut(path, "/-/merge_requests/")
+	if !ok {
+		return ""
+	}
+
+	return strings.Trim(projectPath, "/")
+}
+
 func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) {
+	projectPath = strings.TrimSpace(projectPath)
+	if projectPath == "" || !strings.Contains(projectPath, "/") {
+		if fromURL := gitlabProjectPathFromMRURL(artifact.URL); fromURL != "" {
+			projectPath = fromURL
+			artifact.RepoName = fromURL
+		}
+	}
 	if err := coreadapter.PersistGitlabMR(ctx, a.repos, workspaceID, workItemID, artifact, projectPath, iid); err != nil {
 		slog.Warn("glab: persist review artifact failed", "repo", artifact.RepoName, "branch", artifact.Branch, "error", err)
 	}
