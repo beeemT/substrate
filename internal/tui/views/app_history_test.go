@@ -1337,8 +1337,8 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected selecting the planning session row to start tailing the session log")
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	if updated.content.Mode() != ContentModeAgentSession {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeAgentSession)
 	}
 
 	model, cmd = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"}, {Kind: sessionlog.KindToolStart, Tool: "read", Intent: "1", Text: `{"path":"guidance.md"}`}}, NextOffset: 42})
@@ -1463,8 +1463,8 @@ func TestPlanningTaskViewShowsPlanReviewNoticeWithoutAutoNavigating(t *testing.T
 	if cmd != nil {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil while preserving selected planning task view", cmd)
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	if updated.content.Mode() != ContentModeAgentSession {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeAgentSession)
 	}
 	if updated.content.sessionLog.sessionID != "plan-sess-1" {
 		t.Fatalf("session log session id = %q, want plan-sess-1", updated.content.sessionLog.sessionID)
@@ -1646,8 +1646,8 @@ func TestHistoricalPlanningSessionRemainsSelectable(t *testing.T) {
 	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "plan-hist-1" {
 		t.Fatalf("selected entry = %#v, want historical planning session row", sel)
 	}
-	if updated.content.Mode() != ContentModePlanning {
-		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModePlanning)
+	if updated.content.Mode() != ContentModeAgentSession {
+		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeAgentSession)
 	}
 	if updated.content.sessionLog.sessionID != "plan-hist-1" {
 		t.Fatalf("session log session id = %q, want plan-hist-1", updated.content.sessionLog.sessionID)

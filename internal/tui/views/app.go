@@ -2114,7 +2114,13 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 	case "o":
-		if a.mainFocus == mainFocusContent {
+		// Open terminal in worktree when in session view.
+		if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
+			if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+				if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && session.WorktreePath != "" {
+					return a, OpenTerminalCmd(session.WorktreePath)
+				}
+			}
 			break
 		}
 		if a.sidebarMode == sidebarPaneSessions {
@@ -2186,7 +2192,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 			if taskSessionID == taskSidebarSourceDetailsID {
 				a.content.sourceDetails.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 				a.content.SetMode(ContentModeSourceDetails)
-				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
+				if prevMode != a.content.mode && (prevMode == ContentModeAgentSession || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
 				}
 				return nil
@@ -2195,7 +2201,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 				a.content.artifacts.SetItems(a.buildArtifactItems(wi))
 				a.content.artifacts.SetWorkItem(wi.ID, wi.State)
 				a.content.SetMode(ContentModeArtifacts)
-				if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
+				if prevMode != a.content.mode && (prevMode == ContentModeAgentSession || prevMode == ContentModeSessionInteraction) {
 					a.tailingSessionIDs = make(map[string]bool)
 				}
 				return nil
@@ -2222,7 +2228,7 @@ func (a *App) updateContentFromState() tea.Cmd {
 
 	a.content.SetMode(ContentModeOverview)
 	a.content.SetOverviewData(a.buildOverviewData(wi))
-	if prevMode != a.content.mode && (prevMode == ContentModePlanning || prevMode == ContentModeSessionInteraction) {
+	if prevMode != a.content.mode && (prevMode == ContentModeAgentSession || prevMode == ContentModeSessionInteraction) {
 		a.tailingSessionIDs = make(map[string]bool)
 	}
 	return nil
@@ -2341,7 +2347,7 @@ func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd 
 	metaParts = append(metaParts, taskSessionDisplayName(session))
 	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 	if session.Phase == domain.TaskPhasePlanning {
-		a.content.SetMode(ContentModePlanning)
+		a.content.SetMode(ContentModeAgentSession)
 	} else {
 		a.content.SetMode(ContentModeSessionInteraction)
 	}

@@ -1154,6 +1154,26 @@ func browserOpenExecCmd(url string) *exec.Cmd {
 	}
 }
 
+// shellEscape escapes a string for safe use in osascript strings.
+func shellEscape(s string) string {
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+// OpenTerminalCmd opens a new Terminal.app window in the specified directory.
+func OpenTerminalCmd(dir string) tea.Cmd {
+	return func() tea.Msg {
+		script := fmt.Sprintf(`tell application "Terminal"
+		do script "cd %s"
+		activate
+	end tell`, shellEscape(dir))
+		cmd := exec.CommandContext(context.TODO(), "osascript", "-e", script)
+		if err := cmd.Run(); err != nil {
+			slog.Warn("failed to open terminal", "path", dir, "error", err)
+		}
+		return nil
+	}
+}
+
 // StopForemanCmd stops the Foreman session after implementation ends.
 func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
 	return func() tea.Msg {

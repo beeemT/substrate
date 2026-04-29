@@ -461,7 +461,7 @@ func TestContentSetModeDeactivatesSpinnerOnPlanningExit(t *testing.T) {
 
 	cm := NewContentModel(styles.NewStyles(styles.DefaultTheme))
 	cm.SetSize(80, 40)
-	cm.SetMode(ContentModePlanning)
+	cm.SetMode(ContentModeAgentSession)
 	cm.sessionLog.SetSize(80, 40)
 	cm.sessionLog.SetAgentActive(true)
 
@@ -472,7 +472,7 @@ func TestContentSetModeDeactivatesSpinnerOnPlanningExit(t *testing.T) {
 	}
 
 	// Re-entering planning: SetAgentActive(true) must restart the tick chain.
-	cm.SetMode(ContentModePlanning)
+	cm.SetMode(ContentModeAgentSession)
 	cmd := cm.sessionLog.SetAgentActive(true)
 	if cmd == nil {
 		t.Fatal("SetAgentActive(true) after mode transition must return tick cmd")

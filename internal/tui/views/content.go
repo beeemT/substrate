@@ -28,7 +28,7 @@ const (
 	ContentModeOverview                              // canonical root-session overview/control surface
 	ContentModeSourceDetails                         // task-pane source metadata for the selected work item
 	ContentModeArtifacts                             // PR/MR artifact list for the selected work item
-	ContentModePlanning                              // planning/task session log tailing
+	ContentModeAgentSession                          // live agent session log tailing (planning, implementation, review)
 	ContentModeSessionInteraction                    // historical or task session interaction view
 )
 
@@ -121,7 +121,7 @@ func (m *ContentModel) SetMode(mode ContentMode) {
 
 	// When leaving planning/session-interaction, kill the spinner tick chain
 	// so that re-entering restarts it cleanly via SetAgentActive(true).
-	if prev == ContentModePlanning || prev == ContentModeSessionInteraction {
+	if prev == ContentModeAgentSession || prev == ContentModeSessionInteraction {
 		m.sessionLog.SetAgentActive(false)
 	}
 }
@@ -239,7 +239,7 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 	case ContentModeArtifacts:
 		m.artifacts, cmd = m.artifacts.Update(msg)
 		cmds = append(cmds, cmd)
-	case ContentModePlanning, ContentModeSessionInteraction:
+	case ContentModeAgentSession, ContentModeSessionInteraction:
 		m.sessionLog, cmd = m.sessionLog.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -257,7 +257,7 @@ func (m ContentModel) View() string {
 		return m.sourceDetails.View()
 	case ContentModeArtifacts:
 		return m.artifacts.View()
-	case ContentModePlanning, ContentModeSessionInteraction:
+	case ContentModeAgentSession, ContentModeSessionInteraction:
 		return m.sessionLog.View()
 	default:
 		return ""
@@ -426,7 +426,7 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 		return m.sourceDetails.KeybindHints()
 	case ContentModeArtifacts:
 		return m.artifacts.KeybindHints()
-	case ContentModePlanning, ContentModeSessionInteraction:
+	case ContentModeAgentSession, ContentModeSessionInteraction:
 		return m.sessionLog.KeybindHints()
 	default:
 		return nil
@@ -435,7 +435,7 @@ func (m ContentModel) KeybindHints() []KeybindHint {
 
 func (m ContentModel) InputCaptured() bool {
 	switch m.mode {
-	case ContentModePlanning, ContentModeSessionInteraction:
+	case ContentModeAgentSession, ContentModeSessionInteraction:
 		return m.sessionLog.InputCaptured()
 	default:
 		return false

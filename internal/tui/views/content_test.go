@@ -28,7 +28,7 @@ func TestContentSetMode(t *testing.T) {
 		views.ContentModeEmpty,
 		views.ContentModeOverview,
 		views.ContentModeSourceDetails,
-		views.ContentModePlanning,
+		views.ContentModeAgentSession,
 		views.ContentModeSessionInteraction,
 	}
 
