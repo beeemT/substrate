@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -37,6 +38,14 @@ const (
 	rowKindRepoHeader reviewSelectorRowKind = iota
 	rowKindFileHeader
 	rowKindComment
+)
+
+// reviewSelectorFocus tracks which pane has keyboard focus.
+type reviewSelectorFocus int
+
+const (
+	reviewSelectorFocusList reviewSelectorFocus = iota
+	reviewSelectorFocusPreview
 )
 
 // reviewSelectorRow is a flat row in the left selection pane.
@@ -91,6 +100,7 @@ type ReviewFollowupModel struct {
 	// commentSelected: comment.ID -> selected. Defaults true at fetch time.
 	commentSelected map[string]bool
 	selectorCursor  int
+	focus           reviewSelectorFocus // which pane is focused (list or preview)
 
 	spinner spinner.Model
 
@@ -106,6 +116,7 @@ func NewReviewFollowupModel(st styles.Styles) ReviewFollowupModel {
 	return ReviewFollowupModel{
 		styles:  st,
 		spinner: sp,
+		focus:   reviewSelectorFocusList,
 	}
 }
 
@@ -154,6 +165,7 @@ func (m *ReviewFollowupModel) Close() {
 	m.selectorRows = nil
 	m.commentSelected = nil
 	m.selectorCursor = 0
+	m.focus = reviewSelectorFocusList
 }
 
 // OpenLoading puts the overlay into the loading stage for the given work item.
@@ -207,6 +219,7 @@ func (m *ReviewFollowupModel) ApplyFetchResult(commentsByItem map[string][]adapt
 	if len(withUnresolved) == 1 {
 		m.scopedItems = withUnresolved
 		m.stage = reviewFollowupStageSelector
+		m.focus = reviewSelectorFocusList
 		m.rebuildSelectorRows()
 		m.selectorCursor = m.firstCommentRow()
 	} else {
@@ -285,6 +298,7 @@ func (m ReviewFollowupModel) cursorAfterRefetch(prevCommentID string) int {
 			}
 		}
 	}
+	// Fall back to the first comment row; firstCommentRow() already skips headers.
 	return m.firstCommentRow()
 }
 
@@ -528,28 +542,13 @@ func (m ReviewFollowupModel) viewSelector() string {
 	leftWidth := max(1, (iw-1)/2)
 	rightWidth := max(1, iw-leftWidth-1)
 
-	leftBody := m.renderSelectorList(leftWidth, bodyHeight)
-	rightBody := m.renderPreview(rightWidth, bodyHeight)
-
-	rows := make([]string, 0, bodyHeight)
-	leftLines := strings.Split(leftBody, "\n")
-	rightLines := strings.Split(rightBody, "\n")
-	for i := 0; i < bodyHeight; i++ {
-		var l, r string
-		if i < len(leftLines) {
-			l = leftLines[i]
-		}
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		l = padRight(ansi.Truncate(l, leftWidth, "…"), leftWidth)
-		r = ansi.Truncate(r, rightWidth, "…")
-		rows = append(rows, l+" "+r)
-	}
-	body := strings.Join(rows, "\n")
+	leftPane := m.renderSelectorPane(leftWidth, bodyHeight)
+	rightPane := m.renderPreviewPane(rightWidth, bodyHeight)
+	sep := strings.TrimSuffix(strings.Repeat("\n", bodyHeight), "\n")
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 
 	footer := m.styles.Hint.Render(ansi.Truncate(
-		"[↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [Esc] Cancel",
+		" [↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [←→] Focus  [Esc] Cancel",
 		iw, ""))
 	return components.RenderOverlayFrame(m.styles, fw, components.OverlayFrameSpec{
 		HeaderLines: header,
@@ -559,11 +558,12 @@ func (m ReviewFollowupModel) viewSelector() string {
 	})
 }
 
+// renderSelectorList returns the unframed list content for the selector pane.
 func (m ReviewFollowupModel) renderSelectorList(width, height int) string {
 	if len(m.selectorRows) == 0 {
 		return m.styles.Muted.Render("No comments")
 	}
-	// Window the rows around the cursor.
+	// Viewport-like scrolling: keep cursor in view if possible.
 	start := 0
 	if m.selectorCursor >= height {
 		start = m.selectorCursor - height + 1
@@ -600,18 +600,27 @@ func (m ReviewFollowupModel) renderSelectorList(width, height int) string {
 				locator = fmt.Sprintf(":%d ", c.Line)
 			}
 			body := strings.TrimSpace(strings.SplitN(c.Body, "\n", 2)[0])
-			text := fmt.Sprintf("    %s %s%s — %s", mark, locator, c.ReviewerLogin, body)
-			if i == m.selectorCursor {
-				text = m.styles.Active.Render("  ▶ " + strings.TrimLeft(text, " "))
-			}
-			line = text
+			line = fmt.Sprintf("    %s %s%s — %s", mark, locator, c.ReviewerLogin, body)
 		}
 		out = append(out, ansi.Truncate(line, width, "…"))
 	}
 	return strings.Join(out, "\n")
 }
 
-func (m ReviewFollowupModel) renderPreview(width, height int) string {
+// renderSelectorPane returns the comment list in a bordered pane with focus highlighting.
+func (m ReviewFollowupModel) renderSelectorPane(width, height int) string {
+	focused := m.focus == reviewSelectorFocusList
+	content := m.renderSelectorList(width, height)
+	return components.RenderOverlayPane(m.styles, width, height, components.OverlayPaneSpec{
+		Title:        "Comments",
+		DividerWidth: 0,
+		Body:         content,
+		Focused:      focused,
+	})
+}
+
+// renderPreviewContent returns the unframed preview content for the right pane.
+func (m ReviewFollowupModel) renderPreviewContent(width, height int) string {
 	row := m.currentRow()
 	if row == nil || row.kind != rowKindComment {
 		return m.styles.Muted.Render("Select a comment to preview")
@@ -620,8 +629,7 @@ func (m ReviewFollowupModel) renderPreview(width, height int) string {
 	if !ok {
 		return m.styles.Muted.Render("Comment unavailable")
 	}
-	// Render the comment header with author + timestamp (no divider — pane title serves as separator).
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 8)
 	header := m.styles.Title.Render(c.ReviewerLogin)
 	if !c.CreatedAt.IsZero() {
 		header += m.styles.Muted.Render("  " + c.CreatedAt.Format("2006-01-02 15:04"))
@@ -647,6 +655,18 @@ func (m ReviewFollowupModel) renderPreview(width, height int) string {
 		parts = parts[:height]
 	}
 	return strings.Join(parts, "\n")
+}
+
+// renderPreviewPane returns the comment preview in a bordered pane with focus highlighting.
+func (m ReviewFollowupModel) renderPreviewPane(width, height int) string {
+	focused := m.focus == reviewSelectorFocusPreview
+	content := m.renderPreviewContent(width, height)
+	return components.RenderOverlayPane(m.styles, width, height, components.OverlayPaneSpec{
+		Title:        "Preview",
+		DividerWidth: 0,
+		Body:         content,
+		Focused:      focused,
+	})
 }
 
 func (m ReviewFollowupModel) viewConfirm() string {
@@ -745,6 +765,29 @@ func (m ReviewFollowupModel) firstCommentRow() int {
 		}
 	}
 	return 0
+}
+
+// moveCursor moves the cursor by delta (-1 or +1), skipping non-comment rows.
+func (m *ReviewFollowupModel) moveCursor(delta int) {
+	if len(m.selectorRows) == 0 {
+		return
+	}
+	newCursor := m.selectorCursor + delta
+	if newCursor < 0 {
+		newCursor = 0
+	}
+	if newCursor >= len(m.selectorRows) {
+		newCursor = len(m.selectorRows) - 1
+	}
+	// Skip non-comment rows.
+	for newCursor >= 0 && newCursor < len(m.selectorRows) {
+		if m.selectorRows[newCursor].kind == rowKindComment {
+			m.selectorCursor = newCursor
+			return
+		}
+		newCursor += delta
+	}
+	// No comment rows found; keep original cursor.
 }
 
 func (m ReviewFollowupModel) currentRow() *reviewSelectorRow {
@@ -853,6 +896,7 @@ func (m *ReviewFollowupModel) applyPickerSelection() {
 		}
 	}
 	m.stage = reviewFollowupStageSelector
+	m.focus = reviewSelectorFocusList
 	m.rebuildSelectorRows()
 	m.selectorCursor = m.firstCommentRow()
 }
@@ -958,14 +1002,14 @@ func (m ReviewFollowupModel) handleKeySelector(msg tea.KeyMsg) (ReviewFollowupMo
 	switch msg.String() {
 	case keyEsc:
 		return m, func() tea.Msg { return ReviewFollowupCancelMsg{} }
+	case "left", "h":
+		m.focus = reviewSelectorFocusList
+	case "right", "l":
+		m.focus = reviewSelectorFocusPreview
 	case "up", "k":
-		if m.selectorCursor > 0 {
-			m.selectorCursor--
-		}
+		m.moveCursor(-1)
 	case "down", "j":
-		if m.selectorCursor < len(m.selectorRows)-1 {
-			m.selectorCursor++
-		}
+		m.moveCursor(1)
 	case " ":
 		m.toggleAtCursor()
 	case "a":
@@ -994,6 +1038,7 @@ func (m ReviewFollowupModel) handleKeyConfirm(msg tea.KeyMsg) (ReviewFollowupMod
 		return m, cmd
 	case "n", "N", keyEsc:
 		m.stage = reviewFollowupStageSelector
+		m.focus = reviewSelectorFocusList
 	}
 	return m, nil
 }
