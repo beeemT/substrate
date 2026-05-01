@@ -17,6 +17,10 @@ type Theme struct {
 	OverlayBorder, OverlayBorderFocused                                  string
 	SelectedBg, SelectionActive, SelectionInactive                       string
 
+	// Sidebar status borders
+	SidebarBorderActive, SidebarBorderSuccess, SidebarBorderError,
+	SidebarBorderWarning, SidebarBorderMuted, SidebarBorderDefault string
+
 	// Settings subtheme
 	SettingsText, SettingsTextStrong, SettingsBreadcrumb, SettingsSelectionInactiveText string
 	ScrollbarTrack, ScrollbarThumb, ScrollbarThumbFocused                               string
@@ -54,9 +58,17 @@ var DefaultTheme = Theme{
 	ToolBorder:           "#475569",
 	OverlayBorder:        "#2d2d44",
 	OverlayBorderFocused: "#60a5fa",
-	SelectedBg:           "#1e293b",
-	SelectionActive:      "#1e293b",
+	SelectedBg:           "#1e3a5f",
+	SelectionActive:      "#1e3a5f",
 	SelectionInactive:    "#122033",
+
+	// Sidebar status borders
+	SidebarBorderActive:  "#5b8def",
+	SidebarBorderSuccess: "#34d399",
+	SidebarBorderError:   "#f87171",
+	SidebarBorderWarning: "#fbbf24",
+	SidebarBorderMuted:   "#6b7280",
+	SidebarBorderDefault: "#334155",
 
 	SettingsText:                  "#cbd5e1",
 	SettingsTextStrong:            "#f8fafc",
@@ -77,12 +89,18 @@ type Styles struct {
 	Theme  Theme
 	Chrome ChromeMetrics
 
-	Header          lipgloss.Style
-	StatusBar       lipgloss.Style
-	Sidebar         lipgloss.Style
-	SidebarSelected lipgloss.Style
-	Border          lipgloss.Style
-	KeybindAccent   lipgloss.Style
+	Header                 lipgloss.Style
+	StatusBar              lipgloss.Style
+	Sidebar                lipgloss.Style
+	SidebarSelected        lipgloss.Style
+	SidebarItem            lipgloss.Style
+	SidebarItemSelected    lipgloss.Style
+	SidebarItemTitle       lipgloss.Style
+	SidebarItemTitleSel    lipgloss.Style
+	SidebarItemSubtitle    lipgloss.Style
+	SidebarItemSubtitleSel lipgloss.Style
+	Border                 lipgloss.Style
+	KeybindAccent          lipgloss.Style
 
 	// Status badges
 	Active      lipgloss.Style
@@ -153,6 +171,23 @@ func NewStyles(t Theme) Styles {
 			BorderForeground(lipgloss.Color(t.Divider)),
 		SidebarSelected: lipgloss.NewStyle().
 			Background(lipgloss.Color(t.SelectionActive)),
+
+		// Sidebar item styles with status border
+		SidebarItem: lipgloss.NewStyle(),
+		SidebarItemSelected: lipgloss.NewStyle().
+			Background(lipgloss.Color(t.SelectedBg)),
+
+		// Sidebar item typography
+		SidebarItemTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Title)),
+		SidebarItemTitleSel: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Title)).
+			Bold(true),
+		SidebarItemSubtitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Muted)),
+		SidebarItemSubtitleSel: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Muted)),
+
 		Border: lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Border)),

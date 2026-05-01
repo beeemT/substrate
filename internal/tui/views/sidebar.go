@@ -161,6 +161,69 @@ func (e SidebarEntry) sidebarPrefix() string {
 	}
 }
 
+// StatusBorderColor returns the color string for the left border of a sidebar entry.
+// This color reflects the entry's status, making it easy to scan entries at a glance.
+func (e SidebarEntry) StatusBorderColor(st styles.Styles) string {
+	// Source details is informational - use muted/default
+	if e.Kind == SidebarEntryTaskSourceDetails {
+		return st.Theme.SidebarBorderDefault
+	}
+
+	// Artifacts use CI/review state
+	if e.Kind == SidebarEntryTaskArtifacts {
+		if e.ArtifactAggregateCIState == "failure" {
+			return st.Theme.SidebarBorderError
+		}
+		if e.ArtifactAggregateReviewState == "changes_requested" {
+			return st.Theme.SidebarBorderWarning
+		}
+		if e.ArtifactAggregateCIState == "success" || e.ArtifactAggregateReviewState == "approved" {
+			return st.Theme.SidebarBorderSuccess
+		}
+		return st.Theme.SidebarBorderDefault
+	}
+
+	// Task sessions use session status
+	if e.Kind == SidebarEntryTaskSession {
+		switch e.SessionStatus {
+		case domain.AgentSessionCompleted:
+			return st.Theme.SidebarBorderSuccess
+		case domain.AgentSessionFailed:
+			return st.Theme.SidebarBorderError
+		case domain.AgentSessionInterrupted:
+			return st.Theme.SidebarBorderWarning
+		case domain.AgentSessionWaitingForAnswer:
+			return st.Theme.SidebarBorderWarning
+		case domain.AgentSessionRunning:
+			return st.Theme.SidebarBorderActive
+		default:
+			return st.Theme.SidebarBorderDefault
+		}
+	}
+
+	// Work items and history use session state
+	switch {
+	case e.State == domain.SessionMerged:
+		return st.Theme.SidebarBorderSuccess
+	case e.State == domain.SessionCompleted:
+		return st.Theme.SidebarBorderSuccess
+	case e.State == domain.SessionFailed:
+		return st.Theme.SidebarBorderError
+	case e.State == domain.SessionArchived:
+		return st.Theme.SidebarBorderMuted
+	case (e.State == domain.SessionImplementing || e.State == domain.SessionReviewing) && e.HasInterrupted:
+		return st.Theme.SidebarBorderWarning
+	case e.State == domain.SessionPlanReview || (e.State == domain.SessionImplementing && e.HasOpenQuestion):
+		return st.Theme.SidebarBorderWarning
+	case e.State == domain.SessionImplementing || e.State == domain.SessionPlanning || e.State == domain.SessionReviewing:
+		return st.Theme.SidebarBorderActive
+	case e.HasOpenQuestion || e.HasInterrupted:
+		return st.Theme.SidebarBorderWarning
+	default:
+		return st.Theme.SidebarBorderDefault
+	}
+}
+
 // StatusIcon returns the styled status icon for the sidebar entry.
 func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 	if e.Kind == SidebarEntryTaskSourceDetails {
@@ -649,24 +712,9 @@ func (m SidebarModel) View() string {
 			continue
 		}
 		selected := i == m.cursor
-		icon := entry.StatusIcon(m.styles)
-		line1 := truncate(icon+" "+entry.sidebarPrefix(), contentWidth)
-		titleLine := truncate("  "+entry.Title, contentWidth)
-		var line3 string
-		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
-			bar := components.RenderProgressBar(m.styles, entry.DoneSubPlans, entry.TotalSubPlans, max(1, contentWidth-4))
-			line3 = "  " + truncate(bar, max(1, contentWidth-2))
-		} else {
-			line3 = "  " + m.styles.Subtitle.Render(truncate(entry.Subtitle(), max(1, contentWidth-2)))
-		}
-		block := strings.Join([]string{line1, titleLine, line3}, "\n")
-		if selected {
-			// Apply foreground so gaps and un-styled spaces inherit a visible base color.
-			lines = append(lines, m.styles.SidebarSelected.Width(contentWidth).Foreground(lipgloss.Color(m.styles.Theme.Title)).Render(block))
-		} else {
-			lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(block))
-		}
-		lines = append(lines, "")
+		block := renderSidebarItem(entry, selected, m.styles, contentWidth)
+		lines = append(lines, block)
+		lines = append(lines, m.styles.Divider.Render(strings.Repeat("─", contentWidth)))
 	}
 	for len(lines) < m.height {
 		lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(""))
@@ -795,6 +843,60 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// renderSidebarItem renders a single sidebar entry with left status border.
+// The border color reflects the entry's status, and the selected state
+// uses a brighter background with bold title.
+func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, width int) string {
+	borderColor := entry.StatusBorderColor(st)
+
+	icon := entry.StatusIcon(st)
+	prefixWidth := max(0, width-2)
+	prefix := truncate(icon+" "+entry.sidebarPrefix(), prefixWidth)
+	titleWidth := max(0, width-2)
+	title := truncate("  "+entry.Title, titleWidth)
+
+	var footer string
+	if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
+		footerWidth := max(0, width-2)
+		bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, footerWidth-4))
+		footer = "  " + truncate(bar, max(1, footerWidth-2))
+	} else {
+		footerWidth := max(0, width-2)
+		footer = "  " + truncate(entry.Subtitle(), max(1, footerWidth-2))
+	}
+
+	// Build each line with proper styling
+	var line1, line2, line3 string
+	if selected {
+		// Selected: bold prefix, brighter bg, muted footer
+		// Include background on each line so lipgloss doesn't create separate padding segments
+		selectedBg := lipgloss.Color(st.Theme.SelectedBg)
+		line1 = st.SidebarItemTitleSel.Background(selectedBg).Render(prefix)
+		line2 = st.SidebarItem.Background(selectedBg).Render(title)
+		line3 = st.SidebarItemSubtitleSel.Background(selectedBg).Render(footer)
+	} else {
+		// Non-selected: normal weight, muted footer
+		line1 = st.SidebarItemTitle.Render(prefix)
+		line2 = st.SidebarItem.Render(title)
+		line3 = st.SidebarItemSubtitle.Render(footer)
+	}
+
+	block := strings.Join([]string{line1, line2, line3}, "\n")
+
+	// Apply left border style with background for selected state
+	borderStyle := lipgloss.Style{}.
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Width(width)
+
+	if selected {
+		borderStyle = borderStyle.Background(lipgloss.Color(st.Theme.SelectedBg))
+	}
+
+	return borderStyle.Render(block)
 }
 
 // renderGroupHeader renders a group section heading with a trailing divider on one line.
