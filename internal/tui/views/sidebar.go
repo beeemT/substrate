@@ -847,13 +847,13 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 
 // renderSidebarItem renders a single sidebar entry with left status border.
 // The border color reflects the entry's status, and the selected state
-// uses a brighter background with bold title.
+// uses a brighter background with bold title. Icon is omitted for cleaner look.
 func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, width int) string {
 	borderColor := entry.StatusBorderColor(st)
 
-	icon := entry.StatusIcon(st)
+	// No icon - border provides status indication
 	prefixWidth := max(0, width-2)
-	prefix := truncate(icon+" "+entry.sidebarPrefix(), prefixWidth)
+	prefix := truncate(entry.sidebarPrefix(), prefixWidth)
 	titleWidth := max(0, width-2)
 	title := truncate("  "+entry.Title, titleWidth)
 
@@ -862,6 +862,9 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 		footerWidth := max(0, width-2)
 		bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, footerWidth-4))
 		footer = "  " + truncate(bar, max(1, footerWidth-2))
+	} else if entry.Kind == SidebarEntryTaskSession {
+		// Task sessions don't show footer - status is encoded in border color
+		footer = ""
 	} else {
 		footerWidth := max(0, width-2)
 		footer = "  " + truncate(entry.Subtitle(), max(1, footerWidth-2))
@@ -870,14 +873,13 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 	// Build each line with proper styling
 	var line1, line2, line3 string
 	if selected {
-		// Selected: bold prefix, brighter bg, muted footer
-		// Include background on each line so lipgloss doesn't create separate padding segments
+		// Selected: bold prefix, brighter bg
 		selectedBg := lipgloss.Color(st.Theme.SelectedBg)
 		line1 = st.SidebarItemTitleSel.Background(selectedBg).Render(prefix)
 		line2 = st.SidebarItem.Background(selectedBg).Render(title)
 		line3 = st.SidebarItemSubtitleSel.Background(selectedBg).Render(footer)
 	} else {
-		// Non-selected: normal weight, muted footer
+		// Non-selected: normal weight
 		line1 = st.SidebarItemTitle.Render(prefix)
 		line2 = st.SidebarItem.Render(title)
 		line3 = st.SidebarItemSubtitle.Render(footer)
@@ -888,7 +890,7 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 	// Apply left border style with background for selected state
 	borderStyle := lipgloss.Style{}.
 		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(lipgloss.Color(borderColor)).
 		Width(width)
 

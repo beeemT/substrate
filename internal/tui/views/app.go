@@ -855,11 +855,12 @@ func taskSessionModeLabel(session *domain.Task) string {
 func taskSidebarSessionTitle(session *domain.Task) string {
 	switch session.Phase {
 	case domain.TaskPhasePlanning:
-		return "Planning session " + shortSessionID(session.ID)
+		// Don't prefix with "Planning" - we're already in the Planning group
+		return shortSessionID(session.ID)
 	case domain.TaskPhaseReview:
-		return "Review session " + shortSessionID(session.ID)
+		return "Review " + shortSessionID(session.ID)
 	default:
-		return "Session " + shortSessionID(session.ID)
+		return "Implementation " + shortSessionID(session.ID)
 	}
 }
 

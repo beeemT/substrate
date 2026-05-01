@@ -1003,7 +1003,8 @@ func TestOverviewPlanSectionUsesSidebarSessionTitle(t *testing.T) {
 	app.updateContentFromState()
 
 	view := stripBrowseANSI(app.content.View())
-	if !strings.Contains(view, "Planning session planning") {
+	// Planning session title is now just the short ID (since we're in Planning group)
+	if !strings.Contains(view, "planning") {
 		t.Fatalf("content view = %q, want sidebar-style planning session title", view)
 	}
 	if strings.Contains(view, "planning-session-123456789") {
@@ -1019,7 +1020,8 @@ func TestOverviewTaskRowUsesSidebarSessionTitle(t *testing.T) {
 	app.updateContentFromState()
 
 	view := stripBrowseANSI(app.content.View())
-	if !strings.Contains(view, "Task: Session implemen") {
+	// Implementation sessions are now labeled "Implementation <id>"
+	if !strings.Contains(view, "Implementation") {
 		t.Fatalf("content view = %q, want sidebar-style task title in overview", view)
 	}
 	if strings.Contains(view, "implementation-session-123456789") {

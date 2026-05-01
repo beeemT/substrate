@@ -1980,7 +1980,7 @@ func TestSidebarTaskContentUsesSidebarSessionTitle(t *testing.T) {
 		t.Fatalf("session log session id = %q, want implementation-session-123456789", updated.content.sessionLog.sessionID)
 	}
 	view := stripBrowseANSI(updated.content.View())
-	if !strings.Contains(view, "SUB-1 · Session implemen") {
+	if !strings.Contains(view, "SUB-1 · Implementation") {
 		t.Fatalf("content view = %q, want sidebar-style task title", view)
 	}
 	if strings.Contains(view, "implementation-session-123456789") {

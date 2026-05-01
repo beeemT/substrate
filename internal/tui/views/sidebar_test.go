@@ -122,9 +122,10 @@ func TestSidebarUsesDisplayWidthForStyledWorkItemPrefix(t *testing.T) {
 	if got := ansi.StringWidth(lines[2]); got > 12 {
 		t.Fatalf("prefix line width = %d, want <= 12\nline: %q", got, lines[2])
 	}
-	// Left border character is now rendered (│), so strip it
-	prefixLine = strings.TrimPrefix(prefixLine, "│")
-	if prefixLine != "● SUB-123" {
+	// Left thick border character is now rendered (┃), so strip it
+	prefixLine = strings.TrimPrefix(prefixLine, "┃")
+	// No icon is rendered anymore, just the external ID
+	if prefixLine != "SUB-123" {
 		t.Fatalf("prefix line = %q, want full visible prefix without premature ellipsis", prefixLine)
 	}
 }
