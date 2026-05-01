@@ -714,7 +714,9 @@ func (m SidebarModel) View() string {
 		selected := i == m.cursor
 		block := renderSidebarItem(entry, selected, m.styles, contentWidth)
 		lines = append(lines, block)
-		lines = append(lines, m.styles.Divider.Render(strings.Repeat("─", contentWidth)))
+		// Divider with spacing to sidebar borders
+		dividerContent := strings.Repeat("─", max(0, contentWidth-2))
+		lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
 	}
 	for len(lines) < m.height {
 		lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(""))
@@ -887,7 +889,7 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 		} else {
 			// Review/Implementation sessions: prefix + title
 			prefix := truncate(entry.sidebarPrefix(), contentWidth)
-			title := truncate("  "+entry.Title, contentWidth)
+			title := truncate(entry.Title, contentWidth)
 			if selected {
 				selectedBg := lipgloss.Color(st.Theme.SelectedBg)
 				lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
@@ -906,34 +908,34 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 			selectedBg := lipgloss.Color(st.Theme.SelectedBg)
 			lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
 			if entry.Kind == SidebarEntryTaskArtifacts {
-				title := truncate("  "+entry.Title, contentWidth)
+				title := truncate(entry.Title, contentWidth)
 				lines = append(lines, st.SidebarItem.Background(selectedBg).Render(title))
 			} else {
 				subtitle := truncate(entry.Subtitle(), contentWidth)
-				lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render("  "+subtitle))
+				lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render(subtitle))
 			}
 		} else {
 			lines = append(lines, st.SidebarItemTitle.Render(prefix))
 			if entry.Kind == SidebarEntryTaskArtifacts {
-				title := truncate("  "+entry.Title, contentWidth)
+				title := truncate(entry.Title, contentWidth)
 				lines = append(lines, st.SidebarItem.Render(title))
 			} else {
 				subtitle := truncate(entry.Subtitle(), contentWidth)
-				lines = append(lines, st.SidebarItemSubtitle.Render("  "+subtitle))
+				lines = append(lines, st.SidebarItemSubtitle.Render(subtitle))
 			}
 		}
 
 	default:
 		// Work items and history: prefix + title + subtitle/progress
 		prefix := truncate(entry.sidebarPrefix(), contentWidth)
-		title := truncate("  "+entry.Title, contentWidth)
+		title := truncate(entry.Title, contentWidth)
 
 		var footer string
 		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
 			bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, contentWidth-4))
-			footer = "  " + truncate(bar, max(1, contentWidth-2))
+			footer = truncate(bar, max(1, contentWidth-2))
 		} else {
-			footer = "  " + truncate(entry.Subtitle(), max(1, contentWidth-2))
+			footer = truncate(entry.Subtitle(), max(1, contentWidth-2))
 		}
 
 		if selected {

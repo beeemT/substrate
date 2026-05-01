@@ -63,10 +63,10 @@ var DefaultTheme = Theme{
 	SelectionInactive:    "#122033",
 
 	// Sidebar status borders
-	SidebarBorderActive:  "#5b8def",
-	SidebarBorderSuccess: "#34d399",
-	SidebarBorderError:   "#f87171",
-	SidebarBorderWarning: "#fbbf24",
+	SidebarBorderActive:  "#60a5fa",
+	SidebarBorderSuccess: "#22c55e",
+	SidebarBorderError:   "#ef4444",
+	SidebarBorderWarning: "#f97316",
 	SidebarBorderMuted:   "#6b7280",
 	SidebarBorderDefault: "#334155",
 
