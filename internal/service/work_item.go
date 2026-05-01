@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -9,17 +10,19 @@ import (
 
 	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // SessionService provides business logic for work items.
 type SessionService struct {
 	transacter atomic.Transacter[repository.Resources]
+	bus        *event.Bus
 }
 
 // NewSessionService creates a new WorkItemService.
-func NewSessionService(transacter atomic.Transacter[repository.Resources]) *SessionService {
-	return &SessionService{transacter: transacter}
+func NewSessionService(transacter atomic.Transacter[repository.Resources], bus *event.Bus) *SessionService {
+	return &SessionService{transacter: transacter, bus: bus}
 }
 
 // validSessionTransitions defines the allowed state transitions.
@@ -288,7 +291,8 @@ func shouldEnforceExternalIDUniqueness(item domain.Session) bool {
 
 // Transition transitions a work item to a new state.
 func (s *SessionService) Transition(ctx context.Context, id string, to domain.SessionState) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	var committed stateChangeEvent
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		item, err := res.Sessions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("work item", id)
@@ -302,11 +306,89 @@ func (s *SessionService) Transition(ctx context.Context, id string, to domain.Se
 			)
 		}
 
+		from := item.State
 		item.State = to
 		item.UpdatedAt = time.Now()
 
-		return res.Sessions.Update(ctx, item)
+		if err := res.Sessions.Update(ctx, item); err != nil {
+			return err
+		}
+
+		// Capture after DB write — will emit only if transaction commits.
+		committed = stateChangeEvent{from: from, to: to, item: item}
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Transaction committed. Emit outside the transaction.
+	if committed.item.ID != "" {
+		s.emitStateChange(context.Background(), committed.from, committed.to, committed.item)
+	}
+	return nil
+}
+
+type stateChangeEvent struct {
+	from, to domain.SessionState
+	item     domain.Session
+}
+
+// stateToEventType maps session states to their corresponding event types.
+// Returns empty string for states that should not emit events.
+func stateToEventType(state domain.SessionState) domain.EventType {
+	switch state {
+	case domain.SessionIngested:
+		return domain.EventWorkItemIngested
+	case domain.SessionPlanning:
+		return domain.EventWorkItemPlanning
+	case domain.SessionPlanReview:
+		return domain.EventWorkItemPlanReview
+	case domain.SessionApproved:
+		return domain.EventWorkItemApproved
+	case domain.SessionImplementing:
+		return domain.EventWorkItemImplementing
+	case domain.SessionReviewing:
+		return domain.EventWorkItemReviewing
+	case domain.SessionCompleted:
+		return domain.EventWorkItemCompleted
+	case domain.SessionMerged:
+		return domain.EventWorkItemMerged
+	case domain.SessionFailed:
+		return domain.EventWorkItemFailed
+	default:
+		return "" // SessionArchived and unknown states don't emit
+	}
+}
+
+// emitStateChange emits a state change event asynchronously.
+// Nil bus is handled gracefully by skipping the emit.
+func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.SessionState, item domain.Session) {
+	if s.bus == nil {
+		return
+	}
+
+	eventType := stateToEventType(to)
+	if eventType == "" {
+		return // no event for this state
+	}
+
+	go func() {
+		if err := s.bus.Publish(ctx, domain.SystemEvent{
+			ID:          item.ID,
+			EventType:   string(eventType),
+			WorkspaceID: item.WorkspaceID,
+			CreatedAt:   time.Now(),
+		}); err != nil {
+			slog.Error("failed to emit state change event",
+				"error", err,
+				"session_id", item.ID,
+				"from", from,
+				"to", to,
+				"event_type", eventType,
+			)
+		}
+	}()
 }
 
 // StartPlanning transitions a work item from ingested to planning.

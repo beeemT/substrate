@@ -43,17 +43,21 @@ const (
 	EventWorkItemReviewing    EventType = "work_item.reviewing"
 	EventWorkItemCompleted    EventType = "work_item.completed"
 	EventWorkItemFailed       EventType = "work_item.failed"
+	EventWorkItemMerged       EventType = "work_item.merged"
 
 	// Workspace events
 	EventWorkspaceCreated EventType = "workspace.created"
 
 	// Plan events
-	EventPlanGenerated          EventType = "plan.generated"
+	EventPlanGenerated           EventType = "plan.generated"
 	EventPlanSubmittedForReview EventType = "plan.submitted_for_review"
 	EventPlanApproved           EventType = "plan.approved"
 	EventPlanRejected           EventType = "plan.rejected"
 	EventPlanRevised            EventType = "plan.revised"
 	EventPlanFailed             EventType = "plan.failed"
+
+	// Sub-plan events
+	EventSubPlanStatusChanged EventType = "subplan.status_changed"
 
 	// Implementation events
 	EventImplementationStarted EventType = "work_item.implementation_started"

@@ -156,7 +156,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// --- Services ---
 	transacter := reposqlite.NewTransacter(db)
-	workItemSvc := service.NewSessionService(transacter)
+	workItemSvc := service.NewSessionService(transacter, nil)
 	planSvc := service.NewPlanService(transacter)
 	sessionSvc := service.NewTaskService(transacter)
 	reviewSvc := service.NewReviewService(transacter)

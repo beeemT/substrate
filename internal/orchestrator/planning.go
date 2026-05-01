@@ -488,11 +488,6 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		PriorResumeInfo:   req.priorResumeInfo,
 	}
 
-	// 10. Emit PlanningStarted event.
-	if err := s.emitPlanningStartedEvent(ctx, req.workItemID, sessionID, workspace.ID); err != nil {
-		slog.Warn("failed to emit planning started event", "error", err)
-	}
-
 	rawContent, retries, warnings, planErr := s.runPlanningWithCorrectionLoop(ctx, planningCtx, workItem.WorkspaceID)
 	if planErr != nil {
 		if errors.Is(planErr, context.Canceled) {
@@ -911,18 +906,6 @@ func (s *PlanningService) buildAndPersistPlan(
 	}
 
 	return plan, subPlans, nil
-}
-
-// emitPlanningStartedEvent emits a PlanningStarted event.
-func (s *PlanningService) emitPlanningStartedEvent(ctx context.Context, workItemID, sessionID, workspaceID string) error {
-	evt := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventWorkItemPlanning),
-		WorkspaceID: workspaceID,
-		Payload:     fmt.Sprintf(`{"work_item_id":"%s","session_id":"%s"}`, workItemID, sessionID),
-		CreatedAt:   time.Now().UTC(),
-	}
-	return s.eventSvc.Create(ctx, evt)
 }
 
 // emitPlanGeneratedEvent emits a PlanGenerated event.

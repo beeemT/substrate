@@ -81,7 +81,7 @@ func TestArchAppFlow(t *testing.T) {
 			repo := &archFlowRepo{
 				items: map[string]domain.Session{tc.workItem.ID: tc.workItem},
 			}
-			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}})
+			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
 
 			app := NewApp(Services{
 				WorkspaceID:   "ws-local",

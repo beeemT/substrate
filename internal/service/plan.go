@@ -3,23 +3,26 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // PlanService provides business logic for plans and sub-plans.
 type PlanService struct {
 	transacter atomic.Transacter[repository.Resources]
+	eventBus   *event.Bus
 }
 
 // NewPlanService creates a new PlanService.
-func NewPlanService(transacter atomic.Transacter[repository.Resources]) *PlanService {
-	return &PlanService{transacter: transacter}
+func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *PlanService {
+	return &PlanService{transacter: transacter, eventBus: eventBus}
 }
 
 // Plan state transitions
@@ -132,17 +135,73 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 
 // SubmitForReview transitions a plan from draft to pending_review.
 func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
-	return s.TransitionPlan(ctx, id, domain.PlanPendingReview)
+	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
+		return err
+	}
+	if s.eventBus != nil {
+		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:        domain.NewID(),
+			EventType: string(domain.EventPlanSubmittedForReview),
+			CreatedAt: time.Now(),
+		}); pubErr != nil {
+			slog.Warn("failed to emit plan submitted for review event", "error", pubErr, "plan_id", id)
+		}
+	}
+	return nil
 }
 
 // ApprovePlan transitions a plan from pending_review to approved.
 func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
-	return s.TransitionPlan(ctx, id, domain.PlanApproved)
+	var plan domain.Plan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		plan, err = res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		if !canTransitionPlan(plan.Status, domain.PlanApproved) {
+			return newInvalidTransitionError(
+				planStatusName(plan.Status),
+				planStatusName(domain.PlanApproved),
+				"plan",
+			)
+		}
+		plan.Status = domain.PlanApproved
+		plan.UpdatedAt = time.Now()
+		return res.Plans.Update(ctx, plan)
+	})
+	if err != nil {
+		return err
+	}
+
+	if s.eventBus != nil {
+		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventPlanApproved),
+			WorkspaceID: plan.WorkItemID, // WorkItemID serves as workspace context
+			CreatedAt:   time.Now(),
+		}); pubErr != nil {
+			slog.Warn("failed to emit plan approved event", "error", pubErr, "plan_id", id)
+		}
+	}
+	return nil
 }
 
 // RejectPlan transitions a plan from pending_review to rejected.
 func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
-	return s.TransitionPlan(ctx, id, domain.PlanRejected)
+	if err := s.TransitionPlan(ctx, id, domain.PlanRejected); err != nil {
+		return err
+	}
+	if s.eventBus != nil {
+		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:        domain.NewID(),
+			EventType: string(domain.EventPlanRejected),
+			CreatedAt: time.Now(),
+		}); pubErr != nil {
+			slog.Warn("failed to emit plan rejected event", "error", pubErr, "plan_id", id)
+		}
+	}
+	return nil
 }
 
 // UpdatePlanContent updates the plan content without changing status.
@@ -167,6 +226,7 @@ func (s *PlanService) UpdatePlanContent(ctx context.Context, id string, content 
 func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, rawOutput domain.RawPlanOutput) (domain.Plan, []domain.TaskPlan, error) {
 	var resultPlan domain.Plan
 	var resultSubPlans []domain.TaskPlan
+	var planChanged bool
 
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		plan, err := res.Plans.Get(ctx, id)
@@ -254,10 +314,21 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 
 		resultPlan = plan
 		resultSubPlans = updatedSubPlans
+		planChanged = true
 		return nil
 	})
 	if err != nil {
 		return domain.Plan{}, nil, err
+	}
+
+	if planChanged && s.eventBus != nil {
+		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:        domain.NewID(),
+			EventType: string(domain.EventPlanRevised),
+			CreatedAt: time.Now(),
+		}); pubErr != nil {
+			slog.Warn("failed to emit plan revised event", "error", pubErr, "plan_id", id)
+		}
 	}
 
 	return resultPlan, resultSubPlans, nil
@@ -377,7 +448,7 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) err
 
 // TransitionSubPlan transitions a sub-plan to a new status.
 func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		sp, err := res.SubPlans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("sub-plan", id)
@@ -396,6 +467,20 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 
 		return res.SubPlans.Update(ctx, sp)
 	})
+	if err != nil {
+		return err
+	}
+
+	if s.eventBus != nil {
+		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+			ID:        domain.NewID(),
+			EventType: string(domain.EventSubPlanStatusChanged),
+			CreatedAt: time.Now(),
+		}); pubErr != nil {
+			slog.Warn("failed to emit sub-plan status changed event", "error", pubErr, "sub_plan_id", id)
+		}
+	}
+	return nil
 }
 
 // StartSubPlan transitions a sub-plan from pending to in_progress.

@@ -289,6 +289,47 @@ func LoadPlanCmd(svc *service.PlanService, workItemID string) tea.Cmd {
 	}
 }
 
+// LoadSessionCmd fetches a single work item by ID (event-driven).
+func LoadSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		workItem, err := svc.Get(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return SessionLoadedMsg{WorkItem: workItem}
+	}
+}
+
+// LoadTasksForSessionCmd fetches all tasks for a work item (event-driven).
+func LoadTasksForSessionCmd(svc *service.TaskService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := svc.ListByWorkItemID(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return TasksForSessionLoadedMsg{WorkItemID: workItemID, Sessions: sessions}
+	}
+}
+
+// LoadPlanForSessionCmd fetches the plan and sub-plans for a work item (event-driven).
+func LoadPlanForSessionCmd(svc *service.PlanService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		plan, err := svc.GetPlanByWorkItemID(context.Background(), workItemID)
+		if err != nil {
+			// No plan yet is not an error worth surfacing.
+			return PlanForSessionLoadedMsg{WorkItemID: workItemID, Plan: nil}
+		}
+		subPlans, err := svc.ListSubPlansByPlanID(context.Background(), plan.ID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return PlanForSessionLoadedMsg{WorkItemID: workItemID, Plan: &plan, SubPlans: subPlans}
+	}
+}
+
 // LoadPlanByIDCmd fetches a plan by its ID and composes a read-only document.
 func LoadPlanByIDCmd(svc *service.PlanService, planID string) tea.Cmd {
 	return func() tea.Msg {
@@ -338,12 +379,11 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 	}
 }
 
-// ApprovePlanCmd transitions work item to approved and emits plan approved.
+// ApprovePlanCmd transitions work item to approved.
+// Note: PlanService.ApprovePlan emits EventPlanApproved via the event bus.
 func ApprovePlanCmd(
 	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
-	bus *event.Bus,
-	cfg *config.Config,
 	planID, workItemID string,
 ) tea.Cmd {
 	return func() tea.Msg {
@@ -353,9 +393,6 @@ func ApprovePlanCmd(
 		}
 		if err := workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
-		}
-		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, cfg, planID, workItemID); err != nil {
-			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
 		}
 
 		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
@@ -893,42 +930,6 @@ func unarchiveSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd
 		}
 		return SessionUnarchivedMsg{WorkItemID: workItemID, Message: "Session unarchived"}
 	}
-}
-
-func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
-	if bus == nil {
-		return nil
-	}
-	plan, err := planSvc.GetPlan(ctx, planID)
-	if err != nil {
-		return err
-	}
-	workItem, err := workItemSvc.Get(ctx, workItemID)
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"plan_id":      planID,
-		"work_item_id": workItemID,
-		"external_id":  workItem.ExternalID,
-	}
-	var commentMode config.IssueCommentContent
-	if cfg != nil {
-		commentMode = cfg.IssueCommentContentForSource(workItem.Source)
-	} else {
-		commentMode = config.IssueCommentSubPlan
-	}
-	if commentBody := buildIssueCommentBody(ctx, planSvc, commentMode, plan); commentBody != "" {
-		payload["comment_body"] = commentBody
-	}
-	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
-		payload["external_ids"] = externalIDs
-	}
-	if cfg != nil {
-		payload["repo_comment_scopes"] = buildRepoCommentScopes(workItem, cfg)
-	}
-
-	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
 }
 
 // buildRepoCommentScopes builds a map of repo identifiers to comment scopes for plan-approved events.

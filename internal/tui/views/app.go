@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -97,6 +99,9 @@ func appContentBodyWidth(width int) int {
 // App is the top-level bubbletea model.
 type App struct { //nolint:recvcheck // Bubble Tea convention
 	svcs Services
+
+	// Bus subscription for event-driven updates
+	busSub *event.Subscriber
 
 	// Layout sub-models
 	sidebar   SidebarModel
@@ -287,6 +292,54 @@ func (a App) Init() tea.Cmd {
 			LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID),
 			ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 		)
+
+		// Subscribe to event bus for event-driven updates
+		if a.svcs.Bus != nil {
+			a.busSub, _ = a.svcs.Bus.Subscribe(
+				"tui:"+a.svcs.WorkspaceID,
+				// Work item lifecycle
+				string(domain.EventWorkItemPlanning),
+				string(domain.EventWorkItemPlanReview),
+				string(domain.EventWorkItemApproved),
+				string(domain.EventWorkItemImplementing),
+				string(domain.EventWorkItemReviewing),
+				string(domain.EventWorkItemCompleted),
+				string(domain.EventWorkItemFailed),
+				string(domain.EventWorkItemMerged),
+				// Session lifecycle
+				string(domain.EventAgentSessionStarted),
+				string(domain.EventAgentSessionCompleted),
+				string(domain.EventAgentSessionFailed),
+				string(domain.EventAgentSessionInterrupted),
+				string(domain.EventAgentSessionResumed),
+				// Plan lifecycle
+				string(domain.EventPlanGenerated),
+				string(domain.EventPlanApproved),
+				string(domain.EventPlanRejected),
+				string(domain.EventPlanRevised),
+				string(domain.EventPlanSubmittedForReview),
+				// Review
+				string(domain.EventReviewStarted),
+				string(domain.EventReviewCompleted),
+				string(domain.EventCritiquesFound),
+				// Implementation
+				string(domain.EventImplementationStarted),
+				string(domain.EventReimplementationStarted),
+				string(domain.EventPRMerged),
+				string(domain.EventPRReviewStateChanged),
+				// Questions
+				string(domain.EventAgentQuestionRaised),
+				string(domain.EventAgentQuestionAnswered),
+			)
+
+			// Bridge: forward events from subscriber channel to the update loop.
+			cmds = append(cmds, func() tea.Msg {
+				for evt := range a.busSub.C {
+					return DomainEventMsg{Event: evt}
+				}
+				return nil
+			})
+		}
 	}
 
 	if a.activeOverlay == overlayWorkspaceInit {
@@ -1110,17 +1163,96 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PollTickMsg:
 		a.toasts.Prune()
-		if a.svcs.WorkspaceID != "" {
-			cmds = append(cmds,
-				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
-				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
-			)
+		if a.svcs.InstanceID != "" {
+			cmds = append(cmds, HeartbeatCmd(a.svcs.Instance, a.svcs.InstanceID))
 		}
 		if a.activeOverlay == overlaySessionSearch {
 			cmds = append(cmds, a.runSessionSearch(false))
 		}
 		cmds = append(cmds, PollTickCmd())
+		return a, tea.Batch(cmds...)
+
+	case DomainEventMsg:
+		// Keep the bridge alive: reschedule the channel reader.
+		if a.busSub != nil {
+			cmds = append(cmds, func() tea.Msg {
+				for evt := range a.busSub.C {
+					return DomainEventMsg{Event: evt}
+				}
+				return nil
+			})
+		}
+
+		switch domain.EventType(msg.Event.EventType) {
+		// Work item state changes → reload work item + its tasks
+		case domain.EventWorkItemPlanning,
+			domain.EventWorkItemPlanReview,
+			domain.EventWorkItemApproved,
+			domain.EventWorkItemImplementing,
+			domain.EventWorkItemReviewing,
+			domain.EventWorkItemCompleted,
+			domain.EventWorkItemFailed,
+			domain.EventWorkItemMerged:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds,
+					LoadSessionCmd(a.svcs.Session, workItemID),
+					LoadTasksForSessionCmd(a.svcs.Task, workItemID),
+				)
+			}
+
+		// Session lifecycle → reload tasks
+		case domain.EventAgentSessionStarted,
+			domain.EventAgentSessionCompleted,
+			domain.EventAgentSessionFailed,
+			domain.EventAgentSessionInterrupted,
+			domain.EventAgentSessionResumed:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, workItemID))
+			}
+
+		// Plan lifecycle → reload plan
+		case domain.EventPlanGenerated,
+			domain.EventPlanApproved,
+			domain.EventPlanRejected,
+			domain.EventPlanRevised,
+			domain.EventPlanSubmittedForReview:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds, LoadPlanForSessionCmd(a.svcs.Plan, workItemID))
+			}
+
+		// Review events → reload tasks
+		case domain.EventReviewStarted,
+			domain.EventReviewCompleted,
+			domain.EventCritiquesFound:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, workItemID))
+			}
+
+		// Question events → reload questions
+		case domain.EventAgentQuestionRaised,
+			domain.EventAgentQuestionAnswered:
+			sessionID := extractSessionID(msg.Event.Payload)
+			if sessionID != "" {
+				cmds = append(cmds, LoadQuestionsCmd(a.svcs.Question, sessionID))
+			}
+
+		// Higher-level events that don't need targeted reload
+		case domain.EventImplementationStarted,
+			domain.EventReimplementationStarted,
+			domain.EventPRMerged,
+			domain.EventPRReviewStateChanged:
+			// No-op: these don't change the work item state directly
+		}
+
+		// Re-render if viewing the affected work item
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+
 		return a, tea.Batch(cmds...)
 
 	case HeartbeatTickMsg:
@@ -1203,6 +1335,52 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case SessionLoadedMsg:
+		// Upsert the work item
+		if idx := slices.IndexFunc(a.workItems, func(w domain.Session) bool {
+			return w.ID == msg.WorkItem.ID
+		}); idx >= 0 {
+			a.workItems[idx] = msg.WorkItem
+		} else {
+			a.workItems = append(a.workItems, msg.WorkItem)
+		}
+		a.rebuildSidebar()
+		if a.currentWorkItemID == msg.WorkItem.ID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		// Cascade: load tasks and plan for the work item
+		cmds = append(cmds,
+			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItem.ID),
+			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItem.ID),
+		)
+		return a, tea.Batch(cmds...)
+
+	case TasksForSessionLoadedMsg:
+		// Remove old tasks for this work item, add new ones
+		filtered := make([]domain.Task, 0, len(a.sessions))
+		for _, s := range a.sessions {
+			if s.WorkItemID != msg.WorkItemID {
+				filtered = append(filtered, s)
+			}
+		}
+		a.sessions = append(filtered, msg.Sessions...)
+		a.rebuildSidebar()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case PlanForSessionLoadedMsg:
+		if msg.Plan != nil {
+			a.plans[msg.WorkItemID] = msg.Plan
+			a.subPlans[msg.Plan.ID] = msg.SubPlans
+			a.rebuildSidebar()
+		}
 		if a.currentWorkItemID == msg.WorkItemID {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -1293,7 +1471,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Bus, a.svcs.Cfg, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:
@@ -1354,11 +1532,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.svcs.Foreman != nil && a.foremanPlanID != "" {
 			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
 		}
-		// Reload tasks immediately so the sidebar reflects the completed state
-		// without waiting for the next poll tick.
-		if a.svcs.WorkspaceID != "" {
-			cmds = append(cmds, LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID))
-		}
+		// Reload tasks for the specific work item
+		cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case FollowUpPlanMsg:
@@ -1373,7 +1548,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.toasts.AddToast("Follow-up plan ready for review", components.ToastSuccess)
-		return a, nil
+		// Reload the session and plan for the work item
+		cmds = append(cmds,
+			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
+			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
+		)
+		return a, tea.Batch(cmds...)
 
 	case FetchReviewCommentsMsg:
 		if a.svcs.ReviewComments == nil || len(msg.Items) == 0 {
@@ -1907,6 +2087,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ImplementationCompleteMsg:
 		a.cancelPipeline(msg.WorkItemID)
 		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
+		// Reload the work item, tasks, and plan
+		cmds = append(cmds,
+			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
+			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
+		)
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -3731,4 +3917,28 @@ func formatAdapterErrorToast(msg AdapterErrorMsg) string {
 		errStr = errStr[:77] + "..."
 	}
 	return fmt.Sprintf("%s: %s failed\n%s\nRetried %dx", msg.Adapter, msg.EventType, errStr, msg.Retries)
+}
+
+// extractWorkItemID extracts the work_item_id from an event payload.
+func extractWorkItemID(payload string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(payload), &m); err != nil {
+		return ""
+	}
+	if id, ok := m["work_item_id"].(string); ok {
+		return id
+	}
+	return ""
+}
+
+// extractSessionID extracts the session_id from an event payload.
+func extractSessionID(payload string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(payload), &m); err != nil {
+		return ""
+	}
+	if id, ok := m["session_id"].(string); ok {
+		return id
+	}
+	return ""
 }

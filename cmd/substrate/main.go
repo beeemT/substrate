@@ -306,10 +306,10 @@ func buildCoreServices(
 	transacter atomic.Transacter[repository.Resources],
 	eventRepo repository.EventRepository,
 ) coreServices {
-	workItemSvc := service.NewSessionService(transacter)
-	planSvc := service.NewPlanService(transacter)
+	workItemSvc := service.NewSessionService(transacter, nil)
+	planSvc := service.NewPlanService(transacter, nil)
 	workspaceSvc := service.NewWorkspaceService(transacter)
-	taskSvc := service.NewTaskService(transacter)
+	taskSvc := service.NewTaskService(transacter, nil)
 	questionSvc := service.NewQuestionService(transacter)
 	instanceSvc := service.NewInstanceService(transacter)
 	reviewSvc := service.NewReviewService(transacter)

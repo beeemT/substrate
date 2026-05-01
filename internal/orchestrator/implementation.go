@@ -606,10 +606,6 @@ func (s *ImplementationService) runImplementation(
 	session.StartedAt = &now
 	session.UpdatedAt = now
 
-	if err := s.emitSessionStarted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit session started event", "error", err)
-	}
-
 	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
 
 	// Decide how to deliver critique feedback.
@@ -674,16 +670,9 @@ func (s *ImplementationService) runImplementation(
 				slog.Warn("failed to interrupt session on context cancellation",
 					"error", interruptErr, "session_id", sessionID)
 			}
-			if err := s.emitSessionInterrupted(ctx, &session, workspace.ID); err != nil {
-				slog.Warn("failed to emit session interrupted event",
-					"error", err, "session_id", sessionID)
-			}
 		} else {
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 				slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
-			}
-			if err := s.emitSessionFailed(ctx, &session, waitErr.Error(), workspace.ID); err != nil {
-				slog.Warn("failed to emit session failed event", "error", err, "session_id", sessionID)
 			}
 		}
 		return domain.Task{}, fmt.Errorf("agent session failed: %w", waitErr)
@@ -699,10 +688,6 @@ func (s *ImplementationService) runImplementation(
 		if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
 			slog.Warn("failed to store resume info", "error", err, "session_id", sessionID)
 		}
-	}
-
-	if err := s.emitSessionCompleted(ctx, &session, workspace.ID); err != nil {
-		slog.Warn("failed to emit session completed event", "error", err)
 	}
 
 	return session, nil

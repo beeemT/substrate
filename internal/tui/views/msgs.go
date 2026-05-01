@@ -38,6 +38,29 @@ type PlanLoadedMsg struct {
 	SubPlans   []domain.TaskPlan
 }
 
+// SessionLoadedMsg is sent when a single work item is loaded (event-driven).
+type SessionLoadedMsg struct {
+	WorkItem domain.Session
+}
+
+// TasksForSessionLoadedMsg is sent when tasks for a work item are loaded (event-driven).
+type TasksForSessionLoadedMsg struct {
+	WorkItemID string
+	Sessions   []domain.Task
+}
+
+// PlanForSessionLoadedMsg is sent when a plan for a work item is loaded (event-driven).
+type PlanForSessionLoadedMsg struct {
+	WorkItemID string
+	Plan       *domain.Plan
+	SubPlans   []domain.TaskPlan
+}
+
+// DomainEventMsg bridges the event.Bus to the bubbletea update loop.
+type DomainEventMsg struct {
+	Event domain.SystemEvent
+}
+
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
 type QuestionsLoadedMsg struct {
 	SessionID string

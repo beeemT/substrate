@@ -36,6 +36,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithEnvToken(t *testing.T) 
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		nil,
 	)
@@ -64,6 +65,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapterWithCLIAuth(t *testing.T) {
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		nil,
 	)
@@ -89,6 +91,7 @@ func TestBuildWorkItemAdapters_SkipsSentryWithoutOrganizationEvenWithCLIAuth(t *
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		nil,
 	)

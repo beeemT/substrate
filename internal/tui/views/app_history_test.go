@@ -361,10 +361,10 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{
 		Plans:    &cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}},
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}},
-	}})
+	}}, nil)
 	app := NewApp(Services{
-		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}),
-		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
+		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil),
+		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		Plan:          planSvc,
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
@@ -499,12 +499,12 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{
 		Plans:    &cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}},
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}},
-	}})
+	}}, nil)
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
 	msg := deleteSessionCmd(Services{
-		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}),
-		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
+		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil),
+		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		Plan:    planSvc,
 	}, sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
 	deleted, ok := msg.(SessionDeletedMsg)
@@ -846,7 +846,7 @@ func TestPersistCreatedWorkItemMsgDuplicateReturnsPrompt(t *testing.T) {
 	}
 	msg := persistCreatedWorkItemMsg(Services{
 		WorkspaceID: "ws-local",
-		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}),
+		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
 	}, requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)
@@ -887,7 +887,7 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 	}
 	msg := persistCreatedWorkItemMsg(Services{
 		WorkspaceID: "ws-local",
-		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}),
+		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
 	}, requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)

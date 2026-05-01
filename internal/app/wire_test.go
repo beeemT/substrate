@@ -58,6 +58,7 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapter(t *testing.T) {
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		ghAdapter,
 	)
@@ -84,6 +85,7 @@ func TestBuildWorkItemAdapters_RegistersSentryAdapter(t *testing.T) {
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		nil,
 	)
@@ -214,6 +216,7 @@ func TestBuildWorkItemAdapters_RegistersGitHubAdapterWithGhCLI(t *testing.T) {
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		ghAdapter,
 	)
@@ -240,6 +243,7 @@ func TestBuildWorkItemAdapters_RegistersGitLabAdapterWithGlabCLI(t *testing.T) {
 			repository.NoopTransacter{
 				Res: repository.Resources{Sessions: repo},
 			},
+			nil,
 		),
 		nil,
 	)

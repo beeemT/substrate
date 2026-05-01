@@ -2,22 +2,25 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // TaskService provides business logic for repo-scoped tasks.
 type TaskService struct {
 	transacter atomic.Transacter[repository.Resources]
+	eventBus   *event.Bus
 }
 
 // NewTaskService creates a new TaskService.
-func NewTaskService(transacter atomic.Transacter[repository.Resources]) *TaskService {
-	return &TaskService{transacter: transacter}
+func NewTaskService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *TaskService {
+	return &TaskService{transacter: transacter, eventBus: eventBus}
 }
 
 // Task state transitions.
@@ -144,9 +147,21 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	task.CreatedAt = now
 	task.UpdatedAt = now
 
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		return res.Tasks.Create(ctx, task)
+	}); err != nil {
+		return err
+	}
+
+	// Emit event asynchronously after transaction commits
+	go s.emitEvent(domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStarted),
+		WorkspaceID: task.WorkspaceID,
+		CreatedAt:   time.Now(),
 	})
+
+	return nil
 }
 
 // Transition transitions a task to a new status.
@@ -209,52 +224,88 @@ func (s *TaskService) ResumeFromAnswer(ctx context.Context, id string) error {
 
 // Complete transitions a task from running to completed.
 func (s *TaskService) Complete(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		t, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		if !canTransitionTask(task.Status, domain.AgentSessionCompleted) {
+		if !canTransitionTask(t.Status, domain.AgentSessionCompleted) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(t.Status),
 				sessionStatusName(domain.AgentSessionCompleted),
 				"task",
 			)
 		}
 
 		now := time.Now()
-		task.Status = domain.AgentSessionCompleted
-		task.CompletedAt = &now
-		task.UpdatedAt = now
+		t.Status = domain.AgentSessionCompleted
+		t.CompletedAt = &now
+		t.UpdatedAt = now
 
-		return res.Tasks.Update(ctx, task)
+		if err := res.Tasks.Update(ctx, t); err != nil {
+			return err
+		}
+		task = t
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Emit event asynchronously after transaction commits
+	go s.emitEvent(domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionCompleted),
+		WorkspaceID: task.WorkspaceID,
+		CreatedAt:   time.Now(),
+	})
+
+	return nil
 }
 
 // Interrupt transitions a task from running to interrupted.
 func (s *TaskService) Interrupt(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		t, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		if !canTransitionTask(task.Status, domain.AgentSessionInterrupted) {
+		if !canTransitionTask(t.Status, domain.AgentSessionInterrupted) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(t.Status),
 				sessionStatusName(domain.AgentSessionInterrupted),
 				"task",
 			)
 		}
 
 		now := time.Now()
-		task.Status = domain.AgentSessionInterrupted
-		task.ShutdownAt = &now
-		task.UpdatedAt = now
+		t.Status = domain.AgentSessionInterrupted
+		t.ShutdownAt = &now
+		t.UpdatedAt = now
 
-		return res.Tasks.Update(ctx, task)
+		if err := res.Tasks.Update(ctx, t); err != nil {
+			return err
+		}
+		task = t
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Emit event asynchronously after transaction commits
+	go s.emitEvent(domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionInterrupted),
+		WorkspaceID: task.WorkspaceID,
+		CreatedAt:   time.Now(),
+	})
+
+	return nil
 }
 
 // Resume transitions a task from interrupted to running.
@@ -321,28 +372,46 @@ func (s *TaskService) SetPlanID(ctx context.Context, id string, planID string) e
 
 // Fail transitions a task to failed.
 func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		t, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		if !canTransitionTask(task.Status, domain.AgentSessionFailed) {
+		if !canTransitionTask(t.Status, domain.AgentSessionFailed) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(t.Status),
 				sessionStatusName(domain.AgentSessionFailed),
 				"task",
 			)
 		}
 
 		now := time.Now()
-		task.Status = domain.AgentSessionFailed
-		task.CompletedAt = &now
-		task.ExitCode = exitCode
-		task.UpdatedAt = now
+		t.Status = domain.AgentSessionFailed
+		t.CompletedAt = &now
+		t.ExitCode = exitCode
+		t.UpdatedAt = now
 
-		return res.Tasks.Update(ctx, task)
+		if err := res.Tasks.Update(ctx, t); err != nil {
+			return err
+		}
+		task = t
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Emit event asynchronously after transaction commits
+	go s.emitEvent(domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionFailed),
+		WorkspaceID: task.WorkspaceID,
+		CreatedAt:   time.Now(),
+	})
+
+	return nil
 }
 
 // UpdateOwnerInstance updates the owner instance ID for a task.
@@ -435,4 +504,17 @@ func (s *TaskService) FindRunningByOwner(ctx context.Context, instanceID string)
 	}
 
 	return running, nil
+}
+
+// emitEvent emits an event asynchronously. Nil bus is handled gracefully.
+func (s *TaskService) emitEvent(evt domain.SystemEvent) {
+	if s.eventBus == nil {
+		return
+	}
+	if err := s.eventBus.Publish(context.Background(), evt); err != nil {
+		slog.Error("failed to emit event",
+			slog.String("event_type", evt.EventType),
+			slog.String("error", err.Error()),
+		)
+	}
 }

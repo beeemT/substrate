@@ -714,9 +714,9 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
-		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil,
 		nil,
@@ -1044,7 +1044,7 @@ func TestPersistSubPlanStatus_CrashRecovery(t *testing.T) {
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
 
 	svc := &ImplementationService{
-		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
+		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
 	}
 
 	sp := subPlanRepo.subPlans["sp-crashed"]
@@ -1214,14 +1214,15 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 			"ws-1": {ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady},
 		},
 	}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
 	svc := NewImplementationService(
 		cfg,
 		harness,
-		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
-		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		nil, bus,
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
@@ -1318,14 +1319,15 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 			"ws-1": {ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady},
 		},
 	}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
 	svc := NewImplementationService(
 		cfg,
 		harness,
-		nil, event.NewBus(event.BusConfig{EventRepo: eventRepo}),
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}),
-		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		nil, bus,
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
@@ -1393,6 +1395,7 @@ func TestLoadCritiqueFeedback_NoImplSession(t *testing.T) {
 	repo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(
 		repository.NoopTransacter{Res: repository.Resources{Tasks: repo}},
+		nil,
 	)
 	svc := &ImplementationService{
 		sessionSvc: sessionSvc,
@@ -1621,6 +1624,10 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 		t.Fatal("task.CompletedAt must be set after completion")
 	}
 
+	// TaskService emits EventAgentSessionCompleted asynchronously via goroutine.
+	// Give it time to execute before checking.
+	time.Sleep(50 * time.Millisecond)
+
 	// Verify the completed event was emitted.
 	var found bool
 	for _, evt := range eventRepo.events {
@@ -1641,7 +1648,7 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 // TestLastSessionForSubPlan verifies the two-stage decision helper.
 func TestLastSessionForSubPlan(t *testing.T) {
 	repo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 	svc := &ImplementationService{sessionSvc: sessionSvc}
 	ctx := context.Background()
 
@@ -1679,7 +1686,7 @@ func TestLastSessionForSubPlan(t *testing.T) {
 // the impl session whose output should be reviewed.
 func TestLatestCompletedImplSession(t *testing.T) {
 	repo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 	svc := &ImplementationService{sessionSvc: sessionSvc}
 	ctx := context.Background()
 
@@ -1745,7 +1752,7 @@ func TestLatestCompletedImplSession(t *testing.T) {
 // phase combinations.
 func TestTwoStageRetryModel(t *testing.T) {
 	repo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 	svc := &ImplementationService{sessionSvc: sessionSvc}
 	ctx := context.Background()
 

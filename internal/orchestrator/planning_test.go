@@ -372,7 +372,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	registry := NewSessionRegistry()
 	svc := &PlanningService{
 		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}),
-		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
 		registry:    registry,
 	}
 	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, nil)
@@ -629,7 +629,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		cfg:        &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:    harness,
 		templates:  templates,
-		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}),
+		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -773,7 +773,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
 
 	ctx := context.Background()
 
@@ -903,7 +903,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	// Plan repo with UNIQUE enforcement (mirrors SQLite behaviour).
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
 
 	// Seed the rejected plan that occupies the unique slot.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -919,7 +919,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
 
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
@@ -927,7 +927,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 
 	eventRepo := &planTestEventRepo{}
 	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
@@ -1025,7 +1025,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
 
 	// Seed an approved plan — the artifact of a completed work item.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -1041,7 +1041,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionCompleted},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
 
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
@@ -1049,7 +1049,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 
 	eventRepo := &planTestEventRepo{}
 	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
@@ -1100,17 +1100,17 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	planRepo := newUniqueWorkItemPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: newMockSubPlanRepo()}})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: newMockSubPlanRepo()}}, nil)
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionPlanning},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	eventRepo := &planTestEventRepo{}
 	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
 

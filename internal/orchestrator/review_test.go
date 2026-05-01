@@ -49,7 +49,7 @@ func (h *doneHarness) StartSession(_ context.Context, opts adapter.SessionOpts) 
 // newReviewPipelineForTest builds a minimal ReviewPipeline for unit testing.
 // sessionRepo must be pre-populated with any sessions the test needs.
 func newReviewPipelineForTest(harness adapter.AgentHarness, sessionRepo *mockSessionRepo) *ReviewPipeline {
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	maxCycles := 3
 	reviewTimeoutDur := 5 * time.Second // long enough to detect hangs in tests
 	cfg := &config.Config{}

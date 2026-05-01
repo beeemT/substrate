@@ -15,7 +15,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
 
 	// Setup plan
 	plan := domain.Plan{
@@ -222,7 +222,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 func TestSessionService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 
 	session := domain.Task{
 		ID:             "session-1",
@@ -563,7 +563,7 @@ func TestErrors(t *testing.T) {
 func TestSessionService_FindRunningByOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 
 	// FindRunningByOwner is a placeholder - just verify it returns nil
 	result, err := svc.FindRunningByOwner(ctx, "instance-1")
@@ -579,7 +579,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
 
 	t.Run("GetPlan not found", func(t *testing.T) {
 		_, err := svc.GetPlan(ctx, "nonexistent")
@@ -640,7 +640,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 func TestSessionService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}})
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")

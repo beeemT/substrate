@@ -441,9 +441,9 @@ func sentrySettingsFields(cfg *config.Config) []SettingsField {
 }
 
 func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
-	workItemSvc := service.NewSessionService(s.transacter)
+	workItemSvc := service.NewSessionService(s.transacter, nil)
 	workspaceSvc := service.NewWorkspaceService(s.transacter)
-	sessionSvc := service.NewTaskService(s.transacter)
+	sessionSvc := service.NewTaskService(s.transacter, nil)
 	questionSvc := service.NewQuestionService(s.transacter)
 	instanceSvc := service.NewInstanceService(s.transacter)
 	reviewSvc := service.NewReviewService(s.transacter)
