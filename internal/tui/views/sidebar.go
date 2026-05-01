@@ -714,9 +714,12 @@ func (m SidebarModel) View() string {
 		selected := i == m.cursor
 		block := renderSidebarItem(entry, selected, m.styles, contentWidth)
 		lines = append(lines, block)
-		// Divider with spacing to sidebar borders
-		dividerContent := strings.Repeat("─", max(0, contentWidth-2))
-		lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
+		// Divider with spacing to sidebar borders - skip if last item in group
+		isLastInGroup := (i == end-1) || (i+1 < len(m.entries) && m.entries[i+1].Kind == SidebarEntryGroupHeader)
+		if !isLastInGroup {
+			dividerContent := strings.Repeat("─", max(0, contentWidth-2))
+			lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
+		}
 	}
 	for len(lines) < m.height {
 		lines = append(lines, lipgloss.NewStyle().Width(contentWidth).Render(""))
