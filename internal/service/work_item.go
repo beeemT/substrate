@@ -31,9 +31,9 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionCompleted, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionCompleted:    {domain.SessionPlanning, domain.SessionMerged, domain.SessionArchived},
-	domain.SessionMerged:      {domain.SessionArchived},
-	domain.SessionFailed:      {domain.SessionImplementing, domain.SessionArchived},
-	domain.SessionArchived:    {domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed},
+	domain.SessionMerged:       {domain.SessionArchived},
+	domain.SessionFailed:       {domain.SessionImplementing, domain.SessionArchived},
+	domain.SessionArchived:     {domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed},
 }
 
 // canTransition checks if a state transition is valid.
@@ -446,8 +446,9 @@ func (s *SessionService) Unarchive(ctx context.Context, id string) error {
 		}
 
 		now := time.Now()
-		item.State = item.PreviousState
-		item.PreviousState = ""
+		previousState := item.PreviousState // preserve target state before overwriting
+		item.PreviousState = item.State     // record that we transitioned from archived
+		item.State = previousState          // restore to the pre-archive state
 		item.UpdatedAt = now
 
 		return res.Sessions.Update(ctx, item)
