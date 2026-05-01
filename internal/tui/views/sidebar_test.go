@@ -881,3 +881,176 @@ func TestSidebarMergedGroupsWithCompleted(t *testing.T) {
 		t.Fatalf("expected group to be Completed, got %q", groups[0])
 	}
 }
+
+func TestShouldShowSessionConnector(t *testing.T) {
+	tests := []struct {
+		name    string
+		current views.SidebarEntry
+		next    views.SidebarEntry
+		want    bool
+	}{
+		{
+			name:    "both repo sessions",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			want:    true,
+		},
+		{
+			name:    "current is planning",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "Planning"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			want:    false,
+		},
+		{
+			name:    "next is planning",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "Planning"},
+			want:    false,
+		},
+		{
+			name:    "current is foreman",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "Foreman"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			want:    false,
+		},
+		{
+			name:    "next is foreman",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "Foreman"},
+			want:    false,
+		},
+		{
+			name:    "current is not task session",
+			current: views.SidebarEntry{Kind: views.SidebarEntryWorkItem},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			want:    false,
+		},
+		{
+			name:    "next is not task session",
+			current: views.SidebarEntry{Kind: views.SidebarEntryTaskSession, RepositoryName: "acme/rocket"},
+			next:    views.SidebarEntry{Kind: views.SidebarEntryWorkItem},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := views.ShouldShowSessionConnector(tt.current, tt.next)
+			if got != tt.want {
+				t.Errorf("ShouldShowSessionConnector() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderSessionConnector(t *testing.T) {
+	st := makeSidebarStyles()
+	entry := views.SidebarEntry{
+		Kind:           views.SidebarEntryTaskSession,
+		RepositoryName: "acme/rocket",
+		SessionStatus:  domain.AgentSessionRunning,
+	}
+
+	connector := views.RenderSessionConnector(entry, st, 32)
+	stripped := stripANSI(connector)
+
+	// Should contain the connector glyph
+	if !strings.Contains(stripped, "˅") {
+		t.Errorf("connector should contain ˅ glyph, got %q", stripped)
+	}
+
+	// Should be exactly width chars (ANSI adds color, so check stripped length)
+	if ansi.StringWidth(stripped) > 32 {
+		t.Errorf("connector width %d exceeds max %d", ansi.StringWidth(stripped), 32)
+	}
+}
+
+func TestSidebarConnectorRendersBetweenRepoSessions(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(34)
+	m.SetHeight(30)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "acme/rocket"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1", RepositoryName: "acme/rocket", Title: "Feature: Auth"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2", RepositoryName: "Review", Title: "Review: Auth"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s3", RepositoryName: "acme/rocket", Title: "Fix: API"},
+	})
+
+	view := m.View()
+	stripped := stripANSI(view)
+
+	// Should show connector between repo sessions
+	if !strings.Contains(stripped, "˅") {
+		t.Errorf("sidebar should contain connector ˅ between repo sessions, got:\n%s", stripped)
+	}
+
+	// Should show two connectors: Session1→Session2 and Session2→Session3
+	// Group header doesn't create a connector before it
+	count := strings.Count(stripped, "˅")
+	if count != 2 {
+		t.Errorf("expected 2 connectors (between 3 sessions), got %d", count)
+	}
+}
+
+func TestSidebarNoConnectorBetweenPlanningAndRepo(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(34)
+	m.SetHeight(30)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Planning"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1", RepositoryName: "Planning", Title: "Plan 1"},
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "acme/rocket"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2", RepositoryName: "acme/rocket", Title: "Feature: Auth"},
+	})
+
+	view := m.View()
+	stripped := stripANSI(view)
+
+	// Should NOT show connector between Planning and repo session
+	// There should be no ˅ between Planning group header and acme/rocket group
+	lines := strings.Split(stripped, "\n")
+	// Find the index where Planning session ends and acme/rocket begins
+	planningEndIdx := -1
+	acmeStartIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Plan 1") {
+			planningEndIdx = i
+		}
+		if strings.Contains(line, "acme/rocket") && acmeStartIdx == -1 {
+			acmeStartIdx = i
+		}
+	}
+
+	// Count connectors between planning end and acme start
+	connectorBetweenPlanningAndRepo := false
+	if planningEndIdx >= 0 && acmeStartIdx > planningEndIdx {
+		for i := planningEndIdx; i < acmeStartIdx; i++ {
+			if strings.Contains(lines[i], "˅") {
+				connectorBetweenPlanningAndRepo = true
+				break
+			}
+		}
+	}
+
+	if connectorBetweenPlanningAndRepo {
+		t.Errorf("should not show connector between Planning and repo sessions, got:\n%s", stripped)
+	}
+}
+
+func TestSidebarConnectorFitsWidth(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(34)
+	m.SetHeight(20)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "acme/rocket"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1", RepositoryName: "acme/rocket", Title: "Feature: Auth"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2", RepositoryName: "acme/rocket", Title: "Review: Auth"},
+	})
+
+	view := m.View()
+	for i, line := range strings.Split(view, "\n") {
+		if got := ansi.StringWidth(line); got > 34 {
+			t.Fatalf("line %d width = %d, want <= 34\nline: %q", i+1, got, line)
+		}
+	}
+}

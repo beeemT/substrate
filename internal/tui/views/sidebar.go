@@ -717,8 +717,15 @@ func (m SidebarModel) View() string {
 		// Divider with spacing to sidebar borders - skip if last item in group
 		isLastInGroup := (i == end-1) || (i+1 < len(m.entries) && m.entries[i+1].Kind == SidebarEntryGroupHeader)
 		if !isLastInGroup {
-			dividerContent := strings.Repeat("─", max(0, contentWidth-2))
-			lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
+			if ShouldShowSessionConnector(m.entries[i], m.entries[i+1]) {
+				lines = append(lines, RenderSessionConnector(entry, m.styles, contentWidth))
+			} else {
+				dividerContent := strings.Repeat("─", max(0, contentWidth-2))
+				lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
+			}
+		} else {
+			// Extra space between last item in group and next group header
+			lines = append(lines, "")
 		}
 	}
 	for len(lines) < m.height {
@@ -971,7 +978,7 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 
 // renderGroupHeader renders a group section heading with a trailing divider on one line.
 func renderGroupHeader(st styles.Styles, title string, width int) string {
-	label := st.Muted.Bold(true).Render(title)
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(st.Theme.Title)).Bold(true).Render(title)
 	dividerWidth := max(0, width-ansi.StringWidth(label)-1)
 	if dividerWidth <= 0 {
 		return lipgloss.NewStyle().Width(width).Render(label)
@@ -1245,4 +1252,38 @@ func reverseGroups(groups []groupedEntries) {
 	for i, j := 0, len(groups)-1; i < j; i, j = i+1, j-1 {
 		groups[i], groups[j] = groups[j], groups[i]
 	}
+}
+
+// ShouldShowSessionConnector returns true when a visual connector should appear
+// between the two entries, indicating they are part of the same execution flow
+// (e.g., implementation → review → implementation within a repository).
+func ShouldShowSessionConnector(current, next SidebarEntry) bool {
+	// Both must be task sessions
+	if current.Kind != SidebarEntryTaskSession || next.Kind != SidebarEntryTaskSession {
+		return false
+	}
+	// Skip between Planning/Foreman and repo sessions
+	if current.RepositoryName == "Planning" || current.RepositoryName == "Foreman" {
+		return false
+	}
+	if next.RepositoryName == "Planning" || next.RepositoryName == "Foreman" {
+		return false
+	}
+	// Both are repo-based sessions (impl/review), show connector
+	return true
+}
+
+// RenderSessionConnector renders a minimal down-arrow connector line between
+// session entries to indicate execution flow. The connector uses the same color
+// as the entry's status border to visually link related sessions.
+func RenderSessionConnector(entry SidebarEntry, st styles.Styles, width int) string {
+	const connector = "˅"
+	connectorWidth := ansi.StringWidth(connector)
+	padding := max(0, (width-connectorWidth)/2)
+	// Use the entry's border color to make the connector visually consistent
+	// with the session's status
+	borderColor := entry.StatusBorderColor(st)
+	styledConnector := lipgloss.NewStyle().Foreground(lipgloss.Color(borderColor)).Render(connector)
+	content := strings.Repeat(" ", padding) + styledConnector
+	return lipgloss.NewStyle().Width(width).Render(content)
 }
