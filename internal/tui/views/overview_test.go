@@ -1020,8 +1020,8 @@ func TestOverviewTaskRowUsesSidebarSessionTitle(t *testing.T) {
 	app.updateContentFromState()
 
 	view := stripBrowseANSI(app.content.View())
-	// Implementation sessions are now labeled "Implementation <id>"
-	if !strings.Contains(view, "Implementation") {
+	// All sessions are labeled "Session <id>"
+	if !strings.Contains(view, "Session") {
 		t.Fatalf("content view = %q, want sidebar-style task title in overview", view)
 	}
 	if strings.Contains(view, "implementation-session-123456789") {

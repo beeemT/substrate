@@ -856,11 +856,11 @@ func taskSidebarSessionTitle(session *domain.Task) string {
 	switch session.Phase {
 	case domain.TaskPhasePlanning:
 		// Don't prefix with "Planning" - we're already in the Planning group
-		return shortSessionID(session.ID)
+		return "Session " + shortSessionID(session.ID)
 	case domain.TaskPhaseReview:
-		return "Review " + shortSessionID(session.ID)
+		return "Session " + shortSessionID(session.ID)
 	default:
-		return "Implementation " + shortSessionID(session.ID)
+		return "Session " + shortSessionID(session.ID)
 	}
 }
 

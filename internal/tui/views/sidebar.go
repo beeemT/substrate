@@ -801,7 +801,25 @@ func entryRowHeight(e SidebarEntry) int {
 	if e.Kind == SidebarEntryGroupHeader {
 		return 2 // heading line + blank separator
 	}
-	return 4 // 3 lines + blank separator
+	// Dynamic sizing based on content
+	switch e.Kind {
+	case SidebarEntryTaskSession:
+		// Planning/Foreman sessions: just the session ID (1 line)
+		if e.RepositoryName == "Planning" || e.RepositoryName == "Foreman" {
+			return 2 // 1 line + blank separator
+		}
+		// Review/Implementation sessions: prefix + title (2 lines)
+		return 3 // 2 lines + blank separator
+	case SidebarEntryTaskArtifacts:
+		// Artifacts: prefix + title (2 lines)
+		return 3 // 2 lines + blank separator
+	case SidebarEntryTaskSourceDetails:
+		// Source details: prefix + subtitle (2 lines)
+		return 3 // 2 lines + blank separator
+	default:
+		// Work items and history: prefix + title + subtitle (3 lines)
+		return 4 // 3 lines + blank separator
+	}
 }
 
 // renderSidebarScrollbar renders a thin scrollbar column for the sidebar content area.
@@ -848,44 +866,89 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 // renderSidebarItem renders a single sidebar entry with left status border.
 // The border color reflects the entry's status, and the selected state
 // uses a brighter background with bold title. Icon is omitted for cleaner look.
+// Line count varies by entry type for efficient use of space.
 func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, width int) string {
 	borderColor := entry.StatusBorderColor(st)
+	contentWidth := max(0, width-2)
 
-	// No icon - border provides status indication
-	prefixWidth := max(0, width-2)
-	prefix := truncate(entry.sidebarPrefix(), prefixWidth)
-	titleWidth := max(0, width-2)
-	title := truncate("  "+entry.Title, titleWidth)
+	// Build lines based on entry type
+	var lines []string
 
-	var footer string
-	if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
-		footerWidth := max(0, width-2)
-		bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, footerWidth-4))
-		footer = "  " + truncate(bar, max(1, footerWidth-2))
-	} else if entry.Kind == SidebarEntryTaskSession {
-		// Task sessions don't show footer - status is encoded in border color
-		footer = ""
-	} else {
-		footerWidth := max(0, width-2)
-		footer = "  " + truncate(entry.Subtitle(), max(1, footerWidth-2))
+	switch entry.Kind {
+	case SidebarEntryTaskSession:
+		// Planning sessions (under Planning group): just the session ID
+		if entry.RepositoryName == "Planning" || entry.RepositoryName == "Foreman" {
+			prefix := truncate(entry.Title, contentWidth)
+			if selected {
+				lines = append(lines, st.SidebarItemTitleSel.Background(lipgloss.Color(st.Theme.SelectedBg)).Render(prefix))
+			} else {
+				lines = append(lines, st.SidebarItemTitle.Render(prefix))
+			}
+		} else {
+			// Review/Implementation sessions: prefix + title
+			prefix := truncate(entry.sidebarPrefix(), contentWidth)
+			title := truncate("  "+entry.Title, contentWidth)
+			if selected {
+				selectedBg := lipgloss.Color(st.Theme.SelectedBg)
+				lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
+				lines = append(lines, st.SidebarItem.Background(selectedBg).Render(title))
+			} else {
+				lines = append(lines, st.SidebarItemTitle.Render(prefix))
+				lines = append(lines, st.SidebarItem.Render(title))
+			}
+		}
+
+	case SidebarEntryTaskArtifacts, SidebarEntryTaskSourceDetails:
+		// Artifacts: prefix + title (e.g., "Artifacts" + "Pull requests & merge requests")
+		// Source details: prefix + subtitle (e.g., "Source" + "3 files changed")
+		prefix := truncate(entry.sidebarPrefix(), contentWidth)
+		if selected {
+			selectedBg := lipgloss.Color(st.Theme.SelectedBg)
+			lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
+			if entry.Kind == SidebarEntryTaskArtifacts {
+				title := truncate("  "+entry.Title, contentWidth)
+				lines = append(lines, st.SidebarItem.Background(selectedBg).Render(title))
+			} else {
+				subtitle := truncate(entry.Subtitle(), contentWidth)
+				lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render("  "+subtitle))
+			}
+		} else {
+			lines = append(lines, st.SidebarItemTitle.Render(prefix))
+			if entry.Kind == SidebarEntryTaskArtifacts {
+				title := truncate("  "+entry.Title, contentWidth)
+				lines = append(lines, st.SidebarItem.Render(title))
+			} else {
+				subtitle := truncate(entry.Subtitle(), contentWidth)
+				lines = append(lines, st.SidebarItemSubtitle.Render("  "+subtitle))
+			}
+		}
+
+	default:
+		// Work items and history: prefix + title + subtitle/progress
+		prefix := truncate(entry.sidebarPrefix(), contentWidth)
+		title := truncate("  "+entry.Title, contentWidth)
+
+		var footer string
+		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
+			bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, contentWidth-4))
+			footer = "  " + truncate(bar, max(1, contentWidth-2))
+		} else {
+			footer = "  " + truncate(entry.Subtitle(), max(1, contentWidth-2))
+		}
+
+		if selected {
+			selectedBg := lipgloss.Color(st.Theme.SelectedBg)
+			lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
+			lines = append(lines, st.SidebarItem.Background(selectedBg).Render(title))
+			lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render(footer))
+		} else {
+			lines = append(lines, st.SidebarItemTitle.Render(prefix))
+			lines = append(lines, st.SidebarItem.Render(title))
+			lines = append(lines, st.SidebarItemSubtitle.Render(footer))
+		}
 	}
 
-	// Build each line with proper styling
-	var line1, line2, line3 string
-	if selected {
-		// Selected: bold prefix, brighter bg
-		selectedBg := lipgloss.Color(st.Theme.SelectedBg)
-		line1 = st.SidebarItemTitleSel.Background(selectedBg).Render(prefix)
-		line2 = st.SidebarItem.Background(selectedBg).Render(title)
-		line3 = st.SidebarItemSubtitleSel.Background(selectedBg).Render(footer)
-	} else {
-		// Non-selected: normal weight
-		line1 = st.SidebarItemTitle.Render(prefix)
-		line2 = st.SidebarItem.Render(title)
-		line3 = st.SidebarItemSubtitle.Render(footer)
-	}
-
-	block := strings.Join([]string{line1, line2, line3}, "\n")
+	block := strings.Join(lines, "\n")
 
 	// Apply left border style with background for selected state
 	borderStyle := lipgloss.Style{}.
