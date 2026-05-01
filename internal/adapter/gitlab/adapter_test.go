@@ -50,13 +50,25 @@ func makeAdapterWithConfig(t *testing.T, cfg config.GitlabConfig, fn roundTripFu
 }
 
 func TestParseExternalID(t *testing.T) {
-	projectID, iid, err := parseExternalID("gl:issue:1234#42")
+	// Test new format (path-based)
+	projectPath, iid, err := parseExternalID("gl:issue:alice/rocket#42")
 	if err != nil {
 		t.Fatalf("parseExternalID: %v", err)
 	}
-	if projectID != 1234 || iid != 42 {
-		t.Fatalf("parsed = %d#%d, want 1234#42", projectID, iid)
+	if projectPath != "alice/rocket" || iid != 42 {
+		t.Fatalf("parsed = %q#%d, want alice/rocket#42", projectPath, iid)
 	}
+
+	// Test legacy format (numeric ID) - still supported for backward compatibility
+	legacyPath, legacyIID, err := parseExternalID("gl:issue:1234#42")
+	if err != nil {
+		t.Fatalf("parseExternalID (legacy): %v", err)
+	}
+	if legacyPath != "1234" || legacyIID != 42 {
+		t.Fatalf("parsed legacy = %q#%d, want 1234#42", legacyPath, legacyIID)
+	}
+
+	// Invalid format
 	if _, _, err := parseExternalID("gl:issue:bad"); err == nil {
 		t.Fatal("expected invalid external id error")
 	}
@@ -529,8 +541,9 @@ func TestResolveIssueUsesProjectQualifiedSelectionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if item.ExternalID != "gl:issue:5678#42" {
-		t.Fatalf("ExternalID = %q, want gl:issue:5678#42", item.ExternalID)
+	// ExternalID now uses the path format based on references.full
+	if item.ExternalID != "gl:issue:other-group/other-project#42" {
+		t.Fatalf("ExternalID = %q, want gl:issue:other-group/other-project#42", item.ExternalID)
 	}
 	if len(item.SourceItemIDs) != 1 || item.SourceItemIDs[0] != "5678#42" {
 		t.Fatalf("SourceItemIDs = %#v, want [5678#42]", item.SourceItemIDs)

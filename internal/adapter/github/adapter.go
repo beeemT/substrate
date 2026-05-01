@@ -688,12 +688,15 @@ func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) er
 }
 
 func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) error {
-	commentBody, externalIDs := extractPlanCommentPayload(payload)
+	commentBody, externalIDs, repoScopes := extractPlanCommentPayload(payload)
 	if strings.TrimSpace(commentBody) == "" {
 		return nil
 	}
 	for _, externalID := range externalIDs {
 		if !strings.HasPrefix(externalID, "gh:") {
+			continue
+		}
+		if !a.shouldPostComment(externalID, repoScopes) {
 			continue
 		}
 		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
@@ -1786,16 +1789,59 @@ func extractExternalID(payload string) string {
 	return parsed.ExternalID
 }
 
-func extractPlanCommentPayload(payload string) (string, []string) {
+func extractPlanCommentPayload(payload string) (string, []string, map[string]string) {
 	var parsed struct {
-		CommentBody string   `json:"comment_body"`
-		ExternalIDs []string `json:"external_ids"`
+		CommentBody       string            `json:"comment_body"`
+		ExternalIDs       []string          `json:"external_ids"`
+		RepoCommentScopes map[string]string `json:"repo_comment_scopes"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		return "", nil
+		return "", nil, nil
 	}
 
-	return parsed.CommentBody, parsed.ExternalIDs
+	return parsed.CommentBody, parsed.ExternalIDs, parsed.RepoCommentScopes
+}
+
+// shouldPostComment returns true if a plan comment should be posted for the given external ID.
+func (a *GithubAdapter) shouldPostComment(externalID string, repoScopes map[string]string) bool {
+	repo := extractRepoFromExternalID(externalID)
+	if repo == "" {
+		return true
+	}
+	scopeStr, ok := repoScopes[repo]
+	if !ok {
+		return true // Default to posting
+	}
+	switch config.IssueCommentScope(scopeStr) {
+	case config.IssueCommentScopeNone:
+		return false
+	case config.IssueCommentScopeMine:
+		return a.isOwnRepo(repo)
+	default:
+		return true
+	}
+}
+
+// extractRepoFromExternalID extracts the "owner/repo" portion from a GitHub external ID.
+func extractRepoFromExternalID(externalID string) string {
+	trimmed := strings.TrimSpace(externalID)
+	if !strings.HasPrefix(trimmed, "gh:issue:") {
+		return ""
+	}
+	raw := strings.TrimPrefix(trimmed, "gh:issue:")
+	parts := strings.SplitN(raw, "#", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+// isOwnRepo returns true if the repository is owned by the authenticated user.
+func (a *GithubAdapter) isOwnRepo(repo string) bool {
+	if idx := strings.IndexByte(repo, '/'); idx > 0 {
+		return repo[:idx] == a.viewer
+	}
+	return false
 }
 
 func derefTime(t *time.Time) time.Time {

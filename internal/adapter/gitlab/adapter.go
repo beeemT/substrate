@@ -55,9 +55,10 @@ type httpDoer interface {
 type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
-	cfg     config.GitlabConfig
-	baseURL string
-	client  httpDoer
+	cfg      config.GitlabConfig
+	baseURL  string
+	client   httpDoer
+	username string // cached authenticated username for "mine" scope checks
 }
 
 type issue struct {
@@ -75,6 +76,16 @@ type issue struct {
 	} `json:"references"`
 	CreatedAt *time.Time `json:"created_at"`
 	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+type project struct {
+	ID                int64  `json:"id"`
+	PathWithNamespace string `json:"path_with_namespace"`
+	Namespace         struct {
+		ID   int64  `json:"id"`
+		Path string `json:"path"`
+		Kind string `json:"kind"` // "user" or "group"
+	} `json:"namespace"`
 }
 
 type relatedMergeRequest struct {
@@ -406,11 +417,15 @@ func (a *GitlabAdapter) Watch(ctx context.Context, filter adapter.WorkItemFilter
 }
 
 func (a *GitlabAdapter) Fetch(ctx context.Context, externalID string) (domain.Session, error) {
-	projectID, iid, err := parseExternalID(externalID)
+	projectPath, iid, err := parseExternalID(externalID)
 	if err != nil {
 		return domain.Session{}, err
 	}
-	iss, err := a.fetchIssue(ctx, projectID, iid)
+	numericID, err := a.resolveNumericProjectID(ctx, projectPath)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	iss, err := a.fetchIssue(ctx, numericID, iid)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -423,21 +438,29 @@ func (a *GitlabAdapter) UpdateState(ctx context.Context, externalID string, stat
 	if strings.TrimSpace(mapped) == "" {
 		return nil
 	}
-	projectID, iid, err := parseExternalID(externalID)
+	projectPath, iid, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+	numericID, err := a.resolveNumericProjectID(ctx, projectPath)
 	if err != nil {
 		return err
 	}
 
-	return a.putJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", projectID, iid), map[string]any{"state_event": mapped}, nil)
+	return a.putJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", numericID, iid), map[string]any{"state_event": mapped}, nil)
 }
 
 func (a *GitlabAdapter) AddComment(ctx context.Context, externalID string, body string) error {
-	projectID, iid, err := parseExternalID(externalID)
+	projectPath, iid, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+	numericID, err := a.resolveNumericProjectID(ctx, projectPath)
 	if err != nil {
 		return err
 	}
 
-	return a.postJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d/notes", projectID, iid), map[string]any{"body": body}, nil)
+	return a.postJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d/notes", numericID, iid), map[string]any{"body": body}, nil)
 }
 
 func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
@@ -464,7 +487,7 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 }
 
 func (a *GitlabAdapter) onPlanApproved(ctx context.Context, payload string) error {
-	commentBody, externalIDs := extractPlanCommentPayload(payload)
+	commentBody, externalIDs, repoScopes := extractPlanCommentPayload(payload)
 	if strings.TrimSpace(commentBody) == "" {
 		return nil
 	}
@@ -472,11 +495,91 @@ func (a *GitlabAdapter) onPlanApproved(ctx context.Context, payload string) erro
 		if !strings.HasPrefix(externalID, "gl:") {
 			continue
 		}
+		if !a.shouldPostComment(ctx, externalID, repoScopes) {
+			continue
+		}
 		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+// shouldPostComment returns true if a plan comment should be posted for the given external ID.
+func (a *GitlabAdapter) shouldPostComment(ctx context.Context, externalID string, repoScopes map[string]string) bool {
+	repoKey := extractProjectPathFromExternalID(externalID)
+	if repoKey == "" {
+		return true
+	}
+	scopeStr, ok := repoScopes[repoKey]
+	if !ok {
+		return true // Default to posting
+	}
+	switch config.IssueCommentScope(scopeStr) {
+	case config.IssueCommentScopeNone:
+		return false
+	case config.IssueCommentScopeMine:
+		return a.isOwnNamespace(ctx, externalID)
+	default:
+		return true
+	}
+}
+
+// extractProjectPathFromExternalID extracts the project path from a GitLab external ID.
+func extractProjectPathFromExternalID(externalID string) string {
+	projectPath, _, err := parseExternalID(externalID)
+	if err != nil {
+		return ""
+	}
+	return projectPath
+}
+
+// isOwnNamespace returns true if the issue's project is owned by the authenticated user.
+func (a *GitlabAdapter) isOwnNamespace(ctx context.Context, externalID string) bool {
+	projectPath, _, err := parseExternalID(externalID)
+	if err != nil || projectPath == "" {
+		return false
+	}
+	// Fetch project to get namespace info
+	proj, err := a.fetchProjectByPath(ctx, projectPath)
+	if err != nil || proj == nil {
+		return false
+	}
+	// For user namespaces, check if it matches the authenticated user
+	if proj.Namespace.Kind == "user" {
+		if err := a.resolveUsername(ctx); err != nil {
+			return false
+		}
+		return proj.Namespace.Path == a.username
+	}
+	// For group namespaces, we'd need to check group membership - conservatively return false
+	return false
+}
+
+// fetchProjectByPath fetches project details by path for scope checking.
+func (a *GitlabAdapter) fetchProjectByPath(ctx context.Context, projectPath string) (*project, error) {
+	var proj project
+	encodedPath := url.PathEscape(projectPath)
+	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%s", encodedPath), nil, &proj); err != nil {
+		return nil, err
+	}
+	return &proj, nil
+}
+
+// resolveUsername fetches and caches the authenticated user's username.
+func (a *GitlabAdapter) resolveUsername(ctx context.Context) error {
+	if a.username != "" {
+		return nil
+	}
+	var user struct {
+		Username string `json:"username"`
+		ID       int64  `json:"id"`
+	}
+	if err := a.getJSON(ctx, "/api/v4/user", nil, &user); err != nil {
+		return err
+	}
+	a.username = user.Username
 	return nil
 }
 
@@ -525,6 +628,23 @@ func parseProjectIDFromMetadata(meta map[string]any) int64 {
 
 func parseGroupIDFromMetadata(meta map[string]any) int64 {
 	return parseIntFromMetadata(meta, "group_id")
+}
+
+// resolveNumericProjectID looks up the numeric project ID from a path.
+// Returns the path as-is if it's already numeric (legacy format).
+func (a *GitlabAdapter) resolveNumericProjectID(ctx context.Context, projectPath string) (int64, error) {
+	// If already numeric, return as-is
+	if numericID, err := strconv.ParseInt(projectPath, 10, 64); err == nil {
+		return numericID, nil
+	}
+
+	// Otherwise, fetch project by path to get numeric ID
+	var proj project
+	encodedPath := url.PathEscape(projectPath)
+	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%s", encodedPath), nil, &proj); err != nil {
+		return 0, fmt.Errorf("resolve project %s: %w", projectPath, err)
+	}
+	return proj.ID, nil
 }
 
 func resolveSelectionProjectID(sel adapter.Selection) int64 {
@@ -772,12 +892,12 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 }
 
 func issueToWorkItem(iss issue) domain.Session {
-	projectID := gitlabIssueProjectID(iss)
-	selectionID := gitlabIssueSelectionID(projectID, iss)
+	projectPath := gitlabProjectPath(iss)
+	selectionID := gitlabIssueSelectionID(gitlabIssueProjectID(iss), iss)
 
 	return domain.Session{
 		ID:            domain.NewID(),
-		ExternalID:    formatExternalID(projectID, iss.IID),
+		ExternalID:    formatExternalID(projectPath, iss.IID),
 		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{selectionID},
@@ -815,11 +935,11 @@ func aggregateIssues(issues []issue) domain.Session {
 	if len(issues) > 1 {
 		title = fmt.Sprintf("%s (+%d more)", issues[0].Title, len(issues)-1)
 	}
-	projectID := gitlabIssueProjectID(issues[0])
+	projectPath := gitlabProjectPath(issues[0])
 
 	return domain.Session{
 		ID:            domain.NewID(),
-		ExternalID:    formatExternalID(projectID, issues[0].IID),
+		ExternalID:    formatExternalID(projectPath, issues[0].IID),
 		Source:        adapterName,
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: itemIDs,
@@ -932,30 +1052,38 @@ func formatMilestone(ms milestone) string {
 	return strings.TrimSpace(ms.Title + "\n" + ms.Description)
 }
 
-func formatExternalID(projectID, iid int64) string {
-	return fmt.Sprintf("gl:issue:%d#%d", projectID, iid)
+// formatExternalID creates a GitLab external ID from a project path and issue IID.
+// Format: "gl:issue:{path}#{iid}"
+func formatExternalID(projectPath string, iid int64) string {
+	return fmt.Sprintf("gl:issue:%s#%d", projectPath, iid)
 }
 
-func parseExternalID(externalID string) (int64, int64, error) {
+// parseExternalID parses a GitLab external ID and returns the project path and issue IID.
+// Supports both new format (gl:issue:path#iid) and legacy format (gl:issue:numeric#iid).
+func parseExternalID(externalID string) (projectPath string, iid int64, err error) {
 	trimmed := strings.TrimSpace(externalID)
 	if !strings.HasPrefix(trimmed, "gl:issue:") {
-		return 0, 0, fmt.Errorf("invalid gitlab external id %q", externalID)
+		return "", 0, fmt.Errorf("invalid gitlab external id %q", externalID)
 	}
 	raw := strings.TrimPrefix(trimmed, "gl:issue:")
 	parts := strings.SplitN(raw, "#", 2)
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid gitlab external id %q", externalID)
-	}
-	projectID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse project id: %w", err)
-	}
-	iid, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse issue iid: %w", err)
+		return "", 0, fmt.Errorf("invalid gitlab external id %q", externalID)
 	}
 
-	return projectID, iid, nil
+	iid, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse issue iid: %w", err)
+	}
+
+	// Check if parts[0] is numeric (legacy format) or path (new format)
+	if numericID, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
+		// Legacy format - return the numeric ID as string for backward compatibility
+		return strconv.FormatInt(numericID, 10), iid, nil
+	}
+
+	// New format - parts[0] is already a path
+	return strings.TrimSpace(parts[0]), iid, nil
 }
 
 func extractExternalID(payload string) string {
@@ -969,16 +1097,17 @@ func extractExternalID(payload string) string {
 	return parsed.ExternalID
 }
 
-func extractPlanCommentPayload(payload string) (string, []string) {
+func extractPlanCommentPayload(payload string) (string, []string, map[string]string) {
 	var parsed struct {
-		CommentBody string   `json:"comment_body"`
-		ExternalIDs []string `json:"external_ids"`
+		CommentBody       string            `json:"comment_body"`
+		ExternalIDs       []string          `json:"external_ids"`
+		RepoCommentScopes map[string]string `json:"repo_comment_scopes"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		return "", nil
+		return "", nil, nil
 	}
 
-	return parsed.CommentBody, parsed.ExternalIDs
+	return parsed.CommentBody, parsed.ExternalIDs, parsed.RepoCommentScopes
 }
 
 func gitlabIssueListQuery(opts adapter.ListOpts) (url.Values, error) {

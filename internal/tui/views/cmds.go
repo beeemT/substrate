@@ -924,8 +924,43 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
 		payload["external_ids"] = externalIDs
 	}
+	if cfg != nil {
+		payload["repo_comment_scopes"] = buildRepoCommentScopes(workItem, cfg)
+	}
 
 	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
+}
+
+// buildRepoCommentScopes builds a map of repo identifiers to comment scopes for plan-approved events.
+func buildRepoCommentScopes(workItem domain.Session, cfg *config.Config) map[string]string {
+	scopes := make(map[string]string)
+	for _, itemID := range workItem.SourceItemIDs {
+		repoKey := extractRepoKey(workItem.Source, itemID)
+		if repoKey == "" {
+			continue
+		}
+		if scope := cfg.IssueCommentScopeForRepo(repoKey); scope != "" {
+			scopes[repoKey] = string(scope)
+		}
+	}
+	return scopes
+}
+
+// extractRepoKey extracts the repository identifier from a source item ID.
+func extractRepoKey(source, itemID string) string {
+	switch source {
+	case "github":
+		// GitHub item IDs are in format "owner/repo#number"
+		if idx := strings.IndexByte(itemID, '#'); idx > 0 {
+			return strings.TrimSpace(itemID[:idx])
+		}
+	case "gitlab":
+		// GitLab item IDs are in format "projectPath#number"
+		if idx := strings.IndexByte(itemID, '#'); idx > 0 {
+			return strings.TrimSpace(itemID[:idx])
+		}
+	}
+	return ""
 }
 
 // buildIssueCommentBody assembles the comment body for plan-approved issue comments

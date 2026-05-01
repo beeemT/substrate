@@ -59,6 +59,18 @@ const (
 	IssueCommentFullPlan IssueCommentContent = "full_plan"
 )
 
+// IssueCommentScope controls whether plan comments are posted on tickets at plan approval.
+type IssueCommentScope string
+
+const (
+	// IssueCommentScopeAll posts comments on all linked issues (default).
+	IssueCommentScopeAll IssueCommentScope = "all"
+	// IssueCommentScopeMine posts comments only on issues in user's own repositories.
+	IssueCommentScopeMine IssueCommentScope = "mine"
+	// IssueCommentScopeNone disables plan comments on linked issues.
+	IssueCommentScopeNone IssueCommentScope = "none"
+)
+
 // UIConfig controls TUI presentation defaults.
 type UIConfig struct {
 	// DefaultFilter sets the initial filter mode for the sessions list.
@@ -338,6 +350,29 @@ type ForemanConfig struct {
 type RepoConfig struct {
 	// DocPaths are documentation paths to include in planning context.
 	DocPaths []string `yaml:"doc_paths"`
+	// IssueCommentScope controls whether plan comments are posted at plan approval.
+	// Valid values: "all" (default), "mine", "none".
+	IssueCommentScope IssueCommentScope `yaml:"issue_comment_scope"`
+}
+
+// IssueCommentScopeOrDefault returns the scope, defaulting to "all" if empty.
+func (r RepoConfig) IssueCommentScopeOrDefault() IssueCommentScope {
+	switch r.IssueCommentScope {
+	case IssueCommentScopeNone:
+		return IssueCommentScopeNone
+	case IssueCommentScopeMine:
+		return IssueCommentScopeMine
+	default:
+		return IssueCommentScopeAll
+	}
+}
+
+// IssueCommentScopeForRepo returns the comment scope for a specific repository.
+func (c Config) IssueCommentScopeForRepo(repo string) IssueCommentScope {
+	if repoConfig, ok := c.Repos[repo]; ok && repoConfig.IssueCommentScope != "" {
+		return repoConfig.IssueCommentScopeOrDefault()
+	}
+	return ""
 }
 
 // GlobalDir returns the path to the global Substrate directory.
