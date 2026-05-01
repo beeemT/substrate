@@ -1158,6 +1158,100 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	}
 }
 
+func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceRoot := filepath.Join(tmpDir, "workspace")
+
+	// Setup fake gitwork repo
+	repoName := "test-repo"
+	repoDir := filepath.Join(workspaceRoot, repoName)
+	mainDir := filepath.Join(repoDir, "main")
+	for _, d := range []string{filepath.Join(repoDir, ".bare"), mainDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("create dir %s: %v", d, err)
+		}
+	}
+
+	wtJSON, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"worktrees": []map[string]any{
+				{"dir": mainDir, "branch": "main", "current": true},
+			},
+		},
+	})
+	fakeGitWork := filepath.Join(tmpDir, "git-work")
+	if err := os.WriteFile(
+		fakeGitWork,
+		fmt.Appendf(nil, "#!/bin/sh\nprintf '%%s\\n' %q\n", string(wtJSON)),
+		0o755,
+	); err != nil {
+		t.Fatalf("write fake git-work: %v", err)
+	}
+
+	const (
+		workItemID  = "wi-gen-event"
+		workspaceID = "ws-gen-event"
+	)
+
+	// Setup services
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
+	}}
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
+	}}
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	sessionRepo := newMockSessionRepo()
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	eventRepo := &planTestEventRepo{}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+
+	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate.", "Implement.")}
+	globalCfg := &config.Config{}
+	globalCfg.Plan.MaxParseRetries = ptrInt(0)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	if err != nil {
+		t.Fatalf("NewPlanningService: %v", err)
+	}
+
+	// Run planning
+	result, planErr := svc.Plan(context.Background(), workItemID)
+	if planErr != nil {
+		t.Fatalf("Plan: %v", planErr)
+	}
+	if result == nil {
+		t.Fatal("Plan returned nil result")
+	}
+
+	// Wait for async event emission
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify EventPlanGenerated was emitted
+	events, err := eventRepo.ListByType(context.Background(), string(domain.EventPlanGenerated), 10)
+	if err != nil {
+		t.Fatalf("ListByType: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("plan.generated event count = %d, want 1", len(events))
+	}
+
+	// Verify payload contains plan_id
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(events[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal plan.generated payload: %v", err)
+	}
+	if got, ok := payload["plan_id"].(string); !ok || got == "" {
+		t.Fatalf("plan_id missing or empty in payload: %#v", payload["plan_id"])
+	}
+	if got, ok := payload["work_item_id"].(string); !ok || got != workItemID {
+		t.Fatalf("work_item_id = %q, want %q", got, workItemID)
+	}
+}
+
 // validPlanningPlanWithRepo returns a complete valid substrate plan for the named repo.
 func validPlanningPlanWithRepo(repoName, orchestration, goal string) string {
 	return "```substrate-plan\nexecution_groups:\n  - [" + repoName + "]\n```\n\n## Orchestration\n" +
