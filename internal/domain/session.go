@@ -56,6 +56,7 @@ type SessionHistoryEntry struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	CompletedAt        *time.Time
+	PreviousState      SessionState
 }
 
 // SessionHistoryFilter constrains session-history search results.

@@ -19,6 +19,7 @@ type Session struct {
 	SourceItemIDs []string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	PreviousState SessionState
 }
 
 // SessionState represents the lifecycle state of a work item.
@@ -34,4 +35,5 @@ const (
 	SessionCompleted    SessionState = "completed"
 	SessionMerged       SessionState = "merged"
 	SessionFailed       SessionState = "failed"
+	SessionArchived     SessionState = "archived"
 )

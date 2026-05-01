@@ -37,6 +37,7 @@ const (
 	SidebarFilterActive
 	SidebarFilterNeedsAttention
 	SidebarFilterCompleted
+	SidebarFilterArchived
 )
 
 // SidebarDimension controls how sessions are grouped and sorted.
@@ -209,6 +210,8 @@ func (e SidebarEntry) StatusIcon(st styles.Styles) string {
 		return st.Success.Render("✓")
 	case e.State == domain.SessionFailed:
 		return st.Error.Render("✗")
+	case e.State == domain.SessionArchived:
+		return st.Muted.Render("⊗")
 	case (e.State == domain.SessionImplementing || e.State == domain.SessionReviewing) && e.HasInterrupted:
 		return st.Interrupted.Render("⊘")
 	case e.State == domain.SessionPlanReview || (e.State == domain.SessionImplementing && e.HasOpenQuestion):
@@ -256,6 +259,8 @@ func (e SidebarEntry) Subtitle() string {
 		status = "Failed"
 	case domain.SessionMerged:
 		status = "Merged"
+	case domain.SessionArchived:
+		status = "Archived"
 	}
 	if e.Kind != SidebarEntrySessionHistory {
 		return status
@@ -310,6 +315,8 @@ func sidebarFilterFromString(s string) SidebarFilter {
 		return SidebarFilterNeedsAttention
 	case "completed":
 		return SidebarFilterCompleted
+	case "archived":
+		return SidebarFilterArchived
 	default:
 		return SidebarFilterAll
 	}
@@ -839,7 +846,9 @@ func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted
 		}
 		return false
 	case SidebarFilterCompleted:
-		return state == domain.SessionCompleted || state == domain.SessionFailed || state == domain.SessionMerged
+		return (state == domain.SessionCompleted || state == domain.SessionFailed || state == domain.SessionMerged) && state != domain.SessionArchived
+	case SidebarFilterArchived:
+		return state == domain.SessionArchived
 	default:
 		return true
 	}

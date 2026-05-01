@@ -875,6 +875,26 @@ func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, im
 	}
 }
 
+// archiveSessionCmd archives a work item and returns a completion message.
+func archiveSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := svc.Archive(context.Background(), workItemID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("archive session: %w", err)}
+		}
+		return SessionArchivedMsg{WorkItemID: workItemID, Message: "Session archived"}
+	}
+}
+
+// unarchiveSessionCmd unarchives a work item and returns a completion message.
+func unarchiveSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := svc.Unarchive(context.Background(), workItemID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("unarchive session: %w", err)}
+		}
+		return SessionUnarchivedMsg{WorkItemID: workItemID, Message: "Session unarchived"}
+	}
+}
+
 func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
 	if bus == nil {
 		return nil

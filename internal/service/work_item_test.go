@@ -345,7 +345,13 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 		{domain.SessionReviewing, domain.SessionCompleted, "reviewing -> completed"},
 		{domain.SessionReviewing, domain.SessionImplementing, "reviewing -> implementing"},
 		{domain.SessionReviewing, domain.SessionFailed, "reviewing -> failed"},
-		{domain.SessionFailed, domain.SessionImplementing, "failed -> implementing"},
+		{domain.SessionCompleted, domain.SessionMerged, "completed -> merged"},
+		{domain.SessionCompleted, domain.SessionArchived, "completed -> archived"},
+		{domain.SessionMerged, domain.SessionArchived, "merged -> archived"},
+		{domain.SessionFailed, domain.SessionArchived, "failed -> archived"},
+		{domain.SessionArchived, domain.SessionCompleted, "archived -> completed"},
+		{domain.SessionArchived, domain.SessionMerged, "archived -> merged"},
+		{domain.SessionArchived, domain.SessionFailed, "archived -> failed"},
 	}
 
 	for _, tc := range validTransitions {

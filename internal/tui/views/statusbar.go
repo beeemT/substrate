@@ -229,24 +229,55 @@ func joinStatusBarHintRendered(parts []statusBarHintPart) string {
 	return strings.Join(rendered, "  ")
 }
 
+// reorderStatusBarHintParts moves "Delete session" and "Archive/Unarchive session"
+// to immediately after "New session" and before "Search sessions".
 func reorderStatusBarHintParts(parts []statusBarHintPart) []statusBarHintPart {
 	deleteIndex := indexStatusBarHint(parts, KeybindHint{Key: "d", Label: "Delete session"})
 	newIndex := indexStatusBarHint(parts, KeybindHint{Key: "n", Label: "New session"})
-	if deleteIndex < 0 || newIndex < 0 || deleteIndex == newIndex+1 {
+	archiveIndex := indexStatusBarHint(parts, KeybindHint{Key: "a", Label: "Archive session"})
+	if archiveIndex < 0 {
+		archiveIndex = indexStatusBarHint(parts, KeybindHint{Key: "a", Label: "Unarchive session"})
+	}
+
+	if deleteIndex < 0 && archiveIndex < 0 {
 		return parts
 	}
 
-	deletePart := parts[deleteIndex]
-	reordered := make([]statusBarHintPart, 0, len(parts))
-	reordered = append(reordered, parts[:deleteIndex]...)
-	reordered = append(reordered, parts[deleteIndex+1:]...)
-	if deleteIndex < newIndex {
-		newIndex--
+	if deleteIndex >= 0 && deleteIndex == newIndex+1 && (archiveIndex < 0 || archiveIndex == newIndex+2) {
+		return parts
 	}
-	insertIndex := newIndex + 1
-	reordered = append(reordered, statusBarHintPart{})
-	copy(reordered[insertIndex+1:], reordered[insertIndex:])
-	reordered[insertIndex] = deletePart
+
+	// Build new order: keep parts before newIndex, then add new, then add delete/archive, then rest
+	reordered := make([]statusBarHintPart, 0, len(parts))
+
+	// Copy parts before newIndex (excluding delete and archive)
+	for i := 0; i < newIndex; i++ {
+		if i != deleteIndex && i != archiveIndex {
+			reordered = append(reordered, parts[i])
+		}
+	}
+
+	// Add "New session"
+	if newIndex >= 0 {
+		reordered = append(reordered, parts[newIndex])
+	}
+
+	// Add delete after new
+	if deleteIndex >= 0 {
+		reordered = append(reordered, parts[deleteIndex])
+	}
+
+	// Add archive after delete
+	if archiveIndex >= 0 {
+		reordered = append(reordered, parts[archiveIndex])
+	}
+
+	// Copy remaining parts after newIndex (excluding delete and archive)
+	for i := newIndex + 1; i < len(parts); i++ {
+		if i != deleteIndex && i != archiveIndex {
+			reordered = append(reordered, parts[i])
+		}
+	}
 
 	return reordered
 }

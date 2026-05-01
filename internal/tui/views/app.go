@@ -542,18 +542,27 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return append([]KeybindHint{{Key: "d", Label: "Delete session"}}, hints...)
 	}
+	prependArchive := func(hints []KeybindHint) []KeybindHint {
+		if sessionID := a.archivablSessionID(); sessionID != "" {
+			return append([]KeybindHint{{Key: "a", Label: "Archive session"}}, hints...)
+		}
+		if sessionID := a.unarchivablSessionID(); sessionID != "" {
+			return append([]KeybindHint{{Key: "a", Label: "Unarchive session"}}, hints...)
+		}
+		return hints
+	}
 	if a.mainFocus == mainFocusContent {
 		hints := append([]KeybindHint{{Key: "←/Esc", Label: "Back"}}, a.content.KeybindHints()...)
-		return append(prependDelete(hints), global...)
+		return append(prependArchive(prependDelete(hints)), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
 		hints := []KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}
 		if a.selectedTaskSessionID() != "" && a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			hints = append([]KeybindHint{{Key: "Enter", Label: "Open overview"}}, hints...)
 		}
-		return append(prependDelete(hints), global...)
+		return append(prependArchive(prependDelete(hints)), global...)
 	}
-	return append(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}), global...)
+	return append(prependArchive(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}})), global...)
 }
 
 func (a App) overviewOverlayOpen() bool {
@@ -670,6 +679,81 @@ func (a App) deletableSessionID() string {
 		return a.currentHistoryEntry.WorkItemID
 	}
 	if a.currentWorkItemID != "" {
+		return a.currentWorkItemID
+	}
+	return ""
+}
+
+// archivablSessionID returns the work item ID if the currently selected session
+// is in a terminal state (completed, merged, failed) and can be archived.
+func (a App) archivablSessionID() string {
+	if id := a.archivablSessionIDFromHistoryEntry(); id != "" {
+		return id
+	}
+	if id := a.archivablSessionIDFromWorkItem(); id != "" {
+		return id
+	}
+	return ""
+}
+
+// archivablSessionIDFromHistoryEntry returns the work item ID from the current history entry
+// if it is in a terminal state and can be archived.
+func (a App) archivablSessionIDFromHistoryEntry() string {
+	if a.currentHistoryEntry.WorkItemID == "" {
+		return ""
+	}
+	switch a.currentHistoryEntry.State {
+	case domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed:
+		return a.currentHistoryEntry.WorkItemID
+	}
+	return ""
+}
+
+// archivablSessionIDFromWorkItem returns the work item ID from the current work item
+// if it is in a terminal state and can be archived.
+func (a App) archivablSessionIDFromWorkItem() string {
+	if a.currentWorkItemID == "" {
+		return ""
+	}
+	wi := a.workItemByID(a.currentWorkItemID)
+	if wi == nil {
+		return ""
+	}
+	switch wi.State {
+	case domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed:
+		return a.currentWorkItemID
+	}
+	return ""
+}
+
+// unarchivablSessionID returns the work item ID if the currently selected session
+// is archived and can be unarchived.
+func (a App) unarchivablSessionID() string {
+	if id := a.unarchivablSessionIDFromHistoryEntry(); id != "" {
+		return id
+	}
+	if id := a.unarchivablSessionIDFromWorkItem(); id != "" {
+		return id
+	}
+	return ""
+}
+
+func (a App) unarchivablSessionIDFromHistoryEntry() string {
+	if a.currentHistoryEntry.WorkItemID == "" {
+		return ""
+	}
+	if a.currentHistoryEntry.State == domain.SessionArchived {
+		return a.currentHistoryEntry.WorkItemID
+	}
+	return ""
+}
+
+func (a App) unarchivablSessionIDFromWorkItem() string {
+	if a.currentWorkItemID == "" {
+		return ""
+	}
+	wi := a.workItemByID(a.currentWorkItemID)
+	if wi != nil && wi.State == domain.SessionArchived {
 		return a.currentWorkItemID
 	}
 	return ""
@@ -1176,6 +1260,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.showDeleteSessionConfirm(msg.SessionID)
 		return a, nil
 
+	case ConfirmArchiveMsg:
+		a.showArchiveConfirm(msg.WorkItemID)
+		return a, nil
+
+	case ConfirmUnarchiveMsg:
+		a.showUnarchiveConfirm(msg.WorkItemID)
+		return a, nil
+
 	case ConfirmOverrideAcceptMsg:
 		a.showConfirm("Override Accept",
 			"Accept this work item despite outstanding critiques? This cannot be undone.",
@@ -1418,6 +1510,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		cmds = append(cmds, deleteSessionCmd(a.svcs, a.sessionsDir, msg.SessionID, a.reviewSessionLogs))
 		return a, tea.Batch(cmds...)
+
+	case ArchiveSessionMsg:
+		cmds = append(cmds, archiveSessionCmd(a.svcs.Session, msg.WorkItemID))
+		return a, tea.Batch(cmds...)
+
+	case UnarchiveSessionMsg:
+		cmds = append(cmds, unarchiveSessionCmd(a.svcs.Session, msg.WorkItemID))
+		return a, tea.Batch(cmds...)
+
+	case SessionArchivedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		return a, nil
+
+	case SessionUnarchivedMsg:
+		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		return a, nil
 
 	case ReimplementMsg:
 		if a.svcs.Implementation != nil {
@@ -2064,6 +2172,15 @@ func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.showDeleteSessionConfirm(sessionID)
 			return a, nil
 		}
+	case "a":
+		if sessionID := a.archivablSessionID(); sessionID != "" {
+			a.showArchiveConfirm(sessionID)
+			return a, nil
+		}
+		if sessionID := a.unarchivablSessionID(); sessionID != "" {
+			a.showUnarchiveConfirm(sessionID)
+			return a, nil
+		}
 	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {
 			a.mainFocus = mainFocusSidebar
@@ -2461,6 +2578,20 @@ func (a *App) showDeleteSessionConfirm(sessionID string) {
 	}
 	a.showConfirm("Delete Session", msg,
 		func() tea.Msg { return DeleteSessionMsg{SessionID: sID} },
+	)
+}
+
+func (a *App) showArchiveConfirm(workItemID string) {
+	a.showConfirm("Archive Session",
+		"Archive this session? It will be hidden from the default views. You can unarchive it later.",
+		func() tea.Msg { return ArchiveSessionMsg{WorkItemID: workItemID} },
+	)
+}
+
+func (a *App) showUnarchiveConfirm(workItemID string) {
+	a.showConfirm("Unarchive Session",
+		"Unarchive this session and restore it to the completed view.",
+		func() tea.Msg { return UnarchiveSessionMsg{WorkItemID: workItemID} },
 	)
 }
 

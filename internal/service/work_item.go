@@ -30,8 +30,10 @@ var validSessionTransitions = map[domain.SessionState][]domain.SessionState{
 	domain.SessionApproved:     {domain.SessionImplementing, domain.SessionFailed},
 	domain.SessionImplementing: {domain.SessionReviewing, domain.SessionCompleted, domain.SessionFailed},
 	domain.SessionReviewing:    {domain.SessionCompleted, domain.SessionImplementing, domain.SessionFailed},
-	domain.SessionCompleted:    {domain.SessionPlanning, domain.SessionMerged},
-	domain.SessionFailed:       {domain.SessionImplementing},
+	domain.SessionCompleted:    {domain.SessionPlanning, domain.SessionMerged, domain.SessionArchived},
+	domain.SessionMerged:      {domain.SessionArchived},
+	domain.SessionFailed:      {domain.SessionImplementing, domain.SessionArchived},
+	domain.SessionArchived:    {domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed},
 }
 
 // canTransition checks if a state transition is valid.
@@ -396,6 +398,60 @@ func (s *SessionService) RetryFailedWorkItem(ctx context.Context, id string) err
 	}
 
 	return s.Transition(ctx, id, domain.SessionImplementing)
+}
+
+// Archive archives a terminal work item (completed, merged, or failed).
+// It captures the current state in PreviousState so it can be restored on unarchive.
+func (s *SessionService) Archive(ctx context.Context, id string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		item, err := res.Sessions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("work item", id)
+		}
+
+		if !canTransition(item.State, domain.SessionArchived) {
+			return newInvalidTransitionError(
+				workItemStateName(item.State),
+				workItemStateName(domain.SessionArchived),
+				"work item",
+			)
+		}
+
+		now := time.Now()
+		item.PreviousState = item.State
+		item.State = domain.SessionArchived
+		item.UpdatedAt = now
+
+		return res.Sessions.Update(ctx, item)
+	})
+}
+
+// Unarchive restores an archived work item to its PreviousState.
+func (s *SessionService) Unarchive(ctx context.Context, id string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		item, err := res.Sessions.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("work item", id)
+		}
+
+		if item.State != domain.SessionArchived {
+			return newInvalidTransitionError(
+				workItemStateName(item.State),
+				workItemStateName(item.PreviousState),
+				"work item",
+			)
+		}
+		if item.PreviousState == "" {
+			return newInvalidInputError("no previous state recorded", "previous_state")
+		}
+
+		now := time.Now()
+		item.State = item.PreviousState
+		item.PreviousState = ""
+		item.UpdatedAt = now
+
+		return res.Sessions.Update(ctx, item)
+	})
 }
 
 // StartFollowUpPlanning transitions a completed work item back to planning for a follow-up round.

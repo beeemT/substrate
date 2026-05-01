@@ -278,6 +278,30 @@ type SessionDeletedMsg struct {
 	Warning   string
 }
 
+// ConfirmArchiveMsg requests a confirmation dialog before archiving a session.
+type ConfirmArchiveMsg struct{ WorkItemID string }
+
+// ArchiveSessionMsg fires when the user confirms archiving.
+type ArchiveSessionMsg struct{ WorkItemID string }
+
+// SessionArchivedMsg is sent after the work item is archived.
+type SessionArchivedMsg struct {
+	WorkItemID string
+	Message    string
+}
+
+// ConfirmUnarchiveMsg requests a confirmation dialog before unarchiving a session.
+type ConfirmUnarchiveMsg struct{ WorkItemID string }
+
+// UnarchiveSessionMsg fires when the user confirms unarchiving.
+type UnarchiveSessionMsg struct{ WorkItemID string }
+
+// SessionUnarchivedMsg is sent after the work item is unarchived.
+type SessionUnarchivedMsg struct {
+	WorkItemID string
+	Message    string
+}
+
 // SessionCreatedMsg is sent after the new-session flow persists a work item.
 type SessionCreatedMsg struct {
 	Session domain.Session

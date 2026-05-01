@@ -50,6 +50,7 @@ type sessionHistoryRow struct {
 	CreatedAt          string  `db:"created_at"`
 	UpdatedAt          string  `db:"updated_at"`
 	CompletedAt        *string `db:"completed_at"`
+	PreviousState      *string `db:"previous_state"`
 }
 
 func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
@@ -83,6 +84,7 @@ func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
 		CompletedAt:        completedAt,
+		PreviousState:      domain.SessionState(derefStr(r.PreviousState)),
 	}, nil
 }
 
@@ -247,7 +249,8 @@ func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistor
 			WHEN ss.latest_session_updated_at IS NOT NULL AND ss.latest_session_updated_at > wi.updated_at THEN ss.latest_session_updated_at
 			ELSE wi.updated_at
 		END AS updated_at,
-		ls.completed_at AS completed_at
+		ls.completed_at AS completed_at,
+		wi.previous_state AS previous_state
 	FROM work_items wi
 	JOIN workspaces w ON w.id = wi.workspace_id
 	LEFT JOIN latest_session ls ON ls.work_item_id = wi.id AND ls.rn = 1
