@@ -14,6 +14,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
@@ -929,9 +930,6 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 
-	eventRepo := &planTestEventRepo{}
-	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
-
 	// Discoverer uses the fake binary so buildRepoPointer succeeds for test-repo.
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
@@ -944,7 +942,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, nil, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1051,9 +1049,6 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 
-	eventRepo := &planTestEventRepo{}
-	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
-
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
@@ -1064,7 +1059,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, nil, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1112,7 +1107,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	eventRepo := &planTestEventRepo{}
-	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}})
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
 	repoName := "test-repo"
 	repoDir := filepath.Join(workspaceRoot, repoName)
@@ -1134,7 +1129,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate safely.", "Implement safely.")}
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1143,6 +1138,9 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	if planErr == nil {
 		t.Fatal("planRun succeeded; want active-plan persistence failure")
 	}
+
+	// Wait for async event emission
+	time.Sleep(50 * time.Millisecond)
 
 	events, err := eventRepo.ListByType(context.Background(), string(domain.EventPlanFailed), 10)
 	if err != nil {

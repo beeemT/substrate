@@ -161,21 +161,17 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		}
 	}
 
-	if r.eventBus != nil {
-		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventAgentSessionResumed),
-			WorkspaceID: interrupted.WorkspaceID,
-			Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
-				"old_session_id": interrupted.ID,
-				"new_session_id": newSession.ID,
-				"sub_plan_id":    interrupted.SubPlanID,
-			}),
-			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to publish session resumed event", "error", pubErr, "new_session_id", newSession.ID)
-		}
-	}
+	service.Emit(r.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionResumed),
+		WorkspaceID: interrupted.WorkspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
+			"old_session_id": interrupted.ID,
+			"new_session_id": newSession.ID,
+			"sub_plan_id":    interrupted.SubPlanID,
+		}),
+		CreatedAt: time.Now(),
+	})
 
 	// Register session for steering; deregister when the session finishes.
 	if r.registry != nil {
@@ -361,21 +357,17 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-	if r.eventBus != nil {
-		if pubErr := r.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventAgentSessionResumed),
-			WorkspaceID: failedTask.WorkspaceID,
-			Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
-				"old_session_id": failedTask.ID,
-				"new_session_id": newTask.ID,
-				"sub_plan_id":    failedTask.SubPlanID,
-			}),
-			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to publish session resumed event", "error", pubErr, "new_session_id", newTask.ID)
-		}
-	}
+	service.Emit(r.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionResumed),
+		WorkspaceID: failedTask.WorkspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
+			"old_session_id": failedTask.ID,
+			"new_session_id": newTask.ID,
+			"sub_plan_id":    failedTask.SubPlanID,
+		}),
+		CreatedAt: time.Now(),
+	})
 
 	if r.registry != nil {
 		r.registry.Register(newTask.ID, harnessSession)

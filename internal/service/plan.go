@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -138,15 +137,11 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
 		return err
 	}
-	if s.eventBus != nil {
-		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:        domain.NewID(),
-			EventType: string(domain.EventPlanSubmittedForReview),
-			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to emit plan submitted for review event", "error", pubErr, "plan_id", id)
-		}
-	}
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventPlanSubmittedForReview),
+		CreatedAt: time.Now(),
+	})
 	return nil
 }
 
@@ -174,16 +169,12 @@ func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
 		return err
 	}
 
-	if s.eventBus != nil {
-		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventPlanApproved),
-			WorkspaceID: plan.WorkItemID, // WorkItemID serves as workspace context
-			CreatedAt:   time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to emit plan approved event", "error", pubErr, "plan_id", id)
-		}
-	}
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanApproved),
+		WorkspaceID: plan.WorkItemID, // WorkItemID serves as workspace context
+		CreatedAt:   time.Now(),
+	})
 	return nil
 }
 
@@ -192,15 +183,11 @@ func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
 	if err := s.TransitionPlan(ctx, id, domain.PlanRejected); err != nil {
 		return err
 	}
-	if s.eventBus != nil {
-		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:        domain.NewID(),
-			EventType: string(domain.EventPlanRejected),
-			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to emit plan rejected event", "error", pubErr, "plan_id", id)
-		}
-	}
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventPlanRejected),
+		CreatedAt: time.Now(),
+	})
 	return nil
 }
 
@@ -321,14 +308,12 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 		return domain.Plan{}, nil, err
 	}
 
-	if planChanged && s.eventBus != nil {
-		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
+	if planChanged {
+		Emit(s.eventBus, domain.SystemEvent{
 			ID:        domain.NewID(),
 			EventType: string(domain.EventPlanRevised),
 			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to emit plan revised event", "error", pubErr, "plan_id", id)
-		}
+		})
 	}
 
 	return resultPlan, resultSubPlans, nil
@@ -471,15 +456,11 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 		return err
 	}
 
-	if s.eventBus != nil {
-		if pubErr := s.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:        domain.NewID(),
-			EventType: string(domain.EventSubPlanStatusChanged),
-			CreatedAt: time.Now(),
-		}); pubErr != nil {
-			slog.Warn("failed to emit sub-plan status changed event", "error", pubErr, "sub_plan_id", id)
-		}
-	}
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:        domain.NewID(),
+		EventType: string(domain.EventSubPlanStatusChanged),
+		CreatedAt: time.Now(),
+	})
 	return nil
 }
 

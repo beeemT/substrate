@@ -646,7 +646,7 @@ func buildOrchestrationRuntime(
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			services.plan, services.workItem, services.task, services.event, services.workspace, registry, services.question, cfg,
+			services.plan, services.workItem, services.task, bus, services.workspace, registry, services.question, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)

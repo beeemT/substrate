@@ -135,22 +135,18 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 		return nil, fmt.Errorf("create review cycle: %w", err)
 	}
 
-	// Emit ReviewStarted event
-	if p.eventBus != nil {
-		if err := p.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventReviewStarted),
-			WorkspaceID: session.WorkspaceID,
-			Payload: marshalJSONOrEmpty(string(domain.EventReviewStarted), map[string]any{
-				"session_id":   session.ID,
-				"cycle_number": cycleNumber,
-				"cycle_id":     cycle.ID,
-			}),
-			CreatedAt: time.Now(),
-		}); err != nil {
-			slog.Warn("failed to emit review started event", "error", err)
-		}
-	}
+	// Emit ReviewStarted event (async)
+	service.Emit(p.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventReviewStarted),
+		WorkspaceID: session.WorkspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventReviewStarted), map[string]any{
+			"session_id":   session.ID,
+			"cycle_number": cycleNumber,
+			"cycle_id":     cycle.ID,
+		}),
+		CreatedAt: time.Now(),
+	})
 
 	// Get plan and sub-plan for context
 	subPlan, err := p.planSvc.GetSubPlan(ctx, session.SubPlanID)
@@ -182,39 +178,40 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	result := p.makeDecision(ctx, cycle, critiques)
 	result.SessionID = reviewSessionID
 
-	// Emit review outcome events
-	if p.eventBus != nil {
-		payload := marshalJSONOrEmpty("review.outcome", map[string]any{
-			"session_id":     session.ID,
-			"cycle_number":   cycleNumber,
-			"cycle_id":       cycle.ID,
-			"passed":         result.Passed,
-			"critique_count": len(critiques),
-			"needs_reimpl":   result.NeedsReimpl,
-			"escalated":      result.Escalated,
-		})
-		evtType := domain.EventReviewCompleted
-		if result.NeedsReimpl {
-			evtType = domain.EventCritiquesFound
-			if err := p.eventBus.Publish(ctx, domain.SystemEvent{
-				ID:          domain.NewID(),
-				EventType:   string(domain.EventReimplementationStarted),
-				WorkspaceID: session.WorkspaceID,
-				Payload:     payload,
-				CreatedAt:   time.Now(),
-			}); err != nil {
-				slog.Warn("failed to emit reimplementation started event", "error", err)
-			}
-		}
-		if err := p.eventBus.Publish(ctx, domain.SystemEvent{
+	// Emit review outcome events (async)
+	payload := marshalJSONOrEmpty("review.outcome", map[string]any{
+		"session_id":     session.ID,
+		"cycle_number":   cycleNumber,
+		"cycle_id":       cycle.ID,
+		"passed":         result.Passed,
+		"critique_count": len(critiques),
+		"needs_reimpl":   result.NeedsReimpl,
+		"escalated":      result.Escalated,
+	})
+	now := time.Now()
+	if result.NeedsReimpl {
+		service.Emit(p.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
-			EventType:   string(evtType),
+			EventType:   string(domain.EventCritiquesFound),
 			WorkspaceID: session.WorkspaceID,
 			Payload:     payload,
-			CreatedAt:   time.Now(),
-		}); err != nil {
-			slog.Warn("failed to emit review outcome event", "error", err)
-		}
+			CreatedAt:   now,
+		})
+		service.Emit(p.eventBus, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventReimplementationStarted),
+			WorkspaceID: session.WorkspaceID,
+			Payload:     payload,
+			CreatedAt:   now,
+		})
+	} else {
+		service.Emit(p.eventBus, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventReviewCompleted),
+			WorkspaceID: session.WorkspaceID,
+			Payload:     payload,
+			CreatedAt:   now,
+		})
 	}
 
 	return result, nil

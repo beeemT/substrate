@@ -17,6 +17,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/service"
 )
@@ -53,7 +54,7 @@ type PlanningService struct {
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
 	sessionSvc     *service.TaskService
-	eventSvc       *service.EventService
+	eventBus       *event.Bus
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	globalCfg      *config.Config
@@ -108,7 +109,7 @@ func NewPlanningService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.TaskService,
-	eventSvc *service.EventService,
+	eventBus *event.Bus,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	questionSvc *service.QuestionService,
@@ -128,7 +129,7 @@ func NewPlanningService(
 		planSvc:        planSvc,
 		workItemSvc:    workItemSvc,
 		sessionSvc:     sessionSvc,
-		eventSvc:       eventSvc,
+		eventBus:       eventBus,
 		workspaceSvc:   workspaceSvc,
 		registry:       registry,
 		questionSvc:    questionSvc,
@@ -500,9 +501,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 				slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
 			}
-			if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors, nil); emitErr != nil {
-				slog.Warn("failed to emit plan failed event", "error", emitErr)
-			}
+			s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors, nil)
 			if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
 				slog.Warn("failed to revert work item to ingested after planning error", "error", transErr, "work_item_id", req.workItemID)
 			}
@@ -522,9 +521,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors, nil); emitErr != nil {
-			slog.Warn("failed to emit plan failed event", "error", emitErr)
-		}
+		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors, nil)
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
 			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
 		}
@@ -541,9 +538,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("persist plan: %w", err)); emitErr != nil {
-			slog.Warn("failed to emit plan failed event", "error", emitErr)
-		}
+		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("persist plan: %w", err))
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
 			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
 		}
@@ -560,9 +555,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition plan to pending review: %w", err)); emitErr != nil {
-			slog.Warn("failed to emit plan failed event", "error", emitErr)
-		}
+		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition plan to pending review: %w", err))
 		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
 			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
 		}
@@ -574,9 +567,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
 		}
-		if emitErr := s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition work item to plan review: %w", err)); emitErr != nil {
-			slog.Warn("failed to emit plan failed event", "error", emitErr)
-		}
+		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition work item to plan review: %w", err))
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
 	}
 
@@ -584,10 +575,8 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		slog.Warn("failed to complete planning session", "error", completeErr, "session_id", sessionID)
 	}
 
-	// 15. Emit PlanGenerated event.
-	if err := s.emitPlanGeneratedEvent(ctx, plan.ID, req.workItemID, plan.Version, workspace.ID); err != nil {
-		slog.Warn("failed to emit plan generated event", "error", err)
-	}
+	// 15. Emit PlanGenerated event (async).
+	s.emitPlanGeneratedEvent(ctx, plan.ID, req.workItemID, plan.Version, workspace.ID)
 
 	return &domain.PlanningResult{
 		Plan:     plan,
@@ -908,20 +897,19 @@ func (s *PlanningService) buildAndPersistPlan(
 	return plan, subPlans, nil
 }
 
-// emitPlanGeneratedEvent emits a PlanGenerated event.
-func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, workItemID string, version int, workspaceID string) error {
-	evt := domain.SystemEvent{
+// emitPlanGeneratedEvent emits a PlanGenerated event asynchronously.
+func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, workItemID string, version int, workspaceID string) {
+	service.Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanGenerated),
 		WorkspaceID: workspaceID,
 		Payload:     fmt.Sprintf(`{"plan_id":"%s","work_item_id":"%s","version":%d}`, planID, workItemID, version),
 		CreatedAt:   time.Now().UTC(),
-	}
-	return s.eventSvc.Create(ctx, evt)
+	})
 }
 
-// emitPlanFailedEvent emits a PlanFailed event.
-func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors, cause error) error {
+// emitPlanFailedEvent emits a PlanFailed event asynchronously.
+func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors, cause error) {
 	type planFailedPayload struct {
 		WorkItemID  string  `json:"work_item_id"`
 		SessionID   string  `json:"session_id"`
@@ -939,16 +927,16 @@ func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, s
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
-		return fmt.Errorf("marshal plan failed payload: %w", err)
+		slog.Error("marshal plan failed payload", "error", err)
+		return
 	}
-	evt := domain.SystemEvent{
+	service.Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanFailed),
 		WorkspaceID: workspaceID,
 		Payload:     string(data),
 		CreatedAt:   time.Now().UTC(),
-	}
-	return s.eventSvc.Create(ctx, evt)
+	})
 }
 
 // findOrderForRepo finds the execution order for a repo from the execution groups.

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -506,15 +505,7 @@ func (s *TaskService) FindRunningByOwner(ctx context.Context, instanceID string)
 	return running, nil
 }
 
-// emitEvent emits an event asynchronously. Nil bus is handled gracefully.
+// emitEvent emits an event asynchronously via the shared helper.
 func (s *TaskService) emitEvent(evt domain.SystemEvent) {
-	if s.eventBus == nil {
-		return
-	}
-	if err := s.eventBus.Publish(context.Background(), evt); err != nil {
-		slog.Error("failed to emit event",
-			slog.String("event_type", evt.EventType),
-			slog.String("error", err.Error()),
-		)
-	}
+	Emit(s.eventBus, evt)
 }
