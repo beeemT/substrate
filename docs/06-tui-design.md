@@ -112,14 +112,14 @@ const (
     ContentModeOverview                              // canonical root-session overview/control surface
     ContentModeSourceDetails                         // task-pane source metadata for the selected work item
     ContentModeArtifacts                             // PR/MR artifacts for the selected work item
-    ContentModePlanning                              // planning/task session log tailing
+    ContentModeAgentSession                           // live agent session log tailing (planning, implementation, review)
     ContentModeSessionInteraction                    // historical or task session interaction view
 )
 ```
 
 `ContentModeOverview` is the default when a work item is selected — it handles all root states (ingested, planning, plan_review, approved, implementing, reviewing, completed, failed). When the session is blocked on a human action, the overview surfaces that action inline or through an overlay. The operator never has to navigate to a state-specific page to unblock progress.
 
-`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeArtifacts` renders the artifacts accordion for the work item's PRs/MRs (see §3f). `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModePlanning` renders the live planning transcript while a planning child session is active.
+`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeArtifacts` renders the artifacts accordion for the work item's PRs/MRs (see §3f). `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModeAgentSession` renders live agent session output — planning, implementation, and review — while a child session is active. It replaces the former `ContentModePlanning` name.
 
 ---
 

@@ -355,7 +355,7 @@ CLI-backed transport response parsing (`parseCLIResponse`):
 Capabilities:
 
 - browse: issues only
-- watch: no
+- watch: yes
 - mutate: no
 - issue filters: view (`assigned_to_me`, `all`), state (`unresolved`, `for_review`, `regressed`, `escalating`, `resolved`, `archived`), search, cursor, repo
 - no labels filter
@@ -431,7 +431,7 @@ Tracker references are emitted as `domain.TrackerReference{Provider:"sentry", Ki
 
 The adapter intentionally declines source-tracker side effects:
 
-- `Watch(...)` returns a closed channel
+- `Watch(...)` polls assigned issues at the configured interval and emits `created`, `updated`, and `error` events
 - `UpdateState(...)` returns `nil`
 - `AddComment(...)` returns `nil`
 - `OnEvent(...)` returns `nil`

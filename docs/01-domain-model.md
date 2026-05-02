@@ -25,10 +25,12 @@ type Session struct {
 	AssigneeID    string
 	State         SessionState
 	Metadata      map[string]any
+	ExtraContext  string
 	SourceScope   SelectionScope
 	SourceItemIDs []string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	PreviousState SessionState
 }
 
 type SessionState string
@@ -43,6 +45,7 @@ const (
 	SessionCompleted    SessionState = "completed"
 	SessionMerged       SessionState = "merged"
 	SessionFailed       SessionState = "failed"
+	SessionArchived     SessionState = "archived"
 )
 ```
 
@@ -348,9 +351,13 @@ Questions are attached to a `Task` through the historical `AgentSessionID` field
 type Question struct {
 	ID             string
 	AgentSessionID string
+	Stage          TaskPhase
+	Source         QuestionSource
 	Content        string
 	Context        string
+	Structured     *StructuredQuestionSet
 	Answer         string
+	AnswerData     *AgentQuestionAnswer
 	ProposedAnswer string
 	AnsweredBy     string
 	Status         QuestionStatus
@@ -366,6 +373,8 @@ const (
 	QuestionEscalated QuestionStatus = "escalated"
 )
 ```
+
+`Stage` records which phase the question was raised in (`planning`, `implementation`, `review`). `Source` identifies the harness mechanism that produced the question (`ask_foreman`, `claude_ask`, `omp_ask`, `opencode_question`, `future_harness_question`). `Structured` carries the native ask-question payload when the harness uses a structured question format. `AnswerData` carries the normalized answer delivered back to the live harness.
 
 Current behavior:
 

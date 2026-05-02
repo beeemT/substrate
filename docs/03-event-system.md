@@ -134,11 +134,11 @@ All events flow through `event.Bus.Publish(...)` via the shared `service.Emit()`
 
 Services emit via `service.Emit(bus, evt)` after database transactions commit:
 
-|| Service | Method | Event types |
-||---|---|---|
-|| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged` |
-|| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
-|| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
+||| Service | Methods | Event types |
+|||---|---|---|
+||| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged` |
+||| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+||| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
 
 ### Orchestrator-layer emitters (workflow events)
 
@@ -156,7 +156,7 @@ Orchestrators emit higher-level workflow events via `service.Emit()`:
 || Emitter | Event types | Notes |
 ||---|---|---|
 || GitHub/GitLab adapters (`PersistReviewArtifact`) | `review.artifact_recorded` | Direct persistence via `EventService.Create` |
-|| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.review_state_changed`, `pr.ci_failed`, `pr.merged` | Each emitted only on observed state change |
+||| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.merged` | `pr.merged` emitted on post-merge transition; review state and CI check rows are maintained in the DB by the refresh loop but do not emit bus events |
 || Adapter dispatch loops | `adapter.error` | Published through bus on handler failure |
 
 ### Unused event constants
@@ -164,6 +164,10 @@ Orchestrators emit higher-level workflow events via `service.Emit()`:
 The following declared constants are not currently emitted in the assigned code paths:
 
 - `workspace.created`
+- `pr.review_state_changed`
+- `pr.ci_failed`
+
+`pr.review_state_changed` and `pr.ci_failed` are declared but not emitted through the bus. The 120-second refresh loop maintains review and check rows in the database, but does not publish events when those rows change. The TUI reads review and check state from the database tables directly.
 
 Also reserved but not currently emitted in the active runtime path: `agent_question.raised` and `agent_question.answered`. These event types are defined and handled in the TUI, but the current question routing in `QuestionService.EscalateWithProposal` does not publish them through the bus — the TUI receives question updates via targeted load commands from orchestrator completion messages instead.
 

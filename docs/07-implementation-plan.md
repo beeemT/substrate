@@ -45,6 +45,8 @@ migrations/
     011_pr_review_state.sql
     012_pr_check_status.sql
     013_question_routing_metadata.sql
+    014_gitlab_mr_worktree_path.sql
+    015_session_archive.sql
 ~/.substrate/state.db
 ```
 
