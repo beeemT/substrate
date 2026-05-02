@@ -45,13 +45,14 @@ func (m *ArtifactsModel) SetSize(w, h int) {
 
 // SetItems replaces the current item list while preserving expansion state for
 // stable artifact IDs across periodic refreshes.
+// When there are 2 or 3 items, all are auto-expanded.
 func (m *ArtifactsModel) SetItems(items []ArtifactItem) {
 	previousExpanded := m.expandedSet
 	m.items = items
 	m.expandedSet = make(map[string]bool, len(previousExpanded))
 	for _, item := range items {
 		key := artifactExpansionKey(item)
-		if previousExpanded[key] {
+		if previousExpanded[key] || len(items) == 2 || len(items) == 3 {
 			m.expandedSet[key] = true
 		}
 	}
@@ -137,6 +138,9 @@ func (m ArtifactsModel) buildBody() string {
 	}
 }
 
+// Cursor returns the current cursor position (for testing).
+func (m ArtifactsModel) Cursor() int { return m.cursor }
+
 // Update handles key and mouse input.
 func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -208,6 +212,8 @@ func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 }
 
 // ensureCursorVisible scrolls the viewport so the focused item row is visible.
+// For expanded items, the row header is placed at the top of the viewport.
+// For collapsed items, the row is placed within the viewport (may be below top).
 func (m *ArtifactsModel) ensureCursorVisible() {
 	if m.cursor < 0 || len(m.items) == 0 {
 		return
@@ -220,11 +226,19 @@ func (m *ArtifactsModel) ensureCursorVisible() {
 			linesBefore += strings.Count(m.renderExpandedCard(i), "\n") + 1
 		}
 	}
-	// The cursor row is at linesBefore. Ensure it's within the viewport.
-	if linesBefore < m.viewport.YOffset {
-		m.viewport.SetYOffset(linesBefore)
-	} else if linesBefore >= m.viewport.YOffset+m.viewport.Height {
-		m.viewport.SetYOffset(linesBefore - m.viewport.Height + 1)
+	// The cursor row is at linesBefore.
+	if m.expandedSet[artifactExpansionKey(m.items[m.cursor])] {
+		// For expanded items, scroll so the row header is at the top.
+		if linesBefore < m.viewport.YOffset || linesBefore > m.viewport.YOffset {
+			m.viewport.SetYOffset(linesBefore)
+		}
+	} else {
+		// For collapsed items, ensure the row is within the viewport.
+		if linesBefore < m.viewport.YOffset {
+			m.viewport.SetYOffset(linesBefore)
+		} else if linesBefore >= m.viewport.YOffset+m.viewport.Height {
+			m.viewport.SetYOffset(linesBefore - m.viewport.Height + 1)
+		}
 	}
 }
 

@@ -132,27 +132,28 @@ func TestArtifactsViewExpandCollapse(t *testing.T) {
 	m.SetSize(80, 40)
 	m.SetItems(testArtifactItems())
 
-	// Initially collapsed — no detail card content.
+	// 3 items auto-expand on SetItems — check expanded state.
 	plain := ansi.Strip(m.View())
-	if strings.Contains(plain, "Kind: PR") {
-		t.Fatal("expected collapsed state, but found expanded card content")
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatal("expected auto-expanded state for 3 items")
 	}
-
-	// Press space to expand first item.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	plain = ansi.Strip(m.View())
 	if !strings.Contains(plain, "Kind: PR") {
-		t.Fatal("expected expanded card after space, missing 'Kind: PR'")
-	}
-	if !strings.Contains(plain, "Repo: acme/auth-svc") {
-		t.Fatal("expected expanded card to show repo")
+		t.Fatal("expected expanded card to show Kind")
 	}
 
-	// Press space again to collapse.
+	// Press space to collapse first item.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	plain = ansi.Strip(m.View())
-	if strings.Contains(plain, "Kind: PR") {
-		t.Fatal("expected collapsed after second space")
+	// First item collapsed (>, not ⌄), but #2 and #3 still expanded.
+	if !strings.Contains(plain, "> #42") {
+		t.Fatal("first item should be collapsed after space")
+	}
+
+	// Press space again to re-expand first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatal("first item should be re-expanded after second space")
 	}
 }
 
@@ -165,12 +166,19 @@ func TestArtifactsViewExpansionSurvivesSetItemsRefresh(t *testing.T) {
 	items := testArtifactItems()
 	m.SetItems(items)
 
+	// 3 items auto-expand on SetItems.
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatalf("expected auto-expanded down-caret; view: %q", plain)
+	}
+
+	// Collapse via space.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	items[0].State = "merged"
 	m.SetItems(items)
 
-	plain := ansi.Strip(m.View())
-	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #42") {
 		t.Fatal("expanded item collapsed after refreshed SetItems")
 	}
 	if !strings.Contains(plain, "⌄ #42") {
@@ -186,15 +194,56 @@ func TestArtifactsViewCollapsedAndExpandedIndicators(t *testing.T) {
 	m.SetSize(80, 40)
 	m.SetItems(testArtifactItems())
 
+	// 3 items auto-expand.
 	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #42") {
+		t.Fatalf("expanded row missing down-caret indicator; view: %q", plain)
+	}
+
+	// Collapse with space.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
 	if !strings.Contains(plain, "> #42") {
 		t.Fatalf("collapsed row missing > indicator; view: %q", plain)
 	}
+}
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	plain = ansi.Strip(m.View())
+func TestArtifactsViewTwoItemsAutoExpand(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	m.SetItems(testArtifactItems()[:2])
+
+	// 2 items should auto-expand.
+	plain := ansi.Strip(m.View())
 	if !strings.Contains(plain, "⌄ #42") {
-		t.Fatalf("expanded row missing down-caret indicator; view: %q", plain)
+		t.Fatalf("expected auto-expanded down-caret for 2 items; view: %q", plain)
+	}
+	if !strings.Contains(plain, "⌄ #43") {
+		t.Fatalf("expected both items expanded; view: %q", plain)
+	}
+}
+
+func TestArtifactsViewFourItemsRemainCollapsed(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStyles(t)
+	m := views.NewArtifactsModel(st)
+	m.SetSize(80, 40)
+	items := []views.ArtifactItem{
+		{ID: "1", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#1", URL: "https://x/1", State: "open"},
+		{ID: "2", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#2", URL: "https://x/2", State: "open"},
+		{ID: "3", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#3", URL: "https://x/3", State: "open"},
+		{ID: "4", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#4", URL: "https://x/4", State: "open"},
+	}
+	m.SetItems(items)
+
+	// 4 items should stay collapsed.
+	plain := ansi.Strip(m.View())
+	if strings.Contains(plain, "⌄ #1") {
+		t.Fatalf("expected collapsed for 4 items; view: %q", plain)
 	}
 }
 
@@ -204,12 +253,23 @@ func TestArtifactsViewRightArrowExpands(t *testing.T) {
 	st := newTestStyles(t)
 	m := views.NewArtifactsModel(st)
 	m.SetSize(80, 40)
-	m.SetItems(testArtifactItems())
+	items := []views.ArtifactItem{
+		{ID: "1", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#1", URL: "https://x/1", State: "open"},
+		{ID: "2", Provider: "github", Kind: "PR", RepoName: "r", Ref: "#2", URL: "https://x/2", State: "open"},
+	}
+	m.SetItems(items)
 
-	// Right arrow on collapsed → expand.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	// 2 items auto-expand.
 	plain := ansi.Strip(m.View())
-	if !strings.Contains(plain, "Kind: PR") {
+	if !strings.Contains(plain, "⌄ #1") {
+		t.Fatal("expected auto-expanded for 2 items")
+	}
+
+	// Collapse via space, then right arrow re-expands.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "⌄ #1") {
 		t.Fatal("right arrow did not expand item")
 	}
 
@@ -226,29 +286,44 @@ func TestArtifactsViewCursorNavigation(t *testing.T) {
 
 	st := newTestStyles(t)
 	m := views.NewArtifactsModel(st)
-	m.SetSize(80, 40)
-	items := testArtifactItems()
+	m.SetSize(80, 60)
+	items := []views.ArtifactItem{
+		{ID: "github:acme/auth-svc:#42", Provider: "github", Kind: "PR", RepoName: "acme/auth-svc", Ref: "#42", URL: "https://github.com/acme/auth-svc/pull/42", State: "open"},
+		{ID: "github:acme/billing:#43", Provider: "github", Kind: "PR", RepoName: "acme/billing", Ref: "#43", URL: "https://github.com/acme/billing/pull/43", State: "open"},
+		{ID: "github:acme/gateway:#44", Provider: "github", Kind: "PR", RepoName: "acme/gateway", Ref: "#44", URL: "https://github.com/acme/gateway/pull/44", State: "open"},
+	}
 	m.SetItems(items)
 
-	// Cursor starts at 0. Move down.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	// Expand second item to verify cursor moved.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	// 3 items auto-expand on SetItems. Cursor starts at 0.
 	plain := ansi.Strip(m.View())
-	if !strings.Contains(plain, "Repo: acme/billing") {
-		t.Fatal("cursor did not move to second item")
+	if !strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("first item should be expanded")
 	}
-	// acme/auth-svc should not be in an expanded card.
-	if strings.Contains(plain, "Repo: acme/auth-svc") {
-		t.Fatal("first item should not be expanded")
+	if !strings.Contains(plain, "Repo: acme/billing") {
+		t.Fatal("second item should be expanded")
 	}
 
-	// Move up back to first.
+	// Collapse all items to test navigation without expansion confusion.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}) // collapse #42
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}) // collapse #43
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}) // collapse #44
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})                        // back to #43
+
+	// Expand second item (#43).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "Repo: acme/billing") {
+		t.Fatal("cursor should show second item expanded")
+	}
+
+	// Move up back to first and expand.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	plain = ansi.Strip(m.View())
 	if !strings.Contains(plain, "Repo: acme/auth-svc") {
-		t.Fatal("cursor did not move back to first item")
+		t.Fatal("cursor should show first item expanded")
 	}
 }
 
@@ -260,11 +335,7 @@ func TestArtifactsViewCursorClamps(t *testing.T) {
 	m.SetSize(80, 40)
 	m.SetItems(testArtifactItems())
 
-	// Move up past the beginning — should clamp at 0.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	// Expand — should show first item.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	// 3 items auto-expand on SetItems — first item is already expanded.
 	plain := ansi.Strip(m.View())
 	if !strings.Contains(plain, "Repo: acme/auth-svc") {
 		t.Fatal("cursor should clamp at first item")
@@ -274,7 +345,6 @@ func TestArtifactsViewCursorClamps(t *testing.T) {
 	for range 10 {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	plain = ansi.Strip(m.View())
 	if !strings.Contains(plain, "Repo: acme/gateway") {
 		t.Fatal("cursor should clamp at last item")
@@ -399,19 +469,27 @@ func TestArtifactsViewMultipleExpanded(t *testing.T) {
 	m.SetSize(80, 60)
 	m.SetItems(testArtifactItems())
 
-	// Expand first.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	// Move to second and expand.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-
+	// 3 items auto-expand on SetItems.
 	plain := ansi.Strip(m.View())
-	// Both should be expanded.
+	// All should be expanded.
 	if !strings.Contains(plain, "Repo: acme/auth-svc") {
 		t.Fatal("first expanded card missing")
 	}
 	if !strings.Contains(plain, "Repo: acme/billing") {
 		t.Fatal("second expanded card missing")
+	}
+	if !strings.Contains(plain, "Repo: acme/gateway") {
+		t.Fatal("third expanded card missing")
+	}
+
+	// Collapse first item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	plain = ansi.Strip(m.View())
+	if strings.Contains(plain, "Repo: acme/auth-svc") {
+		t.Fatal("first card should be collapsed after space")
+	}
+	if !strings.Contains(plain, "Repo: acme/billing") {
+		t.Fatal("second card should remain expanded")
 	}
 }
 
@@ -473,8 +551,7 @@ func TestArtifactsViewExpandedCardShowsReviews(t *testing.T) {
 	items := testArtifactItemsWithReviews()
 	m.SetItems(items)
 
-	// Expand first item.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	// 2 items auto-expand on SetItems.
 
 	plain := ansi.Strip(m.View())
 	// Should show Review section header.
@@ -625,6 +702,12 @@ func TestArtifactsViewExpandedCardShowsChecks(t *testing.T) {
 	m := views.NewArtifactsModel(st)
 	m.SetSize(100, 40)
 	m.SetItems(testArtifactItemsWithChecks())
+
+	// 2 items auto-expand on SetItems. Collapse all to test expansion on specific item.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}) // collapse #42
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}) // collapse #43
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})                        // back to #42
 
 	// Expand first item.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
