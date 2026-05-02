@@ -1,5 +1,5 @@
 # 07 - Implementation Plan
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 Phased build-out of Substrate. This file remains a roadmap, but implemented phases are rewritten to match repository HEAD instead of earlier pre-rename drafts.
 
 ## Directory Structure
@@ -366,7 +366,7 @@ Current TUI reality to keep in mind:
 
 - the default sidebar is root-session / work-item centric
 - history search uses `SessionHistoryEntry`
-- work-item completion and plan approval publish bus events from TUI command helpers
+- plan approval publishes `plan.approved` from `PlanService`; work-item completion publishes `work_item.completed` from `ImplementationService`
 - settings pages rebuild services and rewire adapters/harnesses dynamically
 - workspace init is a TUI flow, not just a CLI-only concern
 - overview view with action cards, confirm triggers, and superseded-interrupted filtering
@@ -420,7 +420,7 @@ The main live risks that still match current architecture are:
 
 - harness parity drift between oh-my-pi and the alternative harnesses
 - provider browse/filter semantics diverging across adapters
-- event-bus partial delivery when `ErrRetryLater` happens after some subscribers already received an event
+- event-bus partial delivery when `ErrRetryLater` happens after some subscribers already received an event (mitigated by drop handler; idempotent consumers)
 - SQLite contention and retry behavior under concurrent writes
 - bridge / CLI output format drift in external tools
 - foreman `question_timeout` config default `"0"` is documented as indefinite but runtime falls back to 60 s

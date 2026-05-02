@@ -1,5 +1,5 @@
 # 10 - Foreman Lifecycle Ownership
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 
 The Foreman is the persistent harness session that handles unresolved questions during implementation. This document covers the ownership boundary between orchestrator and TUI.
 

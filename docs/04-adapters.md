@@ -1,5 +1,5 @@
 # 04 - Adapter Implementations
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 Concrete adapter behavior as implemented under `internal/adapter/` and wired from `internal/app/`.
 
 ---

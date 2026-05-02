@@ -1,5 +1,5 @@
 # 02 - Layered Architecture
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 This document describes the current layering and wiring in repository HEAD.
 The important update versus older drafts is that the codebase now uses `Session`/`Task` domain names internally, while some storage tables and UI copy still use legacy `work_item` / `agent_session` terminology.
 
@@ -169,7 +169,7 @@ type Resources struct {
 
 ## 3. Service Layer
 
-The service layer is the state-machine and validation layer. All services use the **transacter pattern** for repository access.
+The service layer is the state-machine, validation, and event-emission layer. Services own domain state transitions and emit events on every state change. All services use the **transacter pattern** for repository access.
 
 ### Transacter pattern
 
@@ -178,6 +178,7 @@ Every service holds `atomic.Transacter[repository.Resources]` (from `go-atomic`)
 ```go
 type PlanService struct {
 	transacter atomic.Transacter[repository.Resources]
+	bus        *event.Bus  // nil for services that don't emit events
 }
 
 func (s *PlanService) CreatePlan(ctx context.Context, plan domain.Plan) error {
@@ -193,28 +194,44 @@ Rules:
 - All repository access goes through `Transact`, even single-repo reads.
 - Inside a callback, access repos via the `res` parameter (`res.Plans`, `res.Sessions`, etc.). Do NOT close over repo fields from the service struct.
 - For tests, use `repository.NoopTransacter{Res: repository.Resources{Plans: mock, SubPlans: mock}}`.
+- Services that emit events hold `*event.Bus` and use `service.Emit()` to publish after transactions commit. Pass `nil` for the bus in tests.
+
+### Event emission
+
+Services emit events via `service.Emit(bus, evt)`, a shared helper in `internal/service/event_emit.go` that:
+- Publishes asynchronously via `bus.Publish()`
+- Uses a 5-second timeout to prevent goroutine leaks
+- Gracefully no-ops when the bus is nil (for tests)
+
+Services that emit events:
+
+|| Service | Constructor | Events emitted |
+||---|---|---|
+|| `SessionService` | `NewSessionService(transacter, bus)` | work item state transitions via `Transition()` |
+|| `TaskService` | `NewTaskService(transacter, bus)` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+|| `PlanService` | `NewPlanService(transacter, bus)` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
+
+Constructor signatures follow `NewXxxService(transacter, bus *event.Bus)` for emitting services, and `NewXxxService(transacter)` for non-emitting services.
 
 Current services:
 
-| Service | Owns | Key responsibilities |
-|---|---|---|
-| `SessionService` | root `Session` lifecycle | validation, uniqueness checks, state transitions |
-| `PlanService` | `Plan` + `TaskPlan` | plan/sub-plan transitions, FAQ append, lookup helpers |
-| `TaskService` | repo-scoped `Task` lifecycle | pending/running/interrupted transitions, history lookups |
-| `ReviewService` | `ReviewCycle` + `Critique` | cycle transitions, critique persistence and resolution |
-| `QuestionService` | `Question` | answer/escalation/proposal workflows |
-| `WorkspaceService` | `Workspace` | create / transition / archive / recover |
-| `InstanceService` | `SubstrateInstance` | heartbeat, stale detection, cleanup |
-| `EventService` | `SystemEvent` | event persistence (wraps `EventRepository`) |
-| `GithubPRService` | `GithubPullRequest` | upsert, lookup by number, list non-terminal |
-| `GitlabMRService` | `GitlabMergeRequest` | upsert, lookup by IID, list non-terminal |
-| `SessionReviewArtifactService` | `SessionReviewArtifact` | upsert, list by work item / workspace |
-| `GithubPRReviewService` | `GithubPRReview` | upsert by `(pr_id, reviewer_login)`, list by PR, delete on PR terminal transition |
-| `GitlabMRReviewService` | `GitlabMRReview` | upsert by `(mr_id, reviewer_login)`, list by MR, delete on MR terminal transition |
-| `GithubPRCheckService` | `GithubPRCheck` | upsert by `(pr_id, name)`, list by PR, delete on PR terminal transition |
-| `GitlabMRCheckService` | `GitlabMRCheck` | upsert by `(mr_id, name)`, list by MR, delete on MR terminal transition |
-
-All constructors follow the same signature: `NewXxxService(transacter atomic.Transacter[repository.Resources]) *XxxService`.
+|| Service | Owns | Key responsibilities |
+||---|---|---|
+|| `SessionService` | root `Session` lifecycle | validation, uniqueness checks, state transitions, event emission |
+|| `PlanService` | `Plan` + `TaskPlan` | plan/sub-plan transitions, FAQ append, lookup helpers, event emission |
+|| `TaskService` | repo-scoped `Task` lifecycle | pending/running/interrupted transitions, history lookups, event emission |
+|| `ReviewService` | `ReviewCycle` + `Critique` | cycle transitions, critique persistence and resolution |
+|| `QuestionService` | `Question` | answer/escalation/proposal workflows |
+|| `WorkspaceService` | `Workspace` | create / transition / archive / recover |
+|| `InstanceService` | `SubstrateInstance` | heartbeat, stale detection, cleanup |
+|| `EventService` | `SystemEvent` | event persistence (wraps `EventRepository`) |
+|| `GithubPRService` | `GithubPullRequest` | upsert, lookup by number, list non-terminal |
+|| `GitlabMRService` | `GitlabMergeRequest` | upsert, lookup by IID, list non-terminal |
+|| `SessionReviewArtifactService` | `SessionReviewArtifact` | upsert, list by work item / workspace |
+|| `GithubPRReviewService` | `GithubPRReview` | upsert by `(pr_id, reviewer_login)`, list by PR, delete on PR terminal transition |
+|| `GitlabMRReviewService` | `GitlabMRReview` | upsert by `(mr_id, reviewer_login)`, list by MR, delete on MR terminal transition |
+|| `GithubPRCheckService` | `GithubPRCheck` | upsert by `(pr_id, name)`, list by PR, delete on PR terminal transition |
+|| `GitlabMRCheckService` | `GitlabMRCheck` | upsert by `(mr_id, name)`, list by MR, delete on MR terminal transition |
 
 Design rules:
 
@@ -222,6 +239,7 @@ Design rules:
 - Services MUST NOT import or depend on other services. Cross-service orchestration belongs in `internal/orchestrator`.
 - Services return domain-oriented errors (`ErrNotFound`, `ErrInvalidTransition`, `ErrInvalidInput`).
 - Services own transition tables.
+- Services emit events after transactions commit — never emit before persisting state.
 
 ## 4. Orchestration Layer
 
@@ -231,7 +249,7 @@ The current business-logic layer is not a single monolithic `Orchestrator` type.
 |---|---|
 | `Discoverer` | workspace preflight, git-work discovery, repo metadata extraction |
 | `PlanningService` | planning session startup, correction loop, plan persistence |
-| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding |
+|| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding |
 | `ReviewPipeline` | review-session startup, critique parsing, review outcome transitions |
 | `Foreman` | persistent question-answering session, FAQ append, escalation handling |
 | `Resumption` | resume / abandon interrupted tasks |
@@ -240,14 +258,21 @@ The current business-logic layer is not a single monolithic `Orchestrator` type.
 
 Note: `InstanceManager` was deleted. Instance reconciliation is now handled by `InstanceService` directly.
 
-Representative wiring from `cmd/substrate/main.go`:
+Representative wiring via `ServiceManager.buildServices()` (see `internal/tui/views/service_manager.go`):
 
 ```go
-registry := orchestrator.NewSessionRegistry()
+// Bus is shared singleton — passed to services, orchestrators, adapters.
+bus := event.NewBus(event.BusConfig{EventRepo: sm.eventRepo})
 
+// Services receive the shared bus.
+workItemSvc := service.NewSessionService(sm.transacter, bus)
+sessionSvc := service.NewTaskService(sm.transacter, bus)
+planSvc := service.NewPlanService(sm.transacter, bus)
+
+// Orchestrators receive the bus and services.
 planningSvc, _ := orchestrator.NewPlanningService(
 	planningCfg, discoverer, gitClient, harnesses.Planning,
-	planSvc, workItemSvc, sessionSvc, eventSvc, workspaceSvc, registry, cfg,
+	planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, questionSvc, cfg,
 )
 
 reviewPipeline := orchestrator.NewReviewPipeline(
@@ -255,17 +280,11 @@ reviewPipeline := orchestrator.NewReviewPipeline(
 	bus, registry,
 )
 
-implSvc := orchestrator.NewImplementationService(
-	cfg, harnesses.Implementation, gitClient, bus,
-	planSvc, workItemSvc, sessionSvc, workspaceSvc, registry,
-	reviewPipeline,
-	foreman, questionSvc, reviewSvc,
-```
-
 Cross-cutting reality today:
 
-- Services no longer receive bare repository references in orchestration constructors. Orchestration structs receive service pointers and the `SessionRegistry`.
-- Worktree lifecycle, review outcomes, resumed/interrupted notifications, and TUI-published tracker/lifecycle events go through `event.Bus`.
+- `ServiceManager` (in `internal/tui/views/service_manager.go`) owns the complete service graph lifecycle. It creates the shared bus, constructs all services and orchestrators, and wires adapters to the bus.
+- Services own state transitions and emit events via `service.Emit()`. Orchestrators own workflow events and emit via `service.Emit()`. Orchestrators do not emit state-transition events that services already emit.
+- Orchestration structs receive service pointers, the `SessionRegistry`, and the shared bus.
 - Adapters react to events; services do not depend on adapters.
 
 ## 5. SQLite Schema

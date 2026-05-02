@@ -1,5 +1,5 @@
 # 01 - Domain Model
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 Current domain types, state machines, and relationship rules for Substrate.
 This document describes repository HEAD, not earlier naming.
 

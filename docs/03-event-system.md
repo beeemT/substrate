@@ -1,5 +1,5 @@
 # 03 - Event System
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 Substrate's event model has two parts:
 
 1. persisted `domain.SystemEvent` rows in SQLite
@@ -78,6 +78,7 @@ const (
 	EventWorkItemReviewing    EventType = "work_item.reviewing"
 	EventWorkItemCompleted    EventType = "work_item.completed"
 	EventWorkItemFailed       EventType = "work_item.failed"
+	EventWorkItemMerged       EventType = "work_item.merged"
 
 	EventWorkspaceCreated        EventType = "workspace.created"
 	EventPlanGenerated           EventType = "plan.generated"
@@ -85,9 +86,10 @@ const (
 	EventPlanApproved            EventType = "plan.approved"
 	EventPlanRejected            EventType = "plan.rejected"
 	EventPlanRevised             EventType = "plan.revised"
-	EventPlanFailed              EventType = "plan.failed"
+	EventPlanFailed             EventType = "plan.failed"
+	EventSubPlanStatusChanged   EventType = "subplan.status_changed"
 	EventImplementationStarted   EventType = "work_item.implementation_started"
-	EventWorktreeRemoved         EventType = "worktree.removed"
+	EventWorktreeRemoved        EventType = "worktree.removed"
 	EventAgentSessionStarted     EventType = "agent_session.started"
 	EventAgentSessionCompleted   EventType = "agent_session.completed"
 	EventAgentSessionFailed      EventType = "agent_session.failed"
@@ -119,56 +121,51 @@ Important nuance: the bus and repository are not limited to those constants. `Im
 
 ## 2. Where Events Come From Today
 
-The codebase currently persists events from several places. Not every declared constant is actively emitted.
+Events originate from two layers:
 
-### Direct service writes (not through the bus)
+- **Services** own domain state and emit events on every transition. They are the source of truth for state-change events.
+- **Orchestrators** own workflow-level events (plan generation, review outcomes, session resume). They emit via `service.Emit()` which wraps `event.Bus.Publish(...)` asynchronously.
+- **TUI** subscribes to the bus and reacts to events. It does not emit state-change events.
+- **Adapters** subscribe to the bus for side effects (tracker updates, repo lifecycle hooks).
 
-These call `EventService.Create(...)` which persists directly via the repository transaction layer. They do **not** go through `event.Bus` and therefore skip pre/post-hooks and subscriber dispatch:
+All events flow through `event.Bus.Publish(...)` via the shared `service.Emit()` helper, which handles async emission with a 5-second timeout and nil-bus safety.
 
-| Emitter | Event types |
-|---|---|
-| `PlanningService` | `work_item.planning`, `plan.generated`, `plan.failed` |
-| `adapter.PersistReviewArtifact` (GitHub/GitLab adapters) | `review.artifact_recorded` |
-| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.review_state_changed`, `pr.ci_failed`, `pr.merged` (each emitted only on observed state change) |
+### Service-layer emitters (state transitions)
 
-Representative payload shapes:
+Services emit via `service.Emit(bus, evt)` after database transactions commit:
 
-```json
-{"work_item_id":"...","session_id":"..."}
-```
+|| Service | Method | Event types |
+||---|---|---|
+|| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged` |
+|| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+|| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
 
-```json
-{"plan_id":"...","work_item_id":"...","version":1}
-```
+### Orchestrator-layer emitters (workflow events)
 
-### Bus-published events
+Orchestrators emit higher-level workflow events via `service.Emit()`:
 
-These go through `event.Bus.Publish(...)`, so they use the bus's persistence and hook semantics:
+|| Orchestrator | Event types | Notes |
+||---|---|---|
+|| `PlanningService` | `plan.generated`, `plan.failed` | Plan generation is an orchestrator action |
+|| `ImplementationService` | `work_item.implementation_started`, `work_item.completed` (rich payload), `worktree.created`, `worktree.reused` | `agent_session.*` events removed — services emit these |
+|| `ReviewPipeline` | `review.started`, `review.critiques_found`, `review.completed`, `reimplementation.started` | |
+|| `Resumption` | `agent_session.resumed` | |
 
-| Emitter | Event types |
-|---|---|
-| `ImplementationService` (via `publishEvent`) | `work_item.implementation_started`, `agent_session.started`, `agent_session.completed`, `agent_session.failed` |
-| `ImplementationService.ensureWorktree` | `worktree.creating`, `worktree.created`, `worktree.reused` |
-| `ImplementationService.forwardEvents` | raw harness event names from `adapter.AgentEvent.Type` |
-| `ReviewPipeline` | `review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started` |
-| `Resumption` | `agent_session.resumed` |
-| TUI command helpers (`internal/tui/views/cmds.go`) | `plan.approved`, `work_item.completed` |
-| TUI settings service (adapter dispatch loops) | `adapter.error` |
+### Adapter and TUI emitters
 
-### Declared but not currently emitted in the assigned code paths
+|| Emitter | Event types | Notes |
+||---|---|---|
+|| GitHub/GitLab adapters (`PersistReviewArtifact`) | `review.artifact_recorded` | Direct persistence via `EventService.Create` |
+|| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.review_state_changed`, `pr.ci_failed`, `pr.merged` | Each emitted only on observed state change |
+|| Adapter dispatch loops | `adapter.error` | Published through bus on handler failure |
 
-The constants below still exist in `domain`, but the currently assigned sources do not actively publish them as part of the main orchestration path:
+### Unused event constants
+
+The following declared constants are not currently emitted in the assigned code paths:
 
 - `workspace.created`
-- `plan.submitted_for_review`
-- `plan.rejected`
-- `plan.revised`
-- `agent_session.interrupted`
-- `agent_question.raised`
-- `agent_question.answered`
-- several intermediate `work_item.*` state constants besides the specific ones listed above
 
-That distinction matters: they are part of the event vocabulary, but they are not all current runtime facts.
+Also reserved but not currently emitted in the active runtime path: `agent_question.raised` and `agent_question.answered`. These event types are defined and handled in the TUI, but the current question routing in `QuestionService.EscalateWithProposal` does not publish them through the bus — the TUI receives question updates via targeted load commands from orchestrator completion messages instead.
 
 ---
 
@@ -215,7 +212,7 @@ func (b *Bus) SubscriberCount() int
 
 Current behavior:
 
-- subscriber buffer size is `100`
+- subscriber buffer size is `500`
 - `topics == empty` means “receive all events”
 - subscribing with an existing subscriber ID replaces the old subscriber and closes its channel
 - `Subscribe` returns `ErrBusClosed` if the bus has already been closed
@@ -310,33 +307,41 @@ Because dispatch happens subscriber-by-subscriber, `ErrRetryLater` can happen af
 
 ### Work item adapters
 
-Production wiring subscribes each work item adapter to **all** events:
+Production wiring subscribes each work item adapter to a targeted set of events:
 
 ```go
-sub, _ := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
+sub, _ := bus.Subscribe(
+	"work-item-adapter:" + workItemAdapter.Name(),
+	string(domain.EventPlanApproved),
+	string(domain.EventWorkItemCompleted),
+	string(domain.EventPRMerged),
+)
 ```
 
-So the bus does not filter work-item adapter traffic by topic. Each adapter's `OnEvent` implementation decides which events matter.
-
-In practice, current adapters mostly care about:
-
-- `plan.approved`
-- `work_item.completed`
+Each adapter's `OnEvent` implementation receives matching events. Currently, adapters care about `plan.approved`, `work_item.completed`, and `pr.merged`.
 
 ### Repo lifecycle adapters
 
-Production wiring subscribes lifecycle adapters only to:
+Production wiring subscribes lifecycle adapters to:
 
 - `worktree.created`
+- `worktree.reused`
 - `work_item.completed`
+- `pr.merged`
+- `plan.approved`
 
 ```go
 sub, _ := bus.Subscribe(
 	"repo-lifecycle-adapter:" + lifecycleAdapter.Name(),
 	string(domain.EventWorktreeCreated),
+	string(domain.EventWorktreeReused),
 	string(domain.EventWorkItemCompleted),
+	string(domain.EventPRMerged),
+	string(domain.EventPlanApproved),
 )
 ```
+
+Lifecycle adapters also receive a drop handler via `WithDropHandler`, so bus dispatch is non-blocking even when the adapter's goroutine falls behind.
 
 ### Provider routing on top of topic routing
 
@@ -417,7 +422,7 @@ This event uses the same `WorktreeCreatedPayload` struct as `worktree.created`. 
 
 ### `plan.approved`
 
-Published by the TUI helper when a human approves a plan:
+Published by `PlanService.ApprovePlan()` when a human approves a plan:
 
 ```json
 {
@@ -431,7 +436,7 @@ Published by the TUI helper when a human approves a plan:
 
 ### `work_item.completed`
 
-Published by the TUI helper when a work item is accepted:
+Published by `ImplementationService.emitWorkItemCompleted()` after all sub-plans pass review. The richer payload (including branch, review, sub-plan content) stays in the orchestrator since services don't have access to those fields:
 
 ```json
 {
@@ -561,13 +566,23 @@ sequenceDiagram
 
 ## Design Summary
 
-The current event system is:
+The event system architecture:
 
-- a persisted `SystemEvent` row model
-- a topic-based in-process bus with subscriber channels
-- synchronous pre-hooks for gating
-- asynchronous post-hooks for side effects
-- best-effort fan-out with explicit `ErrRetryLater` / drop-handler behavior
-- partly centralized through `event.Bus`, with planning and adapter review-artifact code using `EventService.Create` for direct persistence
+- **Services** own domain state and are the source of truth for state-change events. They emit via `service.Emit()` after DB transactions commit.
+- **`event.Bus`** is a shared singleton in the application composition layer, used by services (as emitters), the TUI (as subscriber), and adapters (as subscribers).
+- **Orchestrators** own workflow-level events and emit via `service.Emit()`. They do not emit state-transition events that services already emit.
+- **TUI** subscribes to the bus and bridges events to its update loop via `DomainEventMsg`. It does not emit state-change events.
+- **Topic-based** in-process bus with subscriber channels, synchronous pre-hooks for gating, and asynchronous post-hooks for side effects.
+- **Best-effort fan-out** with explicit `ErrRetryLater` / drop-handler behavior.
+- All events persist via `event.Bus.Publish()`, which calls `EventRepository.Create` internally. Direct `EventService.Create` calls are reserved for adapter-side artifact persistence.
 
-That last point is intentional to document: “the event system” in HEAD is not a pure all-bus architecture. It is a mixed model, and the docs should describe it that way.
+Key architectural rules:
+
+1. Services own state and emit events on every transition.
+2. Orchestrators coordinate services but do not hold the bus for service-layer events.
+3. Orchestrators never subscribe to the bus — they only publish.
+4. TUI subscribes to the bus and bridges events to its update loop.
+5. Adapters subscribe to the bus for side effects.
+6. `PollTickMsg` is eliminated for work item and task state.
+
+Payloads use `map[string]any` with consistent lowercase keys (`work_item_id`, `session_id`, `workspace_id`) marshaled with `encoding/json`. Shared helpers in `internal/event/payload.go` ensure consistency.

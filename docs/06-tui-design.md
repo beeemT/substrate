@@ -1,6 +1,6 @@
 # 06 - TUI Design
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
-bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bridging.
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
+bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bus architecture. The TUI subscribes to the event bus in `App.Init()` and bridges events to its update loop via `DomainEventMsg`, with targeted load commands replacing the former `PollTickMsg`-driven workspace polls.
 
 ---
 
@@ -596,7 +596,7 @@ If the owning instance is dead (row missing or heartbeat stale >15s), any other 
 
 **Agent output:** All output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL). Any instance can tail this file from disk. The tailing logic handles log rotation: on detecting a size regression or inode change at the watched path, the offset is reset to 0 to follow the new segment.
 
-**State visibility:** Session state changes in the DB are visible to all instances within a poll interval (2s).
+**State visibility:** Session state changes are visible to all instances immediately via the event bus. The TUI subscribes to `event.Bus` and reacts to `DomainEventMsg` for targeted state reloads without polling.
 ---
 
 ## 8. Interaction Model
@@ -714,7 +714,7 @@ func tailSessionLogCmd(logPath string, since int64) tea.Cmd {
 }
 ```
 
-**Ticks**: Spinners use `tea.Tick(100ms, ...)`. DB state polling uses `tea.Every(2s, ...)` to pick up state changes from other instances or background processes.
+**Ticks**: Spinners use `tea.Tick(100ms, ...)`. Toast pruning still uses `PollTickMsg` for periodic cleanup. Work item and task state reloads are event-driven via `DomainEventMsg` — no periodic DB polling for state visibility.
 
 ### Optimistic Updates
 

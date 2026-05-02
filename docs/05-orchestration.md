@@ -1,5 +1,5 @@
 # 05 - Orchestration
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 Owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review/reimplementation, completion, and recovery.
 
 For domain/state definitions see `01-domain-model.md`. For event semantics see `03-event-system.md`. For provider, repo host, and harness behavior see `04-adapters.md`. For rollout status and test gates see `07-implementation-plan.md`.
@@ -488,6 +488,7 @@ Returns `ErrSessionNotRunning` when the target session is not in the registry.
 | Follow-up on completed/failed sessions | yes | `06-tui-design.md` |
 | Failure recovery | yes | `06-tui-design.md` |
 | Graceful quit/teardown | yes | `06-tui-design.md` |
-| Event catalog/handler semantics | no | `03-event-system.md` |
-| Provider/harness internals | no | `04-adapters.md` |
-| Schema/DI/persistence | no | `02-layered-architecture.md` |
+|| Event catalog/handler semantics | no | `03-event-system.md` |
+|| Provider/harness internals | no | `04-adapters.md` |
+|| Schema/DI/persistence | no | `02-layered-architecture.md` |
+|| Event emission for state transitions | no — services emit | `03-event-system.md` |

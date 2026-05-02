@@ -1,5 +1,5 @@
 # TUI Design System
-<!-- docs:last-integrated-commit a38128010038776df783ec0bdf305b2637b5603e -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 This document is the living reference for the current TUI design system.
 
 ---
