@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft. Awaiting approval.
+**COMPLETED** — Phases 1-5 implemented. Phase 6 (ServiceManager) is deferred.
+
+See [Implementation Summary](#implementation-summary) for completed changes.
 
 ## Goal
 
@@ -897,7 +899,7 @@ and `session_id` keys.
 
 ## Implementation Order
 
-### Phase 1: Service Layer Events
+### Phase 1: Service Layer Events ✓
 1. Add `event.Bus` to `SessionService`, emit from `Transition()`
 2. Add `event.Bus` to `TaskService`, emit from `Create`, `Complete`, `Fail`
 3. Add `event.Bus` to `PlanService`, emit from transition methods
@@ -907,7 +909,7 @@ and `session_id` keys.
 **Verification:** Write unit tests that mock the bus and assert correct events are
 published on each state transition.
 
-### Phase 2: Remove Orchestrator Duplicates
+### Phase 2: Remove Orchestrator Duplicates ✓
 1. Update orchestrator constructors (remove `eventBus` where no longer needed)
 2. Remove `emitSession*` calls from `ImplementationService`
 3. Remove `emitPlanningStartedEvent` call from `PlanningService.planRun()`
@@ -916,14 +918,14 @@ published on each state transition.
 **Verification:** Audit that no orchestrator publishes `EventWorkItem*` or
 `EventAgentSession*` directly. Tests still pass.
 
-### Phase 3: Targeted Load Commands
+### Phase 3: Targeted Load Commands ✓
 1. Add `LoadSessionCmd`, `LoadTasksForSessionCmd`, `LoadPlanForSessionCmd`
 2. Add new message types and handlers
 3. Update existing handlers to use targeted commands
 
 **Verification:** Tests for new commands and handlers.
 
-### Phase 4: TUI Subscribes
+### Phase 4: TUI Subscribes ✓
 1. Add `DomainEventMsg` type
 2. Wire subscription in `App.Init()` and teardown on quit
 3. Implement `DomainEventMsg` handler with targeted reload dispatch
@@ -932,14 +934,17 @@ published on each state transition.
 **Verification:** Manual test — trigger a state change, verify UI updates within
 milliseconds without a poll tick.
 
-### Phase 5: Eliminate Poll
+### Phase 5: Eliminate Poll ✓
 1. Remove `PollTickCmd()` from `Init()`
 2. Remove `LoadSessionsCmd`/`LoadTasksCmd` from `PollTickMsg` handler
 
 **Verification:** Confirm no `LoadSessionsCmd`/`LoadTasksCmd` calls remain outside
 the targeted load path and the initial load.
 
-### Phase 6: ServiceManager
+### Phase 6: ServiceManager (DEFERRED)
+This phase was deferred to future work.
+
+**Planned:**
 1. Create `internal/tui/views/service_manager.go`
 2. Extract `buildServices` from `settings_service.go`
 3. Update `SettingsService` to delegate to `ServiceManager`
@@ -951,29 +956,153 @@ the targeted load path and the initial load.
 
 ## Open Questions
 
-1. **`emitWorkItemCompleted` payload split:** The orchestrator's `emitWorkItemCompleted`
-   includes `branch`, `review`, `sub_plan_content`. The service emits a basic
-   `EventWorkItemCompleted`. Should the richer payload stay in the orchestrator,
-   or should the service fetch it? Recommendation: keep in orchestrator. The service
-   doesn't have access to `branch`/`review`/`sub_plan_content`. Splitting the event
-   is more complex than it's worth.
+1. **`emitWorkItemCompleted` payload split:** ✓ RESOLVED — Kept in orchestrator.
+   The service doesn't have access to `branch`/`review`/`sub_plan_content`, so the
+   richer payload stays in `ImplementationService.emitWorkItemCompleted()`.
 
-2. **`TaskService.Interrupt()` as a service method:** Currently the orchestrator
-   calls `TaskService.Fail()` with a special exit code to represent interrupt.
-   Should there be a dedicated `Interrupt()` method on the service, or should the
-   orchestrator call `Fail()`? Recommendation: add `Interrupt()` to the service
-   so the service emits `EventAgentSessionInterrupted` directly. This keeps the
-   service as the single source of truth for session state.
+2. **`TaskService.Interrupt()` as a service method:** ✓ RESOLVED — Implemented.
+   Added `Interrupt()` to `TaskService` which emits `EventAgentSessionInterrupted`
+   directly. The service is the single source of truth for session state.
 
 3. **Live instance heartbeat:** Still uses `PollTickMsg` → `HeartbeatCmd`.
    Could be event-driven (instances emit heartbeat events). Low priority — leave
    the poll for now.
 
-4. **`EventWorktreeCreated` / `EventWorktreeReused`:** Currently emitted by
-   `ImplementationService` but not tied to a service transition. These are
-   fine to stay in the orchestrator — they're workflow events, not state
-   transitions.
+4. **`EventWorktreeCreated` / `EventWorktreeReused`:** ✓ RESOLVED — Kept in orchestrator.
+   These are workflow events, not state transitions. Fine to stay in orchestrator.
 
-5. **Test bus in tests:** All test files that construct services need to be
-   updated to pass `nil` or a test `*event.Bus`. A shared test helper
-   `testBus := event.NewBus(event.BusConfig{})` in each test file is sufficient.
+5. **Test bus in tests:** ✓ RESOLVED — Tests updated.
+   All test files updated to pass `nil` or create a test bus. Added comprehensive
+   event emission tests in `internal/service/event_emit_test.go`.
+
+---
+
+## Implementation Summary
+
+The refactor has been completed. This section documents what was actually implemented.
+
+### Shared Emit Helper
+
+A shared `Emit()` helper was created in `internal/service/event_emit.go`:
+
+```go
+// Emit emits an event asynchronously if the bus is not nil.
+// This is a shared helper to reduce boilerplate across services.
+func Emit(bus *event.Bus, evt domain.SystemEvent) {
+    if bus == nil {
+        return
+    }
+    go func() {
+        ctx, cancel := context.WithTimeout(context.Background(), emitTimeout)
+        defer cancel()
+        if err := bus.Publish(ctx, evt); err != nil {
+            slog.Error("failed to emit event",
+                slog.String("event_type", evt.EventType),
+                slog.String("error", err.Error()),
+            )
+        }
+    }()
+}
+```
+
+Key design decisions:
+- **Async via goroutine** — all events are emitted asynchronously
+- **5-second timeout** — prevents goroutine leaks on slow subscribers
+- **Nil bus safety** — gracefully no-ops when bus is nil (for tests)
+- **Single error logging point** — centralized error handling
+
+### Service Layer Changes
+
+**`SessionService` (`internal/service/work_item.go`)**:
+- Added `*event.Bus` field to struct
+- `Transition()` emits after transaction commits via `emitStateChange()`
+- `stateToEventType()` maps states to event types
+- All named methods (StartPlanning, SubmitPlanForReview, etc.) go through `Transition()`
+
+**`TaskService` (`internal/service/session.go`)**:
+- Added `*event.Bus` field to struct
+- `Create()` emits `EventAgentSessionStarted`
+- `Complete()` emits `EventAgentSessionCompleted`
+- `Fail()` emits `EventAgentSessionFailed`
+- `Interrupt()` emits `EventAgentSessionInterrupted`
+- All emission via shared `Emit()` helper
+
+**`PlanService` (`internal/service/plan.go`)**:
+- Added `*event.Bus` field to struct
+- `SubmitForReview()` emits `EventPlanSubmittedForReview`
+- `ApprovePlan()` emits `EventPlanApproved`
+- `RejectPlan()` emits `EventPlanRejected`
+- `ApplyReviewedPlanOutput()` emits `EventPlanRevised` when content changes
+- `TransitionSubPlan()` emits `EventSubPlanStatusChanged`
+
+### New Event Types
+
+Added to `internal/domain/event.go`:
+```go
+EventSubPlanStatusChanged EventType = "sub_plan.status_changed"
+EventWorkItemMerged      EventType = "work_item.merged"
+```
+
+### Orchestrator Changes
+
+**`PlanningService` (`internal/orchestrator/planning.go`)**:
+- Changed from `*service.EventService` to `*event.Bus` in constructor
+- `emitPlanGeneratedEvent()` now uses `service.Emit()` (async)
+- `emitPlanFailedEvent()` now uses `service.Emit()` (async)
+- Removed `emitPlanningStartedEvent()` — service emits `EventWorkItemPlanning`
+
+**`ImplementationService` (`internal/orchestrator/implementation.go`)**:
+- Removed `emitSessionStarted`, `emitSessionCompleted`, `emitSessionFailed`, `emitSessionInterrupted` calls
+- Kept `emitImplementationStarted`, `emitWorktreeReused`, `emitWorktreeCreated` (workflow events)
+- Kept `emitWorkItemCompleted` (rich payload the service doesn't have)
+
+**`ReviewPipeline` (`internal/orchestrator/review.go`)**:
+- All events now use `service.Emit()` (async)
+- `EventReviewStarted`, `EventCritiquesFound`, `EventReviewCompleted`, `EventReimplementationStarted`
+
+**`Resumption` (`internal/orchestrator/resume.go`)**:
+- `EventAgentSessionResumed` now uses `service.Emit()` (async)
+
+### TUI Changes
+
+**`internal/tui/views/app.go`**:
+- Added `busSub *event.Subscriber` field to `App` struct
+- Subscribes to event bus in `Init()` for all lifecycle events
+- Added `DomainEventMsg` handler with targeted reload dispatch
+- Removed `PollTickCmd` for work item/task state refresh
+- `PollTickMsg` handler kept for toast pruning only
+
+**`internal/tui/views/msgs.go`**:
+- Added `DomainEventMsg`, `SessionLoadedMsg`, `TasksForSessionLoadedMsg`, `PlanForSessionLoadedMsg`
+
+**`internal/tui/views/cmds.go`**:
+- Added `LoadSessionCmd`, `LoadTasksForSessionCmd`, `LoadPlanForSessionCmd`
+- Removed `emitPlanApproved` (service emits)
+- Updated `FollowUpSessionCompleteMsg`, `FollowUpPlanResultMsg`, `ImplementationCompleteMsg` for targeted loads
+
+### Test Coverage
+
+Added comprehensive event emission tests in `internal/service/event_emit_test.go`:
+- `TestEmit` — nil bus safety, async behavior
+- `TestTaskService_EmitsEvents` — Create/Complete/Fail/Interrupt events
+- `TestSessionService_EmitsEvents` — work_item state transition events
+- `TestPlanService_EmitsEvents` — plan/subplan events
+
+Added orchestrator test in `internal/orchestrator/planning_test.go`:
+- `TestPlan_EmitsPlanGeneratedEventOnSuccess`
+- `TestPlanFailureEventIncludesPersistenceError` (updated for async)
+
+### Deferred: Phase 6 (ServiceManager)
+
+The `ServiceManager` extraction was deferred. Currently, `settings_service.go` still owns `rebuildServices()`. This is a future improvement to separate concerns.
+
+### Trade-offs and Notes
+
+1. **Async events everywhere** — All event emission is now async. This means:
+   - Services don't block on subscriber handling
+   - Tests need `time.Sleep()` to wait for goroutine completion
+   - Order between state persistence and event delivery is not guaranteed
+
+2. **Dual sourcing is harmless** — Both completion message handlers AND `DomainEventMsg` may trigger targeted loads. `SessionsLoadedMsg` does upsert, so duplicate calls are no-ops.
+
+3. **ReviewPipeline event simplification** — The original design had conditional emission based on decision result. The simplified implementation emits both `EventCritiquesFound` and `EventReimplementationStarted` when reimplementation is needed, with consistent payload.
