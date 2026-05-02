@@ -101,7 +101,8 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	svcs Services
 
 	// Bus subscription for event-driven updates
-	busSub *event.Subscriber
+	busSub        *event.Subscriber
+	eventConsumer *EventConsumer
 
 	// Layout sub-models
 	sidebar   SidebarModel
@@ -132,10 +133,10 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// State cache (refreshed by DB poll)
 	workItems []domain.Session
 	sessions  []domain.Task
-	subPlans  map[string][]domain.TaskPlan // keyed by planID
-	plans     map[string]*domain.Plan      // keyed by workItemID
-	questions map[string][]domain.Question // keyed by sessionID
-	reviews   map[string]ReviewsLoadedMsg  // keyed by sessionID
+	subPlans  map[string][]domain.TaskPlan          // keyed by planID
+	plans     map[string]*domain.Plan               // keyed by workItemID
+	questions map[string]map[string]domain.Question // sessionID → questionID → Question
+	reviews   map[string]ReviewsLoadedMsg           // keyed by sessionID
 
 	savedNewSessionFilters   []domain.NewSessionFilter
 	newSessionAutonomous     *NewSessionAutonomousRuntime
@@ -226,7 +227,7 @@ func NewApp(svcs Services) App {
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
-		questions:                      make(map[string][]domain.Question),
+		questions:                      make(map[string]map[string]domain.Question),
 		reviews:                        make(map[string]ReviewsLoadedMsg),
 		tailingSessionIDs:              make(map[string]bool),
 		liveInstanceIDs:                make(map[string]bool),
@@ -282,7 +283,7 @@ func RunTUI(svcs Services) error {
 func (a App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
-	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForAdapterErrorCmd(a.svcs.AdapterErrors), WaitForLogToastCmd(a.svcs.LogToasts), StartupWarningsCmd(a.svcs.StartupWarnings))
+	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.svcs.LogToasts), StartupWarningsCmd(a.svcs.StartupWarnings))
 
 	if a.svcs.WorkspaceID != "" {
 		cmds = append(cmds,
@@ -295,9 +296,11 @@ func (a App) Init() tea.Cmd {
 
 		// Subscribe to event bus for event-driven updates
 		if a.svcs.Bus != nil {
-			a.busSub, _ = a.svcs.Bus.Subscribe(
+			var err error
+			a.busSub, err = a.svcs.Bus.Subscribe(
 				"tui:"+a.svcs.WorkspaceID,
 				// Work item lifecycle
+				string(domain.EventWorkItemIngested),
 				string(domain.EventWorkItemPlanning),
 				string(domain.EventWorkItemPlanReview),
 				string(domain.EventWorkItemApproved),
@@ -330,15 +333,16 @@ func (a App) Init() tea.Cmd {
 				// Questions
 				string(domain.EventAgentQuestionRaised),
 				string(domain.EventAgentQuestionAnswered),
+				// Adapters
+				string(domain.EventAdapterError),
 			)
-
-			// Bridge: forward events from subscriber channel to the update loop.
-			cmds = append(cmds, func() tea.Msg {
-				for evt := range a.busSub.C {
-					return DomainEventMsg{Event: evt}
-				}
-				return nil
-			})
+			if err != nil {
+				slog.Error("failed to subscribe TUI to event bus", "error", err)
+			} else {
+				// Bridge: forward events from subscriber channel to the update loop via EventConsumer.
+				a.eventConsumer = NewEventConsumer(&a, a.busSub)
+				cmds = append(cmds, a.eventConsumer.BridgeCmd())
+			}
 		}
 	}
 
@@ -1092,7 +1096,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceInitDoneMsg:
 		cmds = append(cmds, initializeWorkspaceServicesCmd(
-			a.svcs.Settings,
+			a.svcs.Settings.serviceMgr,
 			a.svcs,
 			msg.WorkspaceID,
 			msg.WorkspaceName,
@@ -1120,7 +1124,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
 			)
 		}
-		cmds = append(cmds, WaitForAdapterErrorCmd(a.svcs.AdapterErrors))
 		return a, tea.Batch(cmds...)
 
 	case QuitRequestMsg:
@@ -1128,6 +1131,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case QuitConfirmedMsg:
 		a.teardownAllPipelines()
+		if a.busSub != nil {
+			a.svcs.Bus.Unsubscribe("tui:" + a.svcs.WorkspaceID)
+		}
 		return a, a.quitCmd()
 
 	case WorkspaceCancelMsg:
@@ -1175,16 +1181,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DomainEventMsg:
 		// Keep the bridge alive: reschedule the channel reader.
 		if a.busSub != nil {
-			cmds = append(cmds, func() tea.Msg {
-				for evt := range a.busSub.C {
-					return DomainEventMsg{Event: evt}
-				}
-				return nil
-			})
+			cmds = append(cmds, a.eventConsumer.BridgeCmd())
+		}
+
+		// Defensive: ignore events not for this workspace.
+		if msg.Event.WorkspaceID != "" && msg.Event.WorkspaceID != a.svcs.WorkspaceID {
+			return a, nil
 		}
 
 		switch domain.EventType(msg.Event.EventType) {
-		// Work item state changes → reload work item + its tasks
+		// Work item state changes → targeted load of work item and its tasks
+		case domain.EventWorkItemIngested:
+			// Handled by WorkItemIngestedMsg below; no action needed here.
 		case domain.EventWorkItemPlanning,
 			domain.EventWorkItemPlanReview,
 			domain.EventWorkItemApproved,
@@ -1200,8 +1208,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					LoadTasksForSessionCmd(a.svcs.Task, workItemID),
 				)
 			}
+			if a.currentWorkItemID != "" {
+				cmds = append(cmds, a.updateContentFromState())
+			}
 
-		// Session lifecycle → reload tasks
+		// Session lifecycle → targeted load of tasks
 		case domain.EventAgentSessionStarted,
 			domain.EventAgentSessionCompleted,
 			domain.EventAgentSessionFailed,
@@ -1211,8 +1222,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if workItemID != "" {
 				cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, workItemID))
 			}
+			if a.currentWorkItemID != "" {
+				cmds = append(cmds, a.updateContentFromState())
+			}
 
-		// Plan lifecycle → reload plan
+		// Plan lifecycle → targeted load of plan
 		case domain.EventPlanGenerated,
 			domain.EventPlanApproved,
 			domain.EventPlanRejected,
@@ -1222,35 +1236,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if workItemID != "" {
 				cmds = append(cmds, LoadPlanForSessionCmd(a.svcs.Plan, workItemID))
 			}
-
-		// Review events → reload tasks
-		case domain.EventReviewStarted,
-			domain.EventReviewCompleted,
-			domain.EventCritiquesFound:
-			workItemID := extractWorkItemID(msg.Event.Payload)
-			if workItemID != "" {
-				cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, workItemID))
+			if a.currentWorkItemID != "" {
+				cmds = append(cmds, a.updateContentFromState())
 			}
 
-		// Question events → reload questions
+		// Question events → handled by typed messages below
 		case domain.EventAgentQuestionRaised,
-			domain.EventAgentQuestionAnswered:
-			sessionID := extractSessionID(msg.Event.Payload)
-			if sessionID != "" {
-				cmds = append(cmds, LoadQuestionsCmd(a.svcs.Question, sessionID))
-			}
+			domain.EventAgentQuestionAnswered,
+			domain.EventReviewStarted,
+			domain.EventReviewCompleted,
+			domain.EventCritiquesFound,
+			domain.EventReimplementationStarted,
+			domain.EventAdapterError,
+			domain.EventPRMerged:
+			// Handled by typed message cases below; no action needed here.
 
 		// Higher-level events that don't need targeted reload
 		case domain.EventImplementationStarted,
-			domain.EventReimplementationStarted,
-			domain.EventPRMerged,
 			domain.EventPRReviewStateChanged:
 			// No-op: these don't change the work item state directly
-		}
-
-		// Re-render if viewing the affected work item
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
 		}
 
 		return a, tea.Batch(cmds...)
@@ -1392,9 +1396,112 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case QuestionsLoadedMsg:
-		a.questions[msg.SessionID] = msg.Questions
+		if a.questions[msg.SessionID] == nil {
+			a.questions[msg.SessionID] = make(map[string]domain.Question)
+		}
+		for _, q := range msg.Questions {
+			a.questions[msg.SessionID][q.ID] = q
+		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	// --- Event-driven typed message handlers ---
+
+	case WorkItemIngestedMsg:
+		a.workItems = append(a.workItems, msg.Session)
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.Session.ID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case WorkItemUpdatedMsg:
+		a.upsertWorkItem(msg.Session)
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.Session.ID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case PlanGeneratedMsg:
+		a.plans[msg.WorkItemID] = msg.Plan
+		if msg.Plan != nil {
+			a.subPlans[msg.Plan.ID] = msg.SubPlans
+		}
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case PlanUpdatedMsg:
+		a.plans[msg.WorkItemID] = msg.Plan
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case SessionStartedMsg:
+		a.sessions = append(a.sessions, msg.Task)
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case SessionUpdatedMsg:
+		for i := range a.sessions {
+			if a.sessions[i].ID == msg.Task.ID {
+				a.sessions[i] = msg.Task
+				break
+			}
+		}
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case QuestionRaisedMsg:
+		a.upsertQuestion(msg.SessionID, msg.Question)
+		a.rebuildSidebar()
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case QuestionAnsweredMsg:
+		a.removeQuestion(msg.SessionID, msg.QuestionID)
+		a.rebuildSidebar()
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case ReviewStartedMsg, ReviewCompletedMsg, CritiquesFoundMsg, ReimplementationStartedMsg:
+		sessionID := extractReviewSessionID(msg)
+		cmds = append(cmds, LoadReviewsCmd(a.svcs.Review, sessionID))
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case AdapterErrorEventMsg:
+		a.toasts.AddToast(fmt.Sprintf("Adapter error (%s): %v", msg.Adapter, msg.Err), components.ToastWarning)
+		return a, nil
+
+	case PRMergedMsg:
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -2179,15 +2286,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case AdapterErrorMsg:
-		slog.Error("adapter error",
-			"adapter", msg.Adapter,
-			"event_type", msg.EventType,
-			"error", msg.Err,
-			"retries", msg.Retries,
-		)
-		toastMsg := formatAdapterErrorToast(msg)
-		a.toasts.AddToast(toastMsg, components.ToastWarning)
-		return a, WaitForAdapterErrorCmd(a.svcs.AdapterErrors)
+		// Deprecated: Adapter errors are now handled via AdapterErrorEventMsg from the event bus.
+		// This handler is kept for backward compatibility during the transition.
+		return a, nil
 
 	case LogToastMsg:
 		level := components.ToastWarning
@@ -3917,6 +4018,40 @@ func formatAdapterErrorToast(msg AdapterErrorMsg) string {
 		errStr = errStr[:77] + "..."
 	}
 	return fmt.Sprintf("%s: %s failed\n%s\nRetried %dx", msg.Adapter, msg.EventType, errStr, msg.Retries)
+}
+
+// upsertQuestion adds or updates a question in the nested map.
+func (a *App) upsertQuestion(sessionID string, question domain.Question) {
+	if a.questions[sessionID] == nil {
+		a.questions[sessionID] = make(map[string]domain.Question)
+	}
+	a.questions[sessionID][question.ID] = question
+}
+
+// removeQuestion removes a question from the cache. If the session has no more questions,
+// the session key is removed from the map.
+func (a *App) removeQuestion(sessionID, questionID string) {
+	if sessionQuestions, ok := a.questions[sessionID]; ok {
+		delete(sessionQuestions, questionID)
+		if len(sessionQuestions) == 0 {
+			delete(a.questions, sessionID)
+		}
+	}
+}
+
+// extractReviewSessionID extracts the session ID from review-related messages.
+func extractReviewSessionID(msg tea.Msg) string {
+	switch m := msg.(type) {
+	case ReviewStartedMsg:
+		return m.SessionID
+	case ReviewCompletedMsg:
+		return m.SessionID
+	case CritiquesFoundMsg:
+		return m.SessionID
+	case ReimplementationStartedMsg:
+		return m.SessionID
+	}
+	return ""
 }
 
 // extractWorkItemID extracts the work_item_id from an event payload.

@@ -2,7 +2,7 @@
 
 ## Status
 
-**COMPLETED** — Phases 1-5 implemented. Phase 6 (ServiceManager) is deferred.
+**COMPLETED** — All phases including Phase 6 (ServiceManager) are implemented.
 
 See [Implementation Summary](#implementation-summary) for completed changes.
 
@@ -941,14 +941,11 @@ milliseconds without a poll tick.
 **Verification:** Confirm no `LoadSessionsCmd`/`LoadTasksCmd` calls remain outside
 the targeted load path and the initial load.
 
-### Phase 6: ServiceManager (DEFERRED)
-This phase was deferred to future work.
-
-**Planned:**
-1. Create `internal/tui/views/service_manager.go`
-2. Extract `buildServices` from `settings_service.go`
-3. Update `SettingsService` to delegate to `ServiceManager`
-4. Wire `ServiceManager` into `Services`
+### Phase 6: ServiceManager ✓
+1. Created `internal/tui/views/service_manager.go`
+2. Extracted `buildServices` from `settings_service.go`
+3. Updated `SettingsService` to delegate to `ServiceManager`
+4. `ServiceManager` owns service graph lifecycle: `Init`, `Rebuild`, `GetServices`, `Close`
 
 **Verification:** Change settings, verify new service graph is built, old one torn down.
 
@@ -1092,9 +1089,39 @@ Added orchestrator test in `internal/orchestrator/planning_test.go`:
 - `TestPlan_EmitsPlanGeneratedEventOnSuccess`
 - `TestPlanFailureEventIncludesPersistenceError` (updated for async)
 
-### Deferred: Phase 6 (ServiceManager)
+### Phase 6: ServiceManager Implementation
 
-The `ServiceManager` extraction was deferred. Currently, `settings_service.go` still owns `rebuildServices()`. This is a future improvement to separate concerns.
+The `ServiceManager` was implemented as a dedicated component that owns the service graph lifecycle:
+
+**`internal/tui/views/service_manager.go`:**
+```go
+type ServiceManager struct {
+    transacter atomic.Transacter[repository.Resources]
+    eventRepo  repository.EventRepository
+    mu         sync.RWMutex
+    services   *Services
+}
+
+// Init builds the initial service graph.
+func (sm *ServiceManager) Init(ctx context.Context, cfg *config.Config) error
+
+// Rebuild tears down and rebuilds the service graph.
+func (sm *ServiceManager) Rebuild(ctx context.Context, cfg *config.Config, current Services) (*Services, error)
+
+// InitWorkspace rebuilds for a new workspace.
+func (sm *ServiceManager) InitWorkspace(ctx context.Context, cfg *config.Config, current Services, workspaceID, workspaceName, workspaceDir string) (*Services, error)
+
+// GetServices returns the current service graph (concurrent-safe).
+func (sm *ServiceManager) GetServices() *Services
+
+// Close shuts down the service graph.
+func (sm *ServiceManager) Close()
+```
+
+**Key design:**
+- `SettingsService` now only manages config, workspace selection, and credentials
+- Delegates service graph lifecycle to `ServiceManager`
+- `buildServices` extracted with shared bus passed to all services, orchestrators, and adapters
 
 ### Trade-offs and Notes
 

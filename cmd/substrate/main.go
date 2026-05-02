@@ -324,6 +324,9 @@ func buildCoreServices(
 	newSessionFilterSvc := service.NewSessionFilterService(transacter)
 	newSessionFilterLockSvc := service.NewSessionFilterLockService(transacter)
 
+	// Create ServiceManager for service graph lifecycle
+	serviceMgr := views.NewServiceManager(transacter, eventRepo)
+
 	return coreServices{
 		workItem:             workItemSvc,
 		plan:                 planSvc,
@@ -343,7 +346,7 @@ func buildCoreServices(
 		newSessionFilter:     newSessionFilterSvc,
 		newSessionFilterLock: newSessionFilterLockSvc,
 		settings: views.NewSettingsService(
-			transacter, planSvc, eventRepo, config.OSKeychainStore{},
+			transacter, config.OSKeychainStore{}, serviceMgr,
 		),
 	}
 }

@@ -1355,7 +1355,7 @@ func humanReviewCycleStatus(status domain.ReviewCycleStatus) string {
 	}
 }
 
-func buildQuestionNote(questions []domain.Question) string {
+func buildQuestionNote(questions map[string]domain.Question) string {
 	for _, question := range questions {
 		if isOpenQuestion(question) {
 			return "Waiting for answer: " + summarizeText(question.Content, 72)
@@ -1365,7 +1365,7 @@ func buildQuestionNote(questions []domain.Question) string {
 	return "Waiting for answer"
 }
 
-func hasOpenQuestion(questions []domain.Question) bool {
+func hasOpenQuestion(questions map[string]domain.Question) bool {
 	for _, question := range questions {
 		if isOpenQuestion(question) {
 			return true

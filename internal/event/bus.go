@@ -165,7 +165,7 @@ func (b *Bus) Subscribe(id string, topics ...string) (*Subscriber, error) {
 	sub := &Subscriber{
 		ID:     id,
 		Topics: topicSet,
-		C:      make(chan domain.SystemEvent, 100), // buffered to avoid blocking
+		C:      make(chan domain.SystemEvent, 500), // buffered to avoid blocking
 	}
 
 	// Close existing subscriber channel if present to prevent goroutine leak

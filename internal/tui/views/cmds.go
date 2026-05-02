@@ -483,19 +483,16 @@ func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd 
 
 // initializeWorkspaceServicesCmd rebuilds services after workspace initialization
 // so adapters, harnesses, and instance registration use the new workspace root.
-func initializeWorkspaceServicesCmd(settings *SettingsService, current Services, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
+func initializeWorkspaceServicesCmd(serviceMgr *ServiceManager, current Services, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
 	return func() tea.Msg {
-		if settings == nil {
-			return ErrMsg{Err: errors.New("settings service is unavailable")}
+		if serviceMgr == nil {
+			return ErrMsg{Err: errors.New("service manager is unavailable")}
 		}
 		if current.Cfg == nil {
 			return ErrMsg{Err: errors.New("config is unavailable")}
 		}
-		current.WorkspaceID = workspaceID
-		current.WorkspaceName = workspaceName
-		current.WorkspaceDir = workspaceDir
 
-		reloaded, err := settings.rebuildServices(context.Background(), current.Cfg, current)
+		reloaded, err := serviceMgr.InitWorkspace(context.Background(), current.Cfg, current, workspaceID, workspaceName, workspaceDir)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -507,13 +504,13 @@ func initializeWorkspaceServicesCmd(settings *SettingsService, current Services,
 			PID:         os.Getpid(),
 			Hostname:    host,
 		}
-		if err := reloaded.Services.Instance.Create(context.Background(), inst); err != nil {
+		if err := reloaded.Instance.Create(context.Background(), inst); err != nil {
 			slog.Warn("failed to register instance after workspace initialization", "workspace_id", workspaceID, "err", err)
 		} else {
-			reloaded.Services.InstanceID = inst.ID
+			reloaded.InstanceID = inst.ID
 		}
 
-		return WorkspaceServicesReloadedMsg{Reload: reloaded, Message: "Workspace initialized"}
+		return WorkspaceServicesReloadedMsg{Reload: viewsServicesReload{Services: *reloaded}, Message: "Workspace initialized"}
 	}
 }
 

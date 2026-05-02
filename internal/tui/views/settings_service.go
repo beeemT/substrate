@@ -21,11 +21,7 @@ import (
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
-	"github.com/beeemT/substrate/internal/event"
-	"github.com/beeemT/substrate/internal/gitwork"
-	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
-	"github.com/beeemT/substrate/internal/service"
 	"gopkg.in/yaml.v3"
 )
 
@@ -112,9 +108,8 @@ func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
 
 type SettingsService struct {
 	transacter  atomic.Transacter[repository.Resources]
-	planSvc     *service.PlanService
-	eventRepo   repository.EventRepository
 	secretStore config.SecretStore
+	serviceMgr  *ServiceManager
 }
 
 type viewsServicesReload struct {
@@ -126,15 +121,13 @@ type viewsServicesReload struct {
 
 func NewSettingsService(
 	transacter atomic.Transacter[repository.Resources],
-	planSvc *service.PlanService,
-	eventRepo repository.EventRepository,
 	secretStore config.SecretStore,
+	serviceMgr *ServiceManager,
 ) *SettingsService {
 	return &SettingsService{
 		transacter:  transacter,
-		planSvc:     planSvc,
-		eventRepo:   eventRepo,
 		secretStore: secretStore,
+		serviceMgr:  serviceMgr,
 	}
 }
 
@@ -221,10 +214,13 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 	if err != nil {
 		return SettingsApplyResult{}, err
 	}
-	reloaded, err := s.rebuildServices(ctx, cfg, current)
+
+	// Rebuild services via ServiceManager
+	reloaded, err := s.serviceMgr.Rebuild(ctx, cfg, current)
 	if err != nil {
 		return SettingsApplyResult{}, err
 	}
+
 	if err := s.SaveRaw(raw); err != nil {
 		return SettingsApplyResult{}, err
 	}
@@ -233,9 +229,32 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 			slog.Warn("failed to stop foreman on settings apply", "error", stopErr)
 		}
 	}
-	reloaded.SettingsData.RawYAML = raw
 
-	return SettingsApplyResult{Services: reloaded, Message: "Settings applied"}, nil
+	// Get snapshot for settings data
+	snapshot, err := s.Snapshot(cfg)
+	if err != nil {
+		return SettingsApplyResult{}, err
+	}
+	snapshot.RawYAML = raw
+
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		return SettingsApplyResult{}, err
+	}
+	sessionsDir, err := config.SessionsDir()
+	if err != nil {
+		return SettingsApplyResult{}, err
+	}
+
+	return SettingsApplyResult{
+		Services: viewsServicesReload{
+			Services:     *reloaded,
+			ConfigPath:   cfgPath,
+			SessionsDir:  sessionsDir,
+			SettingsData: snapshot,
+		},
+		Message: "Settings applied",
+	}, nil
 }
 
 func (s *SettingsService) TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error) {
@@ -438,254 +457,6 @@ func sentrySettingsFields(cfg *config.Config) []SettingsField {
 		orgField,
 		{Section: "adapters.sentry", Key: "projects", Label: "Projects", Type: SettingsFieldStringList, Value: strings.Join(sentry.Projects, ",")},
 	}
-}
-
-func (s *SettingsService) rebuildServices(ctx context.Context, cfg *config.Config, current Services) (viewsServicesReload, error) {
-	workItemSvc := service.NewSessionService(s.transacter, nil)
-	workspaceSvc := service.NewWorkspaceService(s.transacter)
-	sessionSvc := service.NewTaskService(s.transacter, nil)
-	questionSvc := service.NewQuestionService(s.transacter)
-	instanceSvc := service.NewInstanceService(s.transacter)
-	reviewSvc := service.NewReviewService(s.transacter)
-	eventSvc := service.NewEventService(s.transacter)
-	ghPRSvc := service.NewGithubPRService(s.transacter)
-	glMRSvc := service.NewGitlabMRService(s.transacter)
-	sessionArtifactSvc := service.NewSessionReviewArtifactService(s.transacter)
-	ghPRReviewSvc := service.NewGithubPRReviewService(s.transacter)
-	glMRReviewSvc := service.NewGitlabMRReviewService(s.transacter)
-	ghPRCheckSvc := service.NewGithubPRCheckService(s.transacter)
-	glMRCheckSvc := service.NewGitlabMRCheckService(s.transacter)
-	newSessionFilterSvc := service.NewSessionFilterService(s.transacter)
-	newSessionFilterLockSvc := service.NewSessionFilterLockService(s.transacter)
-	bus := event.NewBus(event.BusConfig{EventRepo: s.eventRepo})
-	gitClient := current.GitClient
-	if gitClient == nil {
-		gitClient = gitwork.NewClient("")
-	}
-	repos := adapter.ReviewArtifactRepos{
-		Events:           eventSvc,
-		GithubPRs:        ghPRSvc,
-		GitlabMRs:        glMRSvc,
-		SessionArtifacts: sessionArtifactSvc,
-		Sessions:         workItemSvc,
-		GithubPRReviews:  ghPRReviewSvc,
-		GitlabMRReviews:  glMRReviewSvc,
-		GithubPRChecks:   ghPRCheckSvc,
-		GitlabMRChecks:   glMRCheckSvc,
-		Bus:              bus,
-	}
-	githubAdapter, githubWarning := app.BuildGithubAdapter(ctx, cfg, repos)
-
-	var adapters []adapter.WorkItemAdapter
-	var adapterWarnings []string
-	if current.WorkspaceID != "" {
-		adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc, githubAdapter)
-	}
-	if githubWarning != "" {
-		adapterWarnings = append(adapterWarnings, githubWarning)
-	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, repos, githubAdapter)
-	adapterErrors := make(chan AdapterErrorMsg, 16)
-
-	for _, workItemAdapter := range adapters {
-		sub, subErr := bus.Subscribe("work-item-adapter:"+workItemAdapter.Name(), string(domain.EventPlanApproved), string(domain.EventWorkItemCompleted), string(domain.EventPRMerged))
-		if subErr != nil {
-			return viewsServicesReload{}, fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
-		}
-		go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
-			for evt := range events {
-				var lastErr error
-				for attempt := range 3 {
-					if err := a.OnEvent(context.Background(), evt); err != nil {
-						lastErr = err
-						if attempt < 2 {
-							// PermissionError is permanent; retrying will not help.
-							if errors.As(lastErr, new(*adapter.PermissionError)) {
-								break
-							}
-							time.Sleep(time.Duration(attempt+1) * time.Second)
-						}
-						continue
-					}
-					lastErr = nil
-					break
-				}
-				if lastErr != nil {
-					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
-						ID:          domain.NewID(),
-						EventType:   string(domain.EventAdapterError),
-						WorkspaceID: evt.WorkspaceID,
-						Payload:     errPayload,
-						CreatedAt:   time.Now(),
-					}); pubErr != nil {
-						slog.Warn("failed to publish adapter error event", "error", pubErr)
-					}
-
-					select {
-					case adapterErrors <- AdapterErrorMsg{
-						Adapter:   a.Name(),
-						EventType: evt.EventType,
-						Err:       lastErr,
-						Retries:   2,
-					}:
-					default:
-					}
-				}
-			}
-		}(workItemAdapter, sub.C)
-	}
-	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted), string(domain.EventPRMerged), string(domain.EventPlanApproved))
-		if subErr != nil {
-			return viewsServicesReload{}, fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
-		}
-		go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
-			for evt := range events {
-				var lastErr error
-				for attempt := range 3 {
-					if err := a.OnEvent(context.Background(), evt); err != nil {
-						lastErr = err
-						if attempt < 2 {
-							// PermissionError is permanent; retrying will not help.
-							if errors.As(lastErr, new(*adapter.PermissionError)) {
-								break
-							}
-							time.Sleep(time.Duration(attempt+1) * time.Second)
-						}
-						continue
-					}
-					lastErr = nil
-					break
-				}
-				if lastErr != nil {
-					errPayload := fmt.Sprintf(`{"adapter":%q,"event_type":%q,"error":%q}`, a.Name(), evt.EventType, lastErr.Error())
-					if pubErr := bus.Publish(context.Background(), domain.SystemEvent{
-						ID:          domain.NewID(),
-						EventType:   string(domain.EventAdapterError),
-						WorkspaceID: evt.WorkspaceID,
-						Payload:     errPayload,
-						CreatedAt:   time.Now(),
-					}); pubErr != nil {
-						slog.Warn("failed to publish adapter error event", "error", pubErr)
-					}
-
-					select {
-					case adapterErrors <- AdapterErrorMsg{
-						Adapter:   a.Name(),
-						EventType: evt.EventType,
-						Err:       lastErr,
-						Retries:   2,
-					}:
-					default:
-					}
-				}
-			}
-		}(lifecycleAdapter, sub.C)
-	}
-
-	// Start PR/MR state refresh for lifecycle adapters.
-	for _, la := range repoLifecycleAdapters {
-		type prRefresher interface {
-			StartPRRefresh(ctx context.Context, workspaceID string)
-		}
-		type mrRefresher interface {
-			StartMRRefresh(ctx context.Context, workspaceID string)
-		}
-		if r, ok := la.(prRefresher); ok && current.WorkspaceID != "" {
-			r.StartPRRefresh(ctx, current.WorkspaceID)
-		}
-		if r, ok := la.(mrRefresher); ok && current.WorkspaceID != "" {
-			r.StartMRRefresh(ctx, current.WorkspaceID)
-		}
-	}
-	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
-	harnesses, err := app.BuildAgentHarnesses(cfg, current.WorkspaceDir)
-	if err != nil {
-		return viewsServicesReload{}, fmt.Errorf("building agent harnesses: %w", err)
-	}
-	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
-	registry := orchestrator.NewSessionRegistry()
-	var planningSvc *orchestrator.PlanningService
-	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(planningCfg, discoverer, gitClient, harnesses.Planning, s.planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, questionSvc, cfg)
-		if err != nil {
-			return viewsServicesReload{}, fmt.Errorf("build planning service: %w", err)
-		}
-	}
-	var reviewPipeline *orchestrator.ReviewPipeline
-	if harnesses.Review != nil {
-		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, s.planSvc, workItemSvc, bus, registry)
-	}
-	var foreman *orchestrator.Foreman
-	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, s.planSvc, questionSvc, sessionSvc, bus)
-	}
-	var implSvc *orchestrator.ImplementationService
-	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, s.planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc)
-	}
-	var resumption *orchestrator.Resumption
-	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, s.planSvc, bus, registry)
-	}
-	cfgPath, err := config.ConfigPath()
-	if err != nil {
-		return viewsServicesReload{}, err
-	}
-	sessionsDir, err := config.SessionsDir()
-	if err != nil {
-		return viewsServicesReload{}, err
-	}
-	snapshot, err := s.Snapshot(cfg)
-	if err != nil {
-		return viewsServicesReload{}, err
-	}
-
-	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
-
-	return viewsServicesReload{
-		ConfigPath:   cfgPath,
-		SessionsDir:  sessionsDir,
-		SettingsData: snapshot,
-		Services: Services{
-			Session:               workItemSvc,
-			Plan:                  s.planSvc,
-			Task:                  sessionSvc,
-			Question:              questionSvc,
-			Instance:              instanceSvc,
-			Workspace:             workspaceSvc,
-			Review:                reviewSvc,
-			Events:                eventSvc,
-			GithubPRs:             ghPRSvc,
-			GitlabMRs:             glMRSvc,
-			SessionArtifacts:      sessionArtifactSvc,
-			GithubPRReviews:       ghPRReviewSvc,
-			GitlabMRReviews:       glMRReviewSvc,
-			GithubPRChecks:        ghPRCheckSvc,
-			GitlabMRChecks:        glMRCheckSvc,
-			NewSessionFilters:     newSessionFilterSvc,
-			NewSessionFilterLocks: newSessionFilterLockSvc,
-			Planning:              planningSvc,
-			Implementation:        implSvc,
-			ReviewPipeline:        reviewPipeline,
-			Resumption:            resumption,
-			Foreman:               foreman,
-			SessionRegistry:       registry,
-			Cfg:                   cfg,
-			Adapters:              adapters,
-			Harnesses:             harnesses,
-			GitClient:             gitClient,
-			Bus:                   bus,
-			AdapterErrors:         adapterErrors,
-			ReviewComments:        reviewCommentDispatcher,
-			StartupWarnings:       adapterWarnings,
-			InstanceID:            current.InstanceID,
-			WorkspaceID:           current.WorkspaceID,
-			WorkspaceDir:          current.WorkspaceDir,
-			WorkspaceName:         current.WorkspaceName,
-		},
-	}, nil
 }
 
 func harnessRunnerForProvider(harness string, svcs Services) adapter.HarnessActionRunner {

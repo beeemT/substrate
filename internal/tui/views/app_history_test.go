@@ -1801,14 +1801,16 @@ func TestSidebarSourceDetailsShowsQuestionAlertWithoutAutoNavigating(t *testing.
 	updated = model.(App)
 
 	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
-	updated.questions["sess-1"] = []domain.Question{{
-		ID:             "q-1",
-		AgentSessionID: "sess-1",
-		Content:        "Need approval before continuing",
-		ProposedAnswer: "Approve the follow-up.",
-		Status:         domain.QuestionEscalated,
-		CreatedAt:      time.Now(),
-	}}
+	updated.questions["sess-1"] = map[string]domain.Question{
+		"q-1": {
+			ID:             "q-1",
+			AgentSessionID: "sess-1",
+			Content:        "Need approval before continuing",
+			ProposedAnswer: "Approve the follow-up.",
+			Status:         domain.QuestionEscalated,
+			CreatedAt:      time.Now(),
+		},
+	}
 
 	cmd := updated.updateContentFromState()
 	if cmd != nil {
@@ -1855,13 +1857,15 @@ func TestSidebarSourceDetailsEnterOpensOverviewForAlert(t *testing.T) {
 	updated = model.(App)
 
 	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
-	updated.questions["sess-1"] = []domain.Question{{
-		ID:             "q-1",
-		AgentSessionID: "sess-1",
-		Content:        "Need approval before continuing",
-		Status:         domain.QuestionEscalated,
-		CreatedAt:      time.Now(),
-	}}
+	updated.questions["sess-1"] = map[string]domain.Question{
+		"q-1": {
+			ID:             "q-1",
+			AgentSessionID: "sess-1",
+			Content:        "Need approval before continuing",
+			Status:         domain.QuestionEscalated,
+			CreatedAt:      time.Now(),
+		},
+	}
 	if cmd := updated.updateContentFromState(); cmd != nil {
 		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
 	}

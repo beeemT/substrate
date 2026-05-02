@@ -110,13 +110,15 @@ func TestInitializeWorkspaceServicesCmd_RebuildsServicesAndRegistersInstance(t *
 	t.Setenv("PATH", t.TempDir())
 	workspaceDir := t.TempDir()
 	instanceRepo := &stubInstanceRepo{}
-	settings := &SettingsService{transacter: repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}}
+	transacter := repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}
+	serviceMgr := NewServiceManager(transacter, nil)
+	settings := NewSettingsService(transacter, config.OSKeychainStore{}, serviceMgr)
 	current := Services{
 		Cfg:      newWorkspaceInitHarnessConfig(),
 		Settings: settings,
 	}
 
-	msg := initializeWorkspaceServicesCmd(settings, current, "ws-1", "workspace", workspaceDir)()
+	msg := initializeWorkspaceServicesCmd(serviceMgr, current, "ws-1", "workspace", workspaceDir)()
 	got, ok := msg.(WorkspaceServicesReloadedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want WorkspaceServicesReloadedMsg", msg)

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
@@ -157,7 +158,9 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SUBSTRATE_HOME", home)
 
-	svc := &SettingsService{}
+	// Create proper ServiceManager for Apply
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, serviceMgr)
 	currentRaw := mustSerializeSettingsConfig(t, svc, newSettingsApplyHarnessConfig())
 	if err := svc.SaveRaw(currentRaw); err != nil {
 		t.Fatalf("SaveRaw(current): %v", err)
@@ -229,7 +232,8 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 func TestSettingsApply_ReturnsRebuiltServicesOnSuccess(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 
-	svc := &SettingsService{}
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, serviceMgr)
 	cfg := newSettingsApplyHarnessConfig()
 	cfg.Adapters.ClaudeCode.Model = "claude-3-7-sonnet"
 	raw := mustSerializeSettingsConfig(t, svc, cfg)

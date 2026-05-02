@@ -57,9 +57,80 @@ type PlanForSessionLoadedMsg struct {
 }
 
 // DomainEventMsg bridges the event.Bus to the bubbletea update loop.
+// It is produced by the event consumer goroutine and handled in App.Update().
 type DomainEventMsg struct {
 	Event domain.SystemEvent
 }
+
+// --- Event-driven typed messages ---
+
+// WorkItemIngestedMsg is sent when a new work item is ingested.
+type WorkItemIngestedMsg struct {
+	WorkspaceID string
+	Session     domain.Session
+}
+
+// WorkItemUpdatedMsg is sent when a work item state changes (planning, approved, etc.).
+type WorkItemUpdatedMsg struct {
+	Session domain.Session
+}
+
+// PlanGeneratedMsg is sent when a new plan is generated.
+type PlanGeneratedMsg struct {
+	WorkItemID string
+	Plan       *domain.Plan
+	SubPlans   []domain.TaskPlan
+}
+
+// PlanUpdatedMsg is sent when a plan is updated (approved, rejected, revised).
+type PlanUpdatedMsg struct {
+	WorkItemID string
+	Plan       *domain.Plan
+}
+
+// SessionStartedMsg is sent when an agent session starts.
+type SessionStartedMsg struct {
+	Task domain.Task
+}
+
+// SessionUpdatedMsg is sent when an agent session state changes.
+type SessionUpdatedMsg struct {
+	Task domain.Task
+}
+
+// QuestionRaisedMsg is sent when a question is raised by an agent.
+type QuestionRaisedMsg struct {
+	SessionID string
+	Question  domain.Question
+}
+
+// QuestionAnsweredMsg is sent when a question is answered.
+type QuestionAnsweredMsg struct {
+	SessionID  string
+	QuestionID string
+}
+
+// ReviewStartedMsg is sent when a review cycle starts.
+type ReviewStartedMsg struct{ SessionID string }
+
+// ReviewCompletedMsg is sent when a review cycle completes.
+type ReviewCompletedMsg struct{ SessionID string }
+
+// CritiquesFoundMsg is sent when critiques are found during review.
+type CritiquesFoundMsg struct{ SessionID string }
+
+// ReimplementationStartedMsg is sent when re-implementation starts.
+type ReimplementationStartedMsg struct{ SessionID string }
+
+// AdapterErrorEventMsg is sent when an adapter reports an error.
+type AdapterErrorEventMsg struct {
+	Adapter   string
+	EventType string
+	Err       error
+}
+
+// PRMergedMsg is sent when a PR is merged.
+type PRMergedMsg struct{ SessionID string }
 
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
 type QuestionsLoadedMsg struct {

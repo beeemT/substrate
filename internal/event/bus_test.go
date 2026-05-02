@@ -552,8 +552,8 @@ func TestBus_RetryLater(t *testing.T) {
 	}
 	defer bus.Unsubscribe("sub-1")
 
-	// Fill the subscriber's buffer (100 capacity)
-	for fillID := range make([]struct{}, 100) {
+	// Fill the subscriber's buffer (500 capacity)
+	for fillID := range make([]struct{}, 500) {
 		event := domain.SystemEvent{
 			ID:          fmt.Sprintf("fill-%d", fillID),
 			EventType:   "test.event",
