@@ -79,7 +79,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil while showing confirm dialog", cmd)
@@ -118,7 +118,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil while showing confirm dialog", cmd)
@@ -268,7 +268,7 @@ func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	view := updated.View()
@@ -326,7 +326,7 @@ func sizedLayoutTestApp(t *testing.T, width, height int) *App {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	return updated

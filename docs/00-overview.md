@@ -73,6 +73,8 @@ Substrate is organized around a few stable seams:
 - Reactive TUI via event bus: `14`
 - Phasing/tests/risks: `07`
 - TUI design-system contract and verification guidance: `08`
+- Stage-aware question routing: `09`
+- Foreman lifecycle ownership: `10`
 - Deferred follow-ups: `future-work.md`
 
 ## Document Map
@@ -88,4 +90,6 @@ Substrate is organized around a few stable seams:
 | `06-tui-design.md` | Views, overlays, settings UX, operator interactions | Adapter implementations, DB schema |
 | `07-implementation-plan.md` | Phases, quality gates, test strategy, risks | Canonical runtime behavior |
 | `08-tui-design-system.md` | Design-system ownership boundaries, shared chrome semantics, layout guardrails, verification guidance | Broader TUI workflow behavior |
+| `09-stage-aware-question-routing.md` | Stage-aware agent question routing, planning vs. implementation routing | TUI layout, event bus internals |
+| `10-foreman-lifecycle.md` | Foreman lifecycle ownership, start/stop/restart/cleanup | Runtime orchestration details |
 | `future-work.md` | Deferred follow-up items with scope/interim/requirements | Implementation timelines, current behavior details |

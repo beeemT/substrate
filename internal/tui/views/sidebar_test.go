@@ -534,6 +534,26 @@ func TestFilterSidebarEntries(t *testing.T) {
 		}
 	})
 
+	t.Run("archived", func(t *testing.T) {
+		archivedEntries := []views.SidebarEntry{
+			makeWorkItemEntry("a", "gh:issue:1", domain.SessionArchived, "github", now, now),
+			makeWorkItemEntry("b", "gh:issue:2", domain.SessionArchived, "github", now, now),
+			makeWorkItemEntry("c", "gh:issue:3", domain.SessionPlanning, "github", now, now),
+		}
+		got := views.FilterSidebarEntries(archivedEntries, views.SidebarFilterArchived)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 archived entries, got %d", len(got))
+		}
+		for _, e := range got {
+			if e.Kind != views.SidebarEntryWorkItem {
+				continue
+			}
+			if e.State != domain.SessionArchived {
+				t.Fatalf("unexpected state in archived filter: %s", e.State)
+			}
+		}
+	})
+
 	t.Run("passes through non-work-item entries", func(t *testing.T) {
 		entries3 := []views.SidebarEntry{
 			{Kind: views.SidebarEntryTaskOverview, WorkItemID: "wi-1"},

@@ -290,7 +290,6 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		{Key: "f", Label: "Follow tail"},
 		{Key: "g", Label: "Go to start"},
 		{Key: "v", Label: "Verbose logs"},
-		{Key: "o", Label: "Terminal"},
 	}
 	if hasThinkingBlocks(m.entries) {
 		hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})

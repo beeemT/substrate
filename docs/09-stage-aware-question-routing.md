@@ -1,5 +1,5 @@
 # Stage-Aware Agent Question Routing
-<!-- docs:last-integrated-commit d56ecb2c3f38e0f9cc72570767df5a89f13ff5a3 -->
+<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 
 ## Purpose
 

@@ -519,7 +519,7 @@ func (s *SessionService) Unarchive(ctx context.Context, id string) error {
 		if item.State != domain.SessionArchived {
 			return newInvalidTransitionError(
 				workItemStateName(item.State),
-				"archived", // unarchive requires state to be archived
+				workItemStateName(item.PreviousState), // will restore to this state
 				"work item",
 			)
 		}

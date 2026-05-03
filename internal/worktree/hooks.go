@@ -37,9 +37,8 @@ type hookEntry struct {
 
 // HookRegistry manages pre-checkout hooks.
 type HookRegistry struct {
-	mu     sync.RWMutex
-	hooks  []hookEntry
-	closed bool
+	mu    sync.RWMutex
+	hooks []hookEntry
 }
 
 // NewHookRegistry creates a new empty hook registry.

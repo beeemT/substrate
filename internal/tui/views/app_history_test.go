@@ -184,7 +184,7 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.sessionSearch.loading {
 		t.Fatal("expected background poll refresh to keep loading indicator hidden")
@@ -199,7 +199,7 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if !updated.sessionSearch.loading {
 		t.Fatal("expected interactive search request to show loading indicator")
@@ -228,7 +228,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model after resize = %T, want App", model)
+		t.Fatalf("model after resize = %T, want *App", model)
 	}
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	if cmd == nil {
@@ -236,7 +236,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after opening search = %T, want App", model)
+		t.Fatalf("model after opening search = %T, want *App", model)
 	}
 	sel := updated.sessionSearch.Selected()
 	if sel == nil {
@@ -267,7 +267,7 @@ func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model after resize = %T, want App", model)
+		t.Fatalf("model after resize = %T, want *App", model)
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
@@ -276,7 +276,7 @@ func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after opening search = %T, want App", model)
+		t.Fatalf("model after opening search = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlaySessionSearch {
 		t.Fatalf("activeOverlay = %v, want %v", updated.activeOverlay, overlaySessionSearch)
@@ -304,7 +304,7 @@ func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *t
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model after resize = %T, want App", model)
+		t.Fatalf("model after resize = %T, want *App", model)
 	}
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	if cmd == nil {
@@ -312,14 +312,14 @@ func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *t
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after opening search = %T, want App", model)
+		t.Fatalf("model after opening search = %T, want *App", model)
 	}
 
 	filter := updated.sessionSearchFilter()
 	model, _ = updated.Update(SessionHistoryLoadedMsg{Filter: filter, Entries: nil})
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after empty history load = %T, want App", model)
+		t.Fatalf("model after empty history load = %T, want *App", model)
 	}
 	if updated.sessionSearch.loading {
 		t.Fatal("expected loading indicator to clear after history response")
@@ -393,7 +393,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -402,7 +402,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after down = %T, want App", model)
+		t.Fatalf("model after down = %T, want *App", model)
 	}
 
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
@@ -411,7 +411,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after delete key = %T, want App", model)
+		t.Fatalf("model after delete key = %T, want *App", model)
 	}
 	confirmMsg, ok := cmd().(ConfirmDeleteSessionMsg)
 	if !ok {
@@ -427,7 +427,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after confirm msg = %T, want App", model)
+		t.Fatalf("model after confirm msg = %T, want *App", model)
 	}
 	if !updated.confirmActive {
 		t.Fatal("expected confirm modal to be active")
@@ -446,7 +446,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model after confirm key = %T, want App", model)
+		t.Fatalf("model after confirm key = %T, want *App", model)
 	}
 	if updated.confirmActive {
 		t.Fatal("expected confirm modal to close after confirmation")
@@ -533,7 +533,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model after delete warning = %T, want App", model)
+		t.Fatalf("model after delete warning = %T, want *App", model)
 	}
 	toastView := stripToastANSI(updated.toasts.StackView())
 	if !strings.Contains(toastView, "Session deleted") {
@@ -631,7 +631,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if view := stripToastANSI(updated.View()); !strings.Contains(view, "Read only") {
 		t.Fatalf("view = %q, want persistent read only toast", view)
@@ -706,7 +706,7 @@ func TestSessionDeletedMsg_ClearsOpenRemoteHistoryEntry(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model after remote delete = %T, want App", model)
+		t.Fatalf("model after remote delete = %T, want *App", model)
 	}
 	if updated.currentWorkItemID != "" {
 		t.Fatalf("currentWorkItemID = %q, want empty", updated.currentWorkItemID)
@@ -752,7 +752,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil for ready-to-plan selection", cmd)
@@ -809,7 +809,7 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 	})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.currentWorkItemID != "wi-new" {
 		t.Fatalf("currentWorkItemID = %q, want wi-new", updated.currentWorkItemID)
@@ -962,7 +962,7 @@ func TestWorkItemDuplicatePromptShowsDecisionDialog(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if !updated.duplicateSessionActive {
 		t.Fatal("expected duplicate-session dialog to be active")
@@ -992,7 +992,7 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.duplicateSessionActive {
 		t.Fatal("expected duplicate-session dialog to close after opening existing work item")
@@ -1035,7 +1035,7 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.duplicateSessionActive {
 		t.Fatal("expected duplicate-session dialog to close after starting planning")
@@ -1077,7 +1077,7 @@ func TestWorkItemDuplicateCancelChoiceKeepsCurrentSelection(t *testing.T) {
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd == nil {
 		t.Fatal("expected escape to resolve the duplicate-session dialog")
@@ -1121,7 +1121,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.content.Mode() != ContentModeOverview {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeOverview)
@@ -1272,7 +1272,7 @@ func TestPlanningSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.sidebarMode != sidebarPaneTasks {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneTasks", updated.sidebarMode)
@@ -1666,7 +1666,7 @@ func TestNewSessionOpensFromWorkItemWithExistingSession(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayNewSession {
 		t.Fatalf("activeOverlay = %v, want %v", updated.activeOverlay, overlayNewSession)
@@ -1706,7 +1706,7 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.sidebarMode != sidebarPaneTasks {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneTasks", updated.sidebarMode)

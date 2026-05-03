@@ -45,7 +45,8 @@ func NewServiceManager(
 func (sm *ServiceManager) Init(ctx context.Context, cfg *config.Config) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	svcs, err := sm.buildServices(ctx, cfg, Services{})
+	settingsSvc := NewSettingsService(sm.transacter, config.OSKeychainStore{}, sm)
+	svcs, err := sm.buildServices(ctx, cfg, Services{Settings: settingsSvc})
 	if err != nil {
 		return err
 	}
@@ -58,6 +59,16 @@ func (sm *ServiceManager) Init(ctx context.Context, cfg *config.Config) error {
 func (sm *ServiceManager) Rebuild(ctx context.Context, cfg *config.Config, current Services) (*Services, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	// Stop old PR/MR refresh goroutines before building new services.
+	// This prevents orphaned goroutines when adapters change or workspace updates.
+	if sm.services != nil {
+		for _, stop := range sm.services.RefreshStoppers {
+			if stop != nil {
+				stop()
+			}
+		}
+	}
 
 	svcs, err := sm.buildServices(ctx, cfg, current)
 	if err != nil {
@@ -101,6 +112,12 @@ func (sm *ServiceManager) InitWorkspace(ctx context.Context, cfg *config.Config,
 
 // buildServices constructs the complete service graph.
 func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config, current Services) (*Services, error) {
+	// Preserve settings service reference if already created
+	settingsSvc := current.Settings
+	if settingsSvc == nil {
+		settingsSvc = NewSettingsService(sm.transacter, config.OSKeychainStore{}, sm)
+	}
+
 	// 1. Create bus (shared singleton — passed to services, orchestrators, adapters)
 	bus := event.NewBus(event.BusConfig{EventRepo: sm.eventRepo}, event.WithDropHandler(
 		func(subscriberID string, evt domain.SystemEvent) {
@@ -112,7 +129,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		},
 	))
 
-	// 1. Create hook registry for pre-checkout validation
+	// 2. Create hook registry for pre-checkout validation
 	hookRegistry := worktree.NewHookRegistry()
 
 	// 2. Create services with shared bus
@@ -180,18 +197,26 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 	}
 
 	// Start PR/MR state refresh for lifecycle adapters.
+	// Collect stop functions to cancel the refresh loops on next Rebuild.
+	var refreshStoppers []func()
 	for _, la := range repoLifecycleAdapters {
 		type prRefresher interface {
-			StartPRRefresh(ctx context.Context, workspaceID string)
+			StartPRRefresh(ctx context.Context, workspaceID string) func()
 		}
 		type mrRefresher interface {
-			StartMRRefresh(ctx context.Context, workspaceID string)
+			StartMRRefresh(ctx context.Context, workspaceID string) func()
 		}
 		if r, ok := la.(prRefresher); ok && current.WorkspaceID != "" {
-			r.StartPRRefresh(ctx, current.WorkspaceID)
+			stop := r.StartPRRefresh(ctx, current.WorkspaceID)
+			if stop != nil {
+				refreshStoppers = append(refreshStoppers, stop)
+			}
 		}
 		if r, ok := la.(mrRefresher); ok && current.WorkspaceID != "" {
-			r.StartMRRefresh(ctx, current.WorkspaceID)
+			stop := r.StartMRRefresh(ctx, current.WorkspaceID)
+			if stop != nil {
+				refreshStoppers = append(refreshStoppers, stop)
+			}
 		}
 	}
 
@@ -236,6 +261,8 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
 
 	return &Services{
+		Settings:              settingsSvc,
+		RefreshStoppers:       refreshStoppers,
 		Session:               workItemSvc,
 		Plan:                  planSvc,
 		Task:                  sessionSvc,

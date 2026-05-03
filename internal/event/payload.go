@@ -12,7 +12,10 @@ func WorkItemStatePayload(workItemID, workspaceID string, session domain.Session
 		"workspace_id": workspaceID,
 		"session":      session,
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }
 
@@ -21,7 +24,10 @@ func WorkItemIngestedPayload(workspaceID string, session domain.Session) string 
 		"workspace_id": workspaceID,
 		"session":      session,
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }
 
@@ -32,7 +38,10 @@ func SessionPayload(session domain.Task) string {
 		"workspace_id": session.WorkspaceID,
 		"phase":        string(session.Phase),
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }
 
@@ -41,7 +50,10 @@ func QuestionAnsweredPayload(sessionID, questionID string) string {
 		"session_id":  sessionID,
 		"question_id": questionID,
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }
 

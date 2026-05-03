@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -55,10 +56,11 @@ type httpDoer interface {
 type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
-	cfg      config.GitlabConfig
-	baseURL  string
-	client   httpDoer
-	username string // cached authenticated username for "mine" scope checks
+	cfg        config.GitlabConfig
+	baseURL    string
+	client     httpDoer
+	username   string       // cached authenticated username for "mine" scope checks
+	usernameMu sync.RWMutex // protects username cache
 }
 
 type issue struct {
@@ -549,9 +551,13 @@ func (a *GitlabAdapter) isOwnNamespace(ctx context.Context, externalID string) b
 	// For user namespaces, check if it matches the authenticated user
 	if proj.Namespace.Kind == "user" {
 		if err := a.resolveUsername(ctx); err != nil {
+			// On error, conservatively return false rather than suppressing comments
 			return false
 		}
-		return proj.Namespace.Path == a.username
+		a.usernameMu.RLock()
+		username := a.username
+		a.usernameMu.RUnlock()
+		return proj.Namespace.Path == username
 	}
 	// For group namespaces, we'd need to check group membership - conservatively return false
 	return false
@@ -569,9 +575,22 @@ func (a *GitlabAdapter) fetchProjectByPath(ctx context.Context, projectPath stri
 
 // resolveUsername fetches and caches the authenticated user's username.
 func (a *GitlabAdapter) resolveUsername(ctx context.Context) error {
+	// Check cache first with read lock
+	a.usernameMu.RLock()
+	if a.username != "" {
+		a.usernameMu.RUnlock()
+		return nil
+	}
+	a.usernameMu.RUnlock()
+
+	// Fetch username with write lock
+	a.usernameMu.Lock()
+	defer a.usernameMu.Unlock()
+	// Double-check after acquiring write lock
 	if a.username != "" {
 		return nil
 	}
+
 	var user struct {
 		Username string `json:"username"`
 		ID       int64  `json:"id"`

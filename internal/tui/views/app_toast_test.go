@@ -54,7 +54,7 @@ func newToastTestApp(t *testing.T) *App {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	return updated
@@ -66,7 +66,7 @@ func updateToastTestApp(t *testing.T, app *App, msg tea.Msg) *App {
 	model, _ := app.Update(msg)
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	return updated
@@ -195,7 +195,7 @@ func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	updated.loadHistoryEntry(SidebarEntry{
 		Kind:          SidebarEntrySessionHistory,
@@ -293,7 +293,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	updated.toasts.AddToast("Sync complete", components.ToastSuccess)
 
@@ -386,7 +386,7 @@ func TestAppUpdate_QuitConfirmedStopsActiveNewSessionAutonomousRuntime(t *testin
 	model, _ := app.Update(QuitConfirmedMsg{})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	if !stopCalled {

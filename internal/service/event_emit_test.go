@@ -29,7 +29,7 @@ func TestEmit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
-		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
+		defer bus.Unsubscribe(sub.ID)
 
 		// Emit event
 		Emit(bus, domain.SystemEvent{
@@ -45,7 +45,7 @@ func TestEmit(t *testing.T) {
 			t.Error("timeout waiting for event")
 		}
 
-		// Note: no Close method on Bus in current implementation
+		defer bus.Close()
 	})
 }
 
@@ -59,7 +59,7 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
-		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
+		defer bus.Unsubscribe(sub.ID)
 
 		task := domain.Task{
 			ID:             "task-1",
@@ -93,7 +93,7 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionCompleted))
-		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
+		defer bus.Unsubscribe(sub.ID)
 
 		task := domain.Task{
 			ID:             "task-complete-test",
@@ -135,7 +135,7 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionFailed))
-		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
+		defer bus.Unsubscribe(sub.ID)
 
 		task := domain.Task{
 			ID:             "task-fail-test",
@@ -172,7 +172,7 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionInterrupted))
-		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
+		defer bus.Unsubscribe(sub.ID)
 
 		task := domain.Task{
 			ID:             "task-interrupt-test",

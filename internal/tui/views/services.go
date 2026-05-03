@@ -58,6 +58,9 @@ type Services struct {
 	WorkspaceID   string
 	WorkspaceDir  string
 	WorkspaceName string
+	// RefreshStoppers holds cancel functions for PR/MR refresh goroutines.
+	// Call these before Rebuild to prevent orphaned goroutines.
+	RefreshStoppers []func()
 }
 
 func (s Services) ForemanHarness() adapter.AgentHarness {

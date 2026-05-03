@@ -320,7 +320,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd == nil {
 		t.Fatal("expected opening new session to trigger a browse reload")
@@ -330,7 +330,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd == nil {
 		t.Fatal("expected view cycling to trigger a browse reload")
@@ -352,7 +352,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd == nil {
 		t.Fatal("expected Esc to emit a close-overlay command")
@@ -365,7 +365,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if cmd == nil {
 		t.Fatal("expected reopening new session to trigger a browse reload")
@@ -1159,7 +1159,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 	})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayOverviewLinks {
 		t.Fatalf("active overlay = %v, want overview links", updated.activeOverlay)
@@ -1168,7 +1168,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 	model, _ = updated.Update(CloseOverlayMsg{})
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayNewSession {
 		t.Fatalf("active overlay = %v, want new session", updated.activeOverlay)
@@ -2477,7 +2477,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 	model, _ := app.Update(ErrMsg{Err: errors.New("boom")})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	if view := stripBrowseANSI(updated.toasts.StackView()); !strings.Contains(view, "Error: boom") {
@@ -2513,7 +2513,7 @@ func TestAppErrMsgFormatsGitHubSearchValidationError(t *testing.T) {
 	model, _ := app.Update(ErrMsg{Err: errors.New(errMsg)})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	view := stripBrowseANSI(updated.toasts.StackView())

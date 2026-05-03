@@ -865,6 +865,9 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 	if _, err := sessionRepo.Get(context.Background(), result.SessionID); err != repository.ErrNotFound {
 		t.Fatalf("expected pending session cleanup, got %v", err)
 	}
+	// Wait for any async event emissions to complete.
+	// EventAgentSessionStarted is emitted asynchronously via service.Emit with a 5s timeout.
+	time.Sleep(50 * time.Millisecond)
 	for _, evt := range eventRepo.events {
 		if evt.EventType == string(domain.EventAgentSessionStarted) {
 			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentSessionStarted)

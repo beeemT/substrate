@@ -171,7 +171,7 @@ func TestApp_WorkspaceInitDoneTriggersServiceReload(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.hasWorkspace {
 		t.Fatal("workspace should not be marked ready until services finish reloading")
@@ -208,7 +208,7 @@ func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if !updated.hasWorkspace {
 		t.Fatal("expected workspace to be marked ready")
@@ -261,7 +261,7 @@ func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
 	model, _ = app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 
 	// New overlay instances must inherit the terminal size set before the reload.
@@ -299,7 +299,7 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 	}
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if len(updated.workItems) != 1 || updated.workItems[0].ID != "wi-current" {
 		t.Fatalf("work items = %#v, want current workspace data preserved", updated.workItems)
@@ -314,7 +314,7 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 	}
 	updated, ok = model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if len(updated.sessions) != 1 || updated.sessions[0].ID != "sess-current" {
 		t.Fatalf("sessions = %#v, want current workspace data preserved", updated.sessions)
@@ -362,7 +362,7 @@ func TestApp_NewReposHealthCheckMsg_ActivatesModalWhenPlainReposFound(t *testing
 	model, _ := app.Update(msg)
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayWorkspaceInit {
 		t.Fatalf("activeOverlay = %v, want overlayWorkspaceInit", updated.activeOverlay)
@@ -393,7 +393,7 @@ func TestApp_NewReposHealthCheckMsg_IgnoredWhenNoPlainRepos(t *testing.T) {
 	model, _ := app.Update(msg)
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayNone {
 		t.Fatalf("activeOverlay = %v, want overlayNone when no plain repos", updated.activeOverlay)
@@ -420,7 +420,7 @@ func TestApp_NewReposInitDoneMsg_ClearsOverlayAndShowsToast(t *testing.T) {
 	model, _ := app.Update(NewReposInitDoneMsg{Count: 2})
 	updated, ok := model.(*App)
 	if !ok {
-		t.Fatalf("model = %T, want App", model)
+		t.Fatalf("model = %T, want *App", model)
 	}
 	if updated.activeOverlay != overlayNone {
 		t.Fatalf("activeOverlay = %v, want overlayNone after init done", updated.activeOverlay)
