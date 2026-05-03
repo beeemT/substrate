@@ -512,6 +512,7 @@ func (m ReviewFollowupModel) viewPicker() string {
 		}
 		count := len(m.commentsByItem[it.ID])
 		line := fmt.Sprintf("%s  %s %s  (%d comment%s)", mark, it.RepoName, it.Ref, count, pluralS(count))
+		line += "  " + m.reviewStatusLabel(it)
 		if i == m.pickerCursor {
 			line = m.styles.Active.Render("▶ " + line)
 		} else {
@@ -529,6 +530,29 @@ func (m ReviewFollowupModel) viewPicker() string {
 		Footer:      footer,
 		Focused:     true,
 	})
+}
+
+// reviewStatusLabel returns a styled label summarizing the PR's review state.
+// Matches the conventions used in the artifacts sidebar.
+func (m ReviewFollowupModel) reviewStatusLabel(item ArtifactItem) string {
+	hasApproved := false
+	hasChangesRequested := false
+	for _, r := range item.Reviews {
+		switch r.State {
+		case "approved":
+			hasApproved = true
+		case "changes_requested":
+			hasChangesRequested = true
+		}
+	}
+	switch {
+	case hasChangesRequested:
+		return m.styles.Error.Render("✗ review")
+	case hasApproved:
+		return m.styles.Success.Render("✓ review")
+	default:
+		return m.styles.Muted.Render("◐ review")
+	}
 }
 
 func (m ReviewFollowupModel) viewSelector() string {

@@ -171,6 +171,7 @@ type GitlabConfig struct {
 	PollInterval        string              `yaml:"poll_interval"` // default: 5m
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
+	IssueCommentScope   IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
 }
 
 type GithubConfig struct {
@@ -183,6 +184,7 @@ type GithubConfig struct {
 	Labels              []string            `yaml:"labels"`
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
+	IssueCommentScope   IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
 	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
 }
 
@@ -535,8 +537,14 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.GitHub.IssueCommentContent == "" {
 		cfg.Adapters.GitHub.IssueCommentContent = IssueCommentSubPlan
 	}
+	if cfg.Adapters.GitHub.IssueCommentScope == "" {
+		cfg.Adapters.GitHub.IssueCommentScope = IssueCommentScopeAll
+	}
 	if cfg.Adapters.GitLab.IssueCommentContent == "" {
 		cfg.Adapters.GitLab.IssueCommentContent = IssueCommentSubPlan
+	}
+	if cfg.Adapters.GitLab.IssueCommentScope == "" {
+		cfg.Adapters.GitLab.IssueCommentScope = IssueCommentScopeAll
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
@@ -619,6 +627,18 @@ func validate(cfg *Config) error {
 	}
 	if !validIssueCommentContent[cfg.Adapters.GitLab.IssueCommentContent] {
 		return fmt.Errorf("invalid adapters.gitlab.issue_comment_content: %q (must be none, orchestrator_plan, sub_plan, orchestrator_and_sub_plan, or full_plan)", cfg.Adapters.GitLab.IssueCommentContent)
+	}
+
+	validIssueCommentScope := map[IssueCommentScope]bool{
+		IssueCommentScopeAll:  true,
+		IssueCommentScopeMine: true,
+		IssueCommentScopeNone: true,
+	}
+	if !validIssueCommentScope[cfg.Adapters.GitHub.IssueCommentScope] {
+		return fmt.Errorf("invalid adapters.github.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitHub.IssueCommentScope)
+	}
+	if !validIssueCommentScope[cfg.Adapters.GitLab.IssueCommentScope] {
+		return fmt.Errorf("invalid adapters.gitlab.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitLab.IssueCommentScope)
 	}
 
 	validHarnesses := map[HarnessName]bool{

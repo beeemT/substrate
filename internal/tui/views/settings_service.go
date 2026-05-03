@@ -596,6 +596,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.gitlab", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.PollInterval},
 				{Section: "adapters.gitlab", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitLab.StateMappings)},
 				{Section: "adapters.gitlab", Key: "issue_comment_content", Label: "Issue Comment Content", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitLab.IssueCommentContent), Options: []string{"none", "orchestrator_plan", "sub_plan", "orchestrator_and_sub_plan", "full_plan"}},
+				{Section: "adapters.gitlab", Key: "issue_comment_scope", Label: "Issue Comment Scope", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitLab.IssueCommentScope), Options: []string{"all", "mine", "none"}},
 			},
 		},
 		{
@@ -615,6 +616,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.github", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.PollInterval},
 				{Section: "adapters.github", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitHub.StateMappings)},
 				{Section: "adapters.github", Key: "issue_comment_content", Label: "Issue Comment Content", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitHub.IssueCommentContent), Options: []string{"none", "orchestrator_plan", "sub_plan", "orchestrator_and_sub_plan", "full_plan"}},
+				{Section: "adapters.github", Key: "issue_comment_scope", Label: "Issue Comment Scope", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitHub.IssueCommentScope), Options: []string{"all", "mine", "none"}},
 				{Section: "adapters.github", Key: "post_merge_close_issue", Label: "Post Merge Close Issue", Type: SettingsFieldBool, Value: strconv.FormatBool(cfg.Adapters.GitHub.PostMergeCloseIssue)},
 			},
 		},
@@ -831,6 +833,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.GitLab.StateMappings = parseMap(value)
 	case "adapters.gitlab.issue_comment_content":
 		cfg.Adapters.GitLab.IssueCommentContent = config.IssueCommentContent(value)
+	case "adapters.gitlab.issue_comment_scope":
+		cfg.Adapters.GitLab.IssueCommentScope = config.IssueCommentScope(value)
 	case "adapters.sentry.token_ref":
 		cfg.Adapters.Sentry.Token, cfg.Adapters.Sentry.TokenRef = applySecretField(value, "sentry.token")
 	case "adapters.sentry.base_url":
@@ -858,6 +862,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.GitHub.BaseURL = value
 	case "adapters.github.issue_comment_content":
 		cfg.Adapters.GitHub.IssueCommentContent = config.IssueCommentContent(value)
+	case "adapters.github.issue_comment_scope":
+		cfg.Adapters.GitHub.IssueCommentScope = config.IssueCommentScope(value)
 	case "adapters.github.post_merge_close_issue":
 		cfg.Adapters.GitHub.PostMergeCloseIssue = value == "true"
 	case "adapters.glab.reviewers":
@@ -1024,6 +1030,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Maps Substrate tracker states to GitLab issue states.", statusEmpty
 	case "adapters.gitlab.issue_comment_content":
 		return "What plan content is posted as a comment on linked GitLab issues at plan approval.", "sub_plan"
+	case "adapters.gitlab.issue_comment_scope":
+		return "Which issues get plan comments: all, mine only, or none.", "all"
 	case "adapters.github.token_ref":
 		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", statusEmpty
 	case "adapters.github.assignee":
@@ -1040,6 +1048,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Base URL for the GitHub API (useful for GitHub Enterprise).", "https://api.github.com"
 	case "adapters.github.issue_comment_content":
 		return "What plan content is posted as a comment on linked GitHub issues at plan approval.", "sub_plan"
+	case "adapters.github.issue_comment_scope":
+		return "Which issues get plan comments: all, mine only, or none.", "all"
 	case "adapters.github.post_merge_close_issue":
 		return "Close linked issue when all PRs are merged.", "false"
 	case "adapters.sentry.token_ref":
