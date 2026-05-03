@@ -69,9 +69,12 @@ func TestBus_PreHook_CallOrder(t *testing.T) {
 
 	bus.RegisterPreHook(HookConfig{Name: "first"}, func(_ context.Context, _ domain.SystemEvent) error {
 		mu.Lock()
+		defer mu.Unlock()
 		order = append(order, "first")
-		callCh <- "first"
-		mu.Unlock()
+		select {
+		case callCh <- "first":
+		default:
+		}
 		return nil
 	})
 	bus.RegisterPreHook(HookConfig{Name: "second"}, func(_ context.Context, _ domain.SystemEvent) error {

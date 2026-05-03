@@ -65,34 +65,6 @@ type ReviewResult struct {
 	SessionID   string // review agent session ID — log at config.SessionsDir()/<SessionID>.log
 }
 
-// ReviewStartedPayload is the payload for EventReviewStarted.
-type ReviewStartedPayload struct {
-	PlanID      string `json:"plan_id"`
-	SessionID   string `json:"session_id"`
-	CycleNumber int    `json:"cycle_number"`
-}
-
-// CritiquesFoundPayload is the payload for EventCritiquesFound.
-type CritiquesFoundPayload struct {
-	CycleID       string `json:"cycle_id"`
-	CritiqueCount int    `json:"critique_count"`
-	HasMajor      bool   `json:"has_major"`
-}
-
-// ReviewCompletedPayload is the payload for EventReviewCompleted.
-type ReviewCompletedPayload struct {
-	CycleID     string `json:"cycle_id"`
-	Passed      bool   `json:"passed"`
-	CycleNumber int    `json:"cycle_number"`
-}
-
-// ReimplementationStartedPayload is the payload for EventReimplementationStarted.
-type ReimplementationStartedPayload struct {
-	CycleID   string `json:"cycle_id"`
-	PlanID    string `json:"plan_id"`
-	SessionID string `json:"session_id"`
-}
-
 // ReviewSession reviews an agent session's output.
 func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task) (*ReviewResult, error) {
 	// Get existing review cycles

@@ -109,6 +109,22 @@ func NewBus(cfg BusConfig, opts ...BusOption) *Bus {
 	return b
 }
 
+// IsPreHookEvent reports whether the given event type is a pre-hook event.
+//
+// Deprecated: pre-hook event types were removed in the async event-bus migration.
+// This method always returns false. Hooks now run after persistence and cannot
+// abort database writes — use worktree.HookRegistry for synchronous validation.
+func (b *Bus) IsPreHookEvent(_ string) bool {
+	return false
+}
+
+// RegisterPreHookType is a no-op.
+//
+// Deprecated: pre-hook event types were removed in the async event-bus migration.
+// This method does nothing. For synchronous validation that runs before state
+// transitions, use worktree.HookRegistry instead.
+func (b *Bus) RegisterPreHookType(_ string) {}
+
 // Subscribe creates a new subscriber for the given topics.
 // If no topics are specified, the subscriber receives all events.
 // Returns ErrBusClosed if the bus has been closed.
