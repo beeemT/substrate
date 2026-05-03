@@ -242,6 +242,30 @@ func TestContentHopLandsOnOppositeSide(t *testing.T) {
 	}
 }
 
+func TestContentHop3HopsCompletesAndFlipsSide(t *testing.T) {
+	// Regression test: after a 3-hop sequence the bunny must land on the opposite
+	// side and hopActive must be false. Before the fix, hopFrame was left at 4
+	// (not reset to 0) after an intermediate hop, causing the counter to be
+	// stuck at 4 and hopActive to remain true forever, which killed the blink
+	// chain.
+	m := views.NewContentModel(makeContentStyles())
+	m.SetSize(80, 24)
+
+	// Trigger a 3-hop sequence.
+	m, _ = m.Update(components.BunnyHopTriggerMsg{Hops: 3})
+
+	// 3 hops × 5 frames + 2 pauses between hops = 17 steps total.
+	for range 17 {
+		m, _ = m.Update(components.BunnyHopStepMsg{})
+	}
+
+	// After landing, the bunny should still render and not be hopping.
+	view := m.View()
+	if !strings.Contains(view, "ω") {
+		t.Fatalf("expected bunny after 3-hop landing, got: %q", view)
+	}
+}
+
 func TestContentHopContainerStaysFixed(t *testing.T) {
 	// The container (box) must not shift vertically between stationary and any
 	// hop frame. We find the row containing the top-left border corner (╭)

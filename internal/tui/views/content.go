@@ -211,7 +211,7 @@ func (m ContentModel) Update(msg tea.Msg) (ContentModel, tea.Cmd) {
 				m.hopFrame++
 				if m.hopFrame >= components.FramesPerHop {
 					// Hop complete: land on box.
-					m.hopFrame = components.FramesPerHop - 1
+					m.hopFrame = 0 // reset so the next BunnyHopStepMsg starts fresh
 					if m.hopIndex < m.hopCount-1 {
 						// More hops to go: pause on the box.
 						m.hopPause = true
