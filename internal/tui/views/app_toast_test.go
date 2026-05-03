@@ -38,7 +38,7 @@ func findLineContaining(lines []string, needle string) int {
 	return -1
 }
 
-func newToastTestApp(t *testing.T) App {
+func newToastTestApp(t *testing.T) *App {
 	t.Helper()
 
 	cfg := &config.Config{}
@@ -52,7 +52,7 @@ func newToastTestApp(t *testing.T) App {
 		},
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -60,11 +60,11 @@ func newToastTestApp(t *testing.T) App {
 	return updated
 }
 
-func updateToastTestApp(t *testing.T, app App, msg tea.Msg) App {
+func updateToastTestApp(t *testing.T, app *App, msg tea.Msg) *App {
 	t.Helper()
 
 	model, _ := app.Update(msg)
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -72,7 +72,7 @@ func updateToastTestApp(t *testing.T, app App, msg tea.Msg) App {
 	return updated
 }
 
-func toastCount(app App) int {
+func toastCount(app *App) int {
 	return reflect.ValueOf(app.toasts).FieldByName("toasts").Len()
 }
 
@@ -193,7 +193,7 @@ func TestAppView_ReadOnlyToastStackFitsNarrowWindow(t *testing.T) {
 
 	app := newToastTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 36, Height: 12})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -291,7 +291,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 		},
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -384,7 +384,7 @@ func TestAppUpdate_QuitConfirmedStopsActiveNewSessionAutonomousRuntime(t *testin
 	app.syncNewSessionFilterOverlays()
 
 	model, _ := app.Update(QuitConfirmedMsg{})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}

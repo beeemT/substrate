@@ -11,18 +11,6 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
-
-// waitForEvent receives an event from ch or fails t on timeout.
-func waitForEvent(t *testing.T, ch <-chan domain.SystemEvent, timeout time.Duration) domain.SystemEvent {
-	select {
-	case evt := <-ch:
-		return evt
-	case <-time.After(timeout):
-		t.Fatalf("timeout after %v waiting for event", timeout)
-		return domain.SystemEvent{} // unreachable
-	}
-}
-
 func TestEmit(t *testing.T) {
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		// Should not panic when bus is nil
@@ -406,6 +394,9 @@ func TestSessionService_EmitsEvents(t *testing.T) {
 			t.Fatalf("Transition with nil bus: %v", err)
 		}
 	})
+
+	// Note: Archive/Unarchive don't emit events, so no nil-bus test needed for them.
+	// They call s.transacter.Transact directly and don't use the Emit helper.
 }
 
 func TestPlanService_EmitsEvents(t *testing.T) {

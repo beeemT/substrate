@@ -510,7 +510,12 @@ func initializeWorkspaceServicesCmd(serviceMgr *ServiceManager, current Services
 			reloaded.InstanceID = inst.ID
 		}
 
-		return WorkspaceServicesReloadedMsg{Reload: viewsServicesReload{Services: *reloaded}, Message: "Workspace initialized"}
+		sessionsDir, _ := config.SessionsDir()
+
+		return WorkspaceServicesReloadedMsg{Reload: viewsServicesReload{
+			Services:    *reloaded,
+			SessionsDir: sessionsDir,
+		}, Message: "Workspace initialized"}
 	}
 }
 

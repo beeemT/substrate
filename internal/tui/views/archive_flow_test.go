@@ -108,9 +108,9 @@ func TestArchAppFlow(t *testing.T) {
 
 			// 2. Press 'a' to open confirm dialog (no cmd returned — dialog is inline).
 			model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-			app = model.(App)
+			app = model.(*App)
 			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-			app = model.(App)
+			app = model.(*App)
 			if cmd != nil {
 				t.Fatalf("'a' key should not return cmd, got %v", cmd)
 			}
@@ -121,7 +121,7 @@ func TestArchAppFlow(t *testing.T) {
 			// 3. Press Enter: onYes lambda in showArchiveConfirm/showUnarchiveConfirm fires
 			//    ArchiveSessionMsg/UnarchiveSessionMsg directly (not a cmd).
 			model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			app = model.(App)
+			app = model.(*App)
 
 			// 4. Feed the message back to the app to trigger the handler.
 			//    The handler appends archiveSessionCmd/unarchiveSessionCmd to tea.Batch.
@@ -132,13 +132,13 @@ func TestArchAppFlow(t *testing.T) {
 				if cmd != nil {
 					completionMsg = cmd()
 				}
-				_ = model.(App)
+				_ = model.(*App)
 			case "Unarchive session":
 				model, cmd := app.Update(UnarchiveSessionMsg{WorkItemID: tc.workItem.ID})
 				if cmd != nil {
 					completionMsg = cmd()
 				}
-				_ = model.(App)
+				_ = model.(*App)
 			}
 
 			// 5. Verify service call succeeded and state is correct.

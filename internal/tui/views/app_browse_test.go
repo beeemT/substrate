@@ -132,13 +132,13 @@ func applyOverlayCmds(t *testing.T, overlay NewSessionOverlay, cmd tea.Cmd) NewS
 	return overlay
 }
 
-func applyAppCmds(t *testing.T, app App, cmd tea.Cmd) App {
+func applyAppCmds(t *testing.T, app *App, cmd tea.Cmd) *App {
 	t.Helper()
 	for _, msg := range runOverlayCmd(t, cmd) {
 		model, follow := app.Update(msg)
-		updated, ok := model.(App)
+		updated, ok := model.(*App)
 		if !ok {
-			t.Fatalf("model = %T, want App", model)
+			t.Fatalf("model = %T, want *App", model)
 		}
 		app = updated
 		if follow != nil {
@@ -318,7 +318,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	app.newSession.SetSize(100, 30)
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -328,7 +328,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	app = applyAppCmds(t, updated, cmd)
 
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -350,7 +350,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	}
 
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -363,7 +363,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	}
 
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1157,7 +1157,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 		Sources: []OverviewSourceItem{{Provider: "GitHub", Ref: "#42", URL: "https://github.com/acme/rocket/issues/42"}},
 		Reviews: []OverviewReviewRow{{Kind: "PR", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7"}},
 	})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1166,7 +1166,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 	}
 
 	model, _ = updated.Update(CloseOverlayMsg{})
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -2475,7 +2475,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 		LogToasts: logToasts,
 	})
 	model, _ := app.Update(ErrMsg{Err: errors.New("boom")})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -2511,7 +2511,7 @@ func TestAppErrMsgFormatsGitHubSearchValidationError(t *testing.T) {
 
 	app := NewApp(Services{Settings: &SettingsService{}})
 	model, _ := app.Update(ErrMsg{Err: errors.New(errMsg)})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}

@@ -15,10 +15,10 @@ func TestAppAKeyNoLongerOpensAddRepoOverlay(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.activeOverlay == overlayAddRepo {
 		t.Fatal("'a' key must NOT open addRepo overlay directly; use 'r' \u2192 'a' instead")
@@ -30,15 +30,15 @@ func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(ShowAddRepoMsg{})
-	updated = model.(App)
+	updated = model.(*App)
 
 	// Esc is routed to addRepo.Update, which returns CloseOverlayMsg as a command.
 	// The two-step dispatch mirrors what the BubbleTea runtime does.
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected Esc to return a close-overlay command while add-repo overlay is open")
 	}
@@ -48,7 +48,7 @@ func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 	}
 
 	model, _ = updated.Update(msg)
-	closed := model.(App)
+	closed := model.(*App)
 
 	if closed.activeOverlay == overlayAddRepo {
 		t.Fatalf("activeOverlay = %v, want overlay closed after Esc", closed.activeOverlay)
@@ -63,25 +63,25 @@ func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Open repo manager via 'R'.
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("precondition: activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
 	}
 
 	// Transition to add-repo via ShowAddRepoMsg (what 'a' inside repo manager does).
 	model, _ = updated.Update(ShowAddRepoMsg{})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.activeOverlay != overlayAddRepo {
 		t.Fatalf("precondition: activeOverlay = %v, want overlayAddRepo", updated.activeOverlay)
 	}
 
 	// Esc in add-repo should produce CloseOverlayMsg.
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected Esc to return a command")
 	}
@@ -92,7 +92,7 @@ func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
 
 	// Dispatching CloseOverlayMsg should return to repo manager, not home.
 	model, _ = updated.Update(msg)
-	returned := model.(App)
+	returned := model.(*App)
 
 	if returned.activeOverlay != overlayRepoManager {
 		t.Fatalf("activeOverlay = %v, want overlayRepoManager after Esc from add-repo opened via repo manager", returned.activeOverlay)
@@ -110,15 +110,15 @@ func TestAppRepoClonedMsgShowsSuccessToast(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// RepoClonedMsg handler fires ActionDoneMsg as a command rather than mutating toast state
 	// directly, so we simulate the runtime dispatching it by sending it in a follow-up Update.
 	model, _ = updated.Update(RepoClonedMsg{RepoPath: "/workspace/my-repo"})
-	updated = model.(App)
+	updated = model.(*App)
 
 	model, _ = updated.Update(ActionDoneMsg{Message: "Repository cloned to workspace"})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	// The toast text may wrap inside the toast box, so check for the prefix
@@ -136,10 +136,10 @@ func TestAppAddRepoViewFitsWindowWhenOpen(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(ShowAddRepoMsg{})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	lines := strings.Split(view, "\n")
@@ -160,7 +160,7 @@ func TestAppManagedRepoSlugsRebuildOnScan(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	msg := ManagedReposLoadedMsg{
 		Repos: []managedRepo{
@@ -179,7 +179,7 @@ func TestAppManagedRepoSlugsRebuildOnScan(t *testing.T) {
 		},
 	}
 	model, _ = updated.Update(msg)
-	updated = model.(App)
+	updated = model.(*App)
 
 	// Slugs for repos with a valid remote URL must be present.
 	if !updated.managedRepoSlugs["beeemt/substrate"] {
@@ -206,7 +206,7 @@ func TestAppOpenAddRepoTriggersScanWhenSlugsNil(t *testing.T) {
 		Settings:      &SettingsService{},
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// managedRepoSlugs starts nil; opening add-repo should trigger a scan.
 	if updated.managedRepoSlugs != nil {
@@ -231,11 +231,11 @@ func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Open add-repo overlay.
 	model, _ = updated.Update(ShowAddRepoMsg{})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.activeOverlay != overlayAddRepo {
 		t.Fatal("precondition: add-repo overlay must be active")
 	}
@@ -250,7 +250,7 @@ func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 		},
 	}
 	model, _ = updated.Update(scanMsg)
-	updated = model.(App)
+	updated = model.(*App)
 
 	// The app-level slug set must be populated.
 	if !updated.managedRepoSlugs["beeemt/substrate"] {
@@ -264,7 +264,7 @@ func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 		URL: "https://github.com/beeemT/substrate.git", DefaultBranch: "main",
 	}
 	model, _ = updated.Update(RepoListLoadedMsg{Repos: []adapter.RepoItem{repoItem}, HasMore: false})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	plain := ansi.Strip(view)
@@ -280,7 +280,7 @@ func TestAppRepoClonedMsgUpdatesSlugs(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Simulate AddRepoCloneMsg to set pendingCloneSlug.
 	cloneMsg := AddRepoCloneMsg{
@@ -289,11 +289,11 @@ func TestAppRepoClonedMsgUpdatesSlugs(t *testing.T) {
 		CloneURL: "https://github.com/beeemT/newrepo.git",
 	}
 	model, _ = updated.Update(cloneMsg)
-	updated = model.(App)
+	updated = model.(*App)
 
 	// Simulate successful RepoClonedMsg.
 	model, _ = updated.Update(RepoClonedMsg{RepoPath: "/tmp/workspace/newrepo"})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if !updated.managedRepoSlugs["beeemt/newrepo"] {
 		t.Error("expected 'beeemt/newrepo' slug in managedRepoSlugs after successful clone")
@@ -307,7 +307,7 @@ func TestAppRepoClonedMsgErrorDoesNotUpdateSlugs(t *testing.T) {
 
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Set pendingCloneSlug via AddRepoCloneMsg.
 	cloneMsg := AddRepoCloneMsg{
@@ -316,11 +316,11 @@ func TestAppRepoClonedMsgErrorDoesNotUpdateSlugs(t *testing.T) {
 		CloneURL: "https://github.com/beeemT/failrepo.git",
 	}
 	model, _ = updated.Update(cloneMsg)
-	updated = model.(App)
+	updated = model.(*App)
 
 	// Simulate failed clone.
 	model, _ = updated.Update(RepoClonedMsg{RepoPath: "/tmp/workspace/failrepo", Err: errRepoManagerTest})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.managedRepoSlugs["beeemt/failrepo"] {
 		t.Error("failed clone must not add slug to managedRepoSlugs")

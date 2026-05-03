@@ -34,13 +34,13 @@ func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 		t.Fatalf("msg = %T, want CloseOverlayMsg", msg)
 	}
 
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
 
 	model, _ = updated.Update(msg)
-	closed, ok := model.(App)
+	closed, ok := model.(*App)
 	if !ok {
 		t.Fatalf("closed model = %T, want App", model)
 	}
@@ -71,7 +71,7 @@ func TestApp_SOpensSettingsOverlay(t *testing.T) {
 		t.Fatalf("cmd = %v, want nil when opening settings", cmd)
 	}
 
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}

@@ -173,7 +173,6 @@ func run() error {
 		SettingsData:          settingsData,
 		GitClient:             runtime.gitClient,
 		Bus:                   bus,
-		AdapterErrors:         adapters.adapterErrors,
 		StartupWarnings:       adapters.warnings,
 		LogStore:              logStore,
 		LogToasts:             logToasts,

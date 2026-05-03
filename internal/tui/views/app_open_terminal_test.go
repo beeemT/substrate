@@ -14,7 +14,7 @@ func TestAppOKeyOpensTerminalInWorktree(t *testing.T) {
 
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Set a worktree path on the session.
 	for i := range updated.sessions {
@@ -45,7 +45,7 @@ func TestAppOKeyNoOpWithoutWorktree(t *testing.T) {
 
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Session from newSidebarDrilldownTestApp has no worktree.
 
@@ -70,7 +70,7 @@ func TestAppOKeyNoOpInSidebar(t *testing.T) {
 
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// 'o' in sidebar mode (sessions pane) toggles sort direction.
 	updated.mainFocus = mainFocusSidebar

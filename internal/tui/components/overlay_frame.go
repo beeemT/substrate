@@ -208,12 +208,13 @@ func overlayBodyHeight(termHeight, chromeLines int, spec SplitOverlaySizingSpec)
 		return maxInt(1, maxInt(minBodyHeight, spec.DefaultBodyHeight))
 	}
 	// Fill the terminal: body gets every row not occupied by chrome.
-	// The height ratio and DefaultBodyHeight are intentionally ignored here —
-	// overlays are expected to fill the available vertical space. The ratio
-	// fields exist only to satisfy the spec struct and for the termHeight=0 path.
 	maxHeight := termHeight - chromeLines
 	if maxHeight < 1 {
 		return 1
+	}
+	// Apply optional upper bound from spec.
+	if spec.MaxBodyHeight > 0 {
+		maxHeight = minInt(maxHeight, spec.MaxBodyHeight)
 	}
 	return maxInt(1, maxHeight)
 }

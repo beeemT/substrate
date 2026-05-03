@@ -77,7 +77,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T)
 	}
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -116,7 +116,7 @@ func TestAppDeleteShortcutAppearsAndTriggersForSelectedSingleSessionWorkItem(t *
 	}
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -139,7 +139,7 @@ func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
 	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
-	updated := model.(App)
+	updated := model.(*App)
 
 	if got := updated.deletableSessionID(); got != "wi-1" {
 		t.Fatalf("deletable session id = %q, want wi-1", got)
@@ -161,7 +161,7 @@ func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 140, Height: 18})
-	updated := model.(App)
+	updated := model.(*App)
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 140, 18)
 	// At width=140 with a long workspace name, hints may overflow to a second line.
@@ -180,14 +180,14 @@ func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
 	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected task selection to tail its log")
 	}
@@ -206,19 +206,19 @@ func TestAppViewShowsDeleteHintForFocusedTaskSession(t *testing.T) {
 	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected task selection to tail its log")
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 
 	lines := assertAppViewFitsWindow(t, updated.View(), 44, 18)
 	footer := stripBrowseANSI(lines[len(lines)-2]) + " " + stripBrowseANSI(lines[len(lines)-1])
@@ -234,14 +234,14 @@ func TestAppViewKeepsDeleteKeyVisibleForSelectedTaskSessionAtNarrowWidth(t *test
 	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 18, Height: 18})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected task selection to tail its log")
 	}
@@ -266,7 +266,7 @@ func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	})
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -314,7 +314,7 @@ func TestAppViewHighlightsActivePaneWithoutChangingBodyText(t *testing.T) {
 	}
 }
 
-func sizedLayoutTestApp(t *testing.T, width, height int) App {
+func sizedLayoutTestApp(t *testing.T, width, height int) *App {
 	t.Helper()
 
 	app := NewApp(Services{
@@ -324,7 +324,7 @@ func sizedLayoutTestApp(t *testing.T, width, height int) App {
 	})
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}

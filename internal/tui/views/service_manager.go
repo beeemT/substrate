@@ -59,15 +59,16 @@ func (sm *ServiceManager) Rebuild(ctx context.Context, cfg *config.Config, curre
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Tear down: close bus (closes all adapter subscription goroutines)
-	if sm.services != nil && sm.services.Bus != nil {
-		sm.services.Bus.Close()
-	}
-
 	svcs, err := sm.buildServices(ctx, cfg, current)
 	if err != nil {
 		return nil, err
 	}
+
+	// Tear down old services only after new ones are built successfully.
+	if sm.services != nil && sm.services.Bus != nil {
+		sm.services.Bus.Close()
+	}
+
 	sm.services = svcs
 	return svcs, nil
 }

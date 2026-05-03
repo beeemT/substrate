@@ -11,7 +11,7 @@ import (
 
 var errRepoManagerTest = errors.New("test error")
 
-func newRepoManagerTestApp(t *testing.T) App {
+func newRepoManagerTestApp(t *testing.T) *App {
 	t.Helper()
 	return NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
 }
@@ -23,10 +23,10 @@ func TestAppRKeyOpensRepoManagerOverlay(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
@@ -44,7 +44,7 @@ func TestAppRKeyOpensRepoManagerWithWorkItemSelected(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Simulate a typical home-page state: work item selected, overview visible, sidebar focused.
 	updated.currentWorkItemID = "wi-1"
@@ -52,7 +52,7 @@ func TestAppRKeyOpensRepoManagerWithWorkItemSelected(t *testing.T) {
 	updated.mainFocus = mainFocusSidebar
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
@@ -69,15 +69,15 @@ func TestAppRepoManagerEscClosesOverlay(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Open repo manager.
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	// Esc is routed to repoManager.Update, which returns CloseOverlayMsg as a cmd.
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected Esc to return a close-overlay command while repo manager is open")
 	}
@@ -88,7 +88,7 @@ func TestAppRepoManagerEscClosesOverlay(t *testing.T) {
 
 	// Dispatch CloseOverlayMsg to close the overlay.
 	model, _ = updated.Update(msg)
-	closed := model.(App)
+	closed := model.(*App)
 
 	if closed.activeOverlay == overlayRepoManager {
 		t.Fatalf("activeOverlay = %v after Esc, want overlay closed", closed.activeOverlay)
@@ -105,10 +105,10 @@ func TestAppRepoManagerViewFitsWindow(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	lines := strings.Split(view, "\n")
@@ -129,11 +129,11 @@ func TestAppRepoManagerShowAddRepoTransition(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	// Open repo manager.
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.activeOverlay != overlayRepoManager {
 		t.Fatalf("precondition: activeOverlay = %v, want overlayRepoManager", updated.activeOverlay)
@@ -141,7 +141,7 @@ func TestAppRepoManagerShowAddRepoTransition(t *testing.T) {
 
 	// Simulate the overlay emitting ShowAddRepoMsg (what 'a' inside the overlay does).
 	model, _ = updated.Update(ShowAddRepoMsg{})
-	transitioned := model.(App)
+	transitioned := model.(*App)
 
 	if transitioned.activeOverlay != overlayAddRepo {
 		t.Fatalf("activeOverlay = %v after ShowAddRepoMsg, want overlayAddRepo", transitioned.activeOverlay)
@@ -161,10 +161,10 @@ func TestAppRepoRemovedMsgShowsSuccessToast(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(RepoRemovedMsg{RepoPath: "/workspace/my-repo"})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	if !strings.Contains(view, "my-repo") {
@@ -179,13 +179,13 @@ func TestAppRepoRemovedMsgErrorShowsErrorToast(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(RepoRemovedMsg{
 		RepoPath: "/workspace/my-repo",
 		Err:      errRepoManagerTest,
 	})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	// Error toasts contain the error message.
@@ -201,10 +201,10 @@ func TestAppRepoInitializedMsgShowsSuccessToast(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(RepoInitializedMsg{RepoPath: "/workspace/plain-repo"})
-	updated = model.(App)
+	updated = model.(*App)
 
 	view := updated.View()
 	if !strings.Contains(view, "plain-repo") {
@@ -223,10 +223,10 @@ func TestAppRepoManagerOpenDoesNotOpenAddRepo(t *testing.T) {
 
 	app := newRepoManagerTestApp(t)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	if updated.activeOverlay == overlayAddRepo {
 		t.Fatal("'R' key must open repoManager, not addRepo overlay")

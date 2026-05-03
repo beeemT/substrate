@@ -39,7 +39,7 @@ func TestEventConsumerEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to subscribe: %v", err)
 	}
-	ec := NewEventConsumer(&app, sub)
+	ec := NewEventConsumer(app, sub)
 	bridgeCmd := ec.BridgeCmd()
 
 	// Publish EventWorkItemIngested and deliver it through the bridge.
@@ -115,7 +115,7 @@ func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to subscribe: %v", err)
 	}
-	ec := NewEventConsumer(&app, sub)
+	ec := NewEventConsumer(app, sub)
 	bridgeCmd := ec.BridgeCmd()
 
 	// Publish EventAgentQuestionAnswered.
@@ -147,7 +147,7 @@ func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {
 
 	// Process through App.Update.
 	updatedApp, _ := app.Update(answered)
-	app = updatedApp.(App)
+	app = updatedApp.(*App)
 
 	_, has := app.questions["sess-1"]["q-1"]
 	if has {
@@ -183,7 +183,7 @@ func TestEventConsumer_unknownEventReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to subscribe: %v", err)
 	}
-	ec := NewEventConsumer(&app, sub)
+	ec := NewEventConsumer(app, sub)
 	bridgeCmd := ec.BridgeCmd()
 
 	bus.Publish(context.Background(), domain.SystemEvent{

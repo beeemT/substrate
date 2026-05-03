@@ -182,7 +182,7 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected poll tick command batch")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -197,7 +197,7 @@ func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected interactive search command")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -226,7 +226,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	}}
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model after resize = %T, want App", model)
 	}
@@ -234,7 +234,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	if cmd == nil {
 		t.Fatal("expected session search command")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after opening search = %T, want App", model)
 	}
@@ -265,7 +265,7 @@ func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model after resize = %T, want App", model)
 	}
@@ -274,7 +274,7 @@ func TestApp_OpenSessionSearchSeedsLocalAvailableSessions(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected session search command")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after opening search = %T, want App", model)
 	}
@@ -302,7 +302,7 @@ func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *t
 
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model after resize = %T, want App", model)
 	}
@@ -310,14 +310,14 @@ func TestApp_SessionHistoryLoadedKeepsSeededLocalSessionsWhenHistoryIsEmpty(t *t
 	if cmd == nil {
 		t.Fatal("expected session search command")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after opening search = %T, want App", model)
 	}
 
 	filter := updated.sessionSearchFilter()
 	model, _ = updated.Update(SessionHistoryLoadedMsg{Filter: filter, Entries: nil})
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after empty history load = %T, want App", model)
 	}
@@ -391,7 +391,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	app.sessionSearch.SetLoading(false)
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -400,7 +400,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("unexpected command moving focus: %v", cmd)
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after down = %T, want App", model)
 	}
@@ -409,7 +409,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected delete confirmation command")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after delete key = %T, want App", model)
 	}
@@ -425,7 +425,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("unexpected command when showing confirm: %v", cmd)
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after confirm msg = %T, want App", model)
 	}
@@ -444,7 +444,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected delete command after confirming")
 	}
-	updated, ok = model.(App)
+	updated, ok = model.(*App)
 	if !ok {
 		t.Fatalf("model after confirm key = %T, want App", model)
 	}
@@ -531,7 +531,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("unexpected follow-up command for warning toast: %v", cmd)
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model after delete warning = %T, want App", model)
 	}
@@ -629,7 +629,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 	}
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -704,7 +704,7 @@ func TestSessionDeletedMsg_ClearsOpenRemoteHistoryEntry(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("unexpected command clearing remote history entry: %v", cmd)
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model after remote delete = %T, want App", model)
 	}
@@ -750,7 +750,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	}
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -769,7 +769,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	}
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	sel = updated.sidebar.Selected()
 	if sel == nil || sel.WorkItemID != "wi-old" {
 		t.Fatalf("selected work item after second MoveDown = %v, want wi-old", sel)
@@ -807,7 +807,7 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 		},
 		Message: "Work item created: SUB-2",
 	})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -902,7 +902,7 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 	}
 }
 
-func newDuplicatePromptTestApp() (App, domain.Session, domain.Session, domain.Session) {
+func newDuplicatePromptTestApp() (*App, domain.Session, domain.Session, domain.Session) {
 	now := time.Now()
 	older := now.Add(-time.Hour)
 	existing := domain.Session{
@@ -960,7 +960,7 @@ func TestWorkItemDuplicatePromptShowsDecisionDialog(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected duplicate prompt to show dialog without command")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -985,12 +985,12 @@ func TestWorkItemDuplicateOpenExistingChoiceFocusesExistingWorkItemOverview(t *t
 		RequestedSession: requested,
 		ExistingSession:  existing,
 	})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(SessionDuplicateActionMsg{Action: SessionDuplicateOpenExisting})
 	if cmd != nil {
 		t.Fatal("expected opening existing work item to avoid auto-starting planning")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1027,13 +1027,13 @@ func TestWorkItemDuplicateCreateSessionChoiceStartsPlanningWithExistingWorkItem(
 		RequestedSession: requested,
 		ExistingSession:  existing,
 	})
-	updated := model.(App)
+	updated := model.(*App)
 
 	model, cmd := updated.Update(SessionDuplicateActionMsg{Action: SessionDuplicateCreateSession})
 	if cmd == nil {
 		t.Fatal("expected planning command for duplicate-session start")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1073,9 +1073,9 @@ func TestWorkItemDuplicateCancelChoiceKeepsCurrentSelection(t *testing.T) {
 		RequestedSession: requested,
 		ExistingSession:  existing,
 	})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1119,7 +1119,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected planning command after work item creation")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1131,7 +1131,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	}
 }
 
-func newSidebarDrilldownTestApp() App {
+func newSidebarDrilldownTestApp() *App {
 	now := time.Now()
 	app := NewApp(Services{
 		WorkspaceID:   "ws-local",
@@ -1213,7 +1213,7 @@ func newSidebarDrilldownTestApp() App {
 	return app
 }
 
-func newPlanningDrilldownTestApp() App {
+func newPlanningDrilldownTestApp() *App {
 	now := time.Now()
 	app := NewApp(Services{
 		WorkspaceID:   "ws-local",
@@ -1270,7 +1270,7 @@ func newPlanningDrilldownTestApp() App {
 func TestPlanningSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	app := newPlanningDrilldownTestApp()
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1298,9 +1298,9 @@ func TestPlanningSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 func TestPlanningSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 	app := newPlanningDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.Kind != SidebarEntryTaskSourceDetails {
@@ -1326,14 +1326,14 @@ func TestPlanningSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 	app := newPlanningDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatal("expected planning source-details selection to avoid starting a session tail")
 	}
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected selecting the planning session row to start tailing the session log")
 	}
@@ -1342,7 +1342,7 @@ func TestPlanningSidebarRefreshPreservesSessionOutput(t *testing.T) {
 	}
 
 	model, cmd = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"}, {Kind: sessionlog.KindToolStart, Tool: "read", Intent: "1", Text: `{"path":"guidance.md"}`}}, NextOffset: 42})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected live planning update to continue tailing the session log")
 	}
@@ -1386,21 +1386,21 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 	offset := int64(len(content))
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatal("expected source-details selection to avoid starting a tail command")
 	}
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected selecting the planning session row to start tailing the session log")
 	}
 	model, _ = updated.Update(SessionLogLinesMsg{SessionID: "plan-sess-1", Entries: []sessionlog.Entry{{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning"}, {Kind: sessionlog.KindToolStart, Tool: "read", Intent: "1", Text: `{"path":"guidance.md"}`}}, NextOffset: offset})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("moving back to source details returned cmd %v, want nil", cmd)
 	}
@@ -1408,7 +1408,7 @@ func TestPlanningSidebarReopenSessionResumesTailOffset(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSourceDetails)
 	}
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected reopening the planning session row to resume the tail command")
 	}
@@ -1445,11 +1445,11 @@ func TestPlanningTaskViewShowsPlanReviewNoticeWithoutAutoNavigating(t *testing.T
 	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected selecting the planning session row to start tailing the session log")
 	}
@@ -1504,11 +1504,11 @@ func TestPlanningTaskViewEnterOpensOverviewForPlanReviewNotice(t *testing.T) {
 	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	updated.workItems[0].State = domain.SessionPlanReview
 	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
 	updated.sessions[0].Status = domain.AgentSessionCompleted
@@ -1518,7 +1518,7 @@ func TestPlanningTaskViewEnterOpensOverviewForPlanReviewNotice(t *testing.T) {
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("expected Enter quick-jump to avoid starting a tail command, got %v", cmd)
 	}
@@ -1637,11 +1637,11 @@ func TestHistoricalPlanningSessionRemainsSelectable(t *testing.T) {
 	app.sessions = append(app.sessions, planningSession)
 	app.rebuildSidebar()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "plan-hist-1" {
 		t.Fatalf("selected entry = %#v, want historical planning session row", sel)
@@ -1664,7 +1664,7 @@ func TestNewSessionOpensFromWorkItemWithExistingSession(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected new-session open command")
 	}
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1704,7 +1704,7 @@ func TestSidebarSessionsHintsUseTasksLabel(t *testing.T) {
 func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated, ok := model.(App)
+	updated, ok := model.(*App)
 	if !ok {
 		t.Fatalf("model = %T, want App", model)
 	}
@@ -1760,9 +1760,9 @@ func TestSidebarRightDrillsIntoTasksOverview(t *testing.T) {
 func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.Kind != SidebarEntryTaskSourceDetails {
 		t.Fatalf("selected entry = %#v, want source-details row", sel)
@@ -1796,9 +1796,9 @@ func TestSidebarSourceDetailsSelectionShowsSourceContent(t *testing.T) {
 func TestSidebarSourceDetailsShowsQuestionAlertWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 
 	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
 	updated.questions["sess-1"] = map[string]domain.Question{
@@ -1852,9 +1852,9 @@ func TestSidebarSourceDetailsShowsQuestionAlertWithoutAutoNavigating(t *testing.
 func TestSidebarSourceDetailsEnterOpensOverviewForAlert(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 
 	updated.sessions[0].Status = domain.AgentSessionWaitingForAnswer
 	updated.questions["sess-1"] = map[string]domain.Question{
@@ -1871,7 +1871,7 @@ func TestSidebarSourceDetailsEnterOpensOverviewForAlert(t *testing.T) {
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("expected Enter quick-jump to avoid starting a tail command, got %v", cmd)
 	}
@@ -1896,9 +1896,9 @@ func TestSidebarSourceDetailsEnterOpensOverviewForAlert(t *testing.T) {
 func TestSidebarSourceDetailsShowsCompletedAlertWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 
 	updated.workItems[0].State = domain.SessionCompleted
 	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
@@ -1943,11 +1943,11 @@ func TestSidebarSourceDetailsShowsCompletedAlertWithoutAutoNavigating(t *testing
 func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	sel := updated.sidebar.Selected()
 	if sel == nil || sel.Kind != SidebarEntryTaskSession || sel.SessionID != "sess-1" {
 		t.Fatalf("selected entry = %#v, want task row for sess-1", sel)
@@ -1972,11 +1972,11 @@ func TestSidebarTaskContentUsesSidebarSessionTitle(t *testing.T) {
 	app.rebuildSidebar()
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected selecting a task to tail its log")
 	}
@@ -1995,11 +1995,11 @@ func TestSidebarTaskContentUsesSidebarSessionTitle(t *testing.T) {
 func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd == nil {
 		t.Fatal("expected selecting a task to tail its log")
 	}
@@ -2049,23 +2049,23 @@ func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T
 func TestSidebarLeftBacksOutFromTaskContentToSessions(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.mainFocus != mainFocusContent {
 		t.Fatalf("mainFocus = %v, want mainFocusContent", updated.mainFocus)
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.mainFocus != mainFocusSidebar || updated.sidebarMode != sidebarPaneTasks {
 		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in task pane", updated.mainFocus, updated.sidebarMode)
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.sidebarMode != sidebarPaneSessions {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneSessions", updated.sidebarMode)
 	}
@@ -2081,13 +2081,13 @@ func TestSidebarLeftBacksOutFromTaskContentToSessions(t *testing.T) {
 func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = model.(App)
+	updated = model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRight})
-	updated = model.(App)
+	updated = model.(*App)
 
 	foundBackHint := false
 	for _, hint := range updated.currentHints() {
@@ -2104,12 +2104,12 @@ func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
 	}
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.mainFocus != mainFocusSidebar || updated.sidebarMode != sidebarPaneTasks {
 		t.Fatalf("focus/sidebarMode = %v/%v, want sidebar focus in task pane", updated.mainFocus, updated.sidebarMode)
 	}
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if updated.sidebarMode != sidebarPaneSessions {
 		t.Fatalf("sidebarMode = %v, want sidebarPaneSessions", updated.sidebarMode)
 	}

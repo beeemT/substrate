@@ -203,7 +203,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 }
 
 // NewApp creates a new App from the given Services.
-func NewApp(svcs Services) App {
+func NewApp(svcs Services) *App {
 	st := styles.NewStyles(styles.DefaultTheme)
 	sessionsDir, _ := config.SessionsDir()
 	cwd, _ := os.Getwd()
@@ -254,7 +254,7 @@ func NewApp(svcs Services) App {
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, svcs.Workspace)
 		app.activeOverlay = overlayWorkspaceInit
 	}
-	return app
+	return &app
 }
 
 // RunTUI launches the bubbletea program.
@@ -280,7 +280,7 @@ func RunTUI(svcs Services) error {
 }
 
 // Init returns the initial set of commands.
-func (a App) Init() tea.Cmd {
+func (a *App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.svcs.LogToasts), StartupWarningsCmd(a.svcs.StartupWarnings))
@@ -340,7 +340,7 @@ func (a App) Init() tea.Cmd {
 				slog.Error("failed to subscribe TUI to event bus", "error", err)
 			} else {
 				// Bridge: forward events from subscriber channel to the update loop via EventConsumer.
-				a.eventConsumer = NewEventConsumer(&a, a.busSub)
+				a.eventConsumer = NewEventConsumer(a, a.busSub)
 				cmds = append(cmds, a.eventConsumer.BridgeCmd())
 			}
 		}
@@ -647,7 +647,7 @@ func (a *App) updateContentForKey(msg tea.KeyMsg, wasOverviewOverlayOpen bool, p
 	var cmd tea.Cmd
 	a.content, cmd = a.content.Update(msg)
 	a.syncOverviewOverlayFocus(wasOverviewOverlayOpen, previousFocus)
-	return *a, cmd
+	return a, cmd
 }
 
 func (a App) historyEntryTitle(entry SidebarEntry) string {
@@ -1044,7 +1044,7 @@ func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 }
 
 // Update is the bubbletea message handler.
-func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
@@ -1115,6 +1115,55 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyServicesReload(msg.Reload)
 		a.activeOverlay = overlayNone
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+
+		// Re-subscribe to the new bus after workspace init or rebuild.
+		// Init() only subscribes once at startup; if the bus changes (new workspace
+		// or rebuild), we must create a fresh subscription to the new bus.
+		if a.svcs.Bus != nil {
+			if a.busSub != nil {
+				a.svcs.Bus.Unsubscribe("tui:" + a.svcs.WorkspaceID)
+			}
+			var err error
+			a.busSub, err = a.svcs.Bus.Subscribe(
+				"tui:"+a.svcs.WorkspaceID,
+				string(domain.EventWorkItemIngested),
+				string(domain.EventWorkItemPlanning),
+				string(domain.EventWorkItemPlanReview),
+				string(domain.EventWorkItemApproved),
+				string(domain.EventWorkItemImplementing),
+				string(domain.EventWorkItemReviewing),
+				string(domain.EventWorkItemCompleted),
+				string(domain.EventWorkItemFailed),
+				string(domain.EventWorkItemMerged),
+				string(domain.EventAgentTaskStarted),
+				string(domain.EventAgentTaskCompleted),
+				string(domain.EventAgentTaskFailed),
+				string(domain.EventAgentTaskInterrupted),
+				string(domain.EventAgentSessionResumed),
+				string(domain.EventPlanGenerated),
+				string(domain.EventPlanApproved),
+				string(domain.EventPlanRejected),
+				string(domain.EventPlanRevised),
+				string(domain.EventPlanSubmittedForReview),
+				string(domain.EventReviewStarted),
+				string(domain.EventReviewCompleted),
+				string(domain.EventCritiquesFound),
+				string(domain.EventImplementationStarted),
+				string(domain.EventReimplementationStarted),
+				string(domain.EventPRMerged),
+				string(domain.EventPRReviewStateChanged),
+				string(domain.EventAgentQuestionRaised),
+				string(domain.EventAgentQuestionAnswered),
+				string(domain.EventAdapterError),
+			)
+			if err != nil {
+				slog.Error("failed to resubscribe TUI to event bus", "error", err)
+			} else {
+				a.eventConsumer = NewEventConsumer(a, a.busSub)
+				cmds = append(cmds, a.eventConsumer.BridgeCmd())
+			}
+		}
+
 		if a.svcs.WorkspaceID != "" {
 			cmds = append(cmds,
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
@@ -2376,7 +2425,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-func (a App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	// Confirm dialog captures all key input when active.
@@ -3081,15 +3130,15 @@ func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
 			fmt.Sprintf("%d agent %s running and will be killed. Quit anyway?", n, sessionWord),
 			func() tea.Msg { return QuitConfirmedMsg{} },
 		)
-		return a, nil
+		return &a, nil
 	}
 	a.teardownAllPipelines()
-	return a, a.quitCmd()
+	return &a, a.quitCmd()
 }
 
 // quitCmd returns the command that exits the program, cleaning up the instance
 // record when one exists.
-func (a App) quitCmd() tea.Cmd {
+func (a *App) quitCmd() tea.Cmd {
 	if a.svcs.InstanceID != "" {
 		return tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
 	}

@@ -26,7 +26,7 @@ func TestTaskOverviewMatchesRootOverviewContent(t *testing.T) {
 	}
 
 	model, cmd := app.Update(teaKeyRight())
-	updated := model.(App)
+	updated := model.(*App)
 	if cmd != nil {
 		t.Fatalf("overview drilldown cmd = %v, want nil", cmd)
 	}
@@ -928,7 +928,7 @@ func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
 	// [i] opens the overlay for the existing plan (no action card — session state was
 	// not rebuilt, so it takes the else-if branch with planReviewNormal mode).
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	updated := model.(App)
+	updated := model.(*App)
 	if cmd != nil {
 		t.Fatalf("opening plan overlay returned cmd %v, want nil", cmd)
 	}
@@ -941,7 +941,7 @@ func TestAppEscClosesOverviewPlanOverlay(t *testing.T) {
 
 	// Single Esc closes the overlay (input is in normal mode, no cancel step needed).
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("closing plan overlay returned cmd %v, want nil", cmd)
 	}
@@ -970,7 +970,7 @@ func TestAppSidebarPlanOverlayTakesFocusAndEscRestoresSidebar(t *testing.T) {
 
 	// [i] opens the overlay (existing plan, no action card in the overview data).
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	updated := model.(App)
+	updated := model.(*App)
 	if cmd != nil {
 		t.Fatalf("opening plan overlay returned cmd %v, want nil", cmd)
 	}
@@ -983,7 +983,7 @@ func TestAppSidebarPlanOverlayTakesFocusAndEscRestoresSidebar(t *testing.T) {
 
 	// Single Esc closes the overlay (planReviewNormal, no input cancel step).
 	model, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("closing plan overlay returned cmd %v, want nil", cmd)
 	}
@@ -1046,7 +1046,7 @@ func TestAppSidebarPlanOverlayLeftRestoresSidebar(t *testing.T) {
 	}
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	updated := model.(App)
+	updated := model.(*App)
 	if updated.content.overview.overlay != overviewOverlayPlan {
 		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
 	}
@@ -1055,7 +1055,7 @@ func TestAppSidebarPlanOverlayLeftRestoresSidebar(t *testing.T) {
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	updated = model.(App)
+	updated = model.(*App)
 	if cmd != nil {
 		t.Fatalf("closing plan overlay with left returned cmd %v, want nil", cmd)
 	}
@@ -1084,7 +1084,7 @@ func TestAppPlanReviewUsesIForRequestChanges(t *testing.T) {
 	app.mainFocus = mainFocusContent
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	updated := model.(App)
+	updated := model.(*App)
 	if updated.content.overview.overlay != overviewOverlayPlan {
 		t.Fatalf("overlay = %v, want %v", updated.content.overview.overlay, overviewOverlayPlan)
 	}
@@ -1149,9 +1149,9 @@ func TestAppOverviewOverlayCentersOnFullWindow(t *testing.T) {
 		OrchestratorPlan: "## Orchestration\n\nShip it.",
 	}
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
-	updated := model.(App)
+	updated := model.(*App)
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	updated = model.(App)
+	updated = model.(*App)
 
 	plain := stripBrowseANSI(updated.View())
 	lines := strings.Split(plain, "\n")
@@ -1287,7 +1287,7 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	// Before the fix, no LoadPlanCmd was dispatched here, leaving a.plans[wi.ID] nil
 	// until the next poll cycle ~2 seconds later.
 	model, cmds := app.Update(SessionsLoadedMsg{WorkspaceID: "ws-local", Items: []domain.Session{failedWI}})
-	app = model.(App)
+	app = model.(*App)
 	if cmds == nil {
 		t.Fatal("SessionsLoadedMsg must return at least one command (LoadPlanCmd)")
 	}
@@ -1295,7 +1295,7 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	// Step 2: Simulate the PlanLoadedMsg that the dispatched LoadPlanCmd returns.
 	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-failed", Status: domain.PlanApproved}
 	model, _ = app.Update(PlanLoadedMsg{WorkItemID: "wi-failed", Plan: plan})
-	app = model.(App)
+	app = model.(*App)
 
 	if got := app.plans["wi-failed"]; got == nil {
 		t.Fatal("plan must be in a.plans after SessionsLoadedMsg + PlanLoadedMsg; got nil")

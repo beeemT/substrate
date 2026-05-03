@@ -285,7 +285,7 @@ func TestQuestionAnsweredMsg_removes_from_nested_map(t *testing.T) {
 	}
 
 	updated, _ := app.Update(QuestionAnsweredMsg{SessionID: "sess-1", QuestionID: "q-1"})
-	app = updated.(App)
+	app = updated.(*App)
 
 	_, has := app.questions["sess-1"]["q-1"]
 	if has {
@@ -306,7 +306,7 @@ func TestQuestionAnsweredMsg_removes_empty_session(t *testing.T) {
 	}
 
 	updated, _ := app.Update(QuestionAnsweredMsg{SessionID: "sess-1", QuestionID: "q-1"})
-	app = updated.(App)
+	app = updated.(*App)
 
 	_, has := app.questions["sess-1"]
 	if has {

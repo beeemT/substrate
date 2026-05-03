@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -15,6 +16,24 @@ import (
 type TaskService struct {
 	transacter atomic.Transacter[repository.Resources]
 	eventBus   *event.Bus
+}
+
+// taskEventPayload holds the JSON payload for task lifecycle events.
+type taskEventPayload struct {
+	Task       domain.Task `json:"session"`
+	TaskID     string      `json:"session_id"`
+	WorkItemID string      `json:"work_item_id"`
+}
+
+// marshalTaskPayload serializes a task event payload to JSON.
+func marshalTaskPayload(task domain.Task) string {
+	p := taskEventPayload{
+		Task:       task,
+		TaskID:     task.ID,
+		WorkItemID: task.WorkItemID,
+	}
+	b, _ := json.Marshal(p)
+	return string(b)
 }
 
 // NewTaskService creates a new TaskService.
@@ -157,6 +176,7 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentTaskStarted),
 		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
 	})
 
@@ -258,6 +278,7 @@ func (s *TaskService) Complete(ctx context.Context, id string) error {
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentTaskCompleted),
 		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
 	})
 
@@ -301,6 +322,7 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentTaskInterrupted),
 		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
 	})
 
@@ -407,6 +429,7 @@ func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error 
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentTaskFailed),
 		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
 	})
 

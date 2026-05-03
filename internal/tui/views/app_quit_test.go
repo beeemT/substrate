@@ -13,14 +13,14 @@ import (
 )
 
 // newQuitTestApp creates a minimal App with the given sessions list.
-func newQuitTestApp(sessions []domain.Task) App {
+func newQuitTestApp(sessions []domain.Task) *App {
 	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
 	app.sessions = sessions
 	return app
 }
 
 // newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
-func newQuitTestAppWithRegistry(sessions []domain.Task) (App, *orchestrator.SessionRegistry) {
+func newQuitTestAppWithRegistry(sessions []domain.Task) (*App, *orchestrator.SessionRegistry) {
 	reg := orchestrator.NewSessionRegistry()
 	app := NewApp(Services{
 		WorkspaceID:     "ws-1",
@@ -68,7 +68,7 @@ func TestQuitKeyWithRunningSessionsShowsConfirm(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(2))
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	updated := model.(App)
+	updated := model.(*App)
 
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil (no quit before confirmation)", cmd)
@@ -103,7 +103,7 @@ func TestCtrlCWithRunningSessionsShowsConfirm(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(1))
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := model.(App)
+	updated := model.(*App)
 
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil before confirmation", cmd)
@@ -123,7 +123,7 @@ func TestQuitRequestMsgWithRunningSessionsShowsConfirm(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(3))
 	model, cmd := app.Update(QuitRequestMsg{})
-	updated := model.(App)
+	updated := model.(*App)
 
 	if cmd != nil {
 		t.Fatalf("cmd = %v, want nil before confirmation", cmd)
@@ -155,14 +155,14 @@ func TestQuitConfirmYAccepts(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(1))
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	withConfirm := model.(App)
+	withConfirm := model.(*App)
 
 	if !withConfirm.confirmActive {
 		t.Fatal("precondition: expected confirmActive after q with running session")
 	}
 
 	model2, cmd := withConfirm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	afterConfirm := model2.(App)
+	afterConfirm := model2.(*App)
 
 	if afterConfirm.confirmActive {
 		t.Fatal("confirmActive = true after y, expected dialog to be dismissed")
@@ -188,10 +188,10 @@ func TestQuitConfirmCtrlCForceQuits(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(1))
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	withConfirm := model.(App)
+	withConfirm := model.(*App)
 
 	model2, cmd := withConfirm.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	afterConfirm := model2.(App)
+	afterConfirm := model2.(*App)
 
 	if afterConfirm.confirmActive {
 		t.Fatal("confirmActive = true after ctrl+c on confirm, expected force-quit")
@@ -215,10 +215,10 @@ func TestQuitConfirmEscCancels(t *testing.T) {
 
 	app := newQuitTestApp(runningSessions(1))
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	withConfirm := model.(App)
+	withConfirm := model.(*App)
 
 	model2, cmd := withConfirm.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	afterCancel := model2.(App)
+	afterCancel := model2.(*App)
 
 	if afterCancel.confirmActive {
 		t.Fatal("confirmActive = true after esc, expected dialog dismissed")

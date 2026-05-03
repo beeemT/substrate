@@ -76,7 +76,7 @@ func (a App) selectedDuplicateSessionAction() SessionDuplicateAction {
 	return options[index].Action
 }
 
-func (a App) handleDuplicateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (a *App) handleDuplicateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k", keyShiftTab:
 		a.cycleDuplicateSessionOption(-1)
