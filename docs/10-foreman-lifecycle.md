@@ -1,13 +1,16 @@
 # 10 - Foreman Lifecycle Ownership
+
 <!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
 
 The Foreman is the persistent harness session that handles unresolved questions during implementation. This document covers the ownership boundary between orchestrator and TUI.
+
+> **Status:** Migration pending. None of the interfaces, orchestrator methods, or event types described in this document have been implemented. The TUI still directly owns Foreman lifecycle. See §1 (Current State) and §7 (Migration Steps) for the planned cutover.
 
 For Foreman semantics (two-tier resolution, answer timeout, recovery) see `05-orchestration.md §4`. For the TUI interaction model for questions see `06-tui-design.md`.
 
 ---
 
-## Problem
+## 1. Current State
 
 The `Foreman` type lives in `internal/orchestrator/` but the TUI holds a direct `*orchestrator.Foreman` pointer and calls it at seven lifecycle sites:
 
@@ -19,7 +22,7 @@ StopForemanCmd()             Stop()
 restartForemanForTask()       Start()/Stop()
 teardownAllPipelines()        Stop()
 AnswerQuestionCmd()           ResolveEscalated(questionID, answer)
-SkipQuestionCmd()             ResolveEscalated(questionID, "")
+SkipQuestionCmd()            ResolveEscalated(questionID, "")
 App.foremanPlanID (field)     tracks active plan
 ```
 
@@ -35,7 +38,7 @@ App.foremanPlanID (field)     tracks active plan
 
 ---
 
-## Non-Goals
+## 2. Non-Goals
 
 - Do not change the `Foreman`'s internal behavior (question routing, FAQ appending, escalation logic, session restart).
 - Do not change the `QuestionRouter` routing logic.
@@ -44,7 +47,7 @@ App.foremanPlanID (field)     tracks active plan
 
 ---
 
-## Design
+## 3. Target State
 
 ### Principle
 
@@ -202,7 +205,61 @@ Sidebar reads `svcs.ForemanReadOnly.SessionID()` and `svcs.ForemanReadOnly.LastP
 
 ---
 
-## Migration Steps
+## 4. Current Call Sites (before migration)
+
+### TUI (`internal/tui/views/`)
+
+| File | Symbol | Foreman method called |
+|---|---|---|
+| `cmds.go` | `StartForemanCmd` | `Start(ctx, planID, followUpContext)` |
+| `cmds.go` | `StopForemanCmd` | `Stop(ctx)` |
+| `cmds.go` | `AnswerQuestionCmd` | `ResolveEscalated(ctx, questionID, answer)` |
+| `cmds.go` | `SkipQuestionCmd` | `ResolveEscalated(ctx, questionID, "")` |
+| `app.go` | `restartForemanForTask` | `IsRunning()`, `Stop(ctx)`, `Start(ctx, planID, feedback)` |
+| `app.go` | `teardownAllPipelines` | `Stop(ctx)` |
+
+### Orchestrator (`internal/orchestrator/`)
+
+| File | Field / Symbol | Note |
+|---|---|---|
+| `implementation.go` | `foreman *Foreman` field | Never called; forwarded to `QuestionRouter` |
+| `question_router.go` | `foreman *Foreman` field | Used for restart on failure |
+
+---
+
+## 5. Files to Change
+
+| File | Change |
+|---|---|
+| `internal/domain/event.go` | Add `EventForemanStarted`, `EventForemanStopped` |
+| `internal/orchestrator/foreman.go` | Publish events in `Start()`/`Stop()`; add interface implementations |
+| `internal/orchestrator/implementation.go` | Add `BeginForeman`, `EndForeman`, `FollowUp`; change `foreman` field type to `ForemanLifecycle` |
+| `internal/orchestrator/review_followup.go` | New file — `ReviewFollowup` type |
+| `internal/orchestrator/question_router.go` | Hold `ForemanLifecycle` interface instead of `*Foreman` |
+| `internal/tui/views/services.go` | `Foreman *orchestrator.Foreman` → `ForemanReadOnly orchestrator.ForemanReadOnly`; add `ReviewFollowup` |
+| `internal/tui/views/cmds.go` | Remove `StartForemanCmd`, `StopForemanCmd`; add orchestrator delegation cmds; update answerer signatures |
+| `internal/tui/views/app.go` | Remove `foremanPlanID`; update all lifecycle call sites; update sidebar reads |
+| `internal/tui/views/settings_service.go` | Wire `ForemanReadOnly`, `ReviewFollowup` into `Services` |
+
+---
+
+## 6. Acceptance Criteria
+
+- [ ] `Foreman` is not referenced directly from `internal/tui/`
+- [ ] `App` has no `foremanPlanID` field
+- [ ] All Foreman Start/Stop calls are in `internal/orchestrator/`
+- [ ] `ImplementationService` calls `BeginForeman`/`EndForeman` around its implementation runs
+- [ ] `ReviewFollowup` owns follow-up Foreman lifecycle
+- [ ] `AnswerQuestionCmd` and `SkipQuestionCmd` use `ForemanAnswerer` (not `*Foreman`)
+- [ ] Sidebar renders Foreman session correctly via `ForemanReadOnly`
+- [ ] `EventForemanStarted` and `EventForemanStopped` are published
+- [ ] `go build ./...` passes
+- [ ] `go test ./internal/orchestrator/...` passes
+- [ ] Manual smoke test: approve plan → Foreman starts → implementation runs → Foreman stops → follow-up → Foreman restarts
+
+---
+
+## 7. Migration Steps
 
 ### Phase 1 — Add interfaces, methods, and events (no behavioral change)
 
@@ -254,35 +311,3 @@ Sidebar reads `svcs.ForemanReadOnly.SessionID()` and `svcs.ForemanReadOnly.LastP
 3. `FollowUp()` publishes `EventForemanStopped` then `EventForemanStarted` in sequence.
 
 This ensures adapters that need to react to Foreman lifecycle have a bus signal.
-
----
-
-## Files Changed
-
-| File | Change |
-|---|---|
-| `internal/domain/event.go` | Add `EventForemanStarted`, `EventForemanStopped` |
-| `internal/orchestrator/foreman.go` | Publish events in `Start()`/`Stop()`; add interface implementations |
-| `internal/orchestrator/implementation.go` | Add `BeginForeman`, `EndForeman`, `FollowUp`; change `foreman` field type to `ForemanLifecycle` |
-| `internal/orchestrator/review_followup.go` | New file — `ReviewFollowup` type |
-| `internal/orchestrator/question_router.go` | Hold `ForemanLifecycle` interface instead of `*Foreman` |
-| `internal/tui/views/services.go` | `Foreman *orchestrator.Foreman` → `ForemanReadOnly orchestrator.ForemanReadOnly`; add `ReviewFollowup` |
-| `internal/tui/views/cmds.go` | Remove `StartForemanCmd`, `StopForemanCmd`; add orchestrator delegation cmds; update answerer signatures |
-| `internal/tui/views/app.go` | Remove `foremanPlanID`; update all lifecycle call sites; update sidebar reads |
-| `internal/tui/views/settings_service.go` | Wire `ForemanReadOnly`, `ReviewFollowup` into `Services` |
-
----
-
-## Acceptance Criteria
-
-- [ ] `Foreman` is not referenced directly from `internal/tui/`
-- [ ] `App` has no `foremanPlanID` field
-- [ ] All Foreman Start/Stop calls are in `internal/orchestrator/`
-- [ ] `ImplementationService` calls `BeginForeman`/`EndForeman` around its implementation runs
-- [ ] `ReviewFollowup` owns follow-up Foreman lifecycle
-- [ ] `AnswerQuestionCmd` and `SkipQuestionCmd` use `ForemanAnswerer` (not `*Foreman`)
-- [ ] Sidebar renders Foreman session correctly via `ForemanReadOnly`
-- [ ] `EventForemanStarted` and `EventForemanStopped` are published
-- [ ] `go build ./...` passes
-- [ ] `go test ./internal/orchestrator/...` passes
-- [ ] Manual smoke test: approve plan → Foreman starts → implementation runs → Foreman stops → follow-up → Foreman restarts
