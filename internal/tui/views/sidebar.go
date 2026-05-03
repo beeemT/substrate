@@ -706,21 +706,25 @@ func (m SidebarModel) View() string {
 	} else {
 		lines = append(lines, components.RenderDivider(m.styles, contentWidth))
 	}
+	inGroup := false
+	indent := 0
 	for i := start; i < end; i++ {
 		entry := m.entries[i]
 		if entry.Kind == SidebarEntryGroupHeader {
 			lines = append(lines, renderGroupHeader(m.styles, entry.GroupTitle, contentWidth))
 			lines = append(lines, "")
+			inGroup = true
+			indent = 1
 			continue
 		}
 		selected := i == m.cursor
-		block := renderSidebarItem(entry, selected, m.styles, contentWidth)
+		block := renderSidebarItem(entry, selected, m.styles, contentWidth, inGroup)
 		lines = append(lines, block)
 		// Divider with spacing to sidebar borders - skip if last item in group
 		isLastInGroup := (i == end-1) || (i+1 < len(m.entries) && m.entries[i+1].Kind == SidebarEntryGroupHeader)
 		if !isLastInGroup {
 			if ShouldShowSessionConnector(m.entries[i], m.entries[i+1]) {
-				lines = append(lines, RenderSessionConnector(entry, m.styles, contentWidth))
+				lines = append(lines, RenderSessionConnector(entry, m.styles, contentWidth, indent))
 			} else {
 				dividerContent := strings.Repeat("─", max(0, contentWidth-2))
 				lines = append(lines, " "+m.styles.Divider.Render(dividerContent)+" ")
@@ -728,6 +732,8 @@ func (m SidebarModel) View() string {
 		} else {
 			// Extra space between last item in group and next group header
 			lines = append(lines, "")
+			inGroup = false
+			indent = 0
 		}
 	}
 	for len(lines) < m.height {
@@ -881,9 +887,15 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 // The border color reflects the entry's status, and the selected state
 // uses a brighter background with bold title. Icon is omitted for cleaner look.
 // Line count varies by entry type for efficient use of space.
-func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, width int) string {
+// When inGroup is true, items are slightly indented to visually belong to a group.
+func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, width int, inGroup bool) string {
 	borderColor := entry.StatusBorderColor(st)
 	contentWidth := max(0, width-2)
+	indent := 0
+	if inGroup && !selected {
+		indent = 1
+		contentWidth = max(0, contentWidth-indent)
+	}
 
 	// Build lines based on entry type
 	var lines []string
@@ -938,27 +950,20 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 		}
 
 	default:
-		// Work items and history: prefix + title + subtitle/progress
+		// Work items and history: prefix + title + subtitle
 		prefix := truncate(entry.sidebarPrefix(), contentWidth)
 		title := truncate(entry.Title, contentWidth)
-
-		var footer string
-		if (entry.Kind == SidebarEntryWorkItem || entry.Kind == SidebarEntryTaskOverview) && entry.State == domain.SessionImplementing && entry.TotalSubPlans > 0 {
-			bar := components.RenderProgressBar(st, entry.DoneSubPlans, entry.TotalSubPlans, max(1, contentWidth-4))
-			footer = truncate(bar, max(1, contentWidth-2))
-		} else {
-			footer = truncate(entry.Subtitle(), max(1, contentWidth-2))
-		}
+		subtitle := truncate(entry.Subtitle(), max(1, contentWidth-2))
 
 		if selected {
 			selectedBg := lipgloss.Color(st.Theme.SelectedBg)
 			lines = append(lines, st.SidebarItemTitleSel.Background(selectedBg).Render(prefix))
 			lines = append(lines, st.SidebarItem.Background(selectedBg).Render(title))
-			lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render(footer))
+			lines = append(lines, st.SidebarItemSubtitleSel.Background(selectedBg).Render(subtitle))
 		} else {
 			lines = append(lines, st.SidebarItemTitle.Render(prefix))
 			lines = append(lines, st.SidebarItem.Render(title))
-			lines = append(lines, st.SidebarItemSubtitle.Render(footer))
+			lines = append(lines, st.SidebarItemSubtitle.Render(subtitle))
 		}
 	}
 
@@ -973,6 +978,9 @@ func renderSidebarItem(entry SidebarEntry, selected bool, st styles.Styles, widt
 
 	if selected {
 		borderStyle = borderStyle.Background(lipgloss.Color(st.Theme.SelectedBg))
+	}
+	if indent > 0 {
+		borderStyle = borderStyle.MarginLeft(indent)
 	}
 
 	return borderStyle.Render(block)
@@ -1276,16 +1284,15 @@ func ShouldShowSessionConnector(current, next SidebarEntry) bool {
 }
 
 // RenderSessionConnector renders a minimal down-arrow connector line between
-// session entries to indicate execution flow. The connector uses the same color
-// as the entry's status border to visually link related sessions.
-func RenderSessionConnector(entry SidebarEntry, st styles.Styles, width int) string {
+// session entries to indicate execution flow.
+func RenderSessionConnector(entry SidebarEntry, st styles.Styles, width int, indent int) string {
 	const connector = "˅"
 	connectorWidth := ansi.StringWidth(connector)
 	padding := max(0, (width-connectorWidth)/2)
-	// Use the entry's border color to make the connector visually consistent
-	// with the session's status
-	borderColor := entry.StatusBorderColor(st)
-	styledConnector := lipgloss.NewStyle().Foreground(lipgloss.Color(borderColor)).Render(connector)
-	content := strings.Repeat(" ", padding) + styledConnector
-	return lipgloss.NewStyle().Width(width).Render(content)
+	content := strings.Repeat(" ", padding) + connector
+	result := lipgloss.NewStyle().Width(width).Render(content)
+	if indent > 0 {
+		result = lipgloss.NewStyle().MarginLeft(indent).Width(width).Render(result)
+	}
+	return result
 }

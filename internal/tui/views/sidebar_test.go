@@ -975,7 +975,7 @@ func TestRenderSessionConnector(t *testing.T) {
 		SessionStatus:  domain.AgentSessionRunning,
 	}
 
-	connector := views.RenderSessionConnector(entry, st, 32)
+	connector := views.RenderSessionConnector(entry, st, 32, 0)
 	stripped := stripANSI(connector)
 
 	// Should contain the connector glyph
