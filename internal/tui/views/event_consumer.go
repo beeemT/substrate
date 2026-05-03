@@ -54,10 +54,10 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventPlanRejected:            decodePlanUpdated,
 	domain.EventPlanRevised:             decodePlanUpdated,
 	domain.EventPlanFailed:              decodePlanUpdated,
-	domain.EventAgentTaskStarted:        decodeAgentSessionStarted,
-	domain.EventAgentTaskCompleted:      decodeAgentSessionUpdated,
-	domain.EventAgentTaskFailed:         decodeAgentSessionUpdated,
-	domain.EventAgentTaskInterrupted:    decodeAgentSessionUpdated,
+	domain.EventAgentSessionStarted:        decodeAgentSessionStarted,
+	domain.EventAgentSessionCompleted:      decodeAgentSessionUpdated,
+	domain.EventAgentSessionFailed:         decodeAgentSessionUpdated,
+	domain.EventAgentSessionInterrupted:    decodeAgentSessionUpdated,
 	domain.EventAgentSessionResumed:     decodeAgentSessionResumed,
 	domain.EventAgentQuestionRaised:     decodeQuestionRaised,
 	domain.EventAgentQuestionAnswered:   decodeQuestionAnswered,
@@ -138,7 +138,7 @@ func decodeAgentSessionStarted(payload string) tea.Msg {
 		WorkItemID string      `json:"work_item_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		slog.Warn("failed to decode EventAgentTaskStarted payload", "error", err)
+		slog.Warn("failed to decode EventAgentSessionStarted payload", "error", err)
 		return nil
 	}
 	return TaskStartedMsg{

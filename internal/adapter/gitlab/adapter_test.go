@@ -643,11 +643,6 @@ func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
 	}
 }
 
-
-
-
-
-
 func TestShouldPostComment(t *testing.T) {
 	t.Run("no scope configured defaults to true", func(t *testing.T) {
 		a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -682,7 +677,7 @@ func TestShouldPostComment(t *testing.T) {
 	t.Run("scope mine checks own namespace", func(t *testing.T) {
 		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(t, 200, map[string]any{
-				"id":    int64(123),
+				"id":                  int64(123),
 				"path_with_namespace": "alice/rocket",
 				"namespace":           map[string]any{"id": int64(1), "path": "alice", "kind": "user"},
 			}), nil
@@ -697,7 +692,7 @@ func TestShouldPostComment(t *testing.T) {
 	t.Run("scope mine skips foreign namespace", func(t *testing.T) {
 		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(t, 200, map[string]any{
-				"id":    int64(123),
+				"id":                  int64(123),
 				"path_with_namespace": "bob/rocket",
 				"namespace":           map[string]any{"id": int64(2), "path": "bob", "kind": "user"},
 			}), nil
@@ -712,7 +707,7 @@ func TestShouldPostComment(t *testing.T) {
 	t.Run("group namespace skips comment for scope mine", func(t *testing.T) {
 		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return jsonResponse(t, 200, map[string]any{
-				"id":    int64(123),
+				"id":                  int64(123),
 				"path_with_namespace": "myorg/rocket",
 				"namespace":           map[string]any{"id": int64(3), "path": "myorg", "kind": "group"},
 			}), nil
@@ -744,7 +739,7 @@ func TestResolveNumericProjectID(t *testing.T) {
 		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotPath = req.URL.Path
 			return jsonResponse(t, 200, map[string]any{
-				"id":    int64(999),
+				"id":                  int64(999),
 				"path_with_namespace": "alice/rocket",
 				"namespace":           map[string]any{"id": int64(1), "path": "alice", "kind": "user"},
 			}), nil
@@ -761,4 +756,171 @@ func TestResolveNumericProjectID(t *testing.T) {
 			t.Errorf("URL path = %q, want /api/v4/projects/...", gotPath)
 		}
 	})
+}
+
+func TestExtractPlanCommentPayload(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		payload    string
+		wantBody   string
+		wantIDs    []string
+		wantScopes map[string]string
+	}{
+		{
+			name:       "valid payload",
+			payload:    `{"comment_body":"Hello","external_ids":["gl:issue:alice/repo#1","gl:issue:bob/repo#2"],"repo_comment_scopes":{"alice/repo":"mine"}}`,
+			wantBody:   "Hello",
+			wantIDs:    []string{"gl:issue:alice/repo#1", "gl:issue:bob/repo#2"},
+			wantScopes: map[string]string{"alice/repo": "mine"},
+		},
+		{
+			name:     "empty payload",
+			payload:  "",
+			wantBody: "",
+			wantIDs:  nil,
+		},
+		{
+			name:       "invalid JSON",
+			payload:    `{invalid}`,
+			wantBody:   "",
+			wantIDs:    nil,
+			wantScopes: nil,
+		},
+		{
+			name:       "partial fields",
+			payload:    `{"comment_body":"Partial"}`,
+			wantBody:   "Partial",
+			wantIDs:    nil,
+			wantScopes: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body, ids, scopes := extractPlanCommentPayload(tc.payload)
+			if body != tc.wantBody {
+				t.Errorf("body = %q, want %q", body, tc.wantBody)
+			}
+			if !equalStringSlices(ids, tc.wantIDs) {
+				t.Errorf("ids = %v, want %v", ids, tc.wantIDs)
+			}
+			if !equalStringMaps(scopes, tc.wantScopes) {
+				t.Errorf("scopes = %v, want %v", scopes, tc.wantScopes)
+			}
+		})
+	}
+}
+
+func TestParseExternalID_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		externalID string
+		wantPath   string
+		wantIID    int64
+		wantErr    bool
+	}{
+		{
+			name:       "path format",
+			externalID: "gl:issue:alice/repo#42",
+			wantPath:   "alice/repo",
+			wantIID:    42,
+			wantErr:    false,
+		},
+		{
+			name:       "numeric legacy format",
+			externalID: "gl:issue:12345#99",
+			wantPath:   "12345",
+			wantIID:    99,
+			wantErr:    false,
+		},
+		{
+			name:       "whitespace trimmed",
+			externalID: "  gl:issue:alice/repo#1  ",
+			wantPath:   "alice/repo",
+			wantIID:    1,
+			wantErr:    false,
+		},
+		{
+			name:       "missing prefix",
+			externalID: "alice/repo#42",
+			wantErr:    true,
+		},
+		{
+			name:       "missing hash",
+			externalID: "gl:issue:alice/repo",
+			wantErr:    true,
+		},
+		{
+			name:       "empty string",
+			externalID: "",
+			wantErr:    true,
+		},
+		{
+			name:       "non-numeric IID",
+			externalID: "gl:issue:alice/repo#abc",
+			wantErr:    true,
+		},
+		{
+			name:       "negative IID is valid",
+			externalID: "gl:issue:alice/repo#-1",
+			wantPath:   "alice/repo",
+			wantIID:    -1,
+			wantErr:    false,
+		},
+		{
+			name:       "IID overflow",
+			externalID: "gl:issue:alice/repo#99999999999999999999",
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path, iid, err := parseExternalID(tc.externalID)
+			if tc.wantErr && err == nil {
+				t.Errorf("parseExternalID(%q) = _, _, nil, want error", tc.externalID)
+				return
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("parseExternalID(%q) = _, _, %v, want no error", tc.externalID, err)
+				return
+			}
+			if path != tc.wantPath {
+				t.Errorf("path = %q, want %q", path, tc.wantPath)
+			}
+			if iid != tc.wantIID {
+				t.Errorf("iid = %d, want %d", iid, tc.wantIID)
+			}
+		})
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMaps(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

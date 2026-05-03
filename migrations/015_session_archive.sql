@@ -2,5 +2,5 @@
 -- (used for unarchive to restore the pre-archive state).
 -- SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS; this migration must
 -- only be run once. It is safe to re-run on the same database only if the column
--- already exists (the application will panic on duplicate column).
+-- already exists (SQLite returns a "duplicate column name" error on re-run).
 ALTER TABLE work_items ADD COLUMN previous_state TEXT;

@@ -16,7 +16,7 @@ func TestEmit(t *testing.T) {
 		// Should not panic when bus is nil
 		Emit(nil, domain.SystemEvent{
 			ID:        domain.NewID(),
-			EventType: string(domain.EventAgentTaskCompleted),
+			EventType: string(domain.EventAgentSessionCompleted),
 		})
 	})
 
@@ -25,7 +25,7 @@ func TestEmit(t *testing.T) {
 		repo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
 		bus := event.NewBus(event.BusConfig{EventRepo: repo})
 
-		sub, err := bus.Subscribe("test-subscriber", string(domain.EventAgentTaskCompleted))
+		sub, err := bus.Subscribe("test-subscriber", string(domain.EventAgentSessionCompleted))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -34,7 +34,7 @@ func TestEmit(t *testing.T) {
 		// Emit event
 		Emit(bus, domain.SystemEvent{
 			ID:        domain.NewID(),
-			EventType: string(domain.EventAgentTaskCompleted),
+			EventType: string(domain.EventAgentSessionCompleted),
 		})
 
 		// Wait for async emission and receive
@@ -50,12 +50,12 @@ func TestEmit(t *testing.T) {
 }
 
 func TestTaskService_EmitsEvents(t *testing.T) {
-	t.Run("Create emits EventAgentTaskStarted", func(t *testing.T) {
+	t.Run("Create emits EventAgentSessionStarted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
-		sub, err := bus.Subscribe("test", string(domain.EventAgentTaskStarted))
+		sub, err := bus.Subscribe("test", string(domain.EventAgentSessionStarted))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -78,21 +78,21 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventAgentTaskStarted) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentTaskStarted)
+			if evt.EventType != string(domain.EventAgentSessionStarted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentSessionStarted)
 			}
 			t.Logf("received event: %s", evt.ID)
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventAgentTaskStarted")
+			t.Error("timeout waiting for EventAgentSessionStarted")
 		}
 	})
 
-	t.Run("Complete emits EventAgentTaskCompleted", func(t *testing.T) {
+	t.Run("Complete emits EventAgentSessionCompleted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
-		sub, _ := bus.Subscribe("test", string(domain.EventAgentTaskCompleted))
+		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionCompleted))
 		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
 
 		task := domain.Task{
@@ -121,20 +121,20 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventAgentTaskCompleted) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentTaskCompleted)
+			if evt.EventType != string(domain.EventAgentSessionCompleted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentSessionCompleted)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventAgentTaskCompleted")
+			t.Error("timeout waiting for EventAgentSessionCompleted")
 		}
 	})
 
-	t.Run("Fail emits EventAgentTaskFailed", func(t *testing.T) {
+	t.Run("Fail emits EventAgentSessionFailed", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
-		sub, _ := bus.Subscribe("test", string(domain.EventAgentTaskFailed))
+		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionFailed))
 		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
 
 		task := domain.Task{
@@ -158,20 +158,20 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventAgentTaskFailed) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentTaskFailed)
+			if evt.EventType != string(domain.EventAgentSessionFailed) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentSessionFailed)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventAgentTaskFailed")
+			t.Error("timeout waiting for EventAgentSessionFailed")
 		}
 	})
 
-	t.Run("Interrupt emits EventAgentTaskInterrupted", func(t *testing.T) {
+	t.Run("Interrupt emits EventAgentSessionInterrupted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
 
-		sub, _ := bus.Subscribe("test", string(domain.EventAgentTaskInterrupted))
+		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionInterrupted))
 		// Note: no Unsubscribe method on Subscriber in current event.Bus implementation
 
 		task := domain.Task{
@@ -199,11 +199,11 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventAgentTaskInterrupted) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentTaskInterrupted)
+			if evt.EventType != string(domain.EventAgentSessionInterrupted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventAgentSessionInterrupted)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventAgentTaskInterrupted")
+			t.Error("timeout waiting for EventAgentSessionInterrupted")
 		}
 	})
 

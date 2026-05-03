@@ -310,10 +310,10 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventWorkItemFailed),
 				string(domain.EventWorkItemMerged),
 				// Session lifecycle
-				string(domain.EventAgentTaskStarted),
-				string(domain.EventAgentTaskCompleted),
-				string(domain.EventAgentTaskFailed),
-				string(domain.EventAgentTaskInterrupted),
+				string(domain.EventAgentSessionStarted),
+				string(domain.EventAgentSessionCompleted),
+				string(domain.EventAgentSessionFailed),
+				string(domain.EventAgentSessionInterrupted),
 				string(domain.EventAgentSessionResumed),
 				// Plan lifecycle
 				string(domain.EventPlanGenerated),
@@ -1135,10 +1135,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				string(domain.EventWorkItemCompleted),
 				string(domain.EventWorkItemFailed),
 				string(domain.EventWorkItemMerged),
-				string(domain.EventAgentTaskStarted),
-				string(domain.EventAgentTaskCompleted),
-				string(domain.EventAgentTaskFailed),
-				string(domain.EventAgentTaskInterrupted),
+				string(domain.EventAgentSessionStarted),
+				string(domain.EventAgentSessionCompleted),
+				string(domain.EventAgentSessionFailed),
+				string(domain.EventAgentSessionInterrupted),
 				string(domain.EventAgentSessionResumed),
 				string(domain.EventPlanGenerated),
 				string(domain.EventPlanApproved),
@@ -1262,10 +1262,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		// Session lifecycle → targeted load of tasks
-		case domain.EventAgentTaskStarted,
-			domain.EventAgentTaskCompleted,
-			domain.EventAgentTaskFailed,
-			domain.EventAgentTaskInterrupted,
+		case domain.EventAgentSessionStarted,
+			domain.EventAgentSessionCompleted,
+			domain.EventAgentSessionFailed,
+			domain.EventAgentSessionInterrupted,
 			domain.EventAgentSessionResumed:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {

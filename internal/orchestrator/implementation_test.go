@@ -866,8 +866,8 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 		t.Fatalf("expected pending session cleanup, got %v", err)
 	}
 	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventAgentTaskStarted) {
-			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentTaskStarted)
+		if evt.EventType == string(domain.EventAgentSessionStarted) {
+			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentSessionStarted)
 		}
 	}
 }
@@ -1580,7 +1580,7 @@ func TestReviewLoop_NeedsReimplAutoLoopOff(t *testing.T) {
 
 // TestExecuteSubPlan_CompletesTaskOnSuccess verifies the happy path: when the
 // harness returns without error, executeSubPlan marks the task as completed in
-// the repository and emits an EventAgentTaskCompleted event.
+// the repository and emits an EventAgentSessionCompleted event.
 func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 	svc, _, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	svc.harness = &completingHarness{}
@@ -1628,20 +1628,20 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 		t.Fatal("task.CompletedAt must be set after completion")
 	}
 
-	// TaskService emits EventAgentTaskCompleted asynchronously via goroutine.
+	// TaskService emits EventAgentSessionCompleted asynchronously via goroutine.
 	// Give it time to execute before checking.
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the completed event was emitted.
 	var found bool
 	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventAgentTaskCompleted) {
+		if evt.EventType == string(domain.EventAgentSessionCompleted) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected EventAgentTaskCompleted event, none emitted")
+		t.Error("expected EventAgentSessionCompleted event, none emitted")
 	}
 }
 

@@ -151,12 +151,11 @@ func (b *Bus) Unsubscribe(id string) {
 }
 
 // RegisterPreHook registers a synchronous pre-hook.
-// Pre-hooks are called in registration order.
+// Pre-hooks are called in registration order, after persistence but before dispatch.
 //
-// For pre-hook events (e.g., WorktreeCreating): hooks run BEFORE persistence.
-// If any pre-hook returns an error, the event is NOT persisted.
+// For pre-creation validation (e.g., blocking worktree creation), use
+// worktree.HookRegistry instead — it can abort the operation before persistence.
 //
-// For regular events: hooks run AFTER persistence but BEFORE dispatch.
 // If a pre-hook returns an error, dispatch is aborted but the event
 // remains persisted (it already happened).
 //

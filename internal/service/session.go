@@ -174,7 +174,7 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	// Emit event asynchronously after transaction commits
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentTaskStarted),
+		EventType:   string(domain.EventAgentSessionStarted),
 		WorkspaceID: task.WorkspaceID,
 		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
@@ -276,7 +276,7 @@ func (s *TaskService) Complete(ctx context.Context, id string) error {
 	// Emit event asynchronously after transaction commits
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentTaskCompleted),
+		EventType:   string(domain.EventAgentSessionCompleted),
 		WorkspaceID: task.WorkspaceID,
 		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
@@ -320,7 +320,7 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 	// Emit event asynchronously after transaction commits
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentTaskInterrupted),
+		EventType:   string(domain.EventAgentSessionInterrupted),
 		WorkspaceID: task.WorkspaceID,
 		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),
@@ -427,7 +427,7 @@ func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error 
 	// Emit event asynchronously after transaction commits
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentTaskFailed),
+		EventType:   string(domain.EventAgentSessionFailed),
 		WorkspaceID: task.WorkspaceID,
 		Payload:     marshalTaskPayload(task),
 		CreatedAt:   time.Now(),

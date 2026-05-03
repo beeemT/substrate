@@ -17,17 +17,18 @@ type SystemEvent struct {
 // Event type constants for system events.
 // These are used for routing and persistence.
 //
-// Pre-hook events run hooks BEFORE persistence. If any hook rejects,
-// the event is not persisted and the operation should be aborted.
+// Hooks are run synchronously before event dispatch but AFTER persistence.
+// For pre-creation validation (e.g., blocking worktree creation), use
+// the worktree.HookRegistry in the orchestrator instead.
 const (
-	// WorktreeCreating is a pre-hook event emitted before git-work checkout.
-	// Adapters can abort by returning an error.
+	// WorktreeCreating is emitted before git-work checkout.
+	// For validation that can abort creation, use worktree.HookRegistry.
 	EventWorktreeCreating EventType = "worktree.creating"
 
-	// WorktreeCreated is a post-hook event emitted after git-work checkout succeeds.
+	// WorktreeCreated is emitted after git-work checkout succeeds.
 	EventWorktreeCreated EventType = "worktree.created"
 
-	// WorktreeReused is a post-hook event emitted when an existing worktree is reused
+	// WorktreeReused is emitted when an existing worktree is reused
 	// during differential re-implementation.
 	EventWorktreeReused EventType = "worktree.reused"
 )
@@ -66,10 +67,10 @@ const (
 	EventWorktreeRemoved EventType = "worktree.removed"
 
 	// Agent task events (lifecycle of individual agent sessions within a work item)
-	EventAgentTaskStarted     EventType = "agent_task.started"
-	EventAgentTaskCompleted   EventType = "agent_task.completed"
-	EventAgentTaskFailed      EventType = "agent_task.failed"
-	EventAgentTaskInterrupted EventType = "agent_task.interrupted"
+	EventAgentSessionStarted     EventType = "agent_session.started"
+	EventAgentSessionCompleted   EventType = "agent_session.completed"
+	EventAgentSessionFailed      EventType = "agent_session.failed"
+	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
 
 	// Agent session events (resumption lifecycle)
 	EventAgentSessionResumed EventType = "agent_session.resumed"

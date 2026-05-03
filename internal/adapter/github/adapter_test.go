@@ -1136,3 +1136,121 @@ func TestSyncPRDescriptionsOnApproval_WorkItemInstancePostsComments(t *testing.T
 		t.Fatalf("work-item instance should not PATCH pulls, got: %v", requests)
 	}
 }
+
+func TestShouldPostComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		externalID string
+		repoScopes map[string]string
+		want       bool
+	}{
+		{
+			name:       "empty external ID defaults to posting",
+			externalID: "",
+			repoScopes: nil,
+			want:       true,
+		},
+		{
+			name:       "non-issue external ID defaults to posting",
+			externalID: "gh:pr:acme/rocket#10",
+			repoScopes: nil,
+			want:       true,
+		},
+		{
+			name:       "issue with no scope defaults to posting",
+			externalID: "gh:issue:acme/rocket#10",
+			repoScopes: nil,
+			want:       true,
+		},
+		{
+			name:       "scope none suppresses comment",
+			externalID: "gh:issue:acme/rocket#10",
+			repoScopes: map[string]string{"acme/rocket": "none"},
+			want:       false,
+		},
+		{
+			name:       "scope mine when own repo",
+			externalID: "gh:issue:alice/rocket#10",
+			repoScopes: map[string]string{"alice/rocket": "mine"},
+			want:       true,
+		},
+		{
+			name:       "scope mine when not own repo",
+			externalID: "gh:issue:acme/rocket#10",
+			repoScopes: map[string]string{"acme/rocket": "mine"},
+			want:       false,
+		},
+		{
+			name:       "scope all always posts",
+			externalID: "gh:issue:acme/rocket#10",
+			repoScopes: map[string]string{"acme/rocket": "all"},
+			want:       true,
+		},
+		{
+			name:       "scope for different repo defaults to posting",
+			externalID: "gh:issue:acme/rocket#10",
+			repoScopes: map[string]string{"other/repo": "none"},
+			want:       true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Create adapter with known viewer
+			a, _ := newWithDeps(context.Background(), config.GithubConfig{
+				PollInterval:  "10ms",
+				StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"},
+			}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/user" {
+					return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+				}
+				return jsonResp(t, http.StatusOK, map[string]any{}), nil
+			}), func(context.Context) (string, error) { return "token", nil })
+
+			got := a.shouldPostComment(tc.externalID, tc.repoScopes)
+			if got != tc.want {
+				t.Errorf("shouldPostComment(%q, %v) = %v, want %v", tc.externalID, tc.repoScopes, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsOwnRepo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		repo string
+		want bool
+	}{
+		{"empty string", "", false},
+		{"no slash", "repo", false},
+		{"own repo", "alice/repo", true},
+		{"other owner", "acme/repo", false},
+		{"own repo with path", "alice/repo/subpath", true},
+		{"single segment", "alice", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newWithDeps(context.Background(), config.GithubConfig{
+				PollInterval:  "10ms",
+				StateMappings: map[string]string{},
+			}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/user" {
+					return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+				}
+				return jsonResp(t, http.StatusOK, map[string]any{}), nil
+			}), func(context.Context) (string, error) { return "token", nil })
+
+			got := a.isOwnRepo(tc.repo)
+			if got != tc.want {
+				t.Errorf("isOwnRepo(%q) = %v, want %v", tc.repo, got, tc.want)
+			}
+		})
+	}
+}

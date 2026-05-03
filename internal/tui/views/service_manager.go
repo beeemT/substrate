@@ -112,7 +112,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		},
 	))
 
-	// 2. Create hook registry for pre-checkout validation
+	// 1. Create hook registry for pre-checkout validation
 	hookRegistry := worktree.NewHookRegistry()
 
 	// 2. Create services with shared bus
