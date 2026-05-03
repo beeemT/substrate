@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -290,29 +291,55 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 	if item.Draft && stateTag != "merged" && stateTag != "closed" {
 		stateTag = "draft"
 	}
-	reviewSummary := m.reviewSummaryText(item)
+	selected := idx == m.cursor
+
 	indicator := ">"
 	if m.expandedSet[artifactExpansionKey(item)] {
 		indicator = "⌄"
 	}
-	line := fmt.Sprintf("%s %s  %s  %s  [%s]", indicator, item.Ref, item.RepoName, item.Branch, stateTag)
+
+	var parts []string
+
+	// Main content parts (always inherit selection background when selected).
+	if selected {
+		parts = append(parts, m.styles.SidebarSelected.Render(indicator))
+		parts = append(parts, m.styles.SidebarSelected.Render(" "+item.Ref))
+		parts = append(parts, m.styles.SidebarSelected.Render("  "+item.RepoName))
+		parts = append(parts, m.styles.SidebarSelected.Render("  "+item.Branch))
+		parts = append(parts, m.styles.SidebarSelected.Render("  ["+stateTag+"]"))
+	} else {
+		parts = append(parts, indicator)
+		parts = append(parts, " "+item.Ref)
+		parts = append(parts, "  "+item.RepoName)
+		parts = append(parts, "  "+item.Branch)
+		parts = append(parts, "  ["+stateTag+"]")
+	}
+
+	reviewSummary := m.reviewSummaryText(item, selected)
 	if reviewSummary != "" {
-		line += "  " + reviewSummary
+		parts = append(parts, "  "+reviewSummary)
 	}
-	ciSummary := m.ciSummaryText(item)
+	ciSummary := m.ciSummaryText(item, selected)
 	if ciSummary != "" {
-		line += "  " + ciSummary
+		parts = append(parts, "  "+ciSummary)
 	}
+
+	line := strings.Join(parts, "")
 	line = ansi.Truncate(line, m.width, "…")
 
-	if idx == m.cursor {
-		return m.styles.SidebarSelected.Width(m.width).Render(line)
+	if selected {
+		// No outer wrapper: parts are already styled individually with SidebarSelected.
+		// Wrapping would escape pre-rendered ANSI sequences (e.g. review/CI status),
+		// breaking background continuity where those sequences terminate foreground.
+		return line
 	}
 	return m.styles.SettingsText.Render(line)
 }
 
 // reviewSummaryText returns a compact review status string for the collapsed row.
-func (m ArtifactsModel) reviewSummaryText(item ArtifactItem) string {
+// When selected is true, foreground styles inherit the selection background so they
+// render correctly when the row itself is wrapped in a background style.
+func (m ArtifactsModel) reviewSummaryText(item ArtifactItem, selected bool) string {
 	if len(item.Reviews) == 0 {
 		return ""
 	}
@@ -326,18 +353,26 @@ func (m ArtifactsModel) reviewSummaryText(item ArtifactItem) string {
 			hasChangesRequested = true
 		}
 	}
-	switch {
-	case hasChangesRequested:
-		return m.styles.Error.Render("✗ review")
-	case hasApproved:
-		return m.styles.Success.Render("✓ review")
-	default:
-		return m.styles.Muted.Render("◐ review")
+	statusFg, statusText := func() (lipgloss.Style, string) {
+		switch {
+		case hasChangesRequested:
+			return m.styles.Error, "✗ review"
+		case hasApproved:
+			return m.styles.Success, "✓ review"
+		default:
+			return m.styles.Muted, "◐ review"
+		}
+	}()
+	if selected {
+		return statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
 	}
+	return statusFg.Render(statusText)
 }
 
 // ciSummaryText returns a compact CI status string for the collapsed row.
-func (m ArtifactsModel) ciSummaryText(item ArtifactItem) string {
+// When selected is true, foreground styles inherit the selection background so they
+// render correctly when the row itself is wrapped in a background style.
+func (m ArtifactsModel) ciSummaryText(item ArtifactItem, selected bool) string {
 	if len(item.Checks) == 0 {
 		return ""
 	}
@@ -351,14 +386,20 @@ func (m ArtifactsModel) ciSummaryText(item ArtifactItem) string {
 			hasInProgress = true
 		}
 	}
-	switch {
-	case hasFailure:
-		return m.styles.Error.Render("✗ CI")
-	case hasInProgress:
-		return m.styles.Muted.Render("○ CI")
-	default:
-		return m.styles.Success.Render("✓ CI")
+	statusFg, statusText := func() (lipgloss.Style, string) {
+		switch {
+		case hasFailure:
+			return m.styles.Error, "✗ CI"
+		case hasInProgress:
+			return m.styles.Muted, "○ CI"
+		default:
+			return m.styles.Success, "✓ CI"
+		}
+	}()
+	if selected {
+		return statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
 	}
+	return statusFg.Render(statusText)
 }
 
 func (m ArtifactsModel) renderExpandedCard(idx int) string {
