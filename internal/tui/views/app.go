@@ -321,6 +321,7 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventPlanRejected),
 				string(domain.EventPlanRevised),
 				string(domain.EventPlanSubmittedForReview),
+				string(domain.EventPlanFailed),
 				// Review
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
@@ -1112,6 +1113,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceServicesReloadedMsg:
+		oldWorkspaceID := a.svcs.WorkspaceID
 		a.applyServicesReload(msg.Reload)
 		a.activeOverlay = overlayNone
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -1119,9 +1121,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-subscribe to the new bus after workspace init or rebuild.
 		// Init() only subscribes once at startup; if the bus changes (new workspace
 		// or rebuild), we must create a fresh subscription to the new bus.
+		// Unsubscribe from the OLD workspace ID — a.svcs.WorkspaceID was just
+		// overwritten by applyServicesReload, so we saved it above.
 		if a.svcs.Bus != nil {
 			if a.busSub != nil {
-				a.svcs.Bus.Unsubscribe("tui:" + a.svcs.WorkspaceID)
+				a.svcs.Bus.Unsubscribe("tui:" + oldWorkspaceID)
 			}
 			var err error
 			a.busSub, err = a.svcs.Bus.Subscribe(
@@ -1145,6 +1149,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				string(domain.EventPlanRejected),
 				string(domain.EventPlanRevised),
 				string(domain.EventPlanSubmittedForReview),
+				string(domain.EventPlanFailed),
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
 				string(domain.EventCritiquesFound),
@@ -1433,6 +1438,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.plans[msg.WorkItemID] = msg.Plan
 			a.subPlans[msg.Plan.ID] = msg.SubPlans
 			a.rebuildSidebar()
+			a.refreshSessionSearchEntriesFromLocalState()
 		}
 		if a.currentWorkItemID == msg.WorkItemID {
 			cmds = append(cmds, a.updateContentFromState())
@@ -1650,7 +1656,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Cfg, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:

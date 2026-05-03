@@ -154,13 +154,26 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 
 // SubmitForReview transitions a plan from draft to pending_review.
 func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
+	var plan domain.Plan
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		plan, err = res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
 		return err
 	}
 	Emit(s.eventBus, domain.SystemEvent{
-		ID:        domain.NewID(),
-		EventType: string(domain.EventPlanSubmittedForReview),
-		CreatedAt: time.Now(),
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanSubmittedForReview),
+		WorkspaceID: plan.WorkItemID,
+		CreatedAt:   time.Now(),
 	})
 	return nil
 }

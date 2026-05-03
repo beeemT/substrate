@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beeemT/substrate/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
@@ -373,6 +374,36 @@ func (c Config) IssueCommentScopeForRepo(repo string) IssueCommentScope {
 		return repoConfig.IssueCommentScopeOrDefault()
 	}
 	return ""
+}
+
+// IssueCommentScopesForWorkItem returns a map of repository → comment scope for all
+// repositories linked to a work item's source and source_item_ids.
+// Repositories without an explicit scope entry default to "all".
+func (c Config) IssueCommentScopesForWorkItem(workItem domain.Session) map[string]string {
+	repoScopes := make(map[string]string)
+	seen := make(map[string]struct{})
+	addRepo := func(id string) {
+		if id == "" {
+			return
+		}
+		// SourceItemIDs may be "owner/repo#number" or "owner/repo" format.
+		repo := id
+		if idx := strings.IndexByte(id, '#'); idx >= 0 {
+			repo = id[:idx]
+		}
+		if _, ok := seen[repo]; ok {
+			return
+		}
+		seen[repo] = struct{}{}
+		repoScopes[repo] = string(c.IssueCommentScopeForRepo(repo))
+	}
+	// Add primary source.
+	addRepo(workItem.ExternalID)
+	// Add all source item IDs.
+	for _, id := range workItem.SourceItemIDs {
+		addRepo(id)
+	}
+	return repoScopes
 }
 
 // GlobalDir returns the path to the global Substrate directory.

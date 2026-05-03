@@ -384,6 +384,8 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 func ApprovePlanCmd(
 	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
+	cfg *config.Config,
+	bus *event.Bus,
 	planID, workItemID string,
 ) tea.Cmd {
 	return func() tea.Msg {
@@ -393,6 +395,10 @@ func ApprovePlanCmd(
 		}
 		if err := workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
+		}
+		// Emit plan-approved event with issue comment metadata for GitHub/GitLab adapters.
+		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, cfg, planID, workItemID); err != nil {
+			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
 		}
 
 		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
@@ -1062,6 +1068,47 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 		Payload:     string(serialized),
 		CreatedAt:   time.Now(),
 	})
+}
+
+// emitPlanApproved posts the EventPlanApproved system event with issue comment metadata
+// (comment_body, external_ids, repo_comment_scopes) so GitHub/GitLab adapters can post
+// plan-composite comments to the relevant issues/PRs.
+func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
+	if bus == nil {
+		return nil
+	}
+	plan, err := planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		return err
+	}
+	workItem, err := workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"plan_id":      planID,
+		"work_item_id": workItemID,
+		"external_id":  workItem.ExternalID,
+	}
+	var commentMode config.IssueCommentContent
+	if cfg != nil {
+		commentMode = cfg.IssueCommentContentForSource(workItem.Source)
+	} else {
+		commentMode = config.IssueCommentSubPlan
+	}
+	if commentBody := buildIssueCommentBody(ctx, planSvc, commentMode, plan); commentBody != "" {
+		payload["comment_body"] = commentBody
+	}
+	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
+		payload["external_ids"] = externalIDs
+	}
+	if cfg != nil {
+		if scopes := cfg.IssueCommentScopesForWorkItem(workItem); len(scopes) > 0 {
+			payload["repo_comment_scopes"] = scopes
+		}
+	}
+
+	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
 }
 
 func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemID string) (domain.ReviewRef, string, string, error) {
