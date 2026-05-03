@@ -18,7 +18,7 @@ import (
 type workspaceInitMode int
 
 const (
-	workspaceInitModeCreate   workspaceInitMode = iota
+	workspaceInitModeCreate workspaceInitMode = iota
 	workspaceInitModeNewRepos
 )
 
@@ -149,6 +149,10 @@ func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cm
 			}
 
 			return ErrMsg{Err: err}
+		}
+
+		if err := workspaceSvc.MarkReady(context.Background(), ws.ID); err != nil {
+			slog.Warn("failed to mark workspace ready", "error", err)
 		}
 
 		return WorkspaceInitDoneMsg{

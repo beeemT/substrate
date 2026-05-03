@@ -376,6 +376,15 @@ func detectWorkspace(ctx context.Context, workspaceSvc *service.WorkspaceService
 		return workspace, nil
 	}
 
+	// Transition stuck workspaces from "creating" to "ready".
+	if ws.Status == domain.WorkspaceCreating {
+		if transitionErr := workspaceSvc.MarkReady(ctx, ws.ID); transitionErr != nil {
+			slog.Warn("workspace found with status creating; failed to transition to ready", "id", wsFile.ID, "err", transitionErr)
+		} else {
+			slog.Debug("workspace transitioned from creating to ready", "id", wsFile.ID)
+		}
+	}
+
 	workspace.ID = ws.ID
 	workspace.Name = ws.Name
 
