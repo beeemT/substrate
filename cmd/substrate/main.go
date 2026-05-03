@@ -28,6 +28,7 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/tui/views"
 	"github.com/beeemT/substrate/internal/tuilog"
+	"github.com/beeemT/substrate/internal/worktree"
 	"github.com/beeemT/substrate/migrations"
 )
 
@@ -673,12 +674,14 @@ func buildOrchestrationRuntime(
 
 	var implementationSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
+		hookRegistry := worktree.NewHookRegistry()
 		implementationSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
 			services.plan, services.workItem, services.task, services.workspace, registry,
 			reviewPipeline,
 			foreman, services.question,
 			services.review,
+			hookRegistry,
 		)
 	}
 

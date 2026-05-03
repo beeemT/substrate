@@ -189,7 +189,16 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 		"escalated":      result.Escalated,
 	})
 	now := time.Now()
+	// Always emit ReviewCompleted as the base outcome event.
+	service.Emit(p.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventReviewCompleted),
+		WorkspaceID: session.WorkspaceID,
+		Payload:     payload,
+		CreatedAt:   now,
+	})
 	if result.NeedsReimpl {
+		// Additionally emit critique-specific events so consumers know why review ended.
 		service.Emit(p.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventCritiquesFound),
@@ -200,14 +209,6 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 		service.Emit(p.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventReimplementationStarted),
-			WorkspaceID: session.WorkspaceID,
-			Payload:     payload,
-			CreatedAt:   now,
-		})
-	} else {
-		service.Emit(p.eventBus, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventReviewCompleted),
 			WorkspaceID: session.WorkspaceID,
 			Payload:     payload,
 			CreatedAt:   now,

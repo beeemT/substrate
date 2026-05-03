@@ -539,6 +539,190 @@ func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 	})
 }
 
+func TestWorkItemService_Archive(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("archives completed work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionCompleted}
+
+		if err := svc.Archive(ctx, "wi-1"); err != nil {
+			t.Fatalf("Archive failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "wi-1")
+		if got.State != domain.SessionArchived {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionArchived)
+		}
+		if got.PreviousState != domain.SessionCompleted {
+			t.Errorf("PreviousState = %q, want %q", got.PreviousState, domain.SessionCompleted)
+		}
+	})
+
+	t.Run("archives merged work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-2"] = domain.Session{ID: "wi-2", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionMerged}
+
+		if err := svc.Archive(ctx, "wi-2"); err != nil {
+			t.Fatalf("Archive failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "wi-2")
+		if got.State != domain.SessionArchived {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionArchived)
+		}
+		if got.PreviousState != domain.SessionMerged {
+			t.Errorf("PreviousState = %q, want %q", got.PreviousState, domain.SessionMerged)
+		}
+	})
+
+	t.Run("archives failed work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-3"] = domain.Session{ID: "wi-3", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionFailed}
+
+		if err := svc.Archive(ctx, "wi-3"); err != nil {
+			t.Fatalf("Archive failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "wi-3")
+		if got.State != domain.SessionArchived {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionArchived)
+		}
+		if got.PreviousState != domain.SessionFailed {
+			t.Errorf("PreviousState = %q, want %q", got.PreviousState, domain.SessionFailed)
+		}
+	})
+
+	t.Run("rejects archiving non-terminal work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-4"] = domain.Session{ID: "wi-4", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionImplementing}
+
+		err := svc.Archive(ctx, "wi-4")
+		if err == nil {
+			t.Fatal("expected error for non-terminal work item")
+		}
+		if _, ok := err.(ErrInvalidTransition); !ok {
+			t.Errorf("error type = %T, want ErrInvalidTransition", err)
+		}
+	})
+
+	t.Run("rejects archiving nonexistent work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+
+		err := svc.Archive(ctx, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent work item")
+		}
+		if _, ok := err.(ErrNotFound); !ok {
+			t.Errorf("error type = %T, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestWorkItemService_Unarchive(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("restores archived completed work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-1"] = domain.Session{
+			ID:            "wi-1",
+			WorkspaceID:   "ws-1",
+			Title:         "T",
+			Source:        "manual",
+			State:         domain.SessionArchived,
+			PreviousState: domain.SessionCompleted,
+		}
+
+		if err := svc.Unarchive(ctx, "wi-1"); err != nil {
+			t.Fatalf("Unarchive failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "wi-1")
+		if got.State != domain.SessionCompleted {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionCompleted)
+		}
+		if got.PreviousState != domain.SessionArchived {
+			t.Errorf("PreviousState = %q, want %q", got.PreviousState, domain.SessionArchived)
+		}
+	})
+
+	t.Run("restores archived merged work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-2"] = domain.Session{
+			ID:            "wi-2",
+			WorkspaceID:   "ws-1",
+			Title:         "T",
+			Source:        "manual",
+			State:         domain.SessionArchived,
+			PreviousState: domain.SessionMerged,
+		}
+
+		if err := svc.Unarchive(ctx, "wi-2"); err != nil {
+			t.Fatalf("Unarchive failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "wi-2")
+		if got.State != domain.SessionMerged {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionMerged)
+		}
+	})
+
+	t.Run("rejects unarchive of non-archived work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-3"] = domain.Session{ID: "wi-3", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionCompleted}
+
+		err := svc.Unarchive(ctx, "wi-3")
+		if err == nil {
+			t.Fatal("expected error for non-archived work item")
+		}
+		if _, ok := err.(ErrInvalidTransition); !ok {
+			t.Errorf("error type = %T, want ErrInvalidTransition", err)
+		}
+	})
+
+	t.Run("rejects unarchive when no previous state recorded", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		repo.items["wi-4"] = domain.Session{
+			ID:            "wi-4",
+			WorkspaceID:   "ws-1",
+			Title:         "T",
+			Source:        "manual",
+			State:         domain.SessionArchived,
+			PreviousState: "", // empty — came from pre-migration row
+		}
+
+		err := svc.Unarchive(ctx, "wi-4")
+		if err == nil {
+			t.Fatal("expected error when no previous state recorded")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("rejects unarchive of nonexistent work item", func(t *testing.T) {
+		repo := NewMockWorkItemRepository()
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+
+		err := svc.Unarchive(ctx, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent work item")
+		}
+		if _, ok := err.(ErrNotFound); !ok {
+			t.Errorf("error type = %T, want ErrNotFound", err)
+		}
+	})
+}
+
 func TestSessionService_RetryFailedWorkItem(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkItemRepository()

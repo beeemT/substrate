@@ -169,6 +169,7 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 			"old_session_id": interrupted.ID,
 			"new_session_id": newSession.ID,
 			"sub_plan_id":    interrupted.SubPlanID,
+			"work_item_id":   interrupted.WorkItemID,
 		}),
 		CreatedAt: time.Now(),
 	})
@@ -365,6 +366,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 			"old_session_id": failedTask.ID,
 			"new_session_id": newTask.ID,
 			"sub_plan_id":    failedTask.SubPlanID,
+			"work_item_id":   failedTask.WorkItemID,
 		}),
 		CreatedAt: time.Now(),
 	})

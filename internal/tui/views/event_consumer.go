@@ -54,11 +54,11 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventPlanRejected:            decodePlanUpdated,
 	domain.EventPlanRevised:             decodePlanUpdated,
 	domain.EventPlanFailed:              decodePlanUpdated,
-	domain.EventAgentSessionStarted:     decodeAgentSessionStarted,
-	domain.EventAgentSessionCompleted:   decodeAgentSessionUpdated,
-	domain.EventAgentSessionFailed:      decodeAgentSessionUpdated,
-	domain.EventAgentSessionInterrupted: decodeAgentSessionUpdated,
-	domain.EventAgentSessionResumed:     decodeAgentSessionUpdated,
+	domain.EventAgentTaskStarted:        decodeAgentSessionStarted,
+	domain.EventAgentTaskCompleted:      decodeAgentSessionUpdated,
+	domain.EventAgentTaskFailed:         decodeAgentSessionUpdated,
+	domain.EventAgentTaskInterrupted:    decodeAgentSessionUpdated,
+	domain.EventAgentSessionResumed:     decodeAgentSessionResumed,
 	domain.EventAgentQuestionRaised:     decodeQuestionRaised,
 	domain.EventAgentQuestionAnswered:   decodeQuestionAnswered,
 	domain.EventReviewStarted:           decodeReviewStarted,
@@ -133,24 +133,48 @@ func decodePlanUpdated(payload string) tea.Msg {
 
 func decodeAgentSessionStarted(payload string) tea.Msg {
 	var p struct {
-		Session domain.Task `json:"session"`
+		Session    domain.Task `json:"session"`
+		SessionID  string      `json:"session_id"`
+		WorkItemID string      `json:"work_item_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		slog.Warn("failed to decode EventAgentSessionStarted payload", "error", err)
+		slog.Warn("failed to decode EventAgentTaskStarted payload", "error", err)
 		return nil
 	}
-	return SessionStartedMsg{Task: p.Session}
+	return TaskStartedMsg{
+		WorkItemID: p.WorkItemID,
+		Task:       p.Session,
+	}
 }
 
 func decodeAgentSessionUpdated(payload string) tea.Msg {
 	var p struct {
-		Session domain.Task `json:"session"`
+		Session    domain.Task `json:"session"`
+		SessionID  string      `json:"session_id"`
+		WorkItemID string      `json:"work_item_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		slog.Warn("failed to decode agent session event payload", "error", err)
+		slog.Warn("failed to decode agent task event payload", "error", err)
 		return nil
 	}
-	return SessionUpdatedMsg{Task: p.Session}
+	return TaskUpdatedMsg{
+		WorkItemID: p.WorkItemID,
+		Task:       p.Session,
+	}
+}
+
+// decodeAgentSessionResumed handles EventAgentSessionResumed by extracting the work_item_id
+// and triggering a targeted reload of the affected tasks. The full task data is loaded
+// by the TUI command that reads from the repository.
+func decodeAgentSessionResumed(payload string) tea.Msg {
+	var p struct {
+		WorkItemID string `json:"work_item_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventAgentSessionResumed payload", "error", err)
+		return nil
+	}
+	return SessionResumedMsg{WorkItemID: p.WorkItemID, Message: ""}
 }
 
 func decodeQuestionRaised(payload string) tea.Msg {
@@ -231,7 +255,7 @@ func decodeAdapterError(payload string) tea.Msg {
 		slog.Warn("failed to decode EventAdapterError payload", "error", err)
 		return nil
 	}
-	return AdapterErrorEventMsg{Adapter: p.Adapter, EventType: p.EventType, Err: errors.New(p.Err)}
+	return AdapterErrorMsg{Adapter: p.Adapter, EventType: p.EventType, Err: errors.New(p.Err)}
 }
 
 func decodePRMerged(payload string) tea.Msg {

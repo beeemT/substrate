@@ -18,6 +18,7 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/worktree"
 )
 
 // TestBuildWaves tests the BuildWaves function with various input scenarios.
@@ -722,6 +723,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
+		worktree.NewHookRegistry(),
 	)
 
 	return svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo
@@ -864,8 +866,8 @@ func TestExecuteSubPlan_DoesNotStartHarnessWhenSessionStartFails(t *testing.T) {
 		t.Fatalf("expected pending session cleanup, got %v", err)
 	}
 	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventAgentSessionStarted) {
-			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentSessionStarted)
+		if evt.EventType == string(domain.EventAgentTaskStarted) {
+			t.Fatalf("unexpected %s event for session that never reached running", domain.EventAgentTaskStarted)
 		}
 	}
 }
@@ -1227,6 +1229,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
+		worktree.NewHookRegistry(),
 	)
 
 	// Seed a previous completed session with ResumeInfo.
@@ -1332,6 +1335,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
+		worktree.NewHookRegistry(),
 	)
 
 	subPlan := domain.TaskPlan{
@@ -1576,7 +1580,7 @@ func TestReviewLoop_NeedsReimplAutoLoopOff(t *testing.T) {
 
 // TestExecuteSubPlan_CompletesTaskOnSuccess verifies the happy path: when the
 // harness returns without error, executeSubPlan marks the task as completed in
-// the repository and emits an EventAgentSessionCompleted event.
+// the repository and emits an EventAgentTaskCompleted event.
 func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 	svc, _, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	svc.harness = &completingHarness{}
@@ -1624,20 +1628,20 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 		t.Fatal("task.CompletedAt must be set after completion")
 	}
 
-	// TaskService emits EventAgentSessionCompleted asynchronously via goroutine.
+	// TaskService emits EventAgentTaskCompleted asynchronously via goroutine.
 	// Give it time to execute before checking.
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the completed event was emitted.
 	var found bool
 	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventAgentSessionCompleted) {
+		if evt.EventType == string(domain.EventAgentTaskCompleted) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected EventAgentSessionCompleted event, none emitted")
+		t.Error("expected EventAgentTaskCompleted event, none emitted")
 	}
 }
 

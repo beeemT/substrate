@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"sync"
 	"time"
 
@@ -58,14 +57,6 @@ func WithDropHandler(h DropHandler) BusOption {
 	return func(b *Bus) { b.onDrop = h }
 }
 
-// defaultPreHookTypes defines event types that are pre-hook events.
-// Pre-hook events run hooks BEFORE persistence; if any hook rejects,
-// the event is not persisted and the operation should be aborted.
-// Regular events persist first, then fan out to subscribers.
-var defaultPreHookTypes = map[string]bool{
-	string(domain.EventWorktreeCreating): true,
-}
-
 // Subscriber receives events matching their subscribed topics.
 type Subscriber struct {
 	ID     string
@@ -76,23 +67,17 @@ type Subscriber struct {
 // Bus implements a channel-based pub/sub system with topic routing,
 // synchronous pre-hooks, and asynchronous post-hooks.
 //
-// Events are categorized as either "pre-hook events" or regular events:
-//   - Pre-hook events (e.g., WorktreeCreating): hooks run BEFORE persistence.
-//     If any hook returns an error, the event is not persisted and the
-//     operation should be aborted. This is used for gate events that
-//     validate whether an action should proceed.
-//   - Regular events (e.g., PlanApproved): event is persisted FIRST,
-//     then dispatched to subscribers. Hooks run synchronously before
-//     dispatch but cannot "undo" the fact that the event occurred.
+// The bus is purely async for event delivery. For synchronous validation
+// that can abort an operation before it proceeds, use the worktree.HookRegistry
+// instead.
 type Bus struct {
-	mu           sync.RWMutex
-	subscribers  map[string]*Subscriber // subscriber ID -> subscriber
-	preHooks     []preHookEntry
-	postHooks    []postHookEntry
-	eventRepo    repository.EventRepository
-	onDrop       DropHandler     // called when subscriber buffer is full; nil returns ErrRetryLater
-	preHookTypes map[string]bool // event types that are pre-hook events
-	closed       bool
+	mu          sync.RWMutex
+	subscribers map[string]*Subscriber // subscriber ID -> subscriber
+	preHooks    []preHookEntry
+	postHooks   []postHookEntry
+	eventRepo   repository.EventRepository
+	onDrop      DropHandler // called when subscriber buffer is full; nil returns ErrRetryLater
+	closed      bool
 }
 
 type preHookEntry struct {
@@ -112,38 +97,16 @@ type BusConfig struct {
 
 // NewBus creates a new event bus with the given options.
 func NewBus(cfg BusConfig, opts ...BusOption) *Bus {
-	prehookTypes := make(map[string]bool)
-	maps.Copy(prehookTypes, defaultPreHookTypes)
 	b := &Bus{
-		subscribers:  make(map[string]*Subscriber),
-		preHooks:     make([]preHookEntry, 0),
-		postHooks:    make([]postHookEntry, 0),
-		eventRepo:    cfg.EventRepo,
-		preHookTypes: prehookTypes,
+		subscribers: make(map[string]*Subscriber),
+		preHooks:    make([]preHookEntry, 0),
+		postHooks:   make([]postHookEntry, 0),
+		eventRepo:   cfg.EventRepo,
 	}
 	for _, opt := range opts {
 		opt(b)
 	}
 	return b
-}
-
-// IsPreHookEvent reports whether the given event type is a pre-hook event.
-// Pre-hook events run hooks before persistence; regular events persist first.
-func (b *Bus) IsPreHookEvent(eventType string) bool {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.preHookTypes[eventType]
-}
-
-// RegisterPreHookType adds an event type to the pre-hook types set.
-// This should be called before any events are published.
-func (b *Bus) RegisterPreHookType(eventType string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.preHookTypes == nil {
-		b.preHookTypes = make(map[string]bool)
-	}
-	b.preHookTypes[eventType] = true
 }
 
 // Subscribe creates a new subscriber for the given topics.
@@ -231,61 +194,19 @@ func (b *Bus) RegisterPostHook(config HookConfig, hook PostHook) {
 
 // Publish persists the event and dispatches it to matching subscribers.
 //
-// For pre-hook events (e.g., WorktreeCreating):
-//  1. Run pre-hooks synchronously
-//  2. If any pre-hook returns error, abort (event NOT persisted)
-//  3. Persist event to repository
-//
-// For regular events:
-//  1. Persist event to repository
-//  2. Run pre-hooks synchronously (can abort dispatch but not persistence)
-//  3. Dispatch to matching subscribers
-//  4. Run post-hooks asynchronously
+//   - Persist event to repository
+//   - Run pre-hooks synchronously (can abort dispatch but not persistence)
+//   - Dispatch to matching subscribers
+//   - Run post-hooks asynchronously
 func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error {
 	b.mu.RLock()
 	closed := b.closed
-	isPreHookEvent := b.preHookTypes[event.EventType]
 	b.mu.RUnlock()
 
 	if closed {
 		return errors.New("event bus is closed")
 	}
 
-	if isPreHookEvent {
-		return b.publishPreHookEvent(ctx, event)
-	}
-	return b.publishRegularEvent(ctx, event)
-}
-
-// publishPreHookEvent handles publishing of pre-hook events.
-// Pre-hooks run BEFORE persistence. If any rejects, nothing is persisted.
-func (b *Bus) publishPreHookEvent(ctx context.Context, event domain.SystemEvent) error {
-	// Run pre-hooks synchronously BEFORE persistence
-	if err := b.runPreHooks(ctx, event); err != nil {
-		return fmt.Errorf("pre-hook rejected: %w", err)
-	}
-
-	// All pre-hooks passed; persist now for audit and crash-recovery
-	if b.eventRepo != nil {
-		if err := b.eventRepo.Create(ctx, event); err != nil {
-			return fmt.Errorf("persist event: %w", err)
-		}
-	}
-
-	// Dispatch to matching subscribers
-	if err := b.dispatch(event); err != nil {
-		return err
-	}
-
-	// Run post-hooks asynchronously
-	go b.runPostHooks(event)
-
-	return nil
-}
-
-// publishRegularEvent handles publishing of regular events.
-// Event is persisted FIRST (it already happened), then hooks run.
-func (b *Bus) publishRegularEvent(ctx context.Context, event domain.SystemEvent) error {
 	// Persist event first - it represents a fact that already occurred
 	if b.eventRepo != nil {
 		if err := b.eventRepo.Create(ctx, event); err != nil {

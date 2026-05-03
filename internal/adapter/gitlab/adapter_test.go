@@ -642,3 +642,123 @@ func TestOnEvent_IgnoresForeignExternalID_WorkItemCompleted(t *testing.T) {
 		}
 	}
 }
+
+
+
+
+
+
+func TestShouldPostComment(t *testing.T) {
+	t.Run("no scope configured defaults to true", func(t *testing.T) {
+		a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}))
+		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", nil) {
+			t.Error("shouldPostComment() = false, want true with no scope configured")
+		}
+	})
+
+	t.Run("scope all posts comment", func(t *testing.T) {
+		a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}))
+		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "all"}) {
+			t.Error("shouldPostComment() = false, want true with scope all")
+		}
+	})
+
+	t.Run("scope none skips comment", func(t *testing.T) {
+		a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}))
+		if a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "none"}) {
+			t.Error("shouldPostComment() = true, want false with scope none")
+		}
+	})
+
+	t.Run("scope mine checks own namespace", func(t *testing.T) {
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(t, 200, map[string]any{
+				"id":    int64(123),
+				"path_with_namespace": "alice/rocket",
+				"namespace":           map[string]any{"id": int64(1), "path": "alice", "kind": "user"},
+			}), nil
+		})
+		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
+		a.username = "alice"
+		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "mine"}) {
+			t.Error("shouldPostComment() = false, want true for own namespace")
+		}
+	})
+
+	t.Run("scope mine skips foreign namespace", func(t *testing.T) {
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(t, 200, map[string]any{
+				"id":    int64(123),
+				"path_with_namespace": "bob/rocket",
+				"namespace":           map[string]any{"id": int64(2), "path": "bob", "kind": "user"},
+			}), nil
+		})
+		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
+		a.username = "alice"
+		if a.shouldPostComment(context.Background(), "gl:issue:bob/rocket#42", map[string]string{"bob/rocket": "mine"}) {
+			t.Error("shouldPostComment() = true, want false for foreign namespace")
+		}
+	})
+
+	t.Run("group namespace skips comment for scope mine", func(t *testing.T) {
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(t, 200, map[string]any{
+				"id":    int64(123),
+				"path_with_namespace": "myorg/rocket",
+				"namespace":           map[string]any{"id": int64(3), "path": "myorg", "kind": "group"},
+			}), nil
+		})
+		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
+		if a.shouldPostComment(context.Background(), "gl:issue:myorg/rocket#42", map[string]string{"myorg/rocket": "mine"}) {
+			t.Error("shouldPostComment() = true, want false for group namespace")
+		}
+	})
+}
+
+func TestResolveNumericProjectID(t *testing.T) {
+	t.Run("numeric path returned as-is", func(t *testing.T) {
+		a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("unexpected request for numeric path: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}))
+		got, err := a.resolveNumericProjectID(context.Background(), "12345")
+		if err != nil {
+			t.Fatalf("resolveNumericProjectID: %v", err)
+		}
+		if got != 12345 {
+			t.Errorf("got %d, want 12345", got)
+		}
+	})
+
+	t.Run("path-based resolved via API", func(t *testing.T) {
+		var gotPath string
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotPath = req.URL.Path
+			return jsonResponse(t, 200, map[string]any{
+				"id":    int64(999),
+				"path_with_namespace": "alice/rocket",
+				"namespace":           map[string]any{"id": int64(1), "path": "alice", "kind": "user"},
+			}), nil
+		})
+		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
+		got, err := a.resolveNumericProjectID(context.Background(), "alice/rocket")
+		if err != nil {
+			t.Fatalf("resolveNumericProjectID: %v", err)
+		}
+		if got != 999 {
+			t.Errorf("got %d, want 999", got)
+		}
+		if !strings.Contains(gotPath, "/api/v4/projects/") {
+			t.Errorf("URL path = %q, want /api/v4/projects/...", gotPath)
+		}
+	})
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/worktree"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,6 +42,7 @@ type ImplementationService struct {
 	reviewSvc      *service.ReviewService
 	questionRouter *QuestionRouter
 	sessTimeout    time.Duration
+	hookRegistry   *worktree.HookRegistry
 }
 
 // ImplementationConfig contains configuration for the implementation service.
@@ -69,6 +71,7 @@ func NewImplementationService(
 	foreman *Foreman,
 	questionSvc *service.QuestionService,
 	reviewSvc *service.ReviewService,
+	hookRegistry *worktree.HookRegistry,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
 	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, eventBus)
@@ -88,6 +91,7 @@ func NewImplementationService(
 		reviewSvc:      reviewSvc,
 		questionRouter: questionRouter,
 		sessTimeout:    implCfg.SessionTimeout,
+		hookRegistry:   hookRegistry,
 	}
 }
 
@@ -813,25 +817,15 @@ func (s *ImplementationService) ensureWorktree(
 		}
 	}
 
-	// Emit WorktreeCreating pre-hook event
-	creatingPayload := WorktreeCreatingPayload{
+	// Run pre-checkout hooks (synchronous; aborts checkout on rejection)
+	if err := s.hookRegistry.Run(ctx, worktree.CheckoutRequest{
 		WorkspaceID:   workspace.ID,
 		WorkItemID:    workItemID,
 		Repository:    repoName,
 		Branch:        branch,
 		WorkItemTitle: workItemTitle,
-		SubPlan:       subPlan,
-		Review:        reviewCtx.Review,
-	}
-	creatingEvent := domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventWorktreeCreating),
-		WorkspaceID: workspace.ID,
-		Payload:     marshalJSONOrEmpty(string(domain.EventWorktreeCreating), creatingPayload),
-		CreatedAt:   time.Now(),
-	}
-	if err := s.eventBus.Publish(ctx, creatingEvent); err != nil {
-		return "", fmt.Errorf("worktree creating pre-hook rejected: %w", err)
+	}); err != nil {
+		return "", fmt.Errorf("worktree pre-hook rejected: %w", err)
 	}
 
 	// Create worktree
@@ -1642,29 +1636,6 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 		PlanID:   plan.ID,
 		WorkItem: workItem,
 	})
-}
-
-func (s *ImplementationService) emitSessionStarted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	return s.publishEvent(ctx, domain.EventAgentSessionStarted, workspaceID, newSessionEventPayload(session))
-}
-
-func (s *ImplementationService) emitSessionCompleted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	return s.publishEvent(ctx, domain.EventAgentSessionCompleted, workspaceID, newSessionEventPayload(session))
-}
-
-func (s *ImplementationService) emitSessionFailed(ctx context.Context, session *domain.Task, errMsg string, workspaceID string) error {
-	payload := struct {
-		sessionEventPayload
-		Error string `json:"error"`
-	}{
-		sessionEventPayload: newSessionEventPayload(session),
-		Error:               errMsg,
-	}
-	return s.publishEvent(ctx, domain.EventAgentSessionFailed, workspaceID, payload)
-}
-
-func (s *ImplementationService) emitSessionInterrupted(ctx context.Context, session *domain.Task, workspaceID string) error {
-	return s.publishEvent(ctx, domain.EventAgentSessionInterrupted, workspaceID, newSessionEventPayload(session))
 }
 
 // lastSessionForSubPlan returns the most recent session for a sub-plan,

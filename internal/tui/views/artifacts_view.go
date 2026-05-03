@@ -228,8 +228,8 @@ func (m *ArtifactsModel) ensureCursorVisible() {
 	}
 	// The cursor row is at linesBefore.
 	if m.expandedSet[artifactExpansionKey(m.items[m.cursor])] {
-		// For expanded items, scroll so the row header is at the top.
-		if linesBefore < m.viewport.YOffset || linesBefore > m.viewport.YOffset {
+		// For expanded items, scroll so the row header is at the top only if it's above the viewport.
+		if linesBefore < m.viewport.YOffset {
 			m.viewport.SetYOffset(linesBefore)
 		}
 	} else {

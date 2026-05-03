@@ -89,13 +89,27 @@ type PlanUpdatedMsg struct {
 }
 
 // SessionStartedMsg is sent when an agent session starts.
+// Deprecated: use TaskStartedMsg instead.
 type SessionStartedMsg struct {
 	Task domain.Task
 }
 
 // SessionUpdatedMsg is sent when an agent session state changes.
+// Deprecated: use TaskUpdatedMsg instead.
 type SessionUpdatedMsg struct {
 	Task domain.Task
+}
+
+// TaskStartedMsg is sent when an agent task (agent session) starts.
+type TaskStartedMsg struct {
+	WorkItemID string
+	Task       domain.Task
+}
+
+// TaskUpdatedMsg is sent when an agent task (agent session) state changes.
+type TaskUpdatedMsg struct {
+	WorkItemID string
+	Task       domain.Task
 }
 
 // QuestionRaisedMsg is sent when a question is raised by an agent.
@@ -122,11 +136,12 @@ type CritiquesFoundMsg struct{ SessionID string }
 // ReimplementationStartedMsg is sent when re-implementation starts.
 type ReimplementationStartedMsg struct{ SessionID string }
 
-// AdapterErrorEventMsg is sent when an adapter reports an error.
-type AdapterErrorEventMsg struct {
-	Adapter   string
-	EventType string
-	Err       error
+// AdapterErrorMsg is sent when an adapter reports an error via the event bus.
+type AdapterErrorMsg struct {
+	Adapter   string // adapter name (e.g. "github", "gitlab")
+	EventType string // original event type that failed
+	Err       error  // underlying error
+	Retries   int    // number of retries attempted
 }
 
 // PRMergedMsg is sent when a PR is merged.
@@ -211,12 +226,19 @@ type ResumeSessionMsg struct {
 type RestartPlanMsg struct{ WorkItemID string }
 
 // SessionResumedMsg is returned by ResumeSessionCmd after the interrupted session
-// has been replaced by a new running session.
-type SessionResumedMsg struct{ Message string }
+// has been replaced by a new running session, or sent by the event consumer
+// when EventAgentSessionResumed is received.
+type SessionResumedMsg struct {
+	Message    string
+	WorkItemID string
+}
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
 // pipeline has been re-launched from scratch.
-type PlanningRestartedMsg struct{ Message string }
+type PlanningRestartedMsg struct {
+	WorkItemID string
+	Message    string
+}
 
 // QuitRequestMsg fires when an OS signal (SIGTERM) requests a graceful quit.
 type QuitRequestMsg struct{}
@@ -341,15 +363,6 @@ type OpenSessionHistoryMsg struct {
 
 // ErrMsg wraps an error for display in the TUI.
 type ErrMsg struct{ Err error }
-
-// AdapterErrorMsg reports an adapter handler failure after exhausting retries.
-// The TUI displays this as a warning toast.
-type AdapterErrorMsg struct {
-	Adapter   string // adapter name (e.g. "github", "gitlab")
-	EventType string // original event type that failed
-	Err       error  // underlying error
-	Retries   int    // number of retries attempted
-}
 
 // ActionDoneMsg is a generic success acknowledgement.
 type ActionDoneMsg struct{ Message string }

@@ -785,11 +785,15 @@ func TestSidebarStatusLabel(t *testing.T) {
 
 func TestSidebarCycleFilter(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
-	// Cycle through all 4 filter modes.
+	// Cycle through all non-All filter modes (All is the reset/default state,
+	// accessible via 'a' key, not part of the cycle).
 	expected := []views.SidebarFilter{
 		views.SidebarFilterActive,
 		views.SidebarFilterNeedsAttention,
 		views.SidebarFilterCompleted,
+		views.SidebarFilterArchived,
+		// All (index 5) is not in the cycle — the cycle wraps at 5 values.
+		// Starting at All (0), CycleFilter advances through 1-4 and wraps back to 0 (All).
 		views.SidebarFilterAll,
 	}
 	for _, want := range expected {

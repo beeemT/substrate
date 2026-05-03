@@ -153,9 +153,9 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	}
 
 	// Emit event asynchronously after transaction commits
-	go s.emitEvent(domain.SystemEvent{
+	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionStarted),
+		EventType:   string(domain.EventAgentTaskStarted),
 		WorkspaceID: task.WorkspaceID,
 		CreatedAt:   time.Now(),
 	})
@@ -254,9 +254,9 @@ func (s *TaskService) Complete(ctx context.Context, id string) error {
 	}
 
 	// Emit event asynchronously after transaction commits
-	go s.emitEvent(domain.SystemEvent{
+	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionCompleted),
+		EventType:   string(domain.EventAgentTaskCompleted),
 		WorkspaceID: task.WorkspaceID,
 		CreatedAt:   time.Now(),
 	})
@@ -297,9 +297,9 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 	}
 
 	// Emit event asynchronously after transaction commits
-	go s.emitEvent(domain.SystemEvent{
+	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionInterrupted),
+		EventType:   string(domain.EventAgentTaskInterrupted),
 		WorkspaceID: task.WorkspaceID,
 		CreatedAt:   time.Now(),
 	})
@@ -403,9 +403,9 @@ func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error 
 	}
 
 	// Emit event asynchronously after transaction commits
-	go s.emitEvent(domain.SystemEvent{
+	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionFailed),
+		EventType:   string(domain.EventAgentTaskFailed),
 		WorkspaceID: task.WorkspaceID,
 		CreatedAt:   time.Now(),
 	})
@@ -503,9 +503,4 @@ func (s *TaskService) FindRunningByOwner(ctx context.Context, instanceID string)
 	}
 
 	return running, nil
-}
-
-// emitEvent emits an event asynchronously via the shared helper.
-func (s *TaskService) emitEvent(evt domain.SystemEvent) {
-	Emit(s.eventBus, evt)
 }

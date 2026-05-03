@@ -460,7 +460,7 @@ func (m *SidebarModel) SetPaneMode(mode sidebarPaneMode) {
 
 // CycleFilter advances to the next filter mode.
 func (m *SidebarModel) CycleFilter() {
-	m.filter = (m.filter + 1) % 4
+	m.filter = (m.filter + 1) % 5
 	*m.viewDirty = true
 }
 
@@ -504,6 +504,8 @@ func (m *SidebarModel) StatusLabel() string {
 		parts = append(parts, "attention")
 	case SidebarFilterCompleted:
 		parts = append(parts, "completed")
+	case SidebarFilterArchived:
+		parts = append(parts, "archived")
 	}
 	switch m.dimension {
 	case SidebarDimState:

@@ -18,6 +18,7 @@ import (
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/worktree"
 )
 
 // ServiceManager owns the complete service graph lifecycle.
@@ -110,6 +111,9 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		},
 	))
 
+	// 2. Create hook registry for pre-checkout validation
+	hookRegistry := worktree.NewHookRegistry()
+
 	// 2. Create services with shared bus
 	workItemSvc := service.NewSessionService(sm.transacter, bus)
 	workspaceSvc := service.NewWorkspaceService(sm.transacter)
@@ -157,7 +161,6 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		adapterWarnings = append(adapterWarnings, githubWarning)
 	}
 	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, repos, githubAdapter)
-	adapterErrors := make(chan AdapterErrorMsg, 16)
 
 	// Wire adapters to bus
 	for _, workItemAdapter := range adapters {
@@ -165,14 +168,14 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		if subErr != nil {
 			return nil, fmt.Errorf("subscribe work item adapter %s: %w", workItemAdapter.Name(), subErr)
 		}
-		go wireAdapterToBus(workItemAdapter, sub.C, bus, adapterErrors)
+		go wireAdapterToBus(workItemAdapter, sub.C, bus)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
 		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted), string(domain.EventPRMerged), string(domain.EventPlanApproved))
 		if subErr != nil {
 			return nil, fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
 		}
-		go wireAdapterToBus(lifecycleAdapter, sub.C, bus, adapterErrors)
+		go wireAdapterToBus(lifecycleAdapter, sub.C, bus)
 	}
 
 	// Start PR/MR state refresh for lifecycle adapters.
@@ -221,7 +224,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc, hookRegistry)
 	}
 
 	var resumption *orchestrator.Resumption
@@ -260,7 +263,6 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		Harnesses:             harnesses,
 		GitClient:             gitClient,
 		Bus:                   bus,
-		AdapterErrors:         adapterErrors,
 		ReviewComments:        reviewCommentDispatcher,
 		StartupWarnings:       adapterWarnings,
 		InstanceID:            current.InstanceID,
@@ -271,8 +273,8 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 }
 
 // wireAdapterToBus bridges an adapter to the event bus with retry logic.
-func wireAdapterToBus[T any](adapterInstance T, events <-chan domain.SystemEvent, bus *event.Bus, adapterErrors chan<- AdapterErrorMsg) {
-	// Type assertion to adapter.WorkItemAdapter or adapter.RepoLifecycleAdapter
+// Errors are published to the bus as EventAdapterError events for the TUI to consume.
+func wireAdapterToBus[T any](adapterInstance T, events <-chan domain.SystemEvent, bus *event.Bus) {
 	switch a := any(adapterInstance).(type) {
 	case adapter.WorkItemAdapter:
 		for evt := range events {
@@ -301,15 +303,6 @@ func wireAdapterToBus[T any](adapterInstance T, events <-chan domain.SystemEvent
 					CreatedAt:   time.Now(),
 				}); pubErr != nil {
 					slog.Warn("failed to publish adapter error event", "error", pubErr)
-				}
-				select {
-				case adapterErrors <- AdapterErrorMsg{
-					Adapter:   a.Name(),
-					EventType: evt.EventType,
-					Err:       lastErr,
-					Retries:   2,
-				}:
-				default:
 				}
 			}
 		}
@@ -340,15 +333,6 @@ func wireAdapterToBus[T any](adapterInstance T, events <-chan domain.SystemEvent
 					CreatedAt:   time.Now(),
 				}); pubErr != nil {
 					slog.Warn("failed to publish adapter error event", "error", pubErr)
-				}
-				select {
-				case adapterErrors <- AdapterErrorMsg{
-					Adapter:   a.Name(),
-					EventType: evt.EventType,
-					Err:       lastErr,
-					Retries:   2,
-				}:
-				default:
 				}
 			}
 		}

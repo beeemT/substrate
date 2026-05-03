@@ -45,8 +45,9 @@ type Services struct {
 	SettingsData    SettingsSnapshot
 	GitClient       *gitwork.Client
 	Bus             *event.Bus
-	AdapterErrors   chan AdapterErrorMsg
 	ReviewComments  *adapter.ReviewCommentDispatcher
+	// AdapterErrors receives adapter handler failures for toast display.
+	AdapterErrors chan<- AdapterErrorMsg
 	// StartupWarnings collects adapter initialisation warnings to surface
 	// as toasts when the TUI starts.
 	StartupWarnings []string

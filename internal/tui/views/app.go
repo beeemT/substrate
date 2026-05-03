@@ -310,10 +310,10 @@ func (a App) Init() tea.Cmd {
 				string(domain.EventWorkItemFailed),
 				string(domain.EventWorkItemMerged),
 				// Session lifecycle
-				string(domain.EventAgentSessionStarted),
-				string(domain.EventAgentSessionCompleted),
-				string(domain.EventAgentSessionFailed),
-				string(domain.EventAgentSessionInterrupted),
+				string(domain.EventAgentTaskStarted),
+				string(domain.EventAgentTaskCompleted),
+				string(domain.EventAgentTaskFailed),
+				string(domain.EventAgentTaskInterrupted),
 				string(domain.EventAgentSessionResumed),
 				// Plan lifecycle
 				string(domain.EventPlanGenerated),
@@ -1213,10 +1213,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		// Session lifecycle → targeted load of tasks
-		case domain.EventAgentSessionStarted,
-			domain.EventAgentSessionCompleted,
-			domain.EventAgentSessionFailed,
-			domain.EventAgentSessionInterrupted,
+		case domain.EventAgentTaskStarted,
+			domain.EventAgentTaskCompleted,
+			domain.EventAgentTaskFailed,
+			domain.EventAgentTaskInterrupted,
 			domain.EventAgentSessionResumed:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
@@ -1473,6 +1473,29 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case TaskStartedMsg:
+		a.sessions = append(a.sessions, msg.Task)
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case TaskUpdatedMsg:
+		for i := range a.sessions {
+			if a.sessions[i].ID == msg.Task.ID {
+				a.sessions[i] = msg.Task
+				break
+			}
+		}
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
 	case QuestionRaisedMsg:
 		a.upsertQuestion(msg.SessionID, msg.Question)
 		a.rebuildSidebar()
@@ -1497,7 +1520,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
-	case AdapterErrorEventMsg:
+	case AdapterErrorMsg:
 		a.toasts.AddToast(fmt.Sprintf("Adapter error (%s): %v", msg.Adapter, msg.Err), components.ToastWarning)
 		return a, nil
 
@@ -2144,11 +2167,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SessionResumedMsg:
-		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		if msg.Message != "" {
+			a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
-		if a.svcs.WorkspaceID != "" {
+		if msg.WorkItemID != "" {
+			// Event-driven: targeted reload of the specific work item's tasks.
+			cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID))
+		} else if a.svcs.WorkspaceID != "" {
+			// Command-driven: full reload.
 			cmds = append(cmds,
 				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
 				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
@@ -2158,6 +2187,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanningRestartedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
+		cmds = append(cmds,
+			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
+			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
+		)
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -2283,11 +2317,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slog.Error("operation failed", "toast", false, "error", msg.Err)
 		a.toasts.AddToast(formatOperationErrorToast(msg.Err), components.ToastError)
-		return a, nil
-
-	case AdapterErrorMsg:
-		// Deprecated: Adapter errors are now handled via AdapterErrorEventMsg from the event bus.
-		// This handler is kept for backward compatibility during the transition.
 		return a, nil
 
 	case LogToastMsg:
@@ -4002,22 +4031,6 @@ func isGitHubInvalidSearchError(err error) bool {
 	}
 
 	return false
-}
-
-// formatAdapterErrorToast formats an adapter error for display as a toast.
-// Output is max 4 lines to fit the toast display constraint.
-func formatAdapterErrorToast(msg AdapterErrorMsg) string {
-	// Permission failures are permanent and carry a user-actionable cause.
-	// Show a clear, non-technical message instead of the raw API response.
-	var permErr *adapter.PermissionError
-	if errors.As(msg.Err, &permErr) {
-		return msg.Adapter + ": permission denied\nCannot update this issue — check your token has the required scopes."
-	}
-	errStr := msg.Err.Error()
-	if len(errStr) > 80 {
-		errStr = errStr[:77] + "..."
-	}
-	return fmt.Sprintf("%s: %s failed\n%s\nRetried %dx", msg.Adapter, msg.EventType, errStr, msg.Retries)
 }
 
 // upsertQuestion adds or updates a question in the nested map.

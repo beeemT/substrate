@@ -7,7 +7,7 @@ import (
 )
 
 // TestAppOKeyOpensTerminalInWorktree asserts that pressing 'o' in a session view
-// (ContentModePlanning with an active session that has a worktree) returns an
+// (ContentModeAgentSession with an active session that has a worktree) returns an
 // OpenTerminalCmd for the session's worktree.
 func TestAppOKeyOpensTerminalInWorktree(t *testing.T) {
 	t.Parallel()

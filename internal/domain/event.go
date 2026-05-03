@@ -49,7 +49,7 @@ const (
 	EventWorkspaceCreated EventType = "workspace.created"
 
 	// Plan events
-	EventPlanGenerated           EventType = "plan.generated"
+	EventPlanGenerated          EventType = "plan.generated"
 	EventPlanSubmittedForReview EventType = "plan.submitted_for_review"
 	EventPlanApproved           EventType = "plan.approved"
 	EventPlanRejected           EventType = "plan.rejected"
@@ -65,12 +65,14 @@ const (
 	// Worktree events
 	EventWorktreeRemoved EventType = "worktree.removed"
 
-	// Agent session events
-	EventAgentSessionStarted     EventType = "agent_session.started"
-	EventAgentSessionCompleted   EventType = "agent_session.completed"
-	EventAgentSessionFailed      EventType = "agent_session.failed"
-	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
-	EventAgentSessionResumed     EventType = "agent_session.resumed"
+	// Agent task events (lifecycle of individual agent sessions within a work item)
+	EventAgentTaskStarted     EventType = "agent_task.started"
+	EventAgentTaskCompleted   EventType = "agent_task.completed"
+	EventAgentTaskFailed      EventType = "agent_task.failed"
+	EventAgentTaskInterrupted EventType = "agent_task.interrupted"
+
+	// Agent session events (resumption lifecycle)
+	EventAgentSessionResumed EventType = "agent_session.resumed"
 
 	// Question events
 	EventAgentQuestionRaised   EventType = "agent_question.raised"

@@ -785,7 +785,7 @@ func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService
 			return ErrMsg{Err: err}
 		}
 
-		return PlanningRestartedMsg{Message: "Planning restarted"}
+		return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning restarted"}
 	}
 }
 
@@ -1500,22 +1500,6 @@ func gitLabProjectPathFromMRURL(rawURL string) string {
 	}
 
 	return projectPath
-}
-
-// WaitForAdapterErrorCmd listens for adapter errors and converts them to TUI messages.
-// It reads one error from the channel and returns it as an AdapterErrorMsg.
-// The caller should re-invoke this command after handling the message to continue listening.
-func WaitForAdapterErrorCmd(ch <-chan AdapterErrorMsg) tea.Cmd {
-	if ch == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		err, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return err
-	}
 }
 
 // StartupWarningsCmd returns a Cmd that fires a StartupWarningsMsg.

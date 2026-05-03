@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
@@ -418,4 +421,59 @@ func TestPlanService_AllSubPlansCompleted(t *testing.T) {
 			t.Error("expected false when some sub-plans incomplete")
 		}
 	})
+}
+
+func TestPlanService_ApplyReviewedPlanOutput_EmitsEventWithPlanID(t *testing.T) {
+	ctx := context.Background()
+	planRepo := NewMockPlanRepository()
+	subPlanRepo := NewMockSubPlanRepository()
+	repo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
+	bus := event.NewBus(event.BusConfig{EventRepo: repo})
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
+
+	planRepo.plans["plan-1"] = domain.Plan{
+		ID:               "plan-1",
+		WorkItemID:       "wi-1",
+		OrchestratorPlan: "Old orchestration",
+		Status:           domain.PlanPendingReview,
+		Version:          1,
+	}
+
+	raw := domain.RawPlanOutput{
+		ExecutionGroups: [][]string{{"repo-a"}},
+		Orchestration:   "New orchestration",
+		SubPlans:        []domain.RawSubPlan{{RepoName: "repo-a", Content: "new repo a"}},
+	}
+
+	sub, _ := bus.Subscribe("test", string(domain.EventPlanRevised))
+
+	if _, _, err := svc.ApplyReviewedPlanOutput(ctx, "plan-1", raw); err != nil {
+		t.Fatalf("ApplyReviewedPlanOutput failed: %v", err)
+	}
+
+	var got domain.SystemEvent
+	select {
+	case got = <-sub.C:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for EventPlanRevised")
+	}
+
+	if got.EventType != string(domain.EventPlanRevised) {
+		t.Errorf("event type = %q, want %q", got.EventType, domain.EventPlanRevised)
+	}
+	if got.WorkspaceID != "wi-1" {
+		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, "wi-1")
+	}
+	if got.Payload == "" || got.Payload == "{}" {
+		t.Errorf("Payload = %q, want non-empty JSON with plan_id", got.Payload)
+	}
+	var payload struct {
+		PlanID string `json:"plan_id"`
+	}
+	if err := json.Unmarshal([]byte(got.Payload), &payload); err != nil {
+		t.Fatalf("failed to unmarshal payload %q: %v", got.Payload, err)
+	}
+	if payload.PlanID != "plan-1" {
+		t.Errorf("PlanID = %q, want %q", payload.PlanID, "plan-1")
+	}
 }

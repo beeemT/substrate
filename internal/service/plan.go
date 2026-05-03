@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +24,24 @@ type PlanService struct {
 // NewPlanService creates a new PlanService.
 func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *PlanService {
 	return &PlanService{transacter: transacter, eventBus: eventBus}
+}
+
+// planRevisedPayload is the payload for EventPlanRevised.
+type planRevisedPayload struct {
+	PlanID string `json:"plan_id"`
+}
+
+// marshalJSONOrEmpty marshals v to JSON, returning "{}" on error.
+func marshalJSONOrEmpty(eventType string, v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Warn("failed to marshal event payload",
+			slog.String("event_type", eventType),
+			slog.String("error", err.Error()),
+		)
+		return "{}"
+	}
+	return string(b)
 }
 
 // Plan state transitions
@@ -310,9 +330,11 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 
 	if planChanged {
 		Emit(s.eventBus, domain.SystemEvent{
-			ID:        domain.NewID(),
-			EventType: string(domain.EventPlanRevised),
-			CreatedAt: time.Now(),
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventPlanRevised),
+			WorkspaceID: resultPlan.WorkItemID,
+			Payload:     marshalJSONOrEmpty(string(domain.EventPlanRevised), planRevisedPayload{PlanID: resultPlan.ID}),
+			CreatedAt:   time.Now(),
 		})
 	}
 
