@@ -1184,7 +1184,11 @@ func trackerRefsFromMetadata(metadata map[string]any) []domain.TrackerReference 
 }
 
 // publishEvent constructs a SystemEvent and publishes it to the event bus.
+// Nil-safe: if the event bus is not configured, the event is silently dropped.
 func (s *ImplementationService) publishEvent(ctx context.Context, eventType domain.EventType, workspaceID string, payload any) error {
+	if s.eventBus == nil {
+		return nil
+	}
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(eventType),

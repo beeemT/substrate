@@ -218,6 +218,7 @@ func overlayBodyHeight(termHeight, chromeLines int, spec SplitOverlaySizingSpec)
 	// Apply optional upper bound from spec.
 	if spec.MaxBodyHeight > 0 {
 		maxHeight = minInt(maxHeight, spec.MaxBodyHeight)
+		maxHeight = maxInt(minBodyHeight, maxHeight) // re-enforce minimum in case MaxBodyHeight < MinBodyHeight
 	}
 	return maxInt(1, maxHeight)
 }

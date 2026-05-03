@@ -240,7 +240,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Adapters.GitHub.IssueCommentContent = config.IssueCommentSubPlan
 
-	msg := ApprovePlanCmd(workItemSvc, planSvc, "plan-1", "wi-1")()
+	msg := ApprovePlanCmd(workItemSvc, planSvc, cfg, bus, "plan-1", "wi-1")()
 	if _, ok := msg.(PlanApprovedMsg); !ok {
 		t.Fatalf("msg = %T, want PlanApprovedMsg", msg)
 	}

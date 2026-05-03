@@ -66,6 +66,8 @@ func (m *ArtifactsModel) SetItems(items []ArtifactItem) {
 		m.cursor = -1
 	}
 	m.syncViewport()
+	// Auto-expanded cards may push the focused row below the viewport — scroll to make it visible.
+	m.ensureCursorVisible()
 }
 
 func artifactExpansionKey(item ArtifactItem) string {
@@ -228,9 +230,11 @@ func (m *ArtifactsModel) ensureCursorVisible() {
 	}
 	// The cursor row is at linesBefore.
 	if m.expandedSet[artifactExpansionKey(m.items[m.cursor])] {
-		// For expanded items, scroll so the row header is at the top only if it's above the viewport.
+		// For expanded items, scroll so the row header is at the top.
 		if linesBefore < m.viewport.YOffset {
 			m.viewport.SetYOffset(linesBefore)
+		} else if linesBefore >= m.viewport.YOffset+m.viewport.Height {
+			m.viewport.SetYOffset(linesBefore - m.viewport.Height + 1)
 		}
 	} else {
 		// For collapsed items, ensure the row is within the viewport.

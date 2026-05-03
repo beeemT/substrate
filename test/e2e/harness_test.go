@@ -157,8 +157,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	// --- Services ---
 	transacter := reposqlite.NewTransacter(db)
 	workItemSvc := service.NewSessionService(transacter, nil)
-	planSvc := service.NewPlanService(transacter)
-	sessionSvc := service.NewTaskService(transacter)
+	planSvc := service.NewPlanService(transacter, nil)
+	sessionSvc := service.NewTaskService(transacter, nil)
 	reviewSvc := service.NewReviewService(transacter)
 	workspaceSvc := service.NewWorkspaceService(transacter)
 	questionSvc := service.NewQuestionService(transacter)
@@ -188,9 +188,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		planSvc,
 		workItemSvc,
 		sessionSvc,
-		eventSvc,
+		bus,
 		workspaceSvc,
 		nil, // registry
+		questionSvc,
 		cfg,
 	)
 	if err != nil {
@@ -212,6 +213,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		nil, // foreman
 		nil, // questionSvc
 		nil, // reviewSvc
+		nil, // hookRegistry
 	)
 
 	// --- Review pipeline ---

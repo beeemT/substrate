@@ -173,9 +173,15 @@ func NewStyles(t Theme) Styles {
 			Background(lipgloss.Color(t.SelectionActive)),
 
 		// Sidebar item styles with status border
-		SidebarItem: lipgloss.NewStyle(),
+		SidebarItem: lipgloss.NewStyle().
+			BorderLeft(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.SidebarBorderDefault)),
 		SidebarItemSelected: lipgloss.NewStyle().
-			Background(lipgloss.Color(t.SelectedBg)),
+			Background(lipgloss.Color(t.SelectedBg)).
+			BorderLeft(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.SidebarBorderActive)),
 
 		// Sidebar item typography
 		SidebarItemTitle: lipgloss.NewStyle().

@@ -1,85 +1,60 @@
 -- Add previous_state column to work_items to track the state a session transitioned from
 -- (used for unarchive to restore the pre-archive state).
--- SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS; this migration uses
--- a pragma check to make it idempotent-safe. If the column already exists, the
--- migration succeeds without modification.
 --
--- Also adds 'archived' to the state CHECK constraint so that Archive() operations
--- do not violate the constraint (previous migrations defined the constraint without
--- 'archived' since archiving was not yet implemented).
+-- Also updates the state CHECK constraint to include 'archived' (new state added by this
+-- feature) and 'merged' (was missing from migration 001).
+--
+-- SQLite does not support DROP CONSTRAINT or ALTER COLUMN, so updating the CHECK
+-- constraint requires table recreation. We use explicit column lists (not SELECT *)
+-- to match the exact column set present at the time this migration runs.
+--
+-- Note: the migration runner wraps this file in a transaction; do NOT add BEGIN/COMMIT.
+PRAGMA foreign_keys = OFF;
 
--- Idempotent: only add column if it doesn't exist
-SELECT CASE
-	WHEN COUNT(*) = 0 THEN 0
-	ELSE 1
-	END
-FROM pragma_table_info('work_items')
-WHERE name = 'previous_state';
-
--- SQLite doesn't support IF NOT EXISTS for columns, so we use a conditional approach:
--- If the column doesn't exist, add it.
--- We use a transaction with a guard to make this idempotent.
-
--- First, check if we need to add the column
-CREATE TEMP TABLE IF NOT EXISTS _migration_guard AS
-SELECT COUNT(*) AS needs_column_add
-FROM pragma_table_info('work_items')
-WHERE name = 'previous_state';
-
-ATTACH DATABASE ':memory:' AS _guard_check;
--- The column add is done inline below, controlled by the needs_column_add check
-
--- Add the previous_state column if it doesn't exist
--- This runs unconditionally here; the guard table approach above is for documentation.
--- For SQLite, we use a PRAGMA to check and conditionally execute.
--- Note: We cannot use IF NOT EXISTS, so we check pragma_table_info first.
--- If this is a re-run, the ALTER will fail because the column exists.
--- To make this truly idempotent, we would need application-level migration tracking.
--- For now, this migration is marked as non-repeatable; run it only once.
-
--- Add previous_state column
-ALTER TABLE work_items ADD COLUMN previous_state TEXT;
-
--- Update the state CHECK constraint to include 'archived'.
--- SQLite doesn't support DROP CONSTRAINT, so we recreate the table.
--- This is done in a safe way by renaming, creating new table, and copying data.
-
--- Get the current table definition and modify it
--- Note: This is a simplified approach. In production, use a migration tool that
--- supports constraint modification, or run this as a separate migration.
-
--- For now, document that the CHECK constraint must be updated:
--- The existing CHECK constraint on state column needs to include 'archived'.
--- SQLite's ALTER TABLE does not support DROP CONSTRAINT.
--- This migration creates a new table with the updated constraint and copies data.
-
-PRAGMA foreign_keys=off;
-
-CREATE TABLE IF NOT EXISTS _work_items_backup AS SELECT * FROM work_items;
-
-DROP TABLE IF EXISTS _work_items_old;
-ALTER TABLE work_items RENAME TO _work_items_old;
-
-CREATE TABLE work_items (
-	id TEXT PRIMARY KEY,
-	workspace_id TEXT NOT NULL,
-	external_id TEXT,
-	source TEXT NOT NULL,
-	title TEXT NOT NULL,
-	state TEXT NOT NULL DEFAULT 'ingested',
-	plan_id TEXT,
-	external_url TEXT,
-	external_labels TEXT,
-	extra_context TEXT,
-	created_at TEXT NOT NULL,
-	updated_at TEXT NOT NULL,
-	previous_state TEXT,
-	CHECK (state IN ('ingested','planning','plan_review','approved','implementing','reviewing','completed','failed','archived'))
+-- Create new table with previous_state column and updated CHECK constraint.
+CREATE TABLE work_items_new (
+    id              TEXT PRIMARY KEY,
+    workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
+    external_id     TEXT,
+    source          TEXT NOT NULL,
+    source_scope    TEXT,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    assignee_id     TEXT,
+    state           TEXT NOT NULL,
+    labels          TEXT,
+    source_item_ids TEXT,
+    metadata        TEXT,
+    extra_context   TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    previous_state  TEXT,
+    CHECK (state IN ('ingested','planning','plan_review','approved','implementing','reviewing','completed','failed','archived','merged'))
 );
 
-INSERT INTO work_items SELECT * FROM _work_items_old;
+-- Copy data from the current work_items table.
+-- Explicit column list is required because the table schema has been extended by
+-- earlier migrations (e.g., extra_context from 010). Using * would break if the
+-- column count doesn't match.
+INSERT INTO work_items_new (
+    id, workspace_id, external_id, source, source_scope, title, description,
+    assignee_id, state, labels, source_item_ids, metadata, extra_context,
+    created_at, updated_at, previous_state
+) SELECT
+    id, workspace_id, external_id, source, source_scope, title, description,
+    assignee_id, state, labels, source_item_ids, metadata, extra_context,
+    created_at, updated_at, NULL
+FROM work_items;
 
-DROP TABLE _work_items_old;
-DROP TABLE _work_items_backup;
+-- Drop old table and rename new one. Foreign keys are OFF so this won't fail
+-- even though plans.work_item_id references work_items.
+DROP TABLE work_items;
+ALTER TABLE work_items_new RENAME TO work_items;
 
-PRAGMA foreign_keys=on;
+-- Restore indexes from the original schema (001).
+CREATE INDEX idx_work_items_state ON work_items(state);
+CREATE INDEX idx_work_items_source ON work_items(source);
+CREATE INDEX idx_work_items_workspace ON work_items(workspace_id);
+CREATE UNIQUE INDEX idx_work_items_external_id ON work_items(workspace_id, external_id) WHERE external_id IS NOT NULL;
+
+PRAGMA foreign_keys = ON;
