@@ -49,6 +49,71 @@ func TestSidebarArtifactsEntryRendersCorrectly(t *testing.T) {
 	}
 }
 
+func TestSidebarArtifactsEntryStatusBorderColor(t *testing.T) {
+	t.Parallel()
+
+	st := makeSidebarStyles()
+	defaultBorder := st.Theme.SidebarBorderDefault
+
+	tests := []struct {
+		name        string
+		reviewState string
+		ciState     string
+		wantBorder  string
+	}{
+		{"no state uses default", "", "", defaultBorder},
+		{"approved uses success", "approved", "", st.Theme.SidebarBorderSuccess},
+		{"changes requested uses warning", "changes_requested", "", st.Theme.SidebarBorderWarning},
+		{"ci failure uses error", "", "failure", st.Theme.SidebarBorderError},
+		{"ci success uses success", "", "success", st.Theme.SidebarBorderSuccess},
+		{"ci in_progress uses default", "", "in_progress", defaultBorder},
+		{"ci failure overrides approved", "approved", "failure", st.Theme.SidebarBorderError},
+		{"ci failure overrides changes_requested", "changes_requested", "failure", st.Theme.SidebarBorderError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entry := views.SidebarEntry{
+				Kind:                         views.SidebarEntryTaskArtifacts,
+				WorkItemID:                   "wi-1",
+				SessionID:                    "__artifacts__",
+				ArtifactAggregateReviewState: tt.reviewState,
+				ArtifactAggregateCIState:     tt.ciState,
+			}
+			border := entry.StatusBorderColor(st)
+			if border != tt.wantBorder {
+				t.Fatalf("StatusBorderColor = %q, want %q", border, tt.wantBorder)
+			}
+		})
+	}
+}
+
+func TestSidebarArtifactsAndSourceDetailsBorderMatchWhenNoStatus(t *testing.T) {
+	t.Parallel()
+
+	st := makeSidebarStyles()
+
+	artifactsEntry := views.SidebarEntry{
+		Kind:                         views.SidebarEntryTaskArtifacts,
+		WorkItemID:                   "wi-1",
+		SessionID:                    "__artifacts__",
+		ArtifactAggregateReviewState: "",
+		ArtifactAggregateCIState:     "",
+	}
+	sourceEntry := views.SidebarEntry{
+		Kind:       views.SidebarEntryTaskSourceDetails,
+		WorkItemID: "wi-1",
+		SessionID:  "__source_details__",
+	}
+
+	artifactsBorder := artifactsEntry.StatusBorderColor(st)
+	sourceBorder := sourceEntry.StatusBorderColor(st)
+
+	if artifactsBorder != sourceBorder {
+		t.Fatalf("Artifacts border %q != Source border %q when no status", artifactsBorder, sourceBorder)
+	}
+}
+
 func TestSidebarArtifactsEntryStatusIcon(t *testing.T) {
 	t.Parallel()
 

@@ -169,7 +169,7 @@ func (e SidebarEntry) StatusBorderColor(st styles.Styles) string {
 		return st.Theme.SidebarBorderDefault
 	}
 
-	// Artifacts use CI/review state
+	// Artifacts use CI/review state; if no status, treat like informational Source
 	if e.Kind == SidebarEntryTaskArtifacts {
 		if e.ArtifactAggregateCIState == "failure" {
 			return st.Theme.SidebarBorderError
@@ -180,6 +180,7 @@ func (e SidebarEntry) StatusBorderColor(st styles.Styles) string {
 		if e.ArtifactAggregateCIState == "success" || e.ArtifactAggregateReviewState == "approved" {
 			return st.Theme.SidebarBorderSuccess
 		}
+		// No status to report — use default like Source details
 		return st.Theme.SidebarBorderDefault
 	}
 

@@ -300,7 +300,7 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 
 	var parts []string
 
-	// Main content parts (always inherit selection background when selected).
+	// Main content parts.
 	if selected {
 		parts = append(parts, m.styles.SidebarSelected.Render(indicator))
 		parts = append(parts, m.styles.SidebarSelected.Render(" "+item.Ref))
@@ -317,28 +317,29 @@ func (m ArtifactsModel) renderCollapsedRow(idx int, item ArtifactItem) string {
 
 	reviewSummary := m.reviewSummaryText(item, selected)
 	if reviewSummary != "" {
-		parts = append(parts, "  "+reviewSummary)
+		parts = append(parts, reviewSummary)
 	}
 	ciSummary := m.ciSummaryText(item, selected)
 	if ciSummary != "" {
-		parts = append(parts, "  "+ciSummary)
+		parts = append(parts, ciSummary)
 	}
 
 	line := strings.Join(parts, "")
 	line = ansi.Truncate(line, m.width, "…")
 
 	if selected {
-		// No outer wrapper: parts are already styled individually with SidebarSelected.
-		// Wrapping would escape pre-rendered ANSI sequences (e.g. review/CI status),
-		// breaking background continuity where those sequences terminate foreground.
+		visualWidth := ansi.StringWidth(line)
+		if visualWidth < m.width {
+			line += m.styles.SidebarSelected.Render(strings.Repeat(" ", m.width-visualWidth))
+		}
 		return line
 	}
 	return m.styles.SettingsText.Render(line)
 }
 
 // reviewSummaryText returns a compact review status string for the collapsed row.
-// When selected is true, foreground styles inherit the selection background so they
-// render correctly when the row itself is wrapped in a background style.
+// Leading two spaces are included so they render with the selection background when
+// selected, avoiding gaps in the row highlight.
 func (m ArtifactsModel) reviewSummaryText(item ArtifactItem, selected bool) string {
 	if len(item.Reviews) == 0 {
 		return ""
@@ -363,15 +364,16 @@ func (m ArtifactsModel) reviewSummaryText(item ArtifactItem, selected bool) stri
 			return m.styles.Muted, "◐ review"
 		}
 	}()
+	// Include leading separator so it renders with the selection background.
 	if selected {
-		return statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
+		return m.styles.SidebarSelected.Render("  ") + statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
 	}
-	return statusFg.Render(statusText)
+	return "  " + statusFg.Render(statusText)
 }
 
 // ciSummaryText returns a compact CI status string for the collapsed row.
-// When selected is true, foreground styles inherit the selection background so they
-// render correctly when the row itself is wrapped in a background style.
+// Leading two spaces are included so they render with the selection background when
+// selected, avoiding gaps in the row highlight.
 func (m ArtifactsModel) ciSummaryText(item ArtifactItem, selected bool) string {
 	if len(item.Checks) == 0 {
 		return ""
@@ -396,10 +398,11 @@ func (m ArtifactsModel) ciSummaryText(item ArtifactItem, selected bool) string {
 			return m.styles.Success, "✓ CI"
 		}
 	}()
+	// Include leading separator so it renders with the selection background.
 	if selected {
-		return statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
+		return m.styles.SidebarSelected.Render("  ") + statusFg.Inherit(m.styles.SidebarSelected).Render(statusText)
 	}
-	return statusFg.Render(statusText)
+	return "  " + statusFg.Render(statusText)
 }
 
 func (m ArtifactsModel) renderExpandedCard(idx int) string {
