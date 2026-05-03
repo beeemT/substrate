@@ -224,6 +224,8 @@ func newWithDeps(
 }
 
 func (a *GithubAdapter) viewerLogin(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if strings.TrimSpace(a.viewer) != "" {
 		return a.viewer, nil
 	}
@@ -1838,8 +1840,11 @@ func extractRepoFromExternalID(externalID string) string {
 
 // isOwnRepo returns true if the repository is owned by the authenticated user.
 func (a *GithubAdapter) isOwnRepo(repo string) bool {
+	a.mu.RLock()
+	viewer := a.viewer
+	a.mu.RUnlock()
 	if idx := strings.IndexByte(repo, '/'); idx > 0 {
-		return repo[:idx] == a.viewer
+		return repo[:idx] == viewer
 	}
 	return false
 }
