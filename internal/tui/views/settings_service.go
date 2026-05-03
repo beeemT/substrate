@@ -509,6 +509,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "review", Key: "pass_threshold", Label: "Pass Threshold", Type: SettingsFieldEnum, Value: string(cfg.Review.PassThreshold), Options: []string{"nit_only", "minor_ok", "no_critiques"}, Required: true},
 				{Section: "review", Key: "max_cycles", Label: "Max Cycles", Type: SettingsFieldString, Value: intPtrStr(cfg.Review.MaxCycles)},
+				{Section: "review", Key: "timeout", Label: "Timeout", Type: SettingsFieldString, Value: strPtrStr(cfg.Review.Timeout)},
+				{Section: "review", Key: "auto_feedback_loop", Label: "Auto Feedback Loop", Type: SettingsFieldBool, Value: boolPtrStr(cfg.Review.AutoFeedbackLoop)},
 			},
 		},
 		{
@@ -593,6 +595,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.gitlab", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.Assignee},
 				{Section: "adapters.gitlab", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitLab.PollInterval},
 				{Section: "adapters.gitlab", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitLab.StateMappings)},
+				{Section: "adapters.gitlab", Key: "issue_comment_content", Label: "Issue Comment Content", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitLab.IssueCommentContent), Options: []string{"none", "orchestrator_plan", "sub_plan", "orchestrator_and_sub_plan", "full_plan"}},
 			},
 		},
 		{
@@ -607,9 +610,12 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Description: "GitHub issues and PR integration",
 			Fields: []SettingsField{
 				{Section: "adapters.github", Key: "token_ref", Label: "Token", Type: SettingsFieldSecret, Value: secretDisplayValue(cfg.Adapters.GitHub.TokenRef, cfg.Adapters.GitHub.Token), Sensitive: true, Status: config.GitHubAuthSource(cfg.Adapters.GitHub)},
+				{Section: "adapters.github", Key: "base_url", Label: "Base URL", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.BaseURL},
 				{Section: "adapters.github", Key: "assignee", Label: "Assignee", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.Assignee},
 				{Section: "adapters.github", Key: "poll_interval", Label: "Poll Interval", Type: SettingsFieldString, Value: cfg.Adapters.GitHub.PollInterval},
 				{Section: "adapters.github", Key: "state_mappings", Label: "State Mappings", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.GitHub.StateMappings)},
+				{Section: "adapters.github", Key: "issue_comment_content", Label: "Issue Comment Content", Type: SettingsFieldEnum, Value: string(cfg.Adapters.GitHub.IssueCommentContent), Options: []string{"none", "orchestrator_plan", "sub_plan", "orchestrator_and_sub_plan", "full_plan"}},
+				{Section: "adapters.github", Key: "post_merge_close_issue", Label: "Post Merge Close Issue", Type: SettingsFieldBool, Value: strconv.FormatBool(cfg.Adapters.GitHub.PostMergeCloseIssue)},
 			},
 		},
 		{
@@ -755,6 +761,10 @@ func applyField(cfg *config.Config, field SettingsField) error {
 			return err
 		}
 		cfg.Review.MaxCycles = parsed
+	case "review.timeout":
+		cfg.Review.Timeout = parseOptionalString(fieldPath, value)
+	case "review.auto_feedback_loop":
+		cfg.Review.AutoFeedbackLoop = parseOptionalBool(fieldPath, value)
 	case "foreman.question_timeout":
 		cfg.Foreman.QuestionTimeout = value
 	case "harness.default":
@@ -819,6 +829,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.GitLab.PollInterval = value
 	case "adapters.gitlab.state_mappings":
 		cfg.Adapters.GitLab.StateMappings = parseMap(value)
+	case "adapters.gitlab.issue_comment_content":
+		cfg.Adapters.GitLab.IssueCommentContent = config.IssueCommentContent(value)
 	case "adapters.sentry.token_ref":
 		cfg.Adapters.Sentry.Token, cfg.Adapters.Sentry.TokenRef = applySecretField(value, "sentry.token")
 	case "adapters.sentry.base_url":
@@ -842,6 +854,12 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.GitHub.Labels = parseList(value)
 	case "adapters.github.state_mappings":
 		cfg.Adapters.GitHub.StateMappings = parseMap(value)
+	case "adapters.github.base_url":
+		cfg.Adapters.GitHub.BaseURL = value
+	case "adapters.github.issue_comment_content":
+		cfg.Adapters.GitHub.IssueCommentContent = config.IssueCommentContent(value)
+	case "adapters.github.post_merge_close_issue":
+		cfg.Adapters.GitHub.PostMergeCloseIssue = value == "true"
 	case "adapters.glab.reviewers":
 		cfg.Adapters.Glab.Reviewers = parseList(value)
 	case "adapters.glab.labels":
@@ -940,6 +958,10 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Sets how strict the review pipeline is before a change is accepted.", "minor_ok"
 	case "review.max_cycles":
 		return "Maximum review and re-implementation cycles before escalation to a human.", "3"
+	case "review.timeout":
+		return "Maximum time for the review pipeline; 0 uses the default (1 hour).", "0"
+	case "review.auto_feedback_loop":
+		return "Enable automatic feedback loop for review iterations.", "false"
 	case "foreman.question_timeout":
 		return "How long Foreman waits before timing out a question; 0 disables the timeout.", "0"
 	case "harness.default":
@@ -1000,6 +1022,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Polling interval for GitLab watch updates.", "5m"
 	case "adapters.gitlab.state_mappings":
 		return "Maps Substrate tracker states to GitLab issue states.", statusEmpty
+	case "adapters.gitlab.issue_comment_content":
+		return "What plan content is posted as a comment on linked GitLab issues at plan approval.", "sub_plan"
 	case "adapters.github.token_ref":
 		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", statusEmpty
 	case "adapters.github.assignee":
@@ -1012,6 +1036,12 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Default labels applied to GitHub pull requests created by Substrate.", statusEmpty
 	case "adapters.github.state_mappings":
 		return "Maps Substrate tracker states to GitHub issue states.", statusEmpty
+	case "adapters.github.base_url":
+		return "Base URL for the GitHub API (useful for GitHub Enterprise).", "https://api.github.com"
+	case "adapters.github.issue_comment_content":
+		return "What plan content is posted as a comment on linked GitHub issues at plan approval.", "sub_plan"
+	case "adapters.github.post_merge_close_issue":
+		return "Close linked issue when all PRs are merged.", "false"
 	case "adapters.sentry.token_ref":
 		return "Sentry token stored in config or the OS keychain; runtime may also use SENTRY_AUTH_TOKEN or authenticated sentry CLI.", statusEmpty
 	case "adapters.sentry.base_url":
@@ -1045,6 +1075,22 @@ func intPtrStr(p *int) string {
 	return strconv.Itoa(*p)
 }
 
+func strPtrStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+
+	return *p
+}
+
+func boolPtrStr(p *bool) string {
+	if p == nil {
+		return "false"
+	}
+
+	return strconv.FormatBool(*p)
+}
+
 func parseOptionalInt(fieldPath, v string) (*int, error) {
 	if strings.TrimSpace(v) == "" {
 		return nil, nil
@@ -1055,6 +1101,27 @@ func parseOptionalInt(fieldPath, v string) (*int, error) {
 	}
 
 	return &parsed, nil
+}
+
+func parseOptionalString(fieldPath, v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+
+	return &v
+}
+
+func parseOptionalBool(fieldPath, v string) *bool {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+
+	return &parsed
 }
 
 func parseInt(fieldPath, v string) (int, error) {

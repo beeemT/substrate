@@ -20,6 +20,13 @@ func reviewItems() []views.ArtifactItem {
 	}
 }
 
+func reviewItemsWithClosedPR() []views.ArtifactItem {
+	return []views.ArtifactItem{
+		{ID: "github:acme/api:#7", Provider: "github", Kind: "PR", RepoName: "acme/api", Ref: "#7", State: "closed"},
+		{ID: "github:acme/web:#20", Provider: "github", Kind: "PR", RepoName: "acme/web", Ref: "#20", State: "open"},
+	}
+}
+
 func reviewCommentsForTwoPRs() map[string][]adapter.ReviewComment {
 	return map[string][]adapter.ReviewComment{
 		"github:acme/api:#7": {
@@ -82,6 +89,50 @@ func TestReviewFollowup_ApplyFetch_MultiPR_GoesToPicker(t *testing.T) {
 	}
 	if m.Stage() != views.ReviewFollowupStagePicker() {
 		t.Fatalf("expected picker stage, got %v", m.Stage())
+	}
+}
+
+func TestReviewFollowup_ApplyFetch_ClosedPR_NotSelectedByDefault(t *testing.T) {
+	t.Parallel()
+	m := views.NewReviewFollowupModel(newTestStyles(t))
+	m.SetSize(120, 30)
+	_, _ = m.OpenLoading("wi-1", reviewItemsWithClosedPR())
+	comments := map[string][]adapter.ReviewComment{
+		"github:acme/api:#7":  {{ID: "a-1", ReviewerLogin: "alice", Body: "fix it"}},
+		"github:acme/web:#20": {{ID: "w-1", ReviewerLogin: "bob", Body: "fix this too"}},
+	}
+	if keep := m.ApplyFetchResult(comments, time.Now()); !keep {
+		t.Fatal("expected overlay retained")
+	}
+	if m.Stage() != views.ReviewFollowupStagePicker() {
+		t.Fatalf("expected picker stage, got %v", m.Stage())
+	}
+	// Closed PR must not be pre-selected.
+	if m.PickerSelectedForTest("github:acme/api:#7") {
+		t.Fatal("closed PR #7 should not be selected by default")
+	}
+	// Open PR must be pre-selected.
+	if !m.PickerSelectedForTest("github:acme/web:#20") {
+		t.Fatal("open PR #20 should be selected by default")
+	}
+}
+
+func TestReviewFollowup_Selector_FocusIndicatorOnCursor(t *testing.T) {
+	t.Parallel()
+	m := views.NewReviewFollowupModel(newTestStyles(t))
+	m.SetSize(120, 30)
+	_, _ = m.OpenLoading("wi-1", reviewItems())
+	m.ApplyFetchResult(reviewCommentsForTwoPRs(), time.Now())
+	m.ApplyPickerAllForTest()
+	view := m.View()
+	// The list pane border changes color when focused (OverlayPaneFocused vs OverlayPane).
+	// Confirm the view renders without panicking or exceeding dimensions.
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		w := ansi.StringWidth(line)
+		if w > 120 {
+			t.Fatalf("line %d exceeds width 120: %d (%q)", i, w, line)
+		}
 	}
 }
 

@@ -205,7 +205,8 @@ func (m *ReviewFollowupModel) ApplyFetchResult(commentsByItem map[string][]adapt
 	m.pickerItems = withUnresolved
 	m.pickerSelected = make(map[string]bool, len(withUnresolved))
 	for _, it := range withUnresolved {
-		m.pickerSelected[it.ID] = true
+		// Closed PRs are excluded from the default selection.
+		m.pickerSelected[it.ID] = it.State != "closed"
 	}
 
 	// Pre-select every comment.
@@ -602,7 +603,12 @@ func (m ReviewFollowupModel) renderSelectorList(width, height int) string {
 			body := strings.TrimSpace(strings.SplitN(c.Body, "\n", 2)[0])
 			line = fmt.Sprintf("    %s %s%s — %s", mark, locator, c.ReviewerLogin, body)
 		}
-		out = append(out, ansi.Truncate(line, width, "…"))
+		focused := m.focus == reviewSelectorFocusList && i == m.selectorCursor
+		if focused {
+			out = append(out, ansi.Truncate(m.styles.SidebarSelected.Width(width).Render(line), width, "\u2026"))
+		} else {
+			out = append(out, ansi.Truncate(line, width, "\u2026"))
+		}
 	}
 	return strings.Join(out, "\n")
 }

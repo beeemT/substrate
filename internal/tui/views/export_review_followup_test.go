@@ -23,3 +23,9 @@ func (m *ReviewFollowupModel) ApplyPickerAllForTest() {
 	}
 	// Single-PR path already landed in selector; no-op.
 }
+
+// PickerSelectedForTest returns the picker selection state for a given item ID.
+// Used by tests to assert closed/open PR pre-selection behavior.
+func (m *ReviewFollowupModel) PickerSelectedForTest(itemID string) bool {
+	return m.pickerSelected[itemID]
+}
