@@ -10,9 +10,15 @@ either:
 
 1. **Guard before modifying** — check `pragma_table_info` or `pragma_foreign_key_list`
    and skip if the column/constraint already exists.
-2. **Fail safely on re-run** — if a guard is not feasible, the migration MUST detect
-   prior completion (e.g., via a dedicated `_migrations` tracking table) and return
-   early without modifying the schema or data.
+2. **Guard table with UNIQUE constraint** — for table-rebuilding migrations, use a guard
+   table with a unique key. On first run, claim the guard with `INSERT INTO guard VALUES ('done')`.
+   On re-run, the `INSERT` fails with `UNIQUE constraint failed`, rolling back the transaction
+   and preventing data loss. Example:
+   ```sql
+   CREATE TABLE IF NOT EXISTS _migration_guard (id TEXT PRIMARY KEY);
+   INSERT INTO _migration_guard VALUES ('015_my_migration');  -- fails on re-run
+   -- ... migration steps ...
+   ```
 
 Migrations MUST NOT:
 - Drop tables or columns that may contain user data on re-run

@@ -20,18 +20,12 @@ type TaskService struct {
 
 // taskEventPayload holds the JSON payload for task lifecycle events.
 type taskEventPayload struct {
-	Task       domain.Task `json:"session"`
-	TaskID     string      `json:"session_id"`
-	WorkItemID string      `json:"work_item_id"`
+	Task domain.Task `json:"session"`
 }
 
 // marshalTaskPayload serializes a task event payload to JSON.
 func marshalTaskPayload(task domain.Task) string {
-	p := taskEventPayload{
-		Task:       task,
-		TaskID:     task.ID,
-		WorkItemID: task.WorkItemID,
-	}
+	p := taskEventPayload{Task: task}
 	b, _ := json.Marshal(p)
 	return string(b)
 }

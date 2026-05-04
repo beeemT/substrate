@@ -1,6 +1,9 @@
 # 10 - Foreman Lifecycle Ownership
 
 <!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
+<!-- docs:status-updated 2026-05-01 -->
+<!-- docs:migration-status NOT_STARTED -->
+<!-- docs:naming-collision Note: orchestrator.ReviewFollowup (new) collides with views.ReviewFollowupModel (existing TUI overlay). Rename the orchestrator type to avoid confusion. -->
 
 The Foreman is the persistent harness session that handles unresolved questions during implementation. This document covers the ownership boundary between orchestrator and TUI.
 
@@ -35,6 +38,46 @@ App.foremanPlanID (field)     tracks active plan
 3. **TUI state duplication** — `foremanPlanID string` in `App` tracks what plan the Foreman is running for, duplicating knowledge the orchestrator already holds.
 4. **Follow-up boundary violation** — Follow-up sessions are driven by the TUI calling `restartForemanForTask()`, breaking the `ImplementationService` boundary.
 5. **Test coupling** — TUI handlers that test Foreman interaction must construct or mock `*Foreman` directly.
+
+---
+
+## 1b. Current State Verification (as of 2026-05-01)
+
+Confirmed at these exact locations:
+
+### TUI holds `*orchestrator.Foreman` directly
+- `internal/tui/views/services.go:38` — `Foreman *orchestrator.Foreman`
+- `internal/tui/views/cmds.go:1225` — `StartForemanCmd(foreman *orchestrator.Foreman, ...)`
+- `internal/tui/views/cmds.go:1283` — `StopForemanCmd(foreman *orchestrator.Foreman)`
+- `internal/tui/views/app.go:1666–1669` — `StartForemanCmd` dispatched on `PlanApprovedMsg`
+- `internal/tui/views/app.go:1714–1719` — `StopForemanCmd` dispatched on `FollowUpDoneMsg`
+- `internal/tui/views/app.go:1858–1863` — `StopForemanCmd` on `WorkItemUpdatedMsg`
+- `internal/tui/views/app.go:1900–1920` — `StartForemanCmd` on `PlanReImplementsMsg` / `PlanRetryImplementsMsg`
+- `internal/tui/views/app.go:2295–2301` — `StopForemanCmd` on `ImplementationCompleteMsg`
+- `internal/tui/views/app.go:3047–3111` — `restartForemanForTask()` and `teardownAllPipelines()`
+- `internal/tui/views/app.go:3336–3339` — Sidebar reads `SessionID()`, `LastPlanID()`, `LastSessionID()`
+
+### Interfaces do not exist
+`ForemanLifecycle`, `ForemanReadOnly`, `ForemanAnswerer` are not present anywhere in the codebase.
+
+### Events do not exist
+`EventForemanStarted`, `EventForemanStopped` are not present in `internal/domain/event.go`.
+
+### `ImplementationService.foreman` is the orphaned field
+- `internal/orchestrator/implementation.go` — `foreman *Foreman` field; never called in that file
+- `internal/orchestrator/question_router.go` — `foreman *Foreman` field; used for restart-on-failure
+
+### `ReviewFollowup` does not exist
+No `ReviewFollowup` type in `internal/orchestrator/`. The TUI overlay named `ReviewFollowupModel` is unrelated (UI component for review comments, not lifecycle ownership).
+
+### `foremanPlanID` is present
+- `internal/tui/views/app.go:197` — `foremanPlanID string` field on `App`
+
+### `BeginForeman`/`EndForeman`/`FollowUp` do not exist
+No lifecycle methods on `ImplementationService`.
+
+### Summary of required work
+The migration is entirely unstarted. All five phases need to be implemented from scratch.
 
 ---
 
