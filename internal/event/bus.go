@@ -67,9 +67,15 @@ type Subscriber struct {
 // Bus implements a channel-based pub/sub system with topic routing,
 // synchronous pre-hooks, and asynchronous post-hooks.
 //
-// The bus is purely async for event delivery. For synchronous validation
-// that can abort an operation before it proceeds, use the worktree.HookRegistry
-// instead.
+// Transaction boundary: the bus persists events outside the caller's transaction.
+// This is intentional — if event persistence were wrapped in the caller's transaction
+// and that transaction rolled back, we would have already dispatched the event
+// (triggering side effects like adapter calls, worktree operations, etc.) but lost
+// the record of it. The bus is the source of truth for what was dispatched; callers
+// must treat bus.Publish() as idempotent if they need at-least-once delivery guarantees.
+//
+// For synchronous validation that can abort an operation before it proceeds, use the
+// worktree.HookRegistry instead.
 type Bus struct {
 	mu          sync.RWMutex
 	subscribers map[string]*Subscriber // subscriber ID -> subscriber

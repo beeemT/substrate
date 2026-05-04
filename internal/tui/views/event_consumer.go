@@ -23,14 +23,20 @@ func NewEventConsumer(app *App, sub *event.Subscriber) *EventConsumer {
 	return &EventConsumer{app: app, sub: sub}
 }
 
-// BridgeCmd returns a tea.Cmd that reads events from the subscriber channel
-// and forwards them as DomainEventMsg to the update loop.
+// BridgeCmd returns a tea.Cmd that reads a single event from the subscriber
+// channel and forwards it as DomainEventMsg to the update loop. Multiple
+// invocations drain one event per call, ensuring each event gets processed.
 func (ec *EventConsumer) BridgeCmd() tea.Cmd {
 	return func() tea.Msg {
-		for evt := range ec.sub.C {
+		select {
+		case evt, ok := <-ec.sub.C:
+			if !ok {
+				return nil
+			}
 			return DomainEventMsg{Event: evt}
+		default:
+			return nil
 		}
-		return nil
 	}
 }
 

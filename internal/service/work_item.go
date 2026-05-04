@@ -375,7 +375,7 @@ func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.Se
 
 	go func() {
 		if err := s.bus.Publish(ctx, domain.SystemEvent{
-			ID:          item.ID,
+			ID:          domain.NewID(),
 			EventType:   string(eventType),
 			WorkspaceID: item.WorkspaceID,
 			CreatedAt:   time.Now(),
@@ -510,7 +510,11 @@ func (s *SessionService) Archive(ctx context.Context, id string) error {
 
 // Unarchive restores an archived work item to its PreviousState.
 func (s *SessionService) Unarchive(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	var committed struct {
+		from, to domain.SessionState
+		item     *domain.Session
+	}
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		item, err := res.Sessions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("work item", id)
@@ -533,8 +537,20 @@ func (s *SessionService) Unarchive(ctx context.Context, id string) error {
 		item.State = previousState          // restore to the pre-archive state
 		item.UpdatedAt = now
 
+		committed.from = domain.SessionArchived
+		committed.to = previousState
+		committed.item = &item
+
 		return res.Sessions.Update(ctx, item)
 	})
+	if err != nil {
+		return err
+	}
+	// Emit state change event asynchronously.
+	go func() {
+		s.emitStateChange(context.Background(), committed.from, committed.to, *committed.item)
+	}()
+	return nil
 }
 
 // StartFollowUpPlanning transitions a completed work item back to planning for a follow-up round.
