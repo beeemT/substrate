@@ -292,9 +292,23 @@ func (a *GitlabAdapter) Resolve(ctx context.Context, sel adapter.Selection) (dom
 	case domain.ScopeIssues:
 		issues := make([]issue, 0, len(sel.ItemIDs))
 		for _, itemID := range sel.ItemIDs {
+			// Support both numeric project IDs (legacy) and path-based external IDs.
 			projectID, iid, err := parseIssueSelectionID(0, itemID)
 			if err != nil {
 				return domain.Session{}, err
+			}
+			// If we got a numeric project ID, resolve it to the current project.
+			if projectID == 0 && strings.Contains(itemID, "/") {
+				// Path-based external ID: resolve project path to numeric ID.
+				parts := strings.SplitN(itemID, ":", 2)
+				if len(parts) == 2 && parts[0] == "gl" {
+					pathParts := strings.Split(parts[1], "#")[0]
+					pid, err := a.resolveNumericProjectID(ctx, pathParts)
+					if err != nil {
+						return domain.Session{}, err
+					}
+					projectID = pid
+				}
 			}
 			iss, err := a.fetchIssue(ctx, projectID, iid)
 			if err != nil {
