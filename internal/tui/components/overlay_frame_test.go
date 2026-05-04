@@ -40,8 +40,8 @@ func TestComputeSplitOverlayLayoutClampsToViewportAndChrome(t *testing.T) {
 	if layout.InputWidth != 44 {
 		t.Fatalf("input width = %d, want 44", layout.InputWidth)
 	}
-	if layout.BodyHeight != 7 {
-		t.Fatalf("body height = %d, want 7", layout.BodyHeight)
+	if layout.BodyHeight != 8 {
+		t.Fatalf("body height = %d, want 8", layout.BodyHeight)
 	}
 	if layout.LeftPaneWidth != 31 || layout.RightPaneWidth != 32 {
 		t.Fatalf("pane widths = (%d, %d), want (31, 32)", layout.LeftPaneWidth, layout.RightPaneWidth)
@@ -49,14 +49,17 @@ func TestComputeSplitOverlayLayoutClampsToViewportAndChrome(t *testing.T) {
 	if layout.LeftInnerWidth != 27 || layout.RightInnerWidth != 28 {
 		t.Fatalf("inner widths = (%d, %d), want (27, 28)", layout.LeftInnerWidth, layout.RightInnerWidth)
 	}
-	if layout.ListHeight != 5 {
-		t.Fatalf("list height = %d, want 5", layout.ListHeight)
+	if layout.ListHeight != 6 {
+		t.Fatalf("list height = %d, want 6", layout.ListHeight)
 	}
-	if layout.ViewportWidth != 26 || layout.ViewportHeight != 4 {
-		t.Fatalf("viewport = (%d, %d), want (26, 4)", layout.ViewportWidth, layout.ViewportHeight)
+	if layout.ViewportWidth != 26 || layout.ViewportHeight != 5 {
+		t.Fatalf("viewport = (%d, %d), want (26, 5)", layout.ViewportWidth, layout.ViewportHeight)
 	}
 	if layout.ViewportHeight+1 != layout.ListHeight {
 		t.Fatalf("viewport height = %d, want detail title to reserve exactly one row from list height %d", layout.ViewportHeight, layout.ListHeight)
+	}
+	if layout.ViewportHeight != 5 {
+		t.Fatalf("viewport height = %d, want 5", layout.ViewportHeight)
 	}
 }
 

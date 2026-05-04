@@ -1370,7 +1370,12 @@ func (m *NewSessionOverlay) browserChromeLines(renderWidth int) int {
 	advancedRows := m.advancedFilterRows()
 	visibleAdvancedRows := renderedLineCount(advancedRows)
 	reservedAdvancedRows := maxInt(budget.advancedRows, visibleAdvancedRows)
-	return headerLines + reservedAdvancedRows + 5 + browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), renderWidth)
+	// Hint footer renders at frame content width (ContentWidth minus frame padding).
+	// This is wider than renderWidth (ContentWidth-4) used for other chrome elements,
+	// so we must use this width in the budget to avoid off-by-one errors.
+	footerWidth := maxInt(1, renderWidth+2)
+	hintCount := browserHintLineCountForParts(browserHintParts(budget.hasStates, budget.hasViews), footerWidth)
+	return headerLines + reservedAdvancedRows + 5 + hintCount
 }
 
 func (m *NewSessionOverlay) browserLayout() components.SplitOverlayLayout {
@@ -2566,7 +2571,6 @@ func (m *NewSessionOverlay) SetSize(w, h int) {
 	m.height = h
 	baseLayout := components.ComputeSplitOverlayLayout(m.width, m.height, 0, browseSizingSpec)
 	m.resizeInputs(maxInt(1, baseLayout.ContentWidth-browseSizingSpec.InputWidthOffset))
-	m.syncDetailViewport(false)
 	modalFrameWidth, modalBodyHeight := m.extraContextModalSize()
 	m.extraContextInput.SetMaxLines(maxInt(1, modalBodyHeight-3))
 	m.extraContextInput.SetWidth(maxInt(1, m.styles.Chrome.OverlayFrame.InnerWidth(modalFrameWidth)))

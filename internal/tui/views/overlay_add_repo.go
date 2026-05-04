@@ -381,14 +381,15 @@ func (m AddRepoOverlay) browserLayout() components.SplitOverlayLayout {
 // browserChromeLines counts all lines outside the pane body.
 func (m AddRepoOverlay) browserChromeLines(renderWidth int) int {
 	// Frame borders (top + bottom) = 2
+	// Header: title (rendered by RenderOverlayFrame) + source labels = 2 lines
 	// Blank separator between header and body (added by RenderOverlayFrame) = 1
-	// Header: title + source labels = 2 lines
 	// Filter row = 1
 	// Search row = 1
 	// Divider line = 1
-	// Hint footer = 1+ lines
-	hintLines := addRepoHintLineCount(renderWidth)
-	return 2 + 1 + 2 + 1 + 1 + 1 + hintLines
+	// Hint footer renders at frame content width (wider than renderWidth).
+	footerWidth := maxInt(1, renderWidth+2)
+	hintLines := addRepoHintLineCount(footerWidth)
+	return 2 + 2 + 1 + 1 + 1 + 1 + hintLines
 }
 
 // resizeInputs sets the input widths to the layout input width.
