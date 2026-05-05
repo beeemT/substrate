@@ -107,7 +107,7 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 
 		// Parallel pull phase for remaining repos
 		if len(repoPaths) > 1 {
-			results, _ := workerpool.ProcessAll(ctx, repoPaths[1:], workerpool.Config{}, func(ctx context.Context, repoPath string) (pullResult, error) {
+			results, _ := workerpool.ProcessAll(ctx, repoPaths[1:], workerpool.Config{Workers: 4}, func(ctx context.Context, repoPath string) (pullResult, error) {
 				repoName := filepath.Base(repoPath)
 				output, err := d.gitClient.PullMainWorktree(ctx, repoPath)
 				return pullResult{repoName: repoName, output: output, err: err}, nil
