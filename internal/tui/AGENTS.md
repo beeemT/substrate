@@ -105,21 +105,27 @@ Every event emitted by the service layer or orchestrator that the TUI subscribes
 `work_item_id` as a top-level JSON string field. See `internal/service/AGENTS.md` for the full
 contract and helper functions.
 
+### Event → message pipeline
+
+```
+domain.SystemEvent{Payload: JSON} 
+  → eventHandlerRegistry[EventType] 
+  → typed decoder function 
+  → tea.Msg (WorkItemUpdatedMsg, ImplementationStartedMsg, etc.) 
+  → App.Update case block
+```
+
+All work-item state events (`work_item.*`) and high-cardinality events use typed messages.
+Low-cardinality agent session lifecycle events that don't need targeted reload may use `extractWorkItemID`
+in the switch case directly.
+
 ### Adding a new event handler
 
-1. Add the event type to the `subscriptions` slice in `initEventSubscriptions`.
-2. If the event changes work item state, call `LoadSessionCmd` and `LoadTasksForSessionCmd` (not only
-   `LoadTasksForSessionCmd`). The `EventAgentSessionStarted` case is the canonical example.
-3. If the event is purely informational (no state reload needed), document why it is a no-op in a
-   comment — do not silently drop events that should have a handler.
-4. If a new typed message type is needed, add it to `msgs.go`, add the decoder to
-   `event_consumer.go`, and wire it in `eventToMsg`.
-
-### Extractors vs typed messages
-
-Low-cardinality events (agent session lifecycle, work item state transitions) use `extractWorkItemID`
-and `extractSessionID` in the switch case to dispatch `LoadSessionCmd`/`LoadTasksForSessionCmd`.
-High-cardinality or structurally complex events use typed message types decoded via
-`eventToMsg` and handled in dedicated `case` blocks (e.g. `QuestionRaisedMsg`).
-Do not mix both patterns for the same event.
+1. Add the event type constant to `internal/domain/event.go` if it does not exist.
+2. Add a typed message struct to `msgs.go` (e.g. `type MyEventMsg struct{ WorkItemID string }`).
+3. Add a decoder function to `event_consumer.go` and register it in `eventHandlerRegistry`.
+4. Add the event type to the `subscriptions` slice in `initEventSubscriptions` in `app.go`.
+5. In `App.Update`, add a `case MyEventMsg:` that calls `LoadSessionCmd` if the event changes work item state,
+   or returns early if it is purely informational.
+6. If the event is purely informational, document why it is a no-op — do not silently drop events.
 
