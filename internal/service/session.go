@@ -209,10 +209,13 @@ func (s *TaskService) Transition(ctx context.Context, id string, to domain.TaskS
 	})
 }
 
-// Start transitions a task from pending to running.
+// Start transitions a task from pending to running and emits EventAgentSessionStarted
+// so the TUI reloads the task list when an agent session begins executing.
 func (s *TaskService) Start(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		task, err = res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
@@ -232,6 +235,18 @@ func (s *TaskService) Start(ctx context.Context, id string) error {
 
 		return res.Tasks.Update(ctx, task)
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStarted),
+		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskPayload(task),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // WaitForAnswer transitions a task from running to waiting_for_answer.
