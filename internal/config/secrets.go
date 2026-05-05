@@ -151,3 +151,21 @@ func getSecretField(cfg *Config, field string) string {
 		return ""
 	}
 }
+
+// NoopKeychainStore implements SecretStore for testing environments
+// where the OS keychain is unavailable (e.g., CI containers without DBus).
+type NoopKeychainStore struct{}
+
+func (NoopKeychainStore) Get(key string) (string, error) {
+	return "", keyring.ErrNotFound
+}
+
+func (NoopKeychainStore) Set(key, value string) error {
+	return nil
+}
+
+func (NoopKeychainStore) Delete(key string) error {
+	return nil
+}
+
+var _ SecretStore = NoopKeychainStore{}

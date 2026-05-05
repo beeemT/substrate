@@ -112,7 +112,7 @@ func TestInitializeWorkspaceServicesCmd_RebuildsServicesAndRegistersInstance(t *
 	instanceRepo := &stubInstanceRepo{}
 	transacter := repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}
 	serviceMgr := NewServiceManager(transacter, nil)
-	settings := NewSettingsService(transacter, config.OSKeychainStore{}, serviceMgr)
+	settings := NewSettingsService(transacter, config.NoopKeychainStore{}, serviceMgr)
 	current := Services{
 		Cfg:      newWorkspaceInitHarnessConfig(),
 		Settings: settings,

@@ -17,7 +17,7 @@ import (
 func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Commit.Strategy = config.CommitStrategyGranular
 	cfg.Commit.MessageFormat = config.CommitMessageConventional
@@ -57,7 +57,7 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 func TestSettingsSerialize_ValidatesSentryPollInterval(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	tests := []struct {
 		name         string
 		pollInterval string
@@ -95,7 +95,7 @@ func TestSettingsSerialize_ClearsSentryTokenRefWhenSecretFieldBlank(t *testing.T
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("SENTRY_AUTH_TOKEN", "")
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
 	cfg.Adapters.Sentry.Organization = "acme"
@@ -127,7 +127,7 @@ func TestSettingsSerialize_PreservesSentryKeychainRefWithoutPendingSave(t *testi
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("SENTRY_AUTH_TOKEN", "")
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.TokenRef = "keychain:sentry.token"
 	cfg.Adapters.Sentry.Organization = "acme"
@@ -160,7 +160,7 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 
 	// Create proper ServiceManager for Apply
 	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, serviceMgr)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
 	currentRaw := mustSerializeSettingsConfig(t, svc, newSettingsApplyHarnessConfig())
 	if err := svc.SaveRaw(currentRaw); err != nil {
 		t.Fatalf("SaveRaw(current): %v", err)
@@ -233,7 +233,7 @@ func TestSettingsApply_ReturnsRebuiltServicesOnSuccess(t *testing.T) {
 	t.Setenv("SUBSTRATE_HOME", t.TempDir())
 
 	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, serviceMgr)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
 	cfg := newSettingsApplyHarnessConfig()
 	cfg.Adapters.ClaudeCode.Model = "claude-3-7-sonnet"
 	raw := mustSerializeSettingsConfig(t, svc, cfg)
@@ -371,7 +371,7 @@ func TestBuildProviderStatuses_TracksSentryTokenState(t *testing.T) {
 func TestSettingsService_TestProviderSentryReportsConstructorError(t *testing.T) {
 	t.Parallel()
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Token = "sentry-secret"
 
@@ -408,7 +408,7 @@ func TestSettingsService_TestProviderSentryMarksConnectedOnSuccess(t *testing.T)
 	}))
 	defer server.Close()
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Token = "sentry-secret"
 	cfg.Adapters.Sentry.BaseURL = server.URL + "/api/0"
@@ -435,7 +435,7 @@ func TestSettingsService_TestProviderSentrySurfacesAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc := NewSettingsService(repository.NoopTransacter{}, config.OSKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, NewServiceManager(repository.NoopTransacter{}, nil))
 	cfg := &config.Config{}
 	cfg.Adapters.Sentry.Token = "sentry-secret"
 	cfg.Adapters.Sentry.BaseURL = server.URL + "/api/0"

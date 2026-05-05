@@ -631,16 +631,21 @@ func (r *implementationWorkspaceRepo) Delete(_ context.Context, id string) error
 }
 
 type implementationEventRepo struct {
+	mu     sync.Mutex
 	events []domain.SystemEvent
 }
 
 func (r *implementationEventRepo) Create(_ context.Context, evt domain.SystemEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, evt)
 
 	return nil
 }
 
 func (r *implementationEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var events []domain.SystemEvent
 	for _, evt := range r.events {
 		if evt.EventType == eventType {
@@ -655,6 +660,8 @@ func (r *implementationEventRepo) ListByType(_ context.Context, eventType string
 }
 
 func (r *implementationEventRepo) ListByWorkspaceID(_ context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var events []domain.SystemEvent
 	for _, evt := range r.events {
 		if evt.WorkspaceID == workspaceID {
@@ -1632,14 +1639,11 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify the completed event was emitted.
-	var found bool
-	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventAgentSessionCompleted) {
-			found = true
-			break
-		}
+	events, err := eventRepo.ListByType(context.Background(), string(domain.EventAgentSessionCompleted), 10)
+	if err != nil {
+		t.Fatalf("ListByType: %v", err)
 	}
-	if !found {
+	if len(events) == 0 {
 		t.Error("expected EventAgentSessionCompleted event, none emitted")
 	}
 }

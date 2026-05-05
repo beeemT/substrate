@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1317,16 +1318,22 @@ func (r *planTestWorkspaceRepo) Delete(_ context.Context, id string) error {
 }
 
 // planTestEventRepo is an in-memory EventRepository for planning tests.
+// Uses a mutex to handle concurrent access from the Emit goroutine and test assertions.
 type planTestEventRepo struct {
+	mu     sync.Mutex
 	events []domain.SystemEvent
 }
 
 func (r *planTestEventRepo) Create(_ context.Context, event domain.SystemEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, event)
 	return nil
 }
 
 func (r *planTestEventRepo) ListByType(_ context.Context, eventType string, _ int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var events []domain.SystemEvent
 	for _, event := range r.events {
 		if event.EventType == eventType {
