@@ -732,7 +732,7 @@ func sessionExternalState(session *domain.Session) string {
 	if session == nil {
 		return ""
 	}
-	for _, key := range []string{"state", "linear_state_name", "linear_project_state", "linear_initiative_status"} {
+	for _, key := range []string{"state", "linear_state_name", "linear_project_state", "linear_initiative_status", "tracker_state"} {
 		if value := sessionMetadataString(session.Metadata, key); value != "" {
 			return value
 		}

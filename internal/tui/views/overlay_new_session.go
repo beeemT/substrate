@@ -1503,10 +1503,11 @@ func renderDetailMetadata(st styles.Styles, item adapter.ListItem, width int) st
 
 	add("Provider", detailProviderLabel(item.Provider), valueStyle)
 	add("State", item.State, valueStyle)
-	add("Container", item.ContainerRef, valueStyle)
-	if len(item.Labels) > 0 {
-		add("Labels", strings.Join(item.Labels, ", "), valueStyle)
+	if item.Status != "" {
+		add("Status", item.Status, valueStyle)
 	}
+	add("Container", item.ContainerRef, valueStyle)
+	add("Labels", strings.Join(item.Labels, ", "), valueStyle)
 	if !item.UpdatedAt.IsZero() {
 		add("Updated", item.UpdatedAt.Local().Format("2006-01-02 15:04"), valueStyle)
 	}

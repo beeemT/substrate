@@ -1886,12 +1886,34 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionArchivedMsg:
+		updated, err := a.svcs.Session.Get(context.Background(), msg.WorkItemID)
+		if err != nil {
+			slog.Error("failed to fetch archived work item", "error", err, "work_item_id", msg.WorkItemID)
+		} else {
+			a.upsertWorkItem(updated)
+			a.rebuildSidebar()
+			a.refreshSessionSearchEntriesFromLocalState()
+			if a.currentWorkItemID == msg.WorkItemID {
+				cmds = append(cmds, a.updateContentFromState())
+			}
+		}
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		return a, nil
+		return a, tea.Batch(cmds...)
 
 	case SessionUnarchivedMsg:
+		updated, err := a.svcs.Session.Get(context.Background(), msg.WorkItemID)
+		if err != nil {
+			slog.Error("failed to fetch unarchived work item", "error", err, "work_item_id", msg.WorkItemID)
+		} else {
+			a.upsertWorkItem(updated)
+			a.rebuildSidebar()
+			a.refreshSessionSearchEntriesFromLocalState()
+			if a.currentWorkItemID == msg.WorkItemID {
+				cmds = append(cmds, a.updateContentFromState())
+			}
+		}
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		return a, nil
+		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
 		if a.svcs.Implementation != nil {
