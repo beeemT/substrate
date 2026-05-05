@@ -1266,9 +1266,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, a.updateContentFromState())
 			}
 
-		// Session lifecycle → targeted load of tasks
-		case domain.EventAgentSessionStarted,
-			domain.EventAgentSessionCompleted,
+		// Session lifecycle — new sessions: load work item AND tasks so the sidebar
+		// transitions from "Ingested" to "Planning/Implementing" immediately.
+		case domain.EventAgentSessionStarted:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds,
+					LoadSessionCmd(a.svcs.Session, workItemID),
+					LoadTasksForSessionCmd(a.svcs.Task, workItemID),
+				)
+			}
+			if a.currentWorkItemID != "" {
+				cmds = append(cmds, a.updateContentFromState())
+			}
+
+		// Session lifecycle — running/stopped sessions: only reload tasks.
+		case domain.EventAgentSessionCompleted,
 			domain.EventAgentSessionFailed,
 			domain.EventAgentSessionInterrupted,
 			domain.EventAgentSessionResumed:
@@ -1279,8 +1292,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
 			}
-
-		// Plan lifecycle → targeted load of plan
 		case domain.EventPlanGenerated,
 			domain.EventPlanApproved,
 			domain.EventPlanRejected,
