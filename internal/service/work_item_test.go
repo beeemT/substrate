@@ -450,6 +450,18 @@ func TestWorkItemService_ConvenienceMethods(t *testing.T) {
 		}
 	})
 
+	t.Run("StartPlanningFromCrashedSession", func(t *testing.T) {
+		// Simulate a crashed session: work item stuck in planning state
+		repo.items["wi-crashed"] = domain.Session{ID: "wi-crashed", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionPlanning}
+		if err := svc.StartPlanning(ctx, "wi-crashed"); err != nil {
+			t.Fatalf("StartPlanning from crashed session failed: %v", err)
+		}
+		got, _ := svc.Get(ctx, "wi-crashed")
+		if got.State != domain.SessionPlanning {
+			t.Errorf("State = %q, want %q", got.State, domain.SessionPlanning)
+		}
+	})
+
 	t.Run("SubmitPlanForReview", func(t *testing.T) {
 		repo.items["wi-2"] = domain.Session{ID: "wi-2", WorkspaceID: "ws-1", Title: "T", Source: "manual", State: domain.SessionPlanning}
 		if err := svc.SubmitPlanForReview(ctx, "wi-2"); err != nil {

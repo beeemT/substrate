@@ -392,7 +392,22 @@ func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.Se
 }
 
 // StartPlanning transitions a work item from ingested to planning.
+// If the work item is already in planning state (from a crashed session), it first
+// rolls back to ingested before transitioning to planning. This handles the case
+// where substrate was killed externally while planning was in progress.
 func (s *SessionService) StartPlanning(ctx context.Context, id string) error {
+	item, err := s.Get(ctx, id)
+	if err != nil {
+		return newNotFoundError("work item", id)
+	}
+
+	// If already in planning state, roll back first (handles crashed sessions)
+	if item.State == domain.SessionPlanning {
+		if err := s.Transition(ctx, id, domain.SessionIngested); err != nil {
+			return err
+		}
+	}
+
 	return s.Transition(ctx, id, domain.SessionPlanning)
 }
 
