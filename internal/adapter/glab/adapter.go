@@ -777,13 +777,16 @@ func renderGitLabTrackerRef(ref domain.TrackerReference) string {
 
 // StartMRRefresh begins a background goroutine that periodically refreshes
 // non-terminal MR state from GitLab. If no MR repository is configured the
-// call is a no-op (safe for tests).
-func (a *GlabAdapter) StartMRRefresh(ctx context.Context, workspaceID string) {
+// call is a no-op (safe for tests). Returns a stop function that cancels
+// the refresh loop; callers MUST invoke it on adapter teardown.
+func (a *GlabAdapter) StartMRRefresh(ctx context.Context, workspaceID string) func() {
 	if a.repos.GitlabMRs == nil {
-		return
+		return nil
 	}
 	a.workspaceID = workspaceID
-	go a.refreshMRLoop(ctx)
+	refreshCtx, cancel := context.WithCancel(context.Background())
+	go a.refreshMRLoop(refreshCtx)
+	return cancel
 }
 
 func (a *GlabAdapter) refreshMRLoop(ctx context.Context) {

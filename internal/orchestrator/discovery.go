@@ -13,6 +13,7 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/workerpool"
 )
 
 // Discoverer handles workspace scanning and repo discovery.
@@ -58,6 +59,13 @@ type RepoUpdateResults struct {
 	PullFailures []domain.PullFailure
 }
 
+// pullResult holds the result of pulling a single repo.
+type pullResult struct {
+	repoName string
+	output   string
+	err      error
+}
+
 // PullMainWorktrees pulls the main worktree of each git-work repo and then runs
 // gw sync to prune stale worktrees whose remote branches have been deleted.
 // Failures are recorded but don't stop the process.
@@ -79,19 +87,26 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 	d.lastPullAt = time.Now()
 	d.lastPullMu.Unlock()
 
+	// Parallel pull phase
 	var failures []domain.PullFailure
+	if len(repoPaths) > 0 {
+		results, _ := workerpool.ProcessAll(ctx, repoPaths, workerpool.Config{}, func(ctx context.Context, repoPath string) (pullResult, error) {
+			repoName := filepath.Base(repoPath)
+			output, err := d.gitClient.PullMainWorktree(ctx, repoPath)
+			return pullResult{repoName: repoName, output: output, err: err}, nil
+		})
 
-	for _, repoPath := range repoPaths {
-		repoName := filepath.Base(repoPath)
-		output, err := d.gitClient.PullMainWorktree(ctx, repoPath)
-		if err != nil {
-			slog.Warn("failed to pull main worktree", "repo", repoName, "err", err, "output", output)
-			failures = append(failures, domain.PullFailure{
-				RepoName: repoName,
-				Error:    fmt.Sprintf("%v: %s", err, strings.TrimSpace(output)),
-			})
-		} else {
-			slog.Debug("pulled main worktree", "repo", repoName, "output", strings.TrimSpace(output))
+		// Aggregate results
+		for _, res := range results {
+			if res.err != nil {
+				slog.Warn("failed to pull main worktree", "repo", res.repoName, "err", res.err, "output", res.output)
+				failures = append(failures, domain.PullFailure{
+					RepoName: res.repoName,
+					Error:    fmt.Sprintf("%v: %s", res.err, strings.TrimSpace(res.output)),
+				})
+			} else {
+				slog.Debug("pulled main worktree", "repo", res.repoName, "output", strings.TrimSpace(res.output))
+			}
 		}
 	}
 
@@ -102,16 +117,31 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 	return RepoUpdateResults{PullFailures: failures}
 }
 
+// syncResult holds the result of syncing a single repo.
+type syncResult struct {
+	repoName string
+	err      error
+}
+
 // syncWorktrees runs `git-work sync` (fetch --prune + stale-worktree removal) on
 // each repo. Failures are logged and not returned — sync is best-effort maintenance
 // and must never block a planning run or surface as a user-visible warning.
 func (d *Discoverer) syncWorktrees(ctx context.Context, repoPaths []string) {
-	for _, repoPath := range repoPaths {
+	if len(repoPaths) == 0 {
+		return
+	}
+
+	results, _ := workerpool.ProcessAll(ctx, repoPaths, workerpool.Config{}, func(ctx context.Context, repoPath string) (syncResult, error) {
 		repoName := filepath.Base(repoPath)
-		if err := d.gitClient.Sync(ctx, repoPath); err != nil {
-			slog.Warn("failed to sync worktrees", "repo", repoName, "error", err)
+		err := d.gitClient.Sync(ctx, repoPath)
+		return syncResult{repoName: repoName, err: err}, nil
+	})
+
+	for _, res := range results {
+		if res.err != nil {
+			slog.Warn("failed to sync worktrees", "repo", res.repoName, "error", res.err)
 		} else {
-			slog.Debug("synced worktrees", "repo", repoName)
+			slog.Debug("synced worktrees", "repo", res.repoName)
 		}
 	}
 }

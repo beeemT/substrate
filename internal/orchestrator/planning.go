@@ -442,9 +442,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		Status:      domain.AgentSessionPending,
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to revert work item to ingested after session create failure", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("create planning session: %w", err)
 	}
 
@@ -452,18 +450,14 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
 		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to revert work item to ingested after session dir failure", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 
 	// 8. Transition the planning session to running before launching the harness.
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
 		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to revert work item to ingested after session start failure", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("transition planning session to running: %w", err)
 	}
 
@@ -502,9 +496,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 				slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
 			}
 			s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors, nil)
-			if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-				slog.Warn("failed to revert work item to ingested after planning error", "error", transErr, "work_item_id", req.workItemID)
-			}
+			revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		}
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
@@ -522,16 +514,13 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors, nil)
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return &domain.PlanningResult{
 			Warnings:    append(warnings, healthCheck.ToPlanningWarnings()...),
 			ParseErrors: &parseErrors,
 			Retries:     retries,
 		}, fmt.Errorf("plan parsing failed: %w", &parseErrors)
 	}
-
 	// 12. Build and persist plan + sub-plans.
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem, req.replacePlanID)
 	if err != nil {
@@ -539,9 +528,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("persist plan: %w", err))
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("persist plan: %w", err)
 	}
 
@@ -556,9 +543,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition plan to pending review: %w", err))
-		if transErr := s.workItemSvc.Transition(ctx, req.workItemID, domain.SessionIngested); transErr != nil {
-			slog.Warn("failed to reset work item to ingested", "error", transErr, "work_item_id", req.workItemID)
-		}
+		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("transition plan to pending review: %w", err)
 	}
 
@@ -1044,3 +1029,14 @@ block must appear first, before any prose.
 Each repo sub-plan must include ### Goal, ### Scope, ### Changes, ### Validation, and ### Risks.
 ### Scope, ### Validation, and ### Risks need list items; ### Changes needs at least three concrete steps.
 `
+
+// revertWorkItemToIngested safely reverts a work item to SessionIngested status using a
+// durable cleanup context, ensuring the DB write completes even when the parent pipeline
+// is shutting down or the context is already canceled.
+func revertWorkItemToIngested(parent context.Context, workItemSvc *service.SessionService, workItemID string) {
+	ctx, cancel := durableCleanupContext(parent)
+	defer cancel()
+	if err := workItemSvc.Transition(ctx, workItemID, domain.SessionIngested); err != nil {
+		slog.Warn("failed to revert work item to ingested", "error", err, "work_item_id", workItemID)
+	}
+}
