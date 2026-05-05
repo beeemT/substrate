@@ -148,6 +148,10 @@ type SessionOpts struct {
 	// AnswerTimeoutMs controls how long the bridge waits for a foreman answer before
 	// falling back to a placeholder. 0 means no timeout (wait indefinitely).
 	AnswerTimeoutMs int64
+	// Model is the model override for this session. When nil, the harness uses its
+	// own default (e.g. OMP's default for ohmypi). When set to a non-empty string,
+	// it overrides the harness default for this specific session.
+	Model *string
 }
 
 // CommitConfig contains commit strategy settings.
