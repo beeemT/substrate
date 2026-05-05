@@ -43,6 +43,8 @@ func printUsage() {
 
 func main() {
 	if err := run(); err != nil {
+		// Write error to stderr before logging (which goes to TUI log store)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		log.Fatal(err)
 	}
 }
