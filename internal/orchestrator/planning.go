@@ -439,7 +439,6 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		WorkspaceID: workspace.ID,
 		Phase:       domain.TaskPhasePlanning,
 		HarnessName: s.harness.Name(),
-		Status:      domain.AgentSessionPending,
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
@@ -449,14 +448,18 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	// 7. Create session directory.
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
-		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
+			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "session_id", sessionID)
+		}
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
 
 	// 8. Transition the planning session to running before launching the harness.
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
-		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
+			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "session_id", sessionID)
+		}
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("transition planning session to running: %w", err)
 	}

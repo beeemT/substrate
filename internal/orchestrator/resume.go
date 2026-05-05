@@ -101,7 +101,6 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 		RepositoryName:  interrupted.RepositoryName,
 		WorktreePath:    interrupted.WorktreePath,
 		HarnessName:     r.harness.Name(),
-		Status:          domain.AgentSessionPending,
 		OwnerInstanceID: &currentInstanceID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -113,15 +112,10 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	// Transition the new session to running before launching the harness so the
 	// durable session row never lags external state.
 	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
-		deleteOrFailPendingSession(ctx, r.sessionSvc, newSession.ID, nil)
+		_ = r.sessionSvc.Transition(ctx, newSession.ID, domain.AgentSessionFailed)
 
 		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
 	}
-	now = time.Now()
-	newSession.Status = domain.AgentSessionRunning
-	newSession.StartedAt = &now
-	newSession.UpdatedAt = now
-
 	// Start the harness session once the row is durably running.
 	opts := adapter.SessionOpts{
 		SessionID:    newSession.ID,
@@ -317,7 +311,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 		RepositoryName:  failedTask.RepositoryName,
 		WorktreePath:    failedTask.WorktreePath,
 		HarnessName:     r.harness.Name(),
-		Status:          domain.AgentSessionPending,
 		OwnerInstanceID: &currentInstanceID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -327,14 +320,9 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 	}
 
 	if err := r.sessionSvc.Start(ctx, newTask.ID); err != nil {
-		deleteOrFailPendingSession(ctx, r.sessionSvc, newTask.ID, nil)
+		_ = r.sessionSvc.Transition(ctx, newTask.ID, domain.AgentSessionFailed)
 		return FollowUpSessionResult{}, fmt.Errorf("transition follow-up session to running: %w", err)
 	}
-	now = time.Now()
-	newTask.Status = domain.AgentSessionRunning
-	newTask.StartedAt = &now
-	newTask.UpdatedAt = now
-
 	opts := adapter.SessionOpts{
 		SessionID:    newTask.ID,
 		Mode:         adapter.SessionModeAgent,

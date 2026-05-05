@@ -596,19 +596,16 @@ func (s *ImplementationService) runImplementation(
 		RepositoryName: subPlan.RepositoryName,
 		WorktreePath:   worktreePath,
 		HarnessName:    s.harness.Name(),
-		Status:         domain.AgentSessionPending,
 	}
 	if err := s.sessionSvc.Create(ctx, session); err != nil {
 		return domain.Task{}, fmt.Errorf("create session: %w", err)
 	}
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
-		deleteOrFailPendingSession(ctx, s.sessionSvc, sessionID, ptrInt(1))
+		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
+			slog.Warn("failed to transition session to failed", "error", transitionErr, "session_id", sessionID)
+		}
 		return domain.Task{}, fmt.Errorf("start session: %w", err)
 	}
-	now := time.Now()
-	session.Status = domain.AgentSessionRunning
-	session.StartedAt = &now
-	session.UpdatedAt = now
 
 	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
 
@@ -1717,21 +1714,6 @@ func durableCleanupContext(parent context.Context) (context.Context, context.Can
 
 func durableFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), durableFinalizationTimeout)
-}
-
-func deleteOrFailPendingSession(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) {
-	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
-	defer cleanupCancel()
-
-	err := sessionSvc.Delete(cleanupCtx, sessionID)
-	if err == nil {
-		return
-	}
-	slog.Warn("failed to delete pending session during cleanup", "error", err, "session_id", sessionID)
-
-	if err := sessionSvc.Fail(cleanupCtx, sessionID, exitCode); err != nil {
-		slog.Warn("failed to terminalize pending session during cleanup", "error", err, "session_id", sessionID)
-	}
 }
 
 func failSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) error {

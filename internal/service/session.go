@@ -25,7 +25,6 @@ type taskEventPayload struct {
 	SessionID  string      `json:"session_id"`
 }
 
-
 // marshalTaskPayload serializes a task event payload to JSON.
 // work_item_id and session_id are included at the top level so TUI extractors
 // can read them without needing to navigate into the nested session object.
@@ -173,15 +172,6 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	}); err != nil {
 		return err
 	}
-
-	// Emit event asynchronously after transaction commits
-	Emit(s.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionStarted),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskPayload(task),
-		CreatedAt:   time.Now(),
-	})
 
 	return nil
 }

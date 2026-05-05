@@ -213,13 +213,14 @@ func (p *ReviewPipeline) startReviewAgent(
 		RepositoryName: session.RepositoryName,
 		WorktreePath:   session.WorktreePath,
 		HarnessName:    p.harness.Name(),
-		Status:         domain.AgentSessionPending,
 	}
 	if err := p.sessionSvc.Create(ctx, reviewTask); err != nil {
 		return nil, "", "", fmt.Errorf("create review session: %w", err)
 	}
 	if err := p.sessionSvc.Start(ctx, reviewSessionID); err != nil {
-		deleteOrFailPendingSession(ctx, p.sessionSvc, reviewSessionID, ptrInt(1))
+		if transitionErr := p.sessionSvc.Transition(ctx, reviewSessionID, domain.AgentSessionFailed); transitionErr != nil {
+			slog.Warn("failed to transition session to failed", "error", transitionErr, "session_id", reviewSessionID)
+		}
 		return nil, "", "", fmt.Errorf("transition review session to running: %w", err)
 	}
 

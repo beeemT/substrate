@@ -50,7 +50,7 @@ func TestEmit(t *testing.T) {
 }
 
 func TestTaskService_EmitsEvents(t *testing.T) {
-	t.Run("Create emits EventAgentSessionStarted", func(t *testing.T) {
+	t.Run("Start emits EventAgentSessionStarted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
 		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
@@ -71,9 +71,13 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-
 		if err := svc.Create(context.Background(), task); err != nil {
 			t.Fatalf("Create: %v", err)
+		}
+
+		// Event fires on Start, not Create
+		if err := svc.Start(context.Background(), "task-1"); err != nil {
+			t.Fatalf("Start: %v", err)
 		}
 
 		select {
