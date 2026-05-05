@@ -87,25 +87,43 @@ func (d *Discoverer) PullMainWorktrees(ctx context.Context, repoPaths []string) 
 	d.lastPullAt = time.Now()
 	d.lastPullMu.Unlock()
 
-	// Parallel pull phase
+	// Warmup phase: pull one repo first to establish the SSH connection.
+	// This prevents the 1Password SSH agent from being overwhelmed by
+	// concurrent auth requests when many parallel pulls fire at once.
 	var failures []domain.PullFailure
 	if len(repoPaths) > 0 {
-		results, _ := workerpool.ProcessAll(ctx, repoPaths, workerpool.Config{}, func(ctx context.Context, repoPath string) (pullResult, error) {
-			repoName := filepath.Base(repoPath)
-			output, err := d.gitClient.PullMainWorktree(ctx, repoPath)
-			return pullResult{repoName: repoName, output: output, err: err}, nil
-		})
+		warmupRepo := repoPaths[0]
+		repoName := filepath.Base(warmupRepo)
+		warmupOutput, warmupErr := d.gitClient.PullMainWorktree(ctx, warmupRepo)
+		if warmupErr != nil {
+			slog.Warn("failed to pull main worktree", "repo", repoName, "err", warmupErr, "output", warmupOutput)
+			failures = append(failures, domain.PullFailure{
+				RepoName: repoName,
+				Error:    fmt.Sprintf("%v: %s", warmupErr, strings.TrimSpace(warmupOutput)),
+			})
+		} else {
+			slog.Debug("pulled main worktree", "repo", repoName, "output", strings.TrimSpace(warmupOutput))
+		}
 
-		// Aggregate results
-		for _, res := range results {
-			if res.err != nil {
-				slog.Warn("failed to pull main worktree", "repo", res.repoName, "err", res.err, "output", res.output)
-				failures = append(failures, domain.PullFailure{
-					RepoName: res.repoName,
-					Error:    fmt.Sprintf("%v: %s", res.err, strings.TrimSpace(res.output)),
-				})
-			} else {
-				slog.Debug("pulled main worktree", "repo", res.repoName, "output", strings.TrimSpace(res.output))
+		// Parallel pull phase for remaining repos
+		if len(repoPaths) > 1 {
+			results, _ := workerpool.ProcessAll(ctx, repoPaths[1:], workerpool.Config{}, func(ctx context.Context, repoPath string) (pullResult, error) {
+				repoName := filepath.Base(repoPath)
+				output, err := d.gitClient.PullMainWorktree(ctx, repoPath)
+				return pullResult{repoName: repoName, output: output, err: err}, nil
+			})
+
+			// Aggregate results
+			for _, res := range results {
+				if res.err != nil {
+					slog.Warn("failed to pull main worktree", "repo", res.repoName, "err", res.err, "output", res.output)
+					failures = append(failures, domain.PullFailure{
+						RepoName: res.repoName,
+						Error:    fmt.Sprintf("%v: %s", res.err, strings.TrimSpace(res.output)),
+					})
+				} else {
+					slog.Debug("pulled main worktree", "repo", res.repoName, "output", strings.TrimSpace(res.output))
+				}
 			}
 		}
 	}
