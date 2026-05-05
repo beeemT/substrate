@@ -26,9 +26,10 @@ func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus
 	return &PlanService{transacter: transacter, eventBus: eventBus}
 }
 
-// planRevisedPayload is the payload for EventPlanRevised.
-type planRevisedPayload struct {
-	PlanID string `json:"plan_id"`
+// planEventPayload holds the JSON payload for plan lifecycle events.
+type planEventPayload struct {
+	WorkItemID string `json:"work_item_id"`
+	PlanID     string `json:"plan_id,omitempty"`
 }
 
 // marshalJSONOrEmpty marshals v to JSON, returning "{}" on error.
@@ -173,6 +174,7 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanSubmittedForReview),
 		WorkspaceID: plan.WorkItemID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanSubmittedForReview), planEventPayload{WorkItemID: plan.WorkItemID}),
 		CreatedAt:   time.Now(),
 	})
 	return nil
@@ -205,7 +207,8 @@ func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanApproved),
-		WorkspaceID: plan.WorkItemID, // WorkItemID serves as workspace context
+		WorkspaceID: plan.WorkItemID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanApproved), planEventPayload{WorkItemID: plan.WorkItemID}),
 		CreatedAt:   time.Now(),
 	})
 	return nil
@@ -213,12 +216,31 @@ func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
 
 // RejectPlan transitions a plan from pending_review to rejected.
 func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
-	if err := s.TransitionPlan(ctx, id, domain.PlanRejected); err != nil {
+	var workItemID string
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		plan, err := res.Plans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("plan", id)
+		}
+		if !canTransitionPlan(plan.Status, domain.PlanRejected) {
+			return newInvalidTransitionError(
+				planStatusName(plan.Status),
+				planStatusName(domain.PlanRejected),
+				"plan",
+			)
+		}
+		plan.Status = domain.PlanRejected
+		plan.UpdatedAt = time.Now()
+		workItemID = plan.WorkItemID
+		return res.Plans.Update(ctx, plan)
+	})
+	if err != nil {
 		return err
 	}
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:        domain.NewID(),
 		EventType: string(domain.EventPlanRejected),
+		Payload:   marshalJSONOrEmpty(string(domain.EventPlanRejected), planEventPayload{WorkItemID: workItemID}),
 		CreatedAt: time.Now(),
 	})
 	return nil
@@ -346,7 +368,7 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventPlanRevised),
 			WorkspaceID: resultPlan.WorkItemID,
-			Payload:     marshalJSONOrEmpty(string(domain.EventPlanRevised), planRevisedPayload{PlanID: resultPlan.ID}),
+			Payload:     marshalJSONOrEmpty(string(domain.EventPlanRevised), planEventPayload{WorkItemID: resultPlan.WorkItemID, PlanID: resultPlan.ID}),
 			CreatedAt:   time.Now(),
 		})
 	}

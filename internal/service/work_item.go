@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,6 +47,19 @@ func canTransition(from, to domain.SessionState) bool {
 		return false
 	}
 	return slices.Contains(allowed, to)
+}
+
+
+// workItemPayload holds the JSON payload for work-item lifecycle events.
+type workItemPayload struct {
+	WorkItemID string `json:"work_item_id"`
+}
+
+// marshalWorkItemPayload serializes a work-item event payload to JSON.
+func marshalWorkItemPayload(item domain.Session) string {
+	p := workItemPayload{WorkItemID: item.ID}
+	b, _ := json.Marshal(p)
+	return string(b)
 }
 
 // Get retrieves a work item by ID.
@@ -378,6 +392,7 @@ func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.Se
 			ID:          domain.NewID(),
 			EventType:   string(eventType),
 			WorkspaceID: item.WorkspaceID,
+			Payload:     marshalWorkItemPayload(item),
 			CreatedAt:   time.Now(),
 		}); err != nil {
 			slog.Error("failed to emit state change event",
