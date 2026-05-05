@@ -66,13 +66,15 @@ type DomainEventMsg struct {
 
 // WorkItemIngestedMsg is sent when a new work item is ingested.
 type WorkItemIngestedMsg struct {
+	WorkItemID  string
 	WorkspaceID string
 	Session     domain.Session
 }
 
 // WorkItemUpdatedMsg is sent when a work item state changes (planning, approved, etc.).
 type WorkItemUpdatedMsg struct {
-	Session domain.Session
+	WorkItemID string
+	Session    domain.Session
 }
 
 // PlanGeneratedMsg is sent when a new plan is generated.
@@ -144,8 +146,17 @@ type AdapterErrorMsg struct {
 	Retries   int    // number of retries attempted
 }
 
+// ImplementationStartedMsg is sent when implementation starts for a work item.
+type ImplementationStartedMsg struct{ WorkItemID string }
+
+// PRReviewStateChangedMsg is sent when a PR review state changes.
+type PRReviewStateChangedMsg struct{ WorkItemID string }
+
 // PRMergedMsg is sent when a PR is merged.
-type PRMergedMsg struct{ SessionID string }
+type PRMergedMsg struct {
+	WorkItemID string
+	ExternalID string
+}
 
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
 type QuestionsLoadedMsg struct {

@@ -1316,10 +1316,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventPRMerged:
 			// Handled by typed message cases below; no action needed here.
 
-		// Higher-level events that don't need targeted reload
-		case domain.EventImplementationStarted,
-			domain.EventPRReviewStateChanged:
-			// No-op: these don't change the work item state directly
+		// Higher-level events that don't need targeted reload (all other untyped events)
 		}
 
 		return a, tea.Batch(cmds...)
@@ -1478,19 +1475,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Event-driven typed message handlers ---
 
 	case WorkItemIngestedMsg:
-		a.workItems = append(a.workItems, msg.Session)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
-		if a.currentWorkItemID == msg.Session.ID {
+		if msg.WorkItemID != "" {
+			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+		}
+		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
 
+
 	case WorkItemUpdatedMsg:
-		a.upsertWorkItem(msg.Session)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
-		if a.currentWorkItemID == msg.Session.ID {
+		if msg.WorkItemID != "" {
+			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+		}
+		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
@@ -1590,11 +1592,41 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(fmt.Sprintf("Adapter error (%s): %v", msg.Adapter, msg.Err), components.ToastWarning)
 		return a, nil
 
-	case PRMergedMsg:
+
+	case ImplementationStartedMsg:
+		if msg.WorkItemID != "" {
+			cmds = append(cmds,
+				LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
+				LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+			)
+		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
+
+	case PRReviewStateChangedMsg:
+		if msg.WorkItemID != "" {
+			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+		}
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case PRMergedMsg:
+		if msg.WorkItemID != "" {
+			cmds = append(cmds,
+				LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
+				LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+			)
+		}
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+
 
 	case ReviewsLoadedMsg:
 		a.reviews[msg.SessionID] = msg

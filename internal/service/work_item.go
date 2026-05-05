@@ -52,12 +52,14 @@ func canTransition(from, to domain.SessionState) bool {
 
 // workItemPayload holds the JSON payload for work-item lifecycle events.
 type workItemPayload struct {
-	WorkItemID string `json:"work_item_id"`
+	WorkItemID  string         `json:"work_item_id"`
+	WorkspaceID string         `json:"workspace_id,omitempty"`
+	Session     domain.Session `json:"session,omitempty"`
 }
 
 // marshalWorkItemPayload serializes a work-item event payload to JSON.
 func marshalWorkItemPayload(item domain.Session) string {
-	p := workItemPayload{WorkItemID: item.ID}
+	p := workItemPayload{WorkItemID: item.ID, WorkspaceID: item.WorkspaceID, Session: item}
 	b, _ := json.Marshal(p)
 	return string(b)
 }

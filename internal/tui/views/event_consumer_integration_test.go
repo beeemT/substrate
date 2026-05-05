@@ -44,6 +44,7 @@ func TestEventConsumerEndToEnd(t *testing.T) {
 
 	// Publish EventWorkItemIngested and deliver it through the bridge.
 	payload, _ := json.Marshal(map[string]any{
+		"work_item_id": "wi-new",
 		"workspace_id": "ws-integration",
 		"session": domain.Session{
 			ID:          "wi-new",

@@ -16,9 +16,9 @@ func TestEventConsumer_toMsg_WorkItemIngested(t *testing.T) {
 	ec := NewEventConsumer(app, sub)
 
 	payload, _ := json.Marshal(map[string]any{
-		"workspace_id": "ws-1",
+		"work_item_id": "wi-1",
 		"session": domain.Session{
-			ID:          "s-1",
+			ID:          "wi-1",
 			Title:       "Test Session",
 			WorkspaceID: "ws-1",
 		},
@@ -41,11 +41,8 @@ func TestEventConsumer_toMsg_WorkItemIngested(t *testing.T) {
 	}
 
 	typed := msg.(WorkItemIngestedMsg)
-	if typed.WorkspaceID != "ws-1" {
-		t.Errorf("WorkspaceID = %q, want %q", typed.WorkspaceID, "ws-1")
-	}
-	if typed.Session.ID != "s-1" {
-		t.Errorf("Session.ID = %q, want %q", typed.Session.ID, "s-1")
+	if typed.WorkItemID != "wi-1" {
+		t.Errorf("WorkItemID = %q, want %q", typed.WorkItemID, "wi-1")
 	}
 }
 

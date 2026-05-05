@@ -73,6 +73,8 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventReimplementationStarted: decodeReimplementationStarted,
 	domain.EventAdapterError:            decodeAdapterError,
 	domain.EventPRMerged:                decodePRMerged,
+	domain.EventImplementationStarted: decodeImplementationStarted,
+	domain.EventPRReviewStateChanged: decodePRReviewStateChanged,
 }
 
 // toMsg converts a domain.SystemEvent to a tea.Msg for the update loop.
@@ -89,6 +91,7 @@ func (ec *EventConsumer) toMsg(evt domain.SystemEvent) tea.Msg {
 
 func decodeWorkItemIngested(payload string) tea.Msg {
 	var p struct {
+		WorkItemID  string         `json:"work_item_id"`
 		WorkspaceID string         `json:"workspace_id"`
 		Session     domain.Session `json:"session"`
 	}
@@ -96,7 +99,7 @@ func decodeWorkItemIngested(payload string) tea.Msg {
 		slog.Warn("failed to decode EventWorkItemIngested payload", "error", err)
 		return nil
 	}
-	return WorkItemIngestedMsg{WorkspaceID: p.WorkspaceID, Session: p.Session}
+	return WorkItemIngestedMsg{WorkItemID: p.WorkItemID, WorkspaceID: p.WorkspaceID, Session: p.Session}
 }
 
 func decodeWorkItemState(payload string) tea.Msg {
@@ -109,7 +112,7 @@ func decodeWorkItemState(payload string) tea.Msg {
 		slog.Warn("failed to decode work item state payload", "error", err)
 		return nil
 	}
-	return WorkItemUpdatedMsg{Session: p.Session}
+	return WorkItemUpdatedMsg{WorkItemID: p.WorkItemID, Session: p.Session}
 }
 
 func decodePlanGenerated(payload string) tea.Msg {
@@ -264,13 +267,37 @@ func decodeAdapterError(payload string) tea.Msg {
 	return AdapterErrorMsg{Adapter: p.Adapter, EventType: p.EventType, Err: errors.New(p.Err)}
 }
 
+func decodePRReviewStateChanged(payload string) tea.Msg {
+	var p struct {
+		WorkItemID string `json:"work_item_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventPRReviewStateChanged payload", "error", err)
+		return nil
+	}
+	return PRReviewStateChangedMsg{WorkItemID: p.WorkItemID}
+}
+
+func decodeImplementationStarted(payload string) tea.Msg {
+	var p struct {
+		PlanID     string `json:"plan_id"`
+		WorkItemID string `json:"work_item_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventImplementationStarted payload", "error", err)
+		return nil
+	}
+	return ImplementationStartedMsg{WorkItemID: p.WorkItemID}
+}
+
 func decodePRMerged(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"session_id"`
+		WorkItemID string `json:"work_item_id"`
+		ExternalID string `json:"external_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventPRMerged payload", "error", err)
 		return nil
 	}
-	return PRMergedMsg{SessionID: p.SessionID}
+	return PRMergedMsg{WorkItemID: p.WorkItemID, ExternalID: p.ExternalID}
 }
