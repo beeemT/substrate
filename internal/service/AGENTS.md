@@ -41,3 +41,63 @@ Previous iterations introduced wrapper types (`PlanRepoTransacter` interface, `T
 2. Add a field to `repository.Resources`.
 3. Add the sqlite implementation and wire it in `sqlite.ResourcesFactory`.
 4. Access it in service methods via `res.Foos` inside the transact callback.
+
+## Event Contract
+
+### Every event payload MUST include `work_item_id` at the top level
+
+The TUI reads `work_item_id` from the JSON `Payload` field (not from `SystemEvent.WorkspaceID`)
+via `extractWorkItemID`. An empty payload causes `extractWorkItemID("")` to return `""`, which
+breaks every TUI handler that relies on it. This is a hard requirement.
+
+### Required top-level fields
+
+| Field | Type | Description |
+|---|---|---|
+| `work_item_id` | `string` | The ID of the work item this event concerns. Required for all TUI-handled events. |
+| `session_id` | `string` | The agent task/session ID. Required for agent session lifecycle events. |
+| `plan_id` | `string` | The plan ID. Omit if not applicable. |
+| `sub_plan_id` | `string` | The sub-plan ID. Omit if not applicable. |
+
+### Enforced pattern: use shared payload structs
+
+Define a named struct with `json:"..."` tags and marshal it via `marshalJSONOrEmpty` or
+`json.Marshal`. Do not emit raw JSON strings.
+
+```go
+// Good: named struct, omitempty for optional fields
+type planEventPayload struct {
+    WorkItemID string `json:"work_item_id"`
+    PlanID     string `json:"plan_id,omitempty"`
+    SubPlanID  string `json:"sub_plan_id,omitempty"`
+}
+Emit(s.eventBus, domain.SystemEvent{
+    Payload: marshalJSONOrEmpty(string(domain.EventPlanApproved), planEventPayload{WorkItemID: plan.WorkItemID}),
+    ...
+})
+
+// Bad: inline map with no type safety or schema
+Payload: fmt.Sprintf(`{"work_item_id":"%s"}`, id),  // error-prone
+```
+
+### Payload helpers
+
+- `marshalJSONOrEmpty(eventType string, v any)` in `plan.go` — marshals `v` to JSON; on error
+  logs a warning and returns `{}`. Use this for all plan/service-layer events.
+- `marshalWorkItemPayload(item domain.Session) string` in `work_item.go` — returns
+  `{"work_item_id": "<item.ID>"}`.
+- `marshalTaskPayload(task domain.Task) string` in `session.go` — returns a payload with
+  `work_item_id`, `session_id`, and the full nested `session` object.
+
+### WorkspaceID vs Payload
+
+`SystemEvent.WorkspaceID` is the workspace context for persistence/routing but is NOT read by the
+TUI. Always put `work_item_id` in `Payload` so `extractWorkItemID` can extract it.
+
+### Adding a new event
+
+1. Choose the event type constant in `internal/domain/event.go`.
+2. Define a named payload struct with `work_item_id` (and other relevant IDs) as fields.
+3. Marshal via `marshalJSONOrEmpty` in the Emit call.
+4. Verify the TUI handler can extract `work_item_id` from the payload.
+

@@ -30,6 +30,7 @@ func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus
 type planEventPayload struct {
 	WorkItemID string `json:"work_item_id"`
 	PlanID     string `json:"plan_id,omitempty"`
+	SubPlanID  string `json:"sub_plan_id,omitempty"`
 }
 
 // marshalJSONOrEmpty marshals v to JSON, returning "{}" on error.
@@ -490,6 +491,7 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) err
 
 // TransitionSubPlan transitions a sub-plan to a new status.
 func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
+	var workItemID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		sp, err := res.SubPlans.Get(ctx, id)
 		if err != nil {
@@ -507,7 +509,15 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 		sp.Status = to
 		sp.UpdatedAt = time.Now()
 
-		return res.SubPlans.Update(ctx, sp)
+		if err := res.SubPlans.Update(ctx, sp); err != nil {
+			return err
+		}
+
+		plan, err := res.Plans.Get(ctx, sp.PlanID)
+		if err == nil {
+			workItemID = plan.WorkItemID
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -516,10 +526,12 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:        domain.NewID(),
 		EventType: string(domain.EventSubPlanStatusChanged),
+		Payload:   marshalJSONOrEmpty(string(domain.EventSubPlanStatusChanged), planEventPayload{WorkItemID: workItemID, PlanID: "", SubPlanID: id}),
 		CreatedAt: time.Now(),
 	})
 	return nil
 }
+
 
 // StartSubPlan transitions a sub-plan from pending to in_progress.
 func (s *PlanService) StartSubPlan(ctx context.Context, id string) error {

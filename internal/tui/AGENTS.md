@@ -83,3 +83,43 @@
 
 ## Conflict & Duplicate Flows
 - When a duplicate or conflict is detected, **provide explicit user choice** (cancel, open existing, proceed). Do not hard-code a single redirect path. Test each available action.
+
+## Event Bus Contract
+
+### TUI reads IDs from `Payload`, not from `SystemEvent.WorkspaceID`
+
+The TUI receives `domain.SystemEvent` via the event bus and decodes the JSON `Payload` field
+to extract IDs. Two helpers exist:
+
+```go
+func extractWorkItemID(payload string) string  // reads m["work_item_id"]
+func extractSessionID(payload string) string   // reads m["session_id"]
+```
+
+If `Payload` is empty, both return `""`. This breaks every handler that calls them.
+**Do not rely on `WorkspaceID`** — it is the workspace context for persistence/routing, not the work item ID.
+
+### Event payload requirements
+
+Every event emitted by the service layer or orchestrator that the TUI subscribes to MUST include
+`work_item_id` as a top-level JSON string field. See `internal/service/AGENTS.md` for the full
+contract and helper functions.
+
+### Adding a new event handler
+
+1. Add the event type to the `subscriptions` slice in `initEventSubscriptions`.
+2. If the event changes work item state, call `LoadSessionCmd` and `LoadTasksForSessionCmd` (not only
+   `LoadTasksForSessionCmd`). The `EventAgentSessionStarted` case is the canonical example.
+3. If the event is purely informational (no state reload needed), document why it is a no-op in a
+   comment — do not silently drop events that should have a handler.
+4. If a new typed message type is needed, add it to `msgs.go`, add the decoder to
+   `event_consumer.go`, and wire it in `eventToMsg`.
+
+### Extractors vs typed messages
+
+Low-cardinality events (agent session lifecycle, work item state transitions) use `extractWorkItemID`
+and `extractSessionID` in the switch case to dispatch `LoadSessionCmd`/`LoadTasksForSessionCmd`.
+High-cardinality or structurally complex events use typed message types decoded via
+`eventToMsg` and handled in dedicated `case` blocks (e.g. `QuestionRaisedMsg`).
+Do not mix both patterns for the same event.
+

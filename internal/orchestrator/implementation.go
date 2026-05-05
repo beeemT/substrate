@@ -1634,11 +1634,11 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 
 func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {
 	return s.publishEvent(ctx, domain.EventImplementationStarted, workspaceID, struct {
-		PlanID   string          `json:"plan_id"`
-		WorkItem *domain.Session `json:"work_item"`
+		PlanID     string `json:"plan_id"`
+		WorkItemID string `json:"work_item_id"`
 	}{
-		PlanID:   plan.ID,
-		WorkItem: workItem,
+		PlanID:     plan.ID,
+		WorkItemID: workItem.ID,
 	})
 }
 

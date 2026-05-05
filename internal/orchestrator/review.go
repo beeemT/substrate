@@ -114,6 +114,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 		WorkspaceID: session.WorkspaceID,
 		Payload: marshalJSONOrEmpty(string(domain.EventReviewStarted), map[string]any{
 			"session_id":   session.ID,
+			"work_item_id": session.WorkItemID,
 			"cycle_number": cycleNumber,
 			"cycle_id":     cycle.ID,
 		}),
@@ -153,6 +154,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	// Emit review outcome events (async)
 	payload := marshalJSONOrEmpty("review.outcome", map[string]any{
 		"session_id":     session.ID,
+		"work_item_id":   session.WorkItemID,
 		"cycle_number":   cycleNumber,
 		"cycle_id":       cycle.ID,
 		"passed":         result.Passed,
