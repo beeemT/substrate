@@ -73,7 +73,10 @@ func (s *session) Wait(ctx context.Context) error {
 // SendMessage sends a message to the running agent via POST /session/:id/message.
 func (s *session) SendMessage(ctx context.Context, msg string) error {
 	body := SendMessageRequest{Content: msg}
-	body.Variant = s.variant
+	// Variant: nil omits from JSON (omitempty), letting opencode use its default.
+	if s.variant != "" {
+		body.Variant = &s.variant
+	}
 
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -329,7 +332,7 @@ func (s *session) startSSEReader(ctx context.Context) {
 
 			// If we got a done or error event, finish the session.
 			for _, evt := range events {
-				if evt.Type == "done" || evt.Type == "error" {
+				if evt.Type == "error" {
 					s.closeResources()
 					s.finishSession(nil)
 					return
@@ -410,7 +413,7 @@ func (lr *sseLineReader) ReadSSELine() (string, error) {
 			return "", err
 		}
 		line = strings.TrimRight(line, "\r\n")
-		if line != "" || err == io.EOF {
+		if err == io.EOF {
 			return line, err
 		}
 		// Empty line (SSE event separator) — skip and continue.

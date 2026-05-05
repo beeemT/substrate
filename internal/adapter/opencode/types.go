@@ -22,8 +22,8 @@ type CreateSessionResponse struct {
 
 // SendMessageRequest is the body for POST /session/:id/message.
 type SendMessageRequest struct {
-	Content string `json:"content"`
-	Variant string `json:"variant,omitempty"`
+	Content string  `json:"content"`
+	Variant *string `json:"variant,omitempty"` // nil omits from JSON (use opencode default)
 }
 
 // SummarizeRequest is the body for POST /session/:id/summarize.
