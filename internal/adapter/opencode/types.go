@@ -8,10 +8,11 @@ import (
 )
 
 // CreateSessionRequest is the body for POST /session.
+
 type CreateSessionRequest struct {
 	// Agent type: "build" (default) or "plan".
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	Agent string  `json:"agent,omitempty"`
+	Model *string `json:"model,omitempty"` // nil omits from JSON (use opencode's default)
 }
 
 // CreateSessionResponse is the response from POST /session.

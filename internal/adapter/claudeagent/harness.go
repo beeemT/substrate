@@ -80,14 +80,14 @@ func resolveReadyBridgeRuntime(cfg config.ClaudeCodeConfig) (bridge.BridgeRuntim
 // bridgeInitMsg is sent first to configure the session.
 // All config is passed here rather than via env to avoid exposure in /proc/pid/environ.
 type bridgeInitMsg struct {
-	Type            string `json:"type"`
-	Mode            string `json:"mode"`
-	SystemPrompt    string `json:"system_prompt,omitempty"`
-	ResumeSessionID string `json:"resume_session_id,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Thinking        string `json:"thinking,omitempty"`
-	Effort          string `json:"effort,omitempty"`
-	AnswerTimeoutMs int64  `json:"answer_timeout_ms"`
+	Type            string  `json:"type"`
+	Mode            string  `json:"mode"`
+	SystemPrompt    string  `json:"system_prompt,omitempty"`
+	ResumeSessionID string  `json:"resume_session_id,omitempty"`
+	Model           *string `json:"model,omitempty"` // nil omits from JSON (use harness default)
+	Thinking        *string `json:"thinking,omitempty"`
+	Effort          *string `json:"effort,omitempty"`
+	AnswerTimeoutMs int64   `json:"answer_timeout_ms"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -195,10 +195,19 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		Mode:            string(opts.Mode),
 		SystemPrompt:    opts.SystemPrompt,
 		ResumeSessionID: opts.ResumeInfo["claude_session_id"],
-		Model:           h.cfg.Model,
-		Thinking:        h.cfg.Thinking,
-		Effort:          h.cfg.Effort,
 		AnswerTimeoutMs: opts.AnswerTimeoutMs,
+	}
+	// Only set optional fields when non-empty — nil omits from JSON (omitempty),
+	// letting the harness use its own default. Sending an empty string would be
+	// interpreted as an explicit empty value instead of \"use default\".
+	if m := h.cfg.Model; m != "" {
+		initMsg.Model = &m
+	}
+	if t := h.cfg.Thinking; t != "" {
+		initMsg.Thinking = &t
+	}
+	if e := h.cfg.Effort; e != "" {
+		initMsg.Effort = &e
 	}
 	data, err := json.Marshal(initMsg)
 	if err != nil {

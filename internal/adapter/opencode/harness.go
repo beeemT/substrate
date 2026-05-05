@@ -282,9 +282,14 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 
 	// If not resuming, create a new session via POST /session.
 	if openCodeSessionID == "" {
-		createReq := CreateSessionRequest{Agent: h.cfg.Agent, Model: h.cfg.Model}
+		createReq := CreateSessionRequest{Agent: h.cfg.Agent}
 		if createReq.Agent == "" {
 			createReq.Agent = "build"
+		}
+		// Model: nil omits from JSON (omitempty), letting opencode use its default.
+		// Sending an empty string would be interpreted as an explicit empty value.
+		if h.cfg.Model != "" {
+			createReq.Model = &h.cfg.Model
 		}
 		data, marshalErr := json.Marshal(createReq)
 		if marshalErr != nil {

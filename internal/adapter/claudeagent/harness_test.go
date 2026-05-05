@@ -37,12 +37,15 @@ func TestHarnessNameAndCapabilities(t *testing.T) {
 	}
 }
 
+
+func ptrS(s string) *string { return &s }
+
 func TestInitMessageSerialization(t *testing.T) {
 	msg := bridgeInitMsg{
 		Type:         "init",
 		Mode:         "agent",
 		SystemPrompt: "sys",
-		Model:        "claude-3",
+		Model:        ptrS("claude-3"),
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
