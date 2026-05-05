@@ -70,6 +70,7 @@ type issue struct {
 	Title              string   `json:"title"`
 	Description        string   `json:"description"`
 	State              string   `json:"state"`
+	Status             string   `json:"-"` // GitLab Work Item status from GraphQL (not in REST API)
 	Labels             []string `json:"labels"`
 	WebURL             string   `json:"web_url"`
 	MergeRequestsCount int64    `json:"merge_requests_count"`
@@ -124,6 +125,53 @@ type epic struct {
 	CreatedAt   *time.Time `json:"created_at"`
 	UpdatedAt   *time.Time `json:"updated_at"`
 }
+
+// gitlabGraphQLRequest is the GraphQL query for fetching Work Item status via the workItems widget.
+type gitlabGraphQLRequest struct {
+	Query               string                 `json:"query"`
+	Variables           gitlabGraphQLVariables `json:"variables"`
+	gitlabGraphQLErrors `json:"errors,omitempty"`
+}
+
+type gitlabGraphQLVariables struct {
+	FullPath string `json:"fullPath"`
+	IID      string `json:"iid"`
+}
+
+type gitlabGraphQLErrors struct {
+	Message   string   `json:"message"`
+	Locations []any    `json:"locations,omitempty"`
+	Path      []string `json:"path,omitempty"`
+}
+
+// graphqlStatusResponse is the top-level response wrapper.
+type graphqlStatusResponse struct {
+	Data struct {
+		Project struct {
+			WorkItem struct {
+				Widgets []graphqlStatusWidget `json:"widgets"`
+			} `json:"workItem"`
+		} `json:"project"`
+	} `json:"data"`
+	Errors []gitlabGraphQLErrors `json:"errors,omitempty"`
+}
+
+// graphqlWorkItem is a lightweight Work Item for status queries.
+type graphqlWorkItem struct {
+	IID     string                `json:"iid"`
+	Widgets []graphqlStatusWidget `json:"widgets"`
+}
+
+// graphqlStatusWidget extracts the status from the workItems widget.
+type graphqlStatusWidget struct {
+	Type         string `json:"type"`
+	StatusWidget struct {
+		Status string `json:"status"`
+	} `json:"statusWidget"`
+}
+
+// statusEnrichment holds status per issue reference for batch enrichment.
+type statusEnrichment map[string]string // key: "group/project#123", value: status string
 
 func New(ctx context.Context, cfg config.GitlabConfig) (*GitlabAdapter, error) {
 	return newWithDeps(ctx, cfg, &http.Client{Timeout: 30 * time.Second}, execTokenResolver)
@@ -194,13 +242,15 @@ func (a *GitlabAdapter) Name() string { return adapterName }
 func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 	filters := map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 		domain.ScopeIssues: {
-			Views:          []string{"assigned_to_me", filterCreatedByMe, filterAll},
+			Views: []string{"assigned_to_me", filterCreatedByMe, filterAll},
+
 			States:         []string{"open", filterClosed, filterAll},
 			SupportsLabels: true,
 			SupportsSearch: true,
 			SupportsOffset: true,
 			SupportsRepo:   true,
 			SupportsGroup:  true,
+			SupportsStatus: true,
 		},
 		domain.ScopeProjects:    {SupportsOffset: true, SupportsRepo: true},
 		domain.ScopeInitiatives: {SupportsOffset: true, SupportsGroup: true},
@@ -233,6 +283,7 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 				Title:        iss.Title,
 				Description:  iss.Description,
 				State:        iss.State,
+				Status:       strings.TrimSpace(iss.Status),
 				Labels:       append([]string(nil), iss.Labels...),
 				ContainerRef: gitlabProjectPath(iss),
 				URL:          iss.WebURL,
@@ -616,6 +667,92 @@ func (a *GitlabAdapter) resolveUsername(ctx context.Context) error {
 	return nil
 }
 
+// graphqlStatusEnrichment fetches Work Item status for a batch of issues and returns a map
+// keyed by full reference (e.g. "group/project#123"). Returns nil on any GraphQL error so the
+// caller falls back to the REST response without status. GraphQL errors are logged to the
+// standard logger rather than surfaced as user-facing toasts.
+func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []issue) statusEnrichment {
+	if len(issues) == 0 || strings.TrimSpace(a.cfg.Token) == "" {
+		return nil
+	}
+	enrich := make(statusEnrichment)
+	for _, iss := range issues {
+		ref := strings.TrimSpace(iss.References.Full)
+		if ref == "" {
+			continue
+		}
+		status := a.graphqlFetchStatusForIssue(ctx, iss.ProjectID, iss.IID)
+		if status != "" {
+			enrich[ref] = status
+		}
+	}
+	if len(enrich) == 0 {
+		return nil
+	}
+	return enrich
+}
+
+// graphqlFetchStatusForIssue fetches the Work Item status for a single issue via GraphQL.
+// Returns the status string or "" if unavailable. Errors are logged to slog.
+func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectID, iid int64) string {
+	endpoint := "/api/graphql"
+	query := `query ProjectWorkItem($fullPath: ID!, $iid: String!) {
+  project(fullPath: $fullPath) {
+    workItem(iid: $iid) {
+      widgets {
+        type
+        ... on WorkItemWidgetStatus {
+          status
+        }
+      }
+    }
+  }
+}`
+	vars := gitlabGraphQLVariables{
+		FullPath: fmt.Sprintf("gid://gitlab/Project/%d", projectID),
+		IID:      strconv.FormatInt(iid, 10),
+	}
+	var resp graphqlStatusResponse
+	if err := a.doJSON(ctx, http.MethodPost, endpoint, nil, gitlabGraphQLRequest{Query: query, Variables: vars}, &resp); err != nil {
+		slog.Warn("graphql: failed to fetch status for issue", "projectID", projectID, "iid", iid, "error", err)
+		return ""
+	}
+	if len(resp.Errors) > 0 {
+		for _, e := range resp.Errors {
+			slog.Warn("graphql: status query error", "projectID", projectID, "iid", iid, "message", e.Message)
+		}
+		return ""
+	}
+	widgets := resp.Data.Project.WorkItem.Widgets
+	for _, w := range widgets {
+		if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status != "" {
+			return w.StatusWidget.Status
+		}
+	}
+	return ""
+}
+
+// graphqlStatusFilterIssues uses the GraphQL API to server-side filter issues by status.
+// Returns the original slice if GraphQL fails (degrades gracefully).
+func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
+	filtered := make([]issue, 0, len(issues))
+	for _, iss := range issues {
+		ref := strings.TrimSpace(iss.References.Full)
+		if ref == "" {
+			continue
+		}
+		if strings.TrimSpace(a.cfg.Token) == "" {
+			return issues
+		}
+		fetched := a.graphqlFetchStatusForIssue(ctx, iss.ProjectID, iss.IID)
+		if fetched != "" && strings.EqualFold(fetched, status) {
+			iss.Status = fetched
+			filtered = append(filtered, iss)
+		}
+	}
+	return filtered
+}
+
 func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]issue, error) {
 	query, err := gitlabIssueListQuery(opts)
 	if err != nil {
@@ -630,6 +767,11 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	var issues []issue
 	if err := a.getJSON(ctx, endpoint, query, &issues); err != nil {
 		return nil, err
+	}
+
+	// If a status filter is requested, use GraphQL for server-side filtering.
+	if strings.TrimSpace(opts.Status) != "" {
+		issues = a.graphqlStatusFilterIssues(ctx, issues, opts.Status)
 	}
 
 	return issues, nil

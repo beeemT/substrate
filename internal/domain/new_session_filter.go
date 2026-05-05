@@ -24,6 +24,7 @@ type NewSessionFilterCriteria struct {
 	Repository string
 	Group      string
 	TeamID     string
+	Status     string // GitLab Work Item status
 }
 
 // NewSessionFilterLock coordinates lease ownership while applying a New Session filter.

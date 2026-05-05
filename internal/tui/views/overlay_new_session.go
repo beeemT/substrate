@@ -103,6 +103,7 @@ const (
 	browseControlRepo
 	browseControlGroup
 	browseControlTeam
+	browseControlStatus
 )
 
 type browseLoadMode int
@@ -231,6 +232,7 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	repoInput                      components.GrowingTextInput
 	groupInput                     components.GrowingTextInput
 	teamInput                      components.GrowingTextInput
+	statusInput                    components.GrowingTextInput
 	issueList                      list.Model
 	allItems                       []adapter.ListItem
 	browsePages                    map[string]browsePageState
@@ -289,6 +291,10 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	team := components.NewGrowingTextInput()
 	team.SetPlaceholder("Team…")
 	team.SetCharLimit(200)
+
+	status := components.NewGrowingTextInput()
+	status.SetPlaceholder("Status (e.g. in_progress, completed)…")
+	status.SetCharLimit(200)
 
 	mt := components.NewGrowingTextInput()
 	mt.SetPlaceholder("Work item title…")
@@ -352,6 +358,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		repoInput:                      repo,
 		groupInput:                     group,
 		teamInput:                      team,
+		statusInput:                    status,
 		issueList:                      il,
 		browsePages:                    make(map[string]browsePageState),
 		selectedIDs:                    make(map[string]bool),
@@ -409,6 +416,7 @@ func (m *NewSessionOverlay) Close() {
 	m.repoInput.SetValue("")
 	m.groupInput.SetValue("")
 	m.teamInput.SetValue("")
+	m.statusInput.SetValue("")
 	m.blurBrowseInputs()
 	m.manualTitle.SetValue("")
 	m.manualTitle.Blur()
@@ -797,6 +805,9 @@ func (m NewSessionOverlay) browseControls() []browseControl {
 	if filters.SupportsTeam {
 		controls = append(controls, browseControlTeam)
 	}
+	if filters.SupportsStatus {
+		controls = append(controls, browseControlStatus)
+	}
 	return controls
 }
 
@@ -823,6 +834,7 @@ func (m *NewSessionOverlay) blurBrowseInputs() {
 	m.repoInput.Blur()
 	m.groupInput.Blur()
 	m.teamInput.Blur()
+	m.statusInput.Blur()
 }
 
 func (m *NewSessionOverlay) setBrowseControlFocus(control browseControl) {
@@ -854,6 +866,8 @@ func (m *NewSessionOverlay) setBrowseControlFocus(control browseControl) {
 		m.groupInput.Focus()
 	case browseControlTeam:
 		m.teamInput.Focus()
+	case browseControlStatus:
+		m.statusInput.Focus()
 	}
 }
 
@@ -988,6 +1002,7 @@ func (m NewSessionOverlay) currentFilterCriteria() domain.NewSessionFilterCriter
 		Repository: strings.TrimSpace(m.repoInput.Value()),
 		Group:      strings.TrimSpace(m.groupInput.Value()),
 		TeamID:     strings.TrimSpace(m.teamInput.Value()),
+		Status:     strings.TrimSpace(m.statusInput.Value()),
 	}
 }
 
@@ -1098,6 +1113,9 @@ func (m *NewSessionOverlay) applySavedFilter(filter domain.NewSessionFilter) {
 	m.repoInput.SetValue(strings.TrimSpace(filter.Criteria.Repository))
 	m.groupInput.SetValue(strings.TrimSpace(filter.Criteria.Group))
 	m.teamInput.SetValue(strings.TrimSpace(filter.Criteria.TeamID))
+	if status := strings.TrimSpace(filter.Criteria.Status); status != "" {
+		m.statusInput.SetValue(status)
+	}
 	m.viewIndex = 0
 	m.stateIndex = 0
 	m.normalizeSelectionOptions()
@@ -1254,6 +1272,10 @@ func (m *NewSessionOverlay) updateFocusedBrowseInput(msg tea.KeyMsg) []tea.Cmd {
 		before = m.teamInput.Value()
 		m.teamInput, cmd = m.teamInput.Update(msg)
 		after = m.teamInput.Value()
+	case browseControlStatus:
+		before = m.statusInput.Value()
+		m.statusInput, cmd = m.statusInput.Update(msg)
+		after = m.statusInput.Value()
 	default:
 		return nil
 	}
@@ -1286,6 +1308,9 @@ func (m NewSessionOverlay) advancedFilterRows() []string {
 	if filters.SupportsTeam {
 		rows = append(rows, m.controlLabel("Team:   ", browseControlTeam)+m.teamInput.View())
 	}
+	if filters.SupportsStatus {
+		rows = append(rows, m.controlLabel("Status: ", browseControlStatus)+m.statusInput.View())
+	}
 	return rows
 }
 
@@ -1297,6 +1322,7 @@ func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
 	m.repoInput.SetWidth(inputWidth)
 	m.groupInput.SetWidth(inputWidth)
 	m.teamInput.SetWidth(inputWidth)
+	m.statusInput.SetWidth(inputWidth)
 	m.manualTitle.SetWidth(inputWidth)
 	m.manualDesc.SetWidth(inputWidth)
 }
@@ -1316,6 +1342,9 @@ func countAdvancedBrowseFilterRows(filters adapter.BrowseFilterCapabilities) int
 		rows++
 	}
 	if filters.SupportsTeam {
+		rows++
+	}
+	if filters.SupportsStatus {
 		rows++
 	}
 	return rows
@@ -1739,6 +1768,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 	repo := strings.TrimSpace(m.repoInput.Value())
 	group := strings.TrimSpace(m.groupInput.Value())
 	team := strings.TrimSpace(m.teamInput.Value())
+	status := strings.TrimSpace(m.statusInput.Value())
 	pages := cloneBrowsePages(m.browsePages)
 	if mode == browseLoadReset {
 		pages = make(map[string]browsePageState, len(adapters))
@@ -1767,6 +1797,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 				Repo:        repo,
 				Group:       group,
 				TeamID:      team,
+				Status:      status,
 			}
 			if mode == browseLoadAppend {
 				if !page.HasMore {

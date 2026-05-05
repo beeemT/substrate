@@ -17,6 +17,7 @@ type SourceSummary struct {
 	Description string                `json:"description,omitempty"`
 	Excerpt     string                `json:"excerpt,omitempty"`
 	State       string                `json:"state,omitempty"`
+	Status      string                `json:"status,omitempty"` // GitLab Work Item status
 	Labels      []string              `json:"labels,omitempty"`
 	Container   string                `json:"container,omitempty"`
 	URL         string                `json:"url,omitempty"`

@@ -18,6 +18,7 @@ type BrowseFilterCapabilities struct {
 	SupportsRepo   bool
 	SupportsGroup  bool
 	SupportsTeam   bool
+	SupportsStatus bool // GitLab Work Item status filter support
 }
 
 // AdapterCapabilities describes what an adapter can do.
@@ -39,7 +40,8 @@ type ListOpts struct {
 	Limit       int    // Optional: max results (0 = default)
 	Offset      int    // Optional: pagination offset
 	View        string // Optional: assigned_to_me, created_by_me, mentioned, subscribed, all
-	State       string // Optional: provider-native state filter
+	State       string // Optional: provider-native state filter (opened/closed for GitLab)
+	Status      string // Optional: GitLab Work Item status (from GraphQL status widget)
 	Owner       string // Optional: GitHub owner filter
 	Repo        string // Optional: GitHub repo or GitLab project-path filter
 	Group       string // Optional: GitLab group filter
@@ -66,7 +68,8 @@ type ListItem struct {
 	ID           string
 	Title        string
 	Description  string
-	State        string
+	State        string // GitLab issue state (opened/closed)
+	Status       string // GitLab Work Item status (from GraphQL status widget)
 	Labels       []string
 	Provider     string
 	Identifier   string
