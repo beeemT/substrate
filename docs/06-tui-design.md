@@ -648,10 +648,7 @@ Destructive actions (delete session/work item, abandon, reject, override) show a
 
 Quitting while agent sessions are running shows a confirmation dialog listing the count of active sessions that will be killed. `y` confirms quit, `n`/`Esc` cancels. When no sessions are running, `q` quits immediately. SIGTERM is intercepted to route through the same confirmation path.
 
-### Escalation & Manual Intervention
-
-The orchestrator owns the full per-repo review lifecycle (implement → review → reimpl → re-review → pass/escalate/fail; see `05-orchestration.md`). `ImplementationCompleteMsg` signals that the entire lifecycle — implementation and review — is finished. The TUI does not dispatch review commands.
-
+fz|The orchestrator owns the full per-repo review lifecycle (implement → review → reimpl → re-review → pass/escalate/fail; see `05-orchestration.md`). `EventWorkItemCompleted` signals that the entire lifecycle — implementation and review — is finished. The TUI does not dispatch review commands.
 The TUI intervenes only when human input is required:
 
 - **`Override accept`** — accepts a repo that review escalated (max review cycles reached without passing). Handled via `OverrideAcceptCmd`.

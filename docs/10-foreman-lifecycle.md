@@ -53,7 +53,6 @@ Confirmed at these exact locations:
 - `internal/tui/views/app.go:1714–1719` — `StopForemanCmd` dispatched on `FollowUpDoneMsg`
 - `internal/tui/views/app.go:1858–1863` — `StopForemanCmd` on `WorkItemUpdatedMsg`
 - `internal/tui/views/app.go:1900–1920` — `StartForemanCmd` on `PlanReImplementsMsg` / `PlanRetryImplementsMsg`
-- `internal/tui/views/app.go:2295–2301` — `StopForemanCmd` on `ImplementationCompleteMsg`
 - `internal/tui/views/app.go:3047–3111` — `restartForemanForTask()` and `teardownAllPipelines()`
 - `internal/tui/views/app.go:3336–3339` — Sidebar reads `SessionID()`, `LastPlanID()`, `LastSessionID()`
 

@@ -366,3 +366,222 @@ func wireAdapterToBus[T any](adapterInstance T, events <-chan domain.SystemEvent
 		}
 	}
 }
+
+// ServiceProvider interface implementation — each method delegates to GetServices().
+
+func (sm *ServiceManager) Session() *service.SessionService {
+	if s := sm.GetServices(); s != nil {
+		return s.Session
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Plan() *service.PlanService {
+	if s := sm.GetServices(); s != nil {
+		return s.Plan
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Task() *service.TaskService {
+	if s := sm.GetServices(); s != nil {
+		return s.Task
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Question() *service.QuestionService {
+	if s := sm.GetServices(); s != nil {
+		return s.Question
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Instance() *service.InstanceService {
+	if s := sm.GetServices(); s != nil {
+		return s.Instance
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Workspace() *service.WorkspaceService {
+	if s := sm.GetServices(); s != nil {
+		return s.Workspace
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Review() *service.ReviewService {
+	if s := sm.GetServices(); s != nil {
+		return s.Review
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Events() *service.EventService {
+	if s := sm.GetServices(); s != nil {
+		return s.Events
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GithubPRs() *service.GithubPRService {
+	if s := sm.GetServices(); s != nil {
+		return s.GithubPRs
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GitlabMRs() *service.GitlabMRService {
+	if s := sm.GetServices(); s != nil {
+		return s.GitlabMRs
+	}
+	return nil
+}
+
+func (sm *ServiceManager) SessionArtifacts() *service.SessionReviewArtifactService {
+	if s := sm.GetServices(); s != nil {
+		return s.SessionArtifacts
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GithubPRReviews() *service.GithubPRReviewService {
+	if s := sm.GetServices(); s != nil {
+		return s.GithubPRReviews
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GitlabMRReviews() *service.GitlabMRReviewService {
+	if s := sm.GetServices(); s != nil {
+		return s.GitlabMRReviews
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GithubPRChecks() *service.GithubPRCheckService {
+	if s := sm.GetServices(); s != nil {
+		return s.GithubPRChecks
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GitlabMRChecks() *service.GitlabMRCheckService {
+	if s := sm.GetServices(); s != nil {
+		return s.GitlabMRChecks
+	}
+	return nil
+}
+
+func (sm *ServiceManager) NewSessionFilters() *service.SessionFilterService {
+	if s := sm.GetServices(); s != nil {
+		return s.NewSessionFilters
+	}
+	return nil
+}
+
+func (sm *ServiceManager) NewSessionFilterLocks() *service.SessionFilterLockService {
+	if s := sm.GetServices(); s != nil {
+		return s.NewSessionFilterLocks
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Settings() *SettingsService {
+	if s := sm.GetServices(); s != nil {
+		return s.Settings
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Planning() *orchestrator.PlanningService {
+	if s := sm.GetServices(); s != nil {
+		return s.Planning
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Implementation() *orchestrator.ImplementationService {
+	if s := sm.GetServices(); s != nil {
+		return s.Implementation
+	}
+	return nil
+}
+
+func (sm *ServiceManager) ReviewPipeline() *orchestrator.ReviewPipeline {
+	if s := sm.GetServices(); s != nil {
+		return s.ReviewPipeline
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Resumption() *orchestrator.Resumption {
+	if s := sm.GetServices(); s != nil {
+		return s.Resumption
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Foreman() *orchestrator.Foreman {
+	if s := sm.GetServices(); s != nil {
+		return s.Foreman
+	}
+	return nil
+}
+
+func (sm *ServiceManager) SessionRegistry() *orchestrator.SessionRegistry {
+	if s := sm.GetServices(); s != nil {
+		return s.SessionRegistry
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Bus() *event.Bus {
+	if s := sm.GetServices(); s != nil {
+		return s.Bus
+	}
+	return nil
+}
+
+func (sm *ServiceManager) GitClient() *gitwork.Client {
+	if s := sm.GetServices(); s != nil {
+		return s.GitClient
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Adapters() []adapter.WorkItemAdapter {
+	if s := sm.GetServices(); s != nil {
+		return s.Adapters
+	}
+	return nil
+}
+
+func (sm *ServiceManager) RepoSources() []adapter.RepoSource {
+	if s := sm.GetServices(); s != nil {
+		return s.RepoSources
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Harnesses() app.AgentHarnesses {
+	if s := sm.GetServices(); s != nil {
+		return s.Harnesses
+	}
+	return app.AgentHarnesses{}
+}
+
+func (sm *ServiceManager) ReviewComments() *adapter.ReviewCommentDispatcher {
+	if s := sm.GetServices(); s != nil {
+		return s.ReviewComments
+	}
+	return nil
+}
+
+func (sm *ServiceManager) StartupWarnings() []string {
+	if s := sm.GetServices(); s != nil {
+		return s.StartupWarnings
+	}
+	return nil
+}

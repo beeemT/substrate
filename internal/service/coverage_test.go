@@ -15,7 +15,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
 
 	// Setup plan
 	plan := domain.Plan{
@@ -222,7 +222,7 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 func TestSessionService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
 
 	session := domain.Task{
 		ID:             "session-1",
@@ -338,7 +338,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 func TestReviewService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockReviewRepository()
-	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}}, nil)
+	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}}, newTestBus())
 
 	cycle := domain.ReviewCycle{
 		ID:             "cycle-1",
@@ -473,7 +473,7 @@ func TestReviewService_AdditionalMethods(t *testing.T) {
 func TestWorkspaceService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkspaceRepository()
-	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
+	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, newTestBus())
 
 	ws := domain.Workspace{
 		ID:       "ws-1",
@@ -506,7 +506,7 @@ func TestWorkspaceService_AdditionalMethods(t *testing.T) {
 func TestQuestionService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, newTestBus())
 
 	t.Run("ListBySessionID", func(t *testing.T) {
 		repo.questions["q-1"] = domain.Question{ID: "q-1", AgentSessionID: "session-1", Status: domain.QuestionPending}
@@ -563,7 +563,7 @@ func TestErrors(t *testing.T) {
 func TestSessionService_FindRunningByOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
 
 	// FindRunningByOwner is a placeholder - just verify it returns nil
 	result, err := svc.FindRunningByOwner(ctx, "instance-1")
@@ -579,7 +579,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
 
 	t.Run("GetPlan not found", func(t *testing.T) {
 		_, err := svc.GetPlan(ctx, "nonexistent")
@@ -640,7 +640,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 func TestSessionService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
+	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")
@@ -668,7 +668,7 @@ func TestSessionService_NotFoundErrors(t *testing.T) {
 func TestReviewService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockReviewRepository()
-	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}}, nil)
+	svc := NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: repo}}, newTestBus())
 
 	t.Run("GetCycle not found", func(t *testing.T) {
 		_, err := svc.GetCycle(ctx, "nonexistent")
@@ -696,7 +696,7 @@ func TestReviewService_NotFoundErrors(t *testing.T) {
 func TestQuestionService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, newTestBus())
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")
@@ -763,7 +763,7 @@ func TestInstanceService_NotFoundErrors(t *testing.T) {
 func TestWorkspaceService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkspaceRepository()
-	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
+	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, newTestBus())
 
 	t.Run("Delete not found", func(t *testing.T) {
 		err := svc.Delete(ctx, "nonexistent")

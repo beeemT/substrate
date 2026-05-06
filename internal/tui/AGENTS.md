@@ -6,7 +6,6 @@
 - For viewport-backed content, set the viewport width to the pane's inner content width. Set the viewport height to the remaining rows after every reserved row is accounted for: titles, dividers, metadata, tabs, repo headers, footers, hints, and any other fixed chrome.
 - If optional rows can appear or disappear at runtime, recompute viewport height when those inputs change. Do not assume a fixed reservation if metadata, hints, or status rows are conditional.
 - Any dynamic line that can outgrow the available width must be wrapped or truncated before rendering. Prefer ANSI-aware helpers so styled content does not leak escape sequences, overflow, or mis-measure width.
-- When a pane renders multi-line entry blocks, cards, or list rows, keep clipping stable at block boundaries when possible. Do not slice a selected item mid-block unless that behavior is explicitly intended.
 - When composing body panes with a footer or status bar, reserve the footer rows in layout math first, then ensure the body panes render to exactly the remaining height so the bottom pane border lands directly above the footer.
 - Empty, loading, and populated states for the same pane **must** keep identical outer chrome (headers, titles, borders, padding). When async data changes the body later, recompute inner list/viewport sizing as needed, but keep overflow clipped or scrollable inside the pane instead of letting the parent box grow and reshuffle sibling panes.
 
@@ -129,3 +128,48 @@ in the switch case directly.
    or returns early if it is purely informational.
 6. If the event is purely informational, document why it is a no-op — do not silently drop events.
 
+kd|## No Auto-Focus Switching
+
+  Event handlers **MUST NOT** automatically switch sidebar focus (sidebar mode, selected work item, selected session) based on incoming events. Users control their own focus. If a new session appears in the sidebar, the user can navigate to it themselves.
+
+Exception: The `rebuildSidebar()` call itself may re-select an entry if the previously selected entry no longer exists, but it must not arbitrarily switch to a different work item or session.
+## Command Execution Model
+
+`tea.Cmd` functions run **synchronously on the Bubble Tea event loop**. They block the TUI until
+they return. This means the TUI cannot process any events (including domain events from the bus)
+while a command is executing.
+
+**User-triggered actions MUST run asynchronously** — dispatch long-running operations in goroutines:
+
+```go
+// WRONG — blocks TUI during implementation
+func RunImplementationCmd(...) tea.Cmd {
+    return func() tea.Msg {
+        result, err := svc.Implement(ctx, planID)  // BLOCKS
+        // TUI frozen until Implement() returns; events queue up unprocessed
+        return nil
+    }
+}
+
+// CORRECT — dispatches asynchronously, TUI remains responsive
+func RunImplementationCmd(...) tea.Cmd {
+    return func() tea.Msg {
+        go func() {
+            _, err := svc.Implement(ctx, planID)
+            if err != nil {
+                slog.Error("implementation failed", "error", err)
+            }
+            // Completion signaled via EventWorkItemCompleted
+        }()
+        return nil  // Don't block
+    }
+}
+```
+
+Use existing domain events for completion signaling:
+- `EventWorkItemCompleted` / `EventWorkItemFailed` for implementation/review phases
+- `EventAgentSessionStarted` for new sessions appearing in real-time
+- `EventPlanGenerated` / `EventPlanApproved` for planning completion
+
+If existing events are insufficient, emit a new domain event and handle it via the event bus pipeline
+(see "Event → message pipeline" above). Do not block the TUI to wait for long-running operations.

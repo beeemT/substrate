@@ -98,7 +98,9 @@ func appContentBodyWidth(width int) int {
 
 // App is the top-level bubbletea model.
 type App struct { //nolint:recvcheck // Bubble Tea convention
-	svcs Services
+
+	provider   ServiceProvider
+	runtimeCtx RuntimeContext
 
 	// Bus subscription for event-driven updates
 	busSub        *event.Subscriber
@@ -202,28 +204,29 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	pipelineCancels map[string]context.CancelFunc
 }
 
-// NewApp creates a new App from the given Services.
-func NewApp(svcs Services) *App {
+// NewApp creates a new App from the given ServiceProvider and RuntimeContext.
+func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 	st := styles.NewStyles(styles.DefaultTheme)
 	sessionsDir, _ := config.SessionsDir()
 	cwd, _ := os.Getwd()
 
 	app := App{
-		svcs:                           svcs,
+		provider:                       provider,
+		runtimeCtx:                     runtimeCtx,
 		sidebar:                        NewSidebarModel(st),
 		content:                        NewContentModel(st),
 		statusBar:                      NewStatusBarModel(st),
-		newSession:                     NewNewSessionOverlay(svcs.Adapters, svcs.WorkspaceID, st),
+		newSession:                     NewNewSessionOverlay(provider.Adapters(), runtimeCtx.WorkspaceID, st),
 		newSessionAutonomousOverlay:    NewNewSessionAutonomousOverlay(st),
 		sessionSearch:                  NewSessionSearchOverlay(st),
-		settingsPage:                   NewSettingsPage(svcs.Settings, svcs.SettingsData, st),
+		settingsPage:                   NewSettingsPage(provider.Settings(), runtimeCtx.SettingsData, st),
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		overviewLinksOverlay:           NewOverviewLinksOverlay(st),
 		reviewFollowupOverlay:          NewReviewFollowupModel(st),
-		logsOverlay:                    NewLogsOverlay(svcs.LogStore, st),
-		addRepo:                        NewAddRepoOverlay(svcs.RepoSources, svcs.WorkspaceDir, svcs.GitClient, st),
-		repoManager:                    NewRepoManagerOverlay(svcs.WorkspaceDir, svcs.GitClient, st),
+		logsOverlay:                    NewLogsOverlay(runtimeCtx.LogStore, st),
+		addRepo:                        NewAddRepoOverlay(provider.RepoSources(), runtimeCtx.WorkspaceDir, provider.GitClient(), st),
+		repoManager:                    NewRepoManagerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		toasts:                         components.NewToastModel(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
@@ -235,7 +238,7 @@ func NewApp(svcs Services) *App {
 		taskSessionSelectionByWorkItem: make(map[string]string),
 		pipelineCancels:                make(map[string]context.CancelFunc),
 		sessionsDir:                    sessionsDir,
-		hasWorkspace:                   svcs.WorkspaceID != "",
+		hasWorkspace:                   runtimeCtx.WorkspaceID != "",
 		styles:                         st,
 		cachedBase:                     new(string),
 		sbHeight:                       1, // conservative default; updated on first WindowSizeMsg
@@ -244,22 +247,22 @@ func NewApp(svcs Services) *App {
 	app.syncNewSessionFilterOverlays()
 
 	// Apply config-based defaults for the home view.
-	if svcs.Cfg != nil {
-		app.sidebar.filter = sidebarFilterFromString(svcs.Cfg.UI.DefaultFilter)
-		app.sidebar.dimension = sidebarDimFromString(svcs.Cfg.UI.DefaultGroup)
+	if runtimeCtx.Cfg != nil {
+		app.sidebar.filter = sidebarFilterFromString(runtimeCtx.Cfg.UI.DefaultFilter)
+		app.sidebar.dimension = sidebarDimFromString(runtimeCtx.Cfg.UI.DefaultGroup)
 		*app.sidebar.viewDirty = true
 	}
 
 	if !app.hasWorkspace {
-		app.workspaceModal = NewWorkspaceInitModal(cwd, st, svcs.Workspace)
+		app.workspaceModal = NewWorkspaceInitModal(cwd, st, provider.Workspace())
 		app.activeOverlay = overlayWorkspaceInit
 	}
 	return &app
 }
 
 // RunTUI launches the bubbletea program.
-func RunTUI(svcs Services) error {
-	app := NewApp(svcs)
+func RunTUI(provider ServiceProvider, runtimeCtx RuntimeContext) error {
+	app := NewApp(provider, runtimeCtx)
 	p := tea.NewProgram(app, tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
 
 	// Intercept SIGTERM so the quit-confirmation modal can run before exit.
@@ -283,22 +286,22 @@ func RunTUI(svcs Services) error {
 func (a *App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
-	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.svcs.LogToasts), StartupWarningsCmd(a.svcs.StartupWarnings))
+	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
 
-	if a.svcs.WorkspaceID != "" {
+	if a.runtimeCtx.WorkspaceID != "" {
 		cmds = append(cmds,
-			LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-			LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
-			LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
-			LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID),
-			ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
+			LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+			LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
+			LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
+			LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
+			ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
 		)
 
 		// Subscribe to event bus for event-driven updates
-		if a.svcs.Bus != nil {
+		if a.provider.Bus() != nil {
 			var err error
-			a.busSub, err = a.svcs.Bus.Subscribe(
-				"tui:"+a.svcs.WorkspaceID,
+			a.busSub, err = a.provider.Bus().Subscribe(
+				"tui:"+a.runtimeCtx.WorkspaceID,
 				// Work item lifecycle
 				string(domain.EventWorkItemIngested),
 				string(domain.EventWorkItemPlanning),
@@ -349,23 +352,27 @@ func (a *App) Init() tea.Cmd {
 
 	if a.activeOverlay == overlayWorkspaceInit {
 		cmds = append(cmds, a.workspaceModal.ScanCmd())
-	} else if a.svcs.WorkspaceID != "" && a.svcs.WorkspaceDir != "" {
+	} else if a.runtimeCtx.WorkspaceID != "" && a.runtimeCtx.WorkspaceDir != "" {
 		// Scan for plain-git repos that were manually added since the workspace was initialised.
-		cmds = append(cmds, WorkspaceHealthCheckCmd(a.svcs.WorkspaceDir))
+		cmds = append(cmds, WorkspaceHealthCheckCmd(a.runtimeCtx.WorkspaceDir))
 	}
 
 	return tea.Batch(cmds...)
 }
 
 func (a *App) applyServicesReload(reload viewsServicesReload) {
-	a.svcs = reload.Services
-	a.newSession = NewNewSessionOverlay(a.svcs.Adapters, a.svcs.WorkspaceID, a.statusBar.styles)
+	// runtimeCtx is immutable after construction; update workspace fields from reload.
+	a.runtimeCtx.WorkspaceID = reload.Services.WorkspaceID
+	a.runtimeCtx.WorkspaceName = reload.Services.WorkspaceName
+	a.runtimeCtx.WorkspaceDir = reload.Services.WorkspaceDir
+
+	a.newSession = NewNewSessionOverlay(a.provider.Adapters(), a.runtimeCtx.WorkspaceID, a.statusBar.styles)
 	a.newSession.SetSize(a.windowWidth, a.windowHeight)
 	a.newSessionAutonomousOverlay = NewNewSessionAutonomousOverlay(a.statusBar.styles)
 	a.newSessionAutonomousOverlay.SetSize(a.windowWidth, a.windowHeight)
 	a.settingsPage.SetSnapshot(reload.SettingsData)
 	a.sessionsDir = reload.SessionsDir
-	a.hasWorkspace = a.svcs.WorkspaceID != ""
+	a.hasWorkspace = a.runtimeCtx.WorkspaceID != ""
 	a.syncNewSessionFilterOverlays()
 }
 
@@ -391,7 +398,7 @@ func (a App) sessionSearchScope() sessionHistoryScope {
 }
 
 func (a App) sessionSearchFilter() domain.SessionHistoryFilter {
-	return a.sessionSearch.Filter(a.svcs.WorkspaceID)
+	return a.sessionSearch.Filter(a.runtimeCtx.WorkspaceID)
 }
 
 func sessionHistoryEntryKey(entry domain.SessionHistoryEntry) string {
@@ -448,8 +455,8 @@ func sessionHistoryEntryMatches(entry domain.SessionHistoryEntry, search string)
 
 func (a App) localSessionSearchEntry(wi domain.Session) (domain.SessionHistoryEntry, bool) {
 	workspaceName := ""
-	if wi.WorkspaceID == a.svcs.WorkspaceID {
-		workspaceName = strings.TrimSpace(a.svcs.WorkspaceName)
+	if wi.WorkspaceID == a.runtimeCtx.WorkspaceID {
+		workspaceName = strings.TrimSpace(a.runtimeCtx.WorkspaceName)
 	}
 	entry := domain.SessionHistoryEntry{
 		WorkspaceID:        wi.WorkspaceID,
@@ -495,7 +502,7 @@ func (a App) localSessionSearchEntry(wi domain.Session) (domain.SessionHistoryEn
 }
 
 func (a App) localSessionSearchEntries(filter domain.SessionHistoryFilter) []domain.SessionHistoryEntry {
-	if filter.WorkspaceID != nil && *filter.WorkspaceID != a.svcs.WorkspaceID {
+	if filter.WorkspaceID != nil && *filter.WorkspaceID != a.runtimeCtx.WorkspaceID {
 		return nil
 	}
 	entries := make([]domain.SessionHistoryEntry, 0, len(a.workItems))
@@ -544,7 +551,7 @@ func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 		spinnerCmd = a.sessionSearch.SetLoading(true)
 	}
 	a.sessionSearch.SetEntries(a.localSessionSearchEntries(filter))
-	return tea.Batch(spinnerCmd, SearchSessionHistoryCmd(a.svcs.Task, filter))
+	return tea.Batch(spinnerCmd, SearchSessionHistoryCmd(a.provider.Task(), filter))
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
@@ -581,8 +588,8 @@ func (a *App) openAddRepo() tea.Cmd {
 	cmds := []tea.Cmd{a.addRepo.Open(a.managedRepoSlugs)}
 	// If no scan has run yet but we know the workspace dir, trigger one now.
 	// The result will arrive as ManagedReposLoadedMsg and update the overlay via SetPresentSlugs.
-	if a.managedRepoSlugs == nil && a.svcs.WorkspaceDir != "" {
-		cmds = append(cmds, LoadManagedReposCmd(a.svcs.WorkspaceDir))
+	if a.managedRepoSlugs == nil && a.runtimeCtx.WorkspaceDir != "" {
+		cmds = append(cmds, LoadManagedReposCmd(a.runtimeCtx.WorkspaceDir))
 	}
 	return tea.Batch(cmds...)
 }
@@ -966,7 +973,7 @@ func (a App) sidebarEntryFromHistory(entry domain.SessionHistoryEntry) SidebarEn
 }
 
 func (a App) historyEntryIsLocal(entry SidebarEntry) bool {
-	if entry.WorkspaceID == "" || entry.WorkspaceID != a.svcs.WorkspaceID || entry.WorkItemID == "" {
+	if entry.WorkspaceID == "" || entry.WorkspaceID != a.runtimeCtx.WorkspaceID || entry.WorkItemID == "" {
 		return false
 	}
 	for _, workItem := range a.workItems {
@@ -978,7 +985,7 @@ func (a App) historyEntryIsLocal(entry SidebarEntry) bool {
 }
 
 func (a App) historyEntryIsReadOnly(entry SidebarEntry) bool {
-	return entry.WorkspaceID != "" && entry.WorkspaceID != a.svcs.WorkspaceID
+	return entry.WorkspaceID != "" && entry.WorkspaceID != a.runtimeCtx.WorkspaceID
 }
 
 func (a App) readOnlyToast() (components.Toast, bool) {
@@ -989,7 +996,7 @@ func (a App) readOnlyToast() (components.Toast, bool) {
 }
 
 func (a App) harnessWarningToast() (components.Toast, bool) {
-	warning := strings.TrimSpace(a.svcs.SettingsData.HarnessWarning)
+	warning := strings.TrimSpace(a.runtimeCtx.SettingsData.HarnessWarning)
 	if warning == "" {
 		return components.Toast{}, false
 	}
@@ -1087,7 +1094,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		} else if a.hasWorkspace && a.activeOverlay == overlayNone && len(msg.Check.PlainGitClones) > 0 {
 			// New uninitialized repos detected in an existing workspace.
-			a.workspaceModal = NewNewReposModal(a.svcs.WorkspaceDir, a.styles, a.svcs.GitClient)
+			a.workspaceModal = NewNewReposModal(a.runtimeCtx.WorkspaceDir, a.styles, a.provider.GitClient())
 			a.workspaceModal.SetSize(a.windowWidth, a.windowHeight)
 			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 			cmds = append(cmds, cmd)
@@ -1097,8 +1104,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceInitDoneMsg:
 		cmds = append(cmds, initializeWorkspaceServicesCmd(
-			a.svcs.Settings.serviceMgr,
-			a.svcs,
+			a.provider,
+			a.runtimeCtx,
 			msg.WorkspaceID,
 			msg.WorkspaceName,
 			msg.WorkspaceDir,
@@ -1113,7 +1120,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceServicesReloadedMsg:
-		oldWorkspaceID := a.svcs.WorkspaceID
+		oldWorkspaceID := a.runtimeCtx.WorkspaceID
 		a.applyServicesReload(msg.Reload)
 		a.activeOverlay = overlayNone
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -1121,15 +1128,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-subscribe to the new bus after workspace init or rebuild.
 		// Init() only subscribes once at startup; if the bus changes (new workspace
 		// or rebuild), we must create a fresh subscription to the new bus.
-		// Unsubscribe from the OLD workspace ID — a.svcs.WorkspaceID was just
+		// Unsubscribe from the OLD workspace ID — a.runtimeCtx.WorkspaceID was just
 		// overwritten by applyServicesReload, so we saved it above.
-		if a.svcs.Bus != nil {
+		if a.provider.Bus() != nil {
 			if a.busSub != nil {
-				a.svcs.Bus.Unsubscribe("tui:" + oldWorkspaceID)
+				a.provider.Bus().Unsubscribe("tui:" + oldWorkspaceID)
 			}
 			var err error
-			a.busSub, err = a.svcs.Bus.Subscribe(
-				"tui:"+a.svcs.WorkspaceID,
+			a.busSub, err = a.provider.Bus().Subscribe(
+				"tui:"+a.runtimeCtx.WorkspaceID,
 				string(domain.EventWorkItemIngested),
 				string(domain.EventWorkItemPlanning),
 				string(domain.EventWorkItemPlanReview),
@@ -1169,13 +1176,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if a.svcs.WorkspaceID != "" {
+		if a.runtimeCtx.WorkspaceID != "" {
 			cmds = append(cmds,
-				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
-				LoadLiveInstancesCmd(a.svcs.Instance, a.svcs.WorkspaceID),
-				LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID),
-				ReconcileOrphanedTasksCmd(a.svcs.Task, a.svcs.Instance, a.svcs.WorkspaceID, a.svcs.InstanceID),
+				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
+				LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
+				LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
+				ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
 			)
 		}
 		return a, tea.Batch(cmds...)
@@ -1186,7 +1193,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case QuitConfirmedMsg:
 		a.teardownAllPipelines()
 		if a.busSub != nil {
-			a.svcs.Bus.Unsubscribe("tui:" + a.svcs.WorkspaceID)
+			a.provider.Bus().Unsubscribe("tui:" + a.runtimeCtx.WorkspaceID)
 		}
 		return a, a.quitCmd()
 
@@ -1223,8 +1230,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PollTickMsg:
 		a.toasts.Prune()
-		if a.svcs.InstanceID != "" {
-			cmds = append(cmds, HeartbeatCmd(a.svcs.Instance, a.svcs.InstanceID))
+		if a.runtimeCtx.InstanceID != "" {
+			cmds = append(cmds, HeartbeatCmd(a.provider.Instance(), a.runtimeCtx.InstanceID))
 		}
 		if a.activeOverlay == overlaySessionSearch {
 			cmds = append(cmds, a.runSessionSearch(false))
@@ -1239,7 +1246,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Defensive: ignore events not for this workspace.
-		if msg.Event.WorkspaceID != "" && msg.Event.WorkspaceID != a.svcs.WorkspaceID {
+		if msg.Event.WorkspaceID != "" && msg.Event.WorkspaceID != a.runtimeCtx.WorkspaceID {
 			return a, nil
 		}
 
@@ -1258,12 +1265,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds,
-					LoadSessionCmd(a.svcs.Session, workItemID),
-					LoadTasksForSessionCmd(a.svcs.Task, workItemID),
+					LoadSessionCmd(a.provider.Session(), workItemID),
+					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
+					LoadPlanForSessionCmd(a.provider.Plan(), workItemID),
 				)
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
+			}
+			// Implementation/review complete: show toast and stop foreman
+			if msg.Event.EventType == string(domain.EventWorkItemCompleted) {
+				a.cancelPipeline(workItemID)
+				a.toasts.AddToast("Implementation complete", components.ToastSuccess)
+				if a.provider.Foreman() != nil && a.foremanPlanID != "" {
+					cmds = append(cmds, StopForemanCmd(a.provider.Foreman()))
+				}
 			}
 
 		// Session lifecycle — new sessions: load work item AND tasks so the sidebar
@@ -1272,8 +1288,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds,
-					LoadSessionCmd(a.svcs.Session, workItemID),
-					LoadTasksForSessionCmd(a.svcs.Task, workItemID),
+					LoadSessionCmd(a.provider.Session(), workItemID),
+					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
 				)
 			}
 			if a.currentWorkItemID != "" {
@@ -1287,7 +1303,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventAgentSessionResumed:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
-				cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, workItemID))
+				cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), workItemID))
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1299,7 +1315,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventPlanSubmittedForReview:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
-				cmds = append(cmds, LoadPlanForSessionCmd(a.svcs.Plan, workItemID))
+				cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), workItemID))
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1316,14 +1332,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventPRMerged:
 			// Handled by typed message cases below; no action needed here.
 
-		// Higher-level events that don't need targeted reload (all other untyped events)
+			// Higher-level events that don't need targeted reload (all other untyped events)
 		}
 
 		return a, tea.Batch(cmds...)
 
 	case HeartbeatTickMsg:
-		if a.svcs.InstanceID != "" {
-			cmds = append(cmds, HeartbeatCmd(a.svcs.Instance, a.svcs.InstanceID))
+		if a.runtimeCtx.InstanceID != "" {
+			cmds = append(cmds, HeartbeatCmd(a.provider.Instance(), a.runtimeCtx.InstanceID))
 		}
 		cmds = append(cmds, HeartbeatTickCmd())
 		return a, tea.Batch(cmds...)
@@ -1334,7 +1350,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionsLoadedMsg:
-		if msg.WorkspaceID != a.svcs.WorkspaceID {
+		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
 			return a, nil
 		}
 		a.workItems = msg.Items
@@ -1343,27 +1359,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Load plans for all work items so that actions like retry are available
 		// immediately, regardless of whether TasksLoadedMsg arrives first.
 		for _, wi := range msg.Items {
-			cmds = append(cmds, LoadPlanCmd(a.svcs.Plan, wi.ID))
+			cmds = append(cmds, LoadPlanCmd(a.provider.Plan(), wi.ID))
 		}
 		cmds = append(cmds, a.updateContentFromState())
 		return a, tea.Batch(cmds...)
 
 	case TasksLoadedMsg:
-		if msg.WorkspaceID != a.svcs.WorkspaceID {
+		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
 			return a, nil
 		}
 		a.sessions = msg.Sessions
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		for _, wi := range a.workItems {
-			cmds = append(cmds, LoadPlanCmd(a.svcs.Plan, wi.ID))
+			cmds = append(cmds, LoadPlanCmd(a.provider.Plan(), wi.ID))
 		}
 		for _, s := range msg.Sessions {
 			if s.Status == domain.AgentSessionWaitingForAnswer {
-				cmds = append(cmds, LoadQuestionsCmd(a.svcs.Question, s.ID))
+				cmds = append(cmds, LoadQuestionsCmd(a.provider.Question(), s.ID))
 			}
 			if s.Status == domain.AgentSessionCompleted {
-				cmds = append(cmds, LoadReviewsCmd(a.svcs.Review, s.ID))
+				cmds = append(cmds, LoadReviewsCmd(a.provider.Review(), s.ID))
 			}
 		}
 		cmds = append(cmds, a.updateContentFromState())
@@ -1421,8 +1437,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Cascade: load tasks and plan for the work item
 		cmds = append(cmds,
-			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItem.ID),
-			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItem.ID),
+			LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItem.ID),
+			LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItem.ID),
 		)
 		return a, tea.Batch(cmds...)
 
@@ -1455,7 +1471,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InspectPlanMsg:
 		if msg.PlanID != "" {
-			return a, LoadPlanByIDCmd(a.svcs.Plan, msg.PlanID)
+			return a, LoadPlanByIDCmd(a.provider.Plan(), msg.PlanID)
 		}
 		return a, nil
 	case QuestionsLoadedMsg:
@@ -1478,19 +1494,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if msg.WorkItemID != "" {
-			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
 
-
 	case WorkItemUpdatedMsg:
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if msg.WorkItemID != "" {
-			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -1582,7 +1597,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReviewStartedMsg, ReviewCompletedMsg, CritiquesFoundMsg, ReimplementationStartedMsg:
 		sessionID := extractReviewSessionID(msg)
-		cmds = append(cmds, LoadReviewsCmd(a.svcs.Review, sessionID))
+		cmds = append(cmds, LoadReviewsCmd(a.provider.Review(), sessionID))
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -1592,12 +1607,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(fmt.Sprintf("Adapter error (%s): %v", msg.Adapter, msg.Err), components.ToastWarning)
 		return a, nil
 
-
 	case ImplementationStartedMsg:
 		if msg.WorkItemID != "" {
 			cmds = append(cmds,
-				LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
-				LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+				LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
+				LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
 			)
 		}
 		if a.currentWorkItemID != "" {
@@ -1607,7 +1621,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PRReviewStateChangedMsg:
 		if msg.WorkItemID != "" {
-			cmds = append(cmds, LoadSessionCmd(a.svcs.Session, msg.WorkItemID))
+			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -1617,16 +1631,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PRMergedMsg:
 		if msg.WorkItemID != "" {
 			cmds = append(cmds,
-				LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
-				LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
+				LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
+				LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
 			)
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
-
-
 
 	case ReviewsLoadedMsg:
 		a.reviews[msg.SessionID] = msg
@@ -1636,7 +1648,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanEditedMsg:
-		cmds = append(cmds, SaveReviewedPlanCmd(a.svcs.Planning, msg.PlanID, msg.NewContent))
+		cmds = append(cmds, SaveReviewedPlanCmd(a.provider.Planning(), msg.PlanID, msg.NewContent))
 		return a, tea.Batch(cmds...)
 
 	case PlanSavedMsg:
@@ -1683,50 +1695,50 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case StartPlanMsg:
-		if a.svcs.Planning != nil {
-			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID))
+		if a.provider.Planning() != nil {
+			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case RestartPlanMsg:
-		if a.svcs.Planning != nil && a.svcs.Session != nil {
-			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Session, a.svcs.Planning, a.svcs.Task, msg.WorkItemID))
+		if a.provider.Planning() != nil && a.provider.Session() != nil {
+			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Cfg, a.svcs.Bus, msg.PlanID, msg.WorkItemID))
+		cmds = append(cmds, ApprovePlanCmd(a.provider.Session(), a.provider.Plan(), a.runtimeCtx.Cfg, a.provider.Bus(), msg.PlanID, msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:
-		if a.svcs.Implementation != nil {
-			cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, msg.PlanID))
+		if a.provider.Implementation() != nil {
+			cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), msg.PlanID))
 		}
-		if a.svcs.Foreman != nil {
+		if a.provider.Foreman() != nil {
 			a.foremanPlanID = msg.PlanID
-			cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, msg.PlanID, ""))
+			cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), msg.PlanID, ""))
 		}
 		return a, tea.Batch(cmds...)
 
 	case PlanRequestChangesMsg:
-		if a.svcs.Planning != nil {
-			cmds = append(cmds, PlanWithFeedbackCmd(a.registerPipelineCancel(a.currentWorkItemID), a.svcs.Planning, a.currentWorkItemID, msg.PlanID, msg.Feedback))
+		if a.provider.Planning() != nil {
+			cmds = append(cmds, PlanWithFeedbackCmd(a.registerPipelineCancel(a.currentWorkItemID), a.provider.Planning(), a.currentWorkItemID, msg.PlanID, msg.Feedback))
 		} else {
 			a.toasts.AddToast("Plan revision requested (no planning service)", components.ToastInfo)
 		}
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
-		cmds = append(cmds, AnswerQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.SessionRegistry, a.svcs.Foreman, a.svcs.Bus, msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		cmds = append(cmds, AnswerQuestionCmd(a.provider.Question(), a.provider.Task(), a.provider.SessionRegistry(), a.provider.Foreman(), a.provider.Bus(), msg.QuestionID, msg.Answer, msg.AnsweredBy))
 		return a, tea.Batch(cmds...)
 
 	case SteerSessionMsg:
-		if a.svcs.SessionRegistry != nil && msg.SessionID != "" && msg.Message != "" {
-			cmds = append(cmds, SteerSessionCmd(a.svcs.SessionRegistry, msg.SessionID, msg.Message))
+		if a.provider.SessionRegistry() != nil && msg.SessionID != "" && msg.Message != "" {
+			cmds = append(cmds, SteerSessionCmd(a.provider.SessionRegistry(), msg.SessionID, msg.Message))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1735,18 +1747,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case FollowUpSessionMsg:
-		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
+		if a.provider.Resumption() != nil && a.provider.Task() != nil && msg.TaskID != "" && msg.Feedback != "" {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
-			cmds = append(cmds, FollowUpSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
 			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
 			a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
 		}
 		return a, tea.Batch(cmds...)
 
 	case FollowUpFailedSessionMsg:
-		if a.svcs.Resumption != nil && a.svcs.Task != nil && msg.TaskID != "" && msg.Feedback != "" {
+		if a.provider.Resumption() != nil && a.provider.Task() != nil && msg.TaskID != "" && msg.Feedback != "" {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
-			cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.TaskID, msg.Feedback, a.svcs.InstanceID))
+			cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
 			cmds = append(cmds, a.restartForemanForTask(msg.TaskID, msg.Feedback)...)
 			a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
 		}
@@ -1757,18 +1769,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Follow-up session complete", components.ToastSuccess)
 		// Stop the Foreman — follow-up work is done. foremanPlanID is intentionally
 		// preserved so the sidebar still shows the session log.
-		if a.svcs.Foreman != nil && a.foremanPlanID != "" {
-			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+		if a.provider.Foreman() != nil && a.foremanPlanID != "" {
+			cmds = append(cmds, StopForemanCmd(a.provider.Foreman()))
 		}
 		// Reload tasks for the specific work item
-		cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID))
+		cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case FollowUpPlanMsg:
-		if a.svcs.Planning == nil {
+		if a.provider.Planning() == nil {
 			return a, nil
 		}
-		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID, msg.Feedback)
+		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID, msg.Feedback)
 
 	case FollowUpPlanResultMsg:
 		if msg.Err != nil {
@@ -1778,19 +1790,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast("Follow-up plan ready for review", components.ToastSuccess)
 		// Reload the session and plan for the work item
 		cmds = append(cmds,
-			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
-			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
+			LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
+			LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID),
 		)
 		return a, tea.Batch(cmds...)
 
 	case FetchReviewCommentsMsg:
-		if a.svcs.ReviewComments == nil || len(msg.Items) == 0 {
+		if a.provider.ReviewComments() == nil || len(msg.Items) == 0 {
 			return a, nil
 		}
 		a.activeOverlay = overlayReviewFollowup
 		a.reviewFollowupOverlay.SetSize(a.windowWidth, a.windowHeight)
 		gen, spinnerCmd := a.reviewFollowupOverlay.OpenLoading(msg.WorkItemID, msg.Items)
-		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, "", gen))
+		return a, tea.Batch(spinnerCmd, FetchReviewCommentsCmd(a.provider.ReviewComments(), msg.WorkItemID, msg.Items, "", gen))
 
 	case ReviewCommentsFetchedMsg:
 		// Drop results from a previous overlay session (user cancelled or reopened).
@@ -1814,10 +1826,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case ReviewFollowupRefetchMsg:
-		if a.svcs.ReviewComments == nil {
+		if a.provider.ReviewComments() == nil {
 			return a, nil
 		}
-		return a, FetchReviewCommentsCmd(a.svcs.ReviewComments, msg.WorkItemID, msg.Items, msg.Mode, a.reviewFollowupOverlay.Generation())
+		return a, FetchReviewCommentsCmd(a.provider.ReviewComments(), msg.WorkItemID, msg.Items, msg.Mode, a.reviewFollowupOverlay.Generation())
 
 	case ReviewCommentsRefetchedMsg:
 		// Drop refetch results from a previous overlay session.
@@ -1868,27 +1880,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FollowUpFromReviewReplanMsg:
 		a.activeOverlay = overlayNone
 		a.reviewFollowupOverlay.Close()
-		if a.svcs.Planning == nil || strings.TrimSpace(msg.Feedback) == "" {
+		if a.provider.Planning() == nil || strings.TrimSpace(msg.Feedback) == "" {
 			a.toasts.AddToast("Re-plan not dispatched: missing planning service or feedback", components.ToastWarning)
 			return a, nil
 		}
-		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Planning, msg.WorkItemID, msg.Feedback)
+		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID, msg.Feedback)
 
 	case SkipQuestionMsg:
-		cmds = append(cmds, SkipQuestionCmd(a.svcs.Question, a.svcs.Task, a.svcs.SessionRegistry, a.svcs.Foreman, a.svcs.Bus, msg.QuestionID))
+		cmds = append(cmds, SkipQuestionCmd(a.provider.Question(), a.provider.Task(), a.provider.SessionRegistry(), a.provider.Foreman(), a.provider.Bus(), msg.QuestionID))
 		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:
-		if a.svcs.Resumption != nil {
+		if a.provider.Resumption() != nil {
 			ctx := a.pipelineCtxForTask(msg.OldSessionID)
-			cmds = append(cmds, ResumeSessionCmd(ctx, a.svcs.Resumption, a.svcs.Task, msg.OldSessionID, a.svcs.InstanceID))
+			cmds = append(cmds, ResumeSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.OldSessionID, a.runtimeCtx.InstanceID))
 		} else {
 			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case AbandonSessionMsg:
-		cmds = append(cmds, abandonSessionCmd(a.svcs.Task, msg.SessionID))
+		cmds = append(cmds, abandonSessionCmd(a.provider.Task(), msg.SessionID))
 		return a, tea.Batch(cmds...)
 
 	case DeleteSessionMsg:
@@ -1898,9 +1910,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cancelPipeline(msg.SessionID)
 
 		// Stop the Foreman if it is running for this work item's plan.
-		if a.svcs.Foreman != nil {
+		if a.provider.Foreman() != nil {
 			if plan := a.plans[msg.SessionID]; plan != nil && plan.ID == a.foremanPlanID {
-				cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
+				cmds = append(cmds, StopForemanCmd(a.provider.Foreman()))
 				a.foremanPlanID = ""
 			}
 		}
@@ -1909,27 +1921,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// resumed and follow-up sessions that use fire-and-forget goroutines
 		// without a stored cancel handle. AbortAndDeregister is idempotent —
 		// sessions already torn down by the context cancel above are a no-op.
-		if a.svcs.SessionRegistry != nil {
+		if a.provider.SessionRegistry() != nil {
 			for _, task := range a.sessions {
 				if task.WorkItemID == msg.SessionID {
-					a.svcs.SessionRegistry.AbortAndDeregister(context.Background(), task.ID)
+					a.provider.SessionRegistry().AbortAndDeregister(context.Background(), task.ID)
 				}
 			}
 		}
 
-		cmds = append(cmds, deleteSessionCmd(a.svcs, a.sessionsDir, msg.SessionID, a.reviewSessionLogs))
+		cmds = append(cmds, deleteSessionCmd(a.provider, a.sessionsDir, msg.SessionID, a.reviewSessionLogs))
 		return a, tea.Batch(cmds...)
 
 	case ArchiveSessionMsg:
-		cmds = append(cmds, archiveSessionCmd(a.svcs.Session, msg.WorkItemID))
+		cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case UnarchiveSessionMsg:
-		cmds = append(cmds, unarchiveSessionCmd(a.svcs.Session, msg.WorkItemID))
+		cmds = append(cmds, unarchiveSessionCmd(a.provider.Session(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case SessionArchivedMsg:
-		updated, err := a.svcs.Session.Get(context.Background(), msg.WorkItemID)
+		updated, err := a.provider.Session().Get(context.Background(), msg.WorkItemID)
 		if err != nil {
 			slog.Error("failed to fetch archived work item", "error", err, "work_item_id", msg.WorkItemID)
 		} else {
@@ -1944,7 +1956,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionUnarchivedMsg:
-		updated, err := a.svcs.Session.Get(context.Background(), msg.WorkItemID)
+		updated, err := a.provider.Session().Get(context.Background(), msg.WorkItemID)
 		if err != nil {
 			slog.Error("failed to fetch unarchived work item", "error", err, "work_item_id", msg.WorkItemID)
 		} else {
@@ -1959,12 +1971,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
-		if a.svcs.Implementation != nil {
+		if a.provider.Implementation() != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
-				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, plan.ID))
-				if a.svcs.Foreman != nil {
+				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), plan.ID))
+				if a.provider.Foreman() != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID, ""))
+					cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
@@ -1976,12 +1988,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RetryFailedMsg:
 		a.toasts.AddToast("Retrying failed repos...", components.ToastInfo)
-		if a.svcs.Implementation != nil {
+		if a.provider.Implementation() != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
-				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Session, a.svcs.Implementation, plan.ID, msg.WorkItemID))
-				if a.svcs.Foreman != nil {
+				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Implementation(), plan.ID, msg.WorkItemID))
+				if a.provider.Foreman() != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.svcs.Foreman, plan.ID, ""))
+					cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for retry", components.ToastError)
@@ -1993,25 +2005,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FinalizeWorkItemMsg:
 		a.toasts.AddToast("Finalizing completed work item...", components.ToastInfo)
-		if a.svcs.Implementation != nil {
-			cmds = append(cmds, FinalizeWorkItemCmd(a.registerPipelineCancel(msg.WorkItemID), a.svcs.Implementation, msg.WorkItemID))
+		if a.provider.Implementation() != nil {
+			cmds = append(cmds, FinalizeWorkItemCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Implementation service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case OverrideAcceptMsg:
-		cmds = append(cmds, OverrideAcceptCmd(a.svcs.Session, a.svcs.Plan, a.svcs.Task, a.svcs.Bus, msg.WorkItemID))
+		cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), a.provider.Plan(), a.provider.Task(), a.provider.Bus(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case LoadNewSessionFiltersMsg:
 		if strings.TrimSpace(msg.WorkspaceID) == "" {
 			return a, nil
 		}
-		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, msg.WorkspaceID)
+		return a, LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), msg.WorkspaceID)
 
 	case NewSessionFiltersLoadedMsg:
-		if msg.WorkspaceID != a.svcs.WorkspaceID {
+		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
 			return a, nil
 		}
 		a.savedNewSessionFilters = append([]domain.NewSessionFilter(nil), msg.Filters...)
@@ -2019,29 +2031,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case DeleteNewSessionFilterMsg:
-		if strings.TrimSpace(msg.WorkspaceID) == "" || msg.WorkspaceID != a.svcs.WorkspaceID {
+		if strings.TrimSpace(msg.WorkspaceID) == "" || msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
 			return a, nil
 		}
-		return a, DeleteNewSessionFilterCmd(a.svcs.NewSessionFilters, msg)
+		return a, DeleteNewSessionFilterCmd(a.provider.NewSessionFilters(), msg)
 
 	case NewSessionFilterDeletedMsg:
 		if strings.TrimSpace(msg.Message) != "" {
 			a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		}
-		if a.svcs.WorkspaceID == "" {
+		if a.runtimeCtx.WorkspaceID == "" {
 			return a, nil
 		}
-		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID)
+		return a, LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID)
 
 	case SaveNewSessionFilterMsg:
-		return a, SaveNewSessionFilterCmd(a.svcs.NewSessionFilters, msg)
+		return a, SaveNewSessionFilterCmd(a.provider.NewSessionFilters(), msg)
 
 	case NewSessionFilterSavedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		if a.svcs.WorkspaceID == "" {
+		if a.runtimeCtx.WorkspaceID == "" {
 			return a, nil
 		}
-		return a, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID)
+		return a, LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID)
 
 	case StartNewSessionAutonomousModeMsg:
 		if a.newSessionAutonomous != nil {
@@ -2049,10 +2061,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		return a, StartNewSessionAutonomousModeCmd(
-			a.svcs.WorkspaceID,
-			a.svcs.InstanceID,
-			a.svcs.NewSessionFilterLocks,
-			a.svcs.Adapters,
+			a.runtimeCtx.WorkspaceID,
+			a.runtimeCtx.InstanceID,
+			a.provider.NewSessionFilterLocks(),
+			a.provider.Adapters(),
 			a.savedNewSessionFilters,
 			msg.SelectedFilterIDs,
 		)
@@ -2106,7 +2118,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case NewSessionAutonomousDetectedWorkItemMsg:
-		cmds = append(cmds, func() tea.Msg { return persistCreatedWorkItemMsg(a.svcs, msg.WorkItem) })
+		cmds = append(cmds, func() tea.Msg { return persistCreatedWorkItemMsg(a.provider, msg.WorkItem) })
 		if a.newSessionAutonomousChan != nil {
 			cmds = append(cmds, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan))
 		}
@@ -2115,13 +2127,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NewSessionManualMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
-		cmds = append(cmds, createManualSessionCmd(a.svcs, msg))
+		cmds = append(cmds, createManualSessionCmd(a.provider, msg))
 		return a, tea.Batch(cmds...)
 
 	case NewSessionBrowseMsg:
 		a.activeOverlay = overlayNone
 		a.newSession.Close()
-		cmds = append(cmds, createBrowseSessionCmd(a.svcs, msg))
+		cmds = append(cmds, createBrowseSessionCmd(a.provider, msg))
 		return a, tea.Batch(cmds...)
 
 	case RepoClonedMsg:
@@ -2130,7 +2142,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, func() tea.Msg { return ActionDoneMsg{Message: "Repository cloned to workspace"} })
 			// Trigger workspace rescan
-			cmds = append(cmds, LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID))
+			cmds = append(cmds, LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID))
 			// Update the in-memory slug set so a re-opened add-repo overlay reflects the new repo.
 			if a.pendingCloneSlug != "" {
 				if a.managedRepoSlugs == nil {
@@ -2150,7 +2162,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Repo.FullName != "" {
 			a.pendingCloneSlug = strings.ToLower(msg.Repo.FullName)
 		}
-		cmds = append(cmds, CloneRepoCmd(a.svcs.GitClient, msg.CloneDir, msg.CloneURL))
+		cmds = append(cmds, CloneRepoCmd(a.provider.GitClient(), msg.CloneDir, msg.CloneURL))
 		return a, tea.Batch(cmds...)
 
 	case ShowAddRepoMsg:
@@ -2208,16 +2220,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyServicesReload(msg.Reload)
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		if a.activeOverlay == overlaySettings {
-			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 			cmds = append(cmds, cmd)
 		}
-		if a.svcs.WorkspaceID != "" {
-			cmds = append(cmds, LoadNewSessionFiltersCmd(a.svcs.NewSessionFilters, a.svcs.WorkspaceID))
+		if a.runtimeCtx.WorkspaceID != "" {
+			cmds = append(cmds, LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID))
 		}
 		return a, tea.Batch(cmds...)
 	case SettingsProviderTestedMsg:
 		if a.activeOverlay == overlaySettings {
-			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 			cmds = append(cmds, cmd)
 		}
 		if msg.Err != nil {
@@ -2232,7 +2244,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case SettingsLoginCompletedMsg:
 		if a.activeOverlay == overlaySettings {
-			a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+			a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 			cmds = append(cmds, cmd)
 		}
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
@@ -2240,13 +2252,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionCreatedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		if a.svcs.Planning != nil {
+		if a.provider.Planning() != nil {
 			msg.Session.State = domain.SessionPlanning
 		}
 		a.upsertWorkItem(msg.Session)
 		cmds = append(cmds, a.focusWorkItemOverview(msg.Session.ID))
-		if a.svcs.Planning != nil {
-			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.Session.ID), a.svcs.Planning, msg.Session.ID))
+		if a.provider.Planning() != nil {
+			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.Session.ID), a.provider.Planning(), msg.Session.ID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -2271,13 +2283,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.focusWorkItemOverview(existing.ID)
 		case SessionDuplicateCreateSession:
 			a.toasts.AddToast("Starting planning with existing item "+label, components.ToastInfo)
-			if a.svcs.Planning != nil && existing.State == domain.SessionIngested {
+			if a.provider.Planning() != nil && existing.State == domain.SessionIngested {
 				existing.State = domain.SessionPlanning
 			}
 			a.upsertWorkItem(existing)
 			cmds = append(cmds, a.focusWorkItemOverview(existing.ID))
-			if a.svcs.Planning != nil {
-				cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(existing.ID), a.svcs.Planning, existing.ID))
+			if a.provider.Planning() != nil {
+				cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(existing.ID), a.provider.Planning(), existing.ID))
 			} else {
 				a.toasts.AddToast("Planning service not configured", components.ToastError)
 			}
@@ -2295,12 +2307,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.WorkItemID != "" {
 			// Event-driven: targeted reload of the specific work item's tasks.
-			cmds = append(cmds, LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID))
-		} else if a.svcs.WorkspaceID != "" {
+			cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
+		} else if a.runtimeCtx.WorkspaceID != "" {
 			// Command-driven: full reload.
 			cmds = append(cmds,
-				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
+				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
 			)
 		}
 		return a, tea.Batch(cmds...)
@@ -2308,9 +2320,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PlanningRestartedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		cmds = append(cmds,
-			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
-			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
-			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
+			LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
+			LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
+			LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID),
 		)
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -2344,27 +2356,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			browserCmds = append(browserCmds, OpenBrowserCmd(url))
 		}
 		return a, tea.Batch(browserCmds...)
-
-	case ImplementationCompleteMsg:
-		a.cancelPipeline(msg.WorkItemID)
-		a.toasts.AddToast("Implementation complete", components.ToastSuccess)
-		// Reload the work item, tasks, and plan
-		cmds = append(cmds,
-			LoadSessionCmd(a.svcs.Session, msg.WorkItemID),
-			LoadTasksForSessionCmd(a.svcs.Task, msg.WorkItemID),
-			LoadPlanForSessionCmd(a.svcs.Plan, msg.WorkItemID),
-		)
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		// Stop the Foreman — implementation work is done. The foremanPlanID is
-		// intentionally preserved so the sidebar still shows the session log.
-		// If the user starts a follow-up, the foreman is restarted with the
-		// follow-up context.
-		if a.svcs.Foreman != nil && a.foremanPlanID != "" {
-			cmds = append(cmds, StopForemanCmd(a.svcs.Foreman))
-		}
-		return a, tea.Batch(cmds...)
 
 	case SessionDeletedMsg:
 		if plan := a.plans[msg.SessionID]; plan != nil {
@@ -2415,10 +2406,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if warning := strings.TrimSpace(msg.Warning); warning != "" {
 			a.toasts.AddToast(warning, components.ToastWarning)
 		}
-		if a.svcs.WorkspaceID != "" {
+		if a.runtimeCtx.WorkspaceID != "" {
 			cmds = append(cmds,
-				LoadSessionsCmd(a.svcs.Session, a.svcs.WorkspaceID),
-				LoadTasksCmd(a.svcs.Task, a.svcs.WorkspaceID),
+				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
 			)
 		}
 		if a.currentWorkItemID != "" {
@@ -2445,7 +2436,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			level = components.ToastError
 		}
 		a.toasts.AddToast(msg.Message, level)
-		return a, WaitForLogToastCmd(a.svcs.LogToasts)
+		return a, WaitForLogToastCmd(a.runtimeCtx.LogToasts)
 
 	case StartupWarningsMsg:
 		for _, warning := range msg.Warnings {
@@ -2477,7 +2468,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sessionSearch, cmd = a.sessionSearch.Update(msg)
 		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlaySettings {
-		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+		a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlaySourceItems {
 		a.sourceItemsOverlay, cmd = a.sourceItemsOverlay.Update(msg)
@@ -2542,7 +2533,7 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, cmd
 	}
 	if a.activeOverlay == overlaySettings {
-		a.settingsPage, cmd = a.settingsPage.Update(msg, a.svcs)
+		a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 		return a, cmd
 	}
 	if a.activeOverlay == overlayHelp {
@@ -2761,12 +2752,12 @@ func (a *App) updateContentFromState() tea.Cmd {
 				return nil
 			}
 			if taskSessionID == taskSidebarForemanID {
-				if a.svcs.Foreman != nil {
+				if a.provider.Foreman() != nil {
 					// Prefer the live session ID; fall back to the last stopped session.
-					if sid := a.svcs.Foreman.SessionID(); sid != "" {
+					if sid := a.provider.Foreman().SessionID(); sid != "" {
 						return a.showForemanContent(wi, sid, true)
 					}
-					if sid := a.svcs.Foreman.LastSessionID(); sid != "" {
+					if sid := a.provider.Foreman().LastSessionID(); sid != "" {
 						return a.showForemanContent(wi, sid, false)
 					}
 				}
@@ -2977,10 +2968,10 @@ func (a *App) showForemanContent(wi *domain.Session, sessionID string, running b
 }
 
 func (a *App) canActOnSession(s domain.Task) bool {
-	if a.svcs.InstanceID == "" || s.OwnerInstanceID == nil {
+	if a.runtimeCtx.InstanceID == "" || s.OwnerInstanceID == nil {
 		return true
 	}
-	if *s.OwnerInstanceID == a.svcs.InstanceID {
+	if *s.OwnerInstanceID == a.runtimeCtx.InstanceID {
 		return true
 	}
 	if len(a.liveInstanceIDs) == 0 {
@@ -3070,11 +3061,11 @@ func (a *App) pipelineCtxForTask(taskID string) context.Context {
 // and toast surfacing happens when the resulting ReviewAddressDispatchResultMsg
 // is received.
 func (a *App) dispatchReviewAddress(msg FollowUpFromReviewAddressMsg) tea.Cmd {
-	if a.svcs.Task == nil {
+	if a.provider.Task() == nil {
 		a.toasts.AddToast("Task service unavailable; cannot dispatch review follow-up", components.ToastError)
 		return nil
 	}
-	return ResolveReviewAddressDispatchCmd(context.Background(), a.svcs.Task, msg.WorkItemID, msg.PerRepo)
+	return ResolveReviewAddressDispatchCmd(context.Background(), a.provider.Task(), msg.WorkItemID, msg.PerRepo)
 }
 
 // applyReviewAddressDispatchResult emits per-task FollowUpSessionMsg commands and
@@ -3113,7 +3104,7 @@ func (a *App) applyReviewAddressDispatchResult(msg ReviewAddressDispatchResultMs
 // fresh one with follow-up context for the task's work item plan. Returns the
 // tea.Cmd slice to append (empty if foreman is not configured or no plan exists).
 func (a *App) restartForemanForTask(taskID, feedback string) []tea.Cmd {
-	if a.svcs.Foreman == nil {
+	if a.provider.Foreman() == nil {
 		return nil
 	}
 	var workItemID string
@@ -3132,7 +3123,7 @@ func (a *App) restartForemanForTask(taskID, feedback string) []tea.Cmd {
 	}
 
 	a.foremanPlanID = plan.ID
-	foreman := a.svcs.Foreman
+	foreman := a.provider.Foreman()
 	planID := plan.ID
 	// Stop and start must be sequential — tea.Batch runs cmds concurrently,
 	// so we combine them into a single cmd to avoid a race.
@@ -3168,18 +3159,18 @@ func (a *App) teardownAllPipelines() {
 	a.newSessionAutonomousChan = nil
 	a.syncNewSessionFilterOverlays()
 
-	if a.svcs.Foreman != nil && a.foremanPlanID != "" {
-		if stopErr := a.svcs.Foreman.Stop(context.Background()); stopErr != nil {
+	if a.provider.Foreman() != nil && a.foremanPlanID != "" {
+		if stopErr := a.provider.Foreman().Stop(context.Background()); stopErr != nil {
 			slog.Warn("failed to stop foreman on teardown", "error", stopErr)
 		}
 		a.foremanPlanID = ""
 	}
 
-	if a.svcs.SessionRegistry != nil {
+	if a.provider.SessionRegistry() != nil {
 		for _, task := range a.sessions {
 			switch task.Status {
 			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
-				a.svcs.SessionRegistry.AbortAndDeregister(context.Background(), task.ID)
+				a.provider.SessionRegistry().AbortAndDeregister(context.Background(), task.ID)
 			}
 		}
 	}
@@ -3210,23 +3201,23 @@ func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
 // quitCmd returns the command that exits the program, cleaning up the instance
 // record when one exists.
 func (a *App) quitCmd() tea.Cmd {
-	if a.svcs.InstanceID != "" {
-		return tea.Batch(DeleteInstanceCmd(a.svcs.Instance, a.svcs.InstanceID), tea.Quit)
+	if a.runtimeCtx.InstanceID != "" {
+		return tea.Batch(DeleteInstanceCmd(a.provider.Instance(), a.runtimeCtx.InstanceID), tea.Quit)
 	}
 	return tea.Quit
 }
 
 func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 	entry := SidebarEntry{
-		Kind:            SidebarEntryWorkItem,
-		WorkItemID:      wi.ID,
-		ExternalID:      wi.ExternalID,
-		Source:          wi.Source,
-		Title:           wi.Title,
-		State:           wi.State,
-		LastActivity:    wi.UpdatedAt,
-		CreatedAt:       wi.CreatedAt,
-		WorkItemStatus:  sessionExternalState(&wi),
+		Kind:           SidebarEntryWorkItem,
+		WorkItemID:     wi.ID,
+		ExternalID:     wi.ExternalID,
+		Source:         wi.Source,
+		Title:          wi.Title,
+		State:          wi.State,
+		LastActivity:   wi.UpdatedAt,
+		CreatedAt:      wi.CreatedAt,
+		WorkItemStatus: sessionExternalState(&wi),
 	}
 	// For GitLab sessions the canonical ExternalID encodes a numeric project ID
 	// (e.g. "gl:issue:1234#42") which is meaningless to users. Derive a
@@ -3397,11 +3388,11 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 
 	// Foreman block.
 	var foremanEntry *SidebarEntry
-	if a.svcs.Foreman != nil {
+	if a.provider.Foreman() != nil {
 		plan := a.plans[workItemID]
-		running := a.svcs.Foreman.SessionID() != ""
+		running := a.provider.Foreman().SessionID() != ""
 		runningForPlan := running && plan != nil && plan.ID == a.foremanPlanID
-		stoppedForPlan := !running && plan != nil && a.svcs.Foreman.LastPlanID() == plan.ID && a.svcs.Foreman.LastSessionID() != ""
+		stoppedForPlan := !running && plan != nil && a.provider.Foreman().LastPlanID() == plan.ID && a.provider.Foreman().LastSessionID() != ""
 		if runningForPlan {
 			foremanEntry = &SidebarEntry{
 				Kind:           SidebarEntryTaskSession,
@@ -3709,8 +3700,8 @@ func (a App) applyToasts(result string) string {
 
 func (a App) statusBarText() string {
 	parts := make([]string, 0, 2)
-	if a.svcs.WorkspaceName != "" {
-		parts = append(parts, a.svcs.WorkspaceName)
+	if a.runtimeCtx.WorkspaceName != "" {
+		parts = append(parts, a.runtimeCtx.WorkspaceName)
 	}
 	parts = append(parts, fmt.Sprintf("%d active sessions", a.activeSessionCount()))
 	return strings.Join(parts, " · ")
@@ -3727,7 +3718,7 @@ func (a App) activeSessionCount() int {
 	// The foreman is a live subprocess, not a persisted domain.Task, so it must
 	// be counted separately. This ensures the quit-confirmation dialog fires
 	// and the status bar reflects reality when only the foreman is active.
-	if a.svcs.Foreman != nil && a.svcs.Foreman.IsRunning() {
+	if a.provider.Foreman() != nil && a.provider.Foreman().IsRunning() {
 		count++
 	}
 	return count
@@ -3900,9 +3891,9 @@ type sessionDeleteResult struct {
 	CleanupWarning error
 }
 
-func deleteSessionCmd(svcs Services, sessionsDir, sessionID string, reviewSessionLogs map[string]string) tea.Cmd {
+func deleteSessionCmd(provider ServiceProvider, sessionsDir, sessionID string, reviewSessionLogs map[string]string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := deleteSessionTasksAndArtifacts(context.Background(), svcs, sessionsDir, sessionID, reviewSessionLogs)
+		result, err := deleteSessionTasksAndArtifacts(context.Background(), provider, sessionsDir, sessionID, reviewSessionLogs)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -3914,7 +3905,8 @@ func deleteSessionCmd(svcs Services, sessionsDir, sessionID string, reviewSessio
 	}
 }
 
-func deleteSessionTasksAndArtifacts(ctx context.Context, svcs Services, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
+func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvider, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
+	svcs := provider.GetServices()
 	if svcs.Session == nil {
 		return sessionDeleteResult{}, errors.New("session service not configured")
 	}
@@ -4051,7 +4043,8 @@ func existingWorkItemByExternalID(svc *service.SessionService, workspaceID, exte
 	return domain.Session{}, service.ErrNotFound{Entity: "work item", ID: trimmedExternalID}
 }
 
-func persistCreatedWorkItemMsg(svcs Services, wi domain.Session) tea.Msg {
+func persistCreatedWorkItemMsg(provider ServiceProvider, wi domain.Session) tea.Msg {
+	svcs := provider.GetServices()
 	if svcs.Session == nil {
 		return ErrMsg{Err: errors.New("work item service not configured")}
 	}
@@ -4081,9 +4074,9 @@ func persistCreatedWorkItemMsg(svcs Services, wi domain.Session) tea.Msg {
 	return SessionCreatedMsg{Session: wi, Message: "Session created: " + label}
 }
 
-func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
+func createManualSessionCmd(provider ServiceProvider, msg NewSessionManualMsg) tea.Cmd {
 	return func() tea.Msg {
-		if msg.Adapter == nil {
+	if msg.Adapter == nil {
 			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), adapter.Selection{
@@ -4093,13 +4086,13 @@ func createManualSessionCmd(svcs Services, msg NewSessionManualMsg) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return persistCreatedWorkItemMsg(svcs, wi)
+		return persistCreatedWorkItemMsg(provider, wi)
 	}
 }
 
-func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
+func createBrowseSessionCmd(provider ServiceProvider, msg NewSessionBrowseMsg) tea.Cmd {
 	return func() tea.Msg {
-		if msg.Adapter == nil {
+	if msg.Adapter == nil {
 			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), msg.Selection)
@@ -4107,7 +4100,7 @@ func createBrowseSessionCmd(svcs Services, msg NewSessionBrowseMsg) tea.Cmd {
 			return ErrMsg{Err: err}
 		}
 		wi.ExtraContext = msg.ExtraContext
-		return persistCreatedWorkItemMsg(svcs, wi)
+		return persistCreatedWorkItemMsg(provider, wi)
 	}
 }
 

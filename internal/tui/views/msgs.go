@@ -557,14 +557,6 @@ type LiveInstancesLoadedMsg struct {
 	AliveIDs map[string]bool
 }
 
-// ImplementationCompleteMsg is sent when RunImplementationCmd finishes successfully.
-// SessionIDs holds the IDs of completed implementation sessions that need review.
-type ImplementationCompleteMsg struct {
-	PlanID     string
-	WorkItemID string
-	SessionIDs []string // completed session IDs; may be empty on partial failure
-}
-
 // SteerSessionMsg fires when the user submits a steering prompt for a running session.
 type SteerSessionMsg struct {
 	SessionID string

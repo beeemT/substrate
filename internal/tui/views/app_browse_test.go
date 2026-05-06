@@ -309,7 +309,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 		return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-" + opts.View, Provider: "github", Title: title}}}, nil
 	}
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
@@ -1146,7 +1146,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
@@ -2468,7 +2468,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 		slog.SetDefault(prev)
 	})
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		Settings:  &SettingsService{},
 		LogStore:  store,
 		LogToasts: logToasts,
@@ -2508,7 +2508,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 func TestAppErrMsgFormatsGitHubSearchValidationError(t *testing.T) {
 	errMsg := `github: github api status 422: {"message":"Validation Failed","errors":[{"message":"The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.","resource":"Search","field":"q","code":"invalid"}],"documentation_url":"https://docs.github.com/v3/search/","status":"422"}`
 
-	app := NewApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: &SettingsService{}})
 	model, _ := app.Update(ErrMsg{Err: errors.New(errMsg)})
 	updated, ok := model.(*App)
 	if !ok {

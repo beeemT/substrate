@@ -488,17 +488,20 @@ func DeleteInstanceCmd(svc *service.InstanceService, instanceID string) tea.Cmd 
 }
 
 // initializeWorkspaceServicesCmd rebuilds services after workspace initialization
+// initializeWorkspaceServicesCmd rebuilds the service graph for a new workspace
 // so adapters, harnesses, and instance registration use the new workspace root.
-func initializeWorkspaceServicesCmd(serviceMgr *ServiceManager, current Services, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
+func initializeWorkspaceServicesCmd(provider ServiceProvider, runtimeCtx RuntimeContext, workspaceID, workspaceName, workspaceDir string) tea.Cmd {
 	return func() tea.Msg {
-		if serviceMgr == nil {
+		serviceMgr, ok := provider.(*ServiceManager)
+		if !ok {
 			return ErrMsg{Err: errors.New("service manager is unavailable")}
 		}
-		if current.Cfg == nil {
+		if runtimeCtx.Cfg == nil {
 			return ErrMsg{Err: errors.New("config is unavailable")}
 		}
 
-		reloaded, err := serviceMgr.InitWorkspace(context.Background(), current.Cfg, current, workspaceID, workspaceName, workspaceDir)
+		current := *provider.GetServices()
+		reloaded, err := serviceMgr.InitWorkspace(context.Background(), runtimeCtx.Cfg, current, workspaceID, workspaceName, workspaceDir)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -811,49 +814,34 @@ func PlanWithFeedbackCmd(ctx context.Context, svc *orchestrator.PlanningService,
 	}
 }
 
-// RunImplementationCmd executes the implementation pipeline for an approved plan.
-// On success it returns ImplementationCompleteMsg so the caller can trigger review.
+// RunImplementationCmd dispatches the implementation pipeline for an approved plan.
+// It runs asynchronously - completion is signaled via EventWorkItemCompleted.
 func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationService, planID string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := svc.Implement(ctx, planID)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		var sessionIDs []string
-		for _, s := range result.Sessions {
-			if s.Status == domain.AgentSessionCompleted {
-				sessionIDs = append(sessionIDs, s.SessionID)
+		go func() {
+			_, err := svc.Implement(ctx, planID)
+			if err != nil {
+				slog.Error("implementation failed", "error", err, "plan_id", planID)
 			}
-		}
-
-		return ImplementationCompleteMsg{
-			PlanID:     planID,
-			WorkItemID: result.WorkItemID,
-			SessionIDs: sessionIDs,
-		}
+			// On success, EventWorkItemCompleted is emitted by the service.
+		}()
+		return nil // Don't block - let TUI continue processing events
 	}
 }
 
 // FinalizeWorkItemCmd retries final commit/push/completion for an implementing work item whose repo tasks are complete.
+// FinalizeWorkItemCmd retries final commit/push/completion for an implementing work item whose repo tasks are complete.
+// It runs asynchronously - completion is signaled via EventWorkItemCompleted.
 func FinalizeWorkItemCmd(ctx context.Context, svc *orchestrator.ImplementationService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := svc.FinalizeWorkItem(ctx, workItemID)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		var sessionIDs []string
-		for _, s := range result.Sessions {
-			if s.Status == domain.AgentSessionCompleted {
-				sessionIDs = append(sessionIDs, s.SessionID)
+		go func() {
+			_, err := svc.FinalizeWorkItem(ctx, workItemID)
+			if err != nil {
+				slog.Error("finalize work item failed", "error", err, "work_item_id", workItemID)
 			}
-		}
-
-		return ImplementationCompleteMsg{
-			PlanID:     result.PlanID,
-			WorkItemID: result.WorkItemID,
-			SessionIDs: sessionIDs,
-		}
+			// On success, EventWorkItemCompleted is emitted by the service.
+		}()
+		return nil // Don't block
 	}
 }
 
@@ -895,28 +883,23 @@ func OverrideAcceptCmd(
 
 // RetryFailedCmd transitions a failed work item back to implementing and re-runs
 // the implementation pipeline for failed sub-plans.
+// It runs asynchronously - completion is signaled via EventWorkItemCompleted.
 func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, implSvc *orchestrator.ImplementationService, planID, workItemID string) tea.Cmd {
 	return func() tea.Msg {
-		if err := workItemSvc.RetryFailedWorkItem(ctx, workItemID); err != nil {
-			return ErrMsg{Err: fmt.Errorf("retry failed work item: %w", err)}
-		}
-		// Re-run implementation — Implement() will reset failed sub-plans
-		// to pending and only execute those.
-		result, err := implSvc.Implement(ctx, planID)
-		if err != nil {
-			return ErrMsg{Err: fmt.Errorf("retry implementation: %w", err)}
-		}
-		var sessionIDs []string
-		for _, s := range result.Sessions {
-			if s.Status == domain.AgentSessionCompleted {
-				sessionIDs = append(sessionIDs, s.SessionID)
+		go func() {
+			if err := workItemSvc.RetryFailedWorkItem(ctx, workItemID); err != nil {
+				slog.Error("retry failed work item failed", "error", err, "work_item_id", workItemID)
+				return
 			}
-		}
-		return ImplementationCompleteMsg{
-			PlanID:     planID,
-			WorkItemID: workItemID,
-			SessionIDs: sessionIDs,
-		}
+			// Re-run implementation — Implement() will reset failed sub-plans
+			// to pending and only execute those.
+			_, err := implSvc.Implement(ctx, planID)
+			if err != nil {
+				slog.Error("retry implementation failed", "error", err, "plan_id", planID)
+			}
+			// On success, EventWorkItemCompleted is emitted by the service.
+		}()
+		return nil // Don't block
 	}
 }
 

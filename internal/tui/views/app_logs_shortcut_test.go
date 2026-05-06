@@ -10,7 +10,7 @@ import (
 func TestAppLKeyOpensLogsOverlay(t *testing.T) {
 	t.Parallel()
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},

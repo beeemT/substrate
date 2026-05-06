@@ -379,12 +379,8 @@ func stateToEventType(state domain.SessionState) domain.EventType {
 }
 
 // emitStateChange emits a state change event asynchronously.
-// Nil bus is handled gracefully by skipping the emit.
+// The bus must not be nil.
 func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.SessionState, item domain.Session) {
-	if s.bus == nil {
-		return
-	}
-
 	eventType := stateToEventType(to)
 	if eventType == "" {
 		return // no event for this state

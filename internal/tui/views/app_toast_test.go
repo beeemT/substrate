@@ -42,7 +42,7 @@ func newToastTestApp(t *testing.T) *App {
 	t.Helper()
 
 	cfg := &config.Config{}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -280,7 +280,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},

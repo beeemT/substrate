@@ -1787,12 +1787,12 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	if wi.WorkspaceID == "" {
 		return external
 	}
-	external.Reviews = reviewRowsForWorkItem(context.Background(), a.svcs, wi)
+	external.Reviews = reviewRowsForWorkItem(context.Background(), a.provider.GetServices(), wi)
 
 	return external
 }
 
-func reviewRowsForWorkItem(ctx context.Context, svcs Services, wi *domain.Session) []OverviewReviewRow {
+func reviewRowsForWorkItem(ctx context.Context, svcs *Services, wi *domain.Session) []OverviewReviewRow {
 	if wi == nil || wi.WorkspaceID == "" {
 		return nil
 	}
@@ -1908,7 +1908,7 @@ func reviewArtifactKey(repoName, branch, ref string) string {
 	return strings.Join([]string{strings.TrimSpace(repoName), strings.TrimSpace(branch), strings.TrimSpace(ref)}, ":")
 }
 
-func recordedReviewArtifacts(ctx context.Context, svcs Services, wi *domain.Session) []domain.ReviewArtifact {
+func recordedReviewArtifacts(ctx context.Context, svcs *Services, wi *domain.Session) []domain.ReviewArtifact {
 	if wi == nil || wi.WorkspaceID == "" || svcs.Events == nil {
 		return nil
 	}
@@ -1954,8 +1954,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 	}
 	ctx := context.Background()
 	var items []ArtifactItem
-	if a.svcs.SessionArtifacts != nil {
-		links, err := a.svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
+	if a.provider.SessionArtifacts() != nil {
+		links, err := a.provider.SessionArtifacts().ListByWorkItemID(ctx, wi.ID)
 		if err != nil {
 			slog.Error("failed to list session artifacts", "error", err, "workItemID", wi.ID)
 			return nil
@@ -1963,8 +1963,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 		for _, link := range links {
 			switch link.Provider {
 			case "github":
-				if a.svcs.GithubPRs != nil {
-					pr, err := a.svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
+				if a.provider.GithubPRs() != nil {
+					pr, err := a.provider.GithubPRs().Get(ctx, link.ProviderArtifactID)
 					if err != nil {
 						slog.Warn("failed to get github PR", "error", err, "id", link.ProviderArtifactID)
 						continue
@@ -1974,8 +1974,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						state = "draft"
 					}
 					var reviews []ArtifactReview
-					if a.svcs.GithubPRReviews != nil {
-						ghReviews, err := a.svcs.GithubPRReviews.ListByPRID(ctx, pr.ID)
+					if a.provider.GithubPRReviews() != nil {
+						ghReviews, err := a.provider.GithubPRReviews().ListByPRID(ctx, pr.ID)
 						if err != nil {
 							slog.Warn("failed to list github PR reviews", "error", err, "prID", pr.ID)
 						} else {
@@ -1989,8 +1989,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						}
 					}
 					var checks []ArtifactCheck
-					if a.svcs.GithubPRChecks != nil {
-						ghChecks, err := a.svcs.GithubPRChecks.ListByPRID(ctx, pr.ID)
+					if a.provider.GithubPRChecks() != nil {
+						ghChecks, err := a.provider.GithubPRChecks().ListByPRID(ctx, pr.ID)
 						if err != nil {
 							slog.Warn("failed to list github PR checks", "error", err, "prID", pr.ID)
 						} else {
@@ -2021,8 +2021,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 					})
 				}
 			case providerGitlab:
-				if a.svcs.GitlabMRs != nil {
-					mr, err := a.svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+				if a.provider.GitlabMRs() != nil {
+					mr, err := a.provider.GitlabMRs().Get(ctx, link.ProviderArtifactID)
 					if err != nil {
 						slog.Warn("failed to get gitlab MR", "error", err, "id", link.ProviderArtifactID)
 						continue
@@ -2032,8 +2032,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						state = "draft"
 					}
 					var reviews []ArtifactReview
-					if a.svcs.GitlabMRReviews != nil {
-						glReviews, err := a.svcs.GitlabMRReviews.ListByMRID(ctx, mr.ID)
+					if a.provider.GitlabMRReviews() != nil {
+						glReviews, err := a.provider.GitlabMRReviews().ListByMRID(ctx, mr.ID)
 						if err != nil {
 							slog.Warn("failed to list gitlab MR reviews", "error", err, "mrID", mr.ID)
 						} else {
@@ -2047,8 +2047,8 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 						}
 					}
 					var checks []ArtifactCheck
-					if a.svcs.GitlabMRChecks != nil {
-						glChecks, err := a.svcs.GitlabMRChecks.ListByMRID(ctx, mr.ID)
+					if a.provider.GitlabMRChecks() != nil {
+						glChecks, err := a.provider.GitlabMRChecks().ListByMRID(ctx, mr.ID)
 						if err != nil {
 							slog.Warn("failed to list gitlab MR checks", "error", err, "mrID", mr.ID)
 						} else {
@@ -2084,7 +2084,7 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 	for i, item := range items {
 		itemIndexByKey[reviewArtifactKey(item.RepoName, item.Branch, item.Ref)] = i
 	}
-	for _, artifact := range recordedReviewArtifacts(ctx, a.svcs, wi) {
+	for _, artifact := range recordedReviewArtifacts(ctx, a.provider.GetServices(), wi) {
 		item := artifactItemFromReviewArtifact(artifact)
 		key := reviewArtifactKey(item.RepoName, item.Branch, item.Ref)
 		if idx, ok := itemIndexByKey[key]; ok {

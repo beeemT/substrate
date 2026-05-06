@@ -12,7 +12,7 @@ import (
 )
 
 func TestSidebarEntryFromWorkItem_GitlabUsesProjectPath(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -55,7 +55,7 @@ func TestSidebarEntryFromWorkItem_GitlabUsesProjectPath(t *testing.T) {
 }
 
 func TestSidebarEntryFromWorkItem_GitlabNoTrackerRefs_FallsBackToNumeric(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -81,7 +81,7 @@ func TestSidebarEntryFromWorkItem_GitlabNoTrackerRefs_FallsBackToNumeric(t *test
 }
 
 func TestSidebarEntryFromWorkItem_NonGitlabUnaffected(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -152,7 +152,7 @@ func TestTaskSidebarEntries_GitlabIncludesRecordedArtifactWithoutLink(t *testing
 		Payload:     string(payload),
 		CreatedAt:   now,
 	}}}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},

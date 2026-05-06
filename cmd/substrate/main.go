@@ -97,7 +97,6 @@ type orchestrationRuntime struct {
 	resumption     *orchestrator.Resumption
 	registry       *orchestrator.SessionRegistry
 }
-
 func run() error {
 	if handleCLIArgs(os.Args[1:]) {
 		return nil
@@ -120,77 +119,50 @@ func run() error {
 	remote := dbRemote{db}
 	eventRepo := sqlite.NewEventRepo(remote)
 	transacter := sqlite.NewTransacter(db)
-	services := buildCoreServices(transacter, eventRepo)
 
-	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
-	workspace, err := detectWorkspace(ctx, services.workspace)
-	if err != nil {
-		return err
+	// Create ServiceManager and build initial service graph
+	serviceMgr := views.NewServiceManager(transacter, eventRepo)
+	if err := serviceMgr.Init(ctx, cfg); err != nil {
+		return fmt.Errorf("init service manager: %w", err)
 	}
-
-	instanceID := registerInstance(ctx, services.instance, workspace.ID)
 
 	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
 		return fmt.Errorf("load config secrets: %w", err)
 	}
 
-	adapters, err := buildAdapterSetup(ctx, cfg, workspace, services, bus)
+	// Detect workspace
+	workspace, err := detectWorkspace(ctx, serviceMgr.Workspace())
 	if err != nil {
 		return err
 	}
 
-	runtime, err := buildOrchestrationRuntime(cfg, workspace.Dir, services, bus)
-	if err != nil {
-		return err
+	var instanceID string
+	if workspace.ID != "" {
+		instanceID = registerInstance(ctx, serviceMgr.Instance(), workspace.ID)
+		if _, err := serviceMgr.InitWorkspace(ctx, cfg, *serviceMgr.GetServices(), workspace.ID, workspace.Name, workspace.Dir); err != nil {
+			return fmt.Errorf("init workspace: %w", err)
+		}
 	}
 
-	settingsData, err := services.settings.Snapshot(cfg)
+	// Load settings snapshot
+	settingsData, err := serviceMgr.Settings().Snapshot(cfg)
 	if err != nil {
 		return fmt.Errorf("load settings snapshot: %w", err)
 	}
 
-	return views.RunTUI(views.Services{
-		Session:               services.workItem,
-		Plan:                  services.plan,
-		Task:                  services.task,
-		Question:              services.question,
-		Instance:              services.instance,
-		Workspace:             services.workspace,
-		Review:                services.review,
-		Events:                services.event,
-		GithubPRs:             services.githubPR,
-		GitlabMRs:             services.gitlabMR,
-		SessionArtifacts:      services.sessionArtifact,
-		GithubPRReviews:       services.ghPRReview,
-		GitlabMRReviews:       services.glMRReview,
-		GithubPRChecks:        services.ghPRCheck,
-		GitlabMRChecks:        services.glMRCheck,
-		NewSessionFilters:     services.newSessionFilter,
-		NewSessionFilterLocks: services.newSessionFilterLock,
-		Cfg:                   cfg,
-		Adapters:              adapters.workItem,
-		RepoSources:           adapters.repoSources,
-		Harnesses:             runtime.harnesses,
-		Settings:              services.settings,
-		SettingsData:          settingsData,
-		GitClient:             runtime.gitClient,
-		Bus:                   bus,
-		StartupWarnings:       adapters.warnings,
-		LogStore:              logStore,
-		LogToasts:             logToasts,
-		InstanceID:            instanceID,
-		WorkspaceID:           workspace.ID,
-		WorkspaceName:         workspace.Name,
-		WorkspaceDir:          workspace.Dir,
-		Planning:              runtime.planning,
-		Implementation:        runtime.implementation,
-		ReviewPipeline:        runtime.reviewPipeline,
-		Resumption:            runtime.resumption,
-		Foreman:               runtime.foreman,
-		SessionRegistry:       runtime.registry,
-		ReviewComments:        adapters.reviewComments,
+	return views.RunTUI(serviceMgr, views.RuntimeContext{
+		Cfg:           cfg,
+		SettingsData:  settingsData,
+		LogStore:      logStore,
+		LogToasts:     logToasts,
+		InstanceID:     instanceID,
+		WorkspaceID:   workspace.ID,
+		WorkspaceDir:  workspace.Dir,
+		WorkspaceName: workspace.Name,
 	})
 }
+
+
 
 func handleCLIArgs(args []string) bool {
 	if len(args) == 0 {

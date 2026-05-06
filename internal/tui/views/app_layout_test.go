@@ -15,7 +15,7 @@ import (
 )
 
 func TestAppStatusBarTextIncludesWorkspace(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -29,7 +29,7 @@ func TestAppStatusBarTextIncludesWorkspace(t *testing.T) {
 func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 	t.Parallel()
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -51,7 +51,7 @@ func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T) {
 	t.Parallel()
 
-	app := NewApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
 	app.sidebarMode = sidebarPaneTasks
 	app.currentWorkItemID = "wi-1"
 	app.taskSessionSelectionByWorkItem["wi-1"] = "sess-1"
@@ -136,7 +136,7 @@ func TestAppViewShowsDeleteHintForSelectedSingleSessionWorkItem(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
-	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+	app.runtimeCtx.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
 	updated := model.(*App)
@@ -158,7 +158,7 @@ func TestAppViewPlacesDeleteHintBetweenNewAndSearch(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
-	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+	app.runtimeCtx.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 140, Height: 18})
 	updated := model.(*App)
@@ -177,7 +177,7 @@ func TestAppViewShowsDeleteHintForSelectedTaskSession(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
-	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+	app.runtimeCtx.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
 	updated := model.(*App)
@@ -203,7 +203,7 @@ func TestAppViewShowsDeleteHintForFocusedTaskSession(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
-	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+	app.runtimeCtx.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 44, Height: 18})
 	updated := model.(*App)
@@ -231,7 +231,7 @@ func TestAppViewKeepsDeleteKeyVisibleForSelectedTaskSessionAtNarrowWidth(t *test
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
-	app.svcs.WorkspaceName = "workspace-with-a-very-long-name"
+	app.runtimeCtx.WorkspaceName = "workspace-with-a-very-long-name"
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 18, Height: 18})
 	updated := model.(*App)
@@ -259,7 +259,7 @@ func TestAppViewKeepsDeleteKeyVisibleForSelectedTaskSessionAtNarrowWidth(t *test
 }
 
 func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -317,7 +317,7 @@ func TestAppViewHighlightsActivePaneWithoutChangingBodyText(t *testing.T) {
 func sizedLayoutTestApp(t *testing.T, width, height int) *App {
 	t.Helper()
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -653,7 +653,7 @@ func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
 func TestSidebarSessionsHintsIncludeFilterGroupSort(t *testing.T) {
 	t.Parallel()
 
-	app := NewApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
 	// Default state: sidebar focused, sessions pane.
 	if app.mainFocus != mainFocusSidebar || app.sidebarMode != sidebarPaneSessions {
 		t.Fatal("expected default app state to be sidebar-focused on the sessions pane")

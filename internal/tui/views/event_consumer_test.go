@@ -273,7 +273,7 @@ func TestEventConsumer_toMsg_InvalidPayload(t *testing.T) {
 }
 
 func TestQuestionAnsweredMsg_removes_from_nested_map(t *testing.T) {
-	app := NewApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: &SettingsService{}})
 	app.questions = map[string]map[string]domain.Question{
 		"sess-1": {
 			"q-1": {ID: "q-1", Content: "test?"},
@@ -295,7 +295,7 @@ func TestQuestionAnsweredMsg_removes_from_nested_map(t *testing.T) {
 }
 
 func TestQuestionAnsweredMsg_removes_empty_session(t *testing.T) {
-	app := NewApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: &SettingsService{}})
 	app.questions = map[string]map[string]domain.Question{
 		"sess-1": {
 			"q-1": {ID: "q-1", Content: "test?"},

@@ -12,7 +12,7 @@ func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
@@ -56,7 +56,7 @@ func TestApp_SOpensSettingsOverlay(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
@@ -726,4 +727,8 @@ func (m *MockInstanceRepository) Delete(_ context.Context, id string) error {
 	m.byWorkspace[inst.WorkspaceID] = newIDs
 
 	return nil
+}
+
+func newTestBus() *event.Bus {
+	return event.NewBus(event.BusConfig{})
 }

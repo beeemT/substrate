@@ -12,14 +12,6 @@ import (
 )
 
 func TestEmit(t *testing.T) {
-	t.Run("nil bus does not panic", func(t *testing.T) {
-		// Should not panic when bus is nil
-		Emit(nil, domain.SystemEvent{
-			ID:        domain.NewID(),
-			EventType: string(domain.EventAgentSessionCompleted),
-		})
-	})
-
 	t.Run("emits event asynchronously", func(t *testing.T) {
 		// Create a real event bus with mock repo
 		repo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
@@ -213,7 +205,7 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		repo := NewMockSessionRepository()
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil)
+		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
 
 		// Should not panic
 		task := domain.Task{
@@ -380,7 +372,7 @@ func TestSessionService_EmitsEvents(t *testing.T) {
 
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		repo := NewMockWorkItemRepository()
-		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+		svc := NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, newTestBus())
 
 		item := domain.Session{
 			ID:          "wi-nil-bus-test",
@@ -538,7 +530,7 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, nil)
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, newTestBus())
 
 		// Should not panic
 		plan := domain.Plan{

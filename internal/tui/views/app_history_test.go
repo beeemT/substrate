@@ -163,7 +163,7 @@ func (r *sessionSearchDeleteRepo) Delete(_ context.Context, id string) error {
 
 func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	now := time.Now()
-	app := NewApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: &SettingsService{}})
 	app.activeOverlay = overlaySessionSearch
 	app.sessionSearch.Open(sessionHistoryScopeGlobal, false)
 	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{{
@@ -210,7 +210,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	t.Parallel()
 
 	now := time.Now()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -362,7 +362,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		Plans:    &cmdPlanRepo{plans: map[string]domain.Plan{"plan-1": {ID: "plan-1", WorkItemID: "wi-1"}}},
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}},
 	}}, nil)
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil),
 		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		Plan:          planSvc,
@@ -502,11 +502,11 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	}}, nil)
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
-	msg := deleteSessionCmd(Services{
+	msg := deleteSessionCmd(servicesToProvider(Services{
 		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil),
 		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		Plan:    planSvc,
-	}, sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
+	}), sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
 	deleted, ok := msg.(SessionDeletedMsg)
 	if !ok {
 		t.Fatalf("deleteSessionCmd() message = %T, want SessionDeletedMsg", msg)
@@ -527,7 +527,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 		t.Fatalf("work item repo items = %d, want 0 after successful delete", len(workItemRepo.items))
 	}
 
-	model, cmd := NewApp(Services{Settings: &SettingsService{}}).Update(deleted)
+	model, cmd := newTestApp(Services{Settings: &SettingsService{}}).Update(deleted)
 	if cmd != nil {
 		t.Fatalf("unexpected follow-up command for warning toast: %v", cmd)
 	}
@@ -545,7 +545,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 }
 
 func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -601,7 +601,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 }
 
 func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -648,7 +648,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 }
 
 func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *testing.T) {
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -681,7 +681,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 func TestSessionDeletedMsg_ClearsOpenRemoteHistoryEntry(t *testing.T) {
 	t.Parallel()
 
-	app := NewApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: &SettingsService{}})
 	app.content.SetSize(80, 20)
 
 	cmd := app.loadHistoryEntry(SidebarEntry{
@@ -730,7 +730,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	older := now.Add(-2 * time.Hour)
 	newer := now.Add(-15 * time.Minute)
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -779,7 +779,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 	now := time.Now()
 	older := now.Add(-time.Hour)
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -844,10 +844,10 @@ func TestPersistCreatedWorkItemMsgDuplicateReturnsPrompt(t *testing.T) {
 		ExternalID: existing.ExternalID,
 		Title:      "Duplicate item",
 	}
-	msg := persistCreatedWorkItemMsg(Services{
+	msg := persistCreatedWorkItemMsg(servicesToProvider(Services{
 		WorkspaceID: "ws-local",
 		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
-	}, requested)
+	}), requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)
 	if !ok {
@@ -885,10 +885,10 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 		SourceScope:   domain.ScopeIssues,
 		SourceItemIDs: []string{"acme/rocket#7", "acme/rocket#42"},
 	}
-	msg := persistCreatedWorkItemMsg(Services{
+	msg := persistCreatedWorkItemMsg(servicesToProvider(Services{
 		WorkspaceID: "ws-local",
 		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
-	}, requested)
+	}), requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)
 	if !ok {
@@ -934,7 +934,7 @@ func newDuplicatePromptTestApp() (*App, domain.Session, domain.Session, domain.S
 		ExternalID: "SUB-99",
 		Title:      "Requested item",
 	}
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -1097,7 +1097,7 @@ func TestWorkItemDuplicateCancelChoiceKeepsCurrentSelection(t *testing.T) {
 
 func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	now := time.Now()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -1133,7 +1133,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 
 func newSidebarDrilldownTestApp() *App {
 	now := time.Now()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -1215,7 +1215,7 @@ func newSidebarDrilldownTestApp() *App {
 
 func newPlanningDrilldownTestApp() *App {
 	now := time.Now()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
@@ -2124,7 +2124,7 @@ func TestSidebarEscBacksOutFromTaskContentToSessions(t *testing.T) {
 
 func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	now := time.Now()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},

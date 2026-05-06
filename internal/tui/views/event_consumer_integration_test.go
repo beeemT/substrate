@@ -22,7 +22,7 @@ func TestEventConsumerEndToEnd(t *testing.T) {
 	t.Cleanup(func() { bus.Close() })
 
 	// Create App with the bus subscription wired up.
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
@@ -96,7 +96,7 @@ func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {
 	bus := event.NewBus(event.BusConfig{})
 	t.Cleanup(func() { bus.Close() })
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
@@ -170,7 +170,7 @@ func TestEventConsumer_unknownEventReturnsNil(t *testing.T) {
 	bus := event.NewBus(event.BusConfig{})
 	t.Cleanup(func() { bus.Close() })
 
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,

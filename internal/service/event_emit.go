@@ -12,12 +12,9 @@ import (
 // emitTimeout is the timeout for async event emission.
 const emitTimeout = 5 * time.Second
 
-// Emit emits an event asynchronously if the bus is not nil.
-// This is a shared helper to reduce boilerplate across services.
+// Emit emits an event asynchronously.
+// The bus must not be nil; callers are responsible for providing a valid bus.
 func Emit(bus *event.Bus, evt domain.SystemEvent) {
-	if bus == nil {
-		return
-	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), emitTimeout)
 		defer cancel()

@@ -14,7 +14,7 @@ import (
 
 // newQuitTestApp creates a minimal App with the given sessions list.
 func newQuitTestApp(sessions []domain.Task) *App {
-	app := NewApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
 	app.sessions = sessions
 	return app
 }
@@ -22,7 +22,7 @@ func newQuitTestApp(sessions []domain.Task) *App {
 // newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
 func newQuitTestAppWithRegistry(sessions []domain.Task) (*App, *orchestrator.SessionRegistry) {
 	reg := orchestrator.NewSessionRegistry()
-	app := NewApp(Services{
+	app := newTestApp(Services{
 		WorkspaceID:     "ws-1",
 		WorkspaceName:   "test",
 		Settings:        &SettingsService{},
