@@ -277,6 +277,10 @@ func (a *GitlabAdapter) checkGraphQLSupport() bool {
 	if a.graphqlSupported {
 		return true
 	}
+	// No token means GraphQL check is not possible.
+	if strings.TrimSpace(a.cfg.Token) == "" {
+		return false
+	}
 	// Ping /api/graphql with a minimal introspection query. We only check that the
 	// endpoint returns valid JSON (even an empty object) — any JSON response means
 	// the GraphQL endpoint is present. This is a cheap check that avoids parsing
@@ -319,8 +323,15 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 				CreatedAt:    derefTime(iss.CreatedAt),
 				UpdatedAt:    derefTime(iss.UpdatedAt),
 			}
+			// Populate metadata with tracker_state from GraphQL enrichment for session creation.
+			if iss.Status != "" {
+				item.Metadata = map[string]any{"tracker_state": iss.Status}
+			}
 			if artifacts := a.issueReviewArtifacts(ctx, iss); len(artifacts) > 0 {
-				item.Metadata = map[string]any{adapter.ListItemReviewArtifactsMetadataKey: artifacts}
+				if item.Metadata == nil {
+					item.Metadata = make(map[string]any)
+				}
+				item.Metadata[adapter.ListItemReviewArtifactsMetadataKey] = artifacts
 			}
 			items = append(items, item)
 		}
@@ -724,7 +735,7 @@ func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []is
 // graphqlFetchStatusForIssue fetches the Work Item status for a single issue via GraphQL.
 // Returns the status string or "" if unavailable. Errors are logged to slog.
 func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectID, iid int64) string {
-	if strings.TrimSpace(a.cfg.Token) == "" || !a.checkGraphQLSupport() {
+	if !a.checkGraphQLSupport() {
 		return ""
 	}
 	endpoint := "/api/graphql"
@@ -773,7 +784,7 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 // graphqlStatusFilterIssues uses the GraphQL API to server-side filter issues by status.
 // Returns the original slice if GraphQL fails (degrades gracefully).
 func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
-	if strings.TrimSpace(a.cfg.Token) == "" || !a.checkGraphQLSupport() {
+	if !a.checkGraphQLSupport() {
 		return issues
 	}
 	filtered := make([]issue, 0, len(issues))
@@ -922,6 +933,11 @@ func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (i
 	var iss issue
 	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/issues/%d", projectID, iid), nil, &iss); err != nil {
 		return issue{}, err
+	}
+
+	// Enrich with Work Item status from GraphQL for sidebar and source details display.
+	if a.checkGraphQLSupport() {
+		iss.Status = a.graphqlFetchStatusForIssue(ctx, projectID, iid)
 	}
 
 	return iss, nil
@@ -1151,6 +1167,12 @@ func issueToWorkItem(iss issue) domain.Session {
 	projectPath := gitlabProjectPath(iss)
 	selectionID := gitlabIssueSelectionID(gitlabIssueProjectID(iss), iss)
 
+	// Prefer GraphQL status over REST state when available (e.g., "in_progress" vs "opened").
+	trackerState := strings.TrimSpace(iss.State)
+	if s := strings.TrimSpace(iss.Status); s != "" {
+		trackerState = s
+	}
+
 	return domain.Session{
 		ID:            domain.NewID(),
 		ExternalID:    formatExternalID(projectPath, iss.IID),
@@ -1164,7 +1186,7 @@ func issueToWorkItem(iss issue) domain.Session {
 		Metadata: map[string]any{
 			"url":           iss.WebURL,
 			"tracker_refs":  gitlabTrackerRefs([]issue{iss}),
-			"tracker_state": strings.TrimSpace(iss.State),
+			"tracker_state": trackerState,
 		},
 		CreatedAt: derefTime(iss.CreatedAt),
 		UpdatedAt: derefTime(iss.UpdatedAt),
@@ -1206,7 +1228,15 @@ func aggregateIssues(issues []issue) domain.Session {
 		Metadata: map[string]any{
 			"tracker_refs":     gitlabTrackerRefs(issues),
 			"source_summaries": gitlabIssueSourceSummaries(issues),
-			"tracker_state":    strings.TrimSpace(issues[0].State),
+			// Prefer GraphQL status over REST state when available.
+			"tracker_state": func() string {
+				for _, iss := range issues {
+					if s := strings.TrimSpace(iss.Status); s != "" {
+						return s
+					}
+				}
+				return strings.TrimSpace(issues[0].State)
+			}(),
 		},
 		CreatedAt: domain.Now(),
 		UpdatedAt: domain.Now(),

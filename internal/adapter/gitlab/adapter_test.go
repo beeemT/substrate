@@ -533,6 +533,17 @@ func TestResolveIssueUsesProjectQualifiedSelectionID(t *testing.T) {
 				"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
 				"references":  map[string]any{"full": "other-group/other-project#42"},
 			}), nil
+		case "/api/graphql":
+			// GraphQL call for status enrichment.
+			return jsonResponse(t, http.StatusOK, map[string]any{
+				"data": map[string]any{
+					"project": map[string]any{
+						"workItems": map[string]any{
+							"nodes": []any{},
+						},
+					},
+				},
+			}), nil
 		default:
 			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
 		}
@@ -548,8 +559,9 @@ func TestResolveIssueUsesProjectQualifiedSelectionID(t *testing.T) {
 	if len(item.SourceItemIDs) != 1 || item.SourceItemIDs[0] != "5678#42" {
 		t.Fatalf("SourceItemIDs = %#v, want [5678#42]", item.SourceItemIDs)
 	}
-	if len(calls) != 1 || calls[0] != "GET /api/v4/projects/5678/issues/42" {
-		t.Fatalf("calls = %v, want project-qualified fetch", calls)
+	// Now expects 3 calls: REST API + GraphQL capability check + GraphQL status fetch.
+	if len(calls) != 3 || calls[0] != "GET /api/v4/projects/5678/issues/42" {
+		t.Fatalf("calls = %v, want REST fetch + GraphQL capability check + GraphQL status", calls)
 	}
 }
 
