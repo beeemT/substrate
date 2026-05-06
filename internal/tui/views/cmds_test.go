@@ -24,8 +24,8 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
-	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil)
-	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil)
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, views.NewNoopPublisher())
+	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, views.NewNoopPublisher())
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 	sub, err := bus.Subscribe("planning-answer-test", string(domain.EventAgentQuestionAnswered))
@@ -74,13 +74,13 @@ func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
 
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
-	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil)
-	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil)
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, views.NewNoopPublisher())
+	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, views.NewNoopPublisher())
 
 	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}
 	taskRepo.tasks["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
 
-	msg := views.SkipQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, nil, "q-skip")()
+	msg := views.SkipQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, views.MockBus(), "q-skip")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Question skipped" {
 		t.Fatalf("message = %T %#v, want ActionDoneMsg", msg, msg)
 	}

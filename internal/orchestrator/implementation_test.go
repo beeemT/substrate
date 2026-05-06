@@ -722,10 +722,10 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		nil,
 		nil,
 		nil, nil, // foreman, questionSvc
@@ -1052,7 +1052,7 @@ func TestPersistSubPlanStatus_CrashRecovery(t *testing.T) {
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
 
 	svc := &ImplementationService{
-		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
+		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
 	}
 
 	sp := subPlanRepo.subPlans["sp-crashed"]
@@ -1228,10 +1228,10 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		cfg,
 		harness,
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
@@ -1334,10 +1334,10 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		cfg,
 		harness,
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc

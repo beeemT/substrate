@@ -68,7 +68,17 @@ func (tp *testProvider) StartupWarnings() []string { return tp.svcs.StartupWarni
 
 // newTestApp creates an App for testing with a testProvider wrapping svcs.
 func newTestApp(svcs Services) *App {
-	return NewApp(&testProvider{svcs: svcs}, RuntimeContext{})
+	ctx := RuntimeContext{
+		InstanceID:    svcs.InstanceID,
+		WorkspaceID:   svcs.WorkspaceID,
+		WorkspaceDir:  svcs.WorkspaceDir,
+		WorkspaceName: svcs.WorkspaceName,
+		SettingsData:  svcs.SettingsData,
+		Cfg:           svcs.Cfg,
+		LogStore:      svcs.LogStore,
+		LogToasts:     svcs.LogToasts,
+	}
+	return NewApp(&testProvider{svcs: svcs}, ctx)
 }
 
 // servicesToProvider wraps a Services struct in a testProvider.

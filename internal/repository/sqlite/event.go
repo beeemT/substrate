@@ -2,11 +2,36 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/beeemT/go-atomic/generic"
 	"github.com/beeemT/substrate/internal/domain"
 )
+
+// eventRetryBackoffs are the backoffs used when retrying event persistence due to SQLITE_BUSY.
+var eventRetryBackoffs = []time.Duration{
+	100 * time.Millisecond,
+	time.Second,
+	5 * time.Second,
+}
+
+// isSQLiteBusyOrLocked checks if an error is a retryable SQLite error (SQLITE_BUSY or SQLITE_LOCKED).
+func isSQLiteBusyOrLocked(err error) bool {
+	if err == nil {
+		return false
+	}
+	// SQLITE_BUSY = 5, SQLITE_LOCKED = 6
+	var sqliteErr interface{ Code() int }
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() {
+		case 5, 6:
+			return true
+		}
+	}
+	return false
+}
 
 type eventRow struct {
 	ID          string  `db:"id"`
@@ -48,16 +73,27 @@ func NewEventRepo(remote generic.SQLXRemote) EventRepo {
 	return EventRepo{remote: remote}
 }
 
+// Create persists a system event with automatic retry on SQLITE_BUSY.
+// This handles concurrent database access without requiring transaction coordination.
 func (r EventRepo) Create(ctx context.Context, e domain.SystemEvent) error {
 	row := rowFromEvent(e)
-	_, err := r.remote.NamedExecContext(ctx,
-		`INSERT INTO system_events (id, event_type, workspace_id, payload, created_at)
-		 VALUES (:id, :event_type, :workspace_id, :payload, :created_at)`, row)
-	if err != nil {
-		return fmt.Errorf("create event %s: %w", e.ID, err)
+	var lastErr error
+	for i, backoff := range eventRetryBackoffs {
+		if i > 0 {
+			time.Sleep(backoff)
+		}
+		_, err := r.remote.NamedExecContext(ctx,
+			`INSERT INTO system_events (id, event_type, workspace_id, payload, created_at)
+			 VALUES (:id, :event_type, :workspace_id, :payload, :created_at)`, row)
+		if err == nil {
+			return nil
+		}
+		if !isSQLiteBusyOrLocked(err) {
+			return fmt.Errorf("create event %s: %w", e.ID, err)
+		}
+		lastErr = err
 	}
-
-	return nil
+	return fmt.Errorf("create event %s: %w (after retries)", e.ID, lastErr)
 }
 
 func (r EventRepo) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {

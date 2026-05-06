@@ -47,6 +47,9 @@ func (r *archFlowRepo) Delete(_ context.Context, _ string) error { return nil }
 //  4. State → archived, PreviousState → previous state
 //
 // Unarchive reverses: archived → completed (or merged/failed).
+
+
+
 func TestArchAppFlow(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -81,7 +84,7 @@ func TestArchAppFlow(t *testing.T) {
 			repo := &archFlowRepo{
 				items: map[string]domain.Session{tc.workItem.ID: tc.workItem},
 			}
-			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher())
 
 			app := newTestApp(Services{
 				WorkspaceID:   "ws-local",

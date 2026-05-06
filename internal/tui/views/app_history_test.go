@@ -161,6 +161,9 @@ func (r *sessionSearchDeleteRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+
+
+
 func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	now := time.Now()
 	app := newTestApp(Services{Settings: &SettingsService{}})
@@ -363,8 +366,8 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}},
 	}}, nil)
 	app := newTestApp(Services{
-		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, nil),
-		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, NewNoopPublisher()),
+		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
 		Plan:          planSvc,
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
@@ -503,8 +506,8 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
 	msg := deleteSessionCmd(servicesToProvider(Services{
-		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil),
-		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
+		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, NewNoopPublisher()),
+		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
 		Plan:    planSvc,
 	}), sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
 	deleted, ok := msg.(SessionDeletedMsg)
@@ -846,7 +849,7 @@ func TestPersistCreatedWorkItemMsgDuplicateReturnsPrompt(t *testing.T) {
 	}
 	msg := persistCreatedWorkItemMsg(servicesToProvider(Services{
 		WorkspaceID: "ws-local",
-		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
+		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher()),
 	}), requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)
@@ -887,7 +890,7 @@ func TestPersistCreatedWorkItemMsgAggregateDuplicateReturnsPrompt(t *testing.T) 
 	}
 	msg := persistCreatedWorkItemMsg(servicesToProvider(Services{
 		WorkspaceID: "ws-local",
-		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil),
+		Session:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher()),
 	}), requested)
 
 	dup, ok := msg.(SessionDuplicatePromptMsg)

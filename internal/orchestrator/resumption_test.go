@@ -176,7 +176,7 @@ func newPhase9bFixture() *phase9bFixture {
 	}
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 
 	return &phase9bFixture{
 		instanceRepo: instanceRepo,
@@ -184,7 +184,7 @@ func newPhase9bFixture() *phase9bFixture {
 		subPlanRepo:  subPlanRepo,
 		planRepo:     planRepo,
 		instanceSvc:  service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}),
-		sessionSvc:   service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
+		sessionSvc:   service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
 		planSvc:      planSvc,
 		bus:          event.NewBus(event.BusConfig{}),
 		workspaceID:  "ws-test",

@@ -15,11 +15,11 @@ import (
 // ReviewService provides business logic for review cycles and critiques.
 type ReviewService struct {
 	transacter atomic.Transacter[repository.Resources]
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 }
 
 // NewReviewService creates a new ReviewService.
-func NewReviewService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *ReviewService {
+func NewReviewService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *ReviewService {
 	return &ReviewService{transacter: transacter, eventBus: eventBus}
 }
 

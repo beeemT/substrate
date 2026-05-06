@@ -38,7 +38,7 @@ type Foreman struct {
 	planSvc     *service.PlanService
 	questionSvc *service.QuestionService
 	sessionSvc  *service.TaskService
-	eventBus    *event.Bus
+	eventBus    event.Publisher
 
 	mu            sync.Mutex
 	sessionMu     sync.Mutex           // serializes SendMessage+waitForAnswer; prevents concurrent Events() readers
@@ -68,7 +68,7 @@ func NewForeman(
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
 	sessionSvc *service.TaskService,
-	eventBus *event.Bus,
+	eventBus event.Publisher,
 ) *Foreman {
 	return &Foreman{
 		cfg:           cfg,

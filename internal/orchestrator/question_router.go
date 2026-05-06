@@ -18,10 +18,10 @@ type QuestionRouter struct {
 	sessionSvc  *service.TaskService
 	registry    *SessionRegistry
 	foreman     *Foreman
-	eventBus    *event.Bus
+	eventBus    event.Publisher
 }
 
-func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.TaskService, registry *SessionRegistry, foreman *Foreman, eventBus *event.Bus) *QuestionRouter {
+func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.TaskService, registry *SessionRegistry, foreman *Foreman, eventBus event.Publisher) *QuestionRouter {
 	return &QuestionRouter{
 		questionSvc: questionSvc,
 		sessionSvc:  sessionSvc,
@@ -98,24 +98,19 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 	if err := r.questionSvc.Create(ctx, q); err != nil {
 		return fmt.Errorf("%s: persist question: %w", label, err)
 	}
-	if r.eventBus != nil {
-		if err := r.eventBus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(domain.EventAgentQuestionRaised),
-			WorkspaceID: "",
-			Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "session_id": q.AgentSessionID, "question": q.Content, "stage": string(q.Stage), "source": string(q.Source)}),
-			CreatedAt:   time.Now(),
-		}); err != nil {
-			slog.Warn("failed to publish question raised event", "error", err, "question_id", q.ID)
-		}
+	if err := r.eventBus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentQuestionRaised),
+		WorkspaceID: "",
+		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "session_id": q.AgentSessionID, "question": q.Content, "stage": string(q.Stage), "source": string(q.Source)}),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		slog.Warn("failed to publish question raised event", "error", err, "question_id", q.ID)
 	}
 	return nil
 }
 
-func PublishQuestionAnswered(ctx context.Context, eventBus *event.Bus, questionID, sessionID string) error {
-	if eventBus == nil {
-		return nil
-	}
+func PublishQuestionAnswered(ctx context.Context, eventBus event.Publisher, questionID, sessionID string) error {
 	return eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionAnswered),

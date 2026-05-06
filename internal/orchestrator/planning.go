@@ -54,7 +54,7 @@ type PlanningService struct {
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
 	sessionSvc     *service.TaskService
-	eventBus       *event.Bus
+	eventBus       event.Publisher
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	globalCfg      *config.Config
@@ -109,7 +109,7 @@ func NewPlanningService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.TaskService,
-	eventBus *event.Bus,
+	eventBus event.Publisher,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	questionSvc *service.QuestionService,

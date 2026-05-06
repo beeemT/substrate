@@ -18,11 +18,11 @@ import (
 // PlanService provides business logic for plans and sub-plans.
 type PlanService struct {
 	transacter atomic.Transacter[repository.Resources]
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 }
 
 // NewPlanService creates a new PlanService.
-func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *PlanService {
+func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *PlanService {
 	return &PlanService{transacter: transacter, eventBus: eventBus}
 }
 

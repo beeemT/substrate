@@ -13,8 +13,7 @@ import (
 const emitTimeout = 5 * time.Second
 
 // Emit emits an event asynchronously.
-// The bus must not be nil; callers are responsible for providing a valid bus.
-func Emit(bus *event.Bus, evt domain.SystemEvent) {
+func Emit(bus event.Publisher, evt domain.SystemEvent) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), emitTimeout)
 		defer cancel()

@@ -594,10 +594,10 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	harness := &mockAgentHarness{sessionsDir: sessionsDir}
 
 	cfg := testReviewConfig(maxCycles)
-	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}}, nil)
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}}, &mockPublisher{})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
 
@@ -896,9 +896,9 @@ func TestResolveEscalated_AppendsFAQ(t *testing.T) {
 		RepositoryName: "repo-a",
 	}
 
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo}}, nil)
-	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil)
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo}}, &mockPublisher{})
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
 
 	answerCh := make(chan string, 1)
 	f := &Foreman{

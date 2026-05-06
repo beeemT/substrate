@@ -173,3 +173,11 @@ Use existing domain events for completion signaling:
 
 If existing events are insufficient, emit a new domain event and handle it via the event bus pipeline
 (see "Event → message pipeline" above). Do not block the TUI to wait for long-running operations.
+
+## Nil Bus in Command Functions
+
+Do not add nil guards for `*event.Bus` parameters in command functions or helper functions like
+`answerPlanningQuestion`. The `bus` parameter is a required dependency; if it is nil, the code must panic
+to surface missing wiring immediately. Instead, tests must use mock implementations of `event.Publisher`
+(e.g., via mockery) to avoid nil pointer dereferences.
+

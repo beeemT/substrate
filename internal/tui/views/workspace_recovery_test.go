@@ -49,6 +49,9 @@ func (r *recoveryWorkspaceRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+
+
+
 func TestInitWorkspaceCmd_RecoversExistingWorkspaceFile(t *testing.T) {
 	cwd := t.TempDir()
 	wsFile := &gitwork.WorkspaceFile{
@@ -61,7 +64,7 @@ func TestInitWorkspaceCmd_RecoversExistingWorkspaceFile(t *testing.T) {
 	}
 
 	repo := &recoveryWorkspaceRepo{workspaces: make(map[string]domain.Workspace)}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, NewNoopPublisher())
 
 	msg := initWorkspaceCmd(cwd, workspaceSvc)()
 	done, ok := msg.(WorkspaceInitDoneMsg)

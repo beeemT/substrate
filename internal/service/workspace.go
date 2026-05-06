@@ -15,15 +15,14 @@ import (
 // WorkspaceService provides business logic for workspaces.
 type WorkspaceService struct {
 	transacter atomic.Transacter[repository.Resources]
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 }
 
 // NewWorkspaceService creates a new WorkspaceService.
-func NewWorkspaceService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *WorkspaceService {
+func NewWorkspaceService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *WorkspaceService {
 	return &WorkspaceService{transacter: transacter, eventBus: eventBus}
 }
 
-// workspaceEventPayload holds the JSON payload for workspace lifecycle events.
 type workspaceEventPayload struct {
 	WorkspaceID string `json:"workspace_id"`
 	Status      string `json:"status,omitempty"`

@@ -15,11 +15,11 @@ import (
 // QuestionService provides business logic for questions.
 type QuestionService struct {
 	transacter atomic.Transacter[repository.Resources]
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 }
 
 // NewQuestionService creates a new QuestionService.
-func NewQuestionService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *QuestionService {
+func NewQuestionService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *QuestionService {
 	return &QuestionService{transacter: transacter, eventBus: eventBus}
 }
 

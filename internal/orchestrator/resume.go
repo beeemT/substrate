@@ -25,7 +25,7 @@ type Resumption struct {
 	harness    adapter.AgentHarness
 	sessionSvc *service.TaskService
 	planSvc    *service.PlanService
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 	registry   *SessionRegistry
 }
 
@@ -34,7 +34,7 @@ func NewResumption(
 	harness adapter.AgentHarness,
 	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
-	eventBus *event.Bus,
+	eventBus event.Publisher,
 	registry *SessionRegistry,
 ) *Resumption {
 	return &Resumption{

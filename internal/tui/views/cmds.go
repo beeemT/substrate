@@ -500,7 +500,11 @@ func initializeWorkspaceServicesCmd(provider ServiceProvider, runtimeCtx Runtime
 			return ErrMsg{Err: errors.New("config is unavailable")}
 		}
 
-		current := *provider.GetServices()
+		services := provider.GetServices()
+		if services == nil {
+			services = &Services{}
+		}
+		current := *services
 		reloaded, err := serviceMgr.InitWorkspace(context.Background(), runtimeCtx.Cfg, current, workspaceID, workspaceName, workspaceDir)
 		if err != nil {
 			return ErrMsg{Err: err}
@@ -1002,9 +1006,6 @@ func buildIssueCommentBody(ctx context.Context, planSvc *service.PlanService, mo
 }
 
 func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemSvc *service.SessionService, workItemID string) error {
-	if bus == nil {
-		return nil
-	}
 	workItem, err := workItemSvc.Get(ctx, workItemID)
 	if err != nil {
 		return err
@@ -1057,9 +1058,6 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 // (comment_body, external_ids, repo_comment_scopes) so GitHub/GitLab adapters can post
 // plan-composite comments to the relevant issues/PRs.
 func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
-	if bus == nil {
-		return nil
-	}
 	plan, err := planSvc.GetPlan(ctx, planID)
 	if err != nil {
 		return err

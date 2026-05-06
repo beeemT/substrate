@@ -26,7 +26,7 @@ type ReviewPipeline struct {
 	sessionSvc    *service.TaskService
 	planSvc       *service.PlanService
 	workItemSvc   *service.SessionService
-	eventBus      *event.Bus
+	eventBus      event.Publisher
 	registry      *SessionRegistry
 	reviewTimeout time.Duration
 }
@@ -39,7 +39,7 @@ func NewReviewPipeline(
 	sessionSvc *service.TaskService,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
-	eventBus *event.Bus,
+	eventBus event.Publisher,
 	registry *SessionRegistry,
 ) *ReviewPipeline {
 	return &ReviewPipeline{

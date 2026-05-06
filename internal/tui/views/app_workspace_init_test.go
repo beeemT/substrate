@@ -113,7 +113,10 @@ func TestInitializeWorkspaceServicesCmd_RebuildsServicesAndRegistersInstance(t *
 	transacter := repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}
 	serviceMgr := NewServiceManager(transacter, nil)
 
-	msg := initializeWorkspaceServicesCmd(serviceMgr, RuntimeContext{}, "ws-1", "workspace", workspaceDir)()
+	runtimeCtx := RuntimeContext{
+		Cfg: newWorkspaceInitHarnessConfig(),
+	}
+	msg := initializeWorkspaceServicesCmd(serviceMgr, runtimeCtx, "ws-1", "workspace", workspaceDir)()
 	got, ok := msg.(WorkspaceServicesReloadedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want WorkspaceServicesReloadedMsg", msg)

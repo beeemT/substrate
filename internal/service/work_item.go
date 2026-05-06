@@ -18,11 +18,11 @@ import (
 // SessionService provides business logic for work items.
 type SessionService struct {
 	transacter atomic.Transacter[repository.Resources]
-	bus        *event.Bus
+	bus        event.Publisher
 }
 
 // NewSessionService creates a new WorkItemService.
-func NewSessionService(transacter atomic.Transacter[repository.Resources], bus *event.Bus) *SessionService {
+func NewSessionService(transacter atomic.Transacter[repository.Resources], bus event.Publisher) *SessionService {
 	return &SessionService{transacter: transacter, bus: bus}
 }
 
@@ -379,7 +379,6 @@ func stateToEventType(state domain.SessionState) domain.EventType {
 }
 
 // emitStateChange emits a state change event asynchronously.
-// The bus must not be nil.
 func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.SessionState, item domain.Session) {
 	eventType := stateToEventType(to)
 	if eventType == "" {

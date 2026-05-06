@@ -227,7 +227,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{
 		"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "rocket", Content: "Sub-plan content", Order: 0},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher())
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
@@ -270,10 +270,10 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
 		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	bus := event.NewBus(event.BusConfig{})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus)
 	defer bus.Close()
 
 	sub, err := bus.Subscribe("complete-test", string(domain.EventWorkItemCompleted))
@@ -286,27 +286,37 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 		t.Fatalf("msg = %#v, want successful ActionDoneMsg", msg)
 	}
 
-	select {
-	case evt := <-sub.C:
-		var payload struct {
-			ExternalID string           `json:"external_id"`
-			Branch     string           `json:"branch"`
-			Review     domain.ReviewRef `json:"review"`
+	// Two events are emitted: emitStateChange and emitWorkItemCompleted.
+	// Skip the first (session object payload) and check the second.
+	var payload struct {
+		ExternalID string           `json:"external_id"`
+		Branch     string           `json:"branch"`
+		Review     domain.ReviewRef `json:"review"`
+	}
+	// Two events are emitted: emitStateChange (from Transition) and emitWorkItemCompleted.
+	// Skip the first (session object payload) and check the second.
+	for {
+		select {
+		case evt, ok := <-sub.C:
+			if !ok {
+				t.Fatal("channel closed before finding expected event")
+			}
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("Unmarshal payload: %v", err)
+			}
+			if payload.ExternalID == "gh:issue:acme/rocket#42" {
+				goto found
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for work_item.completed event")
 		}
-		if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
-			t.Fatalf("Unmarshal payload: %v", err)
-		}
-		if payload.ExternalID != "gh:issue:acme/rocket#42" {
-			t.Fatalf("external_id = %q", payload.ExternalID)
-		}
-		if payload.Branch != "sub-branch" {
-			t.Fatalf("branch = %q, want sub-branch", payload.Branch)
-		}
-		if payload.Review.BaseRepo.Owner != "acme" || payload.Review.BaseRepo.Repo != "rocket" {
-			t.Fatalf("base repo = %+v, want acme/rocket", payload.Review.BaseRepo)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for work_item.completed event")
+	}
+found:
+	if payload.Branch != "sub-branch" {
+		t.Fatalf("branch = %q, want sub-branch", payload.Branch)
+	}
+	if payload.Review.BaseRepo.Owner != "acme" || payload.Review.BaseRepo.Repo != "rocket" {
+		t.Fatalf("base repo = %+v, want acme/rocket", payload.Review.BaseRepo)
 	}
 }
 
@@ -367,7 +377,7 @@ func TestReconcileOrphanedTasksCmd_InterruptsOrphanedRunningSession(t *testing.T
 		},
 	}}
 
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, NewNoopPublisher())
 	instanceSvc := service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}})
 
 	cmd := ReconcileOrphanedTasksCmd(sessionSvc, instanceSvc, workspaceID, currentInstanceID)

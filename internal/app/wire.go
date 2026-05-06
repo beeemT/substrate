@@ -177,7 +177,7 @@ func (a routedRepoLifecycleAdapter) Name() string { return a.adapter.Name() }
 func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.SystemEvent) error {
 	provider, ok := repoLifecycleEventPlatform(evt)
 	if !ok {
-		slog.Debug("repo lifecycle adapter: dropping event, platform detection failed",
+		slog.Debug("repo lifecycle adapter: dropping event, no platform handler for this event type",
 			"adapter_provider", a.provider,
 			"event_type", evt.EventType,
 			"workspace_id", evt.WorkspaceID,
@@ -185,7 +185,7 @@ func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.Syst
 		return nil
 	}
 	if provider != a.provider {
-		slog.Debug("repo lifecycle adapter: dropping event, platform mismatch",
+		slog.Debug("repo lifecycle adapter: dropping event, event is for different platform",
 			"adapter_provider", a.provider,
 			"detected_provider", provider,
 			"event_type", evt.EventType,

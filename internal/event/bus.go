@@ -48,6 +48,12 @@ type HookConfig struct {
 // The handler typically logs a warning or enqueues a toast notification.
 type DropHandler func(subscriberID string, event domain.SystemEvent)
 
+
+// Publisher is the interface for publishing events.
+type Publisher interface {
+	Publish(ctx context.Context, event domain.SystemEvent) error
+}
+
 // BusOption configures the event bus.
 type BusOption func(*Bus)
 

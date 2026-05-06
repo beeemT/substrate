@@ -373,11 +373,11 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 
 	registry := NewSessionRegistry()
 	svc := &PlanningService{
-		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil),
-		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
+		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{}),
+		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
 		registry:    registry,
 	}
-	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, nil)
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
 
 	answered := make(chan string, 1)
 	events := make(chan adapter.AgentEvent, 2)
@@ -631,7 +631,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		cfg:        &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:    harness,
 		templates:  templates,
-		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
+		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -775,7 +775,7 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 
 	ctx := context.Background()
 
@@ -905,7 +905,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	// Plan repo with UNIQUE enforcement (mirrors SQLite behaviour).
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 
 	// Seed the rejected plan that occupies the unique slot.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -921,21 +921,22 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
 
 	// Discoverer uses the fake binary so buildRepoPointer succeeds for test-repo.
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
 	discoverer := NewDiscoverer(gitClient, globalCfg)
+	bus := &mockPublisher{}
 
 	// Harness writes a valid plan referencing repoName.
 	planText := validPlanningPlanWithRepo(repoName, "Keep test-repo isolated.", "Implement the resolver.")
@@ -943,7 +944,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, nil, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1024,7 +1025,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 
 	// Seed an approved plan — the artifact of a completed work item.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -1040,27 +1041,28 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionCompleted},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
 
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
 	discoverer := NewDiscoverer(gitClient, globalCfg)
+	bus := &mockPublisher{}
 
 	planText := validPlanningPlanWithRepo(repoName, "Re-plan after completion.", "Implement the next iteration.")
 	harness := &planningHarnessSpy{planText: planText}
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, nil, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1096,17 +1098,17 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	planRepo := newUniqueWorkItemPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: newMockSubPlanRepo()}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: newMockSubPlanRepo()}}, &mockPublisher{})
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionPlanning},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
 	eventRepo := &planTestEventRepo{}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
@@ -1197,17 +1199,17 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	// Setup services
 	planRepo := newMockPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
+	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
 	eventRepo := &planTestEventRepo{}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 

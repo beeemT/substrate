@@ -732,3 +732,14 @@ func (m *MockInstanceRepository) Delete(_ context.Context, id string) error {
 func newTestBus() *event.Bus {
 	return event.NewBus(event.BusConfig{})
 }
+
+// MockPublisher implements event.Publisher for testing.
+type MockPublisher struct {
+	Published []domain.SystemEvent
+	Err       error
+}
+
+func (m *MockPublisher) Publish(_ context.Context, evt domain.SystemEvent) error {
+	m.Published = append(m.Published, evt)
+	return m.Err
+}

@@ -15,7 +15,7 @@ import (
 // TaskService provides business logic for repo-scoped tasks.
 type TaskService struct {
 	transacter atomic.Transacter[repository.Resources]
-	eventBus   *event.Bus
+	eventBus   event.Publisher
 }
 
 // taskEventPayload holds the JSON payload for task lifecycle events.
@@ -60,8 +60,7 @@ func marshalTaskStatusChangedPayload(task domain.Task, from, to domain.TaskStatu
 	return string(b)
 }
 
-// NewTaskService creates a new TaskService.
-func NewTaskService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *TaskService {
+func NewTaskService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *TaskService {
 	return &TaskService{transacter: transacter, eventBus: eventBus}
 }
 
