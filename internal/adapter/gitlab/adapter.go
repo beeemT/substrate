@@ -148,9 +148,9 @@ type gitlabGraphQLErrors struct {
 type graphqlStatusResponse struct {
 	Data struct {
 		Project struct {
-			WorkItem struct {
-				Widgets []graphqlStatusWidget `json:"widgets"`
-			} `json:"workItem"`
+			WorkItems struct {
+				Nodes []graphqlWorkItem `json:"nodes"`
+			} `json:"workItems"`
 		} `json:"project"`
 	} `json:"data"`
 	Errors []gitlabGraphQLErrors `json:"errors,omitempty"`
@@ -696,18 +696,20 @@ func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []is
 // Returns the status string or "" if unavailable. Errors are logged to slog.
 func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectID, iid int64) string {
 	endpoint := "/api/graphql"
-	query := `query ProjectWorkItem($fullPath: ID!, $iid: String!) {
-  project(fullPath: $fullPath) {
-    workItem(iid: $iid) {
-      widgets {
-        type
-        ... on WorkItemWidgetStatus {
-          status
-        }
-      }
-    }
-  }
-}`
+	query := `query ProjectWorkItems($fullPath: ID!, $iid: String!) {
+		project(fullPath: $fullPath) {
+			workItems(iids: [$iid]) {
+				nodes {
+					widgets {
+						type
+						... on WorkItemWidgetStatus {
+							status
+						}
+					}
+				}
+			}
+		}
+	}`
 	vars := gitlabGraphQLVariables{
 		FullPath: fmt.Sprintf("gid://gitlab/Project/%d", projectID),
 		IID:      strconv.FormatInt(iid, 10),
@@ -723,7 +725,11 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 		}
 		return ""
 	}
-	widgets := resp.Data.Project.WorkItem.Widgets
+	nodes := resp.Data.Project.WorkItems.Nodes
+	if len(nodes) == 0 {
+		return ""
+	}
+	widgets := nodes[0].Widgets
 	for _, w := range widgets {
 		if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status != "" {
 			return w.StatusWidget.Status

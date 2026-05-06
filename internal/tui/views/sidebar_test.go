@@ -726,6 +726,49 @@ func TestApplyDimensionAndDirection_State_ReviewGroup(t *testing.T) {
 	}
 }
 
+func TestApplyDimensionAndDirection_State_ArchivedGroup(t *testing.T) {
+	now := time.Now()
+	entries := []views.SidebarEntry{
+		makeWorkItemEntry("a", "gh:issue:1", domain.SessionPlanning, "github", now, now),
+		makeWorkItemEntry("b", "gh:issue:2", domain.SessionArchived, "github", now, now),
+		makeWorkItemEntry("c", "gh:issue:3", domain.SessionCompleted, "github", now, now),
+	}
+
+	// In the normal (All) view, archived entries are excluded by FilterSidebarEntries.
+	filtered := views.FilterSidebarEntries(entries, views.SidebarFilterAll)
+	got := views.ApplyDimensionAndDirection(filtered, views.SidebarDimState, views.SidebarDirDesc)
+	var groups []string
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 group headers (Active, Completed), got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Active") {
+		t.Fatalf("expected first group to be Active, got %q", groups[0])
+	}
+	if !strings.HasPrefix(groups[1], "Completed") {
+		t.Fatalf("expected second group to be Completed, got %q", groups[1])
+	}
+
+	// When the archived filter is active, archived entries appear in their own group.
+	filtered = views.FilterSidebarEntries(entries, views.SidebarFilterArchived)
+	got = views.ApplyDimensionAndDirection(filtered, views.SidebarDimState, views.SidebarDirDesc)
+	groups = nil
+	for _, e := range got {
+		if e.Kind == views.SidebarEntryGroupHeader {
+			groups = append(groups, e.GroupTitle)
+		}
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group header (Archived), got %d: %v", len(groups), groups)
+	}
+	if !strings.HasPrefix(groups[0], "Archived") {
+		t.Fatalf("expected group to be Archived, got %q", groups[0])
+	}
+}
 func TestTimeBucket(t *testing.T) {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())

@@ -1002,9 +1002,6 @@ func renderGroupHeader(st styles.Styles, title string, width int) string {
 // FilterSidebarEntries returns entries matching the given filter mode.
 // Only SidebarEntryWorkItem entries are filtered; other kinds pass through.
 func FilterSidebarEntries(entries []SidebarEntry, mode SidebarFilter) []SidebarEntry {
-	if mode == SidebarFilterAll {
-		return entries
-	}
 	var filtered []SidebarEntry
 	for _, e := range entries {
 		if e.Kind != SidebarEntryWorkItem {
@@ -1019,6 +1016,10 @@ func FilterSidebarEntries(entries []SidebarEntry, mode SidebarFilter) []SidebarE
 }
 
 func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted bool, mode SidebarFilter) bool {
+	// Archived sessions are only shown when the archived filter is explicitly active.
+	if state == domain.SessionArchived {
+		return mode == SidebarFilterArchived
+	}
 	switch mode {
 	case SidebarFilterActive:
 		switch state {
@@ -1036,7 +1037,7 @@ func sessionMatchesFilter(state domain.SessionState, hasQuestion, hasInterrupted
 		}
 		return false
 	case SidebarFilterCompleted:
-		return (state == domain.SessionCompleted || state == domain.SessionFailed || state == domain.SessionMerged) && state != domain.SessionArchived
+		return state == domain.SessionCompleted || state == domain.SessionFailed || state == domain.SessionMerged
 	case SidebarFilterArchived:
 		return state == domain.SessionArchived
 	default:
@@ -1102,7 +1103,7 @@ type groupedEntries struct {
 	items []SidebarEntry
 }
 
-// groupByState groups work items into Active, Review, Waiting, Completed, Failed buckets.
+// groupByState groups work items into Active, Review, Waiting, Completed, Failed, and Archived buckets.
 func groupByState(entries []SidebarEntry, dir SidebarDirection) []groupedEntries {
 	stateLabel := func(s domain.SessionState) string {
 		switch s {
@@ -1116,6 +1117,8 @@ func groupByState(entries []SidebarEntry, dir SidebarDirection) []groupedEntries
 			return "Completed"
 		case domain.SessionFailed:
 			return "Failed"
+		case domain.SessionArchived:
+			return "Archived"
 		default:
 			return string(s)
 		}
@@ -1127,7 +1130,7 @@ func groupByState(entries []SidebarEntry, dir SidebarDirection) []groupedEntries
 		groups[label] = append(groups[label], e)
 	}
 
-	groupOrder := []string{"Active", "Review", "Waiting", "Completed", "Failed"}
+	groupOrder := []string{"Active", "Review", "Waiting", "Completed", "Failed", "Archived"}
 	result := make([]groupedEntries, 0, len(groupOrder))
 	for _, label := range groupOrder {
 		items := groups[label]
