@@ -56,11 +56,13 @@ type httpDoer interface {
 type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
-	cfg        config.GitlabConfig
-	baseURL    string
-	client     httpDoer
-	username   string       // cached authenticated username for "mine" scope checks
-	usernameMu sync.RWMutex // protects username cache
+	cfg             config.GitlabConfig
+	baseURL         string
+	client          httpDoer
+	username        string       // cached authenticated username for "mine" scope checks
+	usernameMu      sync.RWMutex // protects username cache
+	graphqlMu       sync.RWMutex // protects graphqlSupported
+	graphqlSupported bool         // true once we confirm /api/graphql responds with valid JSON
 }
 
 type issue struct {
@@ -250,7 +252,7 @@ func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 			SupportsOffset: true,
 			SupportsRepo:   true,
 			SupportsGroup:  true,
-			SupportsStatus: true,
+			SupportsStatus: a.checkGraphQLSupport(),
 		},
 		domain.ScopeProjects:    {SupportsOffset: true, SupportsRepo: true},
 		domain.ScopeInitiatives: {SupportsOffset: true, SupportsGroup: true},
@@ -265,6 +267,33 @@ func (a *GitlabAdapter) Capabilities() adapter.AdapterCapabilities {
 		},
 		BrowseFilters: filters,
 	}
+}
+
+// graphqlSupported returns true if this GitLab instance supports the GraphQL API.
+// The check is performed once on first access and cached thereafter.
+func (a *GitlabAdapter) checkGraphQLSupport() bool {
+	a.graphqlMu.Lock()
+	defer a.graphqlMu.Unlock()
+	if a.graphqlSupported {
+		return true
+	}
+	// Ping /api/graphql with a minimal introspection query. We only check that the
+	// endpoint returns valid JSON (even an empty object) — any JSON response means
+	// the GraphQL endpoint is present. This is a cheap check that avoids parsing
+	// the full schema.
+	body, err := a.doJSONRaw(context.Background(), http.MethodPost, "/api/graphql", nil,
+		gitlabGraphQLRequest{Query: "{ __typename }", Variables: gitlabGraphQLVariables{}})
+	if err != nil {
+		slog.Debug("gitlab: /api/graphql not available", "baseURL", a.baseURL, "error", err)
+		return false
+	}
+	if len(body) == 0 || (body[0] != '{' && body[0] != '[') {
+		slog.Debug("gitlab: /api/graphql returned non-JSON", "baseURL", a.baseURL)
+		return false
+	}
+	a.graphqlSupported = true
+	slog.Debug("gitlab: /api/graphql confirmed available", "baseURL", a.baseURL)
+	return true
 }
 
 func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
@@ -695,6 +724,9 @@ func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []is
 // graphqlFetchStatusForIssue fetches the Work Item status for a single issue via GraphQL.
 // Returns the status string or "" if unavailable. Errors are logged to slog.
 func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectID, iid int64) string {
+	if strings.TrimSpace(a.cfg.Token) == "" || !a.checkGraphQLSupport() {
+		return ""
+	}
 	endpoint := "/api/graphql"
 	query := `query ProjectWorkItems($fullPath: ID!, $iid: String!) {
 		project(fullPath: $fullPath) {
@@ -741,6 +773,9 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 // graphqlStatusFilterIssues uses the GraphQL API to server-side filter issues by status.
 // Returns the original slice if GraphQL fails (degrades gracefully).
 func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
+	if strings.TrimSpace(a.cfg.Token) == "" || !a.checkGraphQLSupport() {
+		return issues
+	}
 	filtered := make([]issue, 0, len(issues))
 	for _, iss := range issues {
 		ref := strings.TrimSpace(iss.References.Full)
@@ -1017,6 +1052,46 @@ type apiError struct {
 
 func (e *apiError) Error() string {
 	return fmt.Sprintf("gitlab api status %d: %s", e.StatusCode, e.Body)
+}
+
+// doJSONRaw performs an HTTP request and returns the raw response body bytes.
+// It is used for lightweight probes where we only care about whether the endpoint
+// returns JSON (any JSON), not the actual content.
+func (a *GitlabAdapter) doJSONRaw(ctx context.Context, method, endpoint string, query url.Values, body any) ([]byte, error) {
+	rawURL := strings.TrimRight(a.baseURL, "/") + endpoint
+	fullURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse url: %w", err)
+	}
+	if query != nil {
+		fullURL.RawQuery = query.Encode()
+	}
+	var bodyReader io.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request body: %w", err)
+		}
+		bodyReader = strings.NewReader(string(payload))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fullURL.String(), bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.Token))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	return data, nil
 }
 
 func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) error {
