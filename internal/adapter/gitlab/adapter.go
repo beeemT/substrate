@@ -717,40 +717,106 @@ func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []is
 	if len(issues) == 0 || strings.TrimSpace(a.cfg.Token) == "" {
 		return nil
 	}
+	if !a.checkGraphQLSupport() {
+		return nil
+	}
 	enrich := make(statusEnrichment)
+
+	// Group issues by project
+	projectIssues := make(map[int64][]issue)
 	for _, iss := range issues {
-		ref := strings.TrimSpace(iss.References.Full)
-		if ref == "" {
+		if iss.References.Full == "" || iss.ProjectID == 0 {
 			continue
 		}
-		status := a.graphqlFetchStatusForIssue(ctx, iss.ProjectID, iss.IID)
-		if status != "" {
-			enrich[ref] = status
+		projectIssues[iss.ProjectID] = append(projectIssues[iss.ProjectID], iss)
+	}
+
+	// Query each project in batches
+	for projectID, projIssues := range projectIssues {
+		iids := make([]string, len(projIssues))
+		for i, iss := range projIssues {
+			iids[i] = strconv.FormatInt(iss.IID, 10)
+		}
+		statuses := a.graphqlBatchFetchStatus(ctx, projectID, iids)
+		for _, iss := range projIssues {
+			if s, ok := statuses[iss.IID]; ok {
+				enrich[iss.References.Full] = s
+			}
 		}
 	}
+
 	if len(enrich) == 0 {
 		return nil
 	}
 	return enrich
 }
 
-// graphqlFetchStatusForIssue fetches the Work Item status for a single issue via GraphQL.
-// Returns the status string or "" if unavailable. Errors are logged to slog.
-func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectID, iid int64) string {
+// graphqlStatusFilterIssues uses the GraphQL API to enrich issues with Work Item status.
+// If status is non-empty, filters to only issues matching that status.
+// Returns the original slice if GraphQL fails (degrades gracefully).
+// Batches requests by project for efficiency.
+func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
 	if !a.checkGraphQLSupport() {
-		return ""
+		return issues
 	}
-	endpoint := "/api/graphql"
-	query := `query ProjectWorkItems($fullPath: ID!, $iid: String!) {
+	filterStatus := strings.TrimSpace(status)
+
+	// Group issues by project
+	projectIssues := make(map[int64][]int)
+	issueMap := make(map[int64]map[int64]*issue) // projectID -> (iid -> issue pointer)
+	for i, iss := range issues {
+		if iss.References.Full == "" || iss.ProjectID == 0 {
+			continue
+		}
+		projectIssues[iss.ProjectID] = append(projectIssues[iss.ProjectID], i)
+		if issueMap[iss.ProjectID] == nil {
+			issueMap[iss.ProjectID] = make(map[int64]*issue)
+		}
+		issueMap[iss.ProjectID][iss.IID] = &issues[i]
+	}
+
+	// Query each project's issues in a single batch
+	for projectID, indices := range projectIssues {
+		iids := make([]string, len(indices))
+		for j, idx := range indices {
+			iids[j] = strconv.FormatInt(issues[idx].IID, 10)
+		}
+		statuses := a.graphqlBatchFetchStatus(ctx, projectID, iids)
+		for _, idx := range indices {
+			iss := &issues[idx]
+			if s, ok := statuses[iss.IID]; ok {
+				iss.Status = s
+			}
+		}
+	}
+
+	// Filter if needed
+	if filterStatus == "" {
+		return issues
+	}
+	filtered := make([]issue, 0, len(issues))
+	for _, iss := range issues {
+		if iss.Status == "" || strings.EqualFold(iss.Status, filterStatus) {
+			filtered = append(filtered, iss)
+		}
+	}
+	return filtered
+}
+
+// graphqlBatchFetchStatus fetches status for multiple IIDs in a single GraphQL query.
+func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectID int64, iids []string) map[int64]string {
+	if len(iids) == 0 {
+		return nil
+	}
+	query := `query ProjectWorkItems($fullPath: ID!, $iids: [String!]!) {
 		project(fullPath: $fullPath) {
-			workItems(iids: [$iid]) {
+			workItems(iids: $iids) {
 				nodes {
+					iid
 					widgets {
 						type
 						... on WorkItemWidgetStatus {
-							status {
-								name
-							}
+							status { name }
 						}
 					}
 				}
@@ -759,57 +825,49 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 	}`
 	vars := gitlabGraphQLVariables{
 		FullPath: fmt.Sprintf("gid://gitlab/Project/%d", projectID),
-		IID:      strconv.FormatInt(iid, 10),
+		IID:      "", // unused but required for struct
 	}
-	var resp graphqlStatusResponse
-	if err := a.doJSON(ctx, http.MethodPost, endpoint, nil, gitlabGraphQLRequest{Query: query, Variables: vars}, &resp); err != nil {
-		slog.Warn("graphql: failed to fetch status for issue", "projectID", projectID, "iid", iid, "error", err)
-		return ""
+	// Use a custom request struct for the batch query
+	type batchResponse struct {
+		Data struct {
+			Project struct {
+				WorkItems struct {
+					Nodes []struct {
+						IID     string `json:"iid"`
+						Widgets []struct {
+							Type         string `json:"type"`
+							StatusWidget struct {
+								Status struct {
+									Name string `json:"name"`
+								} `json:"status"`
+							} `json:"statusWidget"`
+						} `json:"widgets"`
+					} `json:"nodes"`
+				} `json:"workItems"`
+			} `json:"project"`
+		} `json:"data"`
+		Errors []gitlabGraphQLErrors `json:"errors,omitempty"`
 	}
-	if len(resp.Errors) > 0 {
-		for _, e := range resp.Errors {
-			slog.Warn("graphql: status query error", "projectID", projectID, "iid", iid, "message", e.Message)
-		}
-		return ""
+	var resp batchResponse
+	endpoint := "/api/graphql"
+	if err := a.doJSON(ctx, http.MethodPost, endpoint, nil, struct {
+		Query     string                 `json:"query"`
+		Variables gitlabGraphQLVariables `json:"variables"`
+	}{Query: query, Variables: vars}, &resp); err != nil {
+		slog.Warn("graphql: batch status fetch failed", "projectID", projectID, "error", err)
+		return nil
 	}
-	nodes := resp.Data.Project.WorkItems.Nodes
-	if len(nodes) == 0 {
-		return ""
-	}
-	widgets := nodes[0].Widgets
-	for _, w := range widgets {
-		if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status.Name != "" {
-			return w.StatusWidget.Status.Name
-		}
-	}
-	return ""
-}
-
-// graphqlStatusFilterIssues uses the GraphQL API to enrich issues with Work Item status.
-// If status is non-empty, filters to only issues matching that status.
-// Returns the original slice if GraphQL fails (degrades gracefully).
-func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
-	if !a.checkGraphQLSupport() {
-		return issues
-	}
-	filterStatus := strings.TrimSpace(status)
-	filtered := make([]issue, 0, len(issues))
-	for _, iss := range issues {
-		ref := strings.TrimSpace(iss.References.Full)
-		if ref == "" {
-			continue
-		}
-		// Fetch and set status for enrichment.
-		fetched := a.graphqlFetchStatusForIssue(ctx, iss.ProjectID, iss.IID)
-		if fetched != "" {
-			iss.Status = fetched
-		}
-		// Only filter when a status filter is provided and we have a status to compare.
-		if filterStatus == "" || fetched == "" || strings.EqualFold(fetched, filterStatus) {
-			filtered = append(filtered, iss)
+	result := make(map[int64]string)
+	for _, node := range resp.Data.Project.WorkItems.Nodes {
+		iid, _ := strconv.ParseInt(node.IID, 10, 64)
+		for _, w := range node.Widgets {
+			if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status.Name != "" {
+				result[iid] = w.StatusWidget.Status.Name
+				break
+			}
 		}
 	}
-	return filtered
+	return result
 }
 
 func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]issue, error) {
@@ -944,7 +1002,10 @@ func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (i
 
 	// Enrich with Work Item status from GraphQL for sidebar and source details display.
 	if a.checkGraphQLSupport() {
-		iss.Status = a.graphqlFetchStatusForIssue(ctx, projectID, iid)
+		statuses := a.graphqlBatchFetchStatus(ctx, projectID, []string{strconv.FormatInt(iid, 10)})
+		if s, ok := statuses[iid]; ok {
+			iss.Status = s
+		}
 	}
 
 	return iss, nil
