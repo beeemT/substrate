@@ -168,7 +168,7 @@ func (i selectableItem) Title() string {
 }
 
 func (i selectableItem) Description() string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if i.item.Provider != "" {
 		parts = append(parts, strings.ToUpper(i.item.Provider))
 	}
@@ -177,6 +177,9 @@ func (i selectableItem) Description() string {
 	}
 	if i.item.State != "" {
 		parts = append(parts, i.item.State)
+	}
+	if i.item.Status != "" {
+		parts = append(parts, i.item.Status)
 	}
 	return strings.Join(parts, " · ")
 }
