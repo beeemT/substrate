@@ -134,12 +134,12 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 
 	// 2. Create services with shared bus
 	workItemSvc := service.NewSessionService(sm.transacter, bus)
-	workspaceSvc := service.NewWorkspaceService(sm.transacter)
+	workspaceSvc := service.NewWorkspaceService(sm.transacter, bus)
 	sessionSvc := service.NewTaskService(sm.transacter, bus)
 	planSvc := service.NewPlanService(sm.transacter, bus)
-	questionSvc := service.NewQuestionService(sm.transacter)
+	questionSvc := service.NewQuestionService(sm.transacter, bus)
 	instanceSvc := service.NewInstanceService(sm.transacter)
-	reviewSvc := service.NewReviewService(sm.transacter)
+	reviewSvc := service.NewReviewService(sm.transacter, bus)
 	eventSvc := service.NewEventService(sm.transacter)
 	ghPRSvc := service.NewGithubPRService(sm.transacter)
 	glMRSvc := service.NewGitlabMRService(sm.transacter)

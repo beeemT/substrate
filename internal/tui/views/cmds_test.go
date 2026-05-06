@@ -24,7 +24,7 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
-	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}})
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil)
 	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil)
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
@@ -74,7 +74,7 @@ func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
 
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
-	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}})
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil)
 	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, nil)
 
 	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}

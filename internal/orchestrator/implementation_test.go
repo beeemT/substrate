@@ -725,7 +725,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
 		nil,
 		nil,
 		nil, nil, // foreman, questionSvc
@@ -1231,7 +1231,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
@@ -1337,7 +1337,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, nil),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, nil),
 		service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus),
-		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil),
 		nil, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
@@ -1409,7 +1409,7 @@ func TestLoadCritiqueFeedback_NoImplSession(t *testing.T) {
 	)
 	svc := &ImplementationService{
 		sessionSvc: sessionSvc,
-		reviewSvc:  service.NewReviewService(repository.NoopTransacter{}),
+		reviewSvc:  service.NewReviewService(repository.NoopTransacter{}, nil),
 	}
 	result := svc.loadCritiqueFeedback(context.Background(), "sp-1")
 	if result != "" {

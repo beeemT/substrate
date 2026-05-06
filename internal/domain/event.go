@@ -45,9 +45,11 @@ const (
 	EventWorkItemCompleted    EventType = "work_item.completed"
 	EventWorkItemFailed       EventType = "work_item.failed"
 	EventWorkItemMerged       EventType = "work_item.merged"
+	EventWorkItemArchived     EventType = "work_item.archived"
 
 	// Workspace events
-	EventWorkspaceCreated EventType = "workspace.created"
+	EventWorkspaceCreated       EventType = "workspace.created"
+	EventWorkspaceStatusChanged EventType = "workspace.status_changed"
 
 	// Plan events
 	EventPlanGenerated          EventType = "plan.generated"
@@ -56,6 +58,8 @@ const (
 	EventPlanRejected           EventType = "plan.rejected"
 	EventPlanRevised            EventType = "plan.revised"
 	EventPlanFailed             EventType = "plan.failed"
+	EventPlanSuperseded         EventType = "plan.superseded"
+	EventPlanStatusChanged      EventType = "plan.status_changed"
 
 	// Sub-plan events
 	EventSubPlanStatusChanged EventType = "subplan.status_changed"
@@ -72,22 +76,28 @@ const (
 	EventAgentSessionFailed      EventType = "agent_session.failed"
 	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
 
+	EventAgentSessionStatusChanged EventType = "agent_session.status_changed"
+
 	// Agent session events (resumption lifecycle)
 	EventAgentSessionResumed EventType = "agent_session.resumed"
 
 	// Question events
 	EventAgentQuestionRaised   EventType = "agent_question.raised"
 	EventAgentQuestionAnswered EventType = "agent_question.answered"
+	EventQuestionStatusChanged EventType = "question.status_changed"
 
 	// Review events
-	EventReviewStarted           EventType = "review.started"
-	EventReviewCompleted         EventType = "review.completed"
-	EventCritiquesFound          EventType = "review.critiques_found"
-	EventReimplementationStarted EventType = "reimplementation.started"
-	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
-	EventPRReviewStateChanged    EventType = "pr.review_state_changed"
-	EventPRCIFailed              EventType = "pr.ci_failed"
-	EventPRMerged                EventType = "pr.merged"
+	EventReviewStarted            EventType = "review.started"
+	EventReviewCompleted          EventType = "review.completed"
+	EventCritiquesFound           EventType = "review.critiques_found"
+	EventReimplementationStarted  EventType = "reimplementation.started"
+	EventReviewArtifactRecorded   EventType = "review.artifact_recorded"
+	EventReviewCycleStatusChanged EventType = "review_cycle.status_changed"
+	EventCritiqueStatusChanged    EventType = "critique.status_changed"
+
+	EventPRReviewStateChanged EventType = "pr.review_state_changed"
+	EventPRCIFailed           EventType = "pr.ci_failed"
+	EventPRMerged             EventType = "pr.merged"
 
 	// Adapter error events
 	EventAdapterError EventType = "adapter.error"

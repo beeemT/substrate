@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"log/slog"
 	"encoding/json"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,7 +48,6 @@ func canTransition(from, to domain.SessionState) bool {
 	}
 	return slices.Contains(allowed, to)
 }
-
 
 // workItemPayload holds the JSON payload for work-item lifecycle events.
 type workItemPayload struct {
@@ -372,8 +371,10 @@ func stateToEventType(state domain.SessionState) domain.EventType {
 		return domain.EventWorkItemMerged
 	case domain.SessionFailed:
 		return domain.EventWorkItemFailed
+	case domain.SessionArchived:
+		return domain.EventWorkItemArchived
 	default:
-		return "" // SessionArchived and unknown states don't emit
+		return "" // unknown states don't emit
 	}
 }
 
@@ -517,7 +518,8 @@ func (s *SessionService) RetryFailedWorkItem(ctx context.Context, id string) err
 // Archive archives a terminal work item (completed, merged, or failed).
 // It captures the current state in PreviousState so it can be restored on unarchive.
 func (s *SessionService) Archive(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	var committed stateChangeEvent
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		item, err := res.Sessions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("work item", id)
@@ -532,12 +534,23 @@ func (s *SessionService) Archive(ctx context.Context, id string) error {
 		}
 
 		now := time.Now()
+		from := item.State
 		item.PreviousState = item.State
 		item.State = domain.SessionArchived
 		item.UpdatedAt = now
 
-		return res.Sessions.Update(ctx, item)
+		if err := res.Sessions.Update(ctx, item); err != nil {
+			return err
+		}
+		committed = stateChangeEvent{from: from, to: domain.SessionArchived, item: item}
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	s.emitStateChange(context.Background(), committed.from, committed.to, committed.item)
+	return nil
 }
 
 // Unarchive restores an archived work item to its PreviousState.

@@ -33,6 +33,14 @@ type planEventPayload struct {
 	SubPlanID  string `json:"sub_plan_id,omitempty"`
 }
 
+// planStatusChangedPayload holds the JSON payload for generic plan status changes.
+type planStatusChangedPayload struct {
+	WorkItemID string `json:"work_item_id"`
+	PlanID     string `json:"plan_id"`
+	From       string `json:"from"`
+	To         string `json:"to"`
+}
+
 // marshalJSONOrEmpty marshals v to JSON, returning "{}" on error.
 func marshalJSONOrEmpty(eventType string, v any) string {
 	b, err := json.Marshal(v)
@@ -133,25 +141,44 @@ func (s *PlanService) CreatePlan(ctx context.Context, plan domain.Plan) error {
 
 // TransitionPlan transitions a plan to a new status.
 func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.PlanStatus) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		plan, err := res.Plans.Get(ctx, id)
+	var plan domain.Plan
+	var from domain.PlanStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		p, err := res.Plans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
 
-		if !canTransitionPlan(plan.Status, to) {
+		if !canTransitionPlan(p.Status, to) {
 			return newInvalidTransitionError(
-				planStatusName(plan.Status),
+				planStatusName(p.Status),
 				planStatusName(to),
 				"plan",
 			)
 		}
 
-		plan.Status = to
-		plan.UpdatedAt = time.Now()
+		from = p.Status
+		p.Status = to
+		p.UpdatedAt = time.Now()
 
-		return res.Plans.Update(ctx, plan)
+		if err := res.Plans.Update(ctx, p); err != nil {
+			return err
+		}
+		plan = p
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanStatusChanged),
+		WorkspaceID: plan.WorkItemID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanStatusChanged), planStatusChangedPayload{WorkItemID: plan.WorkItemID, PlanID: plan.ID, From: string(from), To: string(to)}),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // SubmitForReview transitions a plan from draft to pending_review.
@@ -414,7 +441,8 @@ func (s *PlanService) AppendFAQ(ctx context.Context, entry domain.FAQEntry) erro
 // at most one active plan per work item. The old plan and its sub-plans remain in the
 // database for historical reference.
 func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan *domain.Plan, subPlans []domain.TaskPlan) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	var supersededWorkItemID string
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		if replacePlanID != "" {
 			old, err := res.Plans.Get(ctx, replacePlanID)
 			if err != nil {
@@ -426,6 +454,7 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 			if err := res.Plans.Update(ctx, old); err != nil {
 				return fmt.Errorf("supersede old plan: %w", err)
 			}
+			supersededWorkItemID = old.WorkItemID
 		}
 		if err := res.Plans.Create(ctx, *plan); err != nil {
 			return fmt.Errorf("create plan %s: %w", plan.ID, err)
@@ -437,6 +466,20 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	if supersededWorkItemID != "" {
+		Emit(s.eventBus, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventPlanSuperseded),
+			WorkspaceID: supersededWorkItemID,
+			Payload:     marshalJSONOrEmpty(string(domain.EventPlanSuperseded), planEventPayload{WorkItemID: supersededWorkItemID, PlanID: replacePlanID}),
+			CreatedAt:   time.Now(),
+		})
+	}
+	return nil
 }
 
 // SubPlan operations
@@ -531,7 +574,6 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 	})
 	return nil
 }
-
 
 // StartSubPlan transitions a sub-plan from pending to in_progress.
 func (s *PlanService) StartSubPlan(ctx context.Context, id string) error {

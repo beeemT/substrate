@@ -2,22 +2,40 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
 	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // QuestionService provides business logic for questions.
 type QuestionService struct {
 	transacter atomic.Transacter[repository.Resources]
+	eventBus   *event.Bus
 }
 
 // NewQuestionService creates a new QuestionService.
-func NewQuestionService(transacter atomic.Transacter[repository.Resources]) *QuestionService {
-	return &QuestionService{transacter: transacter}
+func NewQuestionService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *QuestionService {
+	return &QuestionService{transacter: transacter, eventBus: eventBus}
+}
+
+// questionEventPayload holds the JSON payload for question lifecycle events.
+type questionEventPayload struct {
+	QuestionID string `json:"question_id"`
+	SessionID  string `json:"session_id,omitempty"`
+	From       string `json:"from,omitempty"`
+	To         string `json:"to,omitempty"`
+}
+
+// marshalQuestionPayload serializes a question event payload to JSON.
+func marshalQuestionPayload(questionID, sessionID, from, to string) string {
+	p := questionEventPayload{QuestionID: questionID, SessionID: sessionID, From: from, To: to}
+	b, _ := json.Marshal(p)
+	return string(b)
 }
 
 // Question state transitions
@@ -87,24 +105,43 @@ func (s *QuestionService) Create(ctx context.Context, q domain.Question) error {
 
 // Transition transitions a question to a new status.
 func (s *QuestionService) Transition(ctx context.Context, id string, to domain.QuestionStatus) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		q, err := res.Questions.Get(ctx, id)
+	var q domain.Question
+	var from domain.QuestionStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		question, err := res.Questions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("question", id)
 		}
 
-		if !canTransitionQuestion(q.Status, to) {
+		if !canTransitionQuestion(question.Status, to) {
 			return newInvalidTransitionError(
-				questionStatusName(q.Status),
+				questionStatusName(question.Status),
 				questionStatusName(to),
 				"question",
 			)
 		}
 
-		q.Status = to
+		from = question.Status
+		question.Status = to
 
-		return res.Questions.Update(ctx, q)
+		if err := res.Questions.Update(ctx, question); err != nil {
+			return err
+		}
+		q = question
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventQuestionStatusChanged),
+		WorkspaceID: "",
+		Payload:     marshalQuestionPayload(q.ID, q.AgentSessionID, string(from), string(to)),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // Answer transitions a question from pending to answered and records the answer.
@@ -114,29 +151,48 @@ func (s *QuestionService) Answer(ctx context.Context, id string, answer string, 
 
 // AnswerWithData records a normalized answer and preserves structured answer data when present.
 func (s *QuestionService) AnswerWithData(ctx context.Context, id string, answer domain.AgentQuestionAnswer, answeredBy string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		q, err := res.Questions.Get(ctx, id)
+	var q domain.Question
+	var from domain.QuestionStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		question, err := res.Questions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("question", id)
 		}
 
-		if !canTransitionQuestion(q.Status, domain.QuestionAnswered) {
+		if !canTransitionQuestion(question.Status, domain.QuestionAnswered) {
 			return newInvalidTransitionError(
-				questionStatusName(q.Status),
+				questionStatusName(question.Status),
 				questionStatusName(domain.QuestionAnswered),
 				"question",
 			)
 		}
 
+		from = question.Status
 		now := time.Now()
-		q.Status = domain.QuestionAnswered
-		q.Answer = answer.Text
-		q.AnswerData = &answer
-		q.AnsweredBy = answeredBy
-		q.AnsweredAt = &now
+		question.Status = domain.QuestionAnswered
+		question.Answer = answer.Text
+		question.AnswerData = &answer
+		question.AnsweredBy = answeredBy
+		question.AnsweredAt = &now
 
-		return res.Questions.Update(ctx, q)
+		if err := res.Questions.Update(ctx, question); err != nil {
+			return err
+		}
+		q = question
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventQuestionStatusChanged),
+		WorkspaceID: "",
+		Payload:     marshalQuestionPayload(q.ID, q.AgentSessionID, string(from), string(domain.QuestionAnswered)),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // Escalate transitions a question from pending to escalated.
@@ -147,23 +203,42 @@ func (s *QuestionService) Escalate(ctx context.Context, id string) error {
 // EscalateWithProposal transitions a question from pending to escalated and records
 // the Foreman's proposed answer so the TUI can pre-fill the human review form.
 func (s *QuestionService) EscalateWithProposal(ctx context.Context, id string, proposedAnswer string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		q, err := res.Questions.Get(ctx, id)
+	var q domain.Question
+	var from domain.QuestionStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		question, err := res.Questions.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("question", id)
 		}
-		if !canTransitionQuestion(q.Status, domain.QuestionEscalated) {
+		if !canTransitionQuestion(question.Status, domain.QuestionEscalated) {
 			return newInvalidTransitionError(
-				questionStatusName(q.Status),
+				questionStatusName(question.Status),
 				questionStatusName(domain.QuestionEscalated),
 				"question",
 			)
 		}
-		q.Status = domain.QuestionEscalated
-		q.ProposedAnswer = proposedAnswer
+		from = question.Status
+		question.Status = domain.QuestionEscalated
+		question.ProposedAnswer = proposedAnswer
 
-		return res.Questions.Update(ctx, q)
+		if err := res.Questions.Update(ctx, question); err != nil {
+			return err
+		}
+		q = question
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventQuestionStatusChanged),
+		WorkspaceID: "",
+		Payload:     marshalQuestionPayload(q.ID, q.AgentSessionID, string(from), string(domain.QuestionEscalated)),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // UpdateContext updates the context for a pending question.

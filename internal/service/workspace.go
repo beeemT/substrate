@@ -2,22 +2,40 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
 	"github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 )
 
 // WorkspaceService provides business logic for workspaces.
 type WorkspaceService struct {
 	transacter atomic.Transacter[repository.Resources]
+	eventBus   *event.Bus
 }
 
 // NewWorkspaceService creates a new WorkspaceService.
-func NewWorkspaceService(transacter atomic.Transacter[repository.Resources]) *WorkspaceService {
-	return &WorkspaceService{transacter: transacter}
+func NewWorkspaceService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *WorkspaceService {
+	return &WorkspaceService{transacter: transacter, eventBus: eventBus}
+}
+
+// workspaceEventPayload holds the JSON payload for workspace lifecycle events.
+type workspaceEventPayload struct {
+	WorkspaceID string `json:"workspace_id"`
+	Status      string `json:"status,omitempty"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to,omitempty"`
+}
+
+// marshalWorkspacePayload serializes a workspace event payload to JSON.
+func marshalWorkspacePayload(workspaceID, status, from, to string) string {
+	p := workspaceEventPayload{WorkspaceID: workspaceID, Status: status, From: from, To: to}
+	b, _ := json.Marshal(p)
+	return string(b)
 }
 
 // Workspace state transitions
@@ -61,32 +79,62 @@ func (s *WorkspaceService) Create(ctx context.Context, ws domain.Workspace) erro
 	ws.CreatedAt = now
 	ws.UpdatedAt = now
 
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		return res.Workspaces.Create(ctx, ws)
+	}); err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventWorkspaceCreated),
+		WorkspaceID: ws.ID,
+		Payload:     marshalWorkspacePayload(ws.ID, string(ws.Status), "", ""),
+		CreatedAt:   time.Now(),
 	})
+	return nil
 }
 
 // Transition transitions a workspace to a new status.
 func (s *WorkspaceService) Transition(ctx context.Context, id string, to domain.WorkspaceStatus) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		ws, err := res.Workspaces.Get(ctx, id)
+	var ws domain.Workspace
+	var from domain.WorkspaceStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		w, err := res.Workspaces.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("workspace", id)
 		}
 
-		if !canTransitionWorkspace(ws.Status, to) {
+		if !canTransitionWorkspace(w.Status, to) {
 			return newInvalidTransitionError(
-				workspaceStatusName(ws.Status),
+				workspaceStatusName(w.Status),
 				workspaceStatusName(to),
 				"workspace",
 			)
 		}
 
-		ws.Status = to
-		ws.UpdatedAt = time.Now()
+		from = w.Status
+		w.Status = to
+		w.UpdatedAt = time.Now()
 
-		return res.Workspaces.Update(ctx, ws)
+		if err := res.Workspaces.Update(ctx, w); err != nil {
+			return err
+		}
+		ws = w
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventWorkspaceStatusChanged),
+		WorkspaceID: ws.ID,
+		Payload:     marshalWorkspacePayload(ws.ID, string(ws.Status), string(from), string(to)),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // MarkReady transitions a workspace from creating to ready.

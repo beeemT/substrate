@@ -11,7 +11,7 @@ import (
 func TestWorkspaceService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkspaceRepository()
-	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
+	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
 
 	t.Run("creates workspace with creating status", func(t *testing.T) {
 		ws := domain.Workspace{
@@ -50,7 +50,7 @@ func TestWorkspaceService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkspaceRepository()
-			svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
+			svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
 
 			ws := domain.Workspace{
 				ID:       "ws-test",
@@ -95,7 +95,7 @@ func TestWorkspaceService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockWorkspaceRepository()
-			svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
+			svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
 
 			ws := domain.Workspace{
 				ID:       "ws-test",
@@ -119,7 +119,7 @@ func TestWorkspaceService_InvalidTransitions(t *testing.T) {
 func TestWorkspaceService_ConvenienceMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkspaceRepository()
-	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
+	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
 
 	t.Run("MarkReady", func(t *testing.T) {
 		ws := domain.Workspace{ID: "ws-1", Status: domain.WorkspaceCreating}
@@ -173,7 +173,7 @@ func TestWorkspaceService_ConvenienceMethods(t *testing.T) {
 func TestWorkspaceService_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockWorkspaceRepository()
-	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}})
+	svc := NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, nil)
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")

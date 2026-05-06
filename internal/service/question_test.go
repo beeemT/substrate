@@ -11,7 +11,7 @@ import (
 func TestQuestionService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 	t.Run("creates question with pending status", func(t *testing.T) {
 		q := domain.Question{
@@ -67,7 +67,7 @@ func TestQuestionService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockQuestionRepository()
-			svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+			svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 			q := domain.Question{
 				ID:             "q-test",
@@ -109,7 +109,7 @@ func TestQuestionService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockQuestionRepository()
-			svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+			svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 			q := domain.Question{
 				ID:             "q-test",
@@ -133,7 +133,7 @@ func TestQuestionService_InvalidTransitions(t *testing.T) {
 func TestQuestionService_Answer(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 	q := domain.Question{
 		ID:             "q-1",
@@ -165,7 +165,7 @@ func TestQuestionService_Answer(t *testing.T) {
 func TestQuestionService_Escalate(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 	q := domain.Question{
 		ID:             "q-1",
@@ -188,7 +188,7 @@ func TestQuestionService_Escalate(t *testing.T) {
 func TestQuestionService_UpdateContext(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockQuestionRepository()
-	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+	svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 	t.Run("updates context for pending question", func(t *testing.T) {
 		q := domain.Question{
@@ -235,7 +235,7 @@ func TestQuestionService_HasPendingQuestions(t *testing.T) {
 
 	t.Run("has pending", func(t *testing.T) {
 		repo := NewMockQuestionRepository()
-		svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+		svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 		repo.questions["q-1"] = domain.Question{ID: "q-1", AgentSessionID: "session-1", Status: domain.QuestionPending}
 		repo.questions["q-2"] = domain.Question{ID: "q-2", AgentSessionID: "session-1", Status: domain.QuestionAnswered}
@@ -252,7 +252,7 @@ func TestQuestionService_HasPendingQuestions(t *testing.T) {
 
 	t.Run("no pending", func(t *testing.T) {
 		repo := NewMockQuestionRepository()
-		svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}})
+		svc := NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: repo}}, nil)
 
 		repo.questions["q-1"] = domain.Question{ID: "q-1", AgentSessionID: "session-2", Status: domain.QuestionAnswered}
 		repo.bySession["session-2"] = []string{"q-1"}

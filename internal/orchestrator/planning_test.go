@@ -373,7 +373,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 
 	registry := NewSessionRegistry()
 	svc := &PlanningService{
-		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}),
+		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, nil),
 		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil),
 		registry:    registry,
 	}
@@ -926,7 +926,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
 
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
@@ -1045,7 +1045,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
 
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
@@ -1104,7 +1104,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	eventRepo := &planTestEventRepo{}
@@ -1205,7 +1205,7 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, nil)
 	sessionRepo := newMockSessionRepo()
 	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, nil)
 	eventRepo := &planTestEventRepo{}

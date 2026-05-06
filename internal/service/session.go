@@ -38,6 +38,28 @@ func marshalTaskPayload(task domain.Task) string {
 	return string(b)
 }
 
+// taskStatusChangedPayload holds the JSON payload for generic task status changes.
+type taskStatusChangedPayload struct {
+	Task       domain.Task `json:"session"`
+	WorkItemID string      `json:"work_item_id"`
+	SessionID  string      `json:"session_id"`
+	From       string      `json:"from"`
+	To         string      `json:"to"`
+}
+
+// marshalTaskStatusChangedPayload serializes a generic task status change payload.
+func marshalTaskStatusChangedPayload(task domain.Task, from, to domain.TaskStatus) string {
+	p := taskStatusChangedPayload{
+		Task:       task,
+		WorkItemID: task.WorkItemID,
+		SessionID:  task.ID,
+		From:       string(from),
+		To:         string(to),
+	}
+	b, _ := json.Marshal(p)
+	return string(b)
+}
+
 // NewTaskService creates a new TaskService.
 func NewTaskService(transacter atomic.Transacter[repository.Resources], eventBus *event.Bus) *TaskService {
 	return &TaskService{transacter: transacter, eventBus: eventBus}
@@ -178,25 +200,44 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 
 // Transition transitions a task to a new status.
 func (s *TaskService) Transition(ctx context.Context, id string, to domain.TaskStatus) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	var from domain.TaskStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		t, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		if !canTransitionTask(task.Status, to) {
+		if !canTransitionTask(t.Status, to) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(t.Status),
 				sessionStatusName(to),
 				"task",
 			)
 		}
 
-		task.Status = to
-		task.UpdatedAt = time.Now()
+		from = t.Status
+		t.Status = to
+		t.UpdatedAt = time.Now()
 
-		return res.Tasks.Update(ctx, task)
+		if err := res.Tasks.Update(ctx, t); err != nil {
+			return err
+		}
+		task = t
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStatusChanged),
+		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskStatusChangedPayload(task, from, to),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // Start transitions a task from pending to running and emits EventAgentSessionStarted
@@ -345,27 +386,46 @@ func (s *TaskService) Resume(ctx context.Context, id string) error {
 // FollowUpRestart transitions a completed task back to running for a follow-up session.
 // Unlike Start(), this preserves the original StartedAt and clears CompletedAt.
 func (s *TaskService) FollowUpRestart(ctx context.Context, id string) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+	var task domain.Task
+	var from domain.TaskStatus
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		t, err := res.Tasks.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("task", id)
 		}
 
-		if !canTransitionTask(task.Status, domain.AgentSessionRunning) {
+		if !canTransitionTask(t.Status, domain.AgentSessionRunning) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(t.Status),
 				sessionStatusName(domain.AgentSessionRunning),
 				"task",
 			)
 		}
 
+		from = t.Status
 		now := time.Now()
-		task.Status = domain.AgentSessionRunning
-		task.CompletedAt = nil
-		task.UpdatedAt = now
+		t.Status = domain.AgentSessionRunning
+		t.CompletedAt = nil
+		t.UpdatedAt = now
 
-		return res.Tasks.Update(ctx, task)
+		if err := res.Tasks.Update(ctx, t); err != nil {
+			return err
+		}
+		task = t
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStatusChanged),
+		WorkspaceID: task.WorkspaceID,
+		Payload:     marshalTaskStatusChangedPayload(task, from, domain.AgentSessionRunning),
+		CreatedAt:   time.Now(),
+	})
+	return nil
 }
 
 // UpdateResumeInfo stores harness-specific resume data on the task record.
