@@ -469,6 +469,9 @@ func renderSourceItemMetadata(st styles.Styles, item domain.SourceSummary, width
 	}
 	add("Ref", item.Ref, false)
 	add("State", item.State, false)
+	if item.Status != "" {
+		add("Status", item.Status, false)
+	}
 	add("Container", item.Container, false)
 	if len(item.Labels) > 0 {
 		add("Labels", strings.Join(item.Labels, ", "), false)
@@ -551,6 +554,11 @@ func hydrateSourceSummary(session *domain.Session, summary domain.SourceSummary,
 	}
 	if strings.TrimSpace(hydrated.State) == "" {
 		hydrated.State = sessionExternalState(session)
+	}
+	if strings.TrimSpace(hydrated.Status) == "" {
+		if s := sessionExternalState(session); s != "" && s != hydrated.State {
+			hydrated.Status = s
+		}
 	}
 	if len(hydrated.Labels) == 0 && len(session.Labels) > 0 {
 		hydrated.Labels = append([]string(nil), session.Labels...)
