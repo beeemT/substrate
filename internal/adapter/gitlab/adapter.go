@@ -56,12 +56,12 @@ type httpDoer interface {
 type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
-	cfg             config.GitlabConfig
-	baseURL         string
-	client          httpDoer
-	username        string       // cached authenticated username for "mine" scope checks
-	usernameMu      sync.RWMutex // protects username cache
-	graphqlMu       sync.RWMutex // protects graphqlSupported
+	cfg              config.GitlabConfig
+	baseURL          string
+	client           httpDoer
+	username         string       // cached authenticated username for "mine" scope checks
+	usernameMu       sync.RWMutex // protects username cache
+	graphqlMu        sync.RWMutex // protects graphqlSupported
 	graphqlSupported bool         // true once we confirm /api/graphql responds with valid JSON
 }
 
@@ -160,18 +160,19 @@ type graphqlStatusResponse struct {
 
 // graphqlWorkItem is a lightweight Work Item for status queries.
 type graphqlWorkItem struct {
-	IID     string                `json:"iid"`
-	Widgets []graphqlStatusWidget `json:"widgets"`
-}
-
-// graphqlStatusWidget extracts the status from the workItems widget.
-type graphqlStatusWidget struct {
-	Type         string `json:"type"`
-	StatusWidget struct {
+	IID     string `json:"iid"`
+	Widgets []struct {
+		Type   string `json:"type"`
 		Status struct {
 			Name string `json:"name"`
 		} `json:"status"`
-	} `json:"statusWidget"`
+	} `json:"widgets"`
+}
+type graphqlStatusWidget struct {
+	Type   string `json:"type"`
+	Status struct {
+		Name string `json:"name"`
+	} `json:"status"`
 }
 
 // statusEnrichment holds status per issue reference for batch enrichment.
@@ -737,7 +738,14 @@ func (a *GitlabAdapter) graphqlStatusEnrichment(ctx context.Context, issues []is
 		for i, iss := range projIssues {
 			iids[i] = strconv.FormatInt(iss.IID, 10)
 		}
-		statuses := a.graphqlBatchFetchStatus(ctx, projectID, iids)
+		// Extract project path from first issue's references (e.g., "group/project#123" -> "group/project")
+		projectPath := ""
+		if len(projIssues) > 0 && projIssues[0].References.Full != "" {
+			if idx := strings.LastIndex(projIssues[0].References.Full, "#"); idx > 0 {
+				projectPath = projIssues[0].References.Full[:idx]
+			}
+		}
+		statuses := a.graphqlBatchFetchStatus(ctx, projectPath, projectID, iids)
 		for _, iss := range projIssues {
 			if s, ok := statuses[iss.IID]; ok {
 				enrich[iss.References.Full] = s
@@ -781,7 +789,14 @@ func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []
 		for j, idx := range indices {
 			iids[j] = strconv.FormatInt(issues[idx].IID, 10)
 		}
-		statuses := a.graphqlBatchFetchStatus(ctx, projectID, iids)
+		// Extract project path from first issue's references
+		projectPath := ""
+		if len(indices) > 0 && issues[indices[0]].References.Full != "" {
+			if idx := strings.LastIndex(issues[indices[0]].References.Full, "#"); idx > 0 {
+				projectPath = issues[indices[0]].References.Full[:idx]
+			}
+		}
+		statuses := a.graphqlBatchFetchStatus(ctx, projectPath, projectID, iids)
 		for _, idx := range indices {
 			iss := &issues[idx]
 			if s, ok := statuses[iss.IID]; ok {
@@ -804,7 +819,8 @@ func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []
 }
 
 // graphqlBatchFetchStatus fetches status for multiple IIDs in a single GraphQL query.
-func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectID int64, iids []string) map[int64]string {
+// projectPath is like "group/project" (e.g., "justtrack/frontend/paket").
+func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectPath string, projectID int64, iids []string) map[int64]string {
 	if len(iids) == 0 {
 		return nil
 	}
@@ -823,10 +839,6 @@ func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectID i
 			}
 		}
 	}`
-	vars := gitlabGraphQLVariables{
-		FullPath: fmt.Sprintf("gid://gitlab/Project/%d", projectID),
-		IID:      "", // unused but required for struct
-	}
 	// Use a custom request struct for the batch query
 	type batchResponse struct {
 		Data struct {
@@ -835,12 +847,10 @@ func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectID i
 					Nodes []struct {
 						IID     string `json:"iid"`
 						Widgets []struct {
-							Type         string `json:"type"`
-							StatusWidget struct {
-								Status struct {
-									Name string `json:"name"`
-								} `json:"status"`
-							} `json:"statusWidget"`
+							Type   string `json:"type"`
+							Status struct {
+								Name string `json:"name"`
+							} `json:"status"`
 						} `json:"widgets"`
 					} `json:"nodes"`
 				} `json:"workItems"`
@@ -848,21 +858,40 @@ func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectID i
 		} `json:"data"`
 		Errors []gitlabGraphQLErrors `json:"errors,omitempty"`
 	}
+
 	var resp batchResponse
 	endpoint := "/api/graphql"
-	if err := a.doJSON(ctx, http.MethodPost, endpoint, nil, struct {
-		Query     string                 `json:"query"`
-		Variables gitlabGraphQLVariables `json:"variables"`
-	}{Query: query, Variables: vars}, &resp); err != nil {
+	req := struct {
+		Query     string `json:"query"`
+		Variables struct {
+			FullPath string   `json:"fullPath"`
+			IIDs     []string `json:"iids"`
+		} `json:"variables"`
+	}{
+		Query: query,
+		Variables: struct {
+			FullPath string   `json:"fullPath"`
+			IIDs     []string `json:"iids"`
+		}{
+			FullPath: projectPath,
+			IIDs:     iids,
+		},
+	}
+	if err := a.doJSON(ctx, http.MethodPost, endpoint, nil, req, &resp); err != nil {
 		slog.Warn("graphql: batch status fetch failed", "projectID", projectID, "error", err)
 		return nil
+	}
+	if len(resp.Errors) > 0 {
+		for _, e := range resp.Errors {
+			slog.Warn("graphql: batch errors", "projectID", projectID, "message", e.Message)
+		}
 	}
 	result := make(map[int64]string)
 	for _, node := range resp.Data.Project.WorkItems.Nodes {
 		iid, _ := strconv.ParseInt(node.IID, 10, 64)
 		for _, w := range node.Widgets {
-			if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status.Name != "" {
-				result[iid] = w.StatusWidget.Status.Name
+			if w.Type == "STATUS" {
+				result[iid] = w.Status.Name
 				break
 			}
 		}
@@ -890,6 +919,14 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	// If a status filter is requested, also filter to matching statuses.
 	filterStatus := strings.TrimSpace(opts.Status)
 	issues = a.graphqlStatusFilterIssues(ctx, issues, filterStatus)
+
+	// Enrich issues with Work Item status for UI display (subtitle, details, etc.)
+	enrich := a.graphqlStatusEnrichment(ctx, issues)
+	for i := range issues {
+		if s, ok := enrich[issues[i].References.Full]; ok {
+			issues[i].Status = s
+		}
+	}
 
 	return issues, nil
 }
@@ -1001,8 +1038,10 @@ func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (i
 	}
 
 	// Enrich with Work Item status from GraphQL for sidebar and source details display.
+	// For fetchIssue we can't easily get the project path, so we use the project ID.
+	// GraphQL should accept the numeric ID or the GID.
 	if a.checkGraphQLSupport() {
-		statuses := a.graphqlBatchFetchStatus(ctx, projectID, []string{strconv.FormatInt(iid, 10)})
+		statuses := a.graphqlBatchFetchStatus(ctx, strconv.FormatInt(projectID, 10), projectID, []string{strconv.FormatInt(iid, 10)})
 		if s, ok := statuses[iid]; ok {
 			iss.Status = s
 		}
