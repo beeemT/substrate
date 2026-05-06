@@ -732,7 +732,8 @@ func sessionExternalState(session *domain.Session) string {
 	if session == nil {
 		return ""
 	}
-	for _, key := range []string{"state", "linear_state_name", "linear_project_state", "linear_initiative_status", "tracker_state"} {
+	// Prefer tracker_state (enriched via GraphQL) over raw state from REST APIs.
+	for _, key := range []string{"tracker_state", "state", "linear_state_name", "linear_project_state", "linear_initiative_status"} {
 		if value := sessionMetadataString(session.Metadata, key); value != "" {
 			return value
 		}
