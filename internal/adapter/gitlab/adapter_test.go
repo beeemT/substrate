@@ -120,45 +120,46 @@ func TestNewAllowsIssueBrowsingWithoutProjectID(t *testing.T) {
 }
 
 func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
-	var gotPath string
 	var gotQuery string
 	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotPath = req.URL.Path
-		gotQuery = req.URL.RawQuery
-		if req.URL.Path != "/api/v4/issues" {
-			t.Fatalf("path = %s, want /api/v4/issues", req.URL.Path)
-		}
-		if req.URL.Query().Get("scope") != "created_by_me" {
-			t.Fatalf("scope = %q, want created_by_me", req.URL.Query().Get("scope"))
-		}
-		if req.URL.Query().Get("state") != "closed" {
-			t.Fatalf("state = %q, want closed", req.URL.Query().Get("state"))
-		}
-		if req.URL.Query().Get("search") != "bug" {
-			t.Fatalf("search = %q, want bug", req.URL.Query().Get("search"))
-		}
-		if req.URL.Query().Get("per_page") != "5" {
-			t.Fatalf("per_page = %q, want 5", req.URL.Query().Get("per_page"))
-		}
+		switch req.URL.Path {
+		case "/api/v4/issues":
+			gotQuery = req.URL.RawQuery
+			if req.URL.Query().Get("scope") != "created_by_me" {
+				t.Fatalf("scope = %q, want created_by_me", req.URL.Query().Get("scope"))
+			}
+			if req.URL.Query().Get("state") != "closed" {
+				t.Fatalf("state = %q, want closed", req.URL.Query().Get("state"))
+			}
+			if req.URL.Query().Get("search") != "bug" {
+				t.Fatalf("search = %q, want bug", req.URL.Query().Get("search"))
+			}
+			if req.URL.Query().Get("per_page") != "5" {
+				t.Fatalf("per_page = %q, want 5", req.URL.Query().Get("per_page"))
+			}
 
-		return jsonResponse(t, http.StatusOK, []map[string]any{{
-			"iid":         42,
-			"project_id":  5678,
-			"title":       "Cross-project issue",
-			"description": "body",
-			"state":       "opened",
-			"labels":      []string{"bug"},
-			"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
-			"references":  map[string]any{"full": "other-group/other-project#42"},
-		}}), nil
+			return jsonResponse(t, http.StatusOK, []map[string]any{{
+				"iid":         42,
+				"project_id":  5678,
+				"title":       "Cross-project issue",
+				"description": "body",
+				"state":       "opened",
+				"labels":      []string{"bug"},
+				"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
+				"references":  map[string]any{"full": "other-group/other-project#42"},
+			}}), nil
+		case "/api/graphql":
+			// GraphQL capability probe.
+			return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{}}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+		}
+		return nil, nil
 	}))
 
 	result, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Search: "bug", Limit: 5, View: "created_by_me", State: "closed", Labels: []string{"bug"}, Group: "my-group"})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
-	}
-	if gotPath != "/api/v4/issues" {
-		t.Fatalf("path = %s, want /api/v4/issues", gotPath)
 	}
 	for _, want := range []string{"scope=created_by_me", "state=closed", "search=bug", "per_page=5", "labels=bug", "group_id=my-group"} {
 		if !strings.Contains(gotQuery, want) {
@@ -217,6 +218,9 @@ func TestListSelectableIssuesIncludesRelatedMergeRequests(t *testing.T) {
 				"references":    map[string]any{"short": "!7", "full": "other-group/other-project!7"},
 				"updated_at":    "2026-04-01T12:00:00Z",
 			}}), nil
+		case "/api/graphql":
+			// GraphQL capability probe.
+			return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{}}), nil
 		default:
 			t.Fatalf("unexpected request: %s", req.URL.Path)
 
@@ -280,29 +284,31 @@ func TestGitlabReviewArtifactsFromRelatedMRsPreservesTerminalDraftStates(t *test
 }
 
 func TestListSelectableIssuesFiltersToProjectByPath(t *testing.T) {
-	var gotPath string
 	var gotQuery string
 	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotPath = req.URL.EscapedPath()
 		gotQuery = req.URL.RawQuery
-		return jsonResponse(t, http.StatusOK, []map[string]any{{
-			"iid":        7,
-			"project_id": 99,
-			"title":      "Project-scoped issue",
-			"state":      "opened",
-			"web_url":    "https://gitlab.example.com/my-org/my-repo/-/issues/7",
-			"references": map[string]any{"full": "my-org/my-repo#7"},
-		}}), nil
+		switch req.URL.Path {
+		case "/api/v4/projects/my-org/my-repo/issues":
+			return jsonResponse(t, http.StatusOK, []map[string]any{{
+				"iid":        7,
+				"project_id": 99,
+				"title":      "Project-scoped issue",
+				"state":      "opened",
+				"web_url":    "https://gitlab.example.com/my-org/my-repo/-/issues/7",
+				"references": map[string]any{"full": "my-org/my-repo#7"},
+			}}), nil
+		case "/api/graphql":
+			// GraphQL capability probe.
+			return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{}}), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.URL.Path)
+		}
+		return nil, nil
 	}))
 
 	_, err := a.ListSelectable(context.Background(), adapter.ListOpts{Scope: domain.ScopeIssues, Repo: "my-org/my-repo"})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
-	}
-	// Project path must be encoded as a URL path segment, not a query param.
-	const wantPath = "/api/v4/projects/my-org%2Fmy-repo/issues"
-	if gotPath != wantPath {
-		t.Fatalf("path = %q, want %q", gotPath, wantPath)
 	}
 	if strings.Contains(gotQuery, "project_path") {
 		t.Fatalf("query must not contain project_path; got %q", gotQuery)

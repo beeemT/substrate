@@ -781,24 +781,27 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 	return ""
 }
 
-// graphqlStatusFilterIssues uses the GraphQL API to server-side filter issues by status.
+// graphqlStatusFilterIssues uses the GraphQL API to enrich issues with Work Item status.
+// If status is non-empty, filters to only issues matching that status.
 // Returns the original slice if GraphQL fails (degrades gracefully).
 func (a *GitlabAdapter) graphqlStatusFilterIssues(ctx context.Context, issues []issue, status string) []issue {
 	if !a.checkGraphQLSupport() {
 		return issues
 	}
+	filterStatus := strings.TrimSpace(status)
 	filtered := make([]issue, 0, len(issues))
 	for _, iss := range issues {
 		ref := strings.TrimSpace(iss.References.Full)
 		if ref == "" {
 			continue
 		}
-		if strings.TrimSpace(a.cfg.Token) == "" {
-			return issues
-		}
+		// Fetch and set status for enrichment.
 		fetched := a.graphqlFetchStatusForIssue(ctx, iss.ProjectID, iss.IID)
-		if fetched != "" && strings.EqualFold(fetched, status) {
+		if fetched != "" {
 			iss.Status = fetched
+		}
+		// Only filter when a status filter is provided and we have a status to compare.
+		if filterStatus == "" || fetched == "" || strings.EqualFold(fetched, filterStatus) {
 			filtered = append(filtered, iss)
 		}
 	}
@@ -821,10 +824,10 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		return nil, err
 	}
 
-	// If a status filter is requested, use GraphQL for server-side filtering.
-	if strings.TrimSpace(opts.Status) != "" {
-		issues = a.graphqlStatusFilterIssues(ctx, issues, opts.Status)
-	}
+	// Enrich all issues with Work Item status from GraphQL for display.
+	// If a status filter is requested, also filter to matching statuses.
+	filterStatus := strings.TrimSpace(opts.Status)
+	issues = a.graphqlStatusFilterIssues(ctx, issues, filterStatus)
 
 	return issues, nil
 }
