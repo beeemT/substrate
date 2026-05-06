@@ -168,7 +168,9 @@ type graphqlWorkItem struct {
 type graphqlStatusWidget struct {
 	Type         string `json:"type"`
 	StatusWidget struct {
-		Status string `json:"status"`
+		Status struct {
+			Name string `json:"name"`
+		} `json:"status"`
 	} `json:"statusWidget"`
 }
 
@@ -746,7 +748,9 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 					widgets {
 						type
 						... on WorkItemWidgetStatus {
-							status
+							status {
+								name
+							}
 						}
 					}
 				}
@@ -774,8 +778,8 @@ func (a *GitlabAdapter) graphqlFetchStatusForIssue(ctx context.Context, projectI
 	}
 	widgets := nodes[0].Widgets
 	for _, w := range widgets {
-		if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status != "" {
-			return w.StatusWidget.Status
+		if w.Type == "WORK_ITEM_STATUS" && w.StatusWidget.Status.Name != "" {
+			return w.StatusWidget.Status.Name
 		}
 	}
 	return ""
