@@ -3218,14 +3218,15 @@ func (a *App) quitCmd() tea.Cmd {
 
 func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 	entry := SidebarEntry{
-		Kind:         SidebarEntryWorkItem,
-		WorkItemID:   wi.ID,
-		ExternalID:   wi.ExternalID,
-		Source:       wi.Source,
-		Title:        wi.Title,
-		State:        wi.State,
-		LastActivity: wi.UpdatedAt,
-		CreatedAt:    wi.CreatedAt,
+		Kind:            SidebarEntryWorkItem,
+		WorkItemID:      wi.ID,
+		ExternalID:      wi.ExternalID,
+		Source:          wi.Source,
+		Title:           wi.Title,
+		State:           wi.State,
+		LastActivity:    wi.UpdatedAt,
+		CreatedAt:       wi.CreatedAt,
+		WorkItemStatus:  sessionExternalState(&wi),
 	}
 	// For GitLab sessions the canonical ExternalID encodes a numeric project ID
 	// (e.g. "gl:issue:1234#42") which is meaningless to users. Derive a

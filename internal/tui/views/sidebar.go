@@ -86,6 +86,7 @@ type SidebarEntry struct {
 	ArtifactAggregateReviewState string // "approved" | "changes_requested" | "" (none)
 	ArtifactAggregateCIState     string // "success" | "failure" | "in_progress" | "" (none)
 	GroupTitle                   string
+	WorkItemStatus               string // GitLab Work Item status from GraphQL (e.g. "in_progress", "completed")
 }
 
 func (e SidebarEntry) titlePrefix() string {
@@ -327,6 +328,10 @@ func (e SidebarEntry) Subtitle() string {
 		status = "Archived"
 	}
 	if e.Kind != SidebarEntrySessionHistory {
+		// Append Work Item status (e.g., "Implementing  ·  in_progress")
+		if e.Kind == SidebarEntryWorkItem && e.WorkItemStatus != "" {
+			return status + "  ·  " + e.WorkItemStatus
+		}
 		return status
 	}
 	parts := []string{status}
