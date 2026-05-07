@@ -164,14 +164,15 @@ type LinearConfig struct {
 }
 
 type GitlabConfig struct {
-	TokenRef            string              `yaml:"token_ref"` // keychain reference for GitLab REST API
-	Token               string              `yaml:"-"`
-	BaseURL             string              `yaml:"base_url"`      // default: https://gitlab.com
-	Assignee            string              `yaml:"assignee"`      // username filter for Watch
-	PollInterval        string              `yaml:"poll_interval"` // default: 5m
-	StateMappings       map[string]string   `yaml:"state_mappings"`
-	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
-	IssueCommentScope   IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
+	TokenRef              string              `yaml:"token_ref"` // keychain reference for GitLab REST API
+	Token                 string              `yaml:"-"`
+	BaseURL               string              `yaml:"base_url"`                // default: https://gitlab.com
+	Assignee              string              `yaml:"assignee"`                // username filter for Watch
+	PollInterval          string              `yaml:"poll_interval"`           // default: 5m
+	StatusRefreshInterval string              `yaml:"status_refresh_interval"` // default: 5m
+	StateMappings         map[string]string   `yaml:"state_mappings"`
+	IssueCommentContent   IssueCommentContent `yaml:"issue_comment_content"`
+	IssueCommentScope     IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
 }
 
 type GithubConfig struct {
@@ -527,6 +528,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Adapters.GitLab.PollInterval == "" {
 		cfg.Adapters.GitLab.PollInterval = defaultPollInterval
+	}
+	if cfg.Adapters.GitLab.StatusRefreshInterval == "" {
+		cfg.Adapters.GitLab.StatusRefreshInterval = defaultPollInterval
 	}
 	if cfg.Adapters.GitHub.BaseURL == "" {
 		cfg.Adapters.GitHub.BaseURL = "https://api.github.com"

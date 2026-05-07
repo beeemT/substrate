@@ -220,6 +220,16 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		}
 	}
 
+	// Start GitLab Work Item status refresh for work item adapters.
+	for _, workItemAdapter := range adapters {
+		type statusRefresher interface {
+			StartStatusRefresh(ctx context.Context, workspaceID string)
+		}
+		if r, ok := workItemAdapter.(statusRefresher); ok && current.WorkspaceID != "" {
+			r.StartStatusRefresh(ctx, current.WorkspaceID)
+		}
+	}
+
 	// Build orchestrators
 	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
 	harnesses, err := app.BuildAgentHarnesses(cfg, current.WorkspaceDir)

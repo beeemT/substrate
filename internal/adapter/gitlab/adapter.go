@@ -20,6 +20,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
 )
 
 const (
@@ -59,10 +60,11 @@ type GitlabAdapter struct {
 	cfg              config.GitlabConfig
 	baseURL          string
 	client           httpDoer
-	username         string       // cached authenticated username for "mine" scope checks
-	usernameMu       sync.RWMutex // protects username cache
-	graphqlMu        sync.RWMutex // protects graphqlSupported
-	graphqlSupported bool         // true once we confirm /api/graphql responds with valid JSON
+	username         string                      // cached authenticated username for "mine" scope checks
+	usernameMu       sync.RWMutex                // protects username cache
+	graphqlMu        sync.RWMutex                // protects graphqlSupported
+	graphqlSupported bool                        // true once we confirm /api/graphql responds with valid JSON
+	repos            adapter.ReviewArtifactRepos // for background status refresh
 }
 
 type issue struct {
@@ -1584,4 +1586,105 @@ func derefTime(t *time.Time) time.Time {
 	}
 
 	return t.UTC()
+}
+
+// StartStatusRefresh starts a background goroutine that periodically refreshes
+// Work Item statuses for all sessions in the workspace. It runs an immediate
+// refresh on startup and then repeats at the configured interval.
+func (a *GitlabAdapter) StartStatusRefresh(ctx context.Context, workspaceID string) {
+	if a.repos.Sessions == nil {
+		return
+	}
+	interval := parsePollInterval(a.cfg.StatusRefreshInterval)
+	go func() {
+		// Immediate refresh on startup.
+		a.refreshWorkItemStatuses(ctx, workspaceID)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.refreshWorkItemStatuses(ctx, workspaceID)
+			}
+		}
+	}()
+}
+
+// refreshWorkItemStatuses fetches fresh Work Item status from GraphQL for all
+// non-terminal sessions in the workspace and updates their metadata.
+func (a *GitlabAdapter) refreshWorkItemStatuses(ctx context.Context, workspaceID string) {
+	if a.repos.Sessions == nil {
+		return
+	}
+	if !a.checkGraphQLSupport() {
+		return
+	}
+
+	// List all sessions for this workspace.
+	sessions, err := a.repos.Sessions.List(ctx, repository.SessionFilter{
+		WorkspaceID: &workspaceID,
+	})
+	if err != nil {
+		slog.Warn("gitlab: refresh status: list sessions failed", "workspaceID", workspaceID, "error", err)
+		return
+	}
+
+	// Skip truly terminal sessions.
+	skipStates := map[domain.SessionState]bool{
+		domain.SessionMerged:   true,
+		domain.SessionArchived: true,
+	}
+
+	// Group sessions by project for batch fetching.
+	// Map structure: projectPath -> map of sessionID -> (session, iid)
+	type sessionRef struct {
+		session domain.Session
+		iid     string
+	}
+	projectSessions := make(map[string]map[string]sessionRef)
+	for _, sess := range sessions {
+		if skipStates[sess.State] {
+			continue
+		}
+
+		// Extract projectPath and IID from ExternalID.
+		projectPath, iid, err := parseExternalID(sess.ExternalID)
+		if err != nil || projectPath == "" || iid == 0 {
+			continue
+		}
+
+		if projectSessions[projectPath] == nil {
+			projectSessions[projectPath] = make(map[string]sessionRef)
+		}
+		projectSessions[projectPath][sess.ID] = sessionRef{session: sess, iid: strconv.FormatInt(iid, 10)}
+	}
+
+	// Fetch fresh status for each project.
+	for projectPath, sessions := range projectSessions {
+		iids := make([]string, 0, len(sessions))
+		for _, ref := range sessions {
+			iids = append(iids, ref.iid)
+		}
+
+		// Fetch status using projectPath. For legacy numeric IDs, graphqlBatchFetchStatus
+		// will handle conversion internally if needed.
+		statuses := a.graphqlBatchFetchStatus(ctx, projectPath, 0, iids)
+		if len(statuses) == 0 {
+			continue
+		}
+
+		// Update session metadata with fresh status.
+		for _, ref := range sessions {
+			iid, _ := strconv.ParseInt(ref.iid, 10, 64)
+			if status, ok := statuses[iid]; ok {
+				ref.session.Metadata["tracker_state"] = status
+				if err := a.repos.Sessions.Update(ctx, ref.session); err != nil {
+					slog.Warn("gitlab: refresh status: update session failed", "sessionID", ref.session.ID, "error", err)
+				}
+			}
+		}
+	}
 }
