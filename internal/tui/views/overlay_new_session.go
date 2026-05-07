@@ -66,7 +66,6 @@ const (
 	browseMinPaneWidth      = 36
 	detailMinPaneWidth      = 44
 	browsePageSize          = 50
-	infiniteScrollThreshold = 5
 )
 
 var browseSizingSpec = components.SplitOverlaySizingSpec{
@@ -1738,8 +1737,8 @@ func (m *NewSessionOverlay) maybeLoadMore() tea.Cmd {
 	if m.browseFocus != browseFocusList || m.loading || !m.hasMore || len(m.allItems) == 0 {
 		return nil
 	}
-	threshold := maxInt(0, len(m.allItems)-minInt(infiniteScrollThreshold, len(m.allItems)))
-	if m.issueList.Index() < threshold {
+	viewportBottom := m.issueList.Index() + m.issueList.Height()
+	if viewportBottom < len(m.allItems) {
 		return nil
 	}
 	return m.loadMoreItems()
