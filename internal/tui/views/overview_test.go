@@ -650,18 +650,25 @@ func TestCompletedOverlayEscClosesAndResetsFeedback(t *testing.T) {
 		t.Fatalf("overlay/inputActive = %v/%v, want completed overlay with active feedback", updated.overlay, updated.completed.inputActive)
 	}
 
+	// First Esc cancels the input without closing the overlay.
 	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if updated.overlay != overviewOverlayNone {
-		t.Fatalf("overlay = %v, want closed after esc", updated.overlay)
+	if updated.overlay != overviewOverlayCompleted {
+		t.Fatalf("overlay = %v, want completed overlay to remain open after first esc", updated.overlay)
 	}
 	if updated.completed.inputActive {
-		t.Fatal("inputActive = true after esc close, want false")
+		t.Fatal("inputActive = true after first esc, want false")
 	}
 	if got := updated.completed.feedbackInput.Value(); got != "" {
-		t.Fatalf("feedback input = %q, want reset after esc close", got)
+		t.Fatalf("feedback input = %q, want reset after first esc", got)
 	}
 	if cmd == nil {
-		t.Fatal("expected esc close to return reset command")
+		t.Fatal("expected first esc to return reset command")
+	}
+
+	// Second Esc closes the overlay.
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.overlay != overviewOverlayNone {
+		t.Fatalf("overlay = %v, want closed after second esc", updated.overlay)
 	}
 
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
