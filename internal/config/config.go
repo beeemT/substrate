@@ -60,16 +60,17 @@ const (
 	IssueCommentFullPlan IssueCommentContent = "full_plan"
 )
 
-// IssueCommentScope controls whether plan comments are posted on tickets at plan approval.
-type IssueCommentScope string
+// IssueActionScope controls which linked issues receive plan-approval actions
+// (comments, assignment, and status transitions) on plan approval.
+type IssueActionScope string
 
 const (
-	// IssueCommentScopeAll posts comments on all linked issues (default).
-	IssueCommentScopeAll IssueCommentScope = "all"
-	// IssueCommentScopeMine posts comments only on issues in user's own repositories.
-	IssueCommentScopeMine IssueCommentScope = "mine"
-	// IssueCommentScopeNone disables plan comments on linked issues.
-	IssueCommentScopeNone IssueCommentScope = "none"
+	// IssueActionScopeAll applies actions to all linked issues (default).
+	IssueActionScopeAll IssueActionScope = "all"
+	// IssueActionScopeMine applies actions only to issues in the user's own namespace.
+	IssueActionScopeMine IssueActionScope = "mine"
+	// IssueActionScopeNone skips all plan-approval actions on linked issues.
+	IssueActionScopeNone IssueActionScope = "none"
 )
 
 // UIConfig controls TUI presentation defaults.
@@ -172,7 +173,10 @@ type GitlabConfig struct {
 	StatusRefreshInterval string              `yaml:"status_refresh_interval"` // default: 5m
 	StateMappings         map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent   IssueCommentContent `yaml:"issue_comment_content"`
-	IssueCommentScope     IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
+	IssueActionScope     IssueActionScope   `yaml:"issue_comment_scope"` // all, mine, none
+	// InProgressStatus is the Work Item status name to set on linked issues
+	// at plan approval via GraphQL. Leave empty to skip.
+	InProgressStatus      string              `yaml:"in_progress_status"`
 }
 
 type GithubConfig struct {
@@ -185,8 +189,11 @@ type GithubConfig struct {
 	Labels              []string            `yaml:"labels"`
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
-	IssueCommentScope   IssueCommentScope   `yaml:"issue_comment_scope"` // all, mine, none
+	IssueActionScope   IssueActionScope   `yaml:"issue_comment_scope"` // all, mine, none
 	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
+	// InProgressStatus is the issue label to apply to linked issues at plan
+	// approval. Leave empty to skip.
+	InProgressStatus   string `yaml:"in_progress_status"`
 }
 
 type SentryConfig struct {
@@ -354,35 +361,35 @@ type ForemanConfig struct {
 type RepoConfig struct {
 	// DocPaths are documentation paths to include in planning context.
 	DocPaths []string `yaml:"doc_paths"`
-	// IssueCommentScope controls whether plan comments are posted at plan approval.
+	// IssueActionScope controls whether plan-approval actions are applied.
 	// Valid values: "all" (default), "mine", "none".
-	IssueCommentScope IssueCommentScope `yaml:"issue_comment_scope"`
+	IssueActionScope IssueActionScope `yaml:"issue_comment_scope"`
 }
 
-// IssueCommentScopeOrDefault returns the scope, defaulting to "all" if empty.
-func (r RepoConfig) IssueCommentScopeOrDefault() IssueCommentScope {
-	switch r.IssueCommentScope {
-	case IssueCommentScopeNone:
-		return IssueCommentScopeNone
-	case IssueCommentScopeMine:
-		return IssueCommentScopeMine
+// IssueActionScopeOrDefault returns the scope, defaulting to "all" if empty.
+func (r RepoConfig) IssueActionScopeOrDefault() IssueActionScope {
+	switch r.IssueActionScope {
+	case IssueActionScopeNone:
+		return IssueActionScopeNone
+	case IssueActionScopeMine:
+		return IssueActionScopeMine
 	default:
-		return IssueCommentScopeAll
+		return IssueActionScopeAll
 	}
 }
 
-// IssueCommentScopeForRepo returns the comment scope for a specific repository.
-func (c Config) IssueCommentScopeForRepo(repo string) IssueCommentScope {
-	if repoConfig, ok := c.Repos[repo]; ok && repoConfig.IssueCommentScope != "" {
-		return repoConfig.IssueCommentScopeOrDefault()
+// IssueActionScopeForRepo returns the action scope for a specific repository.
+func (c Config) IssueActionScopeForRepo(repo string) IssueActionScope {
+	if repoConfig, ok := c.Repos[repo]; ok && repoConfig.IssueActionScope != "" {
+		return repoConfig.IssueActionScopeOrDefault()
 	}
 	return ""
 }
 
-// IssueCommentScopesForWorkItem returns a map of repository → comment scope for all
+// IssueActionScopesForWorkItem returns a map of repository → action scope for all
 // repositories linked to a work item's source and source_item_ids.
 // Repositories without an explicit scope entry default to "all".
-func (c Config) IssueCommentScopesForWorkItem(workItem domain.Session) map[string]string {
+func (c Config) IssueActionScopesForWorkItem(workItem domain.Session) map[string]string {
 	repoScopes := make(map[string]string)
 	seen := make(map[string]struct{})
 	addRepo := func(id string) {
@@ -398,7 +405,7 @@ func (c Config) IssueCommentScopesForWorkItem(workItem domain.Session) map[strin
 			return
 		}
 		seen[repo] = struct{}{}
-		repoScopes[repo] = string(c.IssueCommentScopeForRepo(repo))
+		repoScopes[repo] = string(c.IssueActionScopeForRepo(repo))
 	}
 	// Add primary source.
 	addRepo(workItem.ExternalID)
@@ -541,14 +548,14 @@ func applyDefaults(cfg *Config) {
 	if cfg.Adapters.GitHub.IssueCommentContent == "" {
 		cfg.Adapters.GitHub.IssueCommentContent = IssueCommentSubPlan
 	}
-	if cfg.Adapters.GitHub.IssueCommentScope == "" {
-		cfg.Adapters.GitHub.IssueCommentScope = IssueCommentScopeAll
+	if cfg.Adapters.GitHub.IssueActionScope == "" {
+		cfg.Adapters.GitHub.IssueActionScope = IssueActionScopeAll
 	}
 	if cfg.Adapters.GitLab.IssueCommentContent == "" {
 		cfg.Adapters.GitLab.IssueCommentContent = IssueCommentSubPlan
 	}
-	if cfg.Adapters.GitLab.IssueCommentScope == "" {
-		cfg.Adapters.GitLab.IssueCommentScope = IssueCommentScopeAll
+	if cfg.Adapters.GitLab.IssueActionScope == "" {
+		cfg.Adapters.GitLab.IssueActionScope = IssueActionScopeAll
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL
@@ -633,16 +640,16 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("invalid adapters.gitlab.issue_comment_content: %q (must be none, orchestrator_plan, sub_plan, orchestrator_and_sub_plan, or full_plan)", cfg.Adapters.GitLab.IssueCommentContent)
 	}
 
-	validIssueCommentScope := map[IssueCommentScope]bool{
-		IssueCommentScopeAll:  true,
-		IssueCommentScopeMine: true,
-		IssueCommentScopeNone: true,
+	validIssueActionScope := map[IssueActionScope]bool{
+		IssueActionScopeAll:  true,
+		IssueActionScopeMine: true,
+		IssueActionScopeNone: true,
 	}
-	if !validIssueCommentScope[cfg.Adapters.GitHub.IssueCommentScope] {
-		return fmt.Errorf("invalid adapters.github.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitHub.IssueCommentScope)
+	if !validIssueActionScope[cfg.Adapters.GitHub.IssueActionScope] {
+		return fmt.Errorf("invalid adapters.github.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitHub.IssueActionScope)
 	}
-	if !validIssueCommentScope[cfg.Adapters.GitLab.IssueCommentScope] {
-		return fmt.Errorf("invalid adapters.gitlab.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitLab.IssueCommentScope)
+	if !validIssueActionScope[cfg.Adapters.GitLab.IssueActionScope] {
+		return fmt.Errorf("invalid adapters.gitlab.issue_comment_scope: %q (must be all, mine, or none)", cfg.Adapters.GitLab.IssueActionScope)
 	}
 
 	validHarnesses := map[HarnessName]bool{

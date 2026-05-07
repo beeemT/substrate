@@ -935,7 +935,7 @@ func buildRepoCommentScopes(workItem domain.Session, cfg *config.Config) map[str
 		if repoKey == "" {
 			continue
 		}
-		if scope := cfg.IssueCommentScopeForRepo(repoKey); scope != "" {
+		if scope := cfg.IssueActionScopeForRepo(repoKey); scope != "" {
 			scopes[repoKey] = string(scope)
 		}
 	}
@@ -1084,7 +1084,7 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 		payload["external_ids"] = externalIDs
 	}
 	if cfg != nil {
-		if scopes := cfg.IssueCommentScopesForWorkItem(workItem); len(scopes) > 0 {
+		if scopes := cfg.IssueActionScopesForWorkItem(workItem); len(scopes) > 0 {
 			payload["repo_comment_scopes"] = scopes
 		}
 	}

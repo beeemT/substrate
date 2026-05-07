@@ -212,6 +212,10 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 				refreshStoppers = append(refreshStoppers, stop)
 			}
 		}
+		slog.Debug("service_manager: mrRefresher check",
+			"adapter_name", la.Name(),
+			"workspace_id", current.WorkspaceID,
+		)
 		if r, ok := la.(mrRefresher); ok && current.WorkspaceID != "" {
 			stop := r.StartMRRefresh(ctx, current.WorkspaceID)
 			if stop != nil {

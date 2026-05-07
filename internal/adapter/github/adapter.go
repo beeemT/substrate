@@ -691,9 +691,7 @@ func (a *GithubAdapter) onWorktreeReused(ctx context.Context, payload string) er
 
 func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) error {
 	commentBody, externalIDs, repoScopes := extractPlanCommentPayload(payload)
-	if strings.TrimSpace(commentBody) == "" {
-		return nil
-	}
+
 	for _, externalID := range externalIDs {
 		if !strings.HasPrefix(externalID, "gh:") {
 			continue
@@ -701,12 +699,61 @@ func (a *GithubAdapter) onPlanApproved(ctx context.Context, payload string) erro
 		if !a.shouldPostComment(externalID, repoScopes) {
 			continue
 		}
-		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
-			return err
+
+		// Existing: post plan comment
+		if strings.TrimSpace(commentBody) != "" {
+			if err := a.AddComment(ctx, externalID, commentBody); err != nil {
+				slog.Warn("github: post plan comment failed", "id", externalID, "error", err)
+			}
+		}
+
+		// Assign issue to configured user
+		if err := a.assignIssueToCurrentUser(ctx, externalID); err != nil {
+			slog.Warn("github: assign issue failed", "id", externalID, "error", err)
+		}
+
+		// Apply in-progress label
+		if err := a.applyInProgressLabel(ctx, externalID); err != nil {
+			slog.Warn("github: apply in-progress label failed", "id", externalID, "error", err)
 		}
 	}
-
 	return nil
+}
+
+// assignIssueToCurrentUser assigns the issue to the configured assignee.
+// Best-effort: errors are logged but never returned.
+func (a *GithubAdapter) assignIssueToCurrentUser(ctx context.Context, externalID string) error {
+	assignee := strings.TrimSpace(a.assignee)
+	if assignee == "" || assignee == "me" {
+		return nil // not yet resolved; skip
+	}
+	owner, repo, number, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+	return a.postJSON(ctx,
+		fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", owner, repo, number),
+		map[string]any{"assignees": []string{assignee}},
+		nil,
+	)
+}
+
+// applyInProgressLabel applies the configured label to the issue.
+// Best-effort: errors are logged but never returned.
+func (a *GithubAdapter) applyInProgressLabel(ctx context.Context, externalID string) error {
+	label := strings.TrimSpace(a.cfg.InProgressStatus)
+	if label == "" {
+		return nil
+	}
+	owner, repo, number, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+	return a.postJSON(ctx,
+		fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number),
+		[]string{label},
+		nil,
+	)
 }
 
 // syncPRDescriptionsOnApproval updates the description of all open GitHub PRs
@@ -1814,10 +1861,10 @@ func (a *GithubAdapter) shouldPostComment(externalID string, repoScopes map[stri
 	if !ok {
 		return true // Default to posting
 	}
-	switch config.IssueCommentScope(scopeStr) {
-	case config.IssueCommentScopeNone:
+	switch config.IssueActionScope(scopeStr) {
+	case config.IssueActionScopeNone:
 		return false
-	case config.IssueCommentScopeMine:
+	case config.IssueActionScopeMine:
 		return a.isOwnRepo(repo)
 	default:
 		return true

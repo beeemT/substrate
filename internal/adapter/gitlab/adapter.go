@@ -64,7 +64,14 @@ type GitlabAdapter struct {
 	usernameMu       sync.RWMutex                // protects username cache
 	graphqlMu        sync.RWMutex                // protects graphqlSupported
 	graphqlSupported bool                        // true once we confirm /api/graphql responds with valid JSON
+	statusCache      statusCache                // projectPath -> workItemType -> statusName -> statusID
+	statusCacheMu    sync.RWMutex               // protects statusCache
 	repos            adapter.ReviewArtifactRepos // for background status refresh
+}
+
+type statusCache struct {
+	byProject map[string]map[string]map[string]string // projectPath -> workItemType -> statusName -> statusID
+	mu        sync.RWMutex
 }
 
 type issue struct {
@@ -302,6 +309,9 @@ func (a *GitlabAdapter) checkGraphQLSupport() bool {
 	}
 	a.graphqlSupported = true
 	slog.Debug("gitlab: /api/graphql confirmed available", "baseURL", a.baseURL)
+	// Warm the status cache for all known projects asynchronously now that we
+	// know GraphQL is available. This speeds up status transitions on plan approval.
+	go a.warmStatusCacheForAllProjects(context.Background())
 	return true
 }
 
@@ -585,13 +595,11 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
 			return nil
 		}
-
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
 	case domain.EventWorkItemCompleted:
 		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
 			return nil
 		}
-
 		return a.UpdateState(ctx, externalID, domain.TrackerStateInReview)
 	default:
 		return nil
@@ -600,22 +608,318 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 
 func (a *GitlabAdapter) onPlanApproved(ctx context.Context, payload string) error {
 	commentBody, externalIDs, repoScopes := extractPlanCommentPayload(payload)
-	if strings.TrimSpace(commentBody) == "" {
-		return nil
-	}
+
 	for _, externalID := range externalIDs {
 		if !strings.HasPrefix(externalID, "gl:") {
 			continue
 		}
-		if !a.shouldPostComment(ctx, externalID, repoScopes) {
+		if !a.shouldPerformIssueAction(ctx, externalID, repoScopes) {
 			continue
 		}
-		if err := a.AddComment(ctx, externalID, commentBody); err != nil {
-			return err
+
+		// Existing: post plan comment
+		if strings.TrimSpace(commentBody) != "" {
+			if err := a.AddComment(ctx, externalID, commentBody); err != nil {
+				slog.Warn("gitlab: post plan comment failed", "id", externalID, "error", err)
+			}
+		}
+
+		// Assign issue to configured user
+		if err := a.assignIssueToCurrentUser(ctx, externalID); err != nil {
+			slog.Warn("gitlab: assign issue failed", "id", externalID, "error", err)
+		}
+
+		// Transition to in-progress status via GraphQL
+		if strings.TrimSpace(a.cfg.InProgressStatus) != "" && a.checkGraphQLSupport() {
+			if err := a.transitionIssueStatus(ctx, externalID, a.cfg.InProgressStatus); err != nil {
+				slog.Warn("gitlab: transition issue status failed", "id", externalID, "error", err)
+			}
 		}
 	}
-
 	return nil
+}
+
+// shouldPerformIssueAction returns true if plan-approval actions (comment, assign,
+// status transition) should be applied to the given external ID.
+func (a *GitlabAdapter) shouldPerformIssueAction(ctx context.Context, externalID string, repoScopes map[string]string) bool {
+	repoKey := extractProjectPathFromExternalID(externalID)
+	if repoKey == "" {
+		return true
+	}
+	scopeStr, ok := repoScopes[repoKey]
+	if !ok {
+		return true // Default to performing actions
+	}
+	switch config.IssueActionScope(scopeStr) {
+	case config.IssueActionScopeNone:
+		return false
+	case config.IssueActionScopeMine:
+		return a.isOwnNamespace(ctx, externalID)
+	default:
+		return true
+	}
+}
+
+// assignIssueToCurrentUser assigns the issue to the configured assignee.
+// Best-effort: errors are logged but never returned.
+func (a *GitlabAdapter) assignIssueToCurrentUser(ctx context.Context, externalID string) error {
+	assignee := strings.TrimSpace(a.cfg.Assignee)
+	if assignee == "" || assignee == "me" {
+		return nil
+	}
+	projectPath, iid, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+	proj, err := a.fetchProjectByPath(ctx, projectPath)
+	if err != nil {
+		return err
+	}
+	var users []struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := a.getJSON(ctx, "/api/v4/users", url.Values{"username": {assignee}}, &users); err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return fmt.Errorf("gitlab: user %q not found", assignee)
+	}
+	return a.putJSON(ctx,
+		fmt.Sprintf("/api/v4/projects/%d/issues/%d", proj.ID, iid),
+		map[string]any{"assignee_ids": []int64{users[0].ID}},
+		nil,
+	)
+}
+
+// transitionIssueStatus transitions the GitLab Work Item to the named status via GraphQL.
+// It resolves the status name to a Global ID using the pre-fetched status cache.
+// Best-effort: errors are logged but never returned.
+func (a *GitlabAdapter) transitionIssueStatus(ctx context.Context, externalID, statusName string) error {
+	projectPath, iid, err := parseExternalID(externalID)
+	if err != nil {
+		return err
+	}
+
+	// Resolve status name to Global ID from cache
+	statusID := a.resolveStatusID(projectPath, statusName)
+	if statusID == "" {
+		// Cache miss: resolve asynchronously for next time, but try to build a quick query
+		go func() {
+			a.resolveAndCacheStatusIDs(context.Background(), projectPath)
+		}()
+		return fmt.Errorf("gitlab: status %q not cached for project %s", statusName, projectPath)
+	}
+
+	workItemID, err := a.resolveWorkItemID(ctx, projectPath, iid)
+	if err != nil {
+		return err
+	}
+
+	mutation := `mutation updateWorkItemStatus($id: WorkItemID!, $statusID: WorkItemsStatusesStatusID!) {
+		workItemUpdate(input: {id: $id, statusWidget: {status: $statusID}}) {
+			errors
+		}
+	}`
+	vars := map[string]any{
+		"id":       workItemID,
+		"statusID": statusID,
+	}
+
+	type respType struct {
+		Data struct {
+			WorkItemUpdate struct {
+				Errors []string `json:"errors"`
+			} `json:"workItemUpdate"`
+		} `json:"data"`
+	}
+	var resp respType
+	if err := a.doJSON(ctx, http.MethodPost, "/api/graphql", nil, map[string]any{
+		"query":     mutation,
+		"variables": vars,
+	}, &resp); err != nil {
+		return err
+	}
+	if len(resp.Data.WorkItemUpdate.Errors) > 0 {
+		return fmt.Errorf("gitlab graphql: %s", resp.Data.WorkItemUpdate.Errors[0])
+	}
+	return nil
+}
+
+// resolveWorkItemID fetches the Global ID for a work item given its project path and IID.
+func (a *GitlabAdapter) resolveWorkItemID(ctx context.Context, projectPath string, iid int64) (string, error) {
+	query := `query workItemID($fullPath: ID!, $iid: String!) {
+		project(fullPath: $fullPath) {
+			workItems(iids: [$iid]) {
+				nodes { id }
+			}
+		}
+	}`
+	type respType struct {
+		Data struct {
+			Project struct {
+				WorkItems struct {
+					Nodes []struct {
+						ID string `json:"id"`
+					} `json:"nodes"`
+				} `json:"workItems"`
+			} `json:"project"`
+		} `json:"data"`
+	}
+	var resp respType
+	if err := a.doJSON(ctx, http.MethodPost, "/api/graphql", nil, map[string]any{
+		"query": query,
+		"variables": map[string]any{
+			"fullPath": projectPath,
+			"iid":      strconv.FormatInt(iid, 10),
+		},
+	}, &resp); err != nil {
+		return "", err
+	}
+	if len(resp.Data.Project.WorkItems.Nodes) == 0 || resp.Data.Project.WorkItems.Nodes[0].ID == "" {
+		return "", fmt.Errorf("gitlab: work item not found: %s#%d", projectPath, iid)
+	}
+	return resp.Data.Project.WorkItems.Nodes[0].ID, nil
+}
+
+// resolveStatusID looks up the Global ID for a status name in the cache.
+// Returns "" if not yet cached.
+func (a *GitlabAdapter) resolveStatusID(projectPath, statusName string) string {
+	a.statusCacheMu.RLock()
+	defer a.statusCacheMu.RUnlock()
+	if a.statusCache.byProject == nil {
+		return ""
+	}
+	byType, ok := a.statusCache.byProject[projectPath]
+	if !ok {
+		return ""
+	}
+	// Search all work item types for the status name
+	for _, byName := range byType {
+		if id, ok := byName[statusName]; ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// warmStatusCacheForAllProjects fetches status IDs for all projects that have
+// sessions in the workspace. Called on startup and whenever GraphQL becomes available.
+func (a *GitlabAdapter) warmStatusCacheForAllProjects(ctx context.Context) {
+	if a.repos.Sessions == nil {
+		return
+	}
+	if !a.checkGraphQLSupport() {
+		return
+	}
+	// List all sessions to discover unique project paths.
+	sessions, err := a.repos.Sessions.List(ctx, repository.SessionFilter{})
+	if err != nil {
+		slog.Warn("gitlab: warmStatusCache: list sessions failed", "error", err)
+		return
+	}
+	// Collect unique project paths from external IDs.
+	projectPaths := make(map[string]struct{})
+	for _, sess := range sessions {
+		if !strings.HasPrefix(sess.ExternalID, "gl:") {
+			continue
+		}
+		path, _, err := parseExternalID(sess.ExternalID)
+		if err != nil || path == "" {
+			continue
+		}
+		projectPaths[path] = struct{}{}
+	}
+	// Resolve statuses for each project.
+	for pPath := range projectPaths {
+		a.resolveAndCacheStatusIDs(ctx, pPath)
+	}
+}
+
+// resolveAndCacheStatusIDs fetches all available statuses for all work item types
+// in a project and caches them for later use.
+func (a *GitlabAdapter) resolveAndCacheStatusIDs(ctx context.Context, projectPath string) {
+	if !a.checkGraphQLSupport() {
+		return
+	}
+
+	query := `query projectWorkItemStatuses($fullPath: ID!) {
+		project(fullPath: $fullPath) {
+			workItems(first: 20) {
+				nodes {
+					workItemType { name }
+					widgets {
+						type
+						... on WorkItemWidgetStatus {
+							status { id name }
+						}
+					}
+				}
+			}
+		}
+	}`
+
+	type respType struct {
+		Data struct {
+			Project struct {
+				WorkItems struct {
+					Nodes []struct {
+						WorkItemType struct {
+							Name string `json:"name"`
+						} `json:"workItemType"`
+						Widgets []struct {
+							Type   string `json:"type"`
+							Status *struct {
+								ID   string `json:"id"`
+								Name string `json:"name"`
+							} `json:"status"`
+						} `json:"widgets"`
+					} `json:"nodes"`
+				} `json:"workItems"`
+			} `json:"project"`
+		} `json:"data"`
+	}
+
+	var resp respType
+	if err := a.doJSON(ctx, http.MethodPost, "/api/graphql", nil, map[string]any{
+		"query":     query,
+		"variables": map[string]any{"fullPath": projectPath},
+	}, &resp); err != nil {
+		slog.Warn("gitlab: failed to resolve status IDs", "project", projectPath, "error", err)
+		return
+	}
+
+	a.statusCacheMu.Lock()
+	defer a.statusCacheMu.Unlock()
+	if a.statusCache.byProject == nil {
+		a.statusCache.byProject = make(map[string]map[string]map[string]string)
+	}
+	byType := make(map[string]map[string]string)
+	for _, node := range resp.Data.Project.WorkItems.Nodes {
+		if node.WorkItemType.Name == "" {
+			continue
+		}
+		if _, ok := byType[node.WorkItemType.Name]; !ok {
+			byType[node.WorkItemType.Name] = make(map[string]string)
+		}
+		for _, w := range node.Widgets {
+			if w.Type == "STATUS" && w.Status != nil && w.Status.Name != "" {
+				byType[node.WorkItemType.Name][w.Status.Name] = w.Status.ID
+			}
+		}
+	}
+	a.statusCache.byProject[projectPath] = byType
+	slog.Debug("gitlab: cached status IDs", "project", projectPath,
+		"types", len(byType),
+		"totalStatuses", sumValues(byType))
+}
+
+func sumValues(m map[string]map[string]string) int {
+	n := 0
+	for _, inner := range m {
+		n += len(inner)
+	}
+	return n
 }
 
 // shouldPostComment returns true if a plan comment should be posted for the given external ID.
@@ -628,10 +932,10 @@ func (a *GitlabAdapter) shouldPostComment(ctx context.Context, externalID string
 	if !ok {
 		return true // Default to posting
 	}
-	switch config.IssueCommentScope(scopeStr) {
-	case config.IssueCommentScopeNone:
+	switch config.IssueActionScope(scopeStr) {
+	case config.IssueActionScopeNone:
 		return false
-	case config.IssueCommentScopeMine:
+	case config.IssueActionScopeMine:
 		return a.isOwnNamespace(ctx, externalID)
 	default:
 		return true
