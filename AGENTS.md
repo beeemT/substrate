@@ -35,3 +35,25 @@
 - Every handled error **MUST** be logged via `slog` (e.g. `slog.Error(...)`, `slog.Warn(...)`). `main.go` sets `slog.SetDefault` to a `tuilog.Handler`, which routes all `slog` entries to the TUI log screen automatically — no separate wiring is needed.
 - Choose the level that matches the severity: `slog.Error` for unexpected or unrecoverable failures, `slog.Warn` for degraded-but-recoverable conditions, `slog.Debug` for transient or low-signal events. Always include the error as a structured attribute (`"error", err`).
 - Preserve the error chain. Do not discard the original error when wrapping with `fmt.Errorf("%w", err)` or equivalent.
+
+## Interface Compile-Time Verification
+
+When a type is expected to implement an interface, add a compile-time check directly beneath the
+imports in the file where the interface is used:
+
+```go
+// Verify concreteType implements InterfaceType at compile time.
+var _ InterfaceType = concreteType{}
+```
+
+This ensures missing or incorrect interface implementations are caught as build errors rather than
+causing silent runtime failures. Apply this to:
+
+- Adapter types passed to orchestration code (e.g., service_manager.go, wire.go)
+- Repository interfaces expected by service constructors
+- Event bus subscriber interfaces
+- Wrapper types that forward interface methods (e.g., routed adapters)
+
+If a struct implements an interface through a wrapper (e.g., `routedRepoLifecycleAdapter`
+forwarding to an inner adapter), both the wrapper and the inner type should be verified where they
+are defined.

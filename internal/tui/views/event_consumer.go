@@ -33,6 +33,7 @@ func (ec *EventConsumer) BridgeCmd() tea.Cmd {
 			if !ok {
 				return nil
 			}
+			slog.Debug("EventConsumer received event", "eventType", evt.EventType, "workspaceID", evt.WorkspaceID)
 			return DomainEventMsg{Event: evt}
 		default:
 			return nil
@@ -84,6 +85,7 @@ func (ec *EventConsumer) toMsg(evt domain.SystemEvent) tea.Msg {
 		slog.Debug("unhandled bus event in TUI", "type", evt.EventType)
 		return nil
 	}
+	slog.Debug("EventConsumer decoded event", "eventType", evt.EventType)
 	return decoder(evt.Payload)
 }
 

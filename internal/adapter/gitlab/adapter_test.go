@@ -667,8 +667,8 @@ func TestShouldPostComment(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
 			return nil, nil
 		}))
-		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", nil) {
-			t.Error("shouldPostComment() = false, want true with no scope configured")
+		if !a.shouldPerformIssueAction(context.Background(), "gl:issue:alice/rocket#42", nil) {
+			t.Error("shouldPerformIssueAction() = false, want true with no scope configured")
 		}
 	})
 
@@ -677,8 +677,8 @@ func TestShouldPostComment(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
 			return nil, nil
 		}))
-		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "all"}) {
-			t.Error("shouldPostComment() = false, want true with scope all")
+		if !a.shouldPerformIssueAction(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "all"}) {
+			t.Error("shouldPerformIssueAction() = false, want true with scope all")
 		}
 	})
 
@@ -687,8 +687,8 @@ func TestShouldPostComment(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
 			return nil, nil
 		}))
-		if a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "none"}) {
-			t.Error("shouldPostComment() = true, want false with scope none")
+		if a.shouldPerformIssueAction(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "none"}) {
+			t.Error("shouldPerformIssueAction() = true, want false with scope none")
 		}
 	})
 
@@ -702,8 +702,8 @@ func TestShouldPostComment(t *testing.T) {
 		})
 		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
 		a.username = "alice"
-		if !a.shouldPostComment(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "mine"}) {
-			t.Error("shouldPostComment() = false, want true for own namespace")
+		if !a.shouldPerformIssueAction(context.Background(), "gl:issue:alice/rocket#42", map[string]string{"alice/rocket": "mine"}) {
+			t.Error("shouldPerformIssueAction() = false, want true for own namespace")
 		}
 	})
 
@@ -717,8 +717,8 @@ func TestShouldPostComment(t *testing.T) {
 		})
 		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
 		a.username = "alice"
-		if a.shouldPostComment(context.Background(), "gl:issue:bob/rocket#42", map[string]string{"bob/rocket": "mine"}) {
-			t.Error("shouldPostComment() = true, want false for foreign namespace")
+		if a.shouldPerformIssueAction(context.Background(), "gl:issue:bob/rocket#42", map[string]string{"bob/rocket": "mine"}) {
+			t.Error("shouldPerformIssueAction() = true, want false for foreign namespace")
 		}
 	})
 
@@ -731,8 +731,8 @@ func TestShouldPostComment(t *testing.T) {
 			}), nil
 		})
 		a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "alice", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen", "in_review": "reopen", "done": "close"}}, rt)
-		if a.shouldPostComment(context.Background(), "gl:issue:myorg/rocket#42", map[string]string{"myorg/rocket": "mine"}) {
-			t.Error("shouldPostComment() = true, want false for group namespace")
+		if a.shouldPerformIssueAction(context.Background(), "gl:issue:myorg/rocket#42", map[string]string{"myorg/rocket": "mine"}) {
+			t.Error("shouldPerformIssueAction() = true, want false for group namespace")
 		}
 	})
 }

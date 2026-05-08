@@ -17,6 +17,9 @@ type SecretStore interface {
 	Delete(key string) error
 }
 
+// Verify OSKeychainStore implements SecretStore at compile time.
+var _ SecretStore = OSKeychainStore{}
+
 type OSKeychainStore struct{}
 
 func (OSKeychainStore) Get(key string) (string, error) {

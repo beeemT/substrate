@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -22,6 +23,16 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 )
+
+// Verify GitlabAdapter implements adapter.WorkItemAdapter at compile time.
+var _ adapter.WorkItemAdapter = &GitlabAdapter{}
+
+// Verify GitlabAdapter implements statusRefresher interface.
+type statusRefresher interface {
+	StartStatusRefresh(ctx context.Context, workspaceID string) func()
+}
+
+var _ statusRefresher = &GitlabAdapter{}
 
 const (
 	defaultWatchPollInterval = 5 * time.Minute
@@ -57,16 +68,17 @@ type httpDoer interface {
 type tokenResolver func(ctx context.Context, host string) (string, error)
 
 type GitlabAdapter struct {
-	cfg              config.GitlabConfig
-	baseURL          string
-	client           httpDoer
-	username         string                      // cached authenticated username for "mine" scope checks
-	usernameMu       sync.RWMutex                // protects username cache
-	graphqlMu        sync.RWMutex                // protects graphqlSupported
-	graphqlSupported bool                        // true once we confirm /api/graphql responds with valid JSON
-	statusCache      statusCache                // projectPath -> workItemType -> statusName -> statusID
-	statusCacheMu    sync.RWMutex               // protects statusCache
-	repos            adapter.ReviewArtifactRepos // for background status refresh
+	cfg                  config.GitlabConfig
+	baseURL              string
+	client               httpDoer
+	username             string                      // cached authenticated username for "mine" scope checks
+	usernameMu           sync.RWMutex                // protects username cache
+	graphqlMu            sync.RWMutex                // protects graphqlSupported
+	graphqlSupported     bool                        // true once we confirm /api/graphql responds with valid JSON
+	graphqlSupportedUint uint32                      // atomic guard: set to 1 once warming has been launched; prevents duplicate warm-up passes
+	statusCache          statusCache                 // projectPath -> workItemType -> statusName -> statusID
+	statusCacheMu        sync.RWMutex                // protects statusCache
+	repos                adapter.ReviewArtifactRepos // for background status refresh
 }
 
 type statusCache struct {
@@ -309,6 +321,11 @@ func (a *GitlabAdapter) checkGraphQLSupport() bool {
 	}
 	a.graphqlSupported = true
 	slog.Debug("gitlab: /api/graphql confirmed available", "baseURL", a.baseURL)
+	// Attempt atomic set: if another goroutine already set graphqlSupported
+	// to true and kicked off warming, skip to avoid a duplicate warm-up pass.
+	if !atomic.CompareAndSwapUint32(&a.graphqlSupportedUint, 0, 1) {
+		return true
+	}
 	// Warm the status cache for all known projects asynchronously now that we
 	// know GraphQL is available. This speeds up status transitions on plan approval.
 	go a.warmStatusCacheForAllProjects(context.Background())
@@ -660,6 +677,15 @@ func (a *GitlabAdapter) shouldPerformIssueAction(ctx context.Context, externalID
 	}
 }
 
+// extractProjectPathFromExternalID extracts the project path from a GitLab external ID.
+func extractProjectPathFromExternalID(externalID string) string {
+	projectPath, _, err := parseExternalID(externalID)
+	if err != nil {
+		return ""
+	}
+	return projectPath
+}
+
 // assignIssueToCurrentUser assigns the issue to the configured assignee.
 // Best-effort: errors are logged but never returned.
 func (a *GitlabAdapter) assignIssueToCurrentUser(ctx context.Context, externalID string) error {
@@ -699,6 +725,11 @@ func (a *GitlabAdapter) transitionIssueStatus(ctx context.Context, externalID, s
 	projectPath, iid, err := parseExternalID(externalID)
 	if err != nil {
 		return err
+	}
+	// Skip legacy numeric project IDs; GraphQL requires a path like "group/project".
+	if _, parseErr := strconv.ParseInt(projectPath, 10, 64); parseErr == nil {
+		slog.Debug("gitlab: transitionIssueStatus: skipping legacy numeric project ID", "projectPath", projectPath)
+		return nil
 	}
 
 	// Resolve status name to Global ID from cache
@@ -819,21 +850,37 @@ func (a *GitlabAdapter) warmStatusCacheForAllProjects(ctx context.Context) {
 		return
 	}
 	// Collect unique project paths from external IDs.
-	projectPaths := make(map[string]struct{})
+	projectPaths := make([]string, 0, len(sessions))
+	seen := make(map[string]struct{})
 	for _, sess := range sessions {
 		if !strings.HasPrefix(sess.ExternalID, "gl:") {
 			continue
 		}
 		path, _, err := parseExternalID(sess.ExternalID)
-		if err != nil || path == "" {
+		if err != nil || path == "" || path == "0" {
 			continue
 		}
-		projectPaths[path] = struct{}{}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		projectPaths = append(projectPaths, path)
 	}
-	// Resolve statuses for each project.
-	for pPath := range projectPaths {
-		a.resolveAndCacheStatusIDs(ctx, pPath)
+	if len(projectPaths) == 0 {
+		return
 	}
+	var wg sync.WaitGroup
+	for _, pPath := range projectPaths {
+		wg.Add(1)
+		go func(projectPath string) {
+			defer wg.Done()
+			a.resolveAndCacheStatusIDs(context.Background(), projectPath)
+		}(pPath)
+	}
+	go func() {
+		wg.Wait()
+		slog.Debug("gitlab: status cache warm complete", "projects", len(projectPaths))
+	}()
 }
 
 // resolveAndCacheStatusIDs fetches all available statuses for all work item types
@@ -891,20 +938,39 @@ func (a *GitlabAdapter) resolveAndCacheStatusIDs(ctx context.Context, projectPat
 
 	a.statusCacheMu.Lock()
 	defer a.statusCacheMu.Unlock()
+	// Initialize the outer map inside the lock to avoid racing with concurrent readers.
 	if a.statusCache.byProject == nil {
 		a.statusCache.byProject = make(map[string]map[string]map[string]string)
 	}
-	byType := make(map[string]map[string]string)
+	// Merge into any existing cache entry for this project so that repeated
+	// calls (e.g., concurrent project warm-ups) do not clobber previously
+	// discovered work-item types and statuses.
+	byType, ok := a.statusCache.byProject[projectPath]
+	if !ok {
+		byType = make(map[string]map[string]string)
+	} else {
+		// Make a shallow copy so the merged result is written back atomically.
+		copied := make(map[string]map[string]string, len(byType))
+		for k, v := range byType {
+			innerCopy := make(map[string]string, len(v))
+			for kk, vv := range v {
+				innerCopy[kk] = vv
+			}
+			copied[k] = innerCopy
+		}
+		byType = copied
+	}
 	for _, node := range resp.Data.Project.WorkItems.Nodes {
-		if node.WorkItemType.Name == "" {
+		wtype := node.WorkItemType.Name
+		if wtype == "" {
 			continue
 		}
-		if _, ok := byType[node.WorkItemType.Name]; !ok {
-			byType[node.WorkItemType.Name] = make(map[string]string)
+		if _, ok := byType[wtype]; !ok {
+			byType[wtype] = make(map[string]string)
 		}
 		for _, w := range node.Widgets {
 			if w.Type == "STATUS" && w.Status != nil && w.Status.Name != "" {
-				byType[node.WorkItemType.Name][w.Status.Name] = w.Status.ID
+				byType[wtype][w.Status.Name] = w.Status.ID
 			}
 		}
 	}
@@ -920,35 +986,6 @@ func sumValues(m map[string]map[string]string) int {
 		n += len(inner)
 	}
 	return n
-}
-
-// shouldPostComment returns true if a plan comment should be posted for the given external ID.
-func (a *GitlabAdapter) shouldPostComment(ctx context.Context, externalID string, repoScopes map[string]string) bool {
-	repoKey := extractProjectPathFromExternalID(externalID)
-	if repoKey == "" {
-		return true
-	}
-	scopeStr, ok := repoScopes[repoKey]
-	if !ok {
-		return true // Default to posting
-	}
-	switch config.IssueActionScope(scopeStr) {
-	case config.IssueActionScopeNone:
-		return false
-	case config.IssueActionScopeMine:
-		return a.isOwnNamespace(ctx, externalID)
-	default:
-		return true
-	}
-}
-
-// extractProjectPathFromExternalID extracts the project path from a GitLab external ID.
-func extractProjectPathFromExternalID(externalID string) string {
-	projectPath, _, err := parseExternalID(externalID)
-	if err != nil {
-		return ""
-	}
-	return projectPath
 }
 
 // isOwnNamespace returns true if the issue's project is owned by the authenticated user.
@@ -1895,14 +1932,17 @@ func derefTime(t *time.Time) time.Time {
 // StartStatusRefresh starts a background goroutine that periodically refreshes
 // Work Item statuses for all sessions in the workspace. It runs an immediate
 // refresh on startup and then repeats at the configured interval.
-func (a *GitlabAdapter) StartStatusRefresh(ctx context.Context, workspaceID string) {
+func (a *GitlabAdapter) StartStatusRefresh(ctx context.Context, workspaceID string) func() {
 	if a.repos.Sessions == nil {
-		return
+		return nil
 	}
 	interval := parsePollInterval(a.cfg.StatusRefreshInterval)
+	// Derive a cancellable context so the goroutine is isolated from the
+	// caller's lifecycle.
+	refreshCtx, cancel := context.WithCancel(context.Background())
 	go func() {
 		// Immediate refresh on startup.
-		a.refreshWorkItemStatuses(ctx, workspaceID)
+		a.refreshWorkItemStatuses(refreshCtx, workspaceID)
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -1911,10 +1951,11 @@ func (a *GitlabAdapter) StartStatusRefresh(ctx context.Context, workspaceID stri
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				a.refreshWorkItemStatuses(ctx, workspaceID)
+				a.refreshWorkItemStatuses(refreshCtx, workspaceID)
 			}
 		}
 	}()
+	return cancel
 }
 
 // refreshWorkItemStatuses fetches fresh Work Item status from GraphQL for all

@@ -13,6 +13,9 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// Verify LinearAdapter implements adapter.WorkItemAdapter at compile time.
+var _ adapter.WorkItemAdapter = &LinearAdapter{}
+
 const (
 	providerLinear           = "linear"
 	filterAll                = "all"

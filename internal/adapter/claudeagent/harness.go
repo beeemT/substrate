@@ -19,6 +19,12 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify Harness implements adapter.AgentHarness at compile time.
+var _ adapter.AgentHarness = &Harness{}
+
+// Verify Harness implements adapter.HarnessActionRunner at compile time.
+var _ adapter.HarnessActionRunner = &Harness{}
+
 // Harness implements adapter.AgentHarness for the Claude Agent SDK bridge.
 type Harness struct {
 	cfg           config.ClaudeCodeConfig

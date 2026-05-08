@@ -9,6 +9,9 @@ import (
 	"github.com/beeemT/substrate/internal/adapter/bridge"
 )
 
+// Verify claudeAgentSession implements adapter.AgentSession at compile time.
+var _ adapter.AgentSession = (*claudeAgentSession)(nil)
+
 // claudeAgentSession implements adapter.AgentSession for the Claude Agent SDK bridge.
 type claudeAgentSession struct {
 	bs              *bridge.BridgeSession

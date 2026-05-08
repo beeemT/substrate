@@ -21,6 +21,9 @@ import (
 	"github.com/beeemT/substrate/internal/worktree"
 )
 
+// Verify ServiceManager implements ServiceProvider at compile time.
+var _ ServiceProvider = (*ServiceManager)(nil)
+
 // ServiceManager owns the complete service graph lifecycle.
 // It is the single place responsible for building and rebuilding services.
 type ServiceManager struct {
@@ -227,7 +230,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 	// Start GitLab Work Item status refresh for work item adapters.
 	for _, workItemAdapter := range adapters {
 		type statusRefresher interface {
-			StartStatusRefresh(ctx context.Context, workspaceID string)
+			StartStatusRefresh(ctx context.Context, workspaceID string) func()
 		}
 		if r, ok := workItemAdapter.(statusRefresher); ok && current.WorkspaceID != "" {
 			r.StartStatusRefresh(ctx, current.WorkspaceID)

@@ -9,6 +9,9 @@ import (
 	"github.com/beeemT/substrate/internal/adapter/bridge"
 )
 
+// Verify ohMyPiSession implements adapter.AgentSession at compile time.
+var _ adapter.AgentSession = (*ohMyPiSession)(nil)
+
 // ohMyPiSession implements adapter.AgentSession for oh-my-pi.
 type ohMyPiSession struct {
 	bs             *bridge.BridgeSession

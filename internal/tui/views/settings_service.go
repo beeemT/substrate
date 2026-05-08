@@ -1040,6 +1040,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "What plan content is posted as a comment on linked GitLab issues at plan approval.", "sub_plan"
 	case "adapters.gitlab.issue_comment_scope":
 		return "Controls assignment, status transition, and plan comments on linked issues: all, mine, or none.", "all"
+	case "adapters.gitlab.in_progress_status":
+		return "GitLab Work Item status to set on linked issues at plan approval (requires GraphQL).", statusEmpty
 	case "adapters.github.token_ref":
 		return "GitHub token stored in config or the OS keychain; runtime may also fall back to gh auth.", statusEmpty
 	case "adapters.github.assignee":

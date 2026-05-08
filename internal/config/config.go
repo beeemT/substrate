@@ -209,6 +209,9 @@ type SentryConfig struct {
 // GlabConfig configures the glab CLI adapter.
 // All fields are optional; the adapter is always registered regardless.
 type GlabConfig struct {
+	// BaseURL is the GitLab instance URL (e.g., https://gitlab.justtrack.io).
+	// Populated automatically from glab auth status if not set.
+	BaseURL string `yaml:"base_url"`
 	// Reviewers is a list of GitLab usernames added as reviewers to created MRs.
 	Reviewers []string `yaml:"reviewers"`
 	// Labels is a list of GitLab label names added to created MRs.
@@ -532,6 +535,10 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Adapters.GitLab.BaseURL == "" {
 		cfg.Adapters.GitLab.BaseURL = InferGlabBaseURL()
+	}
+	// Glab adapter also needs the base URL for remote API calls.
+	if cfg.Adapters.Glab.BaseURL == "" {
+		cfg.Adapters.Glab.BaseURL = InferGlabBaseURL()
 	}
 	if cfg.Adapters.GitLab.PollInterval == "" {
 		cfg.Adapters.GitLab.PollInterval = defaultPollInterval

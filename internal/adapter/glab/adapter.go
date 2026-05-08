@@ -32,6 +32,16 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// Verify GlabAdapter implements adapter.RepoLifecycleAdapter at compile time.
+var _ coreadapter.RepoLifecycleAdapter = &GlabAdapter{}
+
+// Verify GlabAdapter implements adapter.ReviewCommentFetcher at compile time.
+var _ coreadapter.ReviewCommentFetcher = &GlabAdapter{}
+
+// Verify GlabAdapter implements mrRefresher interface.
+type mrRefresher interface { StartMRRefresh(ctx context.Context, workspaceID string) func() }
+var _ mrRefresher = &GlabAdapter{}
+
 // commandRunner executes an external command in dir and returns its combined output.
 // Injected for testing.
 type commandRunner func(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
@@ -406,6 +416,38 @@ func (a *GlabAdapter) mrView(ctx context.Context, dir, branch string) (glabMRVie
 	}
 
 	return mr, true
+}
+
+// mrViewRemote fetches MR metadata using --repo with full URL (no local repo required).
+func (a *GlabAdapter) mrViewRemote(ctx context.Context, projectPath string, iid int) (glabMRView, bool) {
+	repoURL := fmt.Sprintf("https://%s/%s", a.cfg.BaseURL, projectPath)
+	out, err := a.runner(ctx, "", "glab",
+		"mr", "view",
+		"--repo", repoURL,
+		"--output", "json",
+	)
+	if err != nil {
+		return glabMRView{}, false
+	}
+	var mr glabMRView
+	if err := json.Unmarshal(out, &mr); err != nil {
+		return glabMRView{}, false
+	}
+	if mr.IID <= 0 {
+		return glabMRView{}, false
+	}
+
+	return mr, true
+}
+
+// runGlabApi executes a glab api command. If repoDir is empty, uses --hostname.
+func (a *GlabAdapter) runGlabApi(ctx context.Context, repoDir string, endpoint string) ([]byte, error) {
+	args := []string{"api", endpoint}
+	if repoDir == "" {
+		args = append([]string{"--hostname", a.cfg.BaseURL}, args...)
+		return a.runner(ctx, "", "glab", args...)
+	}
+	return a.runner(ctx, repoDir, "glab", args...)
 }
 
 func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
@@ -815,13 +857,22 @@ func (a *GlabAdapter) refreshMRs(ctx context.Context) {
 }
 
 func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMergeRequest) {
-	repoDir, ok := a.refreshMRRepoDir(mr)
-	if !ok {
-		return
+	repoDir, hasLocalRepo := a.refreshMRRepoDir(mr)
+	var fresh glabMRView
+	var ok bool
+
+	// Try local repo first, fall back to remote lookup.
+	if hasLocalRepo {
+		fresh, ok = a.mrView(ctx, repoDir, mr.SourceBranch)
 	}
-	fresh, ok := a.mrView(ctx, repoDir, mr.SourceBranch)
 	if !ok {
-		return
+		fresh, ok = a.mrViewRemote(ctx, mr.ProjectPath, mr.IID)
+		if !ok {
+			slog.Warn("glab: refresh mr lookup failed", "iid", mr.IID, "project", mr.ProjectPath)
+			return
+		}
+		// No local repo; pass empty dir so glab api uses --hostname.
+		repoDir = ""
 	}
 	updated := domain.GitlabMergeRequest{
 		ID:           mr.ID,
@@ -894,7 +945,8 @@ func (a *GlabAdapter) refreshMRRepoDir(mr domain.GitlabMergeRequest) (string, bo
 		} else {
 			lastDir = dir
 			lastErr = err
-			if i < len(candidates)-1 {
+			// Only log for non-worktree candidates (worktree paths may not exist for MRs without active tasks)
+			if i > 0 && i < len(candidates)-1 {
 				slog.Debug("glab: refresh mr repo dir candidate unavailable", "dir", dir, "iid", mr.IID, "error", err)
 			}
 		}
@@ -916,7 +968,7 @@ func (a *GlabAdapter) refreshMRReviews(ctx context.Context, mr domain.GitlabMerg
 	var reviews []domain.GitlabMRReview
 
 	// Fetch approval state via glab api.
-	approvalOut, err := a.runner(ctx, repoDir, "glab", "api",
+	approvalOut, err := a.runGlabApi(ctx, repoDir,
 		fmt.Sprintf("/projects/%s/merge_requests/%d/approval_state",
 			url.PathEscape(mr.ProjectPath), mr.IID))
 	if err != nil {
@@ -949,7 +1001,7 @@ func (a *GlabAdapter) refreshMRReviews(ctx context.Context, mr domain.GitlabMerg
 	}
 
 	// Fetch discussions to detect unresolved threads.
-	discOut, err := a.runner(ctx, repoDir, "glab", "api",
+	discOut, err := a.runGlabApi(ctx, repoDir,
 		fmt.Sprintf("/projects/%s/merge_requests/%d/discussions",
 			url.PathEscape(mr.ProjectPath), mr.IID))
 	if err != nil {
@@ -1001,7 +1053,7 @@ func (a *GlabAdapter) refreshMRChecks(ctx context.Context, mr domain.GitlabMerge
 	}
 
 	// Fetch the latest pipeline for the MR source branch.
-	pipelinesOut, err := a.runner(ctx, repoDir, "glab", "api",
+	pipelinesOut, err := a.runGlabApi(ctx, repoDir,
 		fmt.Sprintf("/projects/%s/pipelines?ref=%s&per_page=1&order_by=updated_at",
 			url.PathEscape(mr.ProjectPath), url.QueryEscape(mr.SourceBranch)))
 	if err != nil {
@@ -1019,7 +1071,7 @@ func (a *GlabAdapter) refreshMRChecks(ctx context.Context, mr domain.GitlabMerge
 	}
 
 	// Fetch jobs for the latest pipeline.
-	jobsOut, err := a.runner(ctx, repoDir, "glab", "api",
+	jobsOut, err := a.runGlabApi(ctx, repoDir,
 		fmt.Sprintf("/projects/%s/pipelines/%d/jobs",
 			url.PathEscape(mr.ProjectPath), pipelines[0].ID))
 	if err != nil {

@@ -11,6 +11,9 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 )
 
+// Verify ManualAdapter implements adapter.WorkItemAdapter at compile time.
+var _ adapter.WorkItemAdapter = &ManualAdapter{}
+
 // ErrNotSupported is returned for operations not supported by the manual adapter.
 var ErrNotSupported = errors.New("operation not supported by manual adapter")
 

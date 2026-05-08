@@ -24,6 +24,22 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// Verify GithubAdapter implements adapter.WorkItemAdapter at compile time.
+var _ adapter.WorkItemAdapter = WorkItemAdapter{}
+
+// Verify GithubAdapter implements adapter.RepoLifecycleAdapter at compile time.
+var _ adapter.RepoLifecycleAdapter = RepoLifecycleAdapter{}
+
+// Verify GithubAdapter implements adapter.ReviewCommentFetcher at compile time.
+var _ adapter.ReviewCommentFetcher = &GithubAdapter{}
+
+// Verify GithubAdapter implements prRefresher interface.
+type prRefresher interface {
+	StartPRRefresh(ctx context.Context, workspaceID string) func()
+}
+
+var _ prRefresher = &GithubAdapter{}
+
 const adapterName = "github"
 
 type httpClient interface {
@@ -2114,13 +2130,14 @@ func (a *GithubAdapter) upsertPRChecks(ctx context.Context, prID string, runs []
 // StartPRRefresh starts a background goroutine that periodically refreshes
 // non-terminal GitHub pull requests from the API. It runs an immediate refresh
 // on startup and then repeats every 120 seconds.
-func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) {
+func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) func() {
 	if a.repos.GithubPRs == nil {
-		return
+		return nil
 	}
+	refreshCtx, cancel := context.WithCancel(context.Background())
 	go func() {
 		// Immediate refresh on startup.
-		a.refreshPRs(ctx, workspaceID)
+		a.refreshPRs(refreshCtx, workspaceID)
 
 		ticker := time.NewTicker(120 * time.Second)
 		defer ticker.Stop()
@@ -2129,10 +2146,11 @@ func (a *GithubAdapter) StartPRRefresh(ctx context.Context, workspaceID string) 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				a.refreshPRs(ctx, workspaceID)
+				a.refreshPRs(refreshCtx, workspaceID)
 			}
 		}
 	}()
+	return cancel
 }
 
 func (a *GithubAdapter) checkAllMerged(ctx context.Context, workspaceID, prID string) {

@@ -20,6 +20,9 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify OhMyPiHarness implements adapter.AgentHarness at compile time.
+var _ adapter.AgentHarness = &OhMyPiHarness{}
+
 // OhMyPiHarness implements adapter.AgentHarness for oh-my-pi.
 type OhMyPiHarness struct {
 	cfg           config.OhMyPiConfig

@@ -196,22 +196,24 @@ func (a routedRepoLifecycleAdapter) OnEvent(ctx context.Context, evt domain.Syst
 	return a.adapter.OnEvent(ctx, evt)
 }
 
-func (a routedRepoLifecycleAdapter) StartPRRefresh(ctx context.Context, workspaceID string) {
+func (a routedRepoLifecycleAdapter) StartPRRefresh(ctx context.Context, workspaceID string) func() {
 	type refresher interface {
-		StartPRRefresh(ctx context.Context, workspaceID string)
+		StartPRRefresh(ctx context.Context, workspaceID string) func()
 	}
 	if r, ok := a.adapter.(refresher); ok {
-		r.StartPRRefresh(ctx, workspaceID)
+		return r.StartPRRefresh(ctx, workspaceID)
 	}
+	return nil
 }
 
-func (a routedRepoLifecycleAdapter) StartMRRefresh(ctx context.Context, workspaceID string) {
+func (a routedRepoLifecycleAdapter) StartMRRefresh(ctx context.Context, workspaceID string) func() {
 	type refresher interface {
-		StartMRRefresh(ctx context.Context, workspaceID string)
+		StartMRRefresh(ctx context.Context, workspaceID string) func()
 	}
 	if r, ok := a.adapter.(refresher); ok {
-		r.StartMRRefresh(ctx, workspaceID)
+		return r.StartMRRefresh(ctx, workspaceID)
 	}
+	return nil
 }
 
 func repoLifecycleEventPlatform(evt domain.SystemEvent) (remotedetect.Platform, bool) {
@@ -330,3 +332,6 @@ func detectWorkspaceLifecyclePlatforms(ctx context.Context, cfg *config.Config, 
 	}
 	return nil, fmt.Errorf("no supported repo lifecycle platform detected in workspace %s", workspaceDir)
 }
+
+// Verify routedRepoLifecycleAdapter implements adapter.RepoLifecycleAdapter.
+var _ adapter.RepoLifecycleAdapter = routedRepoLifecycleAdapter{}

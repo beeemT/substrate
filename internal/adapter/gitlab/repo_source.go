@@ -17,6 +17,9 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify GitlabRepoSource implements adapter.RepoSource at compile time.
+var _ adapter.RepoSource = &GitlabRepoSource{}
+
 // GitlabRepoSource lists the user's GitLab projects for repository selection.
 type GitlabRepoSource struct {
 	cfg     config.GitlabConfig

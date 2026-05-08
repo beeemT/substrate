@@ -19,6 +19,9 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 )
 
+// Verify session implements adapter.AgentSession at compile time.
+var _ adapter.AgentSession = (*session)(nil)
+
 const (
 	// sseReadBufferSize is the buffer size for reading SSE lines.
 	sseReadBufferSize = 64 * 1024

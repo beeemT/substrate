@@ -20,6 +20,9 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify Harness implements adapter.AgentHarness at compile time.
+var _ adapter.AgentHarness = &Harness{}
+
 // jsonFlag is the canonical --json flag name for `codex exec`.
 // --experimental-json is an alias; we use the canonical form.
 const (

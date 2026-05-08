@@ -21,6 +21,9 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+// Verify SentryAdapter implements adapter.WorkItemAdapter at compile time.
+var _ adapter.WorkItemAdapter = &SentryAdapter{}
+
 const defaultBaseURL = config.DefaultSentryBaseURL
 
 const (

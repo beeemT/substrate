@@ -23,6 +23,12 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify Harness implements adapter.AgentHarness at compile time.
+var _ adapter.AgentHarness = &Harness{}
+
+// Verify Harness implements adapter.HarnessActionRunner at compile time.
+var _ adapter.HarnessActionRunner = &Harness{}
+
 const (
 	// defaultBinary is the opencode binary name resolved via PATH.
 	defaultBinary = "opencode"

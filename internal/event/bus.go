@@ -12,6 +12,9 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
+// Verify Bus implements Publisher at compile time.
+var _ Publisher = &Bus{}
+
 // DefaultHookTimeout is the default timeout for hook execution.
 const DefaultHookTimeout = 30 * time.Second
 

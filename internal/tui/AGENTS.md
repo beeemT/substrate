@@ -180,4 +180,3 @@ Do not add nil guards for `*event.Bus` parameters in command functions or helper
 `answerPlanningQuestion`. The `bus` parameter is a required dependency; if it is nil, the code must panic
 to surface missing wiring immediately. Instead, tests must use mock implementations of `event.Publisher`
 (e.g., via mockery) to avoid nil pointer dereferences.
-

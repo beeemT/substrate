@@ -16,6 +16,9 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Verify GithubRepoSource implements adapter.RepoSource at compile time.
+var _ adapter.RepoSource = &GithubRepoSource{}
+
 // GithubRepoSource lists the user's GitHub repositories and supports search.
 type GithubRepoSource struct {
 	client  httpClient
