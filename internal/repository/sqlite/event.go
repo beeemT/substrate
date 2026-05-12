@@ -2,36 +2,12 @@ package sqlite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/beeemT/go-atomic/generic"
 	"github.com/beeemT/substrate/internal/domain"
 )
-
-// eventRetryBackoffs are the backoffs used when retrying event persistence due to SQLITE_BUSY.
-var eventRetryBackoffs = []time.Duration{
-	100 * time.Millisecond,
-	time.Second,
-	5 * time.Second,
-}
-
-// isSQLiteBusyOrLocked checks if an error is a retryable SQLite error (SQLITE_BUSY or SQLITE_LOCKED).
-func isSQLiteBusyOrLocked(err error) bool {
-	if err == nil {
-		return false
-	}
-	// SQLITE_BUSY = 5, SQLITE_LOCKED = 6
-	var sqliteErr interface{ Code() int }
-	if errors.As(err, &sqliteErr) {
-		switch sqliteErr.Code() {
-		case 5, 6:
-			return true
-		}
-	}
-	return false
-}
 
 type eventRow struct {
 	ID          string  `db:"id"`

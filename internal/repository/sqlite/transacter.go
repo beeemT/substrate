@@ -11,5 +11,9 @@ import (
 // NewTransacter creates a transacter backed by the given DB.
 func NewTransacter(db *sqlx.DB) atomic.Transacter[repository.Resources] {
 	executer := goatomicsqlx.NewExecuter(db)
-	return generic.NewTransacter[generic.SQLXRemote, repository.Resources](executer, ResourcesFactory)
+	return generic.NewTransacter[generic.SQLXRemote, repository.Resources](
+		executer,
+		ResourcesFactory,
+		generic.WithBackOffRetry[generic.SQLXRemote, repository.Resources](sqliteRetry),
+	)
 }
