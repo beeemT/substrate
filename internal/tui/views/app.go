@@ -366,7 +366,7 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.runtimeCtx.WorkspaceName = reload.Services.WorkspaceName
 	a.runtimeCtx.WorkspaceDir = reload.Services.WorkspaceDir
 
-	a.newSession = NewNewSessionOverlay(a.provider.Adapters(), a.runtimeCtx.WorkspaceID, a.statusBar.styles)
+	a.newSession = NewNewSessionOverlay(reload.Services.Adapters, a.runtimeCtx.WorkspaceID, a.statusBar.styles)
 	a.newSession.SetSize(a.windowWidth, a.windowHeight)
 	a.newSessionAutonomousOverlay = NewNewSessionAutonomousOverlay(a.statusBar.styles)
 	a.newSessionAutonomousOverlay.SetSize(a.windowWidth, a.windowHeight)
@@ -1286,7 +1286,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// transitions from "Ingested" to "Planning/Implementing" immediately.
 		case domain.EventAgentSessionStarted:
 			workItemID := extractWorkItemID(msg.Event.Payload)
-			slog.Warn("EventAgentSessionStarted received", "workItemID", workItemID, "workspaceID", msg.Event.WorkspaceID, "runtimeWorkspaceID", a.runtimeCtx.WorkspaceID)
 			if workItemID != "" {
 				cmds = append(cmds,
 					LoadSessionCmd(a.provider.Session(), workItemID),
@@ -1447,7 +1446,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TasksForSessionLoadedMsg:
-		slog.Warn("TasksForSessionLoadedMsg received", "workItemID", msg.WorkItemID, "sessionCount", len(msg.Sessions), "currentWorkItemID", a.currentWorkItemID)
 		// Remove old tasks for this work item, add new ones
 		filtered := make([]domain.Task, 0, len(a.sessions))
 		for _, s := range a.sessions {
@@ -3285,7 +3283,6 @@ func (a App) sessionSidebarEntries() []SidebarEntry {
 }
 
 func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
-	slog.Warn("sessionsForWorkItem called", "workItemID", workItemID, "totalSessions", len(a.sessions))
 	plan := a.plans[workItemID]
 	subPlanOrder := make(map[string]int)
 	if plan != nil {
@@ -3299,7 +3296,6 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
 			sessions = append(sessions, s)
 		}
 	}
-	slog.Warn("sessionsForWorkItem result", "workItemID", workItemID, "foundSessions", len(sessions))
 	sort.SliceStable(sessions, func(i, j int) bool {
 		rankI := taskSessionPhaseRank(sessions[i].Phase)
 		rankJ := taskSessionPhaseRank(sessions[j].Phase)
@@ -3363,7 +3359,6 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	}
 
 	sessions := a.sessionsForWorkItem(workItemID)
-	slog.Warn("taskSidebarEntries", "workItemID", workItemID, "totalSessions", len(sessions), "sidebarMode", a.sidebarMode)
 
 	// Planning block: all planning sessions in temporal order (oldest first).
 	var planningSessions []domain.Task
@@ -4086,7 +4081,7 @@ func persistCreatedWorkItemMsg(provider ServiceProvider, wi domain.Session) tea.
 
 func createManualSessionCmd(provider ServiceProvider, msg NewSessionManualMsg) tea.Cmd {
 	return func() tea.Msg {
-	if msg.Adapter == nil {
+		if msg.Adapter == nil {
 			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), adapter.Selection{
@@ -4102,7 +4097,7 @@ func createManualSessionCmd(provider ServiceProvider, msg NewSessionManualMsg) t
 
 func createBrowseSessionCmd(provider ServiceProvider, msg NewSessionBrowseMsg) tea.Cmd {
 	return func() tea.Msg {
-	if msg.Adapter == nil {
+		if msg.Adapter == nil {
 			return ErrMsg{Err: errors.New("no adapter available")}
 		}
 		wi, err := msg.Adapter.Resolve(context.Background(), msg.Selection)

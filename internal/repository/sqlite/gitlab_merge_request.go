@@ -138,6 +138,14 @@ func (r GitlabMRRepo) ListNonTerminal(ctx context.Context, workspaceID string) (
 	return r.toDomainSlice(rows)
 }
 
+func (r GitlabMRRepo) Delete(ctx context.Context, id string) error {
+	_, err := r.remote.NamedExecContext(ctx, `DELETE FROM gitlab_merge_requests WHERE id = :id`, map[string]any{"id": id})
+	if err != nil {
+		return fmt.Errorf("delete gitlab mr %s: %w", id, err)
+	}
+	return nil
+}
+
 func (r GitlabMRRepo) toDomainSlice(rows []gitlabMRRow) ([]domain.GitlabMergeRequest, error) {
 	mrs := make([]domain.GitlabMergeRequest, len(rows))
 	for i := range rows {

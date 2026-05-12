@@ -86,6 +86,65 @@ func TestEventConsumerEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEventConsumerBridgeWaitsForFutureEvent(t *testing.T) {
+	bus := event.NewBus(event.BusConfig{})
+	t.Cleanup(func() { bus.Close() })
+
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-integration",
+		WorkspaceName: "integration-test",
+		Bus:           bus,
+		Settings:      &SettingsService{},
+	})
+
+	sub, err := bus.Subscribe("tui:ws-integration", string(domain.EventAgentSessionStarted))
+	if err != nil {
+		t.Fatalf("failed to subscribe: %v", err)
+	}
+	ec := NewEventConsumer(app, sub)
+
+	msgCh := make(chan any, 1)
+	go func() {
+		msgCh <- ec.BridgeCmd()()
+	}()
+
+	select {
+	case msg := <-msgCh:
+		t.Fatalf("BridgeCmd returned before any event was published: %T", msg)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"work_item_id": "wi-1",
+		"session_id":   "task-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := bus.Publish(context.Background(), domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStarted),
+		WorkspaceID: "ws-integration",
+		Payload:     string(payload),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("publish event: %v", err)
+	}
+
+	select {
+	case msg := <-msgCh:
+		domMsg, ok := msg.(DomainEventMsg)
+		if !ok {
+			t.Fatalf("expected DomainEventMsg, got %T", msg)
+		}
+		if domMsg.Event.EventType != string(domain.EventAgentSessionStarted) {
+			t.Fatalf("EventType = %q, want %q", domMsg.Event.EventType, domain.EventAgentSessionStarted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BridgeCmd did not deliver published event")
+	}
+}
+
 // TestEventConsumer_questionAnsweredEndToEnd verifies that a question-answered event
 // triggers removal from the nested questions map.
 func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {

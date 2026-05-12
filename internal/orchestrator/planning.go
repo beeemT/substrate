@@ -996,9 +996,7 @@ Then write exactly this structure:
 - concrete files, modules, interfaces, migrations, or commands expected to change
 
 ### Changes
-1. concrete implementation step
-2. concrete implementation step
-3. concrete implementation step
+- concrete implementation step
 
 ### Validation
 - exact tests, checks, or commands to run
@@ -1008,9 +1006,22 @@ Then write exactly this structure:
 
 One ## SubPlan section per repo listed in execution_groups. Omit repos requiring no changes.
 Every sub-plan must be implementation-ready for a later coding session.
-### Scope, ### Validation, and ### Risks must each contain at least one list item.
-### Changes must contain at least three concrete list items.
+### Scope, ### Changes, ### Validation, and ### Risks must each contain at least one list item.
 The Orchestration section must stay separate from repo-specific implementation details.
+
+## Valid List Formats
+All list sections accept these formats:
+- Bullet: "- Add feature X"
+- Numbered: "1. Add feature X"
+- Parenthetical: "1) Add feature X"
+- Checkbox: "- [ ] Add feature X"
+
+## Invalid (will be rejected)
+These look like lists but are not valid:
+- 1 Add feature X    (no period or paren after number)
+- -Add feature X     (no space after dash)
+- Step 1: Add X      (text before marker)
+Each list item must start with a list marker followed by a space.
 
 ## Before Concluding
 Confirm {{.SessionDraftPath}} contains a syntactically complete substrate-plan YAML block,
@@ -1030,7 +1041,8 @@ Re-read {{.SessionDraftPath}} to see your current plan, then address the errors 
 Rewrite {{.SessionDraftPath}} with your complete revised plan. The substrate-plan YAML
 block must appear first, before any prose.
 Each repo sub-plan must include ### Goal, ### Scope, ### Changes, ### Validation, and ### Risks.
-### Scope, ### Validation, and ### Risks need list items; ### Changes needs at least three concrete steps.
+### Scope, ### Validation, and ### Risks need list items; ### Changes needs at least one concrete step.
+All list sections accept bullets (-), numbered (1. or 1)), or checkboxes (- [ ]).
 `
 
 // revertWorkItemToIngested safely reverts a work item to SessionIngested status using a

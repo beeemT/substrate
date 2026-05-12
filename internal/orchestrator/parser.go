@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -222,7 +223,7 @@ type subPlanSectionRequirement struct {
 var requiredSubPlanSections = []subPlanSectionRequirement{
 	{heading: "Goal", requireBody: true},
 	{heading: "Scope", minListItems: 1, requireList: true, requireBody: true},
-	{heading: "Changes", minListItems: 3, requireList: true, requireBody: true},
+	{heading: "Changes", minListItems: 1, requireList: true, requireBody: true},
 	{heading: "Validation", minListItems: 1, requireList: true, requireBody: true},
 	{heading: "Risks", minListItems: 1, requireList: true, requireBody: true},
 }
@@ -274,9 +275,33 @@ func countMarkdownListItems(content string) int {
 	if strings.TrimSpace(content) == "" {
 		return 0
 	}
-	itemRe := regexp.MustCompile(`(?m)^\s*(?:[-*+] |\d+\. )\S`)
 
-	return len(itemRe.FindAllString(content, -1))
+	// Match various markdown list formats:
+	// - Bullets: "- Item", "* Item", "+ Item"
+	// - Numbered: "1. Item", "1) Item"
+	// - Lettered: "a. Item", "a) Item"
+	// - Parenthesized: "(1) Item"
+	// - Checkbox: "- [ ] Item", "- [x] Item"
+	patterns := []string{
+		`(?m)^\s*[-*+]\s+\S`,      // Bullets
+		`(?m)^\s*\d+\.\s+\S`,     // Numbered with dot: "1. Item"
+		`(?m)^\s*\d+\)\s+\S`,     // Numbered with paren: "1) Item"
+		`(?m)^\s*[a-z]\.\s+\S`,   // Lettered with dot: "a. Item"
+		`(?m)^\s*[a-z]\)\s+\S`,   // Lettered with paren: "a) Item"
+		`(?m)^\s*\(\d+\)\s+\S`,   // Parenthesized: "(1) Item"
+		`(?m)^\s*-\s+\[[ 	Xx]\]\s*\S`, // Checkbox: "- [ ] Item" or "- [x] Item"
+	}
+
+	matchedLines := make(map[int]bool)
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		for _, loc := range re.FindAllStringIndex(content, -1) {
+			line := bytes.Count([]byte(content[:loc[0]]), []byte("\n"))
+			matchedLines[line] = true
+		}
+	}
+
+	return len(matchedLines)
 }
 
 // flattenExecutionGroups flattens execution groups into a deduplicated list.

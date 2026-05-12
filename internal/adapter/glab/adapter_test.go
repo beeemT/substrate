@@ -636,6 +636,11 @@ func (r *inMemGitlabMRRepo) ListNonTerminal(_ context.Context, _ string) ([]doma
 	return out, nil
 }
 
+func (r *inMemGitlabMRRepo) Delete(_ context.Context, id string) error {
+	delete(r.data, id)
+	return nil
+}
+
 type inMemArtifactLinkRepo struct {
 	links []domain.SessionReviewArtifact
 }
@@ -823,5 +828,156 @@ func TestSyncMRDescriptionsOnApproval_NoRepos(t *testing.T) {
 	}
 	if len(stub.calls) != 0 {
 		t.Fatalf("expected no runner calls, got %d", len(stub.calls))
+	}
+}
+
+func TestResolveProjectPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid path with slash", func(t *testing.T) {
+		t.Parallel()
+		mr := domain.GitlabMergeRequest{
+			ProjectPath: "justtrack/frontend/paket",
+			WebURL:      "https://gitlab.justtrack.io/justtrack/frontend/paket/-/merge_requests/3977",
+		}
+		if got := resolveProjectPath(mr); got != "justtrack/frontend/paket" {
+			t.Fatalf("got %q, want %q", got, "justtrack/frontend/paket")
+		}
+	})
+
+	t.Run("local folder name corrected from WebURL", func(t *testing.T) {
+		t.Parallel()
+		mr := domain.GitlabMergeRequest{
+			ProjectPath: "backend.postback-service",
+			WebURL:      "https://gitlab.justtrack.io/justtrack/backend/postback-service/-/merge_requests/421",
+		}
+		if got := resolveProjectPath(mr); got != "justtrack/backend/postback-service" {
+			t.Fatalf("got %q, want %q", got, "justtrack/backend/postback-service")
+		}
+	})
+
+	t.Run("empty WebURL falls back to stored path", func(t *testing.T) {
+		t.Parallel()
+		mr := domain.GitlabMergeRequest{
+			ProjectPath: "some-folder",
+			WebURL:      "",
+		}
+		if got := resolveProjectPath(mr); got != "some-folder" {
+			t.Fatalf("got %q, want %q", got, "some-folder")
+		}
+	})
+
+	t.Run("WebURL without merge request path falls back", func(t *testing.T) {
+		t.Parallel()
+		mr := domain.GitlabMergeRequest{
+			ProjectPath: "some-folder",
+			WebURL:      "https://gitlab.justtrack.io/invalid-url",
+		}
+		if got := resolveProjectPath(mr); got != "some-folder" {
+			t.Fatalf("got %q, want %q", got, "some-folder")
+		}
+	})
+}
+
+func TestRefreshSingleMR_CorrectsBadProjectPath(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	stub := &stubRunner{
+		output: []byte(`{"iid":421,"state":"opened","web_url":"https://gitlab.justtrack.io/justtrack/backend/postback-service/-/merge_requests/421","draft":false}`),
+	}
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-1": {
+			ID:           "mr-1",
+			ProjectPath:  "backend.postback-service",
+			IID:          421,
+			State:        "draft",
+			SourceBranch: "sub-LIN-APP-1-fix",
+			WebURL:       "https://gitlab.justtrack.io/justtrack/backend/postback-service/-/merge_requests/421",
+		},
+	}}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs: service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, workspaceDir, stub.run)
+
+	a.refreshSingleMR(context.Background(), mrRepo.data["mr-1"])
+
+	// The stub should have been called with the corrected path.
+	if len(stub.calls) < 1 {
+		t.Fatalf("expected at least 1 glab call, got %d", len(stub.calls))
+	}
+
+	// Verify the API endpoint uses the corrected project path.
+	foundEndpoint := false
+	for _, call := range stub.calls {
+		for _, arg := range call.args {
+			if strings.Contains(arg, "/projects/justtrack%2Fbackend%2Fpostback-service/merge_requests/421") {
+				foundEndpoint = true
+				break
+			}
+		}
+	}
+	if !foundEndpoint {
+		t.Fatalf("expected API call with corrected path, calls: %+v", stub.calls)
+	}
+
+	// Verify the MR was updated with the correct path.
+	updated := mrRepo.data["mr-1"]
+	if updated.ProjectPath != "justtrack/backend/postback-service" {
+		t.Fatalf("project path = %q, want %q", updated.ProjectPath, "justtrack/backend/postback-service")
+	}
+	if updated.State != "ready" {
+		t.Fatalf("state = %q, want %q", updated.State, "ready")
+	}
+}
+
+func TestRefreshSingleMR_UsesOriginRemoteForBadStoredProjectPath(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	var calls []stubCall
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		joined := strings.Join(args, " ")
+		switch {
+		case name == "git" && joined == "remote get-url origin":
+			return []byte("git@gitlab.justtrack.io:justtrack/backend/postback-service.git\n"), nil
+		case name == "glab" && strings.HasPrefix(joined, "mr view "):
+			return nil, errors.New("no merge request for source branch")
+		case name == "glab" && strings.Contains(joined, "/projects/justtrack%2Fbackend%2Fpostback-service/merge_requests/421"):
+			return []byte(`{"iid":421,"state":"merged","web_url":"https://gitlab.justtrack.io/justtrack/backend/postback-service/-/merge_requests/421","draft":false}`), nil
+		case name == "glab" && strings.Contains(joined, "/projects/backend.postback-service/merge_requests/421"):
+			t.Fatalf("queried local folder name as GitLab project path: %q", joined)
+		}
+		return nil, errors.New("unexpected command: " + name + " " + joined)
+	}
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-1": {
+			ID:           "mr-1",
+			ProjectPath:  "backend.postback-service",
+			IID:          421,
+			State:        "ready",
+			SourceBranch: "sub-GL-421-fix",
+			WorktreePath: worktreeDir,
+		},
+	}}
+	repos := coreadapter.ReviewArtifactRepos{
+		GitlabMRs: service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{BaseURL: "https://gitlab.justtrack.io"}, repos, workspaceDir, runner)
+
+	a.refreshSingleMR(context.Background(), mrRepo.data["mr-1"])
+
+	updated := mrRepo.data["mr-1"]
+	if updated.ProjectPath != "justtrack/backend/postback-service" {
+		t.Fatalf("project path = %q, want justtrack/backend/postback-service", updated.ProjectPath)
+	}
+	if updated.State != "merged" {
+		t.Fatalf("state = %q, want merged", updated.State)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls = %+v, want git remote, local mr view, remote mr api", calls)
 	}
 }

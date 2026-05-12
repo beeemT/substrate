@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,7 +38,10 @@ var _ coreadapter.RepoLifecycleAdapter = &GlabAdapter{}
 var _ coreadapter.ReviewCommentFetcher = &GlabAdapter{}
 
 // Verify GlabAdapter implements mrRefresher interface.
-type mrRefresher interface { StartMRRefresh(ctx context.Context, workspaceID string) func() }
+type mrRefresher interface {
+	StartMRRefresh(ctx context.Context, workspaceID string) func()
+}
+
 var _ mrRefresher = &GlabAdapter{}
 
 // commandRunner executes an external command in dir and returns its combined output.
@@ -418,22 +420,33 @@ func (a *GlabAdapter) mrView(ctx context.Context, dir, branch string) (glabMRVie
 	return mr, true
 }
 
-// mrViewRemote fetches MR metadata using --repo with full URL (no local repo required).
+// mrViewRemote fetches MR metadata using glab api (no local repo required).
 func (a *GlabAdapter) mrViewRemote(ctx context.Context, projectPath string, iid int) (glabMRView, bool) {
-	repoURL := fmt.Sprintf("https://%s/%s", a.cfg.BaseURL, projectPath)
-	out, err := a.runner(ctx, "", "glab",
-		"mr", "view",
-		"--repo", repoURL,
-		"--output", "json",
-	)
+	// URL-encode the project path for the API
+	encodedPath := url.PathEscape(projectPath)
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d", encodedPath, iid)
+	slog.Debug("glab: mrViewRemote endpoint", "endpoint", endpoint)
+
+	hostname := glabHostname(a.cfg.BaseURL)
+
+	args := []string{"api", endpoint}
+	if hostname != "" {
+		args = append(args, "--hostname", hostname)
+	}
+	out, err := a.runner(ctx, a.workspaceDir, "glab", args...)
+	slog.Debug("glab: mrViewRemote result", "endpoint", endpoint, "iid", iid, "hasError", err != nil, "outputLen", len(out))
 	if err != nil {
+		slog.Warn("glab: mrViewRemote failed", "endpoint", endpoint, "iid", iid, "error", err, "output", string(out))
 		return glabMRView{}, false
 	}
 	var mr glabMRView
 	if err := json.Unmarshal(out, &mr); err != nil {
+		slog.Warn("glab: mrViewRemote unmarshal failed", "endpoint", endpoint, "iid", iid, "error", err, "output", string(out))
 		return glabMRView{}, false
 	}
+	slog.Debug("glab: mrViewRemote parsed", "endpoint", endpoint, "iid", iid, "mr.IID", mr.IID, "raw_state", strings.TrimSpace(mr.State), "artifact_state", glabArtifactState(mr), "draft", mr.Draft, "work_in_progress", mr.WorkInProgress, "web_url", strings.TrimSpace(mr.WebURL))
 	if mr.IID <= 0 {
+		slog.Warn("glab: mrViewRemote invalid IID", "endpoint", endpoint, "iid", iid, "mr.IID", mr.IID)
 		return glabMRView{}, false
 	}
 
@@ -444,8 +457,11 @@ func (a *GlabAdapter) mrViewRemote(ctx context.Context, projectPath string, iid 
 func (a *GlabAdapter) runGlabApi(ctx context.Context, repoDir string, endpoint string) ([]byte, error) {
 	args := []string{"api", endpoint}
 	if repoDir == "" {
-		args = append([]string{"--hostname", a.cfg.BaseURL}, args...)
-		return a.runner(ctx, "", "glab", args...)
+		hostname := glabHostname(a.cfg.BaseURL)
+		if hostname != "" {
+			args = append([]string{"--hostname", hostname}, args...)
+		}
+		return a.runner(ctx, a.workspaceDir, "glab", args...)
 	}
 	return a.runner(ctx, repoDir, "glab", args...)
 }
@@ -665,6 +681,115 @@ func gitlabProjectPathFromMRURL(rawURL string) string {
 	return strings.Trim(projectPath, "/")
 }
 
+func gitlabProjectPathFromRemoteURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+	if strings.Contains(trimmed, "://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return ""
+		}
+
+		return projectPathFromRemotePath(parsed.Path)
+	}
+	if strings.HasPrefix(trimmed, "git@") || strings.HasPrefix(trimmed, "ssh://") {
+		trimmed = strings.TrimPrefix(trimmed, "ssh://")
+		if at := strings.Index(trimmed, "@"); at >= 0 {
+			trimmed = trimmed[at+1:]
+		}
+		if colon := strings.Index(trimmed, ":"); colon >= 0 {
+			trimmed = trimmed[colon+1:]
+		} else if slash := strings.Index(trimmed, "/"); slash >= 0 {
+			trimmed = trimmed[slash+1:]
+		}
+
+		return projectPathFromRemotePath(trimmed)
+	}
+
+	return ""
+}
+
+func projectPathFromRemotePath(path string) string {
+	projectPath := strings.Trim(path, "/")
+	if !strings.Contains(projectPath, "/") {
+		return ""
+	}
+
+	return projectPath
+}
+
+func glabHostname(baseURL string) string {
+	trimmed := strings.TrimSpace(baseURL)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	trimmed = strings.TrimPrefix(trimmed, "https://")
+	trimmed = strings.TrimPrefix(trimmed, "http://")
+	if host, _, ok := strings.Cut(trimmed, "/"); ok {
+		return host
+	}
+
+	return trimmed
+}
+
+// resolveProjectPath returns the canonical GitLab project path for an MR.
+// If the stored path looks wrong (no "/", suggesting a local folder name),
+// it extracts the correct path from the stored WebURL.
+func resolveProjectPath(mr domain.GitlabMergeRequest) string {
+	// A valid GitLab project path always contains at least one "/" (group/repo or group/subgroup/repo).
+	if strings.Contains(mr.ProjectPath, "/") {
+		return mr.ProjectPath
+	}
+
+	// Stored path looks like a local folder name. Try to extract the real path from WebURL.
+	if path := gitlabProjectPathFromMRURL(mr.WebURL); path != "" {
+		return path
+	}
+
+	// Last resort: return the stored path unchanged.
+	return mr.ProjectPath
+}
+
+func (a *GlabAdapter) refreshProjectPath(ctx context.Context, mr domain.GitlabMergeRequest, repoDir string, hasLocalRepo bool) (string, bool) {
+	if projectPath := gitlabProjectPathFromMRURL(mr.WebURL); projectPath != "" {
+		return projectPath, true
+	}
+	projectPath := strings.TrimSpace(mr.ProjectPath)
+	if strings.Contains(projectPath, "/") {
+		return projectPath, true
+	}
+	if hasLocalRepo {
+		localProjectPath, err := a.projectPathFromLocalRepo(ctx, repoDir)
+		if err != nil {
+			slog.Warn("glab: resolve project path from local repo failed", "iid", mr.IID, "repoDir", repoDir, "error", err)
+		} else if localProjectPath != "" {
+			return localProjectPath, true
+		}
+	}
+
+	return projectPath, false
+}
+
+func (a *GlabAdapter) projectPathFromLocalRepo(ctx context.Context, repoDir string) (string, error) {
+	out, err := a.runner(ctx, repoDir, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return "", fmt.Errorf("git remote get-url origin: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	projectPath := gitlabProjectPathFromRemoteURL(string(out))
+	if projectPath == "" {
+		return "", fmt.Errorf("parse origin remote url %q", strings.TrimSpace(string(out)))
+	}
+
+	return projectPath, nil
+}
+
 func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemID string, artifact domain.ReviewArtifact, projectPath string, iid int) {
 	projectPath = strings.TrimSpace(projectPath)
 	if projectPath == "" || !strings.Contains(projectPath, "/") {
@@ -852,33 +977,80 @@ func (a *GlabAdapter) refreshMRs(ctx context.Context) {
 		return
 	}
 	for _, mr := range mrs {
+		if err := ctx.Err(); err != nil {
+			slog.Debug("glab: refresh mrs context canceled", "error", err)
+			return
+		}
 		a.refreshSingleMR(ctx, mr)
 	}
 }
 
 func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMergeRequest) {
+	started := time.Now()
 	repoDir, hasLocalRepo := a.refreshMRRepoDir(mr)
+	projectPath, hasProjectPath := a.refreshProjectPath(ctx, mr, repoDir, hasLocalRepo)
+	if !hasProjectPath {
+		slog.Warn("glab: refresh mr project path unresolved", "iid", mr.IID, "stored_project", mr.ProjectPath, "web_url", mr.WebURL, "repoDir", repoDir, "hasLocalRepo", hasLocalRepo)
+		return
+	}
+	if projectPath != mr.ProjectPath {
+		slog.Info("glab: corrected project path", "iid", mr.IID, "old", mr.ProjectPath, "new", projectPath)
+	}
+	slog.Debug("glab: refreshSingleMR", "iid", mr.IID, "project", projectPath, "repoDir", repoDir, "hasLocalRepo", hasLocalRepo, "workspaceDir", a.workspaceDir)
 	var fresh glabMRView
 	var ok bool
+
+	slog.Debug("glab: refreshSingleMR local lookup", "iid", mr.IID, "hasLocalRepo", hasLocalRepo)
 
 	// Try local repo first, fall back to remote lookup.
 	if hasLocalRepo {
 		fresh, ok = a.mrView(ctx, repoDir, mr.SourceBranch)
+		slog.Debug("glab: refreshSingleMR local result", "iid", mr.IID, "ok", ok)
 	}
 	if !ok {
-		fresh, ok = a.mrViewRemote(ctx, mr.ProjectPath, mr.IID)
+		fresh, ok = a.mrViewRemote(ctx, projectPath, mr.IID)
+		slog.Debug("glab: refreshSingleMR remote result", "iid", mr.IID, "ok", ok, "raw_state", strings.TrimSpace(fresh.State), "artifact_state", glabArtifactState(fresh), "draft", fresh.Draft, "work_in_progress", fresh.WorkInProgress)
 		if !ok {
-			slog.Warn("glab: refresh mr lookup failed", "iid", mr.IID, "project", mr.ProjectPath)
+			if err := ctx.Err(); err != nil {
+				slog.Warn("glab: refresh mr lookup canceled", "iid", mr.IID, "project", projectPath, "error", err)
+				return
+			}
+			slog.Warn("glab: refresh mr lookup failed", "iid", mr.IID, "project", projectPath, "elapsed", time.Since(started))
 			return
 		}
-		// No local repo; pass empty dir so glab api uses --hostname.
+		// Remote lookup succeeded without repository-local glab state; use
+		// hostname-based API calls for follow-up review/check refreshes too.
 		repoDir = ""
 	}
+
+	// If the remote response contains a WebURL, extract the canonical path from it.
+	// This handles cases where the stored path was partially wrong but passed the
+	// initial slash check (e.g., a different subgroup structure).
+	if fresh.WebURL != "" {
+		if remotePath := gitlabProjectPathFromMRURL(fresh.WebURL); remotePath != "" {
+			projectPath = remotePath
+		}
+	}
+
+	// If the project path changed, the unique key (project_path, iid) in the DB
+	// differs from the old row. Delete the old row so the upsert below creates a
+	// fresh row with the correct path. Reviews and checks cascade on delete.
+	if projectPath != mr.ProjectPath {
+		slog.Info("glab: deleting old MR row with corrected path",
+			"iid", mr.IID, "old_path", mr.ProjectPath, "new_path", projectPath)
+		if err := a.repos.GitlabMRs.Delete(ctx, mr.ID); err != nil {
+			slog.Warn("glab: failed to delete old MR row before path correction",
+				"iid", mr.IID, "id", mr.ID, "error", err)
+		}
+	}
+
+	state := glabArtifactState(fresh)
+	slog.Debug("glab: refreshSingleMR updating", "iid", mr.IID, "raw_state", strings.TrimSpace(fresh.State), "state", state, "draft", fresh.Draft, "work_in_progress", fresh.WorkInProgress)
 	updated := domain.GitlabMergeRequest{
 		ID:           mr.ID,
-		ProjectPath:  mr.ProjectPath,
+		ProjectPath:  projectPath,
 		IID:          fresh.IID,
-		State:        glabArtifactState(fresh),
+		State:        state,
 		Draft:        fresh.Draft || fresh.WorkInProgress,
 		SourceBranch: mr.SourceBranch,
 		WebURL:       strings.TrimSpace(fresh.WebURL),
@@ -887,12 +1059,15 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 		UpdatedAt:    time.Now(),
 	}
 	if err := a.repos.GitlabMRs.Upsert(ctx, updated); err != nil {
-		slog.Warn("glab: refresh mr upsert failed", "iid", mr.IID, "error", err)
+		slog.Warn("glab: refresh mr upsert failed", "iid", mr.IID, "project", projectPath, "state", state, "error", err)
+		return
 	}
+	slog.Debug("glab: refreshSingleMR upserted", "iid", mr.IID, "project", projectPath, "state", state, "elapsed", time.Since(started))
 
 	// Fetch and upsert MR reviews.
-	state := glabArtifactState(fresh)
+	slog.Debug("glab: refreshSingleMR terminal state check", "iid", mr.IID, "state", state)
 	if state == "merged" || state == "closed" {
+		slog.Debug("glab: refreshSingleMR deleting reviews/checks", "iid", mr.IID, "state", state)
 		if a.repos.GitlabMRReviews != nil {
 			if err := a.repos.GitlabMRReviews.DeleteByMRID(ctx, mr.ID); err != nil {
 				slog.Warn("glab: delete mr reviews on terminal state failed", "iid", mr.IID, "error", err)
@@ -904,55 +1079,33 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 			}
 		}
 	} else {
-		a.refreshMRReviews(ctx, mr, repoDir)
-		a.refreshMRChecks(ctx, mr, repoDir)
+		// Build a corrected MR copy for review/check refresh (they use mr.ProjectPath in API calls).
+		corrected := mr
+		corrected.ProjectPath = projectPath
+		corrected.WebURL = strings.TrimSpace(fresh.WebURL)
+		slog.Debug("glab: refreshSingleMR refreshing reviews/checks", "iid", mr.IID)
+		a.refreshMRReviews(ctx, corrected, repoDir)
+		slog.Debug("glab: refreshSingleMR reviews done", "iid", mr.IID)
+		a.refreshMRChecks(ctx, corrected, repoDir)
+		slog.Debug("glab: refreshSingleMR checks done", "iid", mr.IID)
 	}
 
 	// Detect merge transition: MR just became merged.
-	if glabArtifactState(fresh) == "merged" && mr.State != "merged" {
+	if state == "merged" && mr.State != "merged" {
 		a.checkAllMerged(ctx, mr.ID)
 	}
 }
 
 func (a *GlabAdapter) refreshMRRepoDir(mr domain.GitlabMergeRequest) (string, bool) {
-	candidates := make([]string, 0, 2)
-	seen := make(map[string]struct{}, 2)
-	addCandidate := func(dir string) {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			return
-		}
-		if _, ok := seen[dir]; ok {
-			return
-		}
-		seen[dir] = struct{}{}
-		candidates = append(candidates, dir)
-	}
-
-	addCandidate(mr.WorktreePath)
-	if strings.TrimSpace(a.workspaceDir) != "" && strings.TrimSpace(mr.ProjectPath) != "" {
-		addCandidate(filepath.Join(a.workspaceDir, mr.ProjectPath))
-	}
-	if len(candidates) == 0 {
+	dir := strings.TrimSpace(mr.WorktreePath)
+	if dir == "" {
 		return "", false
 	}
-
-	var lastDir string
-	var lastErr error
-	for i, dir := range candidates {
-		if _, err := os.Stat(dir); err == nil {
-			return dir, true
-		} else {
-			lastDir = dir
-			lastErr = err
-			// Only log for non-worktree candidates (worktree paths may not exist for MRs without active tasks)
-			if i > 0 && i < len(candidates)-1 {
-				slog.Debug("glab: refresh mr repo dir candidate unavailable", "dir", dir, "iid", mr.IID, "error", err)
-			}
-		}
+	if _, err := os.Stat(dir); err == nil {
+		return dir, true
+	} else {
+		slog.Warn("glab: refresh mr repo dir not found", "dir", dir, "iid", mr.IID, "error", err)
 	}
-
-	slog.Warn("glab: refresh mr repo dir not found", "dir", lastDir, "iid", mr.IID, "error", lastErr)
 
 	return "", false
 }

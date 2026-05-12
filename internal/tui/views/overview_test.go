@@ -284,6 +284,11 @@ func (r *overviewGitlabMRRepo) ListNonTerminal(_ context.Context, _ string) ([]d
 	return nil, nil
 }
 
+func (r *overviewGitlabMRRepo) Delete(_ context.Context, id string) error {
+	delete(r.mrs, id)
+	return nil
+}
+
 func TestBuildArtifactItemsMergesRecordedGitLabWorktreePath(t *testing.T) {
 	t.Parallel()
 

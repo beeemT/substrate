@@ -23,21 +23,19 @@ func NewEventConsumer(app *App, sub *event.Subscriber) *EventConsumer {
 	return &EventConsumer{app: app, sub: sub}
 }
 
-// BridgeCmd returns a tea.Cmd that reads a single event from the subscriber
-// channel and forwards it as DomainEventMsg to the update loop. Multiple
-// invocations drain one event per call, ensuring each event gets processed.
+// BridgeCmd returns a tea.Cmd that waits for a single event from the subscriber
+// channel and forwards it as DomainEventMsg to the update loop. The App
+// reschedules the command after every delivered event, keeping exactly one
+// bridge command active while avoiding a polling loop that can miss future
+// events after an empty read.
 func (ec *EventConsumer) BridgeCmd() tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case evt, ok := <-ec.sub.C:
-			if !ok {
-				return nil
-			}
-			slog.Debug("EventConsumer received event", "eventType", evt.EventType, "workspaceID", evt.WorkspaceID)
-			return DomainEventMsg{Event: evt}
-		default:
+		evt, ok := <-ec.sub.C
+		if !ok {
 			return nil
 		}
+		slog.Debug("EventConsumer received event", "eventType", evt.EventType, "workspaceID", evt.WorkspaceID)
+		return DomainEventMsg{Event: evt}
 	}
 }
 
@@ -74,8 +72,8 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventReimplementationStarted: decodeReimplementationStarted,
 	domain.EventAdapterError:            decodeAdapterError,
 	domain.EventPRMerged:                decodePRMerged,
-	domain.EventImplementationStarted: decodeImplementationStarted,
-	domain.EventPRReviewStateChanged: decodePRReviewStateChanged,
+	domain.EventImplementationStarted:   decodeImplementationStarted,
+	domain.EventPRReviewStateChanged:    decodePRReviewStateChanged,
 }
 
 // toMsg converts a domain.SystemEvent to a tea.Msg for the update loop.

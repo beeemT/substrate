@@ -144,6 +144,7 @@ type GitlabMergeRequestRepository interface {
 	GetByIID(ctx context.Context, projectPath string, iid int) (domain.GitlabMergeRequest, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.GitlabMergeRequest, error)
 	ListNonTerminal(ctx context.Context, workspaceID string) ([]domain.GitlabMergeRequest, error)
+	Delete(ctx context.Context, id string) error
 }
 
 // SessionReviewArtifactRepository provides persistence for the link between work items and PR/MR records.

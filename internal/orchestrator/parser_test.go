@@ -327,3 +327,111 @@ func validSubPlanBody(goal string) string {
 		"- Preserve existing behavior at the integration boundary.",
 	}, "\n")
 }
+
+func TestCountMarkdownListItems(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected int
+	}{
+		{
+			name:     "empty content",
+			content:  "",
+			expected: 0,
+		},
+		{
+			name:     "whitespace only",
+			content:  "   \n\t  \n",
+			expected: 0,
+		},
+		{
+			name:     "bullet list",
+			content:  "- Add feature X\n- Update Y\n- Fix Z",
+			expected: 3,
+		},
+		{
+			name:     "asterisk bullet",
+			content:  "* Add feature X\n* Update Y",
+			expected: 2,
+		},
+		{
+			name:     "plus bullet",
+			content:  "+ Add feature X",
+			expected: 1,
+		},
+		{
+			name:     "numbered with dot",
+			content:  "1. Add feature X\n2. Update Y\n3. Fix Z",
+			expected: 3,
+		},
+		{
+			name:     "numbered with paren",
+			content:  "1) Add feature X\n2) Update Y",
+			expected: 2,
+		},
+		{
+			name:     "lettered with dot",
+			content:  "a. Add feature X\nb. Update Y",
+			expected: 2,
+		},
+		{
+			name:     "lettered with paren",
+			content:  "a) Add feature X\nb) Update Y",
+			expected: 2,
+		},
+		{
+			name:     "parenthesized numbers",
+			content:  "(1) Add feature X\n(2) Update Y",
+			expected: 2,
+		},
+		{
+			name:     "checkbox unchecked",
+			content:  "- [ ] Add feature X\n- [ ] Update Y",
+			expected: 2,
+		},
+		{
+			name:     "checkbox checked",
+			content:  "- [x] Add feature X\n- [X] Update Y",
+			expected: 2,
+		},
+		{
+			name:     "mixed formats",
+			content:  "- Bullet item\n1. Numbered item\n- [ ] Checkbox item",
+			expected: 3,
+		},
+		{
+			name:     "indented bullet",
+			content:  "  - Indented item\n    - Deep indent",
+			expected: 2,
+		},
+		{
+			name:     "numbered without space rejected",
+			content:  "1Add feature X\n2Update Y",
+			expected: 0,
+		},
+		{
+			name:     "dash without space rejected",
+			content:  "-Add feature X",
+			expected: 0,
+		},
+		{
+			name:     "text before marker rejected",
+			content:  "Step 1: Add feature X\nItem 2: Update Y",
+			expected: 0,
+		},
+		{
+			name:     "single item",
+			content:  "- Add the single feature",
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := countMarkdownListItems(tt.content)
+			if result != tt.expected {
+				t.Errorf("countMarkdownListItems(%q) = %d, want %d", tt.content, result, tt.expected)
+			}
+		})
+	}
+}

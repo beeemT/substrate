@@ -80,3 +80,10 @@ func (s *GitlabMRService) ListNonTerminal(ctx context.Context, workspaceID strin
 	})
 	return result, err
 }
+
+// Delete removes a GitLab merge request by ID.
+func (s *GitlabMRService) Delete(ctx context.Context, id string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.GitlabMRs.Delete(ctx, id)
+	})
+}
