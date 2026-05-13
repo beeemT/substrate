@@ -713,6 +713,16 @@ func (a *App) upsertWorkItem(workItem domain.Session) {
 	a.workItems = append(a.workItems, workItem)
 }
 
+func (a *App) upsertTask(task domain.Task) {
+	for i := range a.sessions {
+		if a.sessions[i].ID == task.ID {
+			a.sessions[i] = task
+			return
+		}
+	}
+	a.sessions = append(a.sessions, task)
+}
+
 func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
 	a.sidebarMode = sidebarPaneSessions
 	a.mainFocus = mainFocusSidebar
@@ -1250,6 +1260,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		if a.eventConsumer != nil {
+			if typedMsg := a.eventConsumer.toMsg(msg.Event); typedMsg != nil {
+				cmds = append(cmds, func() tea.Msg { return typedMsg })
+			}
+		}
+
 		switch domain.EventType(msg.Event.EventType) {
 		// Work item state changes → targeted load of work item and its tasks
 		case domain.EventWorkItemIngested:
@@ -1316,6 +1332,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), workItemID))
+			}
+			if a.currentWorkItemID != "" {
+				cmds = append(cmds, a.updateContentFromState())
+			}
+
+		case domain.EventImplementationStarted:
+			workItemID := extractWorkItemID(msg.Event.Payload)
+			if workItemID != "" {
+				cmds = append(cmds,
+					LoadSessionCmd(a.provider.Session(), workItemID),
+					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
+				)
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1495,6 +1523,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Event-driven typed message handlers ---
 
 	case WorkItemIngestedMsg:
+		if msg.Session.ID != "" {
+			a.upsertWorkItem(msg.Session)
+		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if msg.WorkItemID != "" {
@@ -1506,6 +1537,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkItemUpdatedMsg:
+		if msg.Session.ID != "" {
+			a.upsertWorkItem(msg.Session)
+		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if msg.WorkItemID != "" {
@@ -1561,7 +1595,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskStartedMsg:
-		a.sessions = append(a.sessions, msg.Task)
+		a.upsertTask(msg.Task)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -1570,12 +1604,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskUpdatedMsg:
-		for i := range a.sessions {
-			if a.sessions[i].ID == msg.Task.ID {
-				a.sessions[i] = msg.Task
-				break
-			}
-		}
+		a.upsertTask(msg.Task)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {

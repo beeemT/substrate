@@ -152,6 +152,164 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 	}
 }
 
+func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
+	now := time.Now()
+	task := domain.Task{
+		ID:          "impl-session-1",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-integration",
+		Phase:       domain.TaskPhaseImplementation,
+		Status:      domain.AgentSessionRunning,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	payload, err := json.Marshal(map[string]any{
+		"session":      task,
+		"work_item_id": "wi-1",
+		"session_id":   task.ID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	app := newTestApp(Services{WorkspaceID: "ws-integration", WorkspaceName: "integration-test", Settings: &SettingsService{}})
+	app.busSub = &event.Subscriber{}
+	app.eventConsumer = NewEventConsumer(app, app.busSub)
+	updated, cmd := app.Update(DomainEventMsg{Event: domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionStarted),
+		WorkspaceID: "ws-integration",
+		Payload:     string(payload),
+		CreatedAt:   now,
+	}})
+	app = updated.(*App)
+
+	typed := findBatchMsg[TaskStartedMsg](t, cmd)
+	updated, _ = app.Update(typed)
+	app = updated.(*App)
+	if len(app.sessions) != 1 {
+		t.Fatalf("sessions length = %d, want 1", len(app.sessions))
+	}
+	if got := app.sessions[0]; got.ID != task.ID || got.Phase != domain.TaskPhaseImplementation || got.Status != domain.AgentSessionRunning {
+		t.Fatalf("session = %+v, want implementation running task %+v", got, task)
+	}
+}
+
+func TestDomainEventMsg_ImplementationStartedReloadsWorkItemAndTasks(t *testing.T) {
+	now := time.Now()
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-integration", Title: "Implement me", State: domain.SessionImplementing, CreatedAt: now, UpdatedAt: now}
+	task := domain.Task{ID: "impl-session-1", WorkItemID: "wi-1", WorkspaceID: "ws-integration", Phase: domain.TaskPhaseImplementation, Status: domain.AgentSessionRunning, CreatedAt: now, UpdatedAt: now}
+	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.Task{task.ID: task}}
+	sessionRepo := &mockSessionRepoForSession{workItems: map[string]domain.Session{workItem.ID: workItem}}
+	bus := event.NewBus(event.BusConfig{})
+	t.Cleanup(func() { bus.Close() })
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-integration",
+		WorkspaceName: "integration-test",
+		Task: service.NewTaskService(repository.NoopTransacter{
+			Res: repository.Resources{Tasks: taskRepo},
+		}, bus),
+		Session: service.NewSessionService(repository.NoopTransacter{
+			Res: repository.Resources{Sessions: sessionRepo},
+		}, bus),
+		Settings: &SettingsService{},
+	})
+	app.busSub = &event.Subscriber{}
+	app.eventConsumer = NewEventConsumer(app, app.busSub)
+	payload, err := json.Marshal(map[string]any{"plan_id": "plan-1", "work_item_id": "wi-1"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	_, cmd := app.Update(DomainEventMsg{Event: domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventImplementationStarted),
+		WorkspaceID: "ws-integration",
+		Payload:     string(payload),
+		CreatedAt:   now,
+	}})
+
+	foundSession := false
+	foundTasks := false
+	foundTyped := false
+	for _, msg := range drainBatchMsgs(t, cmd) {
+		switch m := msg.(type) {
+		case SessionLoadedMsg:
+			foundSession = m.WorkItem.ID == "wi-1" && m.WorkItem.State == domain.SessionImplementing
+		case TasksForSessionLoadedMsg:
+			foundTasks = m.WorkItemID == "wi-1" && len(m.Sessions) == 1 && m.Sessions[0].ID == task.ID
+		case ImplementationStartedMsg:
+			foundTyped = m.WorkItemID == "wi-1"
+		}
+	}
+	if !foundSession {
+		t.Fatal("implementation-started event did not schedule work item reload")
+	}
+	if !foundTasks {
+		t.Fatal("implementation-started event did not schedule task reload")
+	}
+	if !foundTyped {
+		t.Fatal("implementation-started event was not decoded into typed message")
+	}
+}
+
+func findBatchMsg[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	if cmd == nil {
+		var zero T
+		t.Fatalf("nil command; want %T", zero)
+		return zero
+	}
+	msg := cmd()
+	if typed, ok := msg.(T); ok {
+		return typed
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		var zero T
+		t.Fatalf("command returned %T; want %T", msg, zero)
+		return zero
+	}
+	for i, sub := range batch {
+		if i == 0 || sub == nil {
+			continue // first command is the event bridge and waits for the next event
+		}
+		if subMsg := sub(); subMsg != nil {
+			if typed, ok := subMsg.(T); ok {
+				return typed
+			}
+		}
+	}
+	var zero T
+	t.Fatalf("batch did not contain %T", zero)
+	return zero
+}
+
+func drainBatchMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		if msg == nil {
+			return nil
+		}
+		return []tea.Msg{msg}
+	}
+	msgs := make([]tea.Msg, 0, len(batch))
+	for i, sub := range batch {
+		if i == 0 || sub == nil {
+			continue // first command is the event bridge and waits for the next event
+		}
+		if subMsg := sub(); subMsg != nil {
+			msgs = append(msgs, subMsg)
+		}
+	}
+	return msgs
+}
+
 // mockTaskRepoForSession implements repository.TaskRepository for testing.
 type mockTaskRepoForSession struct {
 	tasks map[string]domain.Task
