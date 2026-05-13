@@ -1726,10 +1726,12 @@ func gitlabProjectPath(iss issue) string {
 			return strings.TrimSpace(parts[0])
 		}
 	}
-	if strings.TrimSpace(iss.WebURL) == "" {
-		return ""
-	}
-	parsed, err := url.Parse(iss.WebURL)
+
+	return gitlabProjectPathFromIssueURL(iss.WebURL)
+}
+
+func gitlabProjectPathFromIssueURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return ""
 	}
@@ -1740,6 +1742,111 @@ func gitlabProjectPath(iss issue) string {
 	}
 
 	return strings.TrimPrefix(parsed.Path[:idx], "/")
+}
+
+func refreshIssueProjectPath(sess domain.Session, externalProjectPath string) string {
+	if path := gitlabIssueProjectPathFromSessionMetadata(sess.Metadata); path != "" {
+		return path
+	}
+	projectPath := strings.TrimSpace(externalProjectPath)
+	if strings.Contains(projectPath, "/") {
+		return projectPath
+	}
+
+	return projectPath
+}
+
+func gitlabIssueProjectPathFromSessionMetadata(metadata map[string]any) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	if path := gitlabProjectPathFromIssueURL(metadataString(metadata, "url")); path != "" {
+		return path
+	}
+	if path := metadataString(metadata, "project_path"); strings.Contains(path, "/") {
+		return strings.TrimSpace(path)
+	}
+	if path := gitlabIssueProjectPathFromTrackerRefs(metadata["tracker_refs"]); path != "" {
+		return path
+	}
+	if path := gitlabIssueProjectPathFromSourceSummaries(metadata["source_summaries"]); path != "" {
+		return path
+	}
+
+	return ""
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+
+	return strings.TrimSpace(value)
+}
+
+func gitlabIssueProjectPathFromTrackerRefs(value any) string {
+	switch refs := value.(type) {
+	case []domain.TrackerReference:
+		for _, ref := range refs {
+			if ref.Provider == adapterName && ref.Kind == "issue" {
+				if path := gitlabProjectPathFromIssueURL(ref.URL); path != "" {
+					return path
+				}
+				if path := strings.TrimSpace(ref.Repo); strings.Contains(path, "/") {
+					return path
+				}
+			}
+		}
+	case []any:
+		for _, raw := range refs {
+			ref, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if provider := metadataString(ref, "provider"); provider != "" && provider != adapterName {
+				continue
+			}
+			if kind := metadataString(ref, "kind"); kind != "" && kind != "issue" {
+				continue
+			}
+			if path := gitlabProjectPathFromIssueURL(metadataString(ref, "url")); path != "" {
+				return path
+			}
+			if path := metadataString(ref, "repo"); strings.Contains(path, "/") {
+				return path
+			}
+		}
+	}
+
+	return ""
+}
+
+func gitlabIssueProjectPathFromSourceSummaries(value any) string {
+	summaries, ok := value.([]any)
+	if !ok {
+		return ""
+	}
+	for _, raw := range summaries {
+		summary, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if provider := metadataString(summary, "provider"); provider != "" && provider != adapterName {
+			continue
+		}
+		if kind := metadataString(summary, "kind"); kind != "" && kind != "issue" {
+			continue
+		}
+		if path := gitlabProjectPathFromIssueURL(metadataString(summary, "url")); path != "" {
+			return path
+		}
+		if path := metadataString(summary, "container"); strings.Contains(path, "/") {
+			return path
+		}
+	}
+
+	return ""
 }
 
 func gitlabIssueSelectionID(defaultProjectID int64, iss issue) string {
@@ -1986,8 +2093,9 @@ func (a *GitlabAdapter) refreshWorkItemStatuses(ctx context.Context, workspaceID
 	// Group sessions by project for batch fetching.
 	// Map structure: projectPath -> map of sessionID -> (session, iid)
 	type sessionRef struct {
-		session domain.Session
-		iid     string
+		session       domain.Session
+		iid           string
+		parsedProject string
 	}
 	projectSessions := make(map[string]map[string]sessionRef)
 	for _, sess := range sessions {
@@ -2000,11 +2108,18 @@ func (a *GitlabAdapter) refreshWorkItemStatuses(ctx context.Context, workspaceID
 		if err != nil || projectPath == "" || iid == 0 {
 			continue
 		}
-
-		if projectSessions[projectPath] == nil {
-			projectSessions[projectPath] = make(map[string]sessionRef)
+		resolvedProjectPath := refreshIssueProjectPath(sess, projectPath)
+		if resolvedProjectPath == "" {
+			continue
 		}
-		projectSessions[projectPath][sess.ID] = sessionRef{session: sess, iid: strconv.FormatInt(iid, 10)}
+		if resolvedProjectPath != projectPath {
+			slog.Info("gitlab: refresh status: corrected project path", "sessionID", sess.ID, "old", projectPath, "new", resolvedProjectPath)
+		}
+
+		if projectSessions[resolvedProjectPath] == nil {
+			projectSessions[resolvedProjectPath] = make(map[string]sessionRef)
+		}
+		projectSessions[resolvedProjectPath][sess.ID] = sessionRef{session: sess, iid: strconv.FormatInt(iid, 10), parsedProject: projectPath}
 	}
 
 	// Fetch fresh status for each project.
@@ -2025,9 +2140,15 @@ func (a *GitlabAdapter) refreshWorkItemStatuses(ctx context.Context, workspaceID
 		for _, ref := range sessions {
 			iid, _ := strconv.ParseInt(ref.iid, 10, 64)
 			if status, ok := statuses[iid]; ok {
+				if ref.session.Metadata == nil {
+					ref.session.Metadata = map[string]any{}
+				}
 				ref.session.Metadata["tracker_state"] = status
+				if projectPath != ref.parsedProject {
+					ref.session.ExternalID = formatExternalID(projectPath, iid)
+				}
 				if err := a.repos.Sessions.Update(ctx, ref.session); err != nil {
-					slog.Warn("gitlab: refresh status: update session failed", "sessionID", ref.session.ID, "error", err)
+					slog.Warn("gitlab: refresh status: update session failed", "sessionID", ref.session.ID, "project", projectPath, "error", err)
 				}
 			}
 		}

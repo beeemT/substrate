@@ -13,6 +13,8 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -72,6 +74,138 @@ func TestParseExternalID(t *testing.T) {
 	if _, _, err := parseExternalID("gl:issue:bad"); err == nil {
 		t.Fatal("expected invalid external id error")
 	}
+}
+
+func TestRefreshWorkItemStatusesUsesIssueURLProjectPath(t *testing.T) {
+	t.Parallel()
+
+	var gotFullPath string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/api/graphql" {
+			t.Fatalf("unexpected request path %q", req.URL.Path)
+		}
+
+		var body struct {
+			Variables struct {
+				FullPath string   `json:"fullPath"`
+				IIDs     []string `json:"iids"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		gotFullPath = body.Variables.FullPath
+		if gotFullPath != "justtrack/backend/postback-service" {
+			t.Fatalf("fullPath = %q, want justtrack/backend/postback-service", gotFullPath)
+		}
+		if len(body.Variables.IIDs) != 1 || body.Variables.IIDs[0] != "4796" {
+			t.Fatalf("iids = %#v, want [4796]", body.Variables.IIDs)
+		}
+
+		return jsonResponse(t, http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"project": map[string]any{
+					"workItems": map[string]any{
+						"nodes": []any{map[string]any{
+							"iid": "4796",
+							"widgets": []any{map[string]any{
+								"type":   "STATUS",
+								"status": map[string]any{"name": "in_review"},
+							}},
+						}},
+					},
+				},
+			},
+		}), nil
+	}))
+	a.graphqlSupported = true
+
+	repo := &inMemorySessionRepo{items: map[string]domain.Session{
+		"wi-1": {
+			ID:          "wi-1",
+			WorkspaceID: "ws-1",
+			ExternalID:  "gl:issue:backend.postback-service#4796",
+			Source:      adapterName,
+			SourceScope: domain.ScopeIssues,
+			State:       domain.SessionIngested,
+			Metadata: map[string]any{
+				"url":           "https://gitlab.example.com/justtrack/backend/postback-service/-/issues/4796",
+				"tracker_state": "opened",
+			},
+		},
+	}}
+	a.repos.Sessions = service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, nil)
+
+	a.refreshWorkItemStatuses(context.Background(), "ws-1")
+
+	if gotFullPath != "justtrack/backend/postback-service" {
+		t.Fatalf("GraphQL fullPath = %q, want corrected project path", gotFullPath)
+	}
+	updated := repo.items["wi-1"]
+	if updated.ExternalID != "gl:issue:justtrack/backend/postback-service#4796" {
+		t.Fatalf("ExternalID = %q, want corrected full project path", updated.ExternalID)
+	}
+	if got := updated.Metadata["tracker_state"]; got != "in_review" {
+		t.Fatalf("tracker_state = %#v, want in_review", got)
+	}
+}
+
+type inMemorySessionRepo struct {
+	items map[string]domain.Session
+}
+
+func (r *inMemorySessionRepo) Get(_ context.Context, id string) (domain.Session, error) {
+	item, ok := r.items[id]
+	if !ok {
+		return domain.Session{}, repository.ErrNotFound
+	}
+
+	return item, nil
+}
+
+func (r *inMemorySessionRepo) List(_ context.Context, filter repository.SessionFilter) ([]domain.Session, error) {
+	items := make([]domain.Session, 0, len(r.items))
+	for _, item := range r.items {
+		if filter.WorkspaceID != nil && item.WorkspaceID != *filter.WorkspaceID {
+			continue
+		}
+		if filter.ExternalID != nil && item.ExternalID != *filter.ExternalID {
+			continue
+		}
+		if filter.State != nil && item.State != *filter.State {
+			continue
+		}
+		if filter.Source != nil && item.Source != *filter.Source {
+			continue
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (r *inMemorySessionRepo) Create(_ context.Context, item domain.Session) error {
+	if r.items == nil {
+		r.items = map[string]domain.Session{}
+	}
+	r.items[item.ID] = item
+
+	return nil
+}
+
+func (r *inMemorySessionRepo) Update(_ context.Context, item domain.Session) error {
+	if _, ok := r.items[item.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.items[item.ID] = item
+
+	return nil
+}
+
+func (r *inMemorySessionRepo) Delete(_ context.Context, id string) error {
+	delete(r.items, id)
+
+	return nil
 }
 
 func TestParsePollIntervalPolicy(t *testing.T) {
