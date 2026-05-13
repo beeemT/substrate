@@ -1567,10 +1567,14 @@ func (a *GithubAdapter) doJSONWithHeaders(ctx context.Context, method, endpoint 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return nil, adapter.NewPermissionError(adapterName, resp.StatusCode, body)
+		case resp.StatusCode == http.StatusNotFound:
+			return nil, adapter.NewNotFoundError(adapterName, adapter.ResourceGeneric, body)
+		default:
+			return nil, fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 		}
-		return nil, fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
 	if dst == nil {
 		return resp.Header.Clone(), nil

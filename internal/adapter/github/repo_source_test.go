@@ -197,15 +197,15 @@ func TestGithubRepoSource_ListRepos_AuthError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	var permErr *adapter.PermissionError
-	if !errors.As(err, &permErr) {
-		t.Fatalf("expected PermissionError, got %T: %v", err, err)
+	var catErr *adapter.CategorizedError
+	if !errors.As(err, &catErr) {
+		t.Fatalf("expected CategorizedError, got %T: %v", err, err)
 	}
-	if permErr.Adapter != "github" {
-		t.Errorf("Adapter = %q, want %q", permErr.Adapter, "github")
+	if catErr.Category != adapter.CategoryPermissionDenied {
+		t.Errorf("Category = %v, want CategoryPermissionDenied", catErr.Category)
 	}
-	if permErr.StatusCode != http.StatusUnauthorized {
-		t.Errorf("StatusCode = %d, want %d", permErr.StatusCode, http.StatusUnauthorized)
+	if catErr.Provider != "github" {
+		t.Errorf("Provider = %q, want %q", catErr.Provider, "github")
 	}
 }
 

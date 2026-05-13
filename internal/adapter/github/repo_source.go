@@ -132,10 +132,14 @@ func (s *GithubRepoSource) getJSON(ctx context.Context, endpoint string, query u
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return adapter.NewPermissionError(adapterName, resp.StatusCode, body)
+		case resp.StatusCode == http.StatusNotFound:
+			return adapter.NewNotFoundError(adapterName, adapter.ResourceRepo, body)
+		default:
+			return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 		}
-		return fmt.Errorf("github api status %d: %s", resp.StatusCode, body)
 	}
 	if dst == nil {
 		return nil

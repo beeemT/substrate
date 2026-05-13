@@ -1598,10 +1598,15 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(limitedBody)
 		body := strings.TrimSpace(string(data))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return &adapter.PermissionError{Adapter: adapterName, StatusCode: resp.StatusCode, Body: body}
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return adapter.NewPermissionError(adapterName, resp.StatusCode, body)
+		case resp.StatusCode == http.StatusNotFound:
+			resource := adapter.DetectGitLabResource(body)
+			return adapter.NewNotFoundError(adapterName, resource, body)
+		default:
+			return &apiError{StatusCode: resp.StatusCode, Body: body}
 		}
-		return &apiError{StatusCode: resp.StatusCode, Body: body}
 	}
 	if dst == nil {
 		return nil

@@ -4140,45 +4140,19 @@ func createBrowseSessionCmd(provider ServiceProvider, msg NewSessionBrowseMsg) t
 
 // formatOperationErrorToast converts operational errors into concise, actionable toast copy.
 func formatOperationErrorToast(err error) string {
-	if isGitHubInvalidSearchError(err) {
+	// Check for CategorizedError first - this is the preferred path for typed errors.
+	var catErr *adapter.CategorizedError
+	if errors.As(err, &catErr) {
+		return lookupMessage(catErr.Category, catErr.Provider, catErr.Resource, err.Error())
+	}
+
+	// Legacy: Check for GitHub-specific invalid search error.
+	if IsGitHubInvalidSearchError(err) {
 		return "Error: GitHub can't search one or more selected owners/repos.\nCheck the Owner/Repo filters or your repository access."
 	}
 
+	// Fallback: show the raw error.
 	return "Error: " + err.Error()
-}
-
-func isGitHubInvalidSearchError(err error) bool {
-	errText := err.Error()
-	if !strings.Contains(errText, "github api status 422:") {
-		return false
-	}
-	payloadStart := strings.Index(errText, "{")
-	if payloadStart < 0 {
-		return false
-	}
-
-	type githubValidationError struct {
-		Message  string `json:"message"`
-		Resource string `json:"resource"`
-		Field    string `json:"field"`
-		Code     string `json:"code"`
-	}
-	type githubAPIErrorPayload struct {
-		Message string                  `json:"message"`
-		Errors  []githubValidationError `json:"errors"`
-	}
-
-	var payload githubAPIErrorPayload
-	if err := json.Unmarshal([]byte(errText[payloadStart:]), &payload); err != nil {
-		return false
-	}
-	for _, validationErr := range payload.Errors {
-		if strings.EqualFold(validationErr.Resource, "Search") && strings.EqualFold(validationErr.Field, "q") && strings.EqualFold(validationErr.Code, "invalid") {
-			return true
-		}
-	}
-
-	return false
 }
 
 // upsertQuestion adds or updates a question in the nested map.

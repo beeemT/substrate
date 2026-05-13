@@ -954,6 +954,15 @@ func (r *inMemArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspaceID
 	return out, nil
 }
 
+func (r *inMemArtifactLinkRepo) TransferArtifactLinks(_ context.Context, fromID, toID string) error {
+	for i := range r.links {
+		if r.links[i].ProviderArtifactID == fromID {
+			r.links[i].ProviderArtifactID = toID
+		}
+	}
+	return nil
+}
+
 // --- Test helpers for PR description sync ---
 
 func newDescSyncAdapter(t *testing.T, repos adapter.ReviewArtifactRepos, rt roundTripFunc) *GithubAdapter {
