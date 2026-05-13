@@ -59,13 +59,13 @@ const (
 	panelLeft      = "left"
 	panelRight     = "right"
 
-	browseMaxOverlayWidth   = 0
-	browseHeightNumerator   = 4
-	browseHeightDenom       = 5
-	browseMinListHeight     = 6
-	browseMinPaneWidth      = 36
-	detailMinPaneWidth      = 44
-	browsePageSize          = 50
+	browseMaxOverlayWidth = 0
+	browseHeightNumerator = 4
+	browseHeightDenom     = 5
+	browseMinListHeight   = 6
+	browseMinPaneWidth    = 36
+	detailMinPaneWidth    = 44
+	browsePageSize        = 50
 )
 
 var browseSizingSpec = components.SplitOverlaySizingSpec{
@@ -122,12 +122,22 @@ const (
 
 const browseDebounceDelay = 500 * time.Millisecond
 
+// browseSpinnerFrames reuses the session search animation frames.
+var browseSpinnerFrames = sessionSearchSpinnerFrames
+
+// browseSpinnerDelay is the initial delay before showing the spinner.
+const browseSpinnerDelay = 500 * time.Millisecond
+
+// browseSpinnerInterval is how fast the spinner animates.
+const browseSpinnerInterval = 100 * time.Millisecond
+
 // browseDebounceMsg is delivered by a tea.Tick scheduled when the user types
 // in a browse control. Only the tick matching the current browseDebounceSeq
 // fires a network reload; earlier ticks are silently dropped.
 type (
-	browseDebounceMsg struct{ seq int }
-	browsePageState   struct {
+	browseDebounceMsg    struct{ seq int }
+	browseSpinnerTickMsg struct{}
+	browsePageState      struct {
 		Items      []adapter.ListItem
 		Offset     int
 		NextCursor string
@@ -240,6 +250,8 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	browsePages                    map[string]browsePageState
 	selectedIDs                    map[string]bool
 	loading                        bool
+	browseSpinnerFrame             int
+	browseSpinnerVisible           bool
 	hasMore                        bool
 	manualTitle                    components.GrowingTextInput
 	manualDesc                     components.GrowingTextArea
@@ -409,16 +421,9 @@ func (m *NewSessionOverlay) syncBrowseListState(resetCursor bool) {
 	m.issueList.Select(m.issueList.Index())
 }
 
-// Close deactivates the overlay and resets all transient state.
+// Close deactivates the overlay.
 func (m *NewSessionOverlay) Close() {
 	m.active = false
-	m.filterInput.SetValue("")
-	m.labelsInput.SetValue("")
-	m.ownerInput.SetValue("")
-	m.repoInput.SetValue("")
-	m.groupInput.SetValue("")
-	m.teamInput.SetValue("")
-	m.statusInput.SetValue("")
 	m.blurBrowseInputs()
 	m.manualTitle.SetValue("")
 	m.manualTitle.Blur()
@@ -436,6 +441,8 @@ func (m *NewSessionOverlay) Close() {
 	m.issueList.ResetSelected()
 	m.issueList.SetItems(nil)
 	m.loading = false
+	m.browseSpinnerVisible = false
+	m.browseSpinnerFrame = 0
 	m.hasMore = false
 	m.detailViewport.SetContent("")
 	m.detailViewport.YOffset = 0
@@ -969,6 +976,9 @@ func (m *NewSessionOverlay) nextRequestID() int {
 
 func (m *NewSessionOverlay) reloadItems() tea.Cmd {
 	m.loading = true
+	m.browseSpinnerFrame = 0
+	m.browseSpinnerVisible = false
+
 	return m.loadItemsCmd(browseLoadReset, m.nextRequestID())
 }
 
@@ -1099,6 +1109,7 @@ func (m *NewSessionOverlay) clearBrowseResults() {
 	m.selectedIDs = make(map[string]bool)
 	m.allItems = nil
 	m.loading = false
+	m.browseSpinnerVisible = false
 	m.hasMore = false
 	m.detailViewport.SetContent("")
 	m.detailViewport.YOffset = 0
@@ -1878,13 +1889,29 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 	case browseDebounceMsg:
 		if msg.seq == m.browseDebounceSeq {
 			cmds = append(cmds, m.reloadItems())
+			// Schedule the spinner to appear after the initial delay
+			cmds = append(cmds, tea.Tick(browseSpinnerDelay, func(time.Time) tea.Msg {
+				return browseSpinnerTickMsg{}
+			}))
 		}
+
+	case browseSpinnerTickMsg:
+		if !m.loading {
+			m.browseSpinnerVisible = false
+			return m, nil
+		}
+		m.browseSpinnerVisible = true
+		m.browseSpinnerFrame = (m.browseSpinnerFrame + 1) % len(browseSpinnerFrames)
+		return m, tea.Tick(browseSpinnerInterval, func(time.Time) tea.Msg {
+			return browseSpinnerTickMsg{}
+		})
 
 	case issueListLoadedMsg:
 		if msg.requestID != 0 && msg.requestID != m.requestSeq {
 			break
 		}
 		m.loading = false
+		m.browseSpinnerVisible = false
 		m.browsePages = cloneBrowsePages(msg.pages)
 		m.allItems = flattenBrowsePages(m.browsePages)
 		m.hasMore = anyPageHasMore(m.browsePages)
@@ -2425,6 +2452,14 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	}
 
 	leftPaneTitle := "Work Items"
+	if m.browseSpinnerVisible {
+		spinner := m.styles.Accent.Render(browseSpinnerFrames[m.browseSpinnerFrame])
+		// Right-align spinner in the title row
+		titleWidth := ansi.StringWidth(leftPaneTitle) + 1
+		paneWidth := layout.LeftPaneWidth - m.styles.Chrome.OverlayPane.HorizontalFrame()
+		pad := max(0, paneWidth-titleWidth-1)
+		leftPaneTitle += strings.Repeat(" ", pad) + spinner
+	}
 	rightPaneTitle := "Details"
 	if item, ok := m.currentListItem(); ok {
 		rightPaneTitle = detailPaneTitle(m.styles, item, reviewRowsForItem(item), layout.RightInnerWidth)

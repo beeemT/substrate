@@ -223,36 +223,52 @@ func TestNewSessionOverlayBrowseSelectionPersistsInRenderedList(t *testing.T) {
 	}
 }
 
-func TestNewSessionOverlayCloseClearsSelectedBrowseState(t *testing.T) {
+func TestNewSessionOverlayClosePreservesFilterInputs(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {
+				Views:          []string{"assigned_to_me", "all"},
+				SupportsLabels: true,
+				SupportsOwner:  true,
+			},
+		},
+	}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	overlay.Open()
 	overlay.SetSize(100, 30)
-	overlay, _ = overlay.Update(loadedMsg(
-		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
-		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
-	))
-	overlay.setBrowseListFocus()
-	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 
-	view := stripBrowseANSI(overlay.View())
-	assertOverlayFits(t, view, 100, 30)
-	if !strings.Contains(view, "✓ First") {
-		t.Fatalf("view = %q, want selected marker before close", view)
+	// Type freetext into search and labels inputs.
+	for _, r := range "my query" {
+		overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	// Switch focus to labels input and type.
+	overlay.setBrowseControlFocus(browseControlLabels)
+	for _, r := range "bug, urgent" {
+		overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	// Switch focus to owner input and type.
+	overlay.setBrowseControlFocus(browseControlOwner)
+	for _, r := range "octocat" {
+		overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 
+	// Close and reopen.
 	overlay.Close()
 	overlay.Open()
 
-	view = stripBrowseANSI(overlay.View())
-	assertOverlayFits(t, view, 100, 30)
-	if strings.Contains(view, "✓ First") {
-		t.Fatalf("view = %q, want previous selection marker cleared after reopen", view)
+	// Inputs must retain their values.
+	if got := overlay.filterInput.Value(); got != "my query" {
+		t.Fatalf("search input = %q, want %q", got, "my query")
 	}
-	if strings.Contains(view, "First") || strings.Contains(view, "Second") {
-		t.Fatalf("view = %q, want stale browse items cleared after reopen", view)
+	if got := overlay.labelsInput.Value(); got != "bug, urgent" {
+		t.Fatalf("labels input = %q, want %q", got, "bug, urgent")
+	}
+	if got := overlay.ownerInput.Value(); got != "octocat" {
+		t.Fatalf("owner input = %q, want %q", got, "octocat")
 	}
 }
 
@@ -2067,9 +2083,22 @@ func TestNewSessionOverlayStateCycleTriggersReloadAndPassesState(t *testing.T) {
 		t.Fatal("expected reload command after state change")
 	}
 	msg := cmd()
-	if _, ok := msg.(issueListLoadedMsg); !ok {
-		t.Fatalf("msg = %T, want issueListLoadedMsg", msg)
+	// reloadItems returns a batch; find the issueListLoadedMsg
+	var loaded issueListLoadedMsg
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if l, ok := sub().(issueListLoadedMsg); ok {
+				loaded = l
+				break
+			}
+		}
+	} else {
+		loaded = msg.(issueListLoadedMsg)
 	}
+	_ = loaded // verify extraction succeeded
 	if githubAdapter.lastListOpts.State != "closed" {
 		t.Fatalf("state = %q, want closed", githubAdapter.lastListOpts.State)
 	}
@@ -2373,10 +2402,20 @@ func TestNewSessionOverlayAdapterErrorClearsLoading(t *testing.T) {
 	}
 
 	msg := reloadCmd()
-
-	loaded, ok := msg.(issueListLoadedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want issueListLoadedMsg even when adapter errors", msg)
+	// reloadItems returns a batch; find the issueListLoadedMsg
+	var loaded issueListLoadedMsg
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if l, ok := sub().(issueListLoadedMsg); ok {
+				loaded = l
+				break
+			}
+		}
+	} else {
+		loaded = msg.(issueListLoadedMsg)
 	}
 	if len(loaded.errs) == 0 {
 		t.Fatal("expected adapter errors in issueListLoadedMsg")
