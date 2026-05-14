@@ -1,5 +1,30 @@
 # AGENTS
 
+## Glossary
+
+### Domain Types
+
+| Term | Code | Description |
+|---|---|---|
+| **Session / Work item** | `domain.Session` | Root aggregate. One external ticket/PR. Has many AgentSessions and one Plan. |
+| **Agent session** | `domain.Task` | One harness invocation (implement OR review). Phase = planning \| implementation \| review. Status = pending \| running \| waiting_for_answer \| completed \| interrupted \| failed. A task goes through many agent sessions: implement → review → implement → review → ... → completed. The service layer is called `AgentSessionService`. |
+| **Task plan / Sub-plan** | `domain.TaskPlan` | One repo's work. One worktree. One PR. Status: pending \| in_progress \| completed \| failed. `Content` field holds the implementation plan for this repo. One sub-plan per repository (enforced at plan creation time). |
+| **Plan** | `domain.Plan` | The orchestration plan produced by the planning agent. Contains the full task breakdown into TaskPlans. |
+
+### Event Naming Conventions
+
+- `work_item.*` — work-item lifecycle (ingested, planning, plan_review, approved, implementing, reviewing, completed, failed, merged, archived)
+- `agent_session.*` — individual harness invocation lifecycle (started, completed, failed, interrupted, resumed, follow_up)
+- `subplan.*` — sub-plan lifecycle (started, completed, failed)
+- `plan.*` — plan lifecycle (generated, submitted_for_review, approved, rejected, revised, failed, superseded)
+- `worktree.*` — git worktree lifecycle (created, reused, removed)
+
+### Key Distinction: `EventAgentSessionCompleted` vs `EventSubPlanCompleted`
+
+A task (one repo's work = one sub-plan) goes through multiple agent sessions. `EventAgentSessionCompleted` fires after every harness invocation. `EventSubPlanCompleted` fires once — when the task is done (review passed). Adapters must listen to `EventSubPlanCompleted` for PR finalization, not `EventWorkItemCompleted`.
+
+---
+
 ## Workflow
 - Always assume other agents are working on the codebase at the same time as you
 - Commit your work using patches to only commit your work and not the work of other agents

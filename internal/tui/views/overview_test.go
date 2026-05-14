@@ -251,6 +251,15 @@ func (r *overviewArtifactLinkRepo) ListByWorkspaceID(_ context.Context, workspac
 	return out, nil
 }
 
+func (r *overviewArtifactLinkRepo) TransferArtifactLinks(_ context.Context, fromID, toID string) error {
+	for i := range r.links {
+		if r.links[i].ProviderArtifactID == fromID {
+			r.links[i].ProviderArtifactID = toID
+		}
+	}
+	return nil
+}
+
 type overviewGitlabMRRepo struct {
 	mrs map[string]domain.GitlabMergeRequest
 }

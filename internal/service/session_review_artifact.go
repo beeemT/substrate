@@ -52,3 +52,11 @@ func (s *SessionReviewArtifactService) ListByWorkspaceID(ctx context.Context, wo
 	})
 	return result, err
 }
+
+// TransferArtifactLinks moves all session review artifacts from one provider artifact ID to another.
+// This is used when correcting duplicate MR/PR records to preserve session links.
+func (s *SessionReviewArtifactService) TransferArtifactLinks(ctx context.Context, fromID, toID string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.SessionReviewArtifacts.TransferArtifactLinks(ctx, fromID, toID)
+	})
+}

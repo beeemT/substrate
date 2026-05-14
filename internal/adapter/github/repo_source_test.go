@@ -209,6 +209,33 @@ func TestGithubRepoSource_ListRepos_AuthError(t *testing.T) {
 	}
 }
 
+
+func TestGithubRepoSource_ListRepos_NotFoundError(t *testing.T) {
+	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Not Found"}`))
+	})
+
+	_, err := src.ListRepos(context.Background(), adapter.RepoListOpts{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var catErr *adapter.CategorizedError
+	if !errors.As(err, &catErr) {
+		t.Fatalf("expected CategorizedError, got %T: %v", err, err)
+	}
+	if catErr.Category != adapter.CategoryNotFound {
+		t.Errorf("Category = %v, want CategoryNotFound", catErr.Category)
+	}
+	if catErr.Provider != "github" {
+		t.Errorf("Provider = %q, want %q", catErr.Provider, "github")
+	}
+	if catErr.Resource != adapter.ResourceRepo {
+		t.Errorf("Resource = %v, want ResourceRepo", catErr.Resource)
+	}
+}
+
 func TestGithubRepoSource_ListRepos_EmptyResult(t *testing.T) {
 	src, _ := newTestRepoSource(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

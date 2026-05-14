@@ -1032,14 +1032,30 @@ func (a *GlabAdapter) refreshSingleMR(ctx context.Context, mr domain.GitlabMerge
 		}
 	}
 
-	// If the project path changed, the unique key (project_path, iid) in the DB
-	// differs from the old row. Delete the old row so the upsert below creates a
-	// fresh row with the correct path. Reviews and checks cascade on delete.
+	// If the project path changed, we need to either update the existing row or
+	// replace the old row with the corrected one. First, check if a canonical MR
+	// already exists with the correct path.
+	var canonicalID string
 	if projectPath != mr.ProjectPath {
-		slog.Info("glab: deleting old MR row with corrected path",
-			"iid", mr.IID, "old_path", mr.ProjectPath, "new_path", projectPath)
+		if canonical, err := a.repos.GitlabMRs.GetByIID(ctx, projectPath, mr.IID); err == nil {
+			canonicalID = canonical.ID
+		}
+	}
+
+	// If a canonical MR exists, transfer session_review_artifacts from the old
+	// MR to the canonical one before deleting the old row. This preserves the
+	// work item -> MR link.
+	if canonicalID != "" {
+		slog.Info("glab: transferring session links to canonical MR",
+			"iid", mr.IID, "old_id", mr.ID, "canonical_id", canonicalID)
+		if a.repos.SessionArtifacts != nil {
+			if err := a.repos.SessionArtifacts.TransferArtifactLinks(ctx, mr.ID, canonicalID); err != nil {
+				slog.Warn("glab: failed to transfer session links",
+					"iid", mr.IID, "error", err)
+			}
+		}
 		if err := a.repos.GitlabMRs.Delete(ctx, mr.ID); err != nil {
-			slog.Warn("glab: failed to delete old MR row before path correction",
+			slog.Warn("glab: failed to delete old MR row after transfer",
 				"iid", mr.IID, "id", mr.ID, "error", err)
 		}
 	}

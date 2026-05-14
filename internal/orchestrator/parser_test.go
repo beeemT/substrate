@@ -424,6 +424,16 @@ func TestCountMarkdownListItems(t *testing.T) {
 			content:  "- Add the single feature",
 			expected: 1,
 		},
+		{
+			name:     "newline after marker rejected",
+			content:  "-\nplain text on next line",
+			expected: 0,
+		},
+		{
+			name:     "numbered with newline rejected",
+			content:  "1.\ntext on next line",
+			expected: 0,
+		},
 	}
 
 	for _, tt := range tests {

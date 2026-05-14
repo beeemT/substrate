@@ -97,6 +97,7 @@ type orchestrationRuntime struct {
 	resumption     *orchestrator.Resumption
 	registry       *orchestrator.SessionRegistry
 }
+
 func run() error {
 	if handleCLIArgs(os.Args[1:]) {
 		return nil
@@ -155,14 +156,12 @@ func run() error {
 		SettingsData:  settingsData,
 		LogStore:      logStore,
 		LogToasts:     logToasts,
-		InstanceID:     instanceID,
+		InstanceID:    instanceID,
 		WorkspaceID:   workspace.ID,
 		WorkspaceDir:  workspace.Dir,
 		WorkspaceName: workspace.Name,
 	})
 }
-
-
 
 func handleCLIArgs(args []string) bool {
 	if len(args) == 0 {
@@ -245,21 +244,11 @@ func openDatabase(ctx context.Context) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("getting database path: %w", err)
 	}
 
-	db, err := sqlx.Open("sqlite", dbPath)
+	db, err := sqlx.Open("sqlite", dbPath+"?_foreign_keys=1&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("set pragma: %w", err)
-		}
-	}
 
 	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
 		db.Close()

@@ -1681,8 +1681,25 @@ func TestNewSessionOpensFromWorkItemWithExistingSession(t *testing.T) {
 		t.Fatalf("currentWorkItemID = %q, want wi-1", updated.currentWorkItemID)
 	}
 	msg := cmd()
-	if _, ok := msg.(issueListLoadedMsg); !ok {
-		t.Fatalf("msg = %T, want issueListLoadedMsg", msg)
+	// reloadItems returns a batch; find the issueListLoadedMsg
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		found := false
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if _, ok := sub().(issueListLoadedMsg); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("expected issueListLoadedMsg in batch")
+		}
+	} else {
+		if _, ok := msg.(issueListLoadedMsg); !ok {
+			t.Fatalf("msg = %T, want issueListLoadedMsg", msg)
+		}
 	}
 }
 

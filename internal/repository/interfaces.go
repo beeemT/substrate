@@ -152,6 +152,7 @@ type SessionReviewArtifactRepository interface {
 	Upsert(ctx context.Context, link domain.SessionReviewArtifact) error
 	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.SessionReviewArtifact, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error)
+	TransferArtifactLinks(ctx context.Context, fromID, toID string) error
 }
 
 // GithubPRReviewRepository provides persistence for GitHub PR reviews.

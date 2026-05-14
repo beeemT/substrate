@@ -521,6 +521,13 @@ type WorkspaceInitDoneMsg struct {
 // NewReposInitDoneMsg is sent after new plain-git repos are converted to git-work layout.
 type NewReposInitDoneMsg struct{ Count int }
 
+
+// RepoInitProgressMsg is emitted after each repo is initialized during batch init.
+type RepoInitProgressMsg struct {
+	Initialized int // count completed so far
+	Total       int // total repos to initialize
+}
+
 // WorkspaceServicesReloadedMsg is sent after the app rebuilds services for a newly initialized workspace.
 type WorkspaceServicesReloadedMsg struct {
 	Reload  viewsServicesReload

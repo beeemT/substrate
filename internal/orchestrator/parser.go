@@ -283,13 +283,13 @@ func countMarkdownListItems(content string) int {
 	// - Parenthesized: "(1) Item"
 	// - Checkbox: "- [ ] Item", "- [x] Item"
 	patterns := []string{
-		`(?m)^\s*[-*+]\s+\S`,      // Bullets
-		`(?m)^\s*\d+\.\s+\S`,     // Numbered with dot: "1. Item"
-		`(?m)^\s*\d+\)\s+\S`,     // Numbered with paren: "1) Item"
-		`(?m)^\s*[a-z]\.\s+\S`,   // Lettered with dot: "a. Item"
-		`(?m)^\s*[a-z]\)\s+\S`,   // Lettered with paren: "a) Item"
-		`(?m)^\s*\(\d+\)\s+\S`,   // Parenthesized: "(1) Item"
-		`(?m)^\s*-\s+\[[ 	Xx]\]\s*\S`, // Checkbox: "- [ ] Item" or "- [x] Item"
+		`(?m)^\s*[-*+][ 	]+\S`,      // Bullets
+		`(?m)^\s*\d+\.[ 	]+\S`,     // Numbered with dot: "1. Item"
+		`(?m)^\s*\d+\)[ 	]+\S`,     // Numbered with paren: "1) Item"
+		`(?m)^\s*[a-z]\.[ 	]+\S`,   // Lettered with dot: "a. Item"
+		`(?m)^\s*[a-z]\)[ 	]+\S`,   // Lettered with paren: "a) Item"
+		`(?m)^\s*\(\d+\)[ 	]+\S`,   // Parenthesized: "(1) Item"
+		`(?m)^\s*-\s+\[[ 	Xx]\][ 	]*\S`, // Checkbox: "- [ ] Item" or "- [x] Item"
 	}
 
 	matchedLines := make(map[int]bool)

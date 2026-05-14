@@ -92,6 +92,19 @@ func (r SessionReviewArtifactRepo) ListByWorkspaceID(ctx context.Context, worksp
 	return r.toDomainSlice(rows)
 }
 
+// TransferArtifactLinks moves all session_review_artifacts from one provider_artifact_id to another.
+// This is used when correcting duplicate MR/PR records to preserve session links.
+func (r SessionReviewArtifactRepo) TransferArtifactLinks(ctx context.Context, fromID, toID string) error {
+	_, err := r.remote.NamedExecContext(ctx,
+		`UPDATE session_review_artifacts SET provider_artifact_id = :to_id, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE provider = 'gitlab' AND provider_artifact_id = :from_id`,
+		map[string]any{"from_id": fromID, "to_id": toID})
+	if err != nil {
+		return fmt.Errorf("transfer artifact links from %s to %s: %w", fromID, toID, err)
+	}
+	return nil
+}
+
 func (r SessionReviewArtifactRepo) toDomainSlice(rows []sessionReviewArtifactRow) ([]domain.SessionReviewArtifact, error) {
 	links := make([]domain.SessionReviewArtifact, len(rows))
 	for i := range rows {

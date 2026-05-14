@@ -179,6 +179,7 @@ func TestNewReposModal_NewReposInitDoneMsg_SetsInactive(t *testing.T) {
 	}
 }
 
+
 // containsSubstring is a test helper; strings.Contains import-free alternative.
 func containsSubstring(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || func() bool {
@@ -189,4 +190,69 @@ func containsSubstring(s, sub string) bool {
 		}
 		return false
 	}())
+}
+
+// --- Progress counter tests ---
+
+func TestNewReposModal_RepoInitProgressMsg_UpdatesProgress(t *testing.T) {
+	st := newTestStyles(t)
+	m := views.NewNewReposModal("/tmp/ws", st, nil)
+	m.SetSize(120, 40)
+
+	// First, advance past loading to show the init button.
+	healthMsg := views.WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{PlainGitClones: []string{"/tmp/ws/repo1", "/tmp/ws/repo2", "/tmp/ws/repo3"}},
+	}
+	m, _ = m.Update(healthMsg)
+
+	// Send progress message for first repo.
+	progressMsg := views.RepoInitProgressMsg{Initialized: 1, Total: 3}
+	updated, _ := m.Update(progressMsg)
+
+	v := updated.View()
+	// View must contain "1/3" progress counter.
+	if !containsSubstring(v, "1/3") {
+		t.Fatalf("view does not contain progress counter 1/3, got: %s", v)
+	}
+}
+
+func TestNewReposModal_RepoInitProgressMsg_UpdatesCounter(t *testing.T) {
+	st := newTestStyles(t)
+	m := views.NewNewReposModal("/tmp/ws", st, nil)
+	m.SetSize(120, 40)
+
+	// Advance past loading.
+	healthMsg := views.WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{PlainGitClones: []string{"/tmp/ws/repo1", "/tmp/ws/repo2"}},
+	}
+	m, _ = m.Update(healthMsg)
+
+	// Progress: 2/5 (initial + 2 new repos).
+	progressMsg := views.RepoInitProgressMsg{Initialized: 2, Total: 5}
+	updated, _ := m.Update(progressMsg)
+
+	v := updated.View()
+	if !containsSubstring(v, "2/5") {
+		t.Fatalf("view does not contain progress counter 2/5, got: %s", v)
+	}
+}
+
+func TestNewReposModal_NoProgressCounterBeforeInit(t *testing.T) {
+	st := newTestStyles(t)
+	m := views.NewNewReposModal("/tmp/ws", st, nil)
+	m.SetSize(120, 40)
+
+	// Health check with repos.
+	healthMsg := views.WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{PlainGitClones: []string{"/tmp/ws/repo"}},
+	}
+	m, _ = m.Update(healthMsg)
+
+	// No progress message sent yet.
+	v := m.View()
+	// View must NOT contain a progress counter (no "/" followed by digits at end).
+	// We check that "1/1" does not appear when progress hasn't started.
+	if containsSubstring(v, "1/1") {
+		t.Fatalf("view contains unexpected progress counter before init started: %s", v)
+	}
 }

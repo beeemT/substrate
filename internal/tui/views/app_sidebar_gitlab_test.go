@@ -124,6 +124,10 @@ func (r emptySessionArtifactRepo) ListByWorkspaceID(_ context.Context, _ string)
 	return nil, nil
 }
 
+func (r emptySessionArtifactRepo) TransferArtifactLinks(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func TestTaskSidebarEntries_GitlabIncludesRecordedArtifactWithoutLink(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -36,6 +37,13 @@ type WorkspaceInitModal struct {
 	mode         workspaceInitMode
 	gitClient    *gitwork.Client
 	workspaceSvc *service.WorkspaceService
+
+	// initProgress tracks repo initialization progress during batch init.
+	initProgress struct {
+		initialized int
+		total       int
+		active      bool // true while init is running
+	}
 }
 
 // NewWorkspaceInitModal creates a WorkspaceInitModal for the given cwd.
@@ -106,6 +114,11 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 
 	case WorkspaceInitDoneMsg:
 		m.active = false
+
+	case RepoInitProgressMsg:
+		m.initProgress.active = true
+		m.initProgress.initialized = msg.Initialized
+		m.initProgress.total = msg.Total
 
 	case NewReposInitDoneMsg:
 		m.active = false
@@ -201,6 +214,13 @@ func (m WorkspaceInitModal) View() string {
 				m.styles.KeybindAccent.Render("[y]")+m.styles.Subtitle.Render(" Initialize  ")+
 					m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Skip"),
 			)
+			// Render progress counter in bottom-right if init is running
+			if m.initProgress.active {
+				lines = append(lines,
+					"",
+					m.styles.Muted.Render(fmt.Sprintf("%d/%d", m.initProgress.initialized, m.initProgress.total)),
+				)
+			}
 		}
 	} else {
 		lines = append(lines,

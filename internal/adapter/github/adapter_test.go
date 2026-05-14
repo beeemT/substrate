@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1261,5 +1262,62 @@ func TestIsOwnRepo(t *testing.T) {
 				t.Errorf("isOwnRepo(%q) = %v, want %v", tc.repo, got, tc.want)
 			}
 		})
+	}
+}
+
+	// TestFetchIssue_NotFoundError verifies that 404 responses from the GitHub API
+	// are categorized as CategorizedError with CategoryNotFound.
+
+func TestFetchIssue_NotFoundError(t *testing.T) {
+	t.Parallel()
+
+	a, _ := newWithDeps(context.Background(), config.GithubConfig{
+		PollInterval:  "10ms",
+		StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"},
+	}, adapter.ReviewArtifactRepos{}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/user" {
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		}
+		if req.URL.Path == "/repos/acme/rocket/issues/99" {
+			return jsonResp(t, http.StatusNotFound, map[string]any{"message": "Not Found"}), nil
+		}
+		return jsonResp(t, http.StatusOK, map[string]any{}), nil
+	}), func(context.Context) (string, error) { return "token-from-gh", nil })
+
+	_, err := a.Fetch(context.Background(), "gh:issue:acme/rocket#99")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var catErr *adapter.CategorizedError
+	if !errors.As(err, &catErr) {
+		t.Fatalf("expected CategorizedError, got %T: %v", err, err)
+	}
+	if catErr.Category != adapter.CategoryNotFound {
+		t.Errorf("Category = %v, want CategoryNotFound", catErr.Category)
+	}
+	if catErr.Provider != "github" {
+		t.Errorf("Provider = %q, want %q", catErr.Provider, "github")
+	}
+	if catErr.Resource != adapter.ResourceGeneric {
+		t.Errorf("Resource = %v, want ResourceGeneric", catErr.Resource)
+	}
+}
+
+// TestNewPermissionError_PermissionErrorInChain verifies that errors.As with
+// *PermissionError works through a CategorizedError returned by NewPermissionError.
+func TestNewPermissionError_PermissionErrorInChain(t *testing.T) {
+	t.Parallel()
+
+	catErr := adapter.NewPermissionError("github", 401, "Bad credentials")
+	var permErr *adapter.PermissionError
+	if !errors.As(catErr, &permErr) {
+		t.Fatalf("errors.As(catErr, &permErr) = false, want true")
+	}
+	if permErr.Adapter != "github" {
+		t.Errorf("permErr.Adapter = %q, want %q", permErr.Adapter, "github")
+	}
+	if permErr.StatusCode != 401 {
+		t.Errorf("permErr.StatusCode = %d, want 401", permErr.StatusCode)
 	}
 }
