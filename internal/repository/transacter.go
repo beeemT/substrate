@@ -15,7 +15,7 @@ type Resources struct {
 	Workspaces             WorkspaceRepository
 	NewSessionFilters      NewSessionFilterRepository
 	NewSessionFilterLocks  NewSessionFilterLockRepository
-	Tasks                  TaskRepository
+	AgentSessions          AgentSessionRepository
 	Reviews                ReviewRepository
 	Questions              QuestionRepository
 	Events                 EventRepository

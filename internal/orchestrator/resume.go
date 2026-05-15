@@ -23,7 +23,7 @@ const resumeLogLines = 50
 // Resumption handles Resume and Abandon workflows for interrupted agent sessions.
 type Resumption struct {
 	harness    adapter.AgentHarness
-	sessionSvc *service.TaskService
+	sessionSvc *service.AgentSessionService
 	planSvc    *service.PlanService
 	eventBus   event.Publisher
 	registry   *SessionRegistry
@@ -32,7 +32,7 @@ type Resumption struct {
 // NewResumption creates a Resumption instance.
 func NewResumption(
 	harness adapter.AgentHarness,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	planSvc *service.PlanService,
 	eventBus event.Publisher,
 	registry *SessionRegistry,
@@ -48,7 +48,7 @@ func NewResumption(
 
 // ResumeSessionResult holds the outputs of a successful resume.
 type ResumeSessionResult struct {
-	NewSession     domain.Task
+	NewSession     domain.AgentSession
 	HarnessSession adapter.AgentSession
 }
 
@@ -56,7 +56,7 @@ type ResumeSessionResult struct {
 // The interrupted session remains in the DB as interrupted (audit trail).
 // The new session links to the same SubPlan and reuses the existing worktree.
 // currentInstanceID becomes the owner of the new session.
-func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task, currentInstanceID string) (ResumeSessionResult, error) {
+func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.AgentSession, currentInstanceID string) (ResumeSessionResult, error) {
 	if interrupted.Status != domain.AgentSessionInterrupted {
 		return ResumeSessionResult{}, fmt.Errorf("session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
 	}
@@ -92,11 +92,11 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 
 	// Create the new session record (pending).
 	now := time.Now()
-	newSession := domain.Task{
+	newSession := domain.AgentSession{
 		ID:              domain.NewID(),
 		WorkItemID:      interrupted.WorkItemID,
 		WorkspaceID:     interrupted.WorkspaceID,
-		Phase:           domain.TaskPhaseImplementation,
+		Phase:           domain.AgentSessionPhaseImplementation,
 		SubPlanID:       interrupted.SubPlanID,
 		RepositoryName:  interrupted.RepositoryName,
 		WorktreePath:    interrupted.WorktreePath,
@@ -136,9 +136,9 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
 		if failErr := failSessionDurably(ctx, r.sessionSvc, newSession.ID, nil); failErr != nil {
-			slog.Warn("failed to fail resumed session after harness start error",
+			slog.Warn("failed to fail resumed agent session after harness start error",
 				"error", failErr,
-				"session_id", newSession.ID)
+				"agent_session_id", newSession.ID)
 		}
 
 		return ResumeSessionResult{}, fmt.Errorf("start harness session: %w", err)
@@ -149,9 +149,9 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	if hasResume {
 		resumeMsg := "Your previous session was interrupted. The worktree may contain partial changes. Run `git status` and `git diff` to understand current state, then continue implementing remaining items."
 		if sendErr := harnessSession.SendMessage(ctx, resumeMsg); sendErr != nil {
-			slog.Warn("failed to send orientation to resumed session",
+			slog.Warn("failed to send orientation to resumed agent session",
 				"error", sendErr,
-				"session_id", newSession.ID)
+				"agent_session_id", newSession.ID)
 		}
 	}
 
@@ -182,9 +182,9 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 	// Transition the old interrupted session to failed now that its replacement
 	// is durably running. This clears the interrupted action from the overview.
 	if err := r.sessionSvc.Fail(ctx, interrupted.ID, nil); err != nil {
-		slog.Warn("failed to fail superseded interrupted session",
-			"old_session_id", interrupted.ID,
-			"new_session_id", newSession.ID,
+		slog.Warn("failed to fail superseded interrupted agent session",
+			"old_agent_session_id", interrupted.ID,
+			"new_agent_session_id", newSession.ID,
 			"error", err)
 	}
 
@@ -196,12 +196,12 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Task,
 
 // AbandonSession transitions an interrupted session to failed. Terminal operation.
 func (r *Resumption) AbandonSession(ctx context.Context, id string) error {
-	session, err := r.sessionSvc.Get(ctx, id)
+	agentSession, err := r.sessionSvc.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("get session: %w", err)
+		return fmt.Errorf("get agent session: %w", err)
 	}
-	if session.Status != domain.AgentSessionInterrupted {
-		return fmt.Errorf("can only abandon interrupted sessions (status: %s)", session.Status)
+	if agentSession.Status != domain.AgentSessionInterrupted {
+		return fmt.Errorf("can only abandon interrupted sessions (status: %s)", agentSession.Status)
 	}
 
 	return r.sessionSvc.Fail(ctx, id, nil)
@@ -209,139 +209,139 @@ func (r *Resumption) AbandonSession(ctx context.Context, id string) error {
 
 // FollowUpSessionResult holds the outputs of a successful follow-up.
 type FollowUpSessionResult struct {
-	Task           domain.Task
+	Session        domain.AgentSession
 	HarnessSession adapter.AgentSession
 }
 
-// FollowUpSession restarts a completed task with a user follow-up message.
-// Reuses the same Task row (same ID/log file), transitions completed → running,
+// FollowUpSession restarts a completed session with a user follow-up message.
+// Reuses the same AgentSession row (same ID/log file), transitions completed → running,
 // and resumes the native OMP session if available.
-func (r *Resumption) FollowUpSession(ctx context.Context, completedTask domain.Task, feedback, _ string) (FollowUpSessionResult, error) {
-	if completedTask.Status != domain.AgentSessionCompleted {
-		return FollowUpSessionResult{}, fmt.Errorf("task %s is not completed (status: %s)", completedTask.ID, completedTask.Status)
+func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domain.AgentSession, feedback, _ string) (FollowUpSessionResult, error) {
+	if completedSession.Status != domain.AgentSessionCompleted {
+		return FollowUpSessionResult{}, fmt.Errorf("session %s is not completed (status: %s)", completedSession.ID, completedSession.Status)
 	}
 
-	if completedTask.SubPlanID == "" {
-		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on session %s: no sub-plan assigned", completedTask.ID)
+	if completedSession.SubPlanID == "" {
+		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on session %s: no sub-plan assigned", completedSession.ID)
 	}
-	subPlan, err := r.planSvc.GetSubPlan(ctx, completedTask.SubPlanID)
+	subPlan, err := r.planSvc.GetSubPlan(ctx, completedSession.SubPlanID)
 	if err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for session %s: %w", completedTask.SubPlanID, completedTask.ID, err)
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for session %s: %w", completedSession.SubPlanID, completedSession.ID, err)
 	}
 
-	lastLines, err := readLastNLines(completedTask.ID, resumeLogLines)
+	lastLines, err := readLastNLines(completedSession.ID, resumeLogLines)
 	if err != nil {
 		lastLines = "(prior session log unavailable)"
 	}
 
 	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
-	if err := r.sessionSvc.FollowUpRestart(ctx, completedTask.ID); err != nil {
+	if err := r.sessionSvc.FollowUpRestart(ctx, completedSession.ID); err != nil {
 		return FollowUpSessionResult{}, fmt.Errorf("restart task for follow-up: %w", err)
 	}
 
 	now := time.Now()
-	completedTask.Status = domain.AgentSessionRunning
-	completedTask.CompletedAt = nil
-	completedTask.UpdatedAt = now
+	completedSession.Status = domain.AgentSessionRunning
+	completedSession.CompletedAt = nil
+	completedSession.UpdatedAt = now
 
 	opts := adapter.SessionOpts{
-		SessionID:           completedTask.ID,
+		SessionID:           completedSession.ID,
 		Mode:                adapter.SessionModeAgent,
-		WorkspaceID:         completedTask.WorkspaceID,
-		SubPlanID:           completedTask.SubPlanID,
-		Repository:          completedTask.RepositoryName,
-		WorktreePath:        completedTask.WorktreePath,
+		WorkspaceID:         completedSession.WorkspaceID,
+		SubPlanID:           completedSession.SubPlanID,
+		Repository:          completedSession.RepositoryName,
+		WorktreePath:        completedSession.WorktreePath,
 		SystemPrompt:        systemPrompt,
 		UserPrompt:          feedback,
-		ResumeFromSessionID: completedTask.ID,
-		ResumeInfo:          completedTask.ResumeInfo,
+		ResumeFromSessionID: completedSession.ID,
+		ResumeInfo:          completedSession.ResumeInfo,
 	}
 
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
-		if revertErr := completeSessionDurably(ctx, r.sessionSvc, completedTask.ID); revertErr != nil {
-			slog.Warn("failed to revert task to completed after follow-up harness start error",
+		if revertErr := completeSessionDurably(ctx, r.sessionSvc, completedSession.ID); revertErr != nil {
+			slog.Warn("failed to revert agent session to completed after follow-up harness start error",
 				"error", revertErr,
-				"task_id", completedTask.ID)
+				"agent_session_id", completedSession.ID)
 		}
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
 	if r.registry != nil {
-		r.registry.Register(completedTask.ID, harnessSession)
+		r.registry.Register(completedSession.ID, harnessSession)
 	}
 
 	return FollowUpSessionResult{
-		Task:           completedTask,
+		Session:        completedSession,
 		HarnessSession: harnessSession,
 	}, nil
 }
 
-// FollowUpFailedSession creates a new agent session to retry a failed task with user feedback.
-// The failed task row is preserved as audit trail; a fresh Task row is created for the retry.
-func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domain.Task, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
-	if failedTask.Status != domain.AgentSessionFailed {
-		return FollowUpSessionResult{}, fmt.Errorf("task %s is not failed (status: %s)", failedTask.ID, failedTask.Status)
+// FollowUpFailedSession creates a new agent session to retry a failed session with user feedback.
+// The failed session row is preserved as audit trail; a fresh AgentSession row is created for the retry.
+func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedSession domain.AgentSession, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
+	if failedSession.Status != domain.AgentSessionFailed {
+		return FollowUpSessionResult{}, fmt.Errorf("session %s is not failed (status: %s)", failedSession.ID, failedSession.Status)
 	}
 
-	if failedTask.SubPlanID == "" {
-		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on failed session %s: no sub-plan assigned", failedTask.ID)
+	if failedSession.SubPlanID == "" {
+		return FollowUpSessionResult{}, fmt.Errorf("cannot follow up on failed session %s: no sub-plan assigned", failedSession.ID)
 	}
-	subPlan, err := r.planSvc.GetSubPlan(ctx, failedTask.SubPlanID)
+	subPlan, err := r.planSvc.GetSubPlan(ctx, failedSession.SubPlanID)
 	if err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for failed session %s: %w", failedTask.SubPlanID, failedTask.ID, err)
+		return FollowUpSessionResult{}, fmt.Errorf("get sub-plan %s for failed session %s: %w", failedSession.SubPlanID, failedSession.ID, err)
 	}
 
-	lastLines, err := readLastNLines(failedTask.ID, resumeLogLines)
+	lastLines, err := readLastNLines(failedSession.ID, resumeLogLines)
 	if err != nil {
 		lastLines = "(prior session log unavailable)"
 	}
 
 	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
-	// Create a fresh task row — the failed task is audit trail and must not be modified.
+	// Create a fresh agent session row — the failed session is audit trail and must not be modified.
 	now := time.Now()
-	newTask := domain.Task{
+	newSession := domain.AgentSession{
 		ID:              domain.NewID(),
-		WorkItemID:      failedTask.WorkItemID,
-		WorkspaceID:     failedTask.WorkspaceID,
-		Phase:           domain.TaskPhaseImplementation,
-		SubPlanID:       failedTask.SubPlanID,
-		RepositoryName:  failedTask.RepositoryName,
-		WorktreePath:    failedTask.WorktreePath,
+		WorkItemID:      failedSession.WorkItemID,
+		WorkspaceID:     failedSession.WorkspaceID,
+		Phase:           domain.AgentSessionPhaseImplementation,
+		SubPlanID:       failedSession.SubPlanID,
+		RepositoryName:  failedSession.RepositoryName,
+		WorktreePath:    failedSession.WorktreePath,
 		HarnessName:     r.harness.Name(),
 		OwnerInstanceID: &currentInstanceID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	if err := r.sessionSvc.Create(ctx, newTask); err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("create follow-up session for failed task: %w", err)
+	if err := r.sessionSvc.Create(ctx, newSession); err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("create follow-up session for failed session: %w", err)
 	}
 
-	if err := r.sessionSvc.Start(ctx, newTask.ID); err != nil {
-		_ = r.sessionSvc.Transition(ctx, newTask.ID, domain.AgentSessionFailed)
+	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
+		_ = r.sessionSvc.Transition(ctx, newSession.ID, domain.AgentSessionFailed)
 		return FollowUpSessionResult{}, fmt.Errorf("transition follow-up session to running: %w", err)
 	}
 	opts := adapter.SessionOpts{
-		SessionID:    newTask.ID,
+		SessionID:    newSession.ID,
 		Mode:         adapter.SessionModeAgent,
-		WorkspaceID:  failedTask.WorkspaceID,
-		SubPlanID:    failedTask.SubPlanID,
-		Repository:   failedTask.RepositoryName,
-		WorktreePath: failedTask.WorktreePath,
+		WorkspaceID:  failedSession.WorkspaceID,
+		SubPlanID:    failedSession.SubPlanID,
+		Repository:   failedSession.RepositoryName,
+		WorktreePath: failedSession.WorktreePath,
 		SystemPrompt: systemPrompt,
 		UserPrompt:   feedback,
 	}
-	opts.ResumeFromSessionID = failedTask.ID
-	opts.ResumeInfo = failedTask.ResumeInfo
+	opts.ResumeFromSessionID = failedSession.ID
+	opts.ResumeInfo = failedSession.ResumeInfo
 
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {
-		if failErr := failSessionDurably(ctx, r.sessionSvc, newTask.ID, nil); failErr != nil {
+		if failErr := failSessionDurably(ctx, r.sessionSvc, newSession.ID, nil); failErr != nil {
 			slog.Warn("failed to fail follow-up session after harness start error",
 				"error", failErr,
-				"task_id", newTask.ID)
+				"agent_session_id", newSession.ID)
 		}
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
@@ -349,22 +349,22 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedTask domai
 	service.Emit(r.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionResumed),
-		WorkspaceID: failedTask.WorkspaceID,
+		WorkspaceID: failedSession.WorkspaceID,
 		Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
-			"old_session_id": failedTask.ID,
-			"new_session_id": newTask.ID,
-			"sub_plan_id":    failedTask.SubPlanID,
-			"work_item_id":   failedTask.WorkItemID,
+			"old_session_id": failedSession.ID,
+			"new_session_id": newSession.ID,
+			"sub_plan_id":    failedSession.SubPlanID,
+			"work_item_id":   failedSession.WorkItemID,
 		}),
 		CreatedAt: time.Now(),
 	})
 
 	if r.registry != nil {
-		r.registry.Register(newTask.ID, harnessSession)
+		r.registry.Register(newSession.ID, harnessSession)
 	}
 
 	return FollowUpSessionResult{
-		Task:           newTask,
+		Session:        newSession,
 		HarnessSession: harnessSession,
 	}, nil
 }
@@ -477,12 +477,12 @@ func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harn
 		if errors.Is(waitErr, context.Canceled) {
 			if err := interruptSessionDurably(ctx, r.sessionSvc, sessionID); err != nil {
 				slog.Warn("failed to interrupt follow-up session after cancellation",
-					"error", err, "session_id", sessionID)
+					"error", err, "agent_session_id", sessionID)
 			}
 		} else {
 			if err := failSessionDurably(ctx, r.sessionSvc, sessionID, nil); err != nil {
 				slog.Warn("failed to fail follow-up session",
-					"error", err, "session_id", sessionID)
+					"error", err, "agent_session_id", sessionID)
 			}
 		}
 		return
@@ -490,13 +490,13 @@ func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harn
 
 	if err := completeSessionDurably(ctx, r.sessionSvc, sessionID); err != nil {
 		slog.Warn("failed to complete follow-up session",
-			"error", err, "session_id", sessionID)
+			"error", err, "agent_session_id", sessionID)
 	}
 
 	if info := harnessSession.ResumeInfo(); len(info) > 0 {
 		if err := r.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
 			slog.Warn("failed to update resume info for follow-up session",
-				"error", err, "session_id", sessionID)
+				"error", err, "agent_session_id", sessionID)
 		}
 	}
 }

@@ -15,13 +15,13 @@ import (
 // QuestionRouter is the single stage-aware routing point for normalized agent questions.
 type QuestionRouter struct {
 	questionSvc *service.QuestionService
-	sessionSvc  *service.TaskService
+	sessionSvc  *service.AgentSessionService
 	registry    *SessionRegistry
 	foreman     *Foreman
 	eventBus    event.Publisher
 }
 
-func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.TaskService, registry *SessionRegistry, foreman *Foreman, eventBus event.Publisher) *QuestionRouter {
+func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *SessionRegistry, foreman *Foreman, eventBus event.Publisher) *QuestionRouter {
 	return &QuestionRouter{
 		questionSvc: questionSvc,
 		sessionSvc:  sessionSvc,
@@ -31,14 +31,14 @@ func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service
 	}
 }
 
-func (r *QuestionRouter) Route(ctx context.Context, stage domain.TaskPhase, evt adapter.AgentEvent, sessionID string) error {
+func (r *QuestionRouter) Route(ctx context.Context, stage domain.AgentSessionPhase, evt adapter.AgentEvent, sessionID string) error {
 	if r == nil {
 		return fmt.Errorf("route question: router is nil")
 	}
 	switch stage {
-	case domain.TaskPhasePlanning:
+	case domain.AgentSessionPhasePlanning:
 		return r.routePlanning(ctx, evt, sessionID)
-	case domain.TaskPhaseImplementation, domain.TaskPhaseReview:
+	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview:
 		return r.routeImplementation(ctx, evt, sessionID)
 	default:
 		return fmt.Errorf("route question: unsupported stage %q", stage)
@@ -46,7 +46,7 @@ func (r *QuestionRouter) Route(ctx context.Context, stage domain.TaskPhase, evt 
 }
 
 func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.TaskPhasePlanning)
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhasePlanning)
 	if err := r.persistAndPublish(ctx, q, "planning question raised"); err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEve
 }
 
 func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.TaskPhaseImplementation)
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhaseImplementation)
 	if err := r.persistAndPublish(ctx, q, "implementation question raised"); err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.Ag
 			}
 			if r.registry != nil {
 				if err := r.registry.SendAnswer(ctx, sessionID, answer); err != nil {
-					slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", q.ID, "session_id", sessionID)
+					slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", q.ID, "agent_session_id", sessionID)
 					return
 				}
 			}
@@ -102,7 +102,7 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionRaised),
 		WorkspaceID: "",
-		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "session_id": q.AgentSessionID, "question": q.Content, "stage": string(q.Stage), "source": string(q.Source)}),
+		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "agent_session_id": q.AgentSessionID, "question": q.Content, "stage": string(q.Stage), "source": string(q.Source)}),
 		CreatedAt:   time.Now(),
 	}); err != nil {
 		slog.Warn("failed to publish question raised event", "error", err, "question_id", q.ID)
@@ -115,7 +115,7 @@ func PublishQuestionAnswered(ctx context.Context, eventBus event.Publisher, ques
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionAnswered),
 		WorkspaceID: "",
-		Payload:     marshalJSONOrEmpty("agent_question.answered", map[string]string{"id": questionID, "session_id": sessionID}),
+		Payload:     marshalJSONOrEmpty("agent_question.answered", map[string]string{"id": questionID, "agent_session_id": sessionID}),
 		CreatedAt:   time.Now(),
 	})
 }
@@ -124,7 +124,7 @@ func (r *QuestionRouter) publishAnswered(ctx context.Context, questionID, sessio
 	return PublishQuestionAnswered(ctx, r.eventBus, questionID, sessionID)
 }
 
-func questionFromEvent(evt adapter.AgentEvent, sessionID string, stage domain.TaskPhase) domain.Question {
+func questionFromEvent(evt adapter.AgentEvent, sessionID string, stage domain.AgentSessionPhase) domain.Question {
 	content := evt.Payload
 	contextText := ""
 	source := domain.QuestionSourceAskForeman

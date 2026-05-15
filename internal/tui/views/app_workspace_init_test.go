@@ -286,7 +286,7 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 		SettingsData:  snapshot,
 	})
 	app.workItems = []domain.Session{{ID: "wi-current", WorkspaceID: "ws-new", Title: "current"}}
-	app.sessions = []domain.Task{{ID: "sess-current", WorkspaceID: "ws-new"}}
+	app.sessions = []domain.AgentSession{{ID: "sess-current", WorkspaceID: "ws-new"}}
 
 	model, cmd := app.Update(SessionsLoadedMsg{
 		WorkspaceID: "ws-old",
@@ -305,7 +305,7 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 
 	model, cmd = updated.Update(TasksLoadedMsg{
 		WorkspaceID: "ws-old",
-		Sessions:    []domain.Task{{ID: "sess-stale", WorkspaceID: "ws-old"}},
+		Sessions:    []domain.AgentSession{{ID: "sess-stale", WorkspaceID: "ws-old"}},
 	})
 	if cmd != nil {
 		t.Fatalf("expected no command for stale session load, got %v", cmd)
@@ -444,7 +444,7 @@ func TestApp_SessionResumedMsg_ReloadsWorkItemsAndSessions(t *testing.T) {
 	app.workItems = []domain.Session{
 		{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing},
 	}
-	app.sessions = []domain.Task{
+	app.sessions = []domain.AgentSession{
 		{ID: "sess-old", WorkspaceID: "ws-1", Status: domain.AgentSessionInterrupted},
 	}
 	app.currentWorkItemID = "wi-1"

@@ -61,7 +61,7 @@ type coreServices struct {
 	workItem             *service.SessionService
 	plan                 *service.PlanService
 	workspace            *service.WorkspaceService
-	task                 *service.TaskService
+	session              *service.AgentSessionService
 	question             *service.QuestionService
 	instance             *service.InstanceService
 	review               *service.ReviewService
@@ -272,7 +272,7 @@ func buildCoreServices(
 	workItemSvc := service.NewSessionService(transacter, nil)
 	planSvc := service.NewPlanService(transacter, nil)
 	workspaceSvc := service.NewWorkspaceService(transacter, nil)
-	taskSvc := service.NewTaskService(transacter, nil)
+	sessionSvc := service.NewAgentSessionService(transacter, nil)
 	questionSvc := service.NewQuestionService(transacter, nil)
 	instanceSvc := service.NewInstanceService(transacter)
 	reviewSvc := service.NewReviewService(transacter, nil)
@@ -294,7 +294,7 @@ func buildCoreServices(
 		workItem:             workItemSvc,
 		plan:                 planSvc,
 		workspace:            workspaceSvc,
-		task:                 taskSvc,
+		session:              sessionSvc,
 		question:             questionSvc,
 		instance:             instanceSvc,
 		review:               reviewSvc,
@@ -621,7 +621,7 @@ func buildOrchestrationRuntime(
 	if harnesses.Planning != nil {
 		planningSvc, err = orchestrator.NewPlanningService(
 			planningCfg, discoverer, gitClient, harnesses.Planning,
-			services.plan, services.workItem, services.task, bus, services.workspace, registry, services.question, cfg,
+			services.plan, services.workItem, services.session, bus, services.workspace, registry, services.question, cfg,
 		)
 		if err != nil {
 			slog.Warn("failed to build planning service; planning unavailable", "err", err)
@@ -631,7 +631,7 @@ func buildOrchestrationRuntime(
 	var reviewPipeline *orchestrator.ReviewPipeline
 	if harnesses.Review != nil {
 		reviewPipeline = orchestrator.NewReviewPipeline(
-			cfg, harnesses.Review, services.review, services.task, services.plan, services.workItem,
+			cfg, harnesses.Review, services.review, services.session, services.plan, services.workItem,
 			bus, registry,
 		)
 	}
@@ -639,7 +639,7 @@ func buildOrchestrationRuntime(
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
 		foreman = orchestrator.NewForeman(
-			cfg, harnesses.Foreman, services.plan, services.question, services.task, bus,
+				cfg, harnesses.Foreman, services.plan, services.question, services.session, bus,
 		)
 	}
 
@@ -648,7 +648,7 @@ func buildOrchestrationRuntime(
 		hookRegistry := worktree.NewHookRegistry()
 		implementationSvc = orchestrator.NewImplementationService(
 			cfg, harnesses.Implementation, gitClient, bus,
-			services.plan, services.workItem, services.task, services.workspace, registry,
+			services.plan, services.workItem, services.session, services.workspace, registry,
 			reviewPipeline,
 			foreman, services.question,
 			services.review,
@@ -659,7 +659,7 @@ func buildOrchestrationRuntime(
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, services.task, services.plan, bus, registry,
+			harnesses.Resume, services.session, services.plan, bus, registry,
 		)
 	}
 

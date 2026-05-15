@@ -222,13 +222,13 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 func TestSessionService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := domain.Task{
+	session := domain.AgentSession{
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
@@ -269,7 +269,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("WaitForAnswer", func(t *testing.T) {
-		repo.sessions["s-wait"] = domain.Task{ID: "s-wait", WorkItemID: "wi-wait", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
+		repo.sessions["s-wait"] = domain.AgentSession{ID: "s-wait", WorkItemID: "wi-wait", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
 		if err := svc.WaitForAnswer(ctx, "s-wait"); err != nil {
 			t.Fatalf("WaitForAnswer failed: %v", err)
 		}
@@ -280,7 +280,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("ResumeFromAnswer", func(t *testing.T) {
-		repo.sessions["s-resume"] = domain.Task{ID: "s-resume", WorkItemID: "wi-resume", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
+		repo.sessions["s-resume"] = domain.AgentSession{ID: "s-resume", WorkItemID: "wi-resume", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
 		if err := svc.ResumeFromAnswer(ctx, "s-resume"); err != nil {
 			t.Fatalf("ResumeFromAnswer failed: %v", err)
 		}
@@ -291,7 +291,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("Resume", func(t *testing.T) {
-		repo.sessions["s-resume2"] = domain.Task{ID: "s-resume2", WorkItemID: "wi-resume2", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
+		repo.sessions["s-resume2"] = domain.AgentSession{ID: "s-resume2", WorkItemID: "wi-resume2", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
 		if err := svc.Resume(ctx, "s-resume2"); err != nil {
 			t.Fatalf("Resume failed: %v", err)
 		}
@@ -322,7 +322,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		repo.sessions["s-del"] = domain.Task{ID: "s-del", WorkItemID: "wi-del", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
+		repo.sessions["s-del"] = domain.AgentSession{ID: "s-del", WorkItemID: "wi-del", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
 		repo.byWorkItem["wi-del"] = []string{"s-del"}
 		repo.bySubPlan["sp-del"] = []string{"s-del"}
 		repo.byWorkspace["ws-1"] = append(repo.byWorkspace["ws-1"], "s-del")
@@ -563,7 +563,7 @@ func TestErrors(t *testing.T) {
 func TestSessionService_FindRunningByOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	// FindRunningByOwner is a placeholder - just verify it returns nil
 	result, err := svc.FindRunningByOwner(ctx, "instance-1")
@@ -640,7 +640,7 @@ func TestPlanService_NotFoundErrors(t *testing.T) {
 func TestSessionService_NotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	t.Run("Get not found", func(t *testing.T) {
 		_, err := svc.Get(ctx, "nonexistent")

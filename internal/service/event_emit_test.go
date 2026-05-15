@@ -41,11 +41,11 @@ func TestEmit(t *testing.T) {
 	})
 }
 
-func TestTaskService_EmitsEvents(t *testing.T) {
+func TestAgentSessionService_EmitsEvents(t *testing.T) {
 	t.Run("Start emits EventAgentSessionStarted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+		svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 		sub, err := bus.Subscribe("test", string(domain.EventAgentSessionStarted))
 		if err != nil {
@@ -53,22 +53,22 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 		}
 		defer bus.Unsubscribe(sub.ID)
 
-		task := domain.Task{
-			ID:             "task-1",
+		session := domain.AgentSession{
+			ID:             "session-1",
 			WorkItemID:     "wi-1",
 			SubPlanID:      "sp-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.TaskPhaseImplementation,
+			Phase:          domain.AgentSessionPhaseImplementation,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-		if err := svc.Create(context.Background(), task); err != nil {
+		if err := svc.Create(context.Background(), session); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 
 		// Event fires on Start, not Create
-		if err := svc.Start(context.Background(), "task-1"); err != nil {
+		if err := svc.Start(context.Background(), "session-1"); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 
@@ -86,32 +86,32 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 	t.Run("Complete emits EventAgentSessionCompleted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+		svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionCompleted))
 		defer bus.Unsubscribe(sub.ID)
 
-		task := domain.Task{
-			ID:             "task-complete-test",
+		session := domain.AgentSession{
+			ID:             "session-complete-test",
 			WorkItemID:     "wi-1",
 			SubPlanID:      "sp-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.TaskPhaseImplementation,
+			Phase:          domain.AgentSessionPhaseImplementation,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-		if err := svc.Create(context.Background(), task); err != nil {
+		if err := svc.Create(context.Background(), session); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 
 		// Transition to running first
-		if err := svc.Start(context.Background(), "task-complete-test"); err != nil {
+		if err := svc.Start(context.Background(), "session-complete-test"); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 
-		// Complete the task
-		if err := svc.Complete(context.Background(), "task-complete-test"); err != nil {
+		// Complete the session
+		if err := svc.Complete(context.Background(), "session-complete-test"); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 
@@ -128,27 +128,27 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 	t.Run("Fail emits EventAgentSessionFailed", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+		svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionFailed))
 		defer bus.Unsubscribe(sub.ID)
 
-		task := domain.Task{
-			ID:             "task-fail-test",
+		session := domain.AgentSession{
+			ID:             "session-fail-test",
 			WorkItemID:     "wi-1",
 			SubPlanID:      "sp-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.TaskPhaseImplementation,
+			Phase:          domain.AgentSessionPhaseImplementation,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-		if err := svc.Create(context.Background(), task); err != nil {
+		if err := svc.Create(context.Background(), session); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 
 		exitCode := 1
-		if err := svc.Fail(context.Background(), "task-fail-test", &exitCode); err != nil {
+		if err := svc.Fail(context.Background(), "session-fail-test", &exitCode); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 
@@ -165,31 +165,31 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 	t.Run("Interrupt emits EventAgentSessionInterrupted", func(t *testing.T) {
 		repo := NewMockSessionRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+		svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventAgentSessionInterrupted))
 		defer bus.Unsubscribe(sub.ID)
 
-		task := domain.Task{
-			ID:             "task-interrupt-test",
+		session := domain.AgentSession{
+			ID:             "session-interrupt-test",
 			WorkItemID:     "wi-1",
 			SubPlanID:      "sp-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.TaskPhaseImplementation,
+			Phase:          domain.AgentSessionPhaseImplementation,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-		if err := svc.Create(context.Background(), task); err != nil {
+		if err := svc.Create(context.Background(), session); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 
 		// Transition to running first
-		if err := svc.Start(context.Background(), "task-interrupt-test"); err != nil {
+		if err := svc.Start(context.Background(), "session-interrupt-test"); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 
-		if err := svc.Interrupt(context.Background(), "task-interrupt-test"); err != nil {
+		if err := svc.Interrupt(context.Background(), "session-interrupt-test"); err != nil {
 			t.Fatalf("Interrupt: %v", err)
 		}
 
@@ -205,20 +205,20 @@ func TestTaskService_EmitsEvents(t *testing.T) {
 
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		repo := NewMockSessionRepository()
-		svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+		svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 		// Should not panic
-		task := domain.Task{
-			ID:             "task-nil-bus-test",
+		session := domain.AgentSession{
+			ID:             "session-nil-bus-test",
 			WorkItemID:     "wi-1",
 			SubPlanID:      "sp-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.TaskPhaseImplementation,
+			Phase:          domain.AgentSessionPhaseImplementation,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 			Status:         domain.AgentSessionPending,
 		}
-		if err := svc.Create(context.Background(), task); err != nil {
+		if err := svc.Create(context.Background(), session); err != nil {
 			t.Fatalf("Create with nil bus: %v", err)
 		}
 	})

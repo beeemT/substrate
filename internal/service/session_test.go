@@ -9,12 +9,12 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
-func implTask(id, workItemID, workspaceID, subPlanID string, status domain.TaskStatus) domain.Task {
-	return domain.Task{
+func implSession(id, workItemID, workspaceID, subPlanID string, status domain.AgentSessionStatus) domain.AgentSession {
+	return domain.AgentSession{
 		ID:             id,
 		WorkItemID:     workItemID,
 		WorkspaceID:    workspaceID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
@@ -25,10 +25,10 @@ func implTask(id, workItemID, workspaceID, subPlanID string, status domain.TaskS
 func TestSessionService_Create(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	t.Run("creates session with pending status", func(t *testing.T) {
-		session := implTask("session-1", "wi-1", "ws-1", "sp-1", "")
+		session := implSession("session-1", "wi-1", "ws-1", "sp-1", "")
 		if err := svc.Create(ctx, session); err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestSessionService_Create(t *testing.T) {
 	})
 
 	t.Run("rejects non-pending initial status", func(t *testing.T) {
-		session := implTask("session-2", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+		session := implSession("session-2", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 		err := svc.Create(ctx, session)
 		if err == nil {
 			t.Fatal("expected error for non-pending initial status")
@@ -54,18 +54,18 @@ func TestSessionService_Create(t *testing.T) {
 	})
 
 	t.Run("rejects missing work item", func(t *testing.T) {
-		session := implTask("session-3", "", "ws-1", "sp-1", "")
+		session := implSession("session-3", "", "ws-1", "sp-1", "")
 		if err := svc.Create(ctx, session); err == nil {
 			t.Fatal("expected error for missing work item")
 		}
 	})
 
 	t.Run("allows planning sessions without subplan", func(t *testing.T) {
-		session := domain.Task{
+		session := domain.AgentSession{
 			ID:          "plan-1",
 			WorkItemID:  "wi-1",
 			WorkspaceID: "ws-1",
-			Phase:       domain.TaskPhasePlanning,
+			Phase:       domain.AgentSessionPhasePlanning,
 			HarnessName: "omp",
 		}
 		if err := svc.Create(ctx, session); err != nil {
@@ -78,8 +78,8 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	validTransitions := []struct {
-		from domain.TaskStatus
-		to   domain.TaskStatus
+		from domain.AgentSessionStatus
+		to   domain.AgentSessionStatus
 		name string
 	}{
 		{domain.AgentSessionPending, domain.AgentSessionRunning, "pending -> running"},
@@ -98,9 +98,9 @@ func TestSessionService_ValidTransitions(t *testing.T) {
 	for _, tc := range validTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+			svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
+			session := implSession("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
 
 			if err := svc.Transition(ctx, "session-test", tc.to); err != nil {
@@ -122,8 +122,8 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	invalidTransitions := []struct {
-		from domain.TaskStatus
-		to   domain.TaskStatus
+		from domain.AgentSessionStatus
+		to   domain.AgentSessionStatus
 		name string
 	}{
 		{domain.AgentSessionPending, domain.AgentSessionCompleted, "pending -> completed"},
@@ -140,9 +140,9 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := NewMockSessionRepository()
-			svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+			svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-			session := implTask("session-test", "wi-1", "ws-1", "sp-1", tc.from)
+			session := implSession("session-test", "wi-1", "ws-1", "sp-1", tc.from)
 			repo.sessions["session-test"] = session
 
 			err := svc.Transition(ctx, "session-test", tc.to)
@@ -159,9 +159,9 @@ func TestSessionService_InvalidTransitions(t *testing.T) {
 func TestSessionService_StartSetsStartedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionPending)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionPending)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Start(ctx, "session-1"); err != nil {
@@ -177,9 +177,9 @@ func TestSessionService_StartSetsStartedAt(t *testing.T) {
 func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Complete(ctx, "session-1"); err != nil {
@@ -195,9 +195,9 @@ func TestSessionService_CompleteSetsCompletedAt(t *testing.T) {
 func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	if err := svc.Interrupt(ctx, "session-1"); err != nil {
@@ -213,9 +213,9 @@ func TestSessionService_InterruptSetsShutdownAt(t *testing.T) {
 func TestSessionService_FailSetsExitCode(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	exitCode := 1
@@ -232,12 +232,12 @@ func TestSessionService_FailSetsExitCode(t *testing.T) {
 func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	repo.sessions["s-1"] = implTask("s-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
-	repo.sessions["s-2"] = implTask("s-2", "wi-2", "ws-1", "sp-1", domain.AgentSessionRunning)
-	repo.sessions["s-3"] = implTask("s-3", "wi-3", "ws-1", "sp-1", domain.AgentSessionInterrupted)
-	repo.sessions["s-4"] = implTask("s-4", "wi-4", "ws-2", "sp-2", domain.AgentSessionInterrupted)
+	repo.sessions["s-1"] = implSession("s-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	repo.sessions["s-2"] = implSession("s-2", "wi-2", "ws-1", "sp-1", domain.AgentSessionRunning)
+	repo.sessions["s-3"] = implSession("s-3", "wi-3", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	repo.sessions["s-4"] = implSession("s-4", "wi-4", "ws-2", "sp-2", domain.AgentSessionInterrupted)
 	repo.byWorkspace["ws-1"] = []string{"s-1", "s-2", "s-3"}
 	repo.byWorkspace["ws-2"] = []string{"s-4"}
 
@@ -254,10 +254,10 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	now := time.Now()
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
 	session.CompletedAt = &now
 	repo.sessions["session-1"] = session
 
@@ -277,9 +277,9 @@ func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	repo.sessions["session-1"] = implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	repo.sessions["session-1"] = implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 
 	err := svc.FollowUpRestart(ctx, "session-1")
 	if err == nil {
@@ -290,9 +290,9 @@ func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 func TestSessionService_UpdateResumeInfo(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	session := implTask("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 	repo.sessions["session-1"] = session
 
 	wantInfo := map[string]string{

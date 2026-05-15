@@ -92,7 +92,7 @@ to extract IDs. Two helpers exist:
 
 ```go
 func extractWorkItemID(payload string) string  // reads m["work_item_id"]
-func extractSessionID(payload string) string   // reads m["session_id"]
+func extractSessionID(payload string) string   // reads m["agent_session_id"]
 ```
 
 If `Payload` is empty, both return `""`. This breaks every handler that calls them.

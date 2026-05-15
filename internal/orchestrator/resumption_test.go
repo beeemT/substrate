@@ -155,7 +155,7 @@ type phase9bFixture struct {
 	subPlanRepo  *mockSubPlanRepo
 	planRepo     *mockPlanRepo
 	instanceSvc  *service.InstanceService
-	sessionSvc   *service.TaskService
+	sessionSvc   *service.AgentSessionService
 	planSvc      *service.PlanService
 	bus          *event.Bus
 	workspaceID  string
@@ -184,7 +184,7 @@ func newPhase9bFixture() *phase9bFixture {
 		subPlanRepo:  subPlanRepo,
 		planRepo:     planRepo,
 		instanceSvc:  service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}),
-		sessionSvc:   service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
+		sessionSvc:   service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
 		planSvc:      planSvc,
 		bus:          event.NewBus(event.BusConfig{}),
 		workspaceID:  "ws-test",
@@ -194,11 +194,11 @@ func newPhase9bFixture() *phase9bFixture {
 // seedRunningSession inserts a running session owned by ownerInstanceID.
 func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 	owner := ownerInstanceID
-	f.sessionRepo.sessions[sessionID] = domain.Task{
+	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
 		ID:              sessionID,
 		WorkItemID:      "wi-1",
 		WorkspaceID:     f.workspaceID,
-		Phase:           domain.TaskPhaseImplementation,
+		Phase:           domain.AgentSessionPhaseImplementation,
 		SubPlanID:       "sub-plan-1",
 		RepositoryName:  "repo-a",
 		WorktreePath:    "/tmp/worktrees/repo-a",
@@ -210,11 +210,11 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 
 // seedInterruptedSession inserts an interrupted session.
 func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
-	f.sessionRepo.sessions[sessionID] = domain.Task{
+	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -225,11 +225,11 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 
 // seedInterruptedSessionWithResumeInfo inserts an interrupted session with ResumeInfo.
 func (f *phase9bFixture) seedInterruptedSessionWithResumeInfo(sessionID string, resumeInfo map[string]string) {
-	f.sessionRepo.sessions[sessionID] = domain.Task{
+	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -239,7 +239,7 @@ func (f *phase9bFixture) seedInterruptedSessionWithResumeInfo(sessionID string, 
 	}
 }
 
-func (f *phase9bFixture) getSessionStatus(id string) domain.TaskStatus {
+func (f *phase9bFixture) getSessionStatus(id string) domain.AgentSessionStatus {
 	f.sessionRepo.mu.Lock()
 	defer f.sessionRepo.mu.Unlock()
 
@@ -442,7 +442,7 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int4")
-	fix.sessionRepo.updateHook = func(_ context.Context, session domain.Task) error {
+	fix.sessionRepo.updateHook = func(_ context.Context, session domain.AgentSession) error {
 		if session.Status == domain.AgentSessionRunning {
 			cancel()
 		}
@@ -611,11 +611,11 @@ func TestResumeSession_WithoutResumeInfo(t *testing.T) {
 
 // seedCompletedSession inserts a completed session with a sub-plan.
 func (f *phase9bFixture) seedCompletedSession(sessionID string) {
-	f.sessionRepo.sessions[sessionID] = domain.Task{
+	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -626,11 +626,11 @@ func (f *phase9bFixture) seedCompletedSession(sessionID string) {
 
 // seedFailedSession inserts a failed session with a sub-plan.
 func (f *phase9bFixture) seedFailedSession(sessionID string) {
-	f.sessionRepo.sessions[sessionID] = domain.Task{
+	f.sessionRepo.sessions[sessionID] = domain.AgentSession{
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -665,9 +665,9 @@ func TestFollowUpSession_WaitAndComplete_CompletesSessionInDB(t *testing.T) {
 	}
 
 	// WaitAndComplete should transition the session to completed.
-	r.WaitAndComplete(ctx, result.Task.ID, &immediatelyCompletingSession{id: result.Task.ID})
+	r.WaitAndComplete(ctx, result.Session.ID, &immediatelyCompletingSession{id: result.Session.ID})
 
-	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionCompleted {
+	if got := fix.getSessionStatus(result.Session.ID); got != domain.AgentSessionCompleted {
 		t.Errorf("expected completed, got %q", got)
 	}
 }
@@ -698,12 +698,12 @@ func TestFollowUpSession_WaitAndComplete_FailsSessionOnHarnessError(t *testing.T
 	}
 
 	// Inject a session that returns an error from Wait.
-	failingSession := newMockSession(result.Task.ID)
+	failingSession := newMockSession(result.Session.ID)
 	failingSession.waitErr = fmt.Errorf("harness crashed")
 
-	r.WaitAndComplete(ctx, result.Task.ID, failingSession)
+	r.WaitAndComplete(ctx, result.Session.ID, failingSession)
 
-	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionFailed {
+	if got := fix.getSessionStatus(result.Session.ID); got != domain.AgentSessionFailed {
 		t.Errorf("expected failed, got %q", got)
 	}
 }
@@ -734,15 +734,15 @@ func TestFollowUpFailedSession_WaitAndComplete_CompletesNewSessionInDB(t *testin
 	}
 
 	// The new task ID is different from the original failed task.
-	if result.Task.ID == origID {
+	if result.Session.ID == origID {
 		t.Error("FollowUpFailedSession must create a new task, not reuse the failed one")
 	}
 
 	// WaitAndComplete transitions the new session to completed.
-	completingSession := &immediatelyCompletingSession{id: result.Task.ID}
-	r.WaitAndComplete(ctx, result.Task.ID, completingSession)
+	completingSession := &immediatelyCompletingSession{id: result.Session.ID}
+	r.WaitAndComplete(ctx, result.Session.ID, completingSession)
 
-	if got := fix.getSessionStatus(result.Task.ID); got != domain.AgentSessionCompleted {
+	if got := fix.getSessionStatus(result.Session.ID); got != domain.AgentSessionCompleted {
 		t.Errorf("expected new session to be completed, got %q", got)
 	}
 	// Original failed session must remain failed (audit trail).

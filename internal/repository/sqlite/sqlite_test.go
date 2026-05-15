@@ -149,18 +149,18 @@ func makeInstance(t *testing.T, tx generic.SQLXRemote, wsID string) domain.Subst
 	return inst
 }
 
-func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.Task {
+func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.AgentSession {
 	t.Helper()
 	var workItemID string
 	if err := tx.GetContext(context.Background(), &workItemID, `SELECT p.work_item_id FROM sub_plans sp JOIN plans p ON p.id = sp.plan_id WHERE sp.id = ?`, spID); err != nil {
 		t.Fatalf("lookup work item for session helper: %v", err)
 	}
-	s := domain.Task{
+	s := domain.AgentSession{
 		ID:             domain.NewID(),
 		WorkItemID:     workItemID,
 		SubPlanID:      spID,
 		WorkspaceID:    wsID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		RepositoryName: "test-repo",
 		HarnessName:    "claude",
 		WorktreePath:   "/tmp/worktree",
@@ -168,7 +168,7 @@ func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.
 		CreatedAt:      now(),
 		UpdatedAt:      now(),
 	}
-	if err := reposqlite.NewTaskRepo(tx).Create(context.Background(), s); err != nil {
+	if err := reposqlite.NewAgentSessionRepo(tx).Create(context.Background(), s); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 
@@ -637,7 +637,7 @@ func TestSessionCRUD(t *testing.T) {
 	wi := makeWorkItem(t, tx, ws.ID)
 	plan := makePlan(t, tx, wi.ID)
 	sp := makeSubPlan(t, tx, plan.ID)
-	repo := reposqlite.NewTaskRepo(tx)
+	repo := reposqlite.NewAgentSessionRepo(tx)
 
 	sess := makeSession(t, tx, sp.ID, ws.ID)
 
@@ -697,7 +697,7 @@ func TestSessionDeleteCascadesDependents(t *testing.T) {
 	sp := makeSubPlan(t, tx, plan.ID)
 	sess := makeSession(t, tx, sp.ID, ws.ID)
 
-	sessionRepo := reposqlite.NewTaskRepo(tx)
+	sessionRepo := reposqlite.NewAgentSessionRepo(tx)
 	reviewRepo := reposqlite.NewReviewRepo(tx)
 	questionRepo := reposqlite.NewQuestionRepo(tx)
 
@@ -786,7 +786,7 @@ func TestSessionSearchHistory(t *testing.T) {
 
 	workspaceRepo := reposqlite.NewWorkspaceRepo(tx)
 	workItemRepo := reposqlite.NewSessionRepo(tx)
-	sessionRepo := reposqlite.NewTaskRepo(tx)
+	sessionRepo := reposqlite.NewAgentSessionRepo(tx)
 
 	localWS := makeWorkspace(t, tx)
 	localWS.Name = "local-workspace"
@@ -877,11 +877,11 @@ func TestSessionSearchHistory(t *testing.T) {
 	if err := workItemRepo.Update(ctx, planningOnlyItem); err != nil {
 		t.Fatalf("update planning-only work item: %v", err)
 	}
-	planningSession := domain.Task{
+	planningSession := domain.AgentSession{
 		ID:          domain.NewID(),
 		WorkItemID:  planningOnlyItem.ID,
 		WorkspaceID: remoteWS.ID,
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   planningUpdatedAt,
@@ -1209,7 +1209,7 @@ func TestGetNotFound(t *testing.T) {
 		t.Errorf("sub-plan get not found: got %v, want sql.ErrNoRows", err)
 	}
 
-	_, err = reposqlite.NewTaskRepo(tx).Get(ctx, "nope")
+	_, err = reposqlite.NewAgentSessionRepo(tx).Get(ctx, "nope")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("session get not found: got %v, want sql.ErrNoRows", err)
 	}
@@ -1324,7 +1324,7 @@ func TestEmptyLists(t *testing.T) {
 		t.Error("sub-plans should be non-nil empty slice")
 	}
 
-	sessions, err := reposqlite.NewTaskRepo(tx).ListBySubPlanID(ctx, "nonexistent-sp")
+	sessions, err := reposqlite.NewAgentSessionRepo(tx).ListBySubPlanID(ctx, "nonexistent-sp")
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}

@@ -56,7 +56,7 @@ func (r *questionRow) toDomain() (domain.Question, error) {
 	return domain.Question{
 		ID:             r.ID,
 		AgentSessionID: r.AgentSessionID,
-		Stage:          domain.TaskPhase(derefStr(r.Stage)),
+		Stage:          domain.AgentSessionPhase(derefStr(r.Stage)),
 		Source:         domain.QuestionSource(derefStr(r.Source)),
 		Content:        r.Content,
 		Context:        derefStr(r.Context),

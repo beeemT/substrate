@@ -75,21 +75,21 @@ func (r *duplicateCreateWorkItemRepo) Delete(_ context.Context, id string) error
 }
 
 type sessionSearchDeleteRepo struct {
-	sessions map[string]domain.Task
+	sessions map[string]domain.AgentSession
 	entry    domain.SessionHistoryEntry
 }
 
-func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.Task, error) {
+func (r *sessionSearchDeleteRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
 	session, ok := r.sessions[id]
 	if !ok {
-		return domain.Task{}, repository.ErrNotFound
+		return domain.AgentSession{}, repository.ErrNotFound
 	}
 
 	return session, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkItemID == workItemID {
 			result = append(result, session)
@@ -99,8 +99,8 @@ func (r *sessionSearchDeleteRepo) ListByWorkItemID(_ context.Context, workItemID
 	return result, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.SubPlanID == subPlanID {
 			result = append(result, session)
@@ -110,8 +110,8 @@ func (r *sessionSearchDeleteRepo) ListBySubPlanID(_ context.Context, subPlanID s
 	return result, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkspaceID == workspaceID {
 			result = append(result, session)
@@ -121,8 +121,8 @@ func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspace
 	return result, nil
 }
 
-func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.OwnerInstanceID != nil && *session.OwnerInstanceID == instanceID {
 			result = append(result, session)
@@ -143,13 +143,13 @@ func (r *sessionSearchDeleteRepo) SearchHistory(_ context.Context, filter domain
 	return []domain.SessionHistoryEntry{r.entry}, nil
 }
 
-func (r *sessionSearchDeleteRepo) Create(_ context.Context, session domain.Task) error {
+func (r *sessionSearchDeleteRepo) Create(_ context.Context, session domain.AgentSession) error {
 	r.sessions[session.ID] = session
 
 	return nil
 }
 
-func (r *sessionSearchDeleteRepo) Update(_ context.Context, session domain.Task) error {
+func (r *sessionSearchDeleteRepo) Update(_ context.Context, session domain.AgentSession) error {
 	r.sessions[session.ID] = session
 
 	return nil
@@ -346,8 +346,8 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 
 	now := time.Now()
 	repo := &sessionSearchDeleteRepo{
-		sessions: map[string]domain.Task{
-			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+		sessions: map[string]domain.AgentSession{
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 		entry: domain.SessionHistoryEntry{
 			SessionID:          "sess-1",
@@ -366,7 +366,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		SubPlans: &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a"}}},
 	}}, nil)
 	app := newTestApp(Services{
-		Task:          service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, NewNoopPublisher()),
+		Task:          service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, NewNoopPublisher()),
 		Session:       service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
 		Plan:          planSvc,
 		WorkspaceID:   "ws-1",
@@ -385,7 +385,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	}
 	app.sessionsDir = tempDir
 	app.reviewSessionLogs["sess-1"] = filepath.Join(tempDir, "review-1.log")
-	app.sessions = []domain.Task{repo.sessions["sess-1"]}
+	app.sessions = []domain.AgentSession{repo.sessions["sess-1"]}
 	app.activeOverlay = overlaySessionSearch
 	app.sessionSearch.Open(sessionHistoryScopeWorkspace, true)
 	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{repo.entry})
@@ -494,8 +494,8 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 
 	now := time.Now()
 	taskRepo := &sessionSearchDeleteRepo{
-		sessions: map[string]domain.Task{
-			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+		sessions: map[string]domain.AgentSession{
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
@@ -506,7 +506,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
 	msg := deleteSessionCmd(servicesToProvider(Services{
-		Task:    service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, NewNoopPublisher()),
+		Task:    service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, NewNoopPublisher()),
 		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
 		Plan:    planSvc,
 	}), sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
@@ -1193,11 +1193,11 @@ func newSidebarDrilldownTestApp() *App {
 		Status:         domain.SubPlanInProgress,
 		UpdatedAt:      now,
 	}
-	session := domain.Task{
+	session := domain.AgentSession{
 		ID:             "sess-1",
 		WorkItemID:     workItem.ID,
 		WorkspaceID:    "ws-local",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		HarnessName:    "omp",
@@ -1206,7 +1206,7 @@ func newSidebarDrilldownTestApp() *App {
 	}
 	app.plans[workItem.ID] = plan
 	app.subPlans[plan.ID] = []domain.TaskPlan{subPlan}
-	app.sessions = []domain.Task{session}
+	app.sessions = []domain.AgentSession{session}
 	app.content.SetSize(80, 60)
 	app.rebuildSidebar()
 	app.currentWorkItemID = workItem.ID
@@ -1249,18 +1249,18 @@ func newPlanningDrilldownTestApp() *App {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	planningSession := domain.Task{
+	planningSession := domain.AgentSession{
 		ID:          "plan-sess-1",
 		WorkItemID:  workItem.ID,
 		WorkspaceID: workItem.WorkspaceID,
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		UpdatedAt:   now,
 		CreatedAt:   now,
 	}
 	app.workItems = []domain.Session{workItem}
-	app.sessions = []domain.Task{planningSession}
+	app.sessions = []domain.AgentSession{planningSession}
 	app.content.SetSize(80, 60)
 	app.rebuildSidebar()
 	app.currentWorkItemID = workItem.ID
@@ -1574,11 +1574,11 @@ func TestReviewingContentUsesImplementationSessionReviewData(t *testing.T) {
 	app.sessions[0].Status = domain.AgentSessionCompleted
 	app.sessions[0].UpdatedAt = now
 	app.sessions[0].CreatedAt = now
-	app.sessions = append(app.sessions, domain.Task{
+	app.sessions = append(app.sessions, domain.AgentSession{
 		ID:             "review-sess-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-local",
-		Phase:          domain.TaskPhaseReview,
+		Phase:          domain.AgentSessionPhaseReview,
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
 		HarnessName:    "omp-review",
@@ -1627,11 +1627,11 @@ func TestReviewingContentUsesImplementationSessionReviewData(t *testing.T) {
 
 func TestHistoricalPlanningSessionRemainsSelectable(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
-	planningSession := domain.Task{
+	planningSession := domain.AgentSession{
 		ID:          "plan-hist-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-local",
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionCompleted,
 		UpdatedAt:   time.Now().Add(time.Minute),
@@ -2159,51 +2159,51 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	planEarly := domain.Task{
+	planEarly := domain.AgentSession{
 		ID:         "plan-1",
 		WorkItemID: "wi-group",
-		Phase:      domain.TaskPhasePlanning,
+		Phase:      domain.AgentSessionPhasePlanning,
 		Status:     domain.AgentSessionCompleted,
 		CreatedAt:  now.Add(-3 * time.Hour),
 		UpdatedAt:  now.Add(-2 * time.Hour),
 	}
-	planLate := domain.Task{
+	planLate := domain.AgentSession{
 		ID:         "plan-2",
 		WorkItemID: "wi-group",
-		Phase:      domain.TaskPhasePlanning,
+		Phase:      domain.AgentSessionPhasePlanning,
 		Status:     domain.AgentSessionCompleted,
 		CreatedAt:  now.Add(-1 * time.Hour),
 		UpdatedAt:  now.Add(-30 * time.Minute),
 	}
-	implA := domain.Task{
+	implA := domain.AgentSession{
 		ID:             "impl-a",
 		WorkItemID:     "wi-group",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		Status:         domain.AgentSessionCompleted,
 		RepositoryName: "repo-alpha",
 		CreatedAt:      now.Add(-90 * time.Minute),
 		UpdatedAt:      now.Add(-45 * time.Minute),
 	}
-	implB := domain.Task{
+	implB := domain.AgentSession{
 		ID:             "impl-b",
 		WorkItemID:     "wi-group",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		Status:         domain.AgentSessionCompleted,
 		RepositoryName: "repo-beta",
 		CreatedAt:      now.Add(-60 * time.Minute),
 		UpdatedAt:      now.Add(-20 * time.Minute),
 	}
-	implA2 := domain.Task{
+	implA2 := domain.AgentSession{
 		ID:             "impl-a2",
 		WorkItemID:     "wi-group",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		Status:         domain.AgentSessionRunning,
 		RepositoryName: "repo-alpha",
 		CreatedAt:      now.Add(-10 * time.Minute),
 		UpdatedAt:      now.Add(-5 * time.Minute),
 	}
 	app.workItems = []domain.Session{workItem}
-	app.sessions = []domain.Task{planEarly, planLate, implA, implB, implA2}
+	app.sessions = []domain.AgentSession{planEarly, planLate, implA, implB, implA2}
 	app.content.SetSize(80, 60)
 	app.currentWorkItemID = "wi-group"
 	app.sidebarMode = sidebarPaneTasks

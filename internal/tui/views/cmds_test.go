@@ -25,7 +25,7 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, views.NewNoopPublisher())
-	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, views.NewNoopPublisher())
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, views.NewNoopPublisher())
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
 	sub, err := bus.Subscribe("planning-answer-test", string(domain.EventAgentQuestionAnswered))
@@ -33,8 +33,8 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}
-	taskRepo.tasks["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
 
 	msg := views.AnswerQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, bus, "q-plan", "use full cutover", "human")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Answer sent to planner" {
@@ -61,8 +61,8 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 		if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
 			t.Fatalf("unmarshal payload: %v", err)
 		}
-		if payload["id"] != "q-plan" || payload["session_id"] != "plan-session" {
-			t.Fatalf("payload = %#v, want id/session_id", payload)
+		if payload["id"] != "q-plan" || payload["agent_session_id"] != "plan-session" {
+			t.Fatalf("payload = %#v, want id/agent_session_id", payload)
 		}
 	default:
 		t.Fatal("expected planning answered event")
@@ -75,10 +75,10 @@ func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
 	questionRepo := newCmdQuestionRepo()
 	taskRepo := newCmdTaskRepo()
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, views.NewNoopPublisher())
-	taskSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: taskRepo}}, views.NewNoopPublisher())
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, views.NewNoopPublisher())
 
-	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.TaskPhasePlanning, Status: domain.QuestionPending}
-	taskRepo.tasks["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
 
 	msg := views.SkipQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, views.MockBus(), "q-skip")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Question skipped" {
@@ -147,7 +147,7 @@ func (r *cmdQuestionRepo) UpdateProposedAnswer(_ context.Context, id, proposedAn
 }
 
 type cmdTaskRepo struct {
-	tasks       map[string]domain.Task
+	tasks       map[string]domain.AgentSession
 	byWorkItem  map[string][]string
 	bySubPlan   map[string][]string
 	byWorkspace map[string][]string
@@ -155,34 +155,34 @@ type cmdTaskRepo struct {
 
 func newCmdTaskRepo() *cmdTaskRepo {
 	return &cmdTaskRepo{
-		tasks:       make(map[string]domain.Task),
+		tasks:       make(map[string]domain.AgentSession),
 		byWorkItem:  make(map[string][]string),
 		bySubPlan:   make(map[string][]string),
 		byWorkspace: make(map[string][]string),
 	}
 }
 
-func (r *cmdTaskRepo) Get(_ context.Context, id string) (domain.Task, error) {
+func (r *cmdTaskRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
 	task, ok := r.tasks[id]
 	if !ok {
-		return domain.Task{}, repository.ErrNotFound
+		return domain.AgentSession{}, repository.ErrNotFound
 	}
 	return task, nil
 }
 
-func (r *cmdTaskRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+func (r *cmdTaskRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.AgentSession, error) {
 	return r.list(r.byWorkItem[workItemID]), nil
 }
 
-func (r *cmdTaskRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+func (r *cmdTaskRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
 	return r.list(r.bySubPlan[subPlanID]), nil
 }
 
-func (r *cmdTaskRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+func (r *cmdTaskRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
 	return r.list(r.byWorkspace[workspaceID]), nil
 }
 
-func (r *cmdTaskRepo) ListByOwnerInstanceID(_ context.Context, _ string) ([]domain.Task, error) {
+func (r *cmdTaskRepo) ListByOwnerInstanceID(_ context.Context, _ string) ([]domain.AgentSession, error) {
 	return nil, nil
 }
 
@@ -190,7 +190,7 @@ func (r *cmdTaskRepo) SearchHistory(_ context.Context, _ domain.SessionHistoryFi
 	return nil, nil
 }
 
-func (r *cmdTaskRepo) Create(_ context.Context, task domain.Task) error {
+func (r *cmdTaskRepo) Create(_ context.Context, task domain.AgentSession) error {
 	r.tasks[task.ID] = task
 	r.byWorkItem[task.WorkItemID] = append(r.byWorkItem[task.WorkItemID], task.ID)
 	if task.SubPlanID != "" {
@@ -200,7 +200,7 @@ func (r *cmdTaskRepo) Create(_ context.Context, task domain.Task) error {
 	return nil
 }
 
-func (r *cmdTaskRepo) Update(_ context.Context, task domain.Task) error {
+func (r *cmdTaskRepo) Update(_ context.Context, task domain.AgentSession) error {
 	if _, ok := r.tasks[task.ID]; !ok {
 		return repository.ErrNotFound
 	}
@@ -216,8 +216,8 @@ func (r *cmdTaskRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *cmdTaskRepo) list(ids []string) []domain.Task {
-	tasks := make([]domain.Task, 0, len(ids))
+func (r *cmdTaskRepo) list(ids []string) []domain.AgentSession {
+	tasks := make([]domain.AgentSession, 0, len(ids))
 	for _, id := range ids {
 		tasks = append(tasks, r.tasks[id])
 	}

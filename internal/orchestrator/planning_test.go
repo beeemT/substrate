@@ -369,12 +369,12 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 
 	questionRepo := newMockQuestionRepo()
 	sessionRepo := newMockSessionRepo()
-	sessionRepo.sessions["plan-session"] = domain.Task{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.TaskPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
 
 	registry := NewSessionRegistry()
 	svc := &PlanningService{
 		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{}),
-		sessionSvc:  service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
+		sessionSvc:  service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
 		registry:    registry,
 	}
 	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
@@ -406,7 +406,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	if len(questions) != 1 {
 		t.Fatalf("questions len = %d, want 1", len(questions))
 	}
-	if questions[0].Stage != domain.TaskPhasePlanning || questions[0].Source != domain.QuestionSourceAskForeman {
+	if questions[0].Stage != domain.AgentSessionPhasePlanning || questions[0].Source != domain.QuestionSourceAskForeman {
 		t.Fatalf("question stage/source = %s/%s", questions[0].Stage, questions[0].Source)
 	}
 	gotTask, err := svc.sessionSvc.Get(context.Background(), "plan-session")
@@ -618,11 +618,11 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 
 	sessionRepo := newMockSessionRepo()
 	// Seed the planning session record so UpdateResumeInfo can find it.
-	sessionRepo.sessions["plan-omp-1"] = domain.Task{
+	sessionRepo.sessions["plan-omp-1"] = domain.AgentSession{
 		ID:          "plan-omp-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: "mock",
 		Status:      domain.AgentSessionRunning,
 	}
@@ -631,7 +631,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		cfg:        &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
 		harness:    harness,
 		templates:  templates,
-		sessionSvc: service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{}),
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -929,7 +929,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 
 	// Discoverer uses the fake binary so buildRepoPointer succeeds for test-repo.
 	gitClient := gitwork.NewClient(fakeGitWork)
@@ -1049,7 +1049,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
@@ -1108,7 +1108,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	}}
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 	eventRepo := &planTestEventRepo{}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
@@ -1209,7 +1209,7 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	}}
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 	eventRepo := &planTestEventRepo{}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 

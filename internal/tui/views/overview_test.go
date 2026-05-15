@@ -453,7 +453,7 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-local", ExternalID: "SUB-1", Title: "Review plan", State: domain.SessionReviewing, CreatedAt: now, UpdatedAt: now}}
 	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved, Version: 1, UpdatedAt: now}
 	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted, UpdatedAt: now}}
-	app.sessions = []domain.Task{{ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-local", Phase: domain.TaskPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now}}
+	app.sessions = []domain.AgentSession{{ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-local", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now}}
 	app.reviews["sess-1"] = ReviewsLoadedMsg{
 		SessionID: "sess-1",
 		Cycles:    []domain.ReviewCycle{{ID: "cycle-1", AgentSessionID: "sess-1", CycleNumber: 1, Status: domain.ReviewCycleCritiquesFound}},
@@ -1208,11 +1208,11 @@ func TestOverviewInterruptedPlanningDispatchesRestartPlanMsg(t *testing.T) {
 	m := NewSessionOverviewModel(st)
 	m.SetTerminalSize(80, 40)
 	m.SetSize(80, 40)
-	planningSession := domain.Task{
+	planningSession := domain.AgentSession{
 		ID:          "sess-planning",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		Status:      domain.AgentSessionInterrupted,
 	}
 	m.SetData(SessionOverviewData{
@@ -1247,11 +1247,11 @@ func TestOverviewInterruptedImplementationDispatchesResumeSessionMsg(t *testing.
 	m := NewSessionOverviewModel(st)
 	m.SetTerminalSize(80, 40)
 	m.SetSize(80, 40)
-	implSession := domain.Task{
+	implSession := domain.AgentSession{
 		ID:          "sess-impl",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Phase:       domain.TaskPhaseImplementation,
+		Phase:       domain.AgentSessionPhaseImplementation,
 		SubPlanID:   "sp-1",
 		Status:      domain.AgentSessionInterrupted,
 	}
@@ -1371,13 +1371,13 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
 	app.plans["wi-stuck"] = plan
 	app.subPlans["plan-1"] = subPlans
-	app.sessions = []domain.Task{{
+	app.sessions = []domain.AgentSession{{
 		ID:             "impl-1",
 		WorkItemID:     "wi-stuck",
 		WorkspaceID:    "ws-local",
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		Status:         domain.AgentSessionCompleted,
 		UpdatedAt:      now,
 	}}
@@ -1421,12 +1421,12 @@ func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 	workItem := domain.Session{ID: "wi-active", WorkspaceID: "ws-local", State: domain.SessionImplementing, UpdatedAt: now}
 	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-active", Status: domain.PlanApproved}
 	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
-	app.sessions = []domain.Task{{
+	app.sessions = []domain.AgentSession{{
 		ID:          "impl-1",
 		WorkItemID:  "wi-active",
 		WorkspaceID: "ws-local",
 		SubPlanID:   "sp-1",
-		Phase:       domain.TaskPhaseImplementation,
+		Phase:       domain.AgentSessionPhaseImplementation,
 		Status:      domain.AgentSessionRunning,
 		UpdatedAt:   now,
 	}}

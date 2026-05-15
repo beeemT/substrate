@@ -352,7 +352,7 @@ func (m *SessionSearchOverlay) toggleScope() tea.Cmd {
 	return m.setScope(sessionHistoryScopeWorkspace)
 }
 
-func humanAgentSessionStatus(status domain.TaskStatus) string {
+func humanAgentSessionStatus(status domain.AgentSessionStatus) string {
 	switch status {
 	case domain.AgentSessionPending:
 		return "Pending"

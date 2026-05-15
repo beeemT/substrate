@@ -77,16 +77,16 @@ type NewSessionFilterLockRepository interface {
 	Release(ctx context.Context, filterID, instanceID string) error
 }
 
-// TaskRepository provides CRUD for child agent sessions.
-type TaskRepository interface {
-	Get(ctx context.Context, id string) (domain.Task, error)
-	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error)
-	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error)
-	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error)
-	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error)
+// AgentSessionRepository provides CRUD for child agent sessions.
+type AgentSessionRepository interface {
+	Get(ctx context.Context, id string) (domain.AgentSession, error)
+	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.AgentSession, error)
+	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error)
+	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error)
+	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error)
 	SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error)
-	Create(ctx context.Context, s domain.Task) error
-	Update(ctx context.Context, s domain.Task) error
+	Create(ctx context.Context, s domain.AgentSession) error
+	Update(ctx context.Context, s domain.AgentSession) error
 	Delete(ctx context.Context, id string) error
 }
 

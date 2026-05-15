@@ -20,17 +20,17 @@ func TestTransacterRetriesSQLiteBusySnapshot(t *testing.T) {
 	tx := beginTx(t, db)
 	ws := makeWorkspace(t, tx)
 	wi := makeWorkItem(t, tx, ws.ID)
-	task := domain.Task{
+	session := domain.AgentSession{
 		ID:          domain.NewID(),
 		WorkItemID:  wi.ID,
 		WorkspaceID: ws.ID,
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: "claude",
 		Status:      domain.AgentSessionInterrupted,
 		CreatedAt:   now(),
 		UpdatedAt:   now(),
 	}
-	if err := reposqlite.NewTaskRepo(tx).Create(context.Background(), task); err != nil {
+	if err := reposqlite.NewAgentSessionRepo(tx).Create(context.Background(), session); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -41,20 +41,20 @@ func TestTransacterRetriesSQLiteBusySnapshot(t *testing.T) {
 	attempts := 0
 	err := transacter.Transact(context.Background(), func(ctx context.Context, res repository.Resources) error {
 		attempts++
-		current, err := res.Tasks.Get(ctx, task.ID)
+		current, err := res.AgentSessions.Get(ctx, session.ID)
 		if err != nil {
 			return err
 		}
 
 		if attempts == 1 {
-			if _, err := db.ExecContext(ctx, `UPDATE agent_sessions SET updated_at = ? WHERE id = ?`, formatRetryTestTime(time.Now()), task.ID); err != nil {
+			if _, err := db.ExecContext(ctx, `UPDATE agent_sessions SET updated_at = ? WHERE id = ?`, formatRetryTestTime(time.Now()), session.ID); err != nil {
 				t.Fatalf("concurrent update: %v", err)
 			}
 		}
 
 		current.Status = domain.AgentSessionFailed
 		current.UpdatedAt = now()
-		return res.Tasks.Update(ctx, current)
+		return res.AgentSessions.Update(ctx, current)
 	})
 	if err != nil {
 		t.Fatalf("transact returned error: %v", err)
@@ -63,10 +63,10 @@ func TestTransacterRetriesSQLiteBusySnapshot(t *testing.T) {
 		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 
-	var got domain.Task
+	var got domain.AgentSession
 	err = transacter.Transact(context.Background(), func(ctx context.Context, res repository.Resources) error {
 		var err error
-		got, err = res.Tasks.Get(ctx, task.ID)
+		got, err = res.AgentSessions.Get(ctx, session.ID)
 		return err
 	})
 	if err != nil {

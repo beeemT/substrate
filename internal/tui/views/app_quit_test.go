@@ -13,14 +13,14 @@ import (
 )
 
 // newQuitTestApp creates a minimal App with the given sessions list.
-func newQuitTestApp(sessions []domain.Task) *App {
+func newQuitTestApp(sessions []domain.AgentSession) *App {
 	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
 	app.sessions = sessions
 	return app
 }
 
 // newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
-func newQuitTestAppWithRegistry(sessions []domain.Task) (*App, *orchestrator.SessionRegistry) {
+func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, *orchestrator.SessionRegistry) {
 	reg := orchestrator.NewSessionRegistry()
 	app := newTestApp(Services{
 		WorkspaceID:     "ws-1",
@@ -32,10 +32,10 @@ func newQuitTestAppWithRegistry(sessions []domain.Task) (*App, *orchestrator.Ses
 	return app, reg
 }
 
-func runningSessions(n int) []domain.Task {
-	tasks := make([]domain.Task, n)
+func runningSessions(n int) []domain.AgentSession {
+	tasks := make([]domain.AgentSession, n)
 	for i := range tasks {
-		tasks[i] = domain.Task{ID: "s", Status: domain.AgentSessionRunning}
+		tasks[i] = domain.AgentSession{ID: "s", Status: domain.AgentSessionRunning}
 	}
 	return tasks
 }
@@ -250,7 +250,7 @@ func (m *quitTestMockSession) Compact(_ context.Context) error               { r
 func TestQuitConfirmedMsgAbortsRegistrySessions(t *testing.T) {
 	t.Parallel()
 
-	sessions := []domain.Task{
+	sessions := []domain.AgentSession{
 		{ID: "task-1", WorkItemID: "wi-1", Status: domain.AgentSessionRunning},
 		{ID: "task-2", WorkItemID: "wi-1", Status: domain.AgentSessionCompleted},
 		{ID: "task-3", WorkItemID: "wi-2", Status: domain.AgentSessionRunning},

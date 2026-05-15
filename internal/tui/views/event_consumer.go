@@ -142,9 +142,9 @@ func decodePlanUpdated(payload string) tea.Msg {
 
 func decodeAgentSessionStarted(payload string) tea.Msg {
 	var p struct {
-		Session    domain.Task `json:"session"`
-		SessionID  string      `json:"session_id"`
-		WorkItemID string      `json:"work_item_id"`
+		Session    domain.AgentSession `json:"session"`
+		SessionID  string              `json:"agent_session_id"`
+		WorkItemID string              `json:"work_item_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventAgentSessionStarted payload", "error", err)
@@ -158,9 +158,9 @@ func decodeAgentSessionStarted(payload string) tea.Msg {
 
 func decodeAgentSessionUpdated(payload string) tea.Msg {
 	var p struct {
-		Session    domain.Task `json:"session"`
-		SessionID  string      `json:"session_id"`
-		WorkItemID string      `json:"work_item_id"`
+		Session    domain.AgentSession `json:"session"`
+		SessionID  string              `json:"agent_session_id"`
+		WorkItemID string              `json:"work_item_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode agent task event payload", "error", err)
@@ -188,7 +188,7 @@ func decodeAgentSessionResumed(payload string) tea.Msg {
 
 func decodeQuestionRaised(payload string) tea.Msg {
 	var p struct {
-		SessionID string          `json:"session_id"`
+		SessionID string          `json:"agent_session_id"`
 		Question  domain.Question `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
@@ -200,7 +200,7 @@ func decodeQuestionRaised(payload string) tea.Msg {
 
 func decodeQuestionAnswered(payload string) tea.Msg {
 	var p struct {
-		SessionID  string `json:"session_id"`
+		SessionID  string `json:"agent_session_id"`
 		QuestionID string `json:"question_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
@@ -212,7 +212,7 @@ func decodeQuestionAnswered(payload string) tea.Msg {
 
 func decodeReviewStarted(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"session_id"`
+		SessionID string `json:"agent_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventReviewStarted payload", "error", err)
@@ -223,7 +223,7 @@ func decodeReviewStarted(payload string) tea.Msg {
 
 func decodeReviewCompleted(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"session_id"`
+		SessionID string `json:"agent_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventReviewCompleted payload", "error", err)
@@ -234,7 +234,7 @@ func decodeReviewCompleted(payload string) tea.Msg {
 
 func decodeCritiquesFound(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"session_id"`
+		SessionID string `json:"agent_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventCritiquesFound payload", "error", err)
@@ -245,7 +245,7 @@ func decodeCritiquesFound(payload string) tea.Msg {
 
 func decodeReimplementationStarted(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"session_id"`
+		SessionID string `json:"agent_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventReimplementationStarted payload", "error", err)

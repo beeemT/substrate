@@ -49,7 +49,7 @@ func (h *doneHarness) StartSession(_ context.Context, opts adapter.SessionOpts) 
 // newReviewPipelineForTest builds a minimal ReviewPipeline for unit testing.
 // sessionRepo must be pre-populated with any sessions the test needs.
 func newReviewPipelineForTest(harness adapter.AgentHarness, sessionRepo *mockSessionRepo) *ReviewPipeline {
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 	maxCycles := 3
 	reviewTimeoutDur := 5 * time.Second // long enough to detect hangs in tests
 	cfg := &config.Config{}
@@ -69,7 +69,7 @@ func newReviewPipelineForTest(harness adapter.AgentHarness, sessionRepo *mockSes
 // until reviewTimeout fired.
 func TestStartReviewAgent_CompletesOnDone(t *testing.T) {
 	sessionRepo := newMockSessionRepo()
-	sessionRepo.sessions["impl-session-1"] = domain.Task{
+	sessionRepo.sessions["impl-session-1"] = domain.AgentSession{
 		ID:         "impl-session-1",
 		WorkItemID: "wi-1",
 		Status:     domain.AgentSessionRunning,
@@ -77,7 +77,7 @@ func TestStartReviewAgent_CompletesOnDone(t *testing.T) {
 
 	pipeline := newReviewPipelineForTest(&doneHarness{}, sessionRepo)
 
-	session := domain.Task{
+	session := domain.AgentSession{
 		ID:             "impl-session-1",
 		WorkItemID:     "wi-1",
 		SubPlanID:      "sp-1",

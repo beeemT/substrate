@@ -17,21 +17,21 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 	// Real payload from the database
 	now := time.Now()
 	startedAt := time.Now()
-	task := domain.Task{
-		ID:             "01KR0WZPRFCRY356KBNH45ANKT",
-		WorkItemID:     "01KR0NAP6ZW1AAZJGSN6DE4AEE",
-		WorkspaceID:    "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Phase:          domain.TaskPhasePlanning,
-		HarnessName:    "omp",
-		Status:         domain.AgentSessionRunning,
-		StartedAt:      &startedAt,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	task := domain.AgentSession{
+		ID:          "01KR0WZPRFCRY356KBNH45ANKT",
+		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
+		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
+		Phase:       domain.AgentSessionPhasePlanning,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionRunning,
+		StartedAt:   &startedAt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"session":     task,
-		"work_item_id": task.WorkItemID,
-		"session_id":  task.ID,
+		"session":          task,
+		"work_item_id":     task.WorkItemID,
+		"agent_session_id": task.ID,
 	})
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -56,8 +56,8 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 	if typed.Task.ID != task.ID {
 		t.Errorf("Task.ID = %q, want %q", typed.Task.ID, task.ID)
 	}
-	if typed.Task.Phase != domain.TaskPhasePlanning {
-		t.Errorf("Task.Phase = %q, want %q", typed.Task.Phase, domain.TaskPhasePlanning)
+	if typed.Task.Phase != domain.AgentSessionPhasePlanning {
+		t.Errorf("Task.Phase = %q, want %q", typed.Task.Phase, domain.AgentSessionPhasePlanning)
 	}
 	if typed.Task.Status != domain.AgentSessionRunning {
 		t.Errorf("Task.Status = %q, want %q", typed.Task.Status, domain.AgentSessionRunning)
@@ -72,23 +72,23 @@ func TestEventConsumer_toMsg_AgentSessionUpdated(t *testing.T) {
 	now := time.Now()
 	startedAt := time.Now()
 	completedAt := time.Now()
-	task := domain.Task{
-		ID:             "01KR0NBYZVA3NNQNT6AEKFMDBV",
-		WorkItemID:     "01KR0NAP6ZW1AAZJGSN6DE4AEE",
-		WorkspaceID:    "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Phase:          domain.TaskPhasePlanning,
-		HarnessName:    "omp",
-		Status:         domain.AgentSessionFailed,
-		StartedAt:      &startedAt,
-		CompletedAt:    &completedAt,
-		ExitCode:       intPtr(1),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	task := domain.AgentSession{
+		ID:          "01KR0NBYZVA3NNQNT6AEKFMDBV",
+		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
+		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
+		Phase:       domain.AgentSessionPhasePlanning,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionFailed,
+		StartedAt:   &startedAt,
+		CompletedAt: &completedAt,
+		ExitCode:    intPtr(1),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"session":     task,
-		"work_item_id": task.WorkItemID,
-		"session_id":  task.ID,
+		"session":          task,
+		"work_item_id":     task.WorkItemID,
+		"agent_session_id": task.ID,
 	})
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),

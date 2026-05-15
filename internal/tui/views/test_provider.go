@@ -17,7 +17,7 @@ type testProvider struct {
 func (tp *testProvider) GetServices() *Services               { return &tp.svcs }
 func (tp *testProvider) Session() *service.SessionService     { return tp.svcs.Session }
 func (tp *testProvider) Plan() *service.PlanService           { return tp.svcs.Plan }
-func (tp *testProvider) Task() *service.TaskService           { return tp.svcs.Task }
+func (tp *testProvider) Task() *service.AgentSessionService           { return tp.svcs.Task }
 func (tp *testProvider) Question() *service.QuestionService   { return tp.svcs.Question }
 func (tp *testProvider) Instance() *service.InstanceService   { return tp.svcs.Instance }
 func (tp *testProvider) Workspace() *service.WorkspaceService { return tp.svcs.Workspace }

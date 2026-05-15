@@ -22,7 +22,7 @@ type SessionsLoadedMsg struct {
 // TasksLoadedMsg is sent when tasks for a workspace are refreshed.
 type TasksLoadedMsg struct {
 	WorkspaceID string
-	Sessions    []domain.Task
+	Sessions    []domain.AgentSession
 }
 
 // SessionHistoryLoadedMsg is sent when a session-history search completes.
@@ -46,7 +46,7 @@ type SessionLoadedMsg struct {
 // TasksForSessionLoadedMsg is sent when tasks for a work item are loaded (event-driven).
 type TasksForSessionLoadedMsg struct {
 	WorkItemID string
-	Sessions   []domain.Task
+	Sessions   []domain.AgentSession
 }
 
 // PlanForSessionLoadedMsg is sent when a plan for a work item is loaded (event-driven).
@@ -93,25 +93,25 @@ type PlanUpdatedMsg struct {
 // SessionStartedMsg is sent when an agent session starts.
 // Deprecated: use TaskStartedMsg instead.
 type SessionStartedMsg struct {
-	Task domain.Task
+	Task domain.AgentSession
 }
 
 // SessionUpdatedMsg is sent when an agent session state changes.
 // Deprecated: use TaskUpdatedMsg instead.
 type SessionUpdatedMsg struct {
-	Task domain.Task
+	Task domain.AgentSession
 }
 
 // TaskStartedMsg is sent when an agent task (agent session) starts.
 type TaskStartedMsg struct {
 	WorkItemID string
-	Task       domain.Task
+	Task       domain.AgentSession
 }
 
 // TaskUpdatedMsg is sent when an agent task (agent session) state changes.
 type TaskUpdatedMsg struct {
 	WorkItemID string
-	Task       domain.Task
+	Task       domain.AgentSession
 }
 
 // QuestionRaisedMsg is sent when a question is raised by an agent.

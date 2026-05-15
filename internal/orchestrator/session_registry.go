@@ -96,6 +96,6 @@ func (r *SessionRegistry) AbortAndDeregister(ctx context.Context, sessionID stri
 		return
 	}
 	if err := session.Abort(ctx); err != nil {
-		slog.Warn("session abort during deregister", "session_id", sessionID, "err", err)
+		slog.Warn("session abort during deregister", "agent_session_id", sessionID, "err", err)
 	}
 }

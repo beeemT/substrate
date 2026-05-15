@@ -20,7 +20,7 @@ func ResourcesFactory(
 		Workspaces:             NewWorkspaceRepo(tx),
 		NewSessionFilters:      NewSessionFilterRepo(tx),
 		NewSessionFilterLocks:  NewSessionFilterLockRepo(tx),
-		Tasks:                  NewTaskRepo(tx),
+		AgentSessions:          NewAgentSessionRepo(tx),
 		Reviews:                NewReviewRepo(tx),
 		Questions:              NewQuestionRepo(tx),
 		Events:                 NewEventRepo(tx),
@@ -30,7 +30,7 @@ func ResourcesFactory(
 		SessionReviewArtifacts: NewSessionReviewArtifactRepo(tx),
 		GithubPRReviews:        NewGithubPRReviewRepo(tx),
 		GitlabMRReviews:        NewGitlabMRReviewRepo(tx),
-		GithubPRChecks:  NewGithubPRCheckRepo(tx),
-		GitlabMRChecks:  NewGitlabMRCheckRepo(tx),
+		GithubPRChecks:         NewGithubPRCheckRepo(tx),
+		GitlabMRChecks:         NewGitlabMRCheckRepo(tx),
 	}, nil
 }

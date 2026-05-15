@@ -53,7 +53,7 @@ type PlanningService struct {
 	harness        adapter.AgentHarness
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
-	sessionSvc     *service.TaskService
+	sessionSvc     *service.AgentSessionService
 	eventBus       event.Publisher
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
@@ -108,7 +108,7 @@ func NewPlanningService(
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	eventBus event.Publisher,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
@@ -338,7 +338,7 @@ func (s *PlanningService) findPriorPlanningSessionResumeInfo(ctx context.Context
 	// Scan in reverse: tasks are returned in creation order, most-recent last.
 	for i := len(tasks) - 1; i >= 0; i-- {
 		t := tasks[i]
-		if t.Phase == domain.TaskPhasePlanning && t.Status == domain.AgentSessionCompleted && len(t.ResumeInfo) > 0 {
+		if t.Phase == domain.AgentSessionPhasePlanning && t.Status == domain.AgentSessionCompleted && len(t.ResumeInfo) > 0 {
 			return t.ID, t.ResumeInfo
 		}
 	}
@@ -357,7 +357,7 @@ func (s *PlanningService) storeResumeInfo(ctx context.Context, sessionID string,
 		return
 	}
 	if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
-		slog.Warn("failed to store resume info for planning session", "error", err, "session_id", sessionID)
+		slog.Warn("failed to store resume info for planning session", "error", err, "agent_session_id", sessionID)
 	}
 }
 
@@ -433,11 +433,11 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 
 	// 6. Allocate and persist the planning session before launching the harness.
 	sessionID := domain.NewID()
-	planningSession := domain.Task{
+	planningSession := domain.AgentSession{
 		ID:          sessionID,
 		WorkItemID:  workItem.ID,
 		WorkspaceID: workspace.ID,
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		HarnessName: s.harness.Name(),
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
@@ -449,7 +449,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	sessionDir, err := EnsureSessionDir(workspace.RootPath, sessionID)
 	if err != nil {
 		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
-			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "session_id", sessionID)
+			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "agent_session_id", sessionID)
 		}
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("create session directory: %w", err)
@@ -458,7 +458,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	// 8. Transition the planning session to running before launching the harness.
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
 		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
-			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "session_id", sessionID)
+			slog.Warn("failed to transition planning session to failed", "error", transitionErr, "agent_session_id", sessionID)
 		}
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
 		return nil, fmt.Errorf("transition planning session to running: %w", err)
@@ -492,11 +492,11 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
 			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
 				slog.Warn("failed to interrupt planning session on context cancellation",
-					"error", interruptErr, "session_id", sessionID)
+					"error", interruptErr, "agent_session_id", sessionID)
 			}
 		} else {
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-				slog.Warn("failed to fail planning session", "error", failErr, "session_id", sessionID)
+				slog.Warn("failed to fail planning session", "error", failErr, "agent_session_id", sessionID)
 			}
 			s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, planErr.ParseErrors, nil)
 			revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
@@ -514,7 +514,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	if parseErrors.HasErrors() {
 		slog.Error("plan parsing failed after correction loop", "errors", parseErrors.Error())
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "session_id", sessionID)
+			slog.Warn("failed to fail planning session after parse failure", "error", failErr, "agent_session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, &parseErrors, nil)
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
@@ -528,7 +528,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	plan, subPlans, err := s.buildAndPersistPlan(ctx, rawOutput, workItem, req.replacePlanID)
 	if err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "session_id", sessionID)
+			slog.Warn("failed to fail planning session after persistence error", "error", failErr, "agent_session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("persist plan: %w", err))
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
@@ -537,13 +537,13 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 
 	// 12b. Link the planning session to the plan it produced.
 	if err := s.sessionSvc.SetPlanID(ctx, sessionID, plan.ID); err != nil {
-		slog.Warn("failed to store plan_id on planning session", "error", err, "session_id", sessionID, "plan_id", plan.ID)
+		slog.Warn("failed to store plan_id on planning agent session", "error", err, "agent_session_id", sessionID, "plan_id", plan.ID)
 	}
 
 	// 13. Transition plan from draft to pending_review.
 	if err := s.planSvc.SubmitForReview(ctx, plan.ID); err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail planning session after plan review transition error", "error", failErr, "session_id", sessionID)
+			slog.Warn("failed to fail planning agent session after plan review transition error", "error", failErr, "agent_session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition plan to pending review: %w", err))
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)
@@ -553,14 +553,14 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	// 14. Transition work item to plan_review.
 	if err := s.workItemSvc.SubmitPlanForReview(ctx, req.workItemID); err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "session_id", sessionID)
+			slog.Warn("failed to fail planning session after state transition error", "error", failErr, "agent_session_id", sessionID)
 		}
 		s.emitPlanFailedEvent(ctx, req.workItemID, planningCtx.SessionID, workspace.ID, nil, fmt.Errorf("transition work item to plan review: %w", err))
 		return nil, fmt.Errorf("transition work item to plan review: %w", err)
 	}
 
 	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-		slog.Warn("failed to complete planning session", "error", completeErr, "session_id", sessionID)
+		slog.Warn("failed to complete planning session", "error", completeErr, "agent_session_id", sessionID)
 	}
 
 	// 15. Emit PlanGenerated event (async).
@@ -649,7 +649,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	if len(planningCtx.PriorResumeInfo) > 0 && planningCtx.RevisionFeedback != "" {
 		triggerMsg := fmt.Sprintf("%s\n\nWrite the revised plan to `%s`.", planningCtx.RevisionFeedback, draftPath)
 		if err := session.SendMessage(sessionCtx, triggerMsg); err != nil {
-			slog.Warn("failed to send revision feedback to resumed planning session", "error", err, "session_id", planningCtx.SessionID)
+			slog.Warn("failed to send revision feedback to resumed planning session", "error", err, "agent_session_id", planningCtx.SessionID)
 		}
 	}
 
@@ -766,13 +766,13 @@ func waitForClosedPlanningSession(session adapter.AgentSession) error {
 	return nil
 }
 
-func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, session adapter.AgentSession, evt adapter.AgentEvent) (bool, error) {
+func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, agentSession adapter.AgentSession, evt adapter.AgentEvent) (bool, error) {
 	switch evt.Type {
 	case "question":
 		if s.questionRouter == nil {
 			return false, errors.New("planner asked a question but question routing is not configured")
 		}
-		if err := s.questionRouter.Route(ctx, domain.TaskPhasePlanning, evt, session.ID()); err != nil {
+		if err := s.questionRouter.Route(ctx, domain.AgentSessionPhasePlanning, evt, agentSession.ID()); err != nil {
 			return false, fmt.Errorf("route planning question: %w", err)
 		}
 	case "done":
@@ -900,7 +900,7 @@ func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, wo
 func (s *PlanningService) emitPlanFailedEvent(ctx context.Context, workItemID, sessionID, workspaceID string, parseErrors *domain.ParseErrors, cause error) {
 	type planFailedPayload struct {
 		WorkItemID  string  `json:"work_item_id"`
-		SessionID   string  `json:"session_id"`
+		SessionID   string  `json:"agent_session_id"`
 		ParseErrors *string `json:"parse_errors,omitempty"`
 		Error       *string `json:"error,omitempty"`
 	}

@@ -23,7 +23,7 @@ type ReviewPipeline struct {
 	cfg           *config.Config
 	harness       adapter.AgentHarness
 	reviewSvc     *service.ReviewService
-	sessionSvc    *service.TaskService
+	sessionSvc    *service.AgentSessionService
 	planSvc       *service.PlanService
 	workItemSvc   *service.SessionService
 	eventBus      event.Publisher
@@ -36,7 +36,7 @@ func NewReviewPipeline(
 	cfg *config.Config,
 	harness adapter.AgentHarness,
 	reviewSvc *service.ReviewService,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
@@ -66,9 +66,9 @@ type ReviewResult struct {
 }
 
 // ReviewSession reviews an agent session's output.
-func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task) (*ReviewResult, error) {
+func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.AgentSession) (*ReviewResult, error) {
 	// Get existing review cycles
-	cycles, err := p.reviewSvc.ListCyclesBySessionID(ctx, session.ID)
+	cycles, err := p.reviewSvc.ListCyclesBySessionID(ctx, agentSession.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list review cycles: %w", err)
 	}
@@ -95,7 +95,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	// Create review cycle
 	cycle := domain.ReviewCycle{
 		ID:              domain.NewID(),
-		AgentSessionID:  session.ID,
+		AgentSessionID:  agentSession.ID,
 		CycleNumber:     cycleNumber,
 		ReviewerHarness: p.harness.Name(),
 		Status:          domain.ReviewCycleReviewing,
@@ -111,18 +111,18 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	service.Emit(p.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewStarted),
-		WorkspaceID: session.WorkspaceID,
+		WorkspaceID: agentSession.WorkspaceID,
 		Payload: marshalJSONOrEmpty(string(domain.EventReviewStarted), map[string]any{
-			"session_id":   session.ID,
-			"work_item_id": session.WorkItemID,
-			"cycle_number": cycleNumber,
-			"cycle_id":     cycle.ID,
+			"agent_session_id": agentSession.ID,
+			"work_item_id":     agentSession.WorkItemID,
+			"cycle_number":     cycleNumber,
+			"cycle_id":         cycle.ID,
 		}),
 		CreatedAt: time.Now(),
 	})
 
 	// Get plan and sub-plan for context
-	subPlan, err := p.planSvc.GetSubPlan(ctx, session.SubPlanID)
+	subPlan, err := p.planSvc.GetSubPlan(ctx, agentSession.SubPlanID)
 	if err != nil {
 		return nil, fmt.Errorf("get sub-plan: %w", err)
 	}
@@ -132,7 +132,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	}
 
 	// Start review agent session - now returns (session, output, sessionID, error)
-	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, session, subPlan, plan)
+	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
@@ -143,7 +143,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 	// first response), so multi-turn correction is not possible.
 	critiques, parseErr := p.parseCritiques(reviewOutput)
 	if parseErr != nil {
-		slog.Warn("review output not parseable, treating as no critiques", "error", parseErr, "session_id", reviewSessionID)
+		slog.Warn("review output not parseable, treating as no critiques", "error", parseErr, "agent_session_id", reviewSessionID)
 		critiques = []domain.Critique{}
 	}
 
@@ -153,21 +153,21 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 
 	// Emit review outcome events (async)
 	payload := marshalJSONOrEmpty("review.outcome", map[string]any{
-		"session_id":     session.ID,
-		"work_item_id":   session.WorkItemID,
-		"cycle_number":   cycleNumber,
-		"cycle_id":       cycle.ID,
-		"passed":         result.Passed,
-		"critique_count": len(critiques),
-		"needs_reimpl":   result.NeedsReimpl,
-		"escalated":      result.Escalated,
+		"agent_session_id": agentSession.ID,
+		"work_item_id":     agentSession.WorkItemID,
+		"cycle_number":     cycleNumber,
+		"cycle_id":         cycle.ID,
+		"passed":           result.Passed,
+		"critique_count":   len(critiques),
+		"needs_reimpl":     result.NeedsReimpl,
+		"escalated":        result.Escalated,
 	})
 	now := time.Now()
 	// Always emit ReviewCompleted as the base outcome event.
 	service.Emit(p.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewCompleted),
-		WorkspaceID: session.WorkspaceID,
+		WorkspaceID: agentSession.WorkspaceID,
 		Payload:     payload,
 		CreatedAt:   now,
 	})
@@ -176,14 +176,14 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 		service.Emit(p.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventCritiquesFound),
-			WorkspaceID: session.WorkspaceID,
+			WorkspaceID: agentSession.WorkspaceID,
 			Payload:     payload,
 			CreatedAt:   now,
 		})
 		service.Emit(p.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventReimplementationStarted),
-			WorkspaceID: session.WorkspaceID,
+			WorkspaceID: agentSession.WorkspaceID,
 			Payload:     payload,
 			CreatedAt:   now,
 		})
@@ -195,7 +195,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, session domain.Task)
 // startReviewAgent starts a review agent session and returns the session (still alive) along with output.
 func (p *ReviewPipeline) startReviewAgent(
 	ctx context.Context,
-	session domain.Task,
+	agentSession domain.AgentSession,
 	subPlan domain.TaskPlan,
 	plan domain.Plan,
 ) (adapter.AgentSession, string, string, error) {
@@ -204,14 +204,14 @@ func (p *ReviewPipeline) startReviewAgent(
 
 	// Persist the review session before launching the harness.
 	reviewSessionID := domain.NewID()
-	reviewTask := domain.Task{
+	reviewTask := domain.AgentSession{
 		ID:             reviewSessionID,
-		WorkItemID:     session.WorkItemID,
-		WorkspaceID:    session.WorkspaceID,
-		Phase:          domain.TaskPhaseReview,
-		SubPlanID:      session.SubPlanID,
-		RepositoryName: session.RepositoryName,
-		WorktreePath:   session.WorktreePath,
+		WorkItemID:     agentSession.WorkItemID,
+		WorkspaceID:    agentSession.WorkspaceID,
+		Phase:          domain.AgentSessionPhaseReview,
+		SubPlanID:      agentSession.SubPlanID,
+		RepositoryName: agentSession.RepositoryName,
+		WorktreePath:   agentSession.WorktreePath,
 		HarnessName:    p.harness.Name(),
 	}
 	if err := p.sessionSvc.Create(ctx, reviewTask); err != nil {
@@ -219,7 +219,7 @@ func (p *ReviewPipeline) startReviewAgent(
 	}
 	if err := p.sessionSvc.Start(ctx, reviewSessionID); err != nil {
 		if transitionErr := p.sessionSvc.Transition(ctx, reviewSessionID, domain.AgentSessionFailed); transitionErr != nil {
-			slog.Warn("failed to transition session to failed", "error", transitionErr, "session_id", reviewSessionID)
+			slog.Warn("failed to transition session to failed", "error", transitionErr, "agent_session_id", reviewSessionID)
 		}
 		return nil, "", "", fmt.Errorf("transition review session to running: %w", err)
 	}
@@ -229,10 +229,10 @@ func (p *ReviewPipeline) startReviewAgent(
 	opts := adapter.SessionOpts{
 		SessionID:    reviewSessionID,
 		Mode:         adapter.SessionModeAgent,
-		WorkspaceID:  session.WorkspaceID,
-		SubPlanID:    session.SubPlanID,
-		Repository:   session.RepositoryName,
-		WorktreePath: session.WorktreePath,
+		WorkspaceID:  agentSession.WorkspaceID,
+		SubPlanID:    agentSession.SubPlanID,
+		Repository:   agentSession.RepositoryName,
+		WorktreePath: agentSession.WorktreePath,
 		SystemPrompt: prompt,
 		UserPrompt:   "Review the changes in this worktree. Compare against main and evaluate against the sub-plan.",
 	}
@@ -240,7 +240,7 @@ func (p *ReviewPipeline) startReviewAgent(
 	reviewSession, err := p.harness.StartSession(ctx, opts)
 	if err != nil {
 		if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail review session after harness start error", "error", failErr, "session_id", reviewSessionID)
+			slog.Warn("failed to fail review session after harness start error", "error", failErr, "agent_session_id", reviewSessionID)
 		}
 		return nil, "", "", fmt.Errorf("start review session: %w", err)
 	}
@@ -260,13 +260,13 @@ func (p *ReviewPipeline) startReviewAgent(
 		select {
 		case <-timeoutCtx.Done():
 			if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-				slog.Warn("failed to fail timed out review session", "error", failErr, "session_id", reviewSessionID)
+				slog.Warn("failed to fail timed out review session", "error", failErr, "agent_session_id", reviewSessionID)
 			}
 			return reviewSession, "", reviewSessionID, fmt.Errorf("review session timed out: %w", timeoutCtx.Err())
 		case evt, ok := <-reviewSession.Events():
 			if !ok {
 				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-					slog.Warn("failed to fail closed review session", "error", failErr, "session_id", reviewSessionID)
+					slog.Warn("failed to fail closed review session", "error", failErr, "agent_session_id", reviewSessionID)
 				}
 				return reviewSession, "", reviewSessionID, errors.New("review session events channel closed unexpectedly")
 			}
@@ -274,7 +274,7 @@ func (p *ReviewPipeline) startReviewAgent(
 			case "done":
 				// "done" is the normal agent-mode completion signal (lifecycle.completed).
 				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
-					slog.Warn("failed to complete review session", "error", completeErr, "session_id", reviewSessionID)
+					slog.Warn("failed to complete review session", "error", completeErr, "agent_session_id", reviewSessionID)
 				}
 				output, err := p.readSessionOutputFromLog(ctx, reviewSessionID)
 				if err != nil {
@@ -283,7 +283,7 @@ func (p *ReviewPipeline) startReviewAgent(
 				return reviewSession, output, reviewSessionID, nil
 			case "error":
 				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-					slog.Warn("failed to fail review session after agent error", "error", failErr, "session_id", reviewSessionID)
+					slog.Warn("failed to fail review session after agent error", "error", failErr, "agent_session_id", reviewSessionID)
 				}
 				return reviewSession, "", reviewSessionID, fmt.Errorf("review session error: %s", evt.Payload)
 			}

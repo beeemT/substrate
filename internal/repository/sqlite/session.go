@@ -77,7 +77,7 @@ func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
 		WorkItemState:      domain.SessionState(r.WorkItemState),
 		RepositoryName:     r.RepositoryName,
 		HarnessName:        r.HarnessName,
-		Status:             domain.TaskStatus(r.Status),
+		Status:             domain.AgentSessionStatus(r.Status),
 		AgentSessionCount:  r.AgentSessionCount,
 		HasOpenQuestion:    r.HasOpenQuestion != 0,
 		HasInterrupted:     r.HasInterrupted != 0,
@@ -88,40 +88,40 @@ func (r *sessionHistoryRow) toDomain() (domain.SessionHistoryEntry, error) {
 	}, nil
 }
 
-func (r *sessionRow) toDomain() (domain.Task, error) {
+func (r *sessionRow) toDomain() (domain.AgentSession, error) {
 	startedAt, err := parseTimePtr(r.StartedAt)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("started_at: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("started_at: %w", err)
 	}
 	shutdownAt, err := parseTimePtr(r.ShutdownAt)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("shutdown_at: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("shutdown_at: %w", err)
 	}
 	completedAt, err := parseTimePtr(r.CompletedAt)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("completed_at: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("completed_at: %w", err)
 	}
 	createdAt, err := parseTime(r.CreatedAt)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("created_at: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("created_at: %w", err)
 	}
 	updatedAt, err := parseTime(r.UpdatedAt)
 	if err != nil {
-		return domain.Task{}, fmt.Errorf("updated_at: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("updated_at: %w", err)
 	}
 
-	return domain.Task{
+	return domain.AgentSession{
 		ID:              r.ID,
 		WorkItemID:      r.WorkItemID,
 		SubPlanID:       derefStr(r.SubPlanID),
 		PlanID:          derefStr(r.PlanID),
 		WorkspaceID:     r.WorkspaceID,
-		Phase:           domain.TaskPhase(r.Phase),
+		Phase:           domain.AgentSessionPhase(r.Phase),
 		RepositoryName:  derefStr(r.RepositoryName),
 		HarnessName:     r.HarnessName,
 		WorktreePath:    derefStr(r.WorktreePath),
 		PID:             r.PID,
-		Status:          domain.TaskStatus(r.Status),
+		Status:          domain.AgentSessionStatus(r.Status),
 		ExitCode:        r.ExitCode,
 		StartedAt:       startedAt,
 		ShutdownAt:      shutdownAt,
@@ -133,7 +133,7 @@ func (r *sessionRow) toDomain() (domain.Task, error) {
 	}, nil
 }
 
-func rowFromSession(s domain.Task) sessionRow {
+func rowFromAgentSession(s domain.AgentSession) sessionRow {
 	return sessionRow{
 		ID:              s.ID,
 		WorkItemID:      s.WorkItemID,
@@ -157,44 +157,44 @@ func rowFromSession(s domain.Task) sessionRow {
 	}
 }
 
-// TaskRepo implements repository.TaskRepository using SQLite.
-type TaskRepo struct{ remote generic.SQLXRemote }
+// AgentSessionRepo implements repository.AgentSessionRepository using SQLite.
+type AgentSessionRepo struct{ remote generic.SQLXRemote }
 
-func NewTaskRepo(remote generic.SQLXRemote) TaskRepo {
-	return TaskRepo{remote: remote}
+func NewAgentSessionRepo(remote generic.SQLXRemote) AgentSessionRepo {
+	return AgentSessionRepo{remote: remote}
 }
 
-func (r TaskRepo) Get(ctx context.Context, id string) (domain.Task, error) {
+func (r AgentSessionRepo) Get(ctx context.Context, id string) (domain.AgentSession, error) {
 	var row sessionRow
 	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM agent_sessions WHERE id = ?`, id); err != nil {
-		return domain.Task{}, fmt.Errorf("get session %s: %w", id, err)
+		return domain.AgentSession{}, fmt.Errorf("get session %s: %w", id, err)
 	}
 
 	return row.toDomain()
 }
 
-func (r TaskRepo) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
+func (r AgentSessionRepo) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.AgentSession, error) {
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE work_item_id = ? ORDER BY created_at`, workItemID)
 }
 
-func (r TaskRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
+func (r AgentSessionRepo) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error) {
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE sub_plan_id = ? ORDER BY created_at`, subPlanID)
 }
 
-func (r TaskRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
+func (r AgentSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY created_at`, workspaceID)
 }
 
-func (r TaskRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
+func (r AgentSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE owner_instance_id = ? ORDER BY created_at`, instanceID)
 }
 
-func (r TaskRepo) list(ctx context.Context, query string, args ...any) ([]domain.Task, error) {
+func (r AgentSessionRepo) list(ctx context.Context, query string, args ...any) ([]domain.AgentSession, error) {
 	var rows []sessionRow
 	if err := r.remote.SelectContext(ctx, &rows, query, args...); err != nil {
 		return nil, err
 	}
-	sessions := make([]domain.Task, len(rows))
+	sessions := make([]domain.AgentSession, len(rows))
 	for i := range rows {
 		s, err := rows[i].toDomain()
 		if err != nil {
@@ -206,7 +206,7 @@ func (r TaskRepo) list(ctx context.Context, query string, args ...any) ([]domain
 	return sessions, nil
 }
 
-func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+func (r AgentSessionRepo) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
 	query := `WITH latest_session AS (
 		SELECT
 			s.work_item_id AS work_item_id,
@@ -312,8 +312,8 @@ func (r TaskRepo) SearchHistory(ctx context.Context, filter domain.SessionHistor
 	return entries, nil
 }
 
-func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
-	row := rowFromSession(s)
+func (r AgentSessionRepo) Create(ctx context.Context, s domain.AgentSession) error {
+	row := rowFromAgentSession(s)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO agent_sessions
 		 (id, work_item_id, sub_plan_id, plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
@@ -330,8 +330,8 @@ func (r TaskRepo) Create(ctx context.Context, s domain.Task) error {
 	return nil
 }
 
-func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
-	row := rowFromSession(s)
+func (r AgentSessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
+	row := rowFromAgentSession(s)
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE agent_sessions SET work_item_id = :work_item_id, sub_plan_id = :sub_plan_id, plan_id = :plan_id,
 		 workspace_id = :workspace_id,
@@ -353,7 +353,7 @@ func (r TaskRepo) Update(ctx context.Context, s domain.Task) error {
 	return nil
 }
 
-func (r TaskRepo) Delete(ctx context.Context, id string) error {
+func (r AgentSessionRepo) Delete(ctx context.Context, id string) error {
 	params := map[string]any{"id": id}
 
 	if _, err := r.remote.NamedExecContext(ctx, `DELETE FROM questions WHERE agent_session_id = :id`, params); err != nil {

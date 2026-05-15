@@ -2,27 +2,27 @@ package domain
 
 import "time"
 
-// TaskPhase identifies the kind of child agent session being tracked.
-type TaskPhase string
+// AgentSessionPhase identifies the kind of child agent session being tracked.
+type AgentSessionPhase string
 
 const (
-	TaskPhasePlanning       TaskPhase = "planning"
-	TaskPhaseImplementation TaskPhase = "implementation"
-	TaskPhaseReview         TaskPhase = "review"
+	AgentSessionPhasePlanning       AgentSessionPhase = "planning"
+	AgentSessionPhaseImplementation AgentSessionPhase = "implementation"
+	AgentSessionPhaseReview         AgentSessionPhase = "review"
 )
 
-// Task is a single child agent session for a work item.
-type Task struct {
+// AgentSession is a single child agent session for a work item.
+type AgentSession struct {
 	ID              string
 	WorkItemID      string
 	WorkspaceID     string
-	Phase           TaskPhase
+	Phase           AgentSessionPhase
 	SubPlanID       string
-	PlanID          string // Plan produced by this planning session (empty for non-planning tasks).
+	PlanID          string // Plan produced by this planning session (empty for non-planning sessions).
 	RepositoryName  string
 	WorktreePath    string
 	HarnessName     string
-	Status          TaskStatus
+	Status          AgentSessionStatus
 	PID             *int
 	StartedAt       *time.Time
 	CompletedAt     *time.Time
@@ -49,7 +49,7 @@ type SessionHistoryEntry struct {
 	WorkItemState      SessionState
 	RepositoryName     string
 	HarnessName        string
-	Status             TaskStatus
+	Status             AgentSessionStatus
 	AgentSessionCount  int
 	HasOpenQuestion    bool
 	HasInterrupted     bool
@@ -67,14 +67,14 @@ type SessionHistoryFilter struct {
 	Offset      int
 }
 
-// TaskStatus represents the lifecycle state of an agent session.
-type TaskStatus string
+// AgentSessionStatus represents the lifecycle state of an agent session.
+type AgentSessionStatus string
 
 const (
-	AgentSessionPending          TaskStatus = "pending"
-	AgentSessionRunning          TaskStatus = "running"
-	AgentSessionWaitingForAnswer TaskStatus = "waiting_for_answer"
-	AgentSessionCompleted        TaskStatus = "completed"
-	AgentSessionInterrupted      TaskStatus = "interrupted"
-	AgentSessionFailed           TaskStatus = "failed"
+	AgentSessionPending          AgentSessionStatus = "pending"
+	AgentSessionRunning          AgentSessionStatus = "running"
+	AgentSessionWaitingForAnswer AgentSessionStatus = "waiting_for_answer"
+	AgentSessionCompleted        AgentSessionStatus = "completed"
+	AgentSessionInterrupted      AgentSessionStatus = "interrupted"
+	AgentSessionFailed           AgentSessionStatus = "failed"
 )

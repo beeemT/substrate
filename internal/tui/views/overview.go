@@ -82,7 +82,7 @@ type OverviewActionCard struct {
 	QuestionTask   string
 	QuestionAsked  time.Time
 	ProposedAnswer string
-	Session        *domain.Task
+	Session        *domain.AgentSession
 	ReviewRepos    []RepoReviewResult
 	CanAct         bool
 }
@@ -501,7 +501,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				switch action.Kind {
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
-						if action.Session.Phase == domain.TaskPhasePlanning {
+						if action.Session.Phase == domain.AgentSessionPhasePlanning {
 							wID := action.Session.WorkItemID
 							return m, func() tea.Msg { return RestartPlanMsg{WorkItemID: wID} }
 						}
@@ -609,7 +609,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 		}
 	case overviewActionInterrupted:
 		if action.Session != nil {
-			isPlanningPhase := action.Session.Phase == domain.TaskPhasePlanning
+			isPlanningPhase := action.Session.Phase == domain.AgentSessionPhasePlanning
 			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.Session.WorkItemID, isPlanningPhase, action.CanAct)
 		}
 	case overviewActionReviewing:
@@ -831,7 +831,7 @@ func actionKeybindHints(action OverviewActionCard) []KeybindHint {
 		hints := []KeybindHint{{Key: "i", Label: "Inspect"}}
 		if action.CanAct {
 			resumeLabel := "Resume"
-			if action.Session != nil && action.Session.Phase == domain.TaskPhasePlanning {
+			if action.Session != nil && action.Session.Phase == domain.AgentSessionPhasePlanning {
 				resumeLabel = "Restart planning"
 			}
 			hints = append([]KeybindHint{{Key: "r", Label: resumeLabel}, {Key: "a", Label: "Abandon"}}, hints...)
@@ -1280,11 +1280,11 @@ func (a *App) buildOverviewTasks(wi *domain.Session, subPlans []domain.TaskPlan)
 	return rows
 }
 
-func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waiting, interrupted *domain.Task) {
-	tasks := make([]domain.Task, 0, len(a.sessionsForWorkItem(workItemID)))
-	for _, session := range a.sessionsForWorkItem(workItemID) {
-		if session.SubPlanID == subPlanID {
-			tasks = append(tasks, session)
+func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waiting, interrupted *domain.AgentSession) {
+	tasks := make([]domain.AgentSession, 0, len(a.sessionsForWorkItem(workItemID)))
+	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
+		if agentSession.SubPlanID == subPlanID {
+			tasks = append(tasks, agentSession)
 		}
 	}
 	if len(tasks) == 0 {
@@ -1528,7 +1528,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				s.Status == domain.AgentSessionPending ||
 				s.Status == domain.AgentSessionCompleted ||
 				s.Status == domain.AgentSessionWaitingForAnswer {
-				if s.Phase == domain.TaskPhasePlanning {
+				if s.Phase == domain.AgentSessionPhasePlanning {
 					hasPlanningActive = true
 				} else if s.SubPlanID != "" {
 					activeSubPlans[s.SubPlanID] = true
@@ -1539,16 +1539,16 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			if s.Status != domain.AgentSessionInterrupted {
 				continue
 			}
-			if s.Phase == domain.TaskPhasePlanning && hasPlanningActive {
+			if s.Phase == domain.AgentSessionPhasePlanning && hasPlanningActive {
 				superseded[s.ID] = true
 			} else if s.SubPlanID != "" && activeSubPlans[s.SubPlanID] {
 				superseded[s.ID] = true
 			}
 		}
 	}
-	for _, session := range wiSessions {
-		if session.Status == domain.AgentSessionWaitingForAnswer {
-			for _, question := range a.questions[session.ID] {
+	for _, agentSession := range wiSessions {
+		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
+			for _, question := range a.questions[agentSession.ID] {
 				if !isOpenQuestion(question) {
 					continue
 				}
@@ -1561,7 +1561,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				}
 				title := "Question waiting for answer"
 				why := "This repo task is paused until a human answers the escalated question."
-				if session.Phase == domain.TaskPhasePlanning {
+				if agentSession.Phase == domain.AgentSessionPhasePlanning {
 					title = "Planning question"
 					why = "The planner is paused until you answer this question."
 				}
@@ -1570,11 +1570,11 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 					Title:          title,
 					Blocked:        summarizeText(question.Content, 120),
 					Why:            why,
-					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)), taskSidebarSessionTitle(&session))},
+					Affected:       []string{fmt.Sprintf("%s (%s)", firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)), taskSidebarSessionTitle(&agentSession))},
 					Context:        context,
 					Question:       ptrQuestion(question),
-					QuestionRepo:   session.RepositoryName,
-					QuestionTask:   session.ID,
+					QuestionRepo:   agentSession.RepositoryName,
+					QuestionTask:   agentSession.ID,
 					QuestionAsked:  question.CreatedAt,
 					ProposedAnswer: question.ProposedAnswer,
 				})
@@ -1582,22 +1582,22 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				break
 			}
 		}
-		if session.Status == domain.AgentSessionInterrupted {
-			if superseded[session.ID] {
+		if agentSession.Status == domain.AgentSessionInterrupted {
+			if superseded[agentSession.ID] {
 				continue
 			}
 			card := OverviewActionCard{
 				Kind:     overviewActionInterrupted,
-				Blocked:  firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)),
-				Affected: []string{firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))},
+				Blocked:  firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)),
+				Affected: []string{firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession))},
 				Context: []string{
-					"Last update: " + formatAbsoluteTime(session.UpdatedAt),
+					"Last update: " + formatAbsoluteTime(agentSession.UpdatedAt),
 					"Cause: previous substrate owner stopped heartbeating while the agent was running",
 				},
-				Session: &session,
-				CanAct:  a.canActOnSession(session),
+				Session: &agentSession,
+				CanAct:  a.canActOnSession(agentSession),
 			}
-			if session.Phase == domain.TaskPhasePlanning {
+			if agentSession.Phase == domain.AgentSessionPhasePlanning {
 				card.Title = "Planning was interrupted"
 				card.Why = "The planning agent stopped unexpectedly. Restart will begin a fresh planning session."
 				card.Blocked = "Planning"
@@ -1605,7 +1605,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			} else {
 				card.Title = "Interrupted task needs recovery"
 				card.Why = "This task was interrupted and cannot continue until it is resumed or abandoned."
-				card.Context = append(card.Context, "Task: "+taskSidebarSessionTitle(&session))
+				card.Context = append(card.Context, "Task: "+taskSidebarSessionTitle(&agentSession))
 			}
 			actions = append(actions, card)
 		}
@@ -1700,8 +1700,8 @@ func (a *App) buildFinalizeActionCard(wi *domain.Session, subPlans []domain.Task
 		affected = append(affected, subPlan.RepositoryName)
 	}
 
-	for _, session := range a.sessionsForWorkItem(wi.ID) {
-		if isOverviewActiveAgentSession(session.Status) {
+	for _, agentSession := range a.sessionsForWorkItem(wi.ID) {
+		if isOverviewActiveAgentSession(agentSession.Status) {
 			return nil
 		}
 	}
@@ -1719,7 +1719,7 @@ func (a *App) buildFinalizeActionCard(wi *domain.Session, subPlans []domain.Task
 	}
 }
 
-func isOverviewActiveAgentSession(status domain.TaskStatus) bool {
+func isOverviewActiveAgentSession(status domain.AgentSessionStatus) bool {
 	switch status {
 	case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 		return true
@@ -2141,23 +2141,23 @@ func (a *App) buildOverviewActivity(wi *domain.Session, plan *domain.Plan) []Ove
 	if plan != nil && !plan.UpdatedAt.IsZero() {
 		items = append(items, OverviewActivityItem{Summary: fmt.Sprintf("Plan v%d updated", plan.Version), Timestamp: plan.UpdatedAt})
 	}
-	for _, session := range a.sessionsForWorkItem(wi.ID) {
+	for _, agentSession := range a.sessionsForWorkItem(wi.ID) {
 		summary := ""
-		switch session.Status {
+		switch agentSession.Status {
 		case domain.AgentSessionWaitingForAnswer:
 
-			if hasOpenQuestion(a.questions[session.ID]) {
-				summary = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)) + " asked a question"
+			if hasOpenQuestion(a.questions[agentSession.ID]) {
+				summary = firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)) + " asked a question"
 			}
 		case domain.AgentSessionInterrupted:
-			summary = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)) + " interrupted"
+			summary = firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)) + " interrupted"
 		case domain.AgentSessionFailed:
-			summary = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)) + " failed"
+			summary = firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)) + " failed"
 		case domain.AgentSessionCompleted:
-			summary = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session)) + " completed"
+			summary = firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)) + " completed"
 		}
 		if summary != "" {
-			items = append(items, OverviewActivityItem{Summary: summary, Timestamp: session.UpdatedAt})
+			items = append(items, OverviewActivityItem{Summary: summary, Timestamp: agentSession.UpdatedAt})
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Timestamp.After(items[j].Timestamp) })

@@ -125,8 +125,8 @@ func TestEventConsumer_toMsg_QuestionRaised(t *testing.T) {
 		Status:         domain.QuestionPending,
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"session_id": "sess-1",
-		"question":   question,
+		"agent_session_id": "sess-1",
+		"question":         question,
 	})
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -160,8 +160,8 @@ func TestEventConsumer_toMsg_QuestionAnswered(t *testing.T) {
 	ec := NewEventConsumer(app, sub)
 
 	payload, _ := json.Marshal(map[string]any{
-		"session_id":  "sess-1",
-		"question_id": "q-1",
+		"agent_session_id": "sess-1",
+		"question_id":      "q-1",
 	})
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -208,7 +208,7 @@ func TestEventConsumer_toMsg_ReviewEvents(t *testing.T) {
 			ec := NewEventConsumer(app, sub)
 
 			payload, _ := json.Marshal(map[string]any{
-				"session_id": "sess-1",
+				"agent_session_id": "sess-1",
 			})
 			evt := domain.SystemEvent{
 				ID:          domain.NewID(),

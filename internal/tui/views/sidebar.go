@@ -75,7 +75,7 @@ type SidebarEntry struct {
 	Title                        string
 	SubtitleText                 string
 	State                        domain.SessionState
-	SessionStatus                domain.TaskStatus
+	SessionStatus                domain.AgentSessionStatus
 	RepositoryName               string
 	LastActivity                 time.Time
 	CreatedAt                    time.Time
@@ -759,7 +759,7 @@ func (m SidebarModel) View() string {
 	return result
 }
 
-func sessionStatusLabel(status domain.TaskStatus) string {
+func sessionStatusLabel(status domain.AgentSessionStatus) string {
 	switch status {
 	case domain.AgentSessionPending:
 		return "Pending"

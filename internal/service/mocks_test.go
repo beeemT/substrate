@@ -309,9 +309,9 @@ func (m *MockWorkspaceRepository) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// MockSessionRepository implements repository.TaskRepository for testing.
+// MockSessionRepository implements repository.AgentSessionRepository for testing.
 type MockSessionRepository struct {
-	sessions        map[string]domain.Task
+	sessions        map[string]domain.AgentSession
 	byWorkItem      map[string][]string
 	bySubPlan       map[string][]string
 	byWorkspace     map[string][]string
@@ -321,7 +321,7 @@ type MockSessionRepository struct {
 
 func NewMockSessionRepository() *MockSessionRepository {
 	return &MockSessionRepository{
-		sessions:        make(map[string]domain.Task),
+		sessions:        make(map[string]domain.AgentSession),
 		byWorkItem:      make(map[string][]string),
 		bySubPlan:       make(map[string][]string),
 		byWorkspace:     make(map[string][]string),
@@ -329,23 +329,23 @@ func NewMockSessionRepository() *MockSessionRepository {
 	}
 }
 
-func (m *MockSessionRepository) Get(_ context.Context, id string) (domain.Task, error) {
+func (m *MockSessionRepository) Get(_ context.Context, id string) (domain.AgentSession, error) {
 	if m.err != nil {
-		return domain.Task{}, m.err
+		return domain.AgentSession{}, m.err
 	}
 	s, ok := m.sessions[id]
 	if !ok {
-		return domain.Task{}, repository.ErrNotFound
+		return domain.AgentSession{}, repository.ErrNotFound
 	}
 
 	return s, nil
 }
 
-func (m *MockSessionRepository) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.AgentSession, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, id := range m.byWorkItem[workItemID] {
 		result = append(result, m.sessions[id])
 	}
@@ -353,11 +353,11 @@ func (m *MockSessionRepository) ListByWorkItemID(_ context.Context, workItemID s
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, id := range m.bySubPlan[subPlanID] {
 		result = append(result, m.sessions[id])
 	}
@@ -365,11 +365,11 @@ func (m *MockSessionRepository) ListBySubPlanID(_ context.Context, subPlanID str
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, id := range m.byWorkspace[workspaceID] {
 		result = append(result, m.sessions[id])
 	}
@@ -377,11 +377,11 @@ func (m *MockSessionRepository) ListByWorkspaceID(_ context.Context, workspaceID
 	return result, nil
 }
 
-func (m *MockSessionRepository) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
+func (m *MockSessionRepository) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, id := range m.byOwnerInstance[instanceID] {
 		result = append(result, m.sessions[id])
 	}
@@ -397,7 +397,7 @@ func (m *MockSessionRepository) SearchHistory(_ context.Context, _ domain.Sessio
 	return nil, nil
 }
 
-func (m *MockSessionRepository) Create(_ context.Context, s domain.Task) error {
+func (m *MockSessionRepository) Create(_ context.Context, s domain.AgentSession) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -414,7 +414,7 @@ func (m *MockSessionRepository) Create(_ context.Context, s domain.Task) error {
 	return nil
 }
 
-func (m *MockSessionRepository) Update(_ context.Context, s domain.Task) error {
+func (m *MockSessionRepository) Update(_ context.Context, s domain.AgentSession) error {
 	if m.err != nil {
 		return m.err
 	}

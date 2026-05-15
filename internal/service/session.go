@@ -12,60 +12,60 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 )
 
-// TaskService provides business logic for repo-scoped tasks.
-type TaskService struct {
+// AgentSessionService provides business logic for agent sessions.
+type AgentSessionService struct {
 	transacter atomic.Transacter[repository.Resources]
 	eventBus   event.Publisher
 }
 
-// taskEventPayload holds the JSON payload for task lifecycle events.
-type taskEventPayload struct {
-	Task       domain.Task `json:"session"`
-	WorkItemID string      `json:"work_item_id"` // flat fields so TUI extractors don't need nested navigation
-	SessionID  string      `json:"session_id"`
+// agentSessionEventPayload holds the JSON payload for agent session lifecycle events.
+type agentSessionEventPayload struct {
+	Session    domain.AgentSession `json:"session"`
+	WorkItemID string              `json:"work_item_id"` // flat fields so TUI extractors don't need nested navigation
+	SessionID  string              `json:"agent_session_id"`
 }
 
-// marshalTaskPayload serializes a task event payload to JSON.
-// work_item_id and session_id are included at the top level so TUI extractors
+// marshalAgentSessionPayload serializes an agent session event payload to JSON.
+// work_item_id and agent_session_id are included at the top level so TUI extractors
 // can read them without needing to navigate into the nested session object.
-func marshalTaskPayload(task domain.Task) string {
-	p := taskEventPayload{
-		Task:       task,
-		WorkItemID: task.WorkItemID,
-		SessionID:  task.ID,
+func marshalAgentSessionPayload(agentSession domain.AgentSession) string {
+	p := agentSessionEventPayload{
+		Session:    agentSession,
+		WorkItemID: agentSession.WorkItemID,
+		SessionID:  agentSession.ID,
 	}
 	b, _ := json.Marshal(p)
 	return string(b)
 }
 
-// taskStatusChangedPayload holds the JSON payload for generic task status changes.
-type taskStatusChangedPayload struct {
-	Task       domain.Task `json:"session"`
-	WorkItemID string      `json:"work_item_id"`
-	SessionID  string      `json:"session_id"`
-	From       string      `json:"from"`
-	To         string      `json:"to"`
+// agentSessionStatusChangedPayload holds the JSON payload for generic agent session status changes.
+type agentSessionStatusChangedPayload struct {
+	Session    domain.AgentSession       `json:"session"`
+	WorkItemID string                    `json:"work_item_id"`
+	SessionID  string                    `json:"agent_session_id"`
+	From       domain.AgentSessionStatus `json:"from"`
+	To         domain.AgentSessionStatus `json:"to"`
 }
 
-// marshalTaskStatusChangedPayload serializes a generic task status change payload.
-func marshalTaskStatusChangedPayload(task domain.Task, from, to domain.TaskStatus) string {
-	p := taskStatusChangedPayload{
-		Task:       task,
-		WorkItemID: task.WorkItemID,
-		SessionID:  task.ID,
-		From:       string(from),
-		To:         string(to),
+// marshalAgentSessionStatusChangedPayload serializes a generic agent session status change payload.
+func marshalAgentSessionStatusChangedPayload(agentSession domain.AgentSession, from, to domain.AgentSessionStatus) string {
+	p := agentSessionStatusChangedPayload{
+		Session:    agentSession,
+		WorkItemID: agentSession.WorkItemID,
+		SessionID:  agentSession.ID,
+		From:       from,
+		To:         to,
 	}
 	b, _ := json.Marshal(p)
 	return string(b)
 }
 
-func NewTaskService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *TaskService {
-	return &TaskService{transacter: transacter, eventBus: eventBus}
+func NewAgentSessionService(transacter atomic.Transacter[repository.Resources], eventBus event.Publisher) *AgentSessionService {
+	return &AgentSessionService{transacter: transacter, eventBus: eventBus}
 }
 
-// Task state transitions.
-var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
+// agentSession state transitions.
+var validAgentSessionTransitions = map[domain.AgentSessionStatus][]domain.AgentSessionStatus{
 	domain.AgentSessionPending: {domain.AgentSessionRunning, domain.AgentSessionFailed},
 	domain.AgentSessionRunning: {
 		domain.AgentSessionWaitingForAnswer,
@@ -79,33 +79,33 @@ var validTaskTransitions = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.AgentSessionFailed:           {domain.AgentSessionRunning},
 }
 
-func canTransitionTask(from, to domain.TaskStatus) bool {
-	allowed, exists := validTaskTransitions[from]
+func canTransitionAgentSession(from, to domain.AgentSessionStatus) bool {
+	allowed, exists := validAgentSessionTransitions[from]
 	if !exists {
 		return false
 	}
 	return slices.Contains(allowed, to)
 }
 
-// Get retrieves a task by ID.
-func (s *TaskService) Get(ctx context.Context, id string) (domain.Task, error) {
-	var result domain.Task
+// Get retrieves an agent session by ID.
+func (s *AgentSessionService) Get(ctx context.Context, id string) (domain.AgentSession, error) {
+	var result domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+		agentSession, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
-		result = task
+		result = agentSession
 		return nil
 	})
 	return result, err
 }
 
 // ListByWorkItemID retrieves all child agent sessions for a work item.
-func (s *TaskService) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
-	var result []domain.Task
+func (s *AgentSessionService) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.AgentSession, error) {
+	var result []domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.ListByWorkItemID(ctx, workItemID)
+		v, err := res.AgentSessions.ListByWorkItemID(ctx, workItemID)
 		if err != nil {
 			return err
 		}
@@ -116,10 +116,10 @@ func (s *TaskService) ListByWorkItemID(ctx context.Context, workItemID string) (
 }
 
 // ListBySubPlanID retrieves all child agent sessions for a sub-plan.
-func (s *TaskService) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
-	var result []domain.Task
+func (s *AgentSessionService) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error) {
+	var result []domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.ListBySubPlanID(ctx, subPlanID)
+		v, err := res.AgentSessions.ListBySubPlanID(ctx, subPlanID)
 		if err != nil {
 			return err
 		}
@@ -130,10 +130,10 @@ func (s *TaskService) ListBySubPlanID(ctx context.Context, subPlanID string) ([]
 }
 
 // ListByWorkspaceID retrieves all child agent sessions for a workspace.
-func (s *TaskService) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
-	var result []domain.Task
+func (s *AgentSessionService) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
+	var result []domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.ListByWorkspaceID(ctx, workspaceID)
+		v, err := res.AgentSessions.ListByWorkspaceID(ctx, workspaceID)
 		if err != nil {
 			return err
 		}
@@ -144,10 +144,10 @@ func (s *TaskService) ListByWorkspaceID(ctx context.Context, workspaceID string)
 }
 
 // SearchHistory retrieves searchable session-history entries for the requested scope.
-func (s *TaskService) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
+func (s *AgentSessionService) SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error) {
 	var result []domain.SessionHistoryEntry
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.SearchHistory(ctx, filter)
+		v, err := res.AgentSessions.SearchHistory(ctx, filter)
 		if err != nil {
 			return err
 		}
@@ -158,38 +158,38 @@ func (s *TaskService) SearchHistory(ctx context.Context, filter domain.SessionHi
 }
 
 // Create creates a new child agent session in pending status.
-func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
-	if task.WorkItemID == "" {
+func (s *AgentSessionService) Create(ctx context.Context, agentSession domain.AgentSession) error {
+	if agentSession.WorkItemID == "" {
 		return newInvalidInputError("work item is required", "work_item_id")
 	}
-	if task.HarnessName == "" {
+	if agentSession.HarnessName == "" {
 		return newInvalidInputError("harness name is required", "harness_name")
 	}
-	if task.Phase == "" {
+	if agentSession.Phase == "" {
 		return newInvalidInputError("phase is required", "phase")
 	}
-	switch task.Phase {
-	case domain.TaskPhasePlanning:
+	switch agentSession.Phase {
+	case domain.AgentSessionPhasePlanning:
 		// Planning sessions run at the workspace/work-item level and may omit repo-specific fields.
-	case domain.TaskPhaseImplementation, domain.TaskPhaseReview:
-		if task.SubPlanID == "" {
+	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview:
+		if agentSession.SubPlanID == "" {
 			return newInvalidInputError("sub-plan is required for this phase", "sub_plan_id")
 		}
 	default:
-		return newInvalidInputError("unknown task phase", "phase")
+		return newInvalidInputError("unknown session phase", "phase")
 	}
-	if task.Status == "" {
-		task.Status = domain.AgentSessionPending
+	if agentSession.Status == "" {
+		agentSession.Status = domain.AgentSessionPending
 	}
-	if task.Status != domain.AgentSessionPending {
+	if agentSession.Status != domain.AgentSessionPending {
 		return newInvalidInputError("initial status must be pending", "status")
 	}
 	now := time.Now()
-	task.CreatedAt = now
-	task.UpdatedAt = now
+	agentSession.CreatedAt = now
+	agentSession.UpdatedAt = now
 
 	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		return res.Tasks.Create(ctx, task)
+		return res.AgentSessions.Create(ctx, agentSession)
 	}); err != nil {
 		return err
 	}
@@ -197,32 +197,32 @@ func (s *TaskService) Create(ctx context.Context, task domain.Task) error {
 	return nil
 }
 
-// Transition transitions a task to a new status.
-func (s *TaskService) Transition(ctx context.Context, id string, to domain.TaskStatus) error {
-	var task domain.Task
-	var from domain.TaskStatus
+// Transition transitions an agent session to a new status.
+func (s *AgentSessionService) Transition(ctx context.Context, id string, to domain.AgentSessionStatus) error {
+	var agentSession domain.AgentSession
+	var from domain.AgentSessionStatus
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		t, err := res.Tasks.Get(ctx, id)
+		var err error
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(t.Status, to) {
+		if !canTransitionAgentSession(agentSession.Status, to) {
 			return newInvalidTransitionError(
-				sessionStatusName(t.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(to),
-				"task",
+				"agent session",
 			)
 		}
 
-		from = t.Status
-		t.Status = to
-		t.UpdatedAt = time.Now()
+		from = agentSession.Status
+		agentSession.Status = to
+		agentSession.UpdatedAt = time.Now()
 
-		if err := res.Tasks.Update(ctx, t); err != nil {
+		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {
 			return err
 		}
-		task = t
 		return nil
 	})
 	if err != nil {
@@ -232,38 +232,38 @@ func (s *TaskService) Transition(ctx context.Context, id string, to domain.TaskS
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionStatusChanged),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskStatusChangedPayload(task, from, to),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionStatusChangedPayload(agentSession, from, to),
 		CreatedAt:   time.Now(),
 	})
 	return nil
 }
 
-// Start transitions a task from pending to running and emits EventAgentSessionStarted
-// so the TUI reloads the task list when an agent session begins executing.
-func (s *TaskService) Start(ctx context.Context, id string) error {
-	var task domain.Task
+// Start transitions an agent session from pending to running and emits EventAgentSessionStarted
+// so the TUI reloads the session list when an agent session begins executing.
+func (s *AgentSessionService) Start(ctx context.Context, id string) error {
+	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
-		task, err = res.Tasks.Get(ctx, id)
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(task.Status, domain.AgentSessionRunning) {
+		if !canTransitionAgentSession(agentSession.Status, domain.AgentSessionRunning) {
 			return newInvalidTransitionError(
-				sessionStatusName(task.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(domain.AgentSessionRunning),
-				"task",
+				"agent session",
 			)
 		}
 
 		now := time.Now()
-		task.Status = domain.AgentSessionRunning
-		task.StartedAt = &now
-		task.UpdatedAt = now
+		agentSession.Status = domain.AgentSessionRunning
+		agentSession.StartedAt = &now
+		agentSession.UpdatedAt = now
 
-		return res.Tasks.Update(ctx, task)
+		return res.AgentSessions.Update(ctx, agentSession)
 	})
 	if err != nil {
 		return err
@@ -272,49 +272,49 @@ func (s *TaskService) Start(ctx context.Context, id string) error {
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionStarted),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskPayload(task),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionPayload(agentSession),
 		CreatedAt:   time.Now(),
 	})
 	return nil
 }
 
-// WaitForAnswer transitions a task from running to waiting_for_answer.
-func (s *TaskService) WaitForAnswer(ctx context.Context, id string) error {
+// WaitForAnswer transitions an agent session from running to waiting_for_answer.
+func (s *AgentSessionService) WaitForAnswer(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.AgentSessionWaitingForAnswer)
 }
 
-// ResumeFromAnswer transitions a task from waiting_for_answer to running.
-func (s *TaskService) ResumeFromAnswer(ctx context.Context, id string) error {
+// ResumeFromAnswer transitions an agent session from waiting_for_answer to running.
+func (s *AgentSessionService) ResumeFromAnswer(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.AgentSessionRunning)
 }
 
-// Complete transitions a task from running to completed.
-func (s *TaskService) Complete(ctx context.Context, id string) error {
-	var task domain.Task
+// Complete transitions an agent session from running to completed.
+func (s *AgentSessionService) Complete(ctx context.Context, id string) error {
+	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		t, err := res.Tasks.Get(ctx, id)
+		var err error
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(t.Status, domain.AgentSessionCompleted) {
+		if !canTransitionAgentSession(agentSession.Status, domain.AgentSessionCompleted) {
 			return newInvalidTransitionError(
-				sessionStatusName(t.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(domain.AgentSessionCompleted),
-				"task",
+				"agent session",
 			)
 		}
 
 		now := time.Now()
-		t.Status = domain.AgentSessionCompleted
-		t.CompletedAt = &now
-		t.UpdatedAt = now
+		agentSession.Status = domain.AgentSessionCompleted
+		agentSession.CompletedAt = &now
+		agentSession.UpdatedAt = now
 
-		if err := res.Tasks.Update(ctx, t); err != nil {
+		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {
 			return err
 		}
-		task = t
 		return nil
 	})
 	if err != nil {
@@ -325,40 +325,40 @@ func (s *TaskService) Complete(ctx context.Context, id string) error {
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionCompleted),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskPayload(task),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionPayload(agentSession),
 		CreatedAt:   time.Now(),
 	})
 
 	return nil
 }
 
-// Interrupt transitions a task from running to interrupted.
-func (s *TaskService) Interrupt(ctx context.Context, id string) error {
-	var task domain.Task
+// Interrupt transitions an agent session from running to interrupted.
+func (s *AgentSessionService) Interrupt(ctx context.Context, id string) error {
+	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		t, err := res.Tasks.Get(ctx, id)
+		var err error
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(t.Status, domain.AgentSessionInterrupted) {
+		if !canTransitionAgentSession(agentSession.Status, domain.AgentSessionInterrupted) {
 			return newInvalidTransitionError(
-				sessionStatusName(t.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(domain.AgentSessionInterrupted),
-				"task",
+				"agent session",
 			)
 		}
 
 		now := time.Now()
-		t.Status = domain.AgentSessionInterrupted
-		t.ShutdownAt = &now
-		t.UpdatedAt = now
+		agentSession.Status = domain.AgentSessionInterrupted
+		agentSession.ShutdownAt = &now
+		agentSession.UpdatedAt = now
 
-		if err := res.Tasks.Update(ctx, t); err != nil {
+		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {
 			return err
 		}
-		task = t
 		return nil
 	})
 	if err != nil {
@@ -369,48 +369,48 @@ func (s *TaskService) Interrupt(ctx context.Context, id string) error {
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionInterrupted),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskPayload(task),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionPayload(agentSession),
 		CreatedAt:   time.Now(),
 	})
 
 	return nil
 }
 
-// Resume transitions a task from interrupted to running.
-func (s *TaskService) Resume(ctx context.Context, id string) error {
+// Resume transitions an agent session from interrupted to running.
+func (s *AgentSessionService) Resume(ctx context.Context, id string) error {
 	return s.Transition(ctx, id, domain.AgentSessionRunning)
 }
 
-// FollowUpRestart transitions a completed task back to running for a follow-up session.
+// FollowUpRestart transitions a completed agent session back to running for a follow-up session.
 // Unlike Start(), this preserves the original StartedAt and clears CompletedAt.
-func (s *TaskService) FollowUpRestart(ctx context.Context, id string) error {
-	var task domain.Task
-	var from domain.TaskStatus
+func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) error {
+	var agentSession domain.AgentSession
+	var from domain.AgentSessionStatus
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		t, err := res.Tasks.Get(ctx, id)
+		var err error
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(t.Status, domain.AgentSessionRunning) {
+		if !canTransitionAgentSession(agentSession.Status, domain.AgentSessionRunning) {
 			return newInvalidTransitionError(
-				sessionStatusName(t.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(domain.AgentSessionRunning),
-				"task",
+				"agent session",
 			)
 		}
 
-		from = t.Status
+		from = agentSession.Status
 		now := time.Now()
-		t.Status = domain.AgentSessionRunning
-		t.CompletedAt = nil
-		t.UpdatedAt = now
+		agentSession.Status = domain.AgentSessionRunning
+		agentSession.CompletedAt = nil
+		agentSession.UpdatedAt = now
 
-		if err := res.Tasks.Update(ctx, t); err != nil {
+		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {
 			return err
 		}
-		task = t
 		return nil
 	})
 	if err != nil {
@@ -420,71 +420,71 @@ func (s *TaskService) FollowUpRestart(ctx context.Context, id string) error {
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionStatusChanged),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskStatusChangedPayload(task, from, domain.AgentSessionRunning),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionStatusChangedPayload(agentSession, from, domain.AgentSessionRunning),
 		CreatedAt:   time.Now(),
 	})
 	return nil
 }
 
-// UpdateResumeInfo stores harness-specific resume data on the task record.
+// UpdateResumeInfo stores harness-specific resume data on the agent session record.
 // The info map is harness-defined; callers must not interpret individual keys.
-func (s *TaskService) UpdateResumeInfo(ctx context.Context, id string, info map[string]string) error {
+func (s *AgentSessionService) UpdateResumeInfo(ctx context.Context, id string, info map[string]string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+		agentSession, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		task.ResumeInfo = info
-		task.UpdatedAt = time.Now()
+		agentSession.ResumeInfo = info
+		agentSession.UpdatedAt = time.Now()
 
-		return res.Tasks.Update(ctx, task)
+		return res.AgentSessions.Update(ctx, agentSession)
 	})
 }
 
 // SetPlanID records the plan produced by a planning session.
-func (s *TaskService) SetPlanID(ctx context.Context, id string, planID string) error {
+func (s *AgentSessionService) SetPlanID(ctx context.Context, id string, planID string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+		agentSession, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		task.PlanID = planID
-		task.UpdatedAt = time.Now()
+		agentSession.PlanID = planID
+		agentSession.UpdatedAt = time.Now()
 
-		return res.Tasks.Update(ctx, task)
+		return res.AgentSessions.Update(ctx, agentSession)
 	})
 }
 
-// Fail transitions a task to failed.
-func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error {
-	var task domain.Task
+// Fail transitions an agent session to failed.
+func (s *AgentSessionService) Fail(ctx context.Context, id string, exitCode *int) error {
+	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		t, err := res.Tasks.Get(ctx, id)
+		var err error
+		agentSession, err = res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		if !canTransitionTask(t.Status, domain.AgentSessionFailed) {
+		if !canTransitionAgentSession(agentSession.Status, domain.AgentSessionFailed) {
 			return newInvalidTransitionError(
-				sessionStatusName(t.Status),
+				sessionStatusName(agentSession.Status),
 				sessionStatusName(domain.AgentSessionFailed),
-				"task",
+				"agent session",
 			)
 		}
 
 		now := time.Now()
-		t.Status = domain.AgentSessionFailed
-		t.CompletedAt = &now
-		t.ExitCode = exitCode
-		t.UpdatedAt = now
+		agentSession.Status = domain.AgentSessionFailed
+		agentSession.CompletedAt = &now
+		agentSession.ExitCode = exitCode
+		agentSession.UpdatedAt = now
 
-		if err := res.Tasks.Update(ctx, t); err != nil {
+		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {
 			return err
 		}
-		task = t
 		return nil
 	})
 	if err != nil {
@@ -495,100 +495,100 @@ func (s *TaskService) Fail(ctx context.Context, id string, exitCode *int) error 
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionFailed),
-		WorkspaceID: task.WorkspaceID,
-		Payload:     marshalTaskPayload(task),
+		WorkspaceID: agentSession.WorkspaceID,
+		Payload:     marshalAgentSessionPayload(agentSession),
 		CreatedAt:   time.Now(),
 	})
 
 	return nil
 }
 
-// UpdateOwnerInstance updates the owner instance ID for a task.
-func (s *TaskService) UpdateOwnerInstance(ctx context.Context, id string, instanceID string) error {
+// UpdateOwnerInstance updates the owner instance ID for an agent session.
+func (s *AgentSessionService) UpdateOwnerInstance(ctx context.Context, id string, instanceID string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+		agentSession, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		task.OwnerInstanceID = &instanceID
-		task.UpdatedAt = time.Now()
+		agentSession.OwnerInstanceID = &instanceID
+		agentSession.UpdatedAt = time.Now()
 
-		return res.Tasks.Update(ctx, task)
+		return res.AgentSessions.Update(ctx, agentSession)
 	})
 }
 
-// UpdatePID updates the PID for a task.
-func (s *TaskService) UpdatePID(ctx context.Context, id string, pid int) error {
+// UpdatePID updates the PID for an agent session.
+func (s *AgentSessionService) UpdatePID(ctx context.Context, id string, pid int) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		task, err := res.Tasks.Get(ctx, id)
+		agentSession, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		task.PID = &pid
-		task.UpdatedAt = time.Now()
+		agentSession.PID = &pid
+		agentSession.UpdatedAt = time.Now()
 
-		return res.Tasks.Update(ctx, task)
+		return res.AgentSessions.Update(ctx, agentSession)
 	})
 }
 
-// Delete deletes a task.
-func (s *TaskService) Delete(ctx context.Context, id string) error {
+// Delete deletes an agent session.
+func (s *AgentSessionService) Delete(ctx context.Context, id string) error {
 	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		_, err := res.Tasks.Get(ctx, id)
+		_, err := res.AgentSessions.Get(ctx, id)
 		if err != nil {
-			return newNotFoundError("task", id)
+			return newNotFoundError("agent session", id)
 		}
 
-		return res.Tasks.Delete(ctx, id)
+		return res.AgentSessions.Delete(ctx, id)
 	})
 }
 
-// FindInterruptedByWorkspace finds all interrupted tasks for a workspace.
-func (s *TaskService) FindInterruptedByWorkspace(ctx context.Context, workspaceID string) ([]domain.Task, error) {
-	var tasks []domain.Task
+// FindInterruptedByWorkspace finds all interrupted agent sessions for a workspace.
+func (s *AgentSessionService) FindInterruptedByWorkspace(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
+	var sessions []domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.ListByWorkspaceID(ctx, workspaceID)
+		v, err := res.AgentSessions.ListByWorkspaceID(ctx, workspaceID)
 		if err != nil {
 			return err
 		}
-		tasks = v
+		sessions = v
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	var interrupted []domain.Task
-	for _, task := range tasks {
-		if task.Status == domain.AgentSessionInterrupted {
-			interrupted = append(interrupted, task)
+	var interrupted []domain.AgentSession
+	for _, agentSession := range sessions {
+		if agentSession.Status == domain.AgentSessionInterrupted {
+			interrupted = append(interrupted, agentSession)
 		}
 	}
 
 	return interrupted, nil
 }
 
-// FindRunningByOwner finds all running tasks owned by an instance.
-func (s *TaskService) FindRunningByOwner(ctx context.Context, instanceID string) ([]domain.Task, error) {
-	var tasks []domain.Task
+// FindRunningByOwner finds all running agent sessions owned by an instance.
+func (s *AgentSessionService) FindRunningByOwner(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
+	var sessions []domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		v, err := res.Tasks.ListByOwnerInstanceID(ctx, instanceID)
+		v, err := res.AgentSessions.ListByOwnerInstanceID(ctx, instanceID)
 		if err != nil {
 			return err
 		}
-		tasks = v
+		sessions = v
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	var running []domain.Task
-	for _, task := range tasks {
-		if task.Status == domain.AgentSessionRunning {
-			running = append(running, task)
+	var running []domain.AgentSession
+	for _, agentSession := range sessions {
+		if agentSession.Status == domain.AgentSessionRunning {
+			running = append(running, agentSession)
 		}
 	}
 

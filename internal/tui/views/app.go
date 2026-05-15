@@ -134,7 +134,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 
 	// State cache (refreshed by DB poll)
 	workItems []domain.Session
-	sessions  []domain.Task
+	sessions  []domain.AgentSession
 	subPlans  map[string][]domain.TaskPlan          // keyed by planID
 	plans     map[string]*domain.Plan               // keyed by workItemID
 	questions map[string]map[string]domain.Question // sessionID → questionID → Question
@@ -476,14 +476,14 @@ func (a App) localSessionSearchEntry(wi domain.Session) (domain.SessionHistoryEn
 	latest := sessions[0]
 	hasOpenQuestion := false
 	hasInterrupted := false
-	for _, session := range sessions {
-		if session.UpdatedAt.After(latest.UpdatedAt) || (session.UpdatedAt.Equal(latest.UpdatedAt) && (session.CreatedAt.After(latest.CreatedAt) || (session.CreatedAt.Equal(latest.CreatedAt) && session.ID > latest.ID))) {
-			latest = session
+	for _, agentSession := range sessions {
+		if agentSession.UpdatedAt.After(latest.UpdatedAt) || (agentSession.UpdatedAt.Equal(latest.UpdatedAt) && (agentSession.CreatedAt.After(latest.CreatedAt) || (agentSession.CreatedAt.Equal(latest.CreatedAt) && agentSession.ID > latest.ID))) {
+			latest = agentSession
 		}
-		if session.Status == domain.AgentSessionWaitingForAnswer {
+		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
 			hasOpenQuestion = true
 		}
-		if session.Status == domain.AgentSessionInterrupted {
+		if agentSession.Status == domain.AgentSessionInterrupted {
 			hasInterrupted = true
 		}
 	}
@@ -713,14 +713,14 @@ func (a *App) upsertWorkItem(workItem domain.Session) {
 	a.workItems = append(a.workItems, workItem)
 }
 
-func (a *App) upsertTask(task domain.Task) {
+func (a *App) upsertSession(agentSession domain.AgentSession) {
 	for i := range a.sessions {
-		if a.sessions[i].ID == task.ID {
-			a.sessions[i] = task
+		if a.sessions[i].ID == agentSession.ID {
+			a.sessions[i] = agentSession
 			return
 		}
 	}
-	a.sessions = append(a.sessions, task)
+	a.sessions = append(a.sessions, agentSession)
 }
 
 func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
@@ -868,10 +868,10 @@ func (a *App) exitTaskSidebar() tea.Cmd {
 	return a.updateContentFromState()
 }
 
-func (a App) workItemTaskSession(workItemID, sessionID string) *domain.Task {
-	for _, session := range a.sessionsForWorkItem(workItemID) {
-		if session.ID == sessionID {
-			s := session
+func (a App) workItemTaskSession(workItemID, sessionID string) *domain.AgentSession {
+	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
+		if agentSession.ID == sessionID {
+			s := agentSession
 			return &s
 		}
 	}
@@ -883,70 +883,70 @@ func (a App) defaultTaskSessionID(workItemID string) string {
 	return ""
 }
 
-func (a App) latestPlanningSession(workItemID string) *domain.Task {
-	for _, session := range a.sessionsForWorkItem(workItemID) {
-		if session.Phase == domain.TaskPhasePlanning {
-			s := session
+func (a App) latestPlanningSession(workItemID string) *domain.AgentSession {
+	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
+		if agentSession.Phase == domain.AgentSessionPhasePlanning {
+			s := agentSession
 			return &s
 		}
 	}
 	return nil
 }
 
-func (a App) latestImplementationSession(workItemID, subPlanID string) *domain.Task {
-	for _, session := range a.sessionsForWorkItem(workItemID) {
-		if session.Phase == domain.TaskPhaseImplementation && session.SubPlanID == subPlanID {
-			s := session
+func (a App) latestImplementationSession(workItemID, subPlanID string) *domain.AgentSession {
+	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
+		if agentSession.Phase == domain.AgentSessionPhaseImplementation && agentSession.SubPlanID == subPlanID {
+			s := agentSession
 			return &s
 		}
 	}
 	return nil
 }
 
-func taskSessionPhaseRank(phase domain.TaskPhase) int {
+func taskSessionPhaseRank(phase domain.AgentSessionPhase) int {
 	switch phase {
-	case domain.TaskPhasePlanning:
+	case domain.AgentSessionPhasePlanning:
 		return 0
-	case domain.TaskPhaseImplementation:
+	case domain.AgentSessionPhaseImplementation:
 		return 1
-	case domain.TaskPhaseReview:
+	case domain.AgentSessionPhaseReview:
 		return 2
 	default:
 		return 3
 	}
 }
 
-func taskSessionModeLabel(session *domain.Task) string {
-	switch session.Phase {
-	case domain.TaskPhasePlanning:
+func taskSessionModeLabel(agentSession *domain.AgentSession) string {
+	switch agentSession.Phase {
+	case domain.AgentSessionPhasePlanning:
 		return "Planning"
-	case domain.TaskPhaseReview:
+	case domain.AgentSessionPhaseReview:
 		return "Review"
 	default:
 		return "Task"
 	}
 }
 
-func taskSidebarSessionTitle(session *domain.Task) string {
-	switch session.Phase {
-	case domain.TaskPhasePlanning:
+func taskSidebarSessionTitle(agentSession *domain.AgentSession) string {
+	switch agentSession.Phase {
+	case domain.AgentSessionPhasePlanning:
 		// Don't prefix with "Planning" - we're already in the Planning group
-		return "Session " + shortSessionID(session.ID)
-	case domain.TaskPhaseReview:
-		return "Review " + shortSessionID(session.ID)
+		return "Session " + shortSessionID(agentSession.ID)
+	case domain.AgentSessionPhaseReview:
+		return "Review " + shortSessionID(agentSession.ID)
 	default:
-		return "Implementation " + shortSessionID(session.ID)
+		return "Implementation " + shortSessionID(agentSession.ID)
 	}
 }
 
-func taskSessionDisplayName(session *domain.Task) string {
-	switch session.Phase {
-	case domain.TaskPhasePlanning:
+func taskSessionDisplayName(agentSession *domain.AgentSession) string {
+	switch agentSession.Phase {
+	case domain.AgentSessionPhasePlanning:
 		return "Planning"
-	case domain.TaskPhaseReview:
-		return firstNonEmptyString(session.RepositoryName, "Review")
+	case domain.AgentSessionPhaseReview:
+		return firstNonEmptyString(agentSession.RepositoryName, "Review")
 	default:
-		return firstNonEmptyString(session.RepositoryName, "Task")
+		return firstNonEmptyString(agentSession.RepositoryName, "Task")
 	}
 }
 
@@ -1474,8 +1474,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TasksForSessionLoadedMsg:
-		// Remove old tasks for this work item, add new ones
-		filtered := make([]domain.Task, 0, len(a.sessions))
+		// Remove old sessions for this work item, add new ones
+		filtered := make([]domain.AgentSession, 0, len(a.sessions))
 		for _, s := range a.sessions {
 			if s.WorkItemID != msg.WorkItemID {
 				filtered = append(filtered, s)
@@ -1595,7 +1595,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskStartedMsg:
-		a.upsertTask(msg.Task)
+		a.upsertSession(msg.Task)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -1604,7 +1604,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskUpdatedMsg:
-		a.upsertTask(msg.Task)
+		a.upsertSession(msg.Task)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -1955,9 +1955,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without a stored cancel handle. AbortAndDeregister is idempotent —
 		// sessions already torn down by the context cancel above are a no-op.
 		if a.provider.SessionRegistry() != nil {
-			for _, task := range a.sessions {
-				if task.WorkItemID == msg.SessionID {
-					a.provider.SessionRegistry().AbortAndDeregister(context.Background(), task.ID)
+			for _, agentSession := range a.sessions {
+				if agentSession.WorkItemID == msg.SessionID {
+					a.provider.SessionRegistry().AbortAndDeregister(context.Background(), agentSession.ID)
 				}
 			}
 		}
@@ -2408,11 +2408,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		filteredTasks := a.sessions[:0]
-		for _, task := range a.sessions {
-			if _, ok := taskIDSet[task.ID]; ok {
+		for _, agentSession := range a.sessions {
+			if _, ok := taskIDSet[agentSession.ID]; ok {
 				continue
 			}
-			filteredTasks = append(filteredTasks, task)
+			filteredTasks = append(filteredTasks, agentSession)
 		}
 		a.sessions = filteredTasks
 
@@ -2916,47 +2916,47 @@ func firstSourceDetailsAffected(affected []string) string {
 	return strings.TrimSpace(affected[0])
 }
 
-func (a *App) showTaskContent(wi *domain.Session, session *domain.Task) tea.Cmd {
-	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSidebarSessionTitle(session)
-	metaParts := []string{sessionStatusLabel(session.Status)}
-	if session.HarnessName != "" {
-		metaParts = append(metaParts, session.HarnessName)
+func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSession) tea.Cmd {
+	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSidebarSessionTitle(agentSession)
+	metaParts := []string{sessionStatusLabel(agentSession.Status)}
+	if agentSession.HarnessName != "" {
+		metaParts = append(metaParts, agentSession.HarnessName)
 	}
-	metaParts = append(metaParts, taskSessionDisplayName(session))
+	metaParts = append(metaParts, taskSessionDisplayName(agentSession))
 	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
-	if session.Phase == domain.TaskPhasePlanning {
+	if agentSession.Phase == domain.AgentSessionPhasePlanning {
 		a.content.SetMode(ContentModeAgentSession)
 	} else {
 		a.content.SetMode(ContentModeSessionInteraction)
 	}
 	a.content.sessionLog.SetTitle(title)
-	a.content.sessionLog.SetModeLabel(taskSessionModeLabel(session))
+	a.content.sessionLog.SetModeLabel(taskSessionModeLabel(agentSession))
 	a.content.sessionLog.SetMeta(strings.Join(metaParts, " · "))
-	logPath := filepath.Join(a.sessionsDir, session.ID+".log")
+	logPath := filepath.Join(a.sessionsDir, agentSession.ID+".log")
 	resumeOffset := int64(0)
-	if a.content.sessionLog.live && a.content.sessionLog.sessionID == session.ID && a.content.sessionLog.logPath == logPath {
+	if a.content.sessionLog.live && a.content.sessionLog.sessionID == agentSession.ID && a.content.sessionLog.logPath == logPath {
 		resumeOffset = a.content.sessionLog.offset
 	}
-	a.content.sessionLog.SetLogPath(session.ID, logPath)
-	a.content.sessionLog.SetPlanID(session.PlanID)
-	switch session.Status {
+	a.content.sessionLog.SetLogPath(agentSession.ID, logPath)
+	a.content.sessionLog.SetPlanID(agentSession.PlanID)
+	switch agentSession.Status {
 	case domain.AgentSessionFailed:
 		a.content.sessionLog.ClearCompletedSession()
-		a.content.sessionLog.SetFailedSession(session.ID)
+		a.content.sessionLog.SetFailedSession(agentSession.ID)
 	case domain.AgentSessionCompleted:
 		a.content.sessionLog.ClearFailedSession()
-		a.content.sessionLog.SetCompletedSession(session.ID)
+		a.content.sessionLog.SetCompletedSession(agentSession.ID)
 	default:
 		a.content.sessionLog.ClearFailedSession()
 		a.content.sessionLog.ClearCompletedSession()
 	}
-	agentActive := session.Status == domain.AgentSessionPending ||
-		session.Status == domain.AgentSessionRunning ||
-		session.Status == domain.AgentSessionWaitingForAnswer
+	agentActive := agentSession.Status == domain.AgentSessionPending ||
+		agentSession.Status == domain.AgentSessionRunning ||
+		agentSession.Status == domain.AgentSessionWaitingForAnswer
 	spinnerCmd := a.content.sessionLog.SetAgentActive(agentActive)
-	if !a.tailingSessionIDs[session.ID] {
-		a.tailingSessionIDs[session.ID] = true
-		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, session.ID, resumeOffset))
+	if !a.tailingSessionIDs[agentSession.ID] {
+		a.tailingSessionIDs[agentSession.ID] = true
+		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, agentSession.ID, resumeOffset))
 	}
 	return spinnerCmd
 }
@@ -3000,7 +3000,7 @@ func (a *App) showForemanContent(wi *domain.Session, sessionID string, running b
 	return spinnerCmd
 }
 
-func (a *App) canActOnSession(s domain.Task) bool {
+func (a *App) canActOnSession(s domain.AgentSession) bool {
 	if a.runtimeCtx.InstanceID == "" || s.OwnerInstanceID == nil {
 		return true
 	}
@@ -3021,9 +3021,9 @@ func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 func (a *App) showDeleteSessionConfirm(sessionID string) {
 	sID := sessionID
 	var running int
-	for _, task := range a.sessions {
-		if task.WorkItemID == sID {
-			switch task.Status {
+	for _, agentSession := range a.sessions {
+		if agentSession.WorkItemID == sID {
+			switch agentSession.Status {
 			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 				running++
 			}
@@ -3200,10 +3200,10 @@ func (a *App) teardownAllPipelines() {
 	}
 
 	if a.provider.SessionRegistry() != nil {
-		for _, task := range a.sessions {
-			switch task.Status {
+		for _, agentSession := range a.sessions {
+			switch agentSession.Status {
 			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
-				a.provider.SessionRegistry().AbortAndDeregister(context.Background(), task.ID)
+				a.provider.SessionRegistry().AbortAndDeregister(context.Background(), agentSession.ID)
 			}
 		}
 	}
@@ -3311,7 +3311,7 @@ func (a App) sessionSidebarEntries() []SidebarEntry {
 	return entries
 }
 
-func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
+func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
 	plan := a.plans[workItemID]
 	subPlanOrder := make(map[string]int)
 	if plan != nil {
@@ -3319,7 +3319,7 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
 			subPlanOrder[sp.ID] = i
 		}
 	}
-	sessions := make([]domain.Task, 0)
+	sessions := make([]domain.AgentSession, 0)
 	for _, s := range a.sessions {
 		if s.WorkItemID == workItemID {
 			sessions = append(sessions, s)
@@ -3331,7 +3331,7 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.Task {
 		if rankI != rankJ {
 			return rankI < rankJ
 		}
-		if rankI != taskSessionPhaseRank(domain.TaskPhasePlanning) {
+		if rankI != taskSessionPhaseRank(domain.AgentSessionPhasePlanning) {
 			orderI, okI := subPlanOrder[sessions[i].SubPlanID]
 			orderJ, okJ := subPlanOrder[sessions[j].SubPlanID]
 			if okI && okJ && orderI != orderJ {
@@ -3390,9 +3390,9 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	sessions := a.sessionsForWorkItem(workItemID)
 
 	// Planning block: all planning sessions in temporal order (oldest first).
-	var planningSessions []domain.Task
+	var planningSessions []domain.AgentSession
 	for _, s := range sessions {
-		if s.Phase == domain.TaskPhasePlanning {
+		if s.Phase == domain.AgentSessionPhasePlanning {
 			planningSessions = append(planningSessions, s)
 		}
 	}
@@ -3406,16 +3406,16 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			WorkItemID: workItemID,
 			GroupTitle: "Planning",
 		})
-		for _, session := range planningSessions {
+		for _, agentSession := range planningSessions {
 			entries = append(entries, SidebarEntry{
 				Kind:           SidebarEntryTaskSession,
 				WorkItemID:     workItemID,
-				SessionID:      session.ID,
-				Title:          taskSidebarSessionTitle(&session),
+				SessionID:      agentSession.ID,
+				Title:          taskSidebarSessionTitle(&agentSession),
 				State:          wi.State,
-				SessionStatus:  session.Status,
+				SessionStatus:  agentSession.Status,
 				RepositoryName: "Planning",
-				LastActivity:   session.UpdatedAt,
+				LastActivity:   agentSession.UpdatedAt,
 			})
 		}
 	}
@@ -3459,9 +3459,9 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	}
 
 	// Repository blocks: one group per repo, implementation/review sessions in temporal order (oldest first).
-	repoSessions := make(map[string][]domain.Task)
+	repoSessions := make(map[string][]domain.AgentSession)
 	for _, s := range sessions {
-		if s.Phase == domain.TaskPhaseImplementation || s.Phase == domain.TaskPhaseReview {
+		if s.Phase == domain.AgentSessionPhaseImplementation || s.Phase == domain.AgentSessionPhaseReview {
 			repo := firstNonEmptyString(s.RepositoryName, "Repository")
 			repoSessions[repo] = append(repoSessions[repo], s)
 		}
@@ -3481,20 +3481,20 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 			WorkItemID: workItemID,
 			GroupTitle: repoName,
 		})
-		for _, session := range repoItems {
-			entryRepo := session.RepositoryName
-			if session.Phase == domain.TaskPhaseReview {
+		for _, agentSession := range repoItems {
+			entryRepo := agentSession.RepositoryName
+			if agentSession.Phase == domain.AgentSessionPhaseReview {
 				entryRepo = firstNonEmptyString(entryRepo, "Review")
 			}
 			entries = append(entries, SidebarEntry{
 				Kind:           SidebarEntryTaskSession,
 				WorkItemID:     workItemID,
-				SessionID:      session.ID,
-				Title:          taskSidebarSessionTitle(&session),
+				SessionID:      agentSession.ID,
+				Title:          taskSidebarSessionTitle(&agentSession),
 				State:          wi.State,
-				SessionStatus:  session.Status,
+				SessionStatus:  agentSession.Status,
 				RepositoryName: entryRepo,
-				LastActivity:   session.UpdatedAt,
+				LastActivity:   agentSession.UpdatedAt,
 			})
 		}
 	}
@@ -3743,13 +3743,13 @@ func (a App) statusBarText() string {
 
 func (a App) activeSessionCount() int {
 	count := 0
-	for _, session := range a.sessions {
-		switch session.Status {
+	for _, agentSession := range a.sessions {
+		switch agentSession.Status {
 		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 			count++
 		}
 	}
-	// The foreman is a live subprocess, not a persisted domain.Task, so it must
+	// The foreman is a live subprocess, not a persisted AgentSession, so it must
 	// be counted separately. This ensures the quit-confirmation dialog fires
 	// and the status bar reflects reality when only the foreman is active.
 	if a.provider.Foreman() != nil && a.provider.Foreman().IsRunning() {
@@ -3911,7 +3911,7 @@ func renderTopRightOverlay(base, overlay string, width, topInset, bottomInset in
 
 // --- Command helpers ---
 
-func abandonSessionCmd(svc *service.TaskService, sessionID string) tea.Cmd {
+func abandonSessionCmd(svc *service.AgentSessionService, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Fail(context.Background(), sessionID, nil); err != nil {
 			return ErrMsg{Err: err}
@@ -3972,13 +3972,13 @@ func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvide
 			if err != nil {
 				return sessionDeleteResult{}, err
 			}
-			for _, task := range tasks {
-				result.TaskIDs = append(result.TaskIDs, task.ID)
+			for _, agentSession := range tasks {
+				result.TaskIDs = append(result.TaskIDs, agentSession.ID)
 				artifactDeletes = append(artifactDeletes, struct {
 					taskID        string
 					reviewLogPath string
-				}{taskID: task.ID, reviewLogPath: reviewSessionLogs[task.ID]})
-				if err := svcs.Task.Delete(ctx, task.ID); err != nil {
+				}{taskID: agentSession.ID, reviewLogPath: reviewSessionLogs[agentSession.ID]})
+				if err := svcs.Task.Delete(ctx, agentSession.ID); err != nil {
 					return sessionDeleteResult{}, err
 				}
 			}
@@ -4207,7 +4207,7 @@ func extractSessionID(payload string) string {
 	if err := json.Unmarshal([]byte(payload), &m); err != nil {
 		return ""
 	}
-	if id, ok := m["session_id"].(string); ok {
+	if id, ok := m["agent_session_id"].(string); ok {
 		return id
 	}
 	return ""

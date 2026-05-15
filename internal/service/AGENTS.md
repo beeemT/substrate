@@ -55,7 +55,7 @@ breaks every TUI handler that relies on it. This is a hard requirement.
 | Field | Type | Description |
 |---|---|---|
 | `work_item_id` | `string` | The ID of the work item this event concerns. Required for all TUI-handled events. |
-| `session_id` | `string` | The agent task/session ID. Required for agent session lifecycle events. |
+| `agent_session_id` | `string` | The agent session ID. Required for agent session lifecycle events. |
 | `plan_id` | `string` | The plan ID. Omit if not applicable. |
 | `sub_plan_id` | `string` | The sub-plan ID. Omit if not applicable. |
 
@@ -71,11 +71,11 @@ For events that signal a work-item state transition (ingested, planning, approve
 The TUI decoders read `work_item_id`, `workspace_id`, and `session` from this payload.
 Always pass the full `Session` object — never emit only `work_item_id` alone.
 
-### Agent session events: use `marshalTaskPayload`
+### Agent session events: use `marshalAgentSessionPayload`
 
 For events about individual agent sessions (started, completed, failed, etc.), use
-`marshalTaskPayload(task domain.Task) string` in `session.go`. It emits `work_item_id`,
-`session_id`, and the full nested `session` object.
+`marshalAgentSessionPayload(agentSession domain.AgentSession) string` in `session.go`. It emits `work_item_id`,
+`agent_session_id`, and the full nested `session` object.
 
 ### Plan/sub-plan events: use `marshalJSONOrEmpty` with named structs
 
@@ -103,8 +103,8 @@ Payload: fmt.Sprintf(`{"work_item_id":"%s"}`, id),  // error-prone
   logs a warning and returns `{}`. Use this for all plan/service-layer events.
 - `marshalWorkItemPayload(item domain.Session) string` in `work_item.go` — emits `work_item_id`,
   `workspace_id`, and `session`.
-- `marshalTaskPayload(task domain.Task) string` in `session.go` — emits `work_item_id`,
-  `session_id`, and the full nested `session` object.
+- `marshalAgentSessionPayload(agentSession domain.AgentSession) string` in `session.go` — emits `work_item_id`,
+  `agent_session_id`, and the full nested `session` object.
 
 ### WorkspaceID vs Payload
 
@@ -115,7 +115,7 @@ TUI. Always put `work_item_id` in `Payload` so `extractWorkItemID` can extract i
 
 1. Choose the event type constant in `internal/domain/event.go`.
 2. Pick the right helper: `marshalWorkItemPayload` for state transitions,
-   `marshalTaskPayload` for agent sessions, `marshalJSONOrEmpty` with a named struct for plans.
+   `marshalAgentSessionPayload` for agent sessions, `marshalJSONOrEmpty` with a named struct for plans.
 3. Marshal via the helper in the Emit call.
 4. Verify the TUI has a typed message decoder and handler. If not, add them to
    `event_consumer.go` and `app.go` respectively.

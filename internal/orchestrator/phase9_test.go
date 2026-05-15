@@ -246,33 +246,33 @@ func (r *mockSubPlanRepo) Delete(_ context.Context, id string) error {
 
 type mockSessionRepo struct {
 	mu              sync.Mutex
-	sessions        map[string]domain.Task
+	sessions        map[string]domain.AgentSession
 	searchHistory   []domain.SessionHistoryEntry
 	updateErr       error
-	updateErrStatus domain.TaskStatus
+	updateErrStatus domain.AgentSessionStatus
 	deleteErr       error
-	updateHook      func(context.Context, domain.Task) error
+	updateHook      func(context.Context, domain.AgentSession) error
 	deleteHook      func(context.Context, string) error
 }
 
 func newMockSessionRepo() *mockSessionRepo {
-	return &mockSessionRepo{sessions: make(map[string]domain.Task)}
+	return &mockSessionRepo{sessions: make(map[string]domain.AgentSession)}
 }
 
-func (r *mockSessionRepo) Get(_ context.Context, id string) (domain.Task, error) {
+func (r *mockSessionRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s, ok := r.sessions[id]; ok {
 		return s, nil
 	}
 
-	return domain.Task{}, repository.ErrNotFound
+	return domain.AgentSession{}, repository.ErrNotFound
 }
 
-func (r *mockSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, s := range r.sessions {
 		if s.WorkItemID == workItemID {
 			result = append(result, s)
@@ -282,10 +282,10 @@ func (r *mockSessionRepo) ListByWorkItemID(_ context.Context, workItemID string)
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, s := range r.sessions {
 		if s.SubPlanID == subPlanID {
 			result = append(result, s)
@@ -295,10 +295,10 @@ func (r *mockSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) (
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, s := range r.sessions {
 		if s.WorkspaceID == workspaceID {
 			result = append(result, s)
@@ -308,10 +308,10 @@ func (r *mockSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID strin
 	return result, nil
 }
 
-func (r *mockSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
+func (r *mockSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.Task
+	var result []domain.AgentSession
 	for _, s := range r.sessions {
 		if s.OwnerInstanceID != nil && *s.OwnerInstanceID == instanceID {
 			result = append(result, s)
@@ -330,7 +330,7 @@ func (r *mockSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHisto
 	return entries, nil
 }
 
-func (r *mockSessionRepo) Create(_ context.Context, s domain.Task) error {
+func (r *mockSessionRepo) Create(_ context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[s.ID] = s
@@ -338,7 +338,7 @@ func (r *mockSessionRepo) Create(_ context.Context, s domain.Task) error {
 	return nil
 }
 
-func (r *mockSessionRepo) Update(ctx context.Context, s domain.Task) error {
+func (r *mockSessionRepo) Update(ctx context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updateHook != nil {
@@ -596,7 +596,7 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	cfg := testReviewConfig(maxCycles)
 	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}}, &mockPublisher{})
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
 	_ = questionRepo
@@ -615,8 +615,8 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 }
 
 // seedPlanAndSubPlan creates a plan+subplan in the fixture's repos and returns
-// a domain.Task whose SubPlanID points to the sub-plan.
-func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.Task {
+// a domain.AgentSession whose SubPlanID points to the sub-plan.
+func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSession {
 	t.Helper()
 
 	planID := "plan-1"
@@ -632,11 +632,11 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.Task {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	return domain.Task{
+	return domain.AgentSession{
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo-a",
 		HarnessName:    "mock",
@@ -891,14 +891,14 @@ func TestResolveEscalated_AppendsFAQ(t *testing.T) {
 		Content:        "Which pattern should I use?",
 		Status:         domain.QuestionEscalated,
 	}
-	sessionRepo.sessions["sess-1"] = domain.Task{
+	sessionRepo.sessions["sess-1"] = domain.AgentSession{
 		ID:             "sess-1",
 		RepositoryName: "repo-a",
 	}
 
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo}}, &mockPublisher{})
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{})
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 
 	answerCh := make(chan string, 1)
 	f := &Foreman{

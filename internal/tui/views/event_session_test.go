@@ -25,12 +25,12 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 	t.Cleanup(func() { bus.Close() })
 
 	// Create mock repositories
-	taskRepo := &mockTaskRepoForSession{tasks: make(map[string]domain.Task)}
+	taskRepo := &mockTaskRepoForSession{tasks: make(map[string]domain.AgentSession)}
 	sessionRepo := &mockSessionRepoForSession{workItems: make(map[string]domain.Session)}
 
 	// Create services with mock repositories
-	taskSvc := service.NewTaskService(repository.NoopTransacter{
-		Res: repository.Resources{Tasks: taskRepo},
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{
+		Res: repository.Resources{AgentSessions: taskRepo},
 	}, bus)
 	sessionSvc := service.NewSessionService(repository.NoopTransacter{
 		Res: repository.Resources{Sessions: sessionRepo},
@@ -59,11 +59,11 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 
 	// Create a session in the mock repo
 	now := time.Now()
-	session := domain.Task{
+	session := domain.AgentSession{
 		ID:          "session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Phase:       domain.TaskPhasePlanning,
+		Phase:       domain.AgentSessionPhasePlanning,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -77,11 +77,11 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 		UpdatedAt:   now,
 	}
 
-	// Create event payload matching what TaskService.Start emits
+	// Create event payload matching what AgentSessionService.Start emits
 	payload, _ := json.Marshal(map[string]any{
-		"session":      session,
-		"work_item_id": "wi-1",
-		"session_id":   "session-1",
+		"session":          session,
+		"work_item_id":     "wi-1",
+		"agent_session_id": "session-1",
 	})
 
 	// Publish EventAgentSessionStarted
@@ -154,19 +154,19 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 
 func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 	now := time.Now()
-	task := domain.Task{
+	task := domain.AgentSession{
 		ID:          "impl-session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Phase:       domain.TaskPhaseImplementation,
+		Phase:       domain.AgentSessionPhaseImplementation,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	payload, err := json.Marshal(map[string]any{
-		"session":      task,
-		"work_item_id": "wi-1",
-		"session_id":   task.ID,
+		"session":          task,
+		"work_item_id":     "wi-1",
+		"agent_session_id": task.ID,
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -190,7 +190,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 	if len(app.sessions) != 1 {
 		t.Fatalf("sessions length = %d, want 1", len(app.sessions))
 	}
-	if got := app.sessions[0]; got.ID != task.ID || got.Phase != domain.TaskPhaseImplementation || got.Status != domain.AgentSessionRunning {
+	if got := app.sessions[0]; got.ID != task.ID || got.Phase != domain.AgentSessionPhaseImplementation || got.Status != domain.AgentSessionRunning {
 		t.Fatalf("session = %+v, want implementation running task %+v", got, task)
 	}
 }
@@ -198,16 +198,16 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 func TestDomainEventMsg_ImplementationStartedReloadsWorkItemAndTasks(t *testing.T) {
 	now := time.Now()
 	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-integration", Title: "Implement me", State: domain.SessionImplementing, CreatedAt: now, UpdatedAt: now}
-	task := domain.Task{ID: "impl-session-1", WorkItemID: "wi-1", WorkspaceID: "ws-integration", Phase: domain.TaskPhaseImplementation, Status: domain.AgentSessionRunning, CreatedAt: now, UpdatedAt: now}
-	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.Task{task.ID: task}}
+	task := domain.AgentSession{ID: "impl-session-1", WorkItemID: "wi-1", WorkspaceID: "ws-integration", Phase: domain.AgentSessionPhaseImplementation, Status: domain.AgentSessionRunning, CreatedAt: now, UpdatedAt: now}
+	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{task.ID: task}}
 	sessionRepo := &mockSessionRepoForSession{workItems: map[string]domain.Session{workItem.ID: workItem}}
 	bus := event.NewBus(event.BusConfig{})
 	t.Cleanup(func() { bus.Close() })
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
-		Task: service.NewTaskService(repository.NoopTransacter{
-			Res: repository.Resources{Tasks: taskRepo},
+		Task: service.NewAgentSessionService(repository.NoopTransacter{
+			Res: repository.Resources{AgentSessions: taskRepo},
 		}, bus),
 		Session: service.NewSessionService(repository.NoopTransacter{
 			Res: repository.Resources{Sessions: sessionRepo},
@@ -310,20 +310,20 @@ func drainBatchMsgs(t *testing.T, cmd tea.Cmd) []tea.Msg {
 	return msgs
 }
 
-// mockTaskRepoForSession implements repository.TaskRepository for testing.
+// mockTaskRepoForSession implements repository.AgentSessionRepository for testing.
 type mockTaskRepoForSession struct {
-	tasks map[string]domain.Task
+	tasks map[string]domain.AgentSession
 }
 
-func (r *mockTaskRepoForSession) Get(ctx context.Context, id string) (domain.Task, error) {
+func (r *mockTaskRepoForSession) Get(ctx context.Context, id string) (domain.AgentSession, error) {
 	if t, ok := r.tasks[id]; ok {
 		return t, nil
 	}
-	return domain.Task{}, nil
+	return domain.AgentSession{}, nil
 }
 
-func (r *mockTaskRepoForSession) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.Task, error) {
-	var result []domain.Task
+func (r *mockTaskRepoForSession) ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.AgentSession, error) {
+	var result []domain.AgentSession
 	for _, t := range r.tasks {
 		if t.WorkItemID == workItemID {
 			result = append(result, t)
@@ -332,15 +332,15 @@ func (r *mockTaskRepoForSession) ListByWorkItemID(ctx context.Context, workItemI
 	return result, nil
 }
 
-func (r *mockTaskRepoForSession) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error) {
+func (r *mockTaskRepoForSession) ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.AgentSession, error) {
 	return nil, nil
 }
 
-func (r *mockTaskRepoForSession) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error) {
+func (r *mockTaskRepoForSession) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
 	return nil, nil
 }
 
-func (r *mockTaskRepoForSession) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error) {
+func (r *mockTaskRepoForSession) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
 	return nil, nil
 }
 
@@ -348,12 +348,12 @@ func (r *mockTaskRepoForSession) SearchHistory(ctx context.Context, filter domai
 	return nil, nil
 }
 
-func (r *mockTaskRepoForSession) Create(ctx context.Context, s domain.Task) error {
+func (r *mockTaskRepoForSession) Create(ctx context.Context, s domain.AgentSession) error {
 	r.tasks[s.ID] = s
 	return nil
 }
 
-func (r *mockTaskRepoForSession) Update(ctx context.Context, s domain.Task) error {
+func (r *mockTaskRepoForSession) Update(ctx context.Context, s domain.AgentSession) error {
 	r.tasks[s.ID] = s
 	return nil
 }

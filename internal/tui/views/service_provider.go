@@ -19,7 +19,7 @@ type ServiceProvider interface {
 	// Domain services
 	Session() *service.SessionService
 	Plan() *service.PlanService
-	Task() *service.TaskService
+	Task() *service.AgentSessionService
 	Question() *service.QuestionService
 	Instance() *service.InstanceService
 	Workspace() *service.WorkspaceService

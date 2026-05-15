@@ -61,10 +61,10 @@ func TestStartPlanning_EmitsEvent(t *testing.T) {
 	}
 }
 
-func TestTaskService_Start_EmitsEventWithCorrectPayload(t *testing.T) {
+func TestAgentSessionService_Start_EmitsEventWithCorrectPayload(t *testing.T) {
 	repo := NewMockSessionRepository()
 	bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForPlanning{}})
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 	sub, err := bus.Subscribe("test", string(domain.EventAgentSessionStarted))
 	if err != nil {
@@ -72,35 +72,35 @@ func TestTaskService_Start_EmitsEventWithCorrectPayload(t *testing.T) {
 	}
 	defer bus.Unsubscribe(sub.ID)
 
-	task := domain.Task{
-		ID:             "task-payload-test",
+	session := domain.AgentSession{
+		ID:             "session-payload-test",
 		WorkItemID:     "wi-payload-test",
 		SubPlanID:      "sp-test",
 		WorkspaceID:    "ws-test",
-		Phase:          domain.TaskPhasePlanning,
+		Phase:          domain.AgentSessionPhasePlanning,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
 		Status:         domain.AgentSessionPending,
 	}
-	if err := repo.Create(context.Background(), task); err != nil {
+	if err := repo.Create(context.Background(), session); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Start(context.Background(), "task-payload-test"); err != nil {
+	if err := svc.Start(context.Background(), "session-payload-test"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	select {
 	case evt := <-sub.C:
 		var p struct {
-			SessionID  string `json:"session_id"`
+			SessionID  string `json:"agent_session_id"`
 			WorkItemID string `json:"work_item_id"`
 		}
 		if err := json.Unmarshal([]byte(evt.Payload), &p); err != nil {
 			t.Fatalf("unmarshal payload: %v", err)
 		}
-		if p.SessionID != "task-payload-test" {
-			t.Errorf("session_id = %q, want %q", p.SessionID, "task-payload-test")
+		if p.SessionID != "session-payload-test" {
+			t.Errorf("session_id = %q, want %q", p.SessionID, "session-payload-test")
 		}
 		if p.WorkItemID != "wi-payload-test" {
 			t.Errorf("work_item_id = %q, want %q", p.WorkItemID, "wi-payload-test")
@@ -110,25 +110,25 @@ func TestTaskService_Start_EmitsEventWithCorrectPayload(t *testing.T) {
 	}
 }
 
-func TestTaskService_Start_WithNilBus(t *testing.T) {
+func TestAgentSessionService_Start_WithNilBus(t *testing.T) {
 	repo := NewMockSessionRepository()
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, newTestBus())
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	task := domain.Task{
-		ID:             "task-nil-test",
+	session := domain.AgentSession{
+		ID:             "session-nil-test",
 		WorkItemID:     "wi-test",
 		SubPlanID:      "sp-test",
 		WorkspaceID:    "ws-test",
-		Phase:          domain.TaskPhasePlanning,
+		Phase:          domain.AgentSessionPhasePlanning,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
 		Status:         domain.AgentSessionPending,
 	}
-	if err := repo.Create(context.Background(), task); err != nil {
+	if err := repo.Create(context.Background(), session); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Start(context.Background(), "task-nil-test"); err != nil {
+	if err := svc.Start(context.Background(), "session-nil-test"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 }
@@ -244,10 +244,10 @@ func TestSessionService_StartPlanning_AlreadyPlanning_Rollback(t *testing.T) {
 	}
 }
 
-func TestTaskService_Start_PayloadHasFlatFields(t *testing.T) {
+func TestAgentSessionService_Start_PayloadHasFlatFields(t *testing.T) {
 	repo := NewMockSessionRepository()
 	bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForPlanning{}})
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 	sub, err := bus.Subscribe("test", string(domain.EventAgentSessionStarted))
 	if err != nil {
@@ -255,28 +255,28 @@ func TestTaskService_Start_PayloadHasFlatFields(t *testing.T) {
 	}
 	defer bus.Unsubscribe(sub.ID)
 
-	task := domain.Task{
-		ID:             "task-flat-test",
+	session := domain.AgentSession{
+		ID:             "session-flat-test",
 		WorkItemID:     "wi-flat-test",
 		SubPlanID:      "sp-test",
 		WorkspaceID:    "ws-test",
-		Phase:          domain.TaskPhasePlanning,
+		Phase:          domain.AgentSessionPhasePlanning,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
 		Status:         domain.AgentSessionPending,
 	}
-	if err := repo.Create(context.Background(), task); err != nil {
+	if err := repo.Create(context.Background(), session); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Start(context.Background(), "task-flat-test"); err != nil {
+	if err := svc.Start(context.Background(), "session-flat-test"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	select {
 	case evt := <-sub.C:
 		var p struct {
-			SessionID  string `json:"session_id"`
+			SessionID  string `json:"agent_session_id"`
 			WorkItemID string `json:"work_item_id"`
 		}
 		if err := json.Unmarshal([]byte(evt.Payload), &p); err != nil {
@@ -288,8 +288,8 @@ func TestTaskService_Start_PayloadHasFlatFields(t *testing.T) {
 		if p.WorkItemID == "" {
 			t.Error("work_item_id is empty")
 		}
-		if p.SessionID != "task-flat-test" {
-			t.Errorf("session_id = %q, want %q", p.SessionID, "task-flat-test")
+		if p.SessionID != "session-flat-test" {
+			t.Errorf("session_id = %q, want %q", p.SessionID, "session-flat-test")
 		}
 		if p.WorkItemID != "wi-flat-test" {
 			t.Errorf("work_item_id = %q, want %q", p.WorkItemID, "wi-flat-test")
@@ -318,10 +318,10 @@ func TestEmitStateChange_NilBus(t *testing.T) {
 	}
 }
 
-func TestTaskService_Start_WithRunningStatus(t *testing.T) {
+func TestAgentSessionService_Start_WithRunningStatus(t *testing.T) {
 	repo := NewMockSessionRepository()
 	bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForPlanning{}})
-	svc := NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: repo}}, bus)
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
 
 	sub, err := bus.Subscribe("test", string(domain.EventAgentSessionStarted))
 	if err != nil {
@@ -329,21 +329,21 @@ func TestTaskService_Start_WithRunningStatus(t *testing.T) {
 	}
 	defer bus.Unsubscribe(sub.ID)
 
-	task := domain.Task{
-		ID:             "task-status-test",
+	session := domain.AgentSession{
+		ID:             "session-status-test",
 		WorkItemID:     "wi-status-test",
 		SubPlanID:      "sp-test",
 		WorkspaceID:    "ws-test",
-		Phase:          domain.TaskPhasePlanning,
+		Phase:          domain.AgentSessionPhasePlanning,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
 		Status:         domain.AgentSessionPending,
 	}
-	if err := repo.Create(context.Background(), task); err != nil {
+	if err := repo.Create(context.Background(), session); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Start(context.Background(), "task-status-test"); err != nil {
+	if err := svc.Start(context.Background(), "session-status-test"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 

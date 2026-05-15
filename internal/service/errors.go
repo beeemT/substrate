@@ -99,7 +99,7 @@ func workspaceStatusName(s domain.WorkspaceStatus) string {
 	return string(s)
 }
 
-func sessionStatusName(s domain.TaskStatus) string {
+func sessionStatusName(s domain.AgentSessionStatus) string {
 	return string(s)
 }
 

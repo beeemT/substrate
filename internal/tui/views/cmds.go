@@ -67,7 +67,7 @@ func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 }
 
 // LoadTasksCmd fetches all agent sessions for a workspace.
-func LoadTasksCmd(svc *service.TaskService, workspaceID string) tea.Cmd {
+func LoadTasksCmd(svc *service.AgentSessionService, workspaceID string) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := svc.ListByWorkspaceID(context.Background(), workspaceID)
 		if err != nil {
@@ -261,7 +261,7 @@ func WaitForNewSessionAutonomousEventCmd(ch <-chan tea.Msg) tea.Cmd {
 }
 
 // SearchSessionHistoryCmd searches session history within the requested scope.
-func SearchSessionHistoryCmd(svc *service.TaskService, filter domain.SessionHistoryFilter) tea.Cmd {
+func SearchSessionHistoryCmd(svc *service.AgentSessionService, filter domain.SessionHistoryFilter) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := svc.SearchHistory(context.Background(), filter)
 		if err != nil {
@@ -302,7 +302,7 @@ func LoadSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd {
 }
 
 // LoadTasksForSessionCmd fetches all tasks for a work item (event-driven).
-func LoadTasksForSessionCmd(svc *service.TaskService, workItemID string) tea.Cmd {
+func LoadTasksForSessionCmd(svc *service.AgentSessionService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := svc.ListByWorkItemID(context.Background(), workItemID)
 		if err != nil {
@@ -406,7 +406,7 @@ func ApprovePlanCmd(
 }
 
 // AnswerQuestionCmd delivers a human answer through the route required by the question's stage.
-func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID, answer, answeredBy string) tea.Cmd {
+func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		q, err := svc.Get(ctx, questionID)
@@ -414,7 +414,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskSer
 			return ErrMsg{Err: err}
 		}
 		switch q.Stage {
-		case domain.TaskPhasePlanning:
+		case domain.AgentSessionPhasePlanning:
 			if registry != nil {
 				if err := registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
 					return ErrMsg{Err: fmt.Errorf("answer planning question %s: %w", questionID, err)}
@@ -425,7 +425,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskSer
 			}
 			return ActionDoneMsg{Message: "Answer sent to planner"}
 
-		case domain.TaskPhaseImplementation, domain.TaskPhaseReview, "":
+		case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview, "":
 			if foreman != nil {
 				err := foreman.ResolveEscalated(context.Background(), questionID, answer)
 				if err == nil {
@@ -450,7 +450,7 @@ func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskSer
 	}
 }
 
-func answerPlanningQuestion(ctx context.Context, svc *service.QuestionService, sessionSvc *service.TaskService, bus *event.Bus, q domain.Question, answer, answeredBy string) error {
+func answerPlanningQuestion(ctx context.Context, svc *service.QuestionService, sessionSvc *service.AgentSessionService, bus *event.Bus, q domain.Question, answer, answeredBy string) error {
 	if err := svc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
 		return err
 	}
@@ -663,7 +663,7 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 			newOffset = pos
 		}
 		if scanErr := scanner.Err(); scanErr != nil {
-			slog.Warn("session log scanner error", "error", scanErr, "session_id", sessionID)
+			slog.Warn("agent session log scanner error", "error", scanErr, "agent_session_id", sessionID)
 		}
 
 		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
@@ -729,7 +729,7 @@ func StartPlanningCmd(ctx context.Context, svc *orchestrator.PlanningService, wo
 // Errors are logged but never surfaced to the user — the 2s poll loop picks up the
 // updated task statuses.
 func ReconcileOrphanedTasksCmd(
-	taskSvc *service.TaskService,
+	taskSvc *service.AgentSessionService,
 	instanceSvc *service.InstanceService,
 	workspaceID, currentInstanceID string,
 ) tea.Cmd {
@@ -755,21 +755,21 @@ func ReconcileOrphanedTasksCmd(
 			}
 		}
 
-		for _, task := range tasks {
-			if task.Status != domain.AgentSessionRunning && task.Status != domain.AgentSessionWaitingForAnswer {
+		for _, agentSession := range tasks {
+			if agentSession.Status != domain.AgentSessionRunning && agentSession.Status != domain.AgentSessionWaitingForAnswer {
 				continue
 			}
-			// Never interrupt tasks owned by the current instance.
-			if task.OwnerInstanceID != nil && *task.OwnerInstanceID == currentInstanceID {
+			// Never interrupt sessions owned by the current instance.
+			if agentSession.OwnerInstanceID != nil && *agentSession.OwnerInstanceID == currentInstanceID {
 				continue
 			}
-			ownerAlive := task.OwnerInstanceID != nil && liveSet[*task.OwnerInstanceID]
+			ownerAlive := agentSession.OwnerInstanceID != nil && liveSet[*agentSession.OwnerInstanceID]
 			if ownerAlive {
 				continue
 			}
-			if err := taskSvc.Interrupt(ctx, task.ID); err != nil {
-				slog.Error("reconcile: failed to interrupt orphaned task",
-					"task_id", task.ID, "workspace_id", workspaceID, "error", err)
+			if err := taskSvc.Interrupt(ctx, agentSession.ID); err != nil {
+				slog.Error("reconcile: failed to interrupt orphaned agent session",
+					"agent_session_id", agentSession.ID, "workspace_id", workspaceID, "error", err)
 			}
 		}
 
@@ -780,7 +780,7 @@ func ReconcileOrphanedTasksCmd(
 // RestartPlanningCmd rolls a work item back from planning to ingested (if needed)
 // and then re-runs the planning pipeline from the beginning. This handles the case
 // where a planning task was interrupted and the user wants to start fresh.
-func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.TaskService, workItemID string) tea.Cmd {
+func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, workItemID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
@@ -792,8 +792,8 @@ func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService
 			for _, s := range sessions {
 				if s.Status == domain.AgentSessionInterrupted {
 					if failErr := sessionSvc.Fail(ctx, s.ID, nil); failErr != nil {
-						slog.Warn("failed to fail interrupted session during planning restart",
-							"session_id", s.ID, "error", failErr)
+						slog.Warn("failed to fail interrupted agent session during planning restart",
+							"agent_session_id", s.ID, "error", failErr)
 					}
 				}
 			}
@@ -850,7 +850,7 @@ func FinalizeWorkItemCmd(ctx context.Context, svc *orchestrator.ImplementationSe
 }
 
 // ResumeSessionCmd resumes an interrupted agent session.
-func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, sessionSvc *service.TaskService, oldSessionID, instanceID string) tea.Cmd {
+func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, sessionSvc *service.AgentSessionService, oldSessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		session, err := sessionSvc.Get(ctx, oldSessionID)
 		if err != nil {
@@ -868,7 +868,7 @@ func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, 
 func OverrideAcceptCmd(
 	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	bus *event.Bus,
 	workItemID string,
 ) tea.Cmd {
@@ -1005,7 +1005,7 @@ func buildIssueCommentBody(ctx context.Context, planSvc *service.PlanService, mo
 	}
 }
 
-func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemSvc *service.SessionService, workItemID string) error {
+func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.AgentSessionService, workItemSvc *service.SessionService, workItemID string) error {
 	workItem, err := workItemSvc.Get(ctx, workItemID)
 	if err != nil {
 		return err
@@ -1092,7 +1092,7 @@ func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.Plan
 	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
 }
 
-func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.TaskService, workItemID string) (domain.ReviewRef, string, string, error) {
+func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.AgentSessionService, workItemID string) (domain.ReviewRef, string, string, error) {
 	plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
 	if err != nil {
 		return domain.ReviewRef{}, "", "", err
@@ -1106,13 +1106,13 @@ func completionReviewContext(ctx context.Context, planSvc *service.PlanService, 
 		if err != nil {
 			return domain.ReviewRef{}, "", "", err
 		}
-		for _, session := range sessions {
-			if strings.TrimSpace(session.WorktreePath) == "" {
+		for _, agentSession := range sessions {
+			if strings.TrimSpace(agentSession.WorktreePath) == "" {
 				continue
 			}
-			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, session.WorktreePath)
+			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, agentSession.WorktreePath)
 			if err != nil {
-				slog.Warn("failed to resolve review context for session", "session_id", session.ID, "worktree", session.WorktreePath, "error", err)
+				slog.Warn("failed to resolve review context for agent session", "agent_session_id", agentSession.ID, "worktree", agentSession.WorktreePath, "error", err)
 				continue
 			}
 			branch := strings.TrimSpace(reviewCtx.Review.HeadBranch)
@@ -1160,14 +1160,14 @@ func workItemEventExternalIDs(workItem domain.Session) []string {
 }
 
 // SkipQuestionCmd marks a question as skipped and unblocks the pending live harness when possible.
-func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.TaskService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID string) tea.Cmd {
+func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		q, err := svc.Get(ctx, questionID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		if q.Stage == domain.TaskPhasePlanning {
+		if q.Stage == domain.AgentSessionPhasePlanning {
 			if registry != nil {
 				if err := registry.SendAnswer(ctx, q.AgentSessionID, ""); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
 					return ErrMsg{Err: fmt.Errorf("skip planning question %s: %w", questionID, err)}
@@ -1285,7 +1285,7 @@ func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message 
 
 // FollowUpSessionCmd starts a follow-up agent session on a completed task and
 // blocks until the session finishes. Returns FollowUpSessionCompleteMsg when done.
-func FollowUpSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+func FollowUpSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.AgentSessionService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
@@ -1295,14 +1295,14 @@ func FollowUpSessionCmd(ctx context.Context, resumption *orchestrator.Resumption
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("start follow-up session: %w", err)}
 		}
-		resumption.WaitAndComplete(ctx, result.Task.ID, result.HarnessSession)
+		resumption.WaitAndComplete(ctx, result.Session.ID, result.HarnessSession)
 		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
 	}
 }
 
 // FollowUpFailedSessionCmd starts a follow-up agent session on a failed task and
 // blocks until the session finishes. Returns FollowUpSessionCompleteMsg when done.
-func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.TaskService, taskID, feedback, instanceID string) tea.Cmd {
+func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.AgentSessionService, taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
@@ -1312,7 +1312,7 @@ func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resu
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("start failed follow-up session: %w", err)}
 		}
-		resumption.WaitAndComplete(ctx, result.Task.ID, result.HarnessSession)
+		resumption.WaitAndComplete(ctx, result.Session.ID, result.HarnessSession)
 		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
 	}
 }
@@ -1331,15 +1331,15 @@ func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, wor
 // so a slow DB query does not block Bubble Tea's Update loop. The returned
 // message carries Task.ID -> feedback for matched repos and a list of skipped
 // repo names with no completed task.
-func ResolveReviewAddressDispatchCmd(ctx context.Context, svc *service.TaskService, workItemID string, perRepo map[string]string) tea.Cmd {
+func ResolveReviewAddressDispatchCmd(ctx context.Context, svc *service.AgentSessionService, workItemID string, perRepo map[string]string) tea.Cmd {
 	return func() tea.Msg {
 		total := len(perRepo)
 		tasks, err := svc.ListByWorkItemID(ctx, workItemID)
 		if err != nil {
 			return ReviewAddressDispatchResultMsg{WorkItemID: workItemID, Total: total, Err: err}
 		}
-		// Build repoName -> most-recently-updated completed task.
-		completedByRepo := make(map[string]domain.Task)
+		// Build repoName -> most-recently-updated completed session.
+		completedByRepo := make(map[string]domain.AgentSession)
 		for _, t := range tasks {
 			if t.Status != domain.AgentSessionCompleted || t.RepositoryName == "" {
 				continue

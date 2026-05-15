@@ -33,7 +33,7 @@ type ImplementationService struct {
 	eventBus       event.Publisher
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
-	sessionSvc     *service.TaskService
+	sessionSvc     *service.AgentSessionService
 	workspaceSvc   *service.WorkspaceService
 	registry       *SessionRegistry
 	reviewPipeline *ReviewPipeline
@@ -64,7 +64,7 @@ func NewImplementationService(
 	eventBus event.Publisher,
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	reviewPipeline *ReviewPipeline,
@@ -125,7 +125,7 @@ type SessionResult struct {
 	Repository   string
 	WorktreePath string
 	Branch       string
-	Status       domain.TaskStatus
+	Status       domain.AgentSessionStatus
 	StartedAt    time.Time
 	CompletedAt  *time.Time
 	ExitCode     *int
@@ -421,7 +421,7 @@ func (s *ImplementationService) executeSubPlan(
 	// Crash recovery: if the most recent session for this sub-plan is a review session,
 	// the review agent crashed — skip re-implementation and retry the review directly.
 	if s.reviewPipeline != nil {
-		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.TaskPhaseReview {
+		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.AgentSessionPhaseReview {
 			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",
@@ -499,7 +499,7 @@ func (s *ImplementationService) executeSubPlan(
 // already completed; this method starts with the first review.
 func (s *ImplementationService) reviewLoop(
 	ctx context.Context,
-	implSession domain.Task,
+	implSession domain.AgentSession,
 	subPlan domain.TaskPlan,
 	workspace *domain.Workspace,
 	plan *domain.Plan,
@@ -527,8 +527,8 @@ func (s *ImplementationService) reviewLoop(
 
 		reviewResult, err := s.reviewPipeline.ReviewSession(ctx, currentSession)
 		if err != nil {
-			slog.Warn("review session failed", "error", err,
-				"session_id", currentSession.ID, "sub_plan", subPlan.ID)
+			slog.Warn("review agent session failed", "error", err,
+				"agent_session_id", currentSession.ID, "sub_plan", subPlan.ID)
 			outcome.Failed = true
 			return outcome
 		}
@@ -584,30 +584,30 @@ func (s *ImplementationService) runImplementation(
 	workItem *domain.Session,
 	worktreePath string,
 	critiqueFeedback string,
-	prevSession *domain.Task,
-) (domain.Task, error) {
+	prevSession *domain.AgentSession,
+) (domain.AgentSession, error) {
 	sessionID := domain.NewID()
-	session := domain.Task{
+	agentSession := domain.AgentSession{
 		ID:             sessionID,
 		WorkItemID:     workItem.ID,
 		WorkspaceID:    workspace.ID,
-		Phase:          domain.TaskPhaseImplementation,
+		Phase:          domain.AgentSessionPhaseImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		WorktreePath:   worktreePath,
 		HarnessName:    s.harness.Name(),
 	}
-	if err := s.sessionSvc.Create(ctx, session); err != nil {
-		return domain.Task{}, fmt.Errorf("create session: %w", err)
+	if err := s.sessionSvc.Create(ctx, agentSession); err != nil {
+		return domain.AgentSession{}, fmt.Errorf("create agent session: %w", err)
 	}
 	if err := s.sessionSvc.Start(ctx, sessionID); err != nil {
 		if transitionErr := s.sessionSvc.Transition(ctx, sessionID, domain.AgentSessionFailed); transitionErr != nil {
-			slog.Warn("failed to transition session to failed", "error", transitionErr, "session_id", sessionID)
+			slog.Warn("failed to transition agent session to failed", "error", transitionErr, "agent_session_id", sessionID)
 		}
-		return domain.Task{}, fmt.Errorf("start session: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("start agent session: %w", err)
 	}
 
-	opts := s.buildSessionOpts(session, subPlan, plan, workItem, workspace)
+	opts := s.buildSessionOpts(agentSession, subPlan, plan, workItem, workspace)
 
 	// Decide how to deliver critique feedback.
 	// When resuming a prior session (prevSession has ResumeInfo), send critique
@@ -627,9 +627,9 @@ func (s *ImplementationService) runImplementation(
 	if err != nil {
 		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 			slog.Warn("failed to fail session after harness start error", "error", failErr,
-				"session_id", sessionID)
+				"agent_session_id", sessionID)
 		}
-		return domain.Task{}, fmt.Errorf("start agent: %w", err)
+		return domain.AgentSession{}, fmt.Errorf("start agent: %w", err)
 	}
 
 	// Compact the conversation before sending critique so the model starts with
@@ -637,7 +637,7 @@ func (s *ImplementationService) runImplementation(
 	if canCompact {
 		if err := harnessSession.Compact(ctx); err != nil {
 			slog.Warn("failed to compact resumed session, continuing without compact", "error", err,
-				"session_id", sessionID)
+				"agent_session_id", sessionID)
 		}
 	}
 
@@ -647,7 +647,7 @@ func (s *ImplementationService) runImplementation(
 	if canCompact && critiqueFeedback != "" {
 		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
 			slog.Warn("failed to send critique feedback to resumed session", "error", err,
-				"session_id", sessionID)
+				"agent_session_id", sessionID)
 			// Non-fatal: session continues without the explicit critique prompt.
 		}
 	}
@@ -669,29 +669,29 @@ func (s *ImplementationService) runImplementation(
 			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
 			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
 				slog.Warn("failed to interrupt session on context cancellation",
-					"error", interruptErr, "session_id", sessionID)
+					"error", interruptErr, "agent_session_id", sessionID)
 			}
 		} else {
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-				slog.Warn("failed to fail session", "error", failErr, "session_id", sessionID)
+				slog.Warn("failed to fail session", "error", failErr, "agent_session_id", sessionID)
 			}
 		}
-		return domain.Task{}, fmt.Errorf("agent session failed: %w", waitErr)
+		return domain.AgentSession{}, fmt.Errorf("agent session failed: %w", waitErr)
 	}
 
 	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-		slog.Warn("failed to complete session", "error", completeErr, "session_id", sessionID)
+		slog.Warn("failed to complete session", "error", completeErr, "agent_session_id", sessionID)
 	}
 
 	// Persist harness-specific resume data generically — no harness-specific knowledge here.
 	if info := harnessSession.ResumeInfo(); len(info) > 0 {
-		session.ResumeInfo = info
+		agentSession.ResumeInfo = info
 		if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
-			slog.Warn("failed to store resume info", "error", err, "session_id", sessionID)
+			slog.Warn("failed to store resume info", "error", err, "agent_session_id", sessionID)
 		}
 	}
 
-	return session, nil
+	return agentSession, nil
 }
 
 // buildCritiqueFeedback formats review critiques into a prompt section
@@ -904,14 +904,14 @@ func (s *ImplementationService) prepareWorktrees(
 
 // buildSessionOpts builds session options for an agent session.
 func (s *ImplementationService) buildSessionOpts(
-	session domain.Task,
+	agentSession domain.AgentSession,
 	subPlan domain.TaskPlan,
 	plan *domain.Plan,
 	workItem *domain.Session,
 	workspace *domain.Workspace,
 ) adapter.SessionOpts {
 	// Read AGENTS.md if it exists
-	agentsMdPath := filepath.Join(session.WorktreePath, "AGENTS.md")
+	agentsMdPath := filepath.Join(agentSession.WorktreePath, "AGENTS.md")
 	docContext := ""
 	if content, err := os.ReadFile(agentsMdPath); err == nil {
 		docContext = string(content)
@@ -931,12 +931,12 @@ func (s *ImplementationService) buildSessionOpts(
 	systemPrompt := s.buildSystemPrompt(subPlan, plan, workItem, docContext, commitConfig)
 
 	return adapter.SessionOpts{
-		SessionID:            session.ID,
+		SessionID:            agentSession.ID,
 		Mode:                 adapter.SessionModeAgent,
 		WorkspaceID:          workspace.ID,
 		SubPlanID:            subPlan.ID,
 		Repository:           subPlan.RepositoryName,
-		WorktreePath:         session.WorktreePath,
+		WorktreePath:         agentSession.WorktreePath,
 		CrossRepoPlan:        plan.OrchestratorPlan,
 		DocumentationContext: docContext,
 		SystemPrompt:         systemPrompt,
@@ -1094,8 +1094,8 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			}
 
 			if evt.Type == "question" {
-				if err := s.questionRouter.Route(ctx, domain.TaskPhaseImplementation, evt, sessionID); err != nil {
-					slog.Error("failed to route implementation question", "error", err, "session_id", sessionID)
+				if err := s.questionRouter.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
+					slog.Error("failed to route implementation question", "error", err, "agent_session_id", sessionID)
 				}
 				continue
 			}
@@ -1194,22 +1194,22 @@ func (s *ImplementationService) publishEvent(ctx context.Context, eventType doma
 }
 
 type sessionEventPayload struct {
-	SessionID    string           `json:"session_id"`
-	WorkItemID   string           `json:"work_item_id"`
-	Phase        domain.TaskPhase `json:"phase"`
-	SubPlanID    string           `json:"sub_plan_id"`
-	Repository   string           `json:"repository"`
-	WorktreePath string           `json:"worktree_path"`
+	SessionID    string                   `json:"agent_session_id"`
+	WorkItemID   string                   `json:"work_item_id"`
+	Phase        domain.AgentSessionPhase `json:"phase"`
+	SubPlanID    string                   `json:"sub_plan_id"`
+	Repository   string                   `json:"repository"`
+	WorktreePath string                   `json:"worktree_path"`
 }
 
-func newSessionEventPayload(session *domain.Task) sessionEventPayload {
+func newSessionEventPayload(agentSession *domain.AgentSession) sessionEventPayload {
 	return sessionEventPayload{
-		SessionID:    session.ID,
-		WorkItemID:   session.WorkItemID,
-		Phase:        session.Phase,
-		SubPlanID:    session.SubPlanID,
-		Repository:   session.RepositoryName,
-		WorktreePath: session.WorktreePath,
+		SessionID:    agentSession.ID,
+		WorkItemID:   agentSession.WorkItemID,
+		Phase:        agentSession.Phase,
+		SubPlanID:    agentSession.SubPlanID,
+		Repository:   agentSession.RepositoryName,
+		WorktreePath: agentSession.WorktreePath,
 	}
 }
 
@@ -1250,9 +1250,9 @@ func (s *ImplementationService) FinalizeWorkItem(ctx context.Context, workItemID
 	if err != nil {
 		return nil, fmt.Errorf("list agent sessions: %w", err)
 	}
-	for _, task := range tasks {
-		if isActiveAgentSession(task.Status) {
-			return nil, fmt.Errorf("work item %s still has active agent session %s (%s)", workItemID, task.ID, task.Status)
+	for _, agentSession := range tasks {
+		if isActiveAgentSession(agentSession.Status) {
+			return nil, fmt.Errorf("work item %s still has active agent session %s (%s)", workItemID, agentSession.ID, agentSession.Status)
 		}
 	}
 
@@ -1303,48 +1303,48 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 	return nil
 }
 
-func completedSessionResultsForSubPlans(subPlans []domain.TaskPlan, tasks []domain.Task, branch string) ([]SessionResult, error) {
-	latestBySubPlan := make(map[string]domain.Task, len(subPlans))
-	for _, task := range tasks {
-		if task.Phase != domain.TaskPhaseImplementation || task.Status != domain.AgentSessionCompleted || task.SubPlanID == "" {
+func completedSessionResultsForSubPlans(subPlans []domain.TaskPlan, sessions []domain.AgentSession, branch string) ([]SessionResult, error) {
+	latestBySubPlan := make(map[string]domain.AgentSession, len(subPlans))
+	for _, agentSession := range sessions {
+		if agentSession.Phase != domain.AgentSessionPhaseImplementation || agentSession.Status != domain.AgentSessionCompleted || agentSession.SubPlanID == "" {
 			continue
 		}
-		previous, ok := latestBySubPlan[task.SubPlanID]
-		if !ok || taskSortTime(task).After(taskSortTime(previous)) {
-			latestBySubPlan[task.SubPlanID] = task
+		previous, ok := latestBySubPlan[agentSession.SubPlanID]
+		if !ok || sessionSortTime(agentSession).After(sessionSortTime(previous)) {
+			latestBySubPlan[agentSession.SubPlanID] = agentSession
 		}
 	}
 
-	sessions := make([]SessionResult, 0, len(subPlans))
+	results := make([]SessionResult, 0, len(subPlans))
 	for _, subPlan := range subPlans {
-		task, ok := latestBySubPlan[subPlan.ID]
+		agentSession, ok := latestBySubPlan[subPlan.ID]
 		if !ok {
-			return nil, fmt.Errorf("no completed implementation session found for sub-plan %s", subPlan.ID)
+			return nil, fmt.Errorf("no completed implementation agent session found for sub-plan %s", subPlan.ID)
 		}
-		if strings.TrimSpace(task.WorktreePath) == "" {
-			return nil, fmt.Errorf("completed implementation session %s has no worktree path", task.ID)
+		if strings.TrimSpace(agentSession.WorktreePath) == "" {
+			return nil, fmt.Errorf("completed implementation agent session %s has no worktree path", agentSession.ID)
 		}
-		sessions = append(sessions, SessionResult{
+		results = append(results, SessionResult{
 			SubPlanID:    subPlan.ID,
 			Repository:   subPlan.RepositoryName,
 			Branch:       branch,
 			Status:       domain.AgentSessionCompleted,
-			SessionID:    task.ID,
-			WorktreePath: task.WorktreePath,
+			SessionID:    agentSession.ID,
+			WorktreePath: agentSession.WorktreePath,
 		})
 	}
 
-	return sessions, nil
+	return results, nil
 }
 
-func taskSortTime(task domain.Task) time.Time {
-	if !task.UpdatedAt.IsZero() {
-		return task.UpdatedAt
+func sessionSortTime(agentSession domain.AgentSession) time.Time {
+	if !agentSession.UpdatedAt.IsZero() {
+		return agentSession.UpdatedAt
 	}
-	return task.CreatedAt
+	return agentSession.CreatedAt
 }
 
-func isActiveAgentSession(status domain.TaskStatus) bool {
+func isActiveAgentSession(status domain.AgentSessionStatus) bool {
 	switch status {
 	case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 		return true
@@ -1393,7 +1393,7 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 			}
 			if dirty {
 				slog.Warn("agent left uncommitted changes in worktree; spinning up commit session",
-					"repo", repo, "worktree", sess.WorktreePath, "session_id", sess.SessionID)
+					"repo", repo, "worktree", sess.WorktreePath, "agent_session_id", sess.SessionID)
 				if commitErr := s.commitViaAgent(ctx, sess.WorktreePath, repo, sess.SessionID); commitErr != nil {
 					err := fmt.Errorf("repo %s: commit residual changes: %w", repo, commitErr)
 					slog.Error("failed to commit residual changes", "repo", repo, "error", err)
@@ -1640,18 +1640,18 @@ func (s *ImplementationService) emitImplementationStarted(ctx context.Context, p
 // regardless of phase or status. Used by the two-stage retry model:
 // the last session's phase determines whether to retry implementation
 // or review.
-func (s *ImplementationService) lastSessionForSubPlan(ctx context.Context, subPlanID string) *domain.Task {
-	tasks, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
+func (s *ImplementationService) lastSessionForSubPlan(ctx context.Context, subPlanID string) *domain.AgentSession {
+	sessions, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
 	if err != nil {
 		slog.Warn("failed to list sessions for sub-plan",
 			"error", err, "sub_plan_id", subPlanID)
 		return nil
 	}
 
-	var latest *domain.Task
-	for i := range tasks {
-		if latest == nil || tasks[i].CreatedAt.After(latest.CreatedAt) {
-			t := tasks[i]
+	var latest *domain.AgentSession
+	for i := range sessions {
+		if latest == nil || sessions[i].CreatedAt.After(latest.CreatedAt) {
+			t := sessions[i]
 			latest = &t
 		}
 	}
@@ -1661,18 +1661,18 @@ func (s *ImplementationService) lastSessionForSubPlan(ctx context.Context, subPl
 // latestCompletedImplSession returns the most recent completed implementation
 // session for a sub-plan, or nil if none exists. Used by the review-retry
 // path to find the impl session whose output should be reviewed.
-func (s *ImplementationService) latestCompletedImplSession(ctx context.Context, subPlanID string) *domain.Task {
-	tasks, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
+func (s *ImplementationService) latestCompletedImplSession(ctx context.Context, subPlanID string) *domain.AgentSession {
+	sessions, err := s.sessionSvc.ListBySubPlanID(ctx, subPlanID)
 	if err != nil {
 		slog.Warn("failed to list sessions for sub-plan, treating as no completed impl session",
 			"error", err, "sub_plan_id", subPlanID)
 		return nil
 	}
 
-	var latest *domain.Task
-	for i := range tasks {
-		t := tasks[i]
-		if t.Phase == domain.TaskPhaseImplementation && t.Status == domain.AgentSessionCompleted {
+	var latest *domain.AgentSession
+	for i := range sessions {
+		t := sessions[i]
+		if t.Phase == domain.AgentSessionPhaseImplementation && t.Status == domain.AgentSessionCompleted {
 			if latest == nil || t.CreatedAt.After(latest.CreatedAt) {
 				latest = &t
 			}
@@ -1713,7 +1713,7 @@ func durableFinalizationContext(parent context.Context) (context.Context, contex
 	return context.WithTimeout(context.WithoutCancel(parent), durableFinalizationTimeout)
 }
 
-func failSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string, exitCode *int) error {
+func failSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string, exitCode *int) error {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
@@ -1721,13 +1721,13 @@ func failSessionDurably(parent context.Context, sessionSvc *service.TaskService,
 
 // interruptSessionDurably marks a session as interrupted using a context detached from
 // parent cancellation, ensuring the DB write completes even if the pipeline is shutting down.
-func interruptSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string) error {
+func interruptSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) error {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Interrupt(cleanupCtx, sessionID)
 }
 
-func completeSessionDurably(parent context.Context, sessionSvc *service.TaskService, sessionID string) error {
+func completeSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) error {
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Complete(cleanupCtx, sessionID)

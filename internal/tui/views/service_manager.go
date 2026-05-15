@@ -138,7 +138,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 	// 2. Create services with shared bus
 	workItemSvc := service.NewSessionService(sm.transacter, bus)
 	workspaceSvc := service.NewWorkspaceService(sm.transacter, bus)
-	sessionSvc := service.NewTaskService(sm.transacter, bus)
+	sessionSvc := service.NewAgentSessionService(sm.transacter, bus)
 	planSvc := service.NewPlanService(sm.transacter, bus)
 	questionSvc := service.NewQuestionService(sm.transacter, bus)
 	instanceSvc := service.NewInstanceService(sm.transacter)
@@ -400,7 +400,7 @@ func (sm *ServiceManager) Plan() *service.PlanService {
 	return nil
 }
 
-func (sm *ServiceManager) Task() *service.TaskService {
+func (sm *ServiceManager) Task() *service.AgentSessionService {
 	if s := sm.GetServices(); s != nil {
 		return s.Task
 	}

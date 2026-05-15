@@ -248,7 +248,7 @@ func (m *QuestionModel) refreshViewportContent(reset bool) {
 
 func (m QuestionModel) renderHeader() string {
 	stageLabel := "Implementing"
-	if m.question.Stage == domain.TaskPhasePlanning {
+	if m.question.Stage == domain.AgentSessionPhasePlanning {
 		stageLabel = "Planning"
 	}
 
@@ -260,7 +260,7 @@ func (m QuestionModel) renderHeader() string {
 }
 
 func (m QuestionModel) replyLabel() string {
-	if m.question.Stage == domain.TaskPhasePlanning {
+	if m.question.Stage == domain.AgentSessionPhasePlanning {
 		return m.styles.Subtitle.Render("Reply to planner:")
 	}
 
@@ -270,8 +270,8 @@ func (m QuestionModel) replyLabel() string {
 func (m QuestionModel) renderScrollableContent(width int) string {
 	stageLabel := "Agent question:"
 	intro := ""
-	showForeman := m.question.Stage != domain.TaskPhasePlanning
-	if m.question.Stage == domain.TaskPhasePlanning {
+	showForeman := m.question.Stage != domain.AgentSessionPhasePlanning
+	if m.question.Stage == domain.AgentSessionPhasePlanning {
 		stageLabel = "Planning question"
 		intro = m.styles.Subtitle.Render("The planner needs your input before it can continue.")
 	}

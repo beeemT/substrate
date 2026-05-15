@@ -37,7 +37,7 @@ type Foreman struct {
 	harness     adapter.AgentHarness
 	planSvc     *service.PlanService
 	questionSvc *service.QuestionService
-	sessionSvc  *service.TaskService
+	sessionSvc  *service.AgentSessionService
 	eventBus    event.Publisher
 
 	mu            sync.Mutex
@@ -67,7 +67,7 @@ func NewForeman(
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
-	sessionSvc *service.TaskService,
+	sessionSvc *service.AgentSessionService,
 	eventBus event.Publisher,
 ) *Foreman {
 	return &Foreman{
@@ -248,8 +248,8 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 		if err := f.sessionSvc.WaitForAnswer(ctx, pq.question.AgentSessionID); err != nil {
 			// Log but do not abort: the escalation is persisted; the TUI will still show the
 			// question via DB poll even if the state transition fails.
-			slog.Warn("failed to transition session to waiting_for_answer",
-				"error", err, "session_id", pq.question.AgentSessionID)
+			slog.Warn("failed to transition agent session to waiting_for_answer",
+				"error", err, "agent_session_id", pq.question.AgentSessionID)
 		}
 		f.escalatedMu.Lock()
 		f.escalatedChs[pq.question.ID] = escalatedEntry{
@@ -505,7 +505,7 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 	} else {
 		agentSession, err := f.sessionSvc.Get(ctx, entry.agentSessionID)
 		if err != nil {
-			slog.Warn("failed to fetch agent session for FAQ append", "error", err, "session_id", entry.agentSessionID)
+			slog.Warn("failed to fetch agent session for FAQ append", "error", err, "agent_session_id", entry.agentSessionID)
 		} else {
 			faqEntry := domain.FAQEntry{
 				ID:             domain.NewID(),
@@ -526,8 +526,8 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 	// Transition the session back to running before unblocking the sub-agent so the
 	// TUI clears the action-required state before the agent receives the answer.
 	if err := f.sessionSvc.ResumeFromAnswer(ctx, entry.agentSessionID); err != nil {
-		slog.Warn("failed to resume session from waiting_for_answer",
-			"error", err, "session_id", entry.agentSessionID)
+		slog.Warn("failed to resume agent session from waiting_for_answer",
+			"error", err, "agent_session_id", entry.agentSessionID)
 	}
 
 	// Unblock the sub-agent that was waiting.

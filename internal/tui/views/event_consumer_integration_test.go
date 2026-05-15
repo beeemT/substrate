@@ -115,8 +115,8 @@ func TestEventConsumerBridgeWaitsForFutureEvent(t *testing.T) {
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"work_item_id": "wi-1",
-		"session_id":   "task-1",
+		"work_item_id":     "wi-1",
+		"agent_session_id": "task-1",
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -180,8 +180,8 @@ func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {
 
 	// Publish EventAgentQuestionAnswered.
 	payload, _ := json.Marshal(map[string]any{
-		"session_id":  "sess-1",
-		"question_id": "q-1",
+		"agent_session_id": "sess-1",
+		"question_id":      "q-1",
 	})
 	bus.Publish(context.Background(), domain.SystemEvent{
 		ID:          domain.NewID(),

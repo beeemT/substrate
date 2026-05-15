@@ -139,20 +139,20 @@ func (r *cmdSubPlanRepo) Delete(_ context.Context, id string) error {
 }
 
 type cmdSessionRepo struct {
-	sessions map[string]domain.Task
+	sessions map[string]domain.AgentSession
 }
 
-func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.Task, error) {
+func (r *cmdSessionRepo) Get(_ context.Context, id string) (domain.AgentSession, error) {
 	session, ok := r.sessions[id]
 	if !ok {
-		return domain.Task{}, repository.ErrNotFound
+		return domain.AgentSession{}, repository.ErrNotFound
 	}
 
 	return session, nil
 }
 
-func (r *cmdSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkItemID == workItemID {
 			result = append(result, session)
@@ -162,8 +162,8 @@ func (r *cmdSessionRepo) ListByWorkItemID(_ context.Context, workItemID string) 
 	return result, nil
 }
 
-func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.SubPlanID == subPlanID {
 			result = append(result, session)
@@ -173,8 +173,8 @@ func (r *cmdSessionRepo) ListBySubPlanID(_ context.Context, subPlanID string) ([
 	return result, nil
 }
 
-func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.WorkspaceID == workspaceID {
 			result = append(result, session)
@@ -184,8 +184,8 @@ func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string
 	return result, nil
 }
 
-func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.Task, error) {
-	result := make([]domain.Task, 0, len(r.sessions))
+func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
 		if session.OwnerInstanceID != nil && *session.OwnerInstanceID == instanceID {
 			result = append(result, session)
@@ -199,13 +199,13 @@ func (r *cmdSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHistor
 	return nil, nil
 }
 
-func (r *cmdSessionRepo) Create(_ context.Context, session domain.Task) error {
+func (r *cmdSessionRepo) Create(_ context.Context, session domain.AgentSession) error {
 	r.sessions[session.ID] = session
 
 	return nil
 }
 
-func (r *cmdSessionRepo) Update(_ context.Context, session domain.Task) error {
+func (r *cmdSessionRepo) Update(_ context.Context, session domain.AgentSession) error {
 	r.sessions[session.ID] = session
 
 	return nil
@@ -267,13 +267,13 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{
 		"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: filepath.Base(worktreePath)},
 	}}
-	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
+	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.AgentSession{
 		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
 	}}
 	bus := event.NewBus(event.BusConfig{})
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, bus)
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus)
 	defer bus.Close()
 
 	sub, err := bus.Subscribe("complete-test", string(domain.EventWorkItemCompleted))
@@ -355,7 +355,7 @@ func TestReconcileOrphanedTasksCmd_InterruptsOrphanedRunningSession(t *testing.T
 	workspaceID := "ws-1"
 	currentInstanceID := "inst-current"
 
-	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.Task{
+	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.AgentSession{
 		orphanedSessionID: {
 			ID:          orphanedSessionID,
 			WorkspaceID: workspaceID,
@@ -377,7 +377,7 @@ func TestReconcileOrphanedTasksCmd_InterruptsOrphanedRunningSession(t *testing.T
 		},
 	}}
 
-	sessionSvc := service.NewTaskService(repository.NoopTransacter{Res: repository.Resources{Tasks: sessionRepo}}, NewNoopPublisher())
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, NewNoopPublisher())
 	instanceSvc := service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}})
 
 	cmd := ReconcileOrphanedTasksCmd(sessionSvc, instanceSvc, workspaceID, currentInstanceID)
