@@ -2144,10 +2144,10 @@ func TestCommitAndPushRepos_SkipsCleanWorktrees(t *testing.T) {
 		WorktreePath: worktreeDir,
 		SessionID:    "sess-1",
 	}}
-	repoPaths := map[string]string{"repo-a": bareDir}
+	repoPaths := map[string]string{"repo-a": worktreeDir}
 
-	// No remote configured, so push will warn but not fail.
-	// The key assertion: no safety-net commit is attempted on a clean worktree.
+	// ResolveReviewContext runs `git branch --show-current` which fails on bare repos.
+	// Use worktreeDir (which has a checked-out branch) so it succeeds.
 	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
 	for _, r := range results {
 		if r.Err != nil {
@@ -2180,7 +2180,7 @@ func TestCommitAndPushRepos_CommitsDirtyWorktree(t *testing.T) {
 		WorktreePath: worktreeDir,
 		SessionID:    "sess-1",
 	}}
-	repoPaths := map[string]string{"repo-a": bareDir}
+	repoPaths := map[string]string{"repo-a": worktreeDir}
 
 	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
 	for _, r := range results {
@@ -2231,7 +2231,7 @@ func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
 		WorktreePath: worktreeDir,
 		SessionID:    "sess-1",
 	}}
-	repoPaths := map[string]string{"repo-a": bareDir}
+	repoPaths := map[string]string{"repo-a": worktreeDir}
 
 	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
 	for _, r := range results {
@@ -2335,14 +2335,44 @@ func TestDurableFinalizationContextOutlivesAgentFixBudget(t *testing.T) {
 
 func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *testing.T) {
 	workspaceRoot := t.TempDir()
-	repoRoot := filepath.Join(workspaceRoot, "repo-a")
-	bareDir := filepath.Join(repoRoot, ".bare")
+	repoRoot := filepath.Join(workspaceRoot, "repo-a") // discoverRepoPaths looks under workspaceRoot
+	bareDir := t.TempDir()
 	worktreeDir := t.TempDir()
-	if err := os.MkdirAll(bareDir, 0o755); err != nil {
-		t.Fatalf("mkdir bare repo: %v", err)
+	// Create repoRoot directory (git clone needs destination to exist).
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatalf("mkdir repoRoot: %v", err)
 	}
-	initBareRepo(t, bareDir)
-	cloneAsWorktree(t, bareDir, worktreeDir, "feature-branch")
+	// Build a bare repo with a commit so that clones from it succeed.
+	// cloneAsWorktree writes README.md with content "init" and commits.
+	// If the bare repo also has a README.md with the same content, the working tree
+	// matches the committed state and the commit fails. Instead, use an empty bare repo
+	// so cloneAsWorktree's commit succeeds.
+	tempRepo := t.TempDir()
+	initTestRepo(t, tempRepo)
+	// Add a DIFFERENT file to tempRepo so bareDir doesn't have README.md.
+	mustWriteFile(t, filepath.Join(tempRepo, "other.txt"), "different content")
+	mustRun(t, tempRepo, "git", "add", "other.txt")
+	mustRun(t, tempRepo, "git", "commit", "-m", "add other file")
+	// Create bare repo at bareDir and configure its origin remote.
+	mustRun(t, tempRepo, "git", "clone", "--bare", ".", bareDir)
+	mustRun(t, bareDir, "git", "remote", "set-url", "origin", "file://"+bareDir)
+	// Clone bareDir into repoRoot (which is under workspaceRoot/repo-a).
+	mustRun(t, repoRoot, "git", "clone", bareDir, ".")
+	mustRun(t, repoRoot, "git", "config", "user.email", "test@test.com")
+	mustRun(t, repoRoot, "git", "config", "user.name", "Test")
+	mustRun(t, repoRoot, "git", "config", "commit.gpgsign", "false")
+	mustRun(t, repoRoot, "git", "remote", "set-url", "origin", "file://"+bareDir)
+	// Create .bare/ inside repoRoot so discoverRepoPaths finds it as a work repo.
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".bare"), 0o755); err != nil {
+		t.Fatalf("mkdir .bare: %v", err)
+	}
+	mustRun(t, repoRoot+"/.bare", "git", "init", "--bare")
+	mustRun(t, repoRoot+"/.bare", "git", "remote", "add", "origin", "file://"+bareDir)
+	// Use the branch name that FinalizeWorkItem generates from work item.
+	// GenerateBranchName("MAN-1", "Implement the change") = "sub-MAN-1-implement-the-change"
+	// Create worktree as a proper git worktree of repoRoot (not a separate clone) so refs are shared.
+	branchName := "sub-MAN-1-implement-the-change"
+	mustRun(t, repoRoot, "git", "worktree", "add", "-b", branchName, worktreeDir)
 
 	svc, workItemRepo, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
 	svc.cfg = &config.Config{}
@@ -2493,6 +2523,10 @@ func initTestRepo(t *testing.T, dir string) {
 func initBareRepo(t *testing.T, dir string) {
 	t.Helper()
 	mustRun(t, dir, "git", "init", "--bare")
+	// Add an origin remote pointing back at the bare dir itself via file:// so:
+	// 1. ResolveReviewContext finds a remote (succeeds)
+	// 2. gitPushBranch can actually push to it in tests
+	mustRun(t, dir, "git", "remote", "add", "origin", "file://"+dir)
 }
 
 func cloneAsWorktree(t *testing.T, bareDir, worktreeDir, branch string) {

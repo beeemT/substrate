@@ -1427,7 +1427,16 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 		// Resolve review context from the bare repo for remote name and review info.
 		reviewCtx, err := remotedetect.ResolveReviewContext(ctx, bareRepo)
 		if err != nil {
-			slog.Warn("failed to resolve review context for push", "repo", repo, "error", err)
+			err := fmt.Errorf("repo %s: resolve review context: %w", repo, err)
+			slog.Error("failed to resolve review context for push", "repo", repo, "error", err)
+			results = append(results, RepoFinalizationResult{
+				SubPlanID:    sess.SubPlanID,
+				Repository:   repo,
+				WorktreePath: sess.WorktreePath,
+				Branch:       branch,
+				Err:          err,
+			})
+			continue
 		}
 
 		// Build review ref for PR-ready event from resolved context.

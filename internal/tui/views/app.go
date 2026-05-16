@@ -327,6 +327,10 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventPlanRevised),
 				string(domain.EventPlanSubmitted),
 				string(domain.EventPlanFailed),
+				// Sub-plan lifecycle
+				string(domain.EventSubPlanStarted),
+				string(domain.EventSubPlanCompleted),
+				string(domain.EventSubPlanFailed),
 				// Review
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
@@ -1194,6 +1198,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				string(domain.EventPlanRevised),
 				string(domain.EventPlanSubmitted),
 				string(domain.EventPlanFailed),
+				string(domain.EventSubPlanStarted),
+				string(domain.EventSubPlanCompleted),
+				string(domain.EventSubPlanFailed),
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
 				string(domain.EventCritiquesFound),

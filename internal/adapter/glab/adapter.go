@@ -362,10 +362,12 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 
 	// Check if MR exists via glab.
 	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
-		// MR exists — mark it ready
+		// MR exists — mark it ready.
 		if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
 			slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
 		}
+		// Refresh MR state after undrafting to capture the post-update draft flag.
+		mr, _ = a.mrView(ctx, worktreePath, p.Branch)
 		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
@@ -383,12 +385,14 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 	// No existing MR — create one non-draft
 	title := mrTitle(p.WorkItemTitle, p.Branch)
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlanContent), renderGitLabTrackerRefs(p.TrackerRefs))
-	if _, err := a.createMRNonDraft(ctx, worktreePath, p.Branch, title, description); err != nil {
+	mrURL, err := a.createMRNonDraft(ctx, worktreePath, p.Branch, title, description)
+	if err != nil {
 		slog.Warn("glab: sub-plan PR-ready MR creation failed", "repo", projectPath, "branch", p.Branch, "error", err)
 		return nil
 	}
 
-	// Record the artifact.
+	// Persist the MR. Prefer the follow-up mrView for full state; fall back to
+	// the URL from create output if mrView fails.
 	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
 		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:     "gitlab",
@@ -401,6 +405,20 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 			WorktreePath: worktreePath,
 			UpdatedAt:    time.Now(),
 		}, projectPath, mr.IID)
+	} else if mrURL != "" {
+		// mrView failed but create succeeded — extract IID from the returned URL.
+		iid := parseGlabMRNumber(mrURL)
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     projectPath,
+			Ref:          mrURL,
+			URL:          mrURL,
+			State:        "opened",
+			Branch:       p.Branch,
+			WorktreePath: worktreePath,
+			UpdatedAt:    time.Now(),
+		}, projectPath, iid)
 	}
 
 	return nil
@@ -622,6 +640,18 @@ func parseMRURL(output []byte) string {
 	}
 
 	return ""
+}
+
+// parseGlabMRNumber extracts the IID from a GitLab MR URL.
+func parseGlabMRNumber(url string) int {
+	marker := "/-/merge_requests/"
+	idx := strings.LastIndex(url, marker)
+	if idx == -1 {
+		return 0
+	}
+	s := strings.TrimPrefix(url[idx+len(marker):], "!")
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 func glabArtifactRef(rawURL string, iid int) string {

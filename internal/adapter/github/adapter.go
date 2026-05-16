@@ -967,7 +967,13 @@ func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) er
 
 	if len(artifacts) > 0 {
 		// Update existing artifacts: mark PR as non-draft.
+		// Only touch artifacts for this sub-plan's repo to avoid undrafting
+		// unrelated PRs in multi-repo work items that share a branch.
+		targetRepo := baseOwner + "/" + baseRepo
 		for _, artifact := range artifacts {
+			if artifact.RepoName != targetRepo {
+				continue
+			}
 			owner, repo, ok := splitGitHubRepoName(artifact.RepoName)
 			if !ok {
 				continue
@@ -1000,13 +1006,15 @@ func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) er
 		if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", baseOwner, baseRepo, pull.Number), map[string]any{"draft": false}, nil); err != nil {
 			return err
 		}
+		// Record state as "ready" since we just undrafted; githubArtifactState
+		// would still return "draft" from the pre-patch pull value.
 		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:  adapterName,
 			Kind:      "PR",
 			RepoName:  baseOwner + "/" + baseRepo,
 			Ref:       fmt.Sprintf("#%d", pull.Number),
 			URL:       strings.TrimSpace(pull.HTMLURL),
-			State:     githubArtifactState(*pull),
+			State:     "ready",
 			Branch:    p.Branch,
 			Draft:     false,
 			UpdatedAt: time.Now(),

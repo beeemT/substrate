@@ -218,9 +218,9 @@ func TestSubPlanPRReady_UsesPersistedArtifactAfterRestart(t *testing.T) {
 		t.Fatalf("OnEvent: %v", err)
 	}
 
-	// Expect: mr view (to find existing MR) + mr update --ready
-	if len(stub.calls) != 2 {
-		t.Fatalf("glab calls = %d, want 2", len(stub.calls))
+	// Expect: mr view (to find existing MR) + mr update --ready + mr view (refresh state after undrafting)
+	if len(stub.calls) != 3 {
+		t.Fatalf("glab calls = %d, want 3", len(stub.calls))
 	}
 
 	// First call: mr view to find the MR

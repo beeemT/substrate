@@ -278,11 +278,11 @@ func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Expect mr view (to find MR) + mr update --ready
-	if len(stub.calls) != 2 {
-		t.Fatalf("expected 2 glab calls (mr view + mr update), got %d", len(stub.calls))
+	// Expect mr view (to find MR) + mr update --ready + mr view (refresh state after undrafting).
+	if len(stub.calls) != 3 {
+		t.Fatalf("expected 3 glab calls (mr view + mr update + mr view refresh), got %d", len(stub.calls))
 	}
-	// First call should be mr view
+	// First call: mr view to find the MR
 	viewCall := stub.calls[0]
 	viewJoined := strings.Join(viewCall.args, " ")
 	if !strings.Contains(viewJoined, "mr view") {
@@ -291,7 +291,7 @@ func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
 	if viewCall.dir != "/tmp/wt" {
 		t.Errorf("view dir = %q, want /tmp/wt", viewCall.dir)
 	}
-	// Second call should be mr update --ready
+	// Second call: mr update --ready
 	updateCall := stub.calls[1]
 	updateJoined := strings.Join(updateCall.args, " ")
 	if !strings.Contains(updateJoined, "mr update") {
@@ -302,6 +302,12 @@ func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
 	}
 	if !strings.Contains(updateJoined, branch) {
 		t.Errorf("call[1] missing branch %q: %q", branch, updateJoined)
+	}
+	// Third call: mr view to refresh state after undrafting
+	refreshCall := stub.calls[2]
+	refreshJoined := strings.Join(refreshCall.args, " ")
+	if !strings.Contains(refreshJoined, "mr view") {
+		t.Errorf("call[2] = %v, want mr view", refreshCall)
 	}
 }
 

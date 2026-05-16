@@ -258,13 +258,8 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 
 // SubmitForReview transitions a plan from draft to pending_review.
 func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
-	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
-		return err
-	}
-
-	// Load plan, sub-plans, and workspace after the transition so the event
-	// carries the post-transition (pending_review) plan state.
 	var plan domain.Plan
+	var from domain.PlanStatus
 	var subPlans []domain.TaskPlan
 	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
@@ -273,6 +268,15 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
+		if !canTransitionPlan(plan.Status, domain.PlanPendingReview) {
+			return newInvalidTransitionError(planStatusName(plan.Status), planStatusName(domain.PlanPendingReview), "plan")
+		}
+		from = plan.Status
+		plan.Status = domain.PlanPendingReview
+		plan.UpdatedAt = time.Now()
+		if err := res.Plans.Update(ctx, plan); err != nil {
+			return err
+		}
 		subPlans, err = res.SubPlans.ListByPlanID(ctx, id)
 		if err != nil {
 			return fmt.Errorf("list sub-plans: %w", err)
@@ -280,14 +284,22 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
 		if err != nil {
 			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", plan.WorkItemID, "error", err)
-			return nil // Non-fatal: continue without workspace ID
+		} else {
+			workspaceID = workItem.WorkspaceID
 		}
-		workspaceID = workItem.WorkspaceID
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+	// Emit both events only after the transaction has committed.
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanStatusChanged),
+		WorkspaceID: workspaceID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanStatusChanged), planStatusChangedPayload{WorkItemID: plan.WorkItemID, PlanID: plan.ID, From: string(from), To: string(domain.PlanPendingReview)}),
+		CreatedAt:   time.Now(),
+	})
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanSubmitted),

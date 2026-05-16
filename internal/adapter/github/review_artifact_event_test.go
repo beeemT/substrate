@@ -108,12 +108,13 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 	}
 }
 
-func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
+func TestSubPlanPRReady_OnlyUpdatesArtifactForPayloadBaseRepo(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
 	repo := &githubArtifactEventRepo{events: []domain.SystemEvent{
-		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
+		// Two artifacts for the same work item/branch but different repos.
+		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "acme/rocket", Ref: "#7", URL: "https://github.com/acme/rocket/pull/7", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
 		{ID: domain.NewID(), EventType: string(domain.EventReviewArtifactRecorded), WorkspaceID: "ws-1", Payload: mustReviewArtifactPayload(t, "wi-1", domain.ReviewArtifact{Provider: "github", Kind: "PR", RepoName: "acme/engine", Ref: "#9", URL: "https://github.com/acme/engine/pull/9", State: "draft", Branch: "sub-branch", UpdatedAt: now})},
 	}}
 	var requests []string
@@ -124,10 +125,6 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
 		case "/repos/acme/rocket/pulls/7":
 			return jsonResp(t, http.StatusOK, map[string]any{"number": 7, "draft": false, "html_url": "https://github.com/acme/rocket/pull/7"}), nil
-		case "/repos/acme/engine/pulls/9":
-			return jsonResp(t, http.StatusOK, map[string]any{"number": 9, "draft": false, "html_url": "https://github.com/acme/engine/pull/9"}), nil
-		case "/repos/acme/rocket/issues/42":
-			return jsonResp(t, http.StatusOK, map[string]any{"number": 42}), nil
 		default:
 			return jsonResp(t, http.StatusOK, map[string]any{}), nil
 		}
@@ -135,12 +132,13 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
-	// Now use EventSubPlanPRReady instead of EventWorkItemCompleted to mark all PRs as ready.
+	// Payload targets acme/rocket — only that repo's artifact should be updated.
 	payload := `{"work_item_id":"wi-1","workspace_id":"ws-1","branch":"sub-branch","repository":"acme/rocket","work_item_title":"Feature","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
 	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventSubPlanPRReady), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
 	}
-	seenRocket, seenEngine := false, false
+	seenRocket := false
+	seenEngine := false
 	for _, req := range requests {
 		if req == "PATCH /repos/acme/rocket/pulls/7" {
 			seenRocket = true
@@ -149,7 +147,11 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 			seenEngine = true
 		}
 	}
-	if !seenRocket || !seenEngine {
-		t.Fatalf("requests = %v, want both repo pull updates", requests)
+	if !seenRocket {
+		t.Fatalf("requests = %v, want rocket pull update", requests)
+	}
+	// acme/engine artifact must NOT be touched — it's a different sub-plan repo.
+	if seenEngine {
+		t.Fatalf("requests = %v, engine pull should not be updated", requests)
 	}
 }
