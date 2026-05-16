@@ -142,6 +142,17 @@ type ImplementationWarning struct {
 	SessionID string
 }
 
+// RepoFinalizationResult contains the result of finalizing a single repo's branch.
+// Used by the orchestrator to emit EventSubPlanPRReady per sub-plan after successful push.
+type RepoFinalizationResult struct {
+	SubPlanID    string
+	Repository   string
+	WorktreePath string
+	Branch       string
+	Review       domain.ReviewRef
+	Err          error
+}
+
 // Implement starts the implementation phase for an approved plan.
 // It executes sub-plans in waves, creating worktrees and spawning agent sessions.
 func (s *ImplementationService) Implement(ctx context.Context, planID string) (result *ImplementResult, err error) {
@@ -1276,21 +1287,56 @@ func (s *ImplementationService) FinalizeWorkItem(ctx context.Context, workItemID
 
 func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, workItem *domain.Session, workspaceID string, sessions []SessionResult, repoPaths map[string]string, branch string, subPlans []domain.TaskPlan) error {
 	finalizationCtx, finalizationCancel := durableFinalizationContext(ctx)
-	finalizationErr := s.commitAndPushRepos(finalizationCtx, sessions, repoPaths, branch)
+	finalizationResults := s.commitAndPushRepos(finalizationCtx, sessions, repoPaths, branch)
 	finalizationCancel()
-	if finalizationErr != nil {
-		return fmt.Errorf("finalize repos: %w", finalizationErr)
+
+	// Build subPlan map for lookup
+	subPlanByID := make(map[string]domain.TaskPlan, len(subPlans))
+	for _, sp := range subPlans {
+		subPlanByID[sp.ID] = sp
+	}
+
+	// Emit PR-ready events for each successful finalization and collect failures
+	var prReadyErrs []error
+	for _, result := range finalizationResults {
+		if result.Err != nil {
+			prReadyErrs = append(prReadyErrs, result.Err)
+			continue
+		}
+
+		sp, ok := subPlanByID[result.SubPlanID]
+		if !ok {
+			slog.Warn("finalization result has no matching sub-plan, skipping PR-ready",
+				"sub_plan_id", result.SubPlanID, "repo", result.Repository)
+			continue
+		}
+
+		// Call MarkSubPlanPRReady for each successful push
+		if markErr := s.planSvc.MarkSubPlanPRReady(ctx, result.SubPlanID, service.SubPlanPRReadyContext{
+			Repository:     result.Repository,
+			Branch:         result.Branch,
+			WorktreePath:   result.WorktreePath,
+			WorkItemTitle:  workItem.Title,
+			SubPlanContent: sp.Content,
+			TrackerRefs:    trackerRefsFromMetadata(workItem.Metadata),
+			Review:         result.Review,
+		}); markErr != nil {
+			prReadyErrs = append(prReadyErrs, fmt.Errorf("sub-plan %s PR-ready: %w", result.SubPlanID, markErr))
+		}
+	}
+
+	if len(prReadyErrs) > 0 {
+		return fmt.Errorf("finalize repos: %w", errors.Join(prReadyErrs...))
 	}
 
 	completeCtx, completeCancel := durableCleanupContext(ctx)
 	if completeErr := s.workItemSvc.CompleteWorkItem(completeCtx, workItem.ID); completeErr != nil {
 		completeCancel()
-
 		return fmt.Errorf("complete work item: %w", completeErr)
 	}
 	completeCancel()
 	// EventWorkItemCompleted is emitted by CompleteWorkItem → Transition → emitStateChange.
-	// PR/MR finalization moves to EventSubPlanPRReady in task-completion-event-plan.md.
+	// EventSubPlanPRReady is emitted above for each sub-plan after successful push.
 
 	return nil
 }
@@ -1350,8 +1396,9 @@ func isActiveAgentSession(status domain.AgentSessionStatus) bool {
 // uncommitted changes, commits them as a safety net if present, then pushes the branch.
 // Agent sessions are already completed and deregistered by this point, so we
 // commit directly rather than sending a follow-up message to the agent.
-func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) error {
-	var errs []error
+// Returns per-sub-plan results keyed by SubPlanID so the caller can emit PR-ready events.
+func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) []RepoFinalizationResult {
+	results := make([]RepoFinalizationResult, 0, len(sessions))
 	seen := make(map[string]bool, len(repoPaths))
 	for _, sess := range sessions {
 		repo := sess.Repository
@@ -1364,15 +1411,25 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 		if !ok {
 			err := fmt.Errorf("repo %s: bare repo path missing", repo)
 			slog.Warn("no bare repo path for repository, skipping commit/push", "repo", repo, "error", err)
-			errs = append(errs, err)
+			results = append(results, RepoFinalizationResult{
+				SubPlanID:    sess.SubPlanID,
+				Repository:   repo,
+				WorktreePath: sess.WorktreePath,
+				Branch:       branch,
+				Err:          err,
+			})
 			continue
 		}
 
-		// Resolve review context from the bare repo for remote name.
+		// Resolve review context from the bare repo for remote name and review info.
 		reviewCtx, err := remotedetect.ResolveReviewContext(ctx, bareRepo)
 		if err != nil {
 			slog.Warn("failed to resolve review context for push", "repo", repo, "error", err)
 		}
+
+		// Build review ref for PR-ready event from resolved context.
+		reviewRef := reviewCtx.Review
+		reviewRef.HeadBranch = branch
 
 		// Check for residual uncommitted changes in the worktree.
 		if sess.WorktreePath != "" {
@@ -1380,7 +1437,14 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 			if statusErr != nil {
 				err := fmt.Errorf("repo %s: check worktree status: %w", repo, statusErr)
 				slog.Error("failed to check worktree status before finalization", "repo", repo, "worktree", sess.WorktreePath, "error", err)
-				errs = append(errs, err)
+				results = append(results, RepoFinalizationResult{
+					SubPlanID:    sess.SubPlanID,
+					Repository:   repo,
+					WorktreePath: sess.WorktreePath,
+					Branch:       branch,
+					Review:       reviewRef,
+					Err:          err,
+				})
 				continue
 			}
 			if dirty {
@@ -1389,7 +1453,14 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 				if commitErr := s.commitViaAgent(ctx, sess.WorktreePath, repo, sess.SessionID); commitErr != nil {
 					err := fmt.Errorf("repo %s: commit residual changes: %w", repo, commitErr)
 					slog.Error("failed to commit residual changes", "repo", repo, "error", err)
-					errs = append(errs, err)
+					results = append(results, RepoFinalizationResult{
+						SubPlanID:    sess.SubPlanID,
+						Repository:   repo,
+						WorktreePath: sess.WorktreePath,
+						Branch:       branch,
+						Review:       reviewRef,
+						Err:          err,
+					})
 					continue
 				}
 
@@ -1397,55 +1468,120 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 				if statusErr != nil {
 					err := fmt.Errorf("repo %s: check worktree status after commit: %w", repo, statusErr)
 					slog.Error("failed to check worktree status after residual commit", "repo", repo, "worktree", sess.WorktreePath, "error", err)
-					errs = append(errs, err)
+					results = append(results, RepoFinalizationResult{
+						SubPlanID:    sess.SubPlanID,
+						Repository:   repo,
+						WorktreePath: sess.WorktreePath,
+						Branch:       branch,
+						Review:       reviewRef,
+						Err:          err,
+					})
 					continue
 				}
 				if dirtyAfterCommit {
 					err := fmt.Errorf("repo %s: residual changes remain after commit finalization", repo)
 					slog.Error("residual changes remain after commit finalization", "repo", repo, "worktree", sess.WorktreePath, "error", err)
-					errs = append(errs, err)
+					results = append(results, RepoFinalizationResult{
+						SubPlanID:    sess.SubPlanID,
+						Repository:   repo,
+						WorktreePath: sess.WorktreePath,
+						Branch:       branch,
+						Review:       reviewRef,
+						Err:          err,
+					})
 					continue
 				}
 			}
 		}
 
 		// Push branch to remote.
-		if reviewCtx.RemoteName != "" {
-			if pushErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); pushErr != nil {
-				if isPreReceiveRejection(pushErr.Error()) {
-					// A server-side hook declined the push (commit message policy,
-					// secrets scan, etc.). Attempt a local fix and retry.
-					if sess.WorktreePath == "" {
-						err := fmt.Errorf("repo %s: push rejected by pre-receive hook and no worktree available: %w", repo, pushErr)
-						slog.Error("push rejected by pre-receive hook; no worktree available to fix",
-							"repo", repo, "branch", branch, "error", err)
-						errs = append(errs, err)
-					} else {
-						slog.Warn("push rejected by pre-receive hook; attempting local fix",
-							"repo", repo, "branch", branch, "error", pushErr)
-						if fixErr := s.fixPreReceiveRejectionViaAgent(ctx, sess.WorktreePath, pushErr.Error()); fixErr != nil {
-							err := fmt.Errorf("repo %s: fix pre-receive rejection after push failure: %w", repo, errors.Join(pushErr, fixErr))
-							slog.Error("failed to fix pre-receive hook rejection",
-								"repo", repo, "branch", branch, "error", err)
-							errs = append(errs, err)
-						} else if retryErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); retryErr != nil {
-							err := fmt.Errorf("repo %s: push after pre-receive fix: %w", repo, errors.Join(pushErr, retryErr))
-							slog.Error("push still failed after fixing pre-receive hook rejection",
-								"repo", repo, "branch", branch, "error", err)
-							errs = append(errs, err)
-						}
-					}
-				} else {
-					err := fmt.Errorf("repo %s: push branch %s: %w", repo, branch, pushErr)
-					slog.Warn("failed to push branch to remote after review pass",
-						"repo", repo, "branch", branch, "error", err)
-					errs = append(errs, err)
-				}
+		pushErr := func() error {
+			if reviewCtx.RemoteName == "" {
+				return nil
 			}
+			return gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch)
+		}()
+
+		if pushErr != nil {
+			if isPreReceiveRejection(pushErr.Error()) {
+				// A server-side hook declined the push (commit message policy,
+				// secrets scan, etc.). Attempt a local fix and retry.
+				if sess.WorktreePath == "" {
+					err := fmt.Errorf("repo %s: push rejected by pre-receive hook and no worktree available: %w", repo, pushErr)
+					slog.Error("push rejected by pre-receive hook; no worktree available to fix",
+						"repo", repo, "branch", branch, "error", err)
+					results = append(results, RepoFinalizationResult{
+						SubPlanID:    sess.SubPlanID,
+						Repository:   repo,
+						WorktreePath: sess.WorktreePath,
+						Branch:       branch,
+						Review:       reviewRef,
+						Err:          err,
+					})
+				} else {
+					slog.Warn("push rejected by pre-receive hook; attempting local fix",
+						"repo", repo, "branch", branch, "error", pushErr)
+					if fixErr := s.fixPreReceiveRejectionViaAgent(ctx, sess.WorktreePath, pushErr.Error()); fixErr != nil {
+						err := fmt.Errorf("repo %s: fix pre-receive rejection after push failure: %w", repo, errors.Join(pushErr, fixErr))
+						slog.Error("failed to fix pre-receive hook rejection",
+							"repo", repo, "branch", branch, "error", err)
+						results = append(results, RepoFinalizationResult{
+							SubPlanID:    sess.SubPlanID,
+							Repository:   repo,
+							WorktreePath: sess.WorktreePath,
+							Branch:       branch,
+							Review:       reviewRef,
+							Err:          err,
+						})
+					} else if retryErr := gitPushBranch(ctx, bareRepo, reviewCtx.RemoteName, branch); retryErr != nil {
+						err := fmt.Errorf("repo %s: push after pre-receive fix: %w", repo, errors.Join(pushErr, retryErr))
+						slog.Error("push still failed after fixing pre-receive hook rejection",
+							"repo", repo, "branch", branch, "error", err)
+						results = append(results, RepoFinalizationResult{
+							SubPlanID:    sess.SubPlanID,
+							Repository:   repo,
+							WorktreePath: sess.WorktreePath,
+							Branch:       branch,
+							Review:       reviewRef,
+							Err:          err,
+						})
+					} else {
+						// Push succeeded after fix
+						results = append(results, RepoFinalizationResult{
+							SubPlanID:    sess.SubPlanID,
+							Repository:   repo,
+							WorktreePath: sess.WorktreePath,
+							Branch:       branch,
+							Review:       reviewRef,
+						})
+					}
+				}
+			} else {
+				err := fmt.Errorf("repo %s: push branch %s: %w", repo, branch, pushErr)
+				slog.Warn("failed to push branch to remote after review pass",
+					"repo", repo, "branch", branch, "error", err)
+				results = append(results, RepoFinalizationResult{
+					SubPlanID:    sess.SubPlanID,
+					Repository:   repo,
+					WorktreePath: sess.WorktreePath,
+					Branch:       branch,
+					Review:       reviewRef,
+					Err:          err,
+				})
+			}
+		} else {
+			// Push succeeded
+			results = append(results, RepoFinalizationResult{
+				SubPlanID:    sess.SubPlanID,
+				Repository:   repo,
+				WorktreePath: sess.WorktreePath,
+				Branch:       branch,
+				Review:       reviewRef,
+			})
 		}
 	}
 
-	return errors.Join(errs...)
+	return results
 }
 
 // gitStatusDirty returns true if the working tree at dir has uncommitted changes.

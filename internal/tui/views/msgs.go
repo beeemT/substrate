@@ -159,6 +159,14 @@ type PRMergedMsg struct {
 	ExternalID string
 }
 
+// SubPlanStatusChangedMsg is sent when a sub-plan state changes (started, completed, failed).
+type SubPlanStatusChangedMsg struct {
+	WorkItemID string
+	PlanID     string
+	SubPlan    domain.TaskPlan
+	Status     domain.TaskPlanStatus
+}
+
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
 type QuestionsLoadedMsg struct {
 	SessionID string

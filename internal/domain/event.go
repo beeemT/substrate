@@ -61,7 +61,15 @@ const (
 	EventPlanSuperseded    EventType = "plan.superseded"
 	EventPlanStatusChanged EventType = "plan.status_changed"
 
-	// Sub-plan events
+	// Sub-plan state events
+	EventSubPlanStarted   EventType = "subplan.started"
+	EventSubPlanCompleted EventType = "subplan.completed"
+	EventSubPlanFailed    EventType = "subplan.failed"
+
+	// Repo lifecycle event consumed by GitHub/glab lifecycle adapters.
+	EventSubPlanPRReady EventType = "subplan.pr_ready"
+
+	// Deprecated: use EventSubPlanStarted, EventSubPlanCompleted, or EventSubPlanFailed
 	EventSubPlanStatusChanged EventType = "subplan.status_changed"
 
 	// Worktree events

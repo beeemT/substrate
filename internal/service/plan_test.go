@@ -317,7 +317,20 @@ func TestSubPlanService_ValidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+			sessionRepo := NewMockWorkItemRepository()
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
+
+			// Create plan and work item so TransitionSubPlan can load them
+			plan := domain.Plan{
+				ID:         "plan-1",
+				WorkItemID: "wi-1",
+			}
+			planRepo.plans["plan-1"] = plan
+			workItem := domain.Session{
+				ID:          "wi-1",
+				WorkspaceID: "ws-1",
+			}
+			sessionRepo.items["wi-1"] = workItem
 
 			sp := domain.TaskPlan{
 				ID:             "sp-test",
@@ -363,7 +376,20 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+			sessionRepo := NewMockWorkItemRepository()
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
+
+			// Create plan and work item so TransitionSubPlan can load them
+			plan := domain.Plan{
+				ID:         "plan-1",
+				WorkItemID: "wi-1",
+			}
+			planRepo.plans["plan-1"] = plan
+			workItem := domain.Session{
+				ID:          "wi-1",
+				WorkspaceID: "ws-1",
+			}
+			sessionRepo.items["wi-1"] = workItem
 
 			sp := domain.TaskPlan{
 				ID:             "sp-test",

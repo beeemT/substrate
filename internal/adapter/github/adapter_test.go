@@ -212,6 +212,9 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 		switch {
 		case req.URL.Path == "/user":
 			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket":
+			// resolveForkBase calls fetchRepository to check if it's a fork
+			return jsonResp(t, http.StatusOK, map[string]any{"fork": false, "full_name": "acme/rocket", "owner": map[string]any{"login": "acme"}, "name": "rocket", "default_branch": "main"}), nil
 		case req.URL.Path == "/repos/acme/rocket/pulls" && req.Method == http.MethodGet && strings.Contains(req.URL.RawQuery, "head=acme%3Asub-branch") && strings.Contains(req.URL.RawQuery, "base=develop"):
 			pullLookups++
 			if pullLookups == 1 {
@@ -233,9 +236,10 @@ func TestLifecycleCreateAndReady(t *testing.T) {
 	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: createPayload}); err != nil {
 		t.Fatalf("worktree created: %v", err)
 	}
-	completePayload := `{"branch":"sub-branch","external_id":"gh:issue:acme/rocket#42","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
-	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: completePayload}); err != nil {
-		t.Fatalf("work item completed: %v", err)
+	// Now use EventSubPlanPRReady instead of EventWorkItemCompleted to mark the PR as ready.
+	prReadyPayload := `{"work_item_id":"wi-1","branch":"sub-branch","repository":"acme/rocket","work_item_title":"Feature title","sub_plan_content":"Repo specific implementation plan","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventSubPlanPRReady), Payload: prReadyPayload}); err != nil {
+		t.Fatalf("sub-plan PR-ready: %v", err)
 	}
 	seenCreate, seenReady := false, false
 	for _, req := range requests {
@@ -1265,8 +1269,8 @@ func TestIsOwnRepo(t *testing.T) {
 	}
 }
 
-	// TestFetchIssue_NotFoundError verifies that 404 responses from the GitHub API
-	// are categorized as CategorizedError with CategoryNotFound.
+// TestFetchIssue_NotFoundError verifies that 404 responses from the GitHub API
+// are categorized as CategorizedError with CategoryNotFound.
 
 func TestFetchIssue_NotFoundError(t *testing.T) {
 	t.Parallel()

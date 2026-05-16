@@ -167,6 +167,20 @@ type completedPayload struct {
 	Review        domain.ReviewRef          `json:"review"`
 }
 
+type subPlanPRReadyPayload struct {
+	WorkItemID     string                    `json:"work_item_id"`
+	WorkspaceID    string                    `json:"workspace_id"`
+	PlanID         string                    `json:"plan_id"`
+	SubPlanID      string                    `json:"sub_plan_id"`
+	Repository     string                    `json:"repository"`
+	Branch         string                    `json:"branch"`
+	WorktreePath   string                    `json:"worktree_path"`
+	WorkItemTitle  string                    `json:"work_item_title"`
+	SubPlanContent string                    `json:"sub_plan_content"`
+	TrackerRefs    []domain.TrackerReference `json:"tracker_refs"`
+	Review         domain.ReviewRef          `json:"review"`
+}
+
 const (
 	filterAll                = "all"
 	defaultBranchMain        = "main"
@@ -566,9 +580,9 @@ func (a RepoLifecycleAdapter) OnEvent(ctx context.Context, event domain.SystemEv
 			slog.Warn("github: worktree reused handler failed", "err", err)
 		}
 		return nil
-	case domain.EventWorkItemCompleted:
-		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
-			slog.Warn("github: work item completed handler failed", "err", err)
+	case domain.EventSubPlanPRReady:
+		if err := a.onSubPlanPRReady(ctx, event.Payload); err != nil {
+			slog.Warn("github: sub-plan PR-ready handler failed", "err", err)
 		}
 		return nil
 	default:
@@ -910,6 +924,128 @@ func (a *GithubAdapter) onWorkItemCompleted(ctx context.Context, payload string)
 		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, artifact, owner, repo, prNumber)
 	}
 
+	return nil
+}
+
+func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) error {
+	var p subPlanPRReadyPayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return fmt.Errorf("unmarshal sub-plan PR-ready payload: %w", err)
+	}
+	// Only act on GitHub-hosted repos.
+	if provider := strings.ToLower(strings.TrimSpace(p.Review.BaseRepo.Provider)); provider != "" && provider != "github" {
+		return nil
+	}
+	if p.Branch == "" {
+		slog.Warn("github: sub-plan PR-ready payload has no branch; skipping pr update")
+		return nil
+	}
+	if err := a.resolveForkBase(ctx, &p.Review); err != nil {
+		return err
+	}
+	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
+	headOwner := p.Review.HeadRepo.Owner
+	if baseOwner == "" || baseRepo == "" || headOwner == "" {
+		return errors.New("sub-plan PR-ready payload missing review coordinates")
+	}
+	baseBranch := strings.TrimSpace(p.Review.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = defaultBranchMain
+	}
+
+	// Check if we have existing artifacts for this work item.
+	artifacts := a.artifactsForCompletion(ctx, completedPayload{
+		WorkspaceID:   p.WorkspaceID,
+		WorkItemID:    p.WorkItemID,
+		Branch:        p.Branch,
+		WorkItemTitle: p.WorkItemTitle,
+		SubPlan:       p.SubPlanContent,
+		TrackerRefs:   p.TrackerRefs,
+		Review:        p.Review,
+	})
+
+	if len(artifacts) > 0 {
+		// Update existing artifacts: mark PR as non-draft.
+		for _, artifact := range artifacts {
+			owner, repo, ok := splitGitHubRepoName(artifact.RepoName)
+			if !ok {
+				continue
+			}
+			prNumber, err := parseGitHubPullRef(artifact.Ref)
+			if err != nil {
+				return err
+			}
+			if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber), map[string]any{"draft": false}, nil); err != nil {
+				return err
+			}
+			artifact.Draft = false
+			artifact.State = "ready"
+			artifact.UpdatedAt = time.Now()
+			a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, artifact, owner, repo, prNumber)
+		}
+		return nil
+	}
+
+	// No artifacts found via event repo. Try to find existing PR via API.
+	pull, err := a.findOpenPullByBranch(ctx, baseOwner, baseRepo, baseBranch, headOwner, p.Branch)
+	if err != nil {
+		return err
+	}
+	if pull != nil {
+		// PR exists - mark it ready.
+		a.mu.Lock()
+		a.tracked[p.Branch] = *pull
+		a.mu.Unlock()
+		if err := a.patchJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", baseOwner, baseRepo, pull.Number), map[string]any{"draft": false}, nil); err != nil {
+			return err
+		}
+		a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:  adapterName,
+			Kind:      "PR",
+			RepoName:  baseOwner + "/" + baseRepo,
+			Ref:       fmt.Sprintf("#%d", pull.Number),
+			URL:       strings.TrimSpace(pull.HTMLURL),
+			State:     githubArtifactState(*pull),
+			Branch:    p.Branch,
+			Draft:     false,
+			UpdatedAt: time.Now(),
+		}, baseOwner, baseRepo, pull.Number)
+		return nil
+	}
+
+	// No PR found - create a non-draft PR.
+	title := p.WorkItemTitle
+	if title == "" {
+		title = p.Branch
+	}
+	body := appendTrackerFooter(strings.TrimSpace(p.SubPlanContent), renderGitHubTrackerRefs(p.TrackerRefs, p.Review.BaseRepo))
+	var created githubPull
+	if createErr := a.postJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls", baseOwner, baseRepo), map[string]any{
+		"title": title,
+		"head":  headOwner + ":" + p.Branch,
+		"base":  baseBranch,
+		"draft": false,
+		"body":  body,
+	}, &created); createErr != nil {
+		slog.Warn("github: failed to create PR at sub-plan PR-ready", "branch", p.Branch, "err", createErr)
+		return nil
+	}
+	a.mu.Lock()
+	a.tracked[p.Branch] = created
+	a.mu.Unlock()
+	a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+		Provider:  adapterName,
+		Kind:      "PR",
+		RepoName:  baseOwner + "/" + baseRepo,
+		Ref:       fmt.Sprintf("#%d", created.Number),
+		URL:       strings.TrimSpace(created.HTMLURL),
+		State:     githubArtifactState(created),
+		Branch:    p.Branch,
+		Draft:     created.Draft,
+		UpdatedAt: time.Now(),
+	}, baseOwner, baseRepo, created.Number)
+	a.applyPRReviewers(ctx, baseOwner, baseRepo, created.Number)
+	a.applyPRLabels(ctx, baseOwner, baseRepo, created.Number)
 	return nil
 }
 

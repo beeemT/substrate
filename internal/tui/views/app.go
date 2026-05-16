@@ -722,6 +722,30 @@ func (a *App) upsertSession(agentSession domain.AgentSession) {
 	a.sessions = append(a.sessions, agentSession)
 }
 
+// upsertSubPlan adds or updates a sub-plan in the subPlans map keyed by planID.
+func (a *App) upsertSubPlan(planID string, sp domain.TaskPlan) {
+	if planID == "" || sp.ID == "" {
+		return
+	}
+	if a.subPlans == nil {
+		a.subPlans = make(map[string][]domain.TaskPlan)
+	}
+	sps, exists := a.subPlans[planID]
+	if !exists {
+		a.subPlans[planID] = []domain.TaskPlan{sp}
+		return
+	}
+	// Update or append
+	for i := range sps {
+		if sps[i].ID == sp.ID {
+			sps[i] = sp
+			a.subPlans[planID] = sps
+			return
+		}
+	}
+	a.subPlans[planID] = append(sps, sp)
+}
+
 func (a *App) focusWorkItemOverview(workItemID string) tea.Cmd {
 	a.sidebarMode = sidebarPaneSessions
 	a.mainFocus = mainFocusSidebar
@@ -1604,6 +1628,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TaskUpdatedMsg:
 		a.upsertSession(msg.Task)
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case SubPlanStatusChangedMsg:
+		if msg.SubPlan.ID != "" {
+			planID := msg.PlanID
+			if planID == "" {
+				planID = msg.SubPlan.PlanID
+			}
+			if planID != "" {
+				a.upsertSubPlan(planID, msg.SubPlan)
+			} else if msg.WorkItemID != "" {
+				cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID))
+			}
+		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {

@@ -70,6 +70,43 @@ type planStatusChangedPayload struct {
 	To         string `json:"to"`
 }
 
+// subPlanEventPayload holds the JSON payload for sub-plan state events.
+// Used by EventSubPlanStarted, EventSubPlanCompleted, and EventSubPlanFailed.
+type subPlanEventPayload struct {
+	WorkItemID  string                `json:"work_item_id"`
+	WorkspaceID string                `json:"workspace_id,omitempty"`
+	PlanID      string                `json:"plan_id"`
+	SubPlanID   string                `json:"sub_plan_id"`
+	SubPlan     domain.TaskPlan       `json:"sub_plan"`
+	Status      domain.TaskPlanStatus `json:"status"`
+}
+
+// SubPlanPRReadyContext holds adapter-specific context for PR-ready events.
+type SubPlanPRReadyContext struct {
+	Repository     string
+	Branch         string
+	WorktreePath   string
+	WorkItemTitle  string
+	SubPlanContent string
+	TrackerRefs    []domain.TrackerReference
+	Review         domain.ReviewRef
+}
+
+// subPlanPRReadyPayload holds the JSON payload for EventSubPlanPRReady.
+type subPlanPRReadyPayload struct {
+	WorkItemID     string                    `json:"work_item_id"`
+	WorkspaceID    string                    `json:"workspace_id,omitempty"`
+	PlanID         string                    `json:"plan_id"`
+	SubPlanID      string                    `json:"sub_plan_id"`
+	Repository     string                    `json:"repository"`
+	Branch         string                    `json:"branch"`
+	WorktreePath   string                    `json:"worktree_path,omitempty"`
+	WorkItemTitle  string                    `json:"work_item_title,omitempty"`
+	SubPlanContent string                    `json:"sub_plan_content,omitempty"`
+	TrackerRefs    []domain.TrackerReference `json:"tracker_refs,omitempty"`
+	Review         domain.ReviewRef          `json:"review"`
+}
+
 // marshalJSONOrEmpty marshals v to JSON, returning "{}" on error.
 func marshalJSONOrEmpty(eventType string, v any) string {
 	b, err := json.Marshal(v)
@@ -690,11 +727,18 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) err
 }
 
 // TransitionSubPlan transitions a sub-plan to a new status.
+// It emits semantic events based on the destination status:
+// - SubPlanInProgress → EventSubPlanStarted
+// - SubPlanCompleted → EventSubPlanCompleted
+// - SubPlanFailed → EventSubPlanFailed
 func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
-	var workItemID string
-	var workspaceID string
+	var sp domain.TaskPlan
+	var workItem domain.Session
+	var plan domain.Plan
+
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		sp, err := res.SubPlans.Get(ctx, id)
+		var err error
+		sp, err = res.SubPlans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("sub-plan", id)
 		}
@@ -714,37 +758,57 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 			return err
 		}
 
-		plan, err := res.Plans.Get(ctx, sp.PlanID)
+		plan, err = res.Plans.Get(ctx, sp.PlanID)
 		if err != nil {
-			return nil // Non-fatal: continue without workspace ID
+			return fmt.Errorf("get plan for sub-plan event: %w", err)
 		}
-		workItemID = plan.WorkItemID
 
-		// Load work item to get real WorkspaceID
-		if res.Sessions == nil {
-			slog.Warn("Sessions repository not available for workspace ID lookup in TransitionSubPlan")
-			return nil // Non-fatal
-		}
-		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		workItem, err = res.Sessions.Get(ctx, plan.WorkItemID)
 		if err != nil {
-			slog.Warn("failed to load work item for event workspace ID", "plan_id", plan.ID, "work_item_id", plan.WorkItemID, "error", err)
-			return nil // Non-fatal: continue without workspace ID
+			return fmt.Errorf("get work item for sub-plan event: %w", err)
 		}
-		workspaceID = workItem.WorkspaceID
+
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
+	evtType := subPlanEventType(to)
+	if evtType == "" {
+		return nil // No event for SubPlanPending (retry/reset)
+	}
+
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventSubPlanStatusChanged),
-		WorkspaceID: workspaceID,
-		Payload:     marshalJSONOrEmpty(string(domain.EventSubPlanStatusChanged), planEventPayload{WorkItemID: workItemID, PlanID: "", SubPlanID: id}),
-		CreatedAt:   time.Now(),
+		EventType:   string(evtType),
+		WorkspaceID: workItem.WorkspaceID,
+		Payload: marshalJSONOrEmpty(string(evtType), subPlanEventPayload{
+			WorkItemID:  workItem.ID,
+			WorkspaceID: workItem.WorkspaceID,
+			PlanID:      plan.ID,
+			SubPlanID:   sp.ID,
+			SubPlan:     sp,
+			Status:      sp.Status,
+		}),
+		CreatedAt: time.Now(),
 	})
 	return nil
+}
+
+// subPlanEventType returns the semantic event type for a sub-plan status transition.
+// Returns empty string for SubPlanPending (retry/reset) which has no semantic event.
+func subPlanEventType(status domain.TaskPlanStatus) domain.EventType {
+	switch status {
+	case domain.SubPlanInProgress:
+		return domain.EventSubPlanStarted
+	case domain.SubPlanCompleted:
+		return domain.EventSubPlanCompleted
+	case domain.SubPlanFailed:
+		return domain.EventSubPlanFailed
+	default:
+		return ""
+	}
 }
 
 // StartSubPlan transitions a sub-plan from pending to in_progress.
@@ -765,6 +829,75 @@ func (s *PlanService) FailSubPlan(ctx context.Context, id string) error {
 // RetrySubPlan transitions a failed sub-plan back to pending.
 func (s *PlanService) RetrySubPlan(ctx context.Context, id string) error {
 	return s.TransitionSubPlan(ctx, id, domain.SubPlanPending)
+}
+
+// MarkSubPlanPRReady emits EventSubPlanPRReady after a sub-plan's branch has been
+// finalized and pushed. It validates that the sub-plan status is SubPlanCompleted
+// and that required fields (Repository, Branch, Review) are present. This method
+// is event-only: it does not mutate sub-plan status or persist a separate readiness state.
+func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, ready SubPlanPRReadyContext) error {
+	if ready.Repository == "" {
+		return newInvalidInputError("repository is required for PR-ready event", "repository")
+	}
+	if ready.Branch == "" {
+		return newInvalidInputError("branch is required for PR-ready event", "branch")
+	}
+
+	var workItem domain.Session
+	var plan domain.Plan
+	var sp domain.TaskPlan
+
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		sp, err = res.SubPlans.Get(ctx, subPlanID)
+		if err != nil {
+			return newNotFoundError("sub-plan", subPlanID)
+		}
+
+		if sp.Status != domain.SubPlanCompleted {
+			return newInvalidTransitionError(
+				subPlanStatusName(sp.Status),
+				subPlanStatusName(domain.SubPlanCompleted),
+				"sub-plan PR-ready",
+			)
+		}
+
+		plan, err = res.Plans.Get(ctx, sp.PlanID)
+		if err != nil {
+			return fmt.Errorf("get plan for sub-plan PR-ready event: %w", err)
+		}
+
+		workItem, err = res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			return fmt.Errorf("get work item for sub-plan PR-ready event: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventSubPlanPRReady),
+		WorkspaceID: workItem.WorkspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventSubPlanPRReady), subPlanPRReadyPayload{
+			WorkItemID:     workItem.ID,
+			WorkspaceID:    workItem.WorkspaceID,
+			PlanID:         plan.ID,
+			SubPlanID:      sp.ID,
+			Repository:     ready.Repository,
+			Branch:         ready.Branch,
+			WorktreePath:   ready.WorktreePath,
+			WorkItemTitle:  ready.WorkItemTitle,
+			SubPlanContent: ready.SubPlanContent,
+			TrackerRefs:    ready.TrackerRefs,
+			Review:         ready.Review,
+		}),
+		CreatedAt: time.Now(),
+	})
+	return nil
 }
 
 // UpdateSubPlanContent updates the sub-plan content without changing status.

@@ -114,9 +114,9 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
 			slog.Warn("glab: worktree reused handler failed", "error", err)
 		}
-	case domain.EventWorkItemCompleted:
-		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
-			slog.Warn("glab: work item completed handler failed", "error", err)
+	case domain.EventSubPlanPRReady:
+		if err := a.onSubPlanPRReady(ctx, event.Payload); err != nil {
+			slog.Warn("glab: sub-plan PR-ready handler failed", "error", err)
 		}
 	case domain.EventPRMerged:
 		if err := a.onPRMerged(ctx, event.Payload); err != nil {
@@ -325,6 +325,87 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 	return nil
 }
 
+// subPlanPRReadyPayload is the expected shape of EventSubPlanPRReady for glab.
+type subPlanPRReadyPayload struct {
+	WorkItemID     string                    `json:"work_item_id"`
+	WorkspaceID    string                    `json:"workspace_id"`
+	PlanID         string                    `json:"plan_id"`
+	SubPlanID      string                    `json:"sub_plan_id"`
+	Repository     string                    `json:"repository"`
+	Branch         string                    `json:"branch"`
+	WorktreePath   string                    `json:"worktree_path"`
+	WorkItemTitle  string                    `json:"work_item_title"`
+	SubPlanContent string                    `json:"sub_plan_content"`
+	TrackerRefs    []domain.TrackerReference `json:"tracker_refs"`
+	Review         domain.ReviewRef          `json:"review"`
+}
+
+func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) error {
+	var p subPlanPRReadyPayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return fmt.Errorf("unmarshal sub-plan PR-ready payload: %w", err)
+	}
+	// Only act on GitLab-hosted repos.
+	if provider := strings.ToLower(strings.TrimSpace(p.Review.BaseRepo.Provider)); provider != "" && provider != "gitlab" {
+		return nil
+	}
+	if p.Branch == "" {
+		slog.Warn("glab: sub-plan PR-ready payload has no branch; skipping mr update")
+		return nil
+	}
+
+	projectPath := gitlabProjectPathFromReview(p.Review, p.Repository)
+	worktreePath := p.WorktreePath
+	if worktreePath == "" {
+		worktreePath = a.workspaceDir
+	}
+
+	// Check if MR exists via glab.
+	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
+		// MR exists — mark it ready
+		if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
+			slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
+		}
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     projectPath,
+			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+			URL:          strings.TrimSpace(mr.WebURL),
+			State:        glabArtifactState(mr),
+			Branch:       p.Branch,
+			WorktreePath: worktreePath,
+			UpdatedAt:    time.Now(),
+		}, projectPath, mr.IID)
+		return nil
+	}
+
+	// No existing MR — create one non-draft
+	title := mrTitle(p.WorkItemTitle, p.Branch)
+	description := appendTrackerFooter(strings.TrimSpace(p.SubPlanContent), renderGitLabTrackerRefs(p.TrackerRefs))
+	if _, err := a.createMRNonDraft(ctx, worktreePath, p.Branch, title, description); err != nil {
+		slog.Warn("glab: sub-plan PR-ready MR creation failed", "repo", projectPath, "branch", p.Branch, "error", err)
+		return nil
+	}
+
+	// Record the artifact.
+	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     projectPath,
+			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+			URL:          strings.TrimSpace(mr.WebURL),
+			State:        glabArtifactState(mr),
+			Branch:       p.Branch,
+			WorktreePath: worktreePath,
+			UpdatedAt:    time.Now(),
+		}, projectPath, mr.IID)
+	}
+
+	return nil
+}
+
 // createMR runs `glab mr create --draft --source-branch <branch> --title <title> [--description ...] [--label ...] --yes`.
 func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, description string) (string, error) {
 	args := []string{
@@ -356,7 +437,38 @@ func (a *GlabAdapter) createMR(ctx context.Context, dir, branch, title, descript
 	return url, nil
 }
 
-// glabMRView is the minimal subset of `glab mr view --output json` we need.
+// createMRNonDraft runs `glab mr create --source-branch <branch> --title <title> [--description ...] [--label ...] --yes`.
+// Used for PR-ready events where the MR should not be a draft.
+func (a *GlabAdapter) createMRNonDraft(ctx context.Context, dir, branch, title, description string) (string, error) {
+	args := []string{
+		"mr", "create",
+		"--source-branch", branch,
+		"--title", title,
+		"--yes",
+	}
+	if strings.TrimSpace(description) != "" {
+		args = append(args, "--description", description)
+	}
+	for _, r := range a.cfg.Reviewers {
+		args = append(args, "--reviewer", r)
+	}
+	for _, l := range a.cfg.Labels {
+		args = append(args, "--label", l)
+	}
+
+	out, err := a.runner(ctx, dir, "glab", args...)
+	if err != nil {
+		return "", fmt.Errorf("glab mr create (non-draft): %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	url := parseMRURL(out)
+	if url != "" {
+		slog.Info("glab: MR created (non-draft)", "branch", branch, "url", url)
+	}
+
+	return url, nil
+}
+
+// glabMRView is the minimal subset of `glb mr view --output json` we need.
 type glabMRView struct {
 	IID            int    `json:"iid"`
 	State          string `json:"state"`

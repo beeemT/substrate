@@ -504,13 +504,32 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("TransitionSubPlan emits EventSubPlanStatusChanged", func(t *testing.T) {
+	t.Run("TransitionSubPlan emits EventSubPlanStarted", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, bus)
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
 
-		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanStatusChanged))
+		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanStarted))
+
+		// Create a plan and work item so TransitionSubPlan can load them
+		plan := domain.Plan{
+			ID:         "plan-1",
+			WorkItemID: "wi-1",
+			Status:     domain.PlanApproved,
+		}
+		if err := repo.Create(context.Background(), plan); err != nil {
+			t.Fatalf("Create plan: %v", err)
+		}
+		workItem := domain.Session{
+			ID:          "wi-1",
+			WorkspaceID: "ws-1",
+			State:       domain.SessionImplementing,
+		}
+		if err := sessionRepo.Create(context.Background(), workItem); err != nil {
+			t.Fatalf("Create work item: %v", err)
+		}
 
 		// Create a pending sub-plan first
 		subPlan := domain.TaskPlan{
@@ -528,11 +547,11 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventSubPlanStatusChanged) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventSubPlanStatusChanged)
+			if evt.EventType != string(domain.EventSubPlanStarted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventSubPlanStarted)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventSubPlanStatusChanged")
+			t.Error("timeout waiting for EventSubPlanStarted")
 		}
 	})
 

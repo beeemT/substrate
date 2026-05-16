@@ -44,21 +44,26 @@ type eventDecoder func(payload string) tea.Msg
 
 // eventHandlerRegistry maps domain event types to their decoder functions.
 var eventHandlerRegistry = map[domain.EventType]eventDecoder{
-	domain.EventWorkItemIngested:        decodeWorkItemIngested,
-	domain.EventWorkItemPlanning:        decodeWorkItemState,
-	domain.EventWorkItemPlanReview:      decodeWorkItemState,
-	domain.EventWorkItemApproved:        decodeWorkItemState,
-	domain.EventWorkItemImplementing:    decodeWorkItemState,
-	domain.EventWorkItemReviewing:       decodeWorkItemState,
-	domain.EventWorkItemCompleted:       decodeWorkItemState,
-	domain.EventWorkItemFailed:          decodeWorkItemState,
-	domain.EventWorkItemMerged:          decodeWorkItemState,
-	domain.EventPlanGenerated:           decodePlanGenerated,
-	domain.EventPlanSubmitted:           decodePlanUpdated,
-	domain.EventPlanApproved:            decodePlanUpdated,
-	domain.EventPlanRejected:            decodePlanUpdated,
-	domain.EventPlanRevised:             decodePlanUpdated,
-	domain.EventPlanFailed:              decodePlanUpdated,
+	domain.EventWorkItemIngested:     decodeWorkItemIngested,
+	domain.EventWorkItemPlanning:     decodeWorkItemState,
+	domain.EventWorkItemPlanReview:   decodeWorkItemState,
+	domain.EventWorkItemApproved:     decodeWorkItemState,
+	domain.EventWorkItemImplementing: decodeWorkItemState,
+	domain.EventWorkItemReviewing:    decodeWorkItemState,
+	domain.EventWorkItemCompleted:    decodeWorkItemState,
+	domain.EventWorkItemFailed:       decodeWorkItemState,
+	domain.EventWorkItemMerged:       decodeWorkItemState,
+	domain.EventPlanGenerated:        decodePlanGenerated,
+	domain.EventPlanSubmitted:        decodePlanUpdated,
+	domain.EventPlanApproved:         decodePlanUpdated,
+	domain.EventPlanRejected:         decodePlanUpdated,
+	domain.EventPlanRevised:          decodePlanUpdated,
+	domain.EventPlanFailed:           decodePlanUpdated,
+	// Sub-plan events
+	domain.EventSubPlanStarted:   decodeSubPlanEvent,
+	domain.EventSubPlanCompleted: decodeSubPlanEvent,
+	domain.EventSubPlanFailed:    decodeSubPlanEvent,
+	// Agent session events
 	domain.EventAgentSessionStarted:     decodeAgentSessionStarted,
 	domain.EventAgentSessionCompleted:   decodeAgentSessionUpdated,
 	domain.EventAgentSessionFailed:      decodeAgentSessionUpdated,
@@ -139,6 +144,29 @@ func decodePlanUpdated(payload string) tea.Msg {
 		return nil
 	}
 	return PlanUpdatedMsg{WorkItemID: p.WorkItemID, Plan: p.Plan, SubPlans: p.SubPlans}
+}
+
+// decodeSubPlanEvent decodes sub-plan state events (started, completed, failed)
+// with full TaskPlan payload for direct upsert.
+func decodeSubPlanEvent(payload string) tea.Msg {
+	var p struct {
+		WorkItemID  string                `json:"work_item_id"`
+		WorkspaceID string                `json:"workspace_id"`
+		PlanID      string                `json:"plan_id"`
+		SubPlanID   string                `json:"sub_plan_id"`
+		SubPlan     domain.TaskPlan       `json:"sub_plan"`
+		Status      domain.TaskPlanStatus `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode sub-plan event payload", "error", err)
+		return nil
+	}
+	return SubPlanStatusChangedMsg{
+		WorkItemID: p.WorkItemID,
+		PlanID:     p.PlanID,
+		SubPlan:    p.SubPlan,
+		Status:     p.Status,
+	}
 }
 
 func decodeAgentSessionStarted(payload string) tea.Msg {

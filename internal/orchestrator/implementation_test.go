@@ -721,7 +721,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
@@ -1059,9 +1059,22 @@ func TestPersistSubPlanStatus_CrashRecovery(t *testing.T) {
 		Status:         domain.SubPlanInProgress,
 	}
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	// WorkItemRepo is needed because TransitionSubPlan loads the work item to get WorkspaceID.
+	workItemRepo := &implementationWorkItemRepo{
+		items: map[string]domain.Session{
+			"wi-1": {
+				ID:          "wi-1",
+				WorkspaceID: "ws-1",
+				ExternalID:  "MAN-1",
+				Source:      "manual",
+				Title:       "Test",
+				State:       domain.SessionApproved,
+			},
+		},
+	}
 
 	svc := &ImplementationService{
-		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
+		planSvc: service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, &mockPublisher{}),
 	}
 
 	sp := subPlanRepo.subPlans["sp-crashed"]
@@ -2135,8 +2148,11 @@ func TestCommitAndPushRepos_SkipsCleanWorktrees(t *testing.T) {
 
 	// No remote configured, so push will warn but not fail.
 	// The key assertion: no safety-net commit is attempted on a clean worktree.
-	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
-		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	for _, r := range results {
+		if r.Err != nil {
+			t.Fatalf("commitAndPushRepos returned error: %v", r.Err)
+		}
 	}
 
 	// No work_item.completed event should be emitted (that's a separate method).
@@ -2166,8 +2182,11 @@ func TestCommitAndPushRepos_CommitsDirtyWorktree(t *testing.T) {
 	}}
 	repoPaths := map[string]string{"repo-a": bareDir}
 
-	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
-		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	for _, r := range results {
+		if r.Err != nil {
+			t.Fatalf("commitAndPushRepos returned error: %v", r.Err)
+		}
 	}
 
 	// Verify the worktree is now clean.
@@ -2214,8 +2233,11 @@ func TestCommitViaAgent_AttemptsAgentSession(t *testing.T) {
 	}}
 	repoPaths := map[string]string{"repo-a": bareDir}
 
-	if err := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch"); err != nil {
-		t.Fatalf("commitAndPushRepos returned error: %v", err)
+	results := svc.commitAndPushRepos(context.Background(), sessions, repoPaths, "feature-branch")
+	for _, r := range results {
+		if r.Err != nil {
+			t.Fatalf("commitAndPushRepos returned error: %v", r.Err)
+		}
 	}
 
 	// The agent session was attempted.

@@ -69,7 +69,7 @@ func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkIte
 		}(workItemAdapter, sub.C)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted))
+		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventPRMerged), string(domain.EventPlanApproved), string(domain.EventSubPlanPRReady))
 		if err != nil {
 			return err
 		}
@@ -107,8 +107,11 @@ func TestWireAdapterSubscriptions(t *testing.T) {
 	}
 	select {
 	case evt := <-life.events:
-		t.Fatalf("lifecycle adapter should not receive plan.approved, got %s", evt.EventType)
-	default:
+		if evt.EventType != string(domain.EventPlanApproved) {
+			t.Fatalf("lifecycle adapter got %s, want plan.approved", evt.EventType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle adapter to receive plan.approved")
 	}
 
 	worktreeCreated := domain.SystemEvent{ID: domain.NewID(), EventType: string(domain.EventWorktreeCreated), CreatedAt: time.Now()}
@@ -179,14 +182,14 @@ func TestWireAdapterSubscriptions_RoutesLifecycleEventsByProvider(t *testing.T) 
 
 	gitlabEvent := domain.SystemEvent{
 		ID:        domain.NewID(),
-		EventType: string(domain.EventWorkItemCompleted),
-		Payload:   `{"external_id":"gl:issue:1234#42"}`,
+		EventType: string(domain.EventSubPlanPRReady),
+		Payload:   `{"review":{"base_repo":{"provider":"gitlab","owner":"group","repo":"project"},"head_repo":{"provider":"gitlab","owner":"group","repo":"project"}},"branch":"my-branch"}`,
 		CreatedAt: time.Now(),
 	}
 	if err := bus.Publish(context.Background(), gitlabEvent); err != nil {
-		t.Fatalf("publish gitlab work item completed: %v", err)
+		t.Fatalf("publish gitlab subplan pr ready: %v", err)
 	}
-	expectLifecycleEvent(t, gitlabLife.events, string(domain.EventWorkItemCompleted))
+	expectLifecycleEvent(t, gitlabLife.events, string(domain.EventSubPlanPRReady))
 	expectNoLifecycleEvent(t, githubLife.events)
 
 	missingReview := domain.SystemEvent{

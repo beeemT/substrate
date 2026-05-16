@@ -135,8 +135,9 @@ func TestWorkItemCompletedUpdatesAllPersistedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
-	payload := `{"workspace_id":"ws-1","work_item_id":"wi-1","branch":"sub-branch","external_id":"gh:issue:acme/rocket#42"}`
-	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorkItemCompleted), Payload: payload}); err != nil {
+	// Now use EventSubPlanPRReady instead of EventWorkItemCompleted to mark all PRs as ready.
+	payload := `{"work_item_id":"wi-1","workspace_id":"ws-1","branch":"sub-branch","repository":"acme/rocket","work_item_title":"Feature","review":{"base_repo":{"provider":"github","owner":"acme","repo":"rocket"},"head_repo":{"provider":"github","owner":"acme","repo":"rocket"},"base_branch":"develop","head_branch":"sub-branch"}}`
+	if err := a.RepoLifecycleAdapter().OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventSubPlanPRReady), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
 	}
 	seenRocket, seenEngine := false, false
