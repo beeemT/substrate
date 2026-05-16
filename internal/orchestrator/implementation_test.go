@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -2374,7 +2375,7 @@ func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *
 	branchName := "sub-MAN-1-implement-the-change"
 	mustRun(t, repoRoot, "git", "worktree", "add", "-b", branchName, worktreeDir)
 
-	svc, workItemRepo, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+	svc, workItemRepo, eventRepo, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
 	svc.cfg = &config.Config{}
 
 	workItem := workItemRepo.items["wi-1"]
@@ -2416,6 +2417,49 @@ func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *
 	}
 	if got.State != domain.SessionCompleted {
 		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionCompleted)
+	}
+
+	// Verify EventSubPlanPRReady was emitted for the completed sub-plan with all fields.
+	eventRepo.mu.Lock()
+	events := append([]domain.SystemEvent{}, eventRepo.events...)
+	eventRepo.mu.Unlock()
+	found := false
+	for _, evt := range events {
+		if evt.EventType == string(domain.EventSubPlanPRReady) {
+			var payload struct {
+				SubPlanID     string           `json:"sub_plan_id"`
+				Repository    string           `json:"repository"`
+				Branch        string           `json:"branch"`
+				WorktreePath  string           `json:"worktree_path"`
+				PlanID        string           `json:"plan_id"`
+				WorkItemID    string           `json:"work_item_id"`
+				WorkItemTitle string           `json:"work_item_title"`
+				Review        domain.ReviewRef `json:"review"`
+			}
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("malformed EventSubPlanPRReady payload: %v", err)
+			}
+			if payload.SubPlanID == "sp-1" {
+				found = true
+				// Verify critical fields
+				if payload.Repository != "repo-a" {
+					t.Errorf("Repository = %q, want %q", payload.Repository, "repo-a")
+				}
+				if payload.Branch == "" {
+					t.Error("Branch should not be empty")
+				}
+				if payload.WorktreePath == "" {
+					t.Error("WorktreePath should not be empty")
+				}
+				if payload.WorkItemID != "wi-1" {
+					t.Errorf("WorkItemID = %q, want %q", payload.WorkItemID, "wi-1")
+				}
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected EventSubPlanPRReady for sub-plan sp-1 to be emitted after finalization")
 	}
 }
 

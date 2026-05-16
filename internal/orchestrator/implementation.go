@@ -1296,11 +1296,13 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 		subPlanByID[sp.ID] = sp
 	}
 
-	// Emit PR-ready events for each successful finalization and collect failures
-	var prReadyErrs []error
+	// Emit PR-ready events for each successful finalization and collect failures.
+	// Finalization errors and PR-ready emission errors are tracked separately so
+	// the error message accurately reflects what failed.
+	var finalizationErrs, prReadyErrs []error
 	for _, result := range finalizationResults {
 		if result.Err != nil {
-			prReadyErrs = append(prReadyErrs, result.Err)
+			finalizationErrs = append(finalizationErrs, result.Err)
 			continue
 		}
 
@@ -1328,8 +1330,11 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 		}
 	}
 
+	if len(finalizationErrs) > 0 {
+		return fmt.Errorf("finalize repos: %w", errors.Join(finalizationErrs...))
+	}
 	if len(prReadyErrs) > 0 {
-		return fmt.Errorf("finalize repos: %w", errors.Join(prReadyErrs...))
+		return fmt.Errorf("emit PR-ready events: %w", errors.Join(prReadyErrs...))
 	}
 
 	completeCtx, completeCancel := durableCleanupContext(ctx)
@@ -1399,16 +1404,26 @@ func isActiveAgentSession(status domain.AgentSessionStatus) bool {
 // uncommitted changes, commits them as a safety net if present, then pushes the branch.
 // Agent sessions are already completed and deregistered by this point, so we
 // commit directly rather than sending a follow-up message to the agent.
-// Returns per-sub-plan results keyed by SubPlanID so the caller can emit PR-ready events.
+// Returns per-sub-plan results so the caller can emit PR-ready events for each sub-plan.
+// When multiple sub-plans share a repository, commit/push is done once but PR-ready is
+// emitted for each sub-plan.
 func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions []SessionResult, repoPaths map[string]string, branch string) []RepoFinalizationResult {
 	results := make([]RepoFinalizationResult, 0, len(sessions))
-	seen := make(map[string]bool, len(repoPaths))
+	// Track the successful result per repo so we can emit PR-ready for each sub-plan.
+	successfulByRepo := make(map[string]RepoFinalizationResult, len(repoPaths))
 	for _, sess := range sessions {
 		repo := sess.Repository
-		if seen[repo] {
+		if prevResult, ok := successfulByRepo[repo]; ok {
+			// Another sub-plan already pushed this repo; emit PR-ready for this one too.
+			results = append(results, RepoFinalizationResult{
+				SubPlanID:    sess.SubPlanID,
+				Repository:   repo,
+				WorktreePath: prevResult.WorktreePath,
+				Branch:       branch,
+				Review:       prevResult.Review,
+			})
 			continue
 		}
-		seen[repo] = true
 
 		bareRepo, ok := repoPaths[repo]
 		if !ok {
@@ -1559,13 +1574,15 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 						})
 					} else {
 						// Push succeeded after fix
-						results = append(results, RepoFinalizationResult{
+						result := RepoFinalizationResult{
 							SubPlanID:    sess.SubPlanID,
 							Repository:   repo,
 							WorktreePath: sess.WorktreePath,
 							Branch:       branch,
 							Review:       reviewRef,
-						})
+						}
+						results = append(results, result)
+						successfulByRepo[repo] = result
 					}
 				}
 			} else {
@@ -1583,13 +1600,15 @@ func (s *ImplementationService) commitAndPushRepos(ctx context.Context, sessions
 			}
 		} else {
 			// Push succeeded
-			results = append(results, RepoFinalizationResult{
+			result := RepoFinalizationResult{
 				SubPlanID:    sess.SubPlanID,
 				Repository:   repo,
 				WorktreePath: sess.WorktreePath,
 				Branch:       branch,
 				Review:       reviewRef,
-			})
+			}
+			results = append(results, result)
+			successfulByRepo[repo] = result
 		}
 	}
 

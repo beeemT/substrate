@@ -61,7 +61,9 @@ A task (one repo's work = one sub-plan) goes through multiple agent sessions. `E
 - Choose the level that matches the severity: `slog.Error` for unexpected or unrecoverable failures, `slog.Warn` for degraded-but-recoverable conditions, `slog.Debug` for transient or low-signal events. Always include the error as a structured attribute (`"error", err`).
 - Preserve the error chain. Do not discard the original error when wrapping with `fmt.Errorf("%w", err)` or equivalent.
 
-## Interface Compile-Time Verification
+## Required Dependencies
+
+Do not add defensive nil guards or graceful fallbacks to production code to accommodate incomplete test setups. If a method requires a dependency, tests must provide it. Nil guards belong only at trust boundaries (adapters, handlers), not in service or domain logic where inputs are code-controlled.
 
 When a type is expected to implement an interface, add a compile-time check directly beneath the
 imports in the file where the interface is used:

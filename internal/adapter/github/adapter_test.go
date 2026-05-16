@@ -179,6 +179,16 @@ func TestParseExternalID(t *testing.T) {
 		}
 	})
 
+	t.Run("short format without issue prefix", func(t *testing.T) {
+		owner, repo, n, err := parseExternalID("gh:acme/rocket#99")
+		if err != nil {
+			t.Fatalf("parseExternalID: %v", err)
+		}
+		if owner != "acme" || repo != "rocket" || n != 99 {
+			t.Fatalf("parsed = %s/%s#%d, want acme/rocket#99", owner, repo, n)
+		}
+	})
+
 	t.Run("invalid", func(t *testing.T) {
 		_, _, _, err := parseExternalID("gh:issue:other")
 		if err == nil {
@@ -204,7 +214,7 @@ func TestScopeInitiativesUnsupported(t *testing.T) {
 	}
 }
 
-func TestLifecycleCreateAndReady(t *testing.T) {
+func TestSubPlanPRReadyLifecycle(t *testing.T) {
 	requests := make([]string, 0, 6)
 	pullLookups := 0
 	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -586,6 +596,52 @@ func TestWorkItemCompletedTransitionsToInReview(t *testing.T) {
 	}
 	if strings.Contains(body, "closed") {
 		t.Fatalf("patch body = %q, must not contain \"closed\" (done mapping)", body)
+	}
+}
+
+func TestWorkItemCompleted_MultipleExternalIDs_UpdatesAll(t *testing.T) {
+	// When external_ids contains multiple entries, UpdateState must be called for each.
+	var patched []int // issue numbers that were patched
+	a := newTestAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Path == "/user":
+			return jsonResp(t, http.StatusOK, map[string]any{"login": "alice"}), nil
+		case req.URL.Path == "/repos/acme/rocket/issues/10" && req.Method == http.MethodPatch:
+			patched = append(patched, 10)
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 10}), nil
+		case req.URL.Path == "/repos/acme/rocket/issues/11" && req.Method == http.MethodPatch:
+			patched = append(patched, 11)
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 11}), nil
+		case req.URL.Path == "/repos/acme/lib/issues/20" && req.Method == http.MethodPatch:
+			patched = append(patched, 20)
+			return jsonResp(t, http.StatusOK, map[string]any{"number": 20}), nil
+		default:
+			return jsonResp(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+
+	payload, _ := json.Marshal(map[string]any{
+		"external_ids": []string{
+			"gh:issue:acme/rocket#10",
+			"gh:issue:acme/rocket#11",
+			"gh:issue:acme/lib#20", // different repo — also gh: prefix, also processed
+		},
+	})
+	if err := a.WorkItemAdapter().OnEvent(context.Background(), domain.SystemEvent{
+		EventType: string(domain.EventWorkItemCompleted),
+		Payload:   string(payload),
+	}); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if len(patched) != 3 {
+		t.Fatalf("expected 3 PATCH calls, got %d: %v", len(patched), patched)
+	}
+	// The handler calls UpdateState for each gh: prefix ID.
+	// All three are gh: prefix so all should be processed.
+	for _, n := range patched {
+		if n != 10 && n != 11 && n != 20 {
+			t.Errorf("unexpected issue number %d, want 10, 11, or 20", n)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -433,6 +434,57 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("SubmitForReview emits EventPlanStatusChanged", func(t *testing.T) {
+		repo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
+
+		sub, _ := bus.Subscribe("test", string(domain.EventPlanStatusChanged))
+
+		// Create a draft plan first
+		plan := domain.Plan{
+			ID:         "plan-status-test",
+			WorkItemID: "wi-1",
+			Status:     domain.PlanDraft,
+			Version:    1,
+		}
+		if err := repo.Create(context.Background(), plan); err != nil {
+			t.Fatalf("Create plan: %v", err)
+		}
+
+		// Create work item so SubmitForReview can load it for WorkspaceID
+		sessionRepo.Create(context.Background(), domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
+
+		if err := svc.SubmitForReview(context.Background(), "plan-status-test"); err != nil {
+			t.Fatalf("SubmitForReview: %v", err)
+		}
+
+		select {
+		case evt := <-sub.C:
+			if evt.EventType != string(domain.EventPlanStatusChanged) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventPlanStatusChanged)
+			}
+			// Verify payload contains the correct status transition
+			var payload struct {
+				From string `json:"from"`
+				To   string `json:"to"`
+			}
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("failed to unmarshal payload: %v", err)
+			}
+			if payload.From != string(domain.PlanDraft) {
+				t.Errorf("From = %q, want %q", payload.From, domain.PlanDraft)
+			}
+			if payload.To != string(domain.PlanPendingReview) {
+				t.Errorf("To = %q, want %q", payload.To, domain.PlanPendingReview)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("timeout waiting for EventPlanStatusChanged")
+		}
+	})
+
 	t.Run("ApprovePlan emits EventPlanApproved", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
@@ -552,6 +604,108 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 			}
 		case <-time.After(2 * time.Second):
 			t.Error("timeout waiting for EventSubPlanStarted")
+		}
+	})
+
+	t.Run("TransitionSubPlan emits EventSubPlanCompleted", func(t *testing.T) {
+		repo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
+
+		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanCompleted))
+
+		// Create a plan and work item so TransitionSubPlan can load them
+		plan := domain.Plan{
+			ID:         "plan-completed-test",
+			WorkItemID: "wi-completed-test",
+			Status:     domain.PlanApproved,
+		}
+		if err := repo.Create(context.Background(), plan); err != nil {
+			t.Fatalf("Create plan: %v", err)
+		}
+		workItem := domain.Session{
+			ID:          "wi-completed-test",
+			WorkspaceID: "ws-1",
+			State:       domain.SessionImplementing,
+		}
+		if err := sessionRepo.Create(context.Background(), workItem); err != nil {
+			t.Fatalf("Create work item: %v", err)
+		}
+
+		// Create an in-progress sub-plan first
+		subPlan := domain.TaskPlan{
+			ID:     "subplan-completed-test",
+			PlanID: "plan-completed-test",
+			Status: domain.SubPlanInProgress,
+		}
+		if err := subPlanRepo.Create(context.Background(), subPlan); err != nil {
+			t.Fatalf("Create sub-plan: %v", err)
+		}
+
+		if err := svc.TransitionSubPlan(context.Background(), "subplan-completed-test", domain.SubPlanCompleted); err != nil {
+			t.Fatalf("TransitionSubPlan: %v", err)
+		}
+
+		select {
+		case evt := <-sub.C:
+			if evt.EventType != string(domain.EventSubPlanCompleted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventSubPlanCompleted)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("timeout waiting for EventSubPlanCompleted")
+		}
+	})
+
+	t.Run("TransitionSubPlan emits EventSubPlanFailed", func(t *testing.T) {
+		repo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
+
+		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanFailed))
+
+		// Create a plan and work item so TransitionSubPlan can load them
+		plan := domain.Plan{
+			ID:         "plan-failed-test",
+			WorkItemID: "wi-failed-test",
+			Status:     domain.PlanApproved,
+		}
+		if err := repo.Create(context.Background(), plan); err != nil {
+			t.Fatalf("Create plan: %v", err)
+		}
+		workItem := domain.Session{
+			ID:          "wi-failed-test",
+			WorkspaceID: "ws-1",
+			State:       domain.SessionImplementing,
+		}
+		if err := sessionRepo.Create(context.Background(), workItem); err != nil {
+			t.Fatalf("Create work item: %v", err)
+		}
+
+		// Create an in-progress sub-plan first
+		subPlan := domain.TaskPlan{
+			ID:     "subplan-failed-test",
+			PlanID: "plan-failed-test",
+			Status: domain.SubPlanInProgress,
+		}
+		if err := subPlanRepo.Create(context.Background(), subPlan); err != nil {
+			t.Fatalf("Create sub-plan: %v", err)
+		}
+
+		if err := svc.TransitionSubPlan(context.Background(), "subplan-failed-test", domain.SubPlanFailed); err != nil {
+			t.Fatalf("TransitionSubPlan: %v", err)
+		}
+
+		select {
+		case evt := <-sub.C:
+			if evt.EventType != string(domain.EventSubPlanFailed) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventSubPlanFailed)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("timeout waiting for EventSubPlanFailed")
 		}
 	})
 

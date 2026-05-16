@@ -857,10 +857,15 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 	if ready.Branch == "" {
 		return newInvalidInputError("branch is required for PR-ready event", "branch")
 	}
+	// Validate Review coordinates are present.
+	if ready.Review.BaseRepo.Provider == "" && ready.Review.BaseRepo.Repo == "" && ready.Review.HeadRepo.Repo == "" {
+		return newInvalidInputError("review coordinates are required for PR-ready event", "review")
+	}
 
 	var workItem domain.Session
 	var plan domain.Plan
 	var sp domain.TaskPlan
+	var alreadyEmitted bool
 
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
@@ -893,10 +898,14 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 			events, listErr := res.Events.ListByType(ctx, string(domain.EventSubPlanPRReady), 100)
 			if listErr == nil {
 				for _, evt := range events {
-					// Check if this event is for the same sub-plan by parsing the payload.
-					if strings.Contains(evt.Payload, subPlanID) {
+					var payload subPlanPRReadyPayload
+					if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+						continue // Skip malformed payloads
+					}
+					if payload.SubPlanID == subPlanID {
 						slog.Debug("plan: sub-plan PR-ready already emitted, skipping", "sub_plan_id", subPlanID)
-						return nil // Already emitted, idempotent success
+						alreadyEmitted = true
+						return nil
 					}
 				}
 			} else {
@@ -908,6 +917,10 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 	})
 	if err != nil {
 		return err
+	}
+
+	if alreadyEmitted {
+		return nil
 	}
 
 	Emit(s.eventBus, domain.SystemEvent{

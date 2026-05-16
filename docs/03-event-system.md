@@ -342,6 +342,7 @@ Production wiring subscribes lifecycle adapters to:
 - `worktree.created`
 - `worktree.reused`
 - `work_item.completed`
+- `subplan.pr_ready`
 - `pr.merged`
 - `plan.approved`
 
@@ -351,6 +352,7 @@ sub, _ := bus.Subscribe(
 	string(domain.EventWorktreeCreated),
 	string(domain.EventWorktreeReused),
 	string(domain.EventWorkItemCompleted),
+	string(domain.EventSubPlanPRReady),
 	string(domain.EventPRMerged),
 	string(domain.EventPlanApproved),
 )

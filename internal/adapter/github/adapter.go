@@ -947,7 +947,10 @@ func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) er
 		return nil
 	}
 	if err := a.resolveForkBase(ctx, &p.Review); err != nil {
-		return err
+		// Fork resolution is a best-effort enrichment. If it fails (e.g. transient
+		// network error), log and continue with the coordinates from the payload.
+		slog.Warn("github: fork-resolution failed for sub-plan PR-ready, continuing with payload coordinates",
+			"work_item_id", p.WorkItemID, "branch", p.Branch, "error", err)
 	}
 	baseOwner, baseRepo := p.Review.BaseRepo.Owner, p.Review.BaseRepo.Repo
 	headOwner := p.Review.HeadRepo.Owner

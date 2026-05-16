@@ -418,6 +418,35 @@ func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestOnEvent_SubPlanPRReady_GitHubProvider_IsIgnored(t *testing.T) {
+	// The glab adapter must not invoke the glab CLI when the
+	// EventSubPlanPRReady payload names a GitHub-hosted repo.
+	stub := &stubRunner{}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+
+	branch := "sub-gh-99-feature"
+	payload := mustJSON(subPlanPRReadyPayload{
+		WorkItemID:   "wi-999",
+		WorkspaceID:  "ws-local",
+		Branch:       branch,
+		WorktreePath: "/wt/repo",
+		Repository:   "group/project",
+		Review: domain.ReviewRef{
+			BaseRepo: domain.RepoRef{Provider: "github", Owner: "org", Repo: "repo"},
+		},
+	})
+	err := a.OnEvent(context.Background(), domain.SystemEvent{
+		EventType: string(domain.EventSubPlanPRReady),
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stub.calls) != 0 {
+		t.Errorf("expected no glab CLI calls for GitHub-hosted sub-plan, got %d", len(stub.calls))
+	}
+}
+
 func TestOnEvent_SubPlanPRReady_CreatesMRWhenNoneExists(t *testing.T) {
 	// When no MR exists for the branch, createMRNonDraft should be called.
 	var calls []stubCall

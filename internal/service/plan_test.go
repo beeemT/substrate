@@ -456,6 +456,218 @@ func TestPlanService_AllSubPlansCompleted(t *testing.T) {
 	})
 }
 
+func TestPlanService_MarkSubPlanPRReady(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("emits EventSubPlanPRReady on success", func(t *testing.T) {
+		planRepo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+
+		planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+		sessionRepo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+		subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{
+			ID:             "sp-1",
+			PlanID:         "plan-1",
+			RepositoryName: "repo1",
+			Status:         domain.SubPlanCompleted,
+		}
+
+		bus := event.NewBus(event.BusConfig{})
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
+		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanPRReady))
+
+		ready := SubPlanPRReadyContext{
+			Repository:    "repo1",
+			Branch:        "feature/test",
+			WorktreePath:  "/tmp/worktree",
+			WorkItemTitle: "Test PR",
+			Review: domain.ReviewRef{
+				BaseRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				HeadRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				BaseBranch: "main",
+			},
+		}
+		if err := svc.MarkSubPlanPRReady(ctx, "sp-1", ready); err != nil {
+			t.Fatalf("MarkSubPlanPRReady failed: %v", err)
+		}
+
+		var evt domain.SystemEvent
+		select {
+		case evt = <-sub.C:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("timeout waiting for EventSubPlanPRReady")
+		}
+
+		if evt.EventType != string(domain.EventSubPlanPRReady) {
+			t.Errorf("event type = %q, want %q", evt.EventType, domain.EventSubPlanPRReady)
+		}
+		if evt.WorkspaceID != "ws-1" {
+			t.Errorf("WorkspaceID = %q, want %q", evt.WorkspaceID, "ws-1")
+		}
+
+		var payload struct {
+			SubPlanID  string `json:"sub_plan_id"`
+			Repository string `json:"repository"`
+			Branch     string `json:"branch"`
+		}
+		if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+			t.Fatalf("failed to unmarshal payload: %v", err)
+		}
+		if payload.SubPlanID != "sp-1" {
+			t.Errorf("SubPlanID = %q, want %q", payload.SubPlanID, "sp-1")
+		}
+		if payload.Repository != "repo1" {
+			t.Errorf("Repository = %q, want %q", payload.Repository, "repo1")
+		}
+		if payload.Branch != "feature/test" {
+			t.Errorf("Branch = %q, want %q", payload.Branch, "feature/test")
+		}
+	})
+
+	t.Run("returns error when repository is missing", func(t *testing.T) {
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
+			Plans:    NewMockPlanRepository(),
+			SubPlans: NewMockSubPlanRepository(),
+			Sessions: NewMockWorkItemRepository(),
+		}}, newTestBus())
+
+		err := svc.MarkSubPlanPRReady(ctx, "sp-1", SubPlanPRReadyContext{Branch: "feature/test"})
+		if err == nil {
+			t.Fatal("expected error for missing repository")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("returns error when branch is missing", func(t *testing.T) {
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
+			Plans:    NewMockPlanRepository(),
+			SubPlans: NewMockSubPlanRepository(),
+			Sessions: NewMockWorkItemRepository(),
+		}}, newTestBus())
+
+		err := svc.MarkSubPlanPRReady(ctx, "sp-1", SubPlanPRReadyContext{Repository: "repo1"})
+		if err == nil {
+			t.Fatal("expected error for missing branch")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("returns error when sub-plan not found", func(t *testing.T) {
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
+			Plans:    NewMockPlanRepository(),
+			SubPlans: NewMockSubPlanRepository(),
+			Sessions: NewMockWorkItemRepository(),
+		}}, newTestBus())
+
+		err := svc.MarkSubPlanPRReady(ctx, "sp-1", SubPlanPRReadyContext{
+			Repository: "repo1",
+			Branch:     "feature/test",
+			Review: domain.ReviewRef{
+				BaseRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				HeadRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				BaseBranch: "main",
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error for nonexistent sub-plan")
+		}
+		if _, ok := err.(ErrNotFound); !ok {
+			t.Errorf("error type = %T, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("returns error when sub-plan status is not completed", func(t *testing.T) {
+		planRepo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+
+		planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+		sessionRepo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+		subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{
+			ID:             "sp-1",
+			PlanID:         "plan-1",
+			RepositoryName: "repo1",
+			Status:         domain.SubPlanInProgress, // Not completed
+		}
+
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
+			Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo,
+		}}, newTestBus())
+
+		err := svc.MarkSubPlanPRReady(ctx, "sp-1", SubPlanPRReadyContext{
+			Repository: "repo1",
+			Branch:     "feature/test",
+			Review: domain.ReviewRef{
+				BaseRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				HeadRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				BaseBranch: "main",
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error for non-completed sub-plan")
+		}
+		if _, ok := err.(ErrInvalidTransition); !ok {
+			t.Errorf("error type = %T, want ErrInvalidTransition", err)
+		}
+	})
+
+	t.Run("idempotent: skips emission if already emitted", func(t *testing.T) {
+		planRepo := NewMockPlanRepository()
+		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
+
+		planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+		sessionRepo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+		subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{
+			ID:             "sp-1",
+			PlanID:         "plan-1",
+			RepositoryName: "repo1",
+			Status:         domain.SubPlanCompleted,
+		}
+
+		// Simulate a previous emission
+		prevEvents := []domain.SystemEvent{
+			{
+				ID:        "prev-event",
+				EventType: string(domain.EventSubPlanPRReady),
+				Payload:   `{"sub_plan_id":"sp-1","plan_id":"plan-1","work_item_id":"wi-1","repository":"repo1","branch":"feature/old"}`,
+			},
+		}
+		eventRepo := &mockEventRepoForEmit{events: prevEvents}
+		bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
+			Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo, Events: eventRepo,
+		}}, bus)
+		sub, _ := bus.Subscribe("test", string(domain.EventSubPlanPRReady))
+
+		ready := SubPlanPRReadyContext{
+			Repository: "repo1",
+			Branch:     "feature/new",
+			Review: domain.ReviewRef{
+				BaseRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				HeadRepo:   domain.RepoRef{Owner: "owner", Repo: "repo1", Provider: "gitlab"},
+				BaseBranch: "main",
+			},
+		}
+		if err := svc.MarkSubPlanPRReady(ctx, "sp-1", ready); err != nil {
+			t.Fatalf("MarkSubPlanPRReady failed: %v", err)
+		}
+
+		// Should not emit a new event since one already exists for this sub-plan
+		select {
+		case <-sub.C:
+			t.Fatal("expected no event for idempotent call")
+		case <-time.After(100 * time.Millisecond):
+			// Expected: no event received
+		}
+	})
+}
+
 func TestPlanService_ApplyReviewedPlanOutput_EmitsEventWithPlanID(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,16 +16,21 @@ import (
 )
 
 type glabArtifactEventRepo struct {
+	mu     sync.Mutex
 	events []domain.SystemEvent
 }
 
 func (r *glabArtifactEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, e)
 
 	return nil
 }
 
 func (r *glabArtifactEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	filtered := make([]domain.SystemEvent, 0, len(r.events))
 	for _, event := range r.events {
 		if event.EventType == eventType {
@@ -39,6 +45,8 @@ func (r *glabArtifactEventRepo) ListByType(_ context.Context, eventType string, 
 }
 
 func (r *glabArtifactEventRepo) ListByWorkspaceID(_ context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	filtered := make([]domain.SystemEvent, 0, len(r.events))
 	for _, event := range r.events {
 		if event.WorkspaceID == workspaceID {

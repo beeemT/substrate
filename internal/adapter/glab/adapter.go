@@ -354,8 +354,11 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 		return nil
 	}
 	if p.Branch == "" {
-		slog.Warn("glab: sub-plan PR-ready payload has no branch; skipping mr update")
-		return nil
+		return fmt.Errorf("glab: sub-plan PR-ready payload has no branch")
+	}
+	// Validate review coordinates are present.
+	if p.Review.BaseRepo.Provider == "" && p.Review.BaseRepo.Repo == "" && p.Review.HeadRepo.Repo == "" {
+		return fmt.Errorf("glab: sub-plan PR-ready payload missing review coordinates")
 	}
 
 	projectPath := gitlabProjectPathFromReview(p.Review, p.Repository)
@@ -414,7 +417,12 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 		}, projectPath, mr.IID)
 	} else if mrURL != "" {
 		// mrView failed but create succeeded — extract IID from the returned URL.
-		iid := parseGlabMRNumber(mrURL)
+		iid := 0
+		if parsed, err := parseGlabMRNumber(mrURL); err == nil {
+			iid = parsed
+		} else {
+			slog.Warn("glab: failed to parse IID from create-MR URL", "url", mrURL, "error", err)
+		}
 		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",
@@ -650,15 +658,18 @@ func parseMRURL(output []byte) string {
 }
 
 // parseGlabMRNumber extracts the IID from a GitLab MR URL.
-func parseGlabMRNumber(url string) int {
+func parseGlabMRNumber(url string) (int, error) {
 	marker := "/-/merge_requests/"
 	idx := strings.LastIndex(url, marker)
 	if idx == -1 {
-		return 0
+		return 0, fmt.Errorf("no %q marker in MR URL %q", marker, url)
 	}
 	s := strings.TrimPrefix(url[idx+len(marker):], "!")
-	n, _ := strconv.Atoi(s)
-	return n
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("parse IID from MR URL %q: %w", url, err)
+	}
+	return n, nil
 }
 
 func glabArtifactRef(rawURL string, iid int) string {
@@ -1578,32 +1589,58 @@ func (a *GlabAdapter) onPRMerged(ctx context.Context, payload string) error {
 	if !a.cfg.PostMergeCloseIssue {
 		return nil
 	}
-	var parsed struct {
-		ExternalID string `json:"external_id"`
-	}
-	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		return fmt.Errorf("parse pr.merged payload: %w", err)
-	}
-	if parsed.ExternalID == "" || !strings.HasPrefix(parsed.ExternalID, "gl:issue:") {
+	ids := extractExternalIDs(payload, "gl:issue:")
+	if len(ids) == 0 {
 		return nil
-	}
-	raw := strings.TrimPrefix(parsed.ExternalID, "gl:issue:")
-	parts := strings.SplitN(raw, "#", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid gitlab external id %q", parsed.ExternalID)
-	}
-	projectID := parts[0]
-	issueIID := parts[1]
-	if projectID == "" || issueIID == "" {
-		return fmt.Errorf("invalid gitlab external id %q", parsed.ExternalID)
 	}
 	if a.workspaceDir == "" {
 		return fmt.Errorf("glab: no workspace dir for issue close")
 	}
-	_, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",
-		fmt.Sprintf("/projects/%s/issues/%s", url.PathEscape(projectID), url.PathEscape(issueIID)),
-		"--field", "state_event=close")
-	return err
+	var lastErr error
+	for _, extID := range ids {
+		raw := strings.TrimPrefix(extID, "gl:issue:")
+		parts := strings.SplitN(raw, "#", 2)
+		if len(parts) != 2 {
+			lastErr = fmt.Errorf("invalid gitlab external id %q", extID)
+			continue
+		}
+		projectID := parts[0]
+		issueIID := parts[1]
+		if projectID == "" || issueIID == "" {
+			lastErr = fmt.Errorf("invalid gitlab external id %q", extID)
+			continue
+		}
+		_, err := a.runner(ctx, a.workspaceDir, "glab", "api", "-X", "PUT",
+			fmt.Sprintf("/projects/%s/issues/%s", url.PathEscape(projectID), url.PathEscape(issueIID)),
+			"--field", "state_event=close")
+		if err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+// extractExternalIDs returns all external IDs matching the given prefix from the payload.
+// Falls back to the legacy single external_id field if external_ids is absent.
+func extractExternalIDs(payload string, prefix string) []string {
+	var parsed struct {
+		ExternalID  string   `json:"external_id"`
+		ExternalIDs []string `json:"external_ids"`
+	}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return nil
+	}
+	var ids []string
+	if len(parsed.ExternalIDs) > 0 {
+		for _, id := range parsed.ExternalIDs {
+			if strings.HasPrefix(id, prefix) {
+				ids = append(ids, id)
+			}
+		}
+	} else if strings.HasPrefix(parsed.ExternalID, prefix) {
+		ids = append(ids, parsed.ExternalID)
+	}
+	return ids
 }
 
 type glabDiscussionFull struct {
