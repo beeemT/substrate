@@ -137,7 +137,7 @@ Services emit via `service.Emit(bus, evt)` after database transactions commit:
 |||---|---|---|
 ||| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged` |
 ||| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
-||| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
+|||| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
 
 ### Orchestrator-layer emitters (workflow events)
 
@@ -146,7 +146,7 @@ Orchestrators emit higher-level workflow events via `service.Emit()`:
 || Orchestrator | Event types | Notes |
 ||---|---|---|
 || `PlanningService` | `plan.generated`, `plan.failed` | Plan generation is an orchestrator action |
-|| `ImplementationService` | `work_item.implementation_started`, `work_item.completed` (rich payload), `worktree.created`, `worktree.reused` | `agent_session.*` events removed — services emit these |
+||| `ImplementationService` | `work_item.completed` (rich payload), `worktree.created`, `worktree.reused` | `agent_session.*` events removed — services emit these |
 || `ReviewPipeline` | `review.started`, `review.critiques_found`, `review.completed`, `reimplementation.started` | |
 || `Resumption` | `agent_session.resumed` | |
 

@@ -603,21 +603,26 @@ func (a *GitlabAdapter) AddComment(ctx context.Context, externalID string, body 
 }
 
 func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
-	externalID := extractExternalID(event.Payload)
 	switch domain.EventType(event.EventType) {
 	case domain.EventPlanApproved:
 		if err := a.onPlanApproved(ctx, event.Payload); err != nil {
 			return err
 		}
-		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
-			return nil
+		ids := extractExternalIDs(event.Payload, "gl:")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateInProgress); updateErr != nil {
+				slog.Warn("gitlab: failed to update tracker state to in_progress", "error", updateErr, "external_id", id)
+			}
 		}
-		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
+		return nil
 	case domain.EventWorkItemCompleted:
-		if externalID == "" || !strings.HasPrefix(externalID, "gl:") {
-			return nil
+		ids := extractExternalIDs(event.Payload, "gl:")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateInReview); updateErr != nil {
+				slog.Warn("gitlab: failed to update tracker state to in_review", "error", updateErr, "external_id", id)
+			}
 		}
-		return a.UpdateState(ctx, externalID, domain.TrackerStateInReview)
+		return nil
 	default:
 		return nil
 	}
@@ -1907,13 +1912,17 @@ func formatExternalID(projectPath string, iid int64) string {
 }
 
 // parseExternalID parses a GitLab external ID and returns the project path and issue IID.
-// Supports both new format (gl:issue:path#iid) and legacy format (gl:issue:numeric#iid).
+// Accepts "gl:issue:{path}#{iid}", "gl:{path}#{iid}", "gl:issue:{numeric}#{iid}", and "gl:{numeric}#{iid}".
 func parseExternalID(externalID string) (projectPath string, iid int64, err error) {
 	trimmed := strings.TrimSpace(externalID)
-	if !strings.HasPrefix(trimmed, "gl:issue:") {
-		return "", 0, fmt.Errorf("invalid gitlab external id %q", externalID)
+	prefix := "gl:issue:"
+	if !strings.HasPrefix(trimmed, prefix) {
+		prefix = "gl:"
+		if !strings.HasPrefix(trimmed, prefix) {
+			return "", 0, fmt.Errorf("invalid gitlab external id %q", externalID)
+		}
 	}
-	raw := strings.TrimPrefix(trimmed, "gl:issue:")
+	raw := strings.TrimPrefix(trimmed, prefix)
 	parts := strings.SplitN(raw, "#", 2)
 	if len(parts) != 2 {
 		return "", 0, fmt.Errorf("invalid gitlab external id %q", externalID)
@@ -1934,21 +1943,26 @@ func parseExternalID(externalID string) (projectPath string, iid int64, err erro
 	return strings.TrimSpace(parts[0]), iid, nil
 }
 
-func extractExternalID(payload string) string {
+// extractExternalIDs returns all external IDs matching the given prefix from the payload.
+// Falls back to the legacy single external_id field if external_ids is absent.
+func extractExternalIDs(payload string, prefix string) []string {
 	var parsed struct {
 		ExternalID  string   `json:"external_id"`
 		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		return ""
+		return nil
 	}
-	// Prefer external_ids (prefixed list), fall back to single external_id
+	var ids []string
 	for _, id := range parsed.ExternalIDs {
-		if strings.HasPrefix(id, "gl:") {
-			return id
+		if strings.HasPrefix(id, prefix) {
+			ids = append(ids, id)
 		}
 	}
-	return parsed.ExternalID
+	if len(ids) == 0 && parsed.ExternalID != "" && strings.HasPrefix(parsed.ExternalID, prefix) {
+		ids = append(ids, parsed.ExternalID)
+	}
+	return ids
 }
 
 func extractPlanCommentPayload(payload string) (string, []string, map[string]string) {

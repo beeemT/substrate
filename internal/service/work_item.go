@@ -91,11 +91,11 @@ func WorkItemEventExternalIDs(item domain.Session) []string {
 	switch item.Source {
 	case "github":
 		for _, itemID := range item.SourceItemIDs {
-			appendID("gh:" + itemID)
+			appendID("gh:issue:" + itemID)
 		}
 	case "gitlab":
 		for _, itemID := range item.SourceItemIDs {
-			appendID("gl:" + itemID)
+			appendID("gl:issue:" + itemID)
 		}
 	case "linear":
 		for _, itemID := range item.SourceItemIDs {

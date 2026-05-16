@@ -82,8 +82,9 @@ const (
 	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
 
 	// Agent session events (resumption lifecycle)
-	EventAgentSessionResumed  EventType = "agent_session.resumed"
-	EventAgentSessionFollowUp EventType = "agent_session.follow_up"
+	EventAgentSessionResumed          EventType = "agent_session.resumed"
+	EventAgentSessionFollowUp         EventType = "agent_session.follow_up"
+	EventAgentSessionWaitingForAnswer EventType = "agent_session.waiting_for_answer"
 
 	// Question events
 	EventAgentQuestionRaised   EventType = "agent_question.raised"

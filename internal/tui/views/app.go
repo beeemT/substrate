@@ -318,6 +318,8 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventAgentSessionFailed),
 				string(domain.EventAgentSessionInterrupted),
 				string(domain.EventAgentSessionResumed),
+				string(domain.EventAgentSessionFollowUp),
+				string(domain.EventAgentSessionWaitingForAnswer),
 				// Plan lifecycle
 				string(domain.EventPlanGenerated),
 				string(domain.EventPlanApproved),
@@ -1185,6 +1187,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				string(domain.EventAgentSessionInterrupted),
 				string(domain.EventAgentSessionResumed),
 				string(domain.EventAgentSessionFollowUp),
+				string(domain.EventAgentSessionWaitingForAnswer),
 				string(domain.EventPlanGenerated),
 				string(domain.EventPlanApproved),
 				string(domain.EventPlanRejected),
@@ -1312,14 +1315,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
 			}
-			// Implementation/review complete: show toast and stop foreman
-			if msg.Event.EventType == string(domain.EventWorkItemCompleted) {
-				a.cancelPipeline(workItemID)
-				a.toasts.AddToast("Implementation complete", components.ToastSuccess)
-				if a.provider.Foreman() != nil && a.foremanPlanID != "" {
-					cmds = append(cmds, StopForemanCmd(a.provider.Foreman()))
-				}
-			}
 
 		// Session lifecycle — new sessions: load work item AND tasks so the sidebar
 		// transitions from "Ingested" to "Planning/Implementing" immediately.
@@ -1340,7 +1335,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventAgentSessionFailed,
 			domain.EventAgentSessionInterrupted,
 			domain.EventAgentSessionResumed,
-			domain.EventAgentSessionFollowUp:
+			domain.EventAgentSessionFollowUp,
+			domain.EventAgentSessionWaitingForAnswer:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), workItemID))

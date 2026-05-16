@@ -305,6 +305,17 @@ func (s *AgentSessionService) Transition(ctx context.Context, id string, to doma
 			CreatedAt:   time.Now(),
 		})
 	}
+	// Emit EventAgentSessionWaitingForAnswer when a session starts waiting for a human answer
+	// so the TUI can refresh the session status (sidebar, action-needed state).
+	if to == domain.AgentSessionWaitingForAnswer {
+		Emit(s.eventBus, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventAgentSessionWaitingForAnswer),
+			WorkspaceID: agentSession.WorkspaceID,
+			Payload:     marshalAgentSessionPayload(agentSession),
+			CreatedAt:   time.Now(),
+		})
+	}
 	return nil
 }
 

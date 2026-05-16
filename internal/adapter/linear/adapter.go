@@ -510,42 +510,54 @@ func (a *LinearAdapter) AddComment(ctx context.Context, externalID string, body 
 func (a *LinearAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) error {
 	switch domain.EventType(event.EventType) {
 	case domain.EventPlanApproved:
-		id := extractExternalID(event.Payload)
-		if id == "" || !strings.HasPrefix(id, "LIN-") {
-			return nil
+		ids := extractExternalIDs(event.Payload, "lin:", "LIN-")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateInProgress); updateErr != nil {
+				slog.Warn("linear: failed to update tracker state to in_progress", "error", updateErr, "external_id", id)
+			}
 		}
-
-		return a.UpdateState(ctx, id, domain.TrackerStateInProgress)
+		return nil
 	case domain.EventWorkItemCompleted:
-		id := extractExternalID(event.Payload)
-		if id == "" || !strings.HasPrefix(id, "LIN-") {
-			return nil
+		ids := extractExternalIDs(event.Payload, "lin:", "LIN-")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateDone); updateErr != nil {
+				slog.Warn("linear: failed to update tracker state to done", "error", updateErr, "external_id", id)
+			}
 		}
-
-		return a.UpdateState(ctx, id, domain.TrackerStateDone)
+		return nil
 	default:
 		return nil
 	}
 }
 
-// extractExternalID unmarshals a JSON payload and returns the "external_id" field.
-// Returns empty string if the payload is malformed or the field is absent.
-// Prefers external_ids (prefixed list), falls back to single external_id.
-func extractExternalID(payload string) string {
+// extractExternalIDs returns all external IDs matching any of the given prefixes.
+// Prefers external_ids (prefixed list), falls back to the legacy single external_id.
+func extractExternalIDs(payload string, prefixes ...string) []string {
 	var p struct {
 		ExternalID  string   `json:"external_id"`
 		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		return ""
+		return nil
 	}
-	// Prefer external_ids (prefixed list), fall back to single external_id
+	var ids []string
 	for _, id := range p.ExternalIDs {
-		if strings.HasPrefix(id, "LIN-") {
-			return id
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(id, prefix) {
+				ids = append(ids, id)
+				break
+			}
 		}
 	}
-	return p.ExternalID
+	if len(ids) == 0 && p.ExternalID != "" {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(p.ExternalID, prefix) {
+				ids = append(ids, p.ExternalID)
+				break
+			}
+		}
+	}
+	return ids
 }
 
 // --- Data access helpers ---

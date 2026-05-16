@@ -1311,8 +1311,11 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 			continue
 		}
 
-		// Call MarkSubPlanPRReady for each successful push
-		if markErr := s.planSvc.MarkSubPlanPRReady(ctx, result.SubPlanID, service.SubPlanPRReadyContext{
+		// Use a durable context so the PR-ready event is emitted even if the
+		// caller's context is canceled after finalization succeeds.
+		prReadyCtx, prReadyCancel := durablePRReadyContext(ctx)
+		defer prReadyCancel()
+		if markErr := s.planSvc.MarkSubPlanPRReady(prReadyCtx, result.SubPlanID, service.SubPlanPRReadyContext{
 			Repository:     result.Repository,
 			Branch:         result.Branch,
 			WorktreePath:   result.WorktreePath,
@@ -1736,6 +1739,14 @@ const (
 	preReceiveFixAgentTimeout  = 5 * time.Minute
 	durableFinalizationTimeout = commitAgentTimeout + preReceiveFixAgentTimeout + time.Minute
 )
+
+// durablePRReadyContext returns a context derived from parent but insulated from
+// cancellation, with a generous timeout for PR-ready marking and DB persistence.
+// This ensures EventSubPlanPRReady is emitted even if the caller's context is
+// canceled after finalization completes.
+func durablePRReadyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), durableCleanupTimeout)
+}
 
 func durableCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), durableCleanupTimeout)

@@ -538,18 +538,19 @@ func (a WorkItemAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) 
 		if err := a.onPlanApproved(ctx, event.Payload); err != nil {
 			return err
 		}
-		externalID := extractExternalID(event.Payload)
-		if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
-			return nil
+		ids := extractExternalIDs(event.Payload, "gh:")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateInProgress); updateErr != nil {
+				slog.Warn("github: failed to update tracker state to in_progress", "error", updateErr, "external_id", id)
+			}
 		}
-		return a.UpdateState(ctx, externalID, domain.TrackerStateInProgress)
+		return nil
 	case domain.EventWorkItemCompleted:
-		externalID := extractExternalID(event.Payload)
-		if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
-			return nil
-		}
-		if updateErr := a.UpdateState(ctx, externalID, domain.TrackerStateInReview); updateErr != nil {
-			slog.Warn("failed to update tracker state to in_review", "error", updateErr, "external_id", externalID)
+		ids := extractExternalIDs(event.Payload, "gh:")
+		for _, id := range ids {
+			if updateErr := a.UpdateState(ctx, id, domain.TrackerStateInReview); updateErr != nil {
+				slog.Warn("github: failed to update tracker state to in_review", "error", updateErr, "external_id", id)
+			}
 		}
 		return nil
 	case domain.EventPRMerged:
@@ -1963,10 +1964,15 @@ func formatExternalID(owner, repo string, number int64) string {
 
 func parseExternalID(externalID string) (string, string, int64, error) {
 	trimmed := strings.TrimSpace(externalID)
-	if !strings.HasPrefix(trimmed, "gh:issue:") {
-		return "", "", 0, fmt.Errorf("invalid github external id %q", externalID)
+	// Accept both "gh:issue:owner/repo#number" and "gh:owner/repo#number".
+	prefix := "gh:issue:"
+	if !strings.HasPrefix(trimmed, prefix) {
+		prefix = "gh:"
+		if !strings.HasPrefix(trimmed, prefix) {
+			return "", "", 0, fmt.Errorf("invalid github external id %q", externalID)
+		}
 	}
-	raw := strings.TrimPrefix(trimmed, "gh:issue:")
+	raw := strings.TrimPrefix(trimmed, prefix)
 	parts := strings.SplitN(raw, "#", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
 		return "", "", 0, fmt.Errorf("invalid github external id %q", externalID)
@@ -1983,21 +1989,26 @@ func parseExternalID(externalID string) (string, string, int64, error) {
 	return owner, repo, number, nil
 }
 
-func extractExternalID(payload string) string {
+// extractExternalIDs returns all external IDs matching the given prefix from the payload.
+// Falls back to the legacy single external_id field if external_ids is absent.
+func extractExternalIDs(payload string, prefix string) []string {
 	var parsed struct {
 		ExternalID  string   `json:"external_id"`
 		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		return ""
+		return nil
 	}
-	// Prefer external_ids (prefixed list), fall back to single external_id
+	var ids []string
 	for _, id := range parsed.ExternalIDs {
-		if strings.HasPrefix(id, "gh:") {
-			return id
+		if strings.HasPrefix(id, prefix) {
+			ids = append(ids, id)
 		}
 	}
-	return parsed.ExternalID
+	if len(ids) == 0 && parsed.ExternalID != "" && strings.HasPrefix(parsed.ExternalID, prefix) {
+		ids = append(ids, parsed.ExternalID)
+	}
+	return ids
 }
 
 func extractPlanCommentPayload(payload string) (string, []string, map[string]string) {
@@ -2385,10 +2396,12 @@ func (a *GithubAdapter) checkAllMerged(ctx context.Context, workspaceID, prID st
 }
 
 func (a *GithubAdapter) onPRMerged(ctx context.Context, payload string) error {
-	externalID := extractExternalID(payload)
-	if externalID == "" || !strings.HasPrefix(externalID, "gh:") {
+	ids := extractExternalIDs(payload, "gh:")
+	if len(ids) == 0 {
 		return nil
 	}
+	// Only close the primary (first) issue.
+	externalID := ids[0]
 	owner, repo, number, err := parseExternalID(externalID)
 	if err != nil {
 		return fmt.Errorf("parse external id for issue close: %w", err)

@@ -258,6 +258,12 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 
 // SubmitForReview transitions a plan from draft to pending_review.
 func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
+	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
+		return err
+	}
+
+	// Load plan, sub-plans, and workspace after the transition so the event
+	// carries the post-transition (pending_review) plan state.
 	var plan domain.Plan
 	var subPlans []domain.TaskPlan
 	var workspaceID string
@@ -267,12 +273,10 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
-		// Load sub-plans for the event payload
 		subPlans, err = res.SubPlans.ListByPlanID(ctx, id)
 		if err != nil {
 			return fmt.Errorf("list sub-plans: %w", err)
 		}
-		// Load work item to get real WorkspaceID
 		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
 		if err != nil {
 			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", plan.WorkItemID, "error", err)
@@ -282,9 +286,6 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 		return nil
 	})
 	if err != nil {
-		return err
-	}
-	if err := s.TransitionPlan(ctx, id, domain.PlanPendingReview); err != nil {
 		return err
 	}
 	Emit(s.eventBus, domain.SystemEvent{
