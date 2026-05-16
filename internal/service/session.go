@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"time"
 
@@ -20,9 +21,10 @@ type AgentSessionService struct {
 
 // agentSessionEventPayload holds the JSON payload for agent session lifecycle events.
 type agentSessionEventPayload struct {
-	Session    domain.AgentSession `json:"session"`
-	WorkItemID string              `json:"work_item_id"` // flat fields so TUI extractors don't need nested navigation
-	SessionID  string              `json:"agent_session_id"`
+	Session      domain.AgentSession `json:"session"`
+	WorkItemID   string              `json:"work_item_id"` // flat fields so TUI extractors don't need nested navigation
+	SessionID    string              `json:"agent_session_id"`
+	OldSessionID string              `json:"old_session_id,omitempty"` // present for resumed sessions so TUI can link old→new
 }
 
 // marshalAgentSessionPayload serializes an agent session event payload to JSON.
@@ -38,23 +40,84 @@ func marshalAgentSessionPayload(agentSession domain.AgentSession) string {
 	return string(b)
 }
 
-// agentSessionStatusChangedPayload holds the JSON payload for generic agent session status changes.
-type agentSessionStatusChangedPayload struct {
-	Session    domain.AgentSession       `json:"session"`
-	WorkItemID string                    `json:"work_item_id"`
-	SessionID  string                    `json:"agent_session_id"`
-	From       domain.AgentSessionStatus `json:"from"`
-	To         domain.AgentSessionStatus `json:"to"`
+// Resume creates a new agent session as a replacement for an interrupted one and emits
+// EventAgentSessionResumed with both session IDs. The interrupted session is NOT
+// transitioned by this method — callers must handle that separately.
+func (s *AgentSessionService) Resume(ctx context.Context, interrupted domain.AgentSession, harnessName string, ownerInstanceID *string) (domain.AgentSession, error) {
+	now := time.Now()
+	newSession := domain.AgentSession{
+		ID:              domain.NewID(),
+		WorkItemID:      interrupted.WorkItemID,
+		WorkspaceID:     interrupted.WorkspaceID,
+		Phase:           domain.AgentSessionPhaseImplementation,
+		SubPlanID:       interrupted.SubPlanID,
+		RepositoryName:  interrupted.RepositoryName,
+		WorktreePath:    interrupted.WorktreePath,
+		HarnessName:     harnessName,
+		OwnerInstanceID: ownerInstanceID,
+		Status:          domain.AgentSessionPending,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.AgentSessions.Create(ctx, newSession)
+	}); err != nil {
+		return domain.AgentSession{}, err
+	}
+
+	// Transition to running and emit EventAgentSessionResumed.
+	var created domain.AgentSession
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		created, err = res.AgentSessions.Get(ctx, newSession.ID)
+		if err != nil {
+			return newNotFoundError("agent session", newSession.ID)
+		}
+
+		if !canTransitionAgentSession(created.Status, domain.AgentSessionRunning) {
+			return newInvalidTransitionError(
+				sessionStatusName(created.Status),
+				sessionStatusName(domain.AgentSessionRunning),
+				"agent session",
+			)
+		}
+
+		now := time.Now()
+		created.Status = domain.AgentSessionRunning
+		created.StartedAt = &now
+		created.UpdatedAt = now
+
+		return res.AgentSessions.Update(ctx, created)
+	})
+	if err != nil {
+		// Transition failed: clean up the created pending session.
+		// Use a context detached from the caller's cancellation so cleanup always runs.
+		_ = s.transacter.Transact(context.WithoutCancel(ctx), func(ctx context.Context, res repository.Resources) error {
+			return res.AgentSessions.Delete(ctx, newSession.ID)
+		})
+		return domain.AgentSession{}, err
+	}
+
+	// Emit EventAgentSessionResumed with the full new session and the old session ID.
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionResumed),
+		WorkspaceID: created.WorkspaceID,
+		Payload:     marshalAgentSessionPayloadWithOld(created, interrupted.ID),
+		CreatedAt:   time.Now(),
+	})
+
+	return created, nil
 }
 
-// marshalAgentSessionStatusChangedPayload serializes a generic agent session status change payload.
-func marshalAgentSessionStatusChangedPayload(agentSession domain.AgentSession, from, to domain.AgentSessionStatus) string {
-	p := agentSessionStatusChangedPayload{
-		Session:    agentSession,
-		WorkItemID: agentSession.WorkItemID,
-		SessionID:  agentSession.ID,
-		From:       from,
-		To:         to,
+// marshalAgentSessionPayloadWithOld serializes a resumed agent session event payload.
+func marshalAgentSessionPayloadWithOld(agentSession domain.AgentSession, oldSessionID string) string {
+	p := agentSessionEventPayload{
+		Session:      agentSession,
+		WorkItemID:   agentSession.WorkItemID,
+		SessionID:    agentSession.ID,
+		OldSessionID: oldSessionID,
 	}
 	b, _ := json.Marshal(p)
 	return string(b)
@@ -198,6 +261,8 @@ func (s *AgentSessionService) Create(ctx context.Context, agentSession domain.Ag
 }
 
 // Transition transitions an agent session to a new status.
+// For semantic events, use the specialized mutators: Start, Complete, Interrupt, FollowUpRestart.
+// Transition only emits EventAgentSessionResumed for resumption transitions (Interrupted/WaitingForAnswer → Running).
 func (s *AgentSessionService) Transition(ctx context.Context, id string, to domain.AgentSessionStatus) error {
 	var agentSession domain.AgentSession
 	var from domain.AgentSessionStatus
@@ -229,13 +294,17 @@ func (s *AgentSessionService) Transition(ctx context.Context, id string, to doma
 		return err
 	}
 
-	Emit(s.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionStatusChanged),
-		WorkspaceID: agentSession.WorkspaceID,
-		Payload:     marshalAgentSessionStatusChangedPayload(agentSession, from, to),
-		CreatedAt:   time.Now(),
-	})
+	// Only emit EventAgentSessionResumed for resumption transitions.
+	// All other semantic transitions use specialized mutators that emit their own events.
+	if to == domain.AgentSessionRunning && (from == domain.AgentSessionInterrupted || from == domain.AgentSessionWaitingForAnswer) {
+		Emit(s.eventBus, domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventAgentSessionResumed),
+			WorkspaceID: agentSession.WorkspaceID,
+			Payload:     marshalAgentSessionPayload(agentSession),
+			CreatedAt:   time.Now(),
+		})
+	}
 	return nil
 }
 
@@ -377,16 +446,10 @@ func (s *AgentSessionService) Interrupt(ctx context.Context, id string) error {
 	return nil
 }
 
-// Resume transitions an agent session from interrupted to running.
-func (s *AgentSessionService) Resume(ctx context.Context, id string) error {
-	return s.Transition(ctx, id, domain.AgentSessionRunning)
-}
-
 // FollowUpRestart transitions a completed agent session back to running for a follow-up session.
 // Unlike Start(), this preserves the original StartedAt and clears CompletedAt.
 func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) error {
 	var agentSession domain.AgentSession
-	var from domain.AgentSessionStatus
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
 		agentSession, err = res.AgentSessions.Get(ctx, id)
@@ -402,7 +465,6 @@ func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) er
 			)
 		}
 
-		from = agentSession.Status
 		now := time.Now()
 		agentSession.Status = domain.AgentSessionRunning
 		agentSession.CompletedAt = nil
@@ -419,9 +481,9 @@ func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) er
 
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionStatusChanged),
+		EventType:   string(domain.EventAgentSessionFollowUp),
 		WorkspaceID: agentSession.WorkspaceID,
-		Payload:     marshalAgentSessionStatusChangedPayload(agentSession, from, domain.AgentSessionRunning),
+		Payload:     marshalAgentSessionPayload(agentSession),
 		CreatedAt:   time.Now(),
 	})
 	return nil
@@ -456,6 +518,76 @@ func (s *AgentSessionService) SetPlanID(ctx context.Context, id string, planID s
 
 		return res.AgentSessions.Update(ctx, agentSession)
 	})
+}
+
+// FollowUpFailed creates a new agent session for a failed one and transitions it to running.
+// The failed session row is preserved as audit trail. It emits EventAgentSessionResumed
+// with the full new session and the old session ID so the TUI can link old→new.
+func (s *AgentSessionService) FollowUpFailed(ctx context.Context, failed domain.AgentSession, harnessName string, ownerInstanceID *string) (domain.AgentSession, error) {
+	now := time.Now()
+	newSession := domain.AgentSession{
+		ID:              domain.NewID(),
+		WorkItemID:      failed.WorkItemID,
+		WorkspaceID:     failed.WorkspaceID,
+		Phase:           domain.AgentSessionPhaseImplementation,
+		SubPlanID:       failed.SubPlanID,
+		RepositoryName:  failed.RepositoryName,
+		WorktreePath:    failed.WorktreePath,
+		HarnessName:     harnessName,
+		OwnerInstanceID: ownerInstanceID,
+		Status:          domain.AgentSessionPending,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.AgentSessions.Create(ctx, newSession)
+	}); err != nil {
+		return domain.AgentSession{}, fmt.Errorf("create follow-up session: %w", err)
+	}
+
+	// Transition to running and emit EventAgentSessionResumed.
+	var created domain.AgentSession
+	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		var err error
+		created, err = res.AgentSessions.Get(ctx, newSession.ID)
+		if err != nil {
+			return newNotFoundError("agent session", newSession.ID)
+		}
+
+		if !canTransitionAgentSession(created.Status, domain.AgentSessionRunning) {
+			return newInvalidTransitionError(
+				sessionStatusName(created.Status),
+				sessionStatusName(domain.AgentSessionRunning),
+				"agent session",
+			)
+		}
+
+		now := time.Now()
+		created.Status = domain.AgentSessionRunning
+		created.StartedAt = &now
+		created.UpdatedAt = now
+
+		return res.AgentSessions.Update(ctx, created)
+	})
+	if err != nil {
+		// Transition failed: clean up the created pending session.
+		_ = s.transacter.Transact(context.WithoutCancel(ctx), func(ctx context.Context, res repository.Resources) error {
+			return res.AgentSessions.Delete(ctx, newSession.ID)
+		})
+		return domain.AgentSession{}, err
+	}
+
+	// Emit EventAgentSessionResumed with the full new session and the old session ID.
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionResumed),
+		WorkspaceID: created.WorkspaceID,
+		Payload:     marshalAgentSessionPayloadWithOld(created, failed.ID),
+		CreatedAt:   time.Now(),
+	})
+
+	return created, nil
 }
 
 // Fail transitions an agent session to failed.

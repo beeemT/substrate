@@ -212,46 +212,72 @@ func TestDomainEventMsg_ImplementationStartedReloadsWorkItemAndTasks(t *testing.
 		Session: service.NewSessionService(repository.NoopTransacter{
 			Res: repository.Resources{Sessions: sessionRepo},
 		}, bus),
+		Plan: service.NewPlanService(repository.NoopTransacter{
+			Res: repository.Resources{Plans: &mockPlanRepo{}, SubPlans: &mockSubPlanRepo{}},
+		}, bus),
 		Settings: &SettingsService{},
 	})
 	app.busSub = &event.Subscriber{}
 	app.eventConsumer = NewEventConsumer(app, app.busSub)
-	payload, err := json.Marshal(map[string]any{"plan_id": "plan-1", "work_item_id": "wi-1"})
+	// Use EventWorkItemImplementing with full work item payload
+	payload, err := json.Marshal(map[string]any{"work_item_id": "wi-1", "workspace_id": "ws-integration", "session": workItem})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
 	_, cmd := app.Update(DomainEventMsg{Event: domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventImplementationStarted),
+		EventType:   string(domain.EventWorkItemImplementing),
 		WorkspaceID: "ws-integration",
 		Payload:     string(payload),
 		CreatedAt:   now,
 	}})
 
 	foundSession := false
-	foundTasks := false
 	foundTyped := false
 	for _, msg := range drainBatchMsgs(t, cmd) {
 		switch m := msg.(type) {
+		case WorkItemUpdatedMsg:
+			foundTyped = m.WorkItemID == "wi-1" && m.Session.State == domain.SessionImplementing
 		case SessionLoadedMsg:
 			foundSession = m.WorkItem.ID == "wi-1" && m.WorkItem.State == domain.SessionImplementing
-		case TasksForSessionLoadedMsg:
-			foundTasks = m.WorkItemID == "wi-1" && len(m.Sessions) == 1 && m.Sessions[0].ID == task.ID
-		case ImplementationStartedMsg:
-			foundTyped = m.WorkItemID == "wi-1"
 		}
 	}
-	if !foundSession {
-		t.Fatal("implementation-started event did not schedule work item reload")
-	}
-	if !foundTasks {
-		t.Fatal("implementation-started event did not schedule task reload")
-	}
 	if !foundTyped {
-		t.Fatal("implementation-started event was not decoded into typed message")
+		t.Fatal("EventWorkItemImplementing was not decoded into WorkItemUpdatedMsg")
+	}
+	if !foundSession {
+		t.Fatal("WorkItemUpdatedMsg did not schedule work item reload")
 	}
 }
+
+type mockPlanRepo struct{}
+
+func (r *mockPlanRepo) Get(_ context.Context, _ string) (domain.Plan, error) {
+	return domain.Plan{}, repository.ErrNotFound
+}
+
+func (r *mockPlanRepo) GetByWorkItemID(_ context.Context, _ string) (domain.Plan, error) {
+	return domain.Plan{}, repository.ErrNotFound
+}
+func (r *mockPlanRepo) List(_ context.Context) ([]domain.Plan, error)        { return nil, nil }
+func (r *mockPlanRepo) Create(_ context.Context, _ domain.Plan) error        { return nil }
+func (r *mockPlanRepo) Update(_ context.Context, _ domain.Plan) error        { return nil }
+func (r *mockPlanRepo) Delete(_ context.Context, _ string) error             { return nil }
+func (r *mockPlanRepo) AppendFAQ(_ context.Context, _ domain.FAQEntry) error { return nil }
+
+type mockSubPlanRepo struct{}
+
+func (r *mockSubPlanRepo) Get(_ context.Context, _ string) (domain.TaskPlan, error) {
+	return domain.TaskPlan{}, repository.ErrNotFound
+}
+
+func (r *mockSubPlanRepo) ListByPlanID(_ context.Context, _ string) ([]domain.TaskPlan, error) {
+	return nil, nil
+}
+func (r *mockSubPlanRepo) Create(_ context.Context, _ domain.TaskPlan) error { return nil }
+func (r *mockSubPlanRepo) Update(_ context.Context, _ domain.TaskPlan) error { return nil }
+func (r *mockSubPlanRepo) Delete(_ context.Context, _ string) error          { return nil }
 
 func findBatchMsg[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
 	t.Helper()

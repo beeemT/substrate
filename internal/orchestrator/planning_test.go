@@ -775,7 +775,10 @@ func TestBuildAndPersistPlanAtomicReplace(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	sessionRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: "ws-1"},
+	}}
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, &mockPublisher{})
 
 	ctx := context.Background()
 
@@ -905,7 +908,10 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	// Plan repo with UNIQUE enforcement (mirrors SQLite behaviour).
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	sessions := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID},
+	}}
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessions}}, &mockPublisher{})
 
 	// Seed the rejected plan that occupies the unique slot.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -1025,7 +1031,11 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	planRepo := newUniqueWorkItemPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	// Work item needed for planSvc to load WorkspaceID on plan events.
+	sessions := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID},
+	}}
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessions}}, &mockPublisher{})
 
 	// Seed an approved plan — the artifact of a completed work item.
 	if err := planRepo.Create(context.Background(), domain.Plan{
@@ -1199,19 +1209,22 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	// Setup services
 	planRepo := newMockPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	sessions := &planTestWorkItemRepo{items: map[string]domain.Session{
+		workItemID: {ID: workItemID, WorkspaceID: workspaceID},
+	}}
+	eventRepo := &planTestEventRepo{}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessions}}, bus)
 	workItemRepo := &planTestWorkItemRepo{items: map[string]domain.Session{
 		workItemID: {ID: workItemID, WorkspaceID: workspaceID, State: domain.SessionIngested},
 	}}
-	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
 	workspaceRepo := &planTestWorkspaceRepo{workspaces: map[string]domain.Workspace{
 		workspaceID: {ID: workspaceID, RootPath: workspaceRoot},
 	}}
-	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, bus)
 	sessionRepo := newMockSessionRepo()
-	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
-	eventRepo := &planTestEventRepo{}
-	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus)
 
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate.", "Implement.")}
 	globalCfg := &config.Config{}

@@ -15,7 +15,12 @@ func TestPlanService_AdditionalMethods(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+	sessionRepo := NewMockWorkItemRepository()
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
+
+	// Setup work item so SubmitForReview/ApprovePlan can load WorkspaceID
+	sessionRepo.Create(ctx, domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
+	sessionRepo.Create(ctx, domain.Session{ID: "wi-2", WorkspaceID: "ws-1"})
 
 	// Setup plan
 	plan := domain.Plan{
@@ -285,17 +290,6 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 			t.Fatalf("ResumeFromAnswer failed: %v", err)
 		}
 		got, _ := svc.Get(ctx, "s-resume")
-		if got.Status != domain.AgentSessionRunning {
-			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionRunning)
-		}
-	})
-
-	t.Run("Resume", func(t *testing.T) {
-		repo.sessions["s-resume2"] = domain.AgentSession{ID: "s-resume2", WorkItemID: "wi-resume2", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionInterrupted}
-		if err := svc.Resume(ctx, "s-resume2"); err != nil {
-			t.Fatalf("Resume failed: %v", err)
-		}
-		got, _ := svc.Get(ctx, "s-resume2")
 		if got.Status != domain.AgentSessionRunning {
 			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionRunning)
 		}

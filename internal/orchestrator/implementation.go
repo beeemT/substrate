@@ -208,11 +208,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		}
 	}
 	implementingStarted = true
-
-	// 8. Emit ImplementationStarted event
-	if err := s.emitImplementationStarted(ctx, &plan, &workItem, workspace.ID); err != nil {
-		slog.Warn("failed to emit implementation started event", "error", err)
-	}
+	// EventWorkItemImplementing is emitted by StartImplementation → Transition → emitStateChange
 
 	// 9. Generate branch name
 	branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
@@ -1293,12 +1289,8 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 		return fmt.Errorf("complete work item: %w", completeErr)
 	}
 	completeCancel()
-
-	eventCtx, eventCancel := durableCleanupContext(ctx)
-	if emitErr := s.emitWorkItemCompleted(eventCtx, workItem, workspaceID, sessions, repoPaths, branch, subPlans); emitErr != nil {
-		slog.Warn("failed to emit work item completed event", "error", emitErr)
-	}
-	eventCancel()
+	// EventWorkItemCompleted is emitted by CompleteWorkItem → Transition → emitStateChange.
+	// PR/MR finalization moves to EventSubPlanPRReady in task-completion-event-plan.md.
 
 	return nil
 }
@@ -1538,102 +1530,6 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 		return gitStageAndCommit(ctx, worktreePath, fallbackCommitMsg)
 	}
 	return nil
-}
-
-// emitWorkItemCompleted publishes a work_item.completed event to the event bus.
-// Adapters use this to transition draft PRs to ready, update tracker state, etc.
-func (s *ImplementationService) emitWorkItemCompleted(
-	ctx context.Context,
-	workItem *domain.Session,
-	workspaceID string,
-	sessions []SessionResult,
-	repoPaths map[string]string,
-	branch string,
-	subPlans []domain.TaskPlan,
-) error {
-	payload := map[string]any{
-		"workspace_id":    workspaceID,
-		"work_item_id":    workItem.ID,
-		"external_id":     workItem.ExternalID,
-		"work_item_title": workItem.Title,
-		"branch":          branch,
-	}
-
-	// Resolve review context from the first session's worktree.
-	for _, sess := range sessions {
-		if sess.WorktreePath == "" {
-			continue
-		}
-		// Use the bare repo path for review context resolution (same as ensureWorktree).
-		if bareRepo, ok := repoPaths[sess.Repository]; ok {
-			reviewCtx, err := remotedetect.ResolveReviewContextWithBranch(ctx, bareRepo, branch)
-			if err != nil {
-				slog.Warn("failed to resolve review context for completion event", "repo", sess.Repository, "error", err)
-				continue
-			}
-			if reviewCtx.Review.BaseRepo.Owner != "" || reviewCtx.Review.BaseRepo.Repo != "" || reviewCtx.Review.HeadRepo.Owner != "" || reviewCtx.Review.HeadRepo.Repo != "" {
-				payload["review"] = reviewCtx.Review
-			}
-			break
-		}
-	}
-
-	// Include sub-plan content from the first sub-plan.
-	if len(subPlans) > 0 {
-		payload["sub_plan"] = subPlans[0].Content
-	}
-
-	// Include external IDs (source item IDs prefixed by provider).
-	if externalIDs := workItemEventExternalIDs(*workItem); len(externalIDs) > 0 {
-		payload["external_ids"] = externalIDs
-	}
-
-	// Include tracker references.
-	if trackerRefs := trackerRefsFromMetadata(workItem.Metadata); len(trackerRefs) > 0 {
-		payload["tracker_refs"] = trackerRefs
-	}
-
-	return s.publishEvent(ctx, domain.EventWorkItemCompleted, workspaceID, payload)
-}
-
-// workItemEventExternalIDs builds the external_ids list for the completion event payload.
-// It prefixes source item IDs with the provider namespace and deduplicates.
-func workItemEventExternalIDs(workItem domain.Session) []string {
-	seen := make(map[string]struct{})
-	ids := make([]string, 0, len(workItem.SourceItemIDs)+1)
-	appendID := func(id string) {
-		trimmed := strings.TrimSpace(id)
-		if trimmed == "" {
-			return
-		}
-		if _, ok := seen[trimmed]; ok {
-			return
-		}
-		seen[trimmed] = struct{}{}
-		ids = append(ids, trimmed)
-	}
-	switch {
-	case workItem.Source == "github" && workItem.SourceScope == domain.ScopeIssues:
-		for _, id := range workItem.SourceItemIDs {
-			appendID("gh:issue:" + id)
-		}
-	case workItem.Source == "gitlab" && workItem.SourceScope == domain.ScopeIssues:
-		for _, id := range workItem.SourceItemIDs {
-			appendID("gl:issue:" + id)
-		}
-	}
-	appendID(workItem.ExternalID)
-	return ids
-}
-
-func (s *ImplementationService) emitImplementationStarted(ctx context.Context, plan *domain.Plan, workItem *domain.Session, workspaceID string) error {
-	return s.publishEvent(ctx, domain.EventImplementationStarted, workspaceID, struct {
-		PlanID     string `json:"plan_id"`
-		WorkItemID string `json:"work_item_id"`
-	}{
-		PlanID:     plan.ID,
-		WorkItemID: workItem.ID,
-	})
 }
 
 // lastSessionForSubPlan returns the most recent session for a sub-plan,

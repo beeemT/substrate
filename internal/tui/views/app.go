@@ -323,14 +323,13 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventPlanApproved),
 				string(domain.EventPlanRejected),
 				string(domain.EventPlanRevised),
-				string(domain.EventPlanSubmittedForReview),
+				string(domain.EventPlanSubmitted),
 				string(domain.EventPlanFailed),
 				// Review
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
 				string(domain.EventCritiquesFound),
-				// Implementation
-				string(domain.EventImplementationStarted),
+				// Reimplementation
 				string(domain.EventReimplementationStarted),
 				string(domain.EventPRMerged),
 				string(domain.EventPRReviewStateChanged),
@@ -1161,16 +1160,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				string(domain.EventAgentSessionFailed),
 				string(domain.EventAgentSessionInterrupted),
 				string(domain.EventAgentSessionResumed),
+				string(domain.EventAgentSessionFollowUp),
 				string(domain.EventPlanGenerated),
 				string(domain.EventPlanApproved),
 				string(domain.EventPlanRejected),
 				string(domain.EventPlanRevised),
-				string(domain.EventPlanSubmittedForReview),
+				string(domain.EventPlanSubmitted),
 				string(domain.EventPlanFailed),
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
 				string(domain.EventCritiquesFound),
-				string(domain.EventImplementationStarted),
 				string(domain.EventReimplementationStarted),
 				string(domain.EventPRMerged),
 				string(domain.EventPRReviewStateChanged),
@@ -1316,7 +1315,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case domain.EventAgentSessionCompleted,
 			domain.EventAgentSessionFailed,
 			domain.EventAgentSessionInterrupted,
-			domain.EventAgentSessionResumed:
+			domain.EventAgentSessionResumed,
+			domain.EventAgentSessionFollowUp:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), workItemID))
@@ -1328,26 +1328,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventPlanApproved,
 			domain.EventPlanRejected,
 			domain.EventPlanRevised,
-			domain.EventPlanSubmittedForReview:
-			workItemID := extractWorkItemID(msg.Event.Payload)
-			if workItemID != "" {
-				cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), workItemID))
-			}
-			if a.currentWorkItemID != "" {
-				cmds = append(cmds, a.updateContentFromState())
-			}
+			domain.EventPlanSubmitted:
+			// Typed handlers (PlanGeneratedMsg, PlanUpdatedMsg) upsert the full plan and sub-plans directly;
+			// no targeted DB reload needed.
 
-		case domain.EventImplementationStarted:
-			workItemID := extractWorkItemID(msg.Event.Payload)
-			if workItemID != "" {
-				cmds = append(cmds,
-					LoadSessionCmd(a.provider.Session(), workItemID),
-					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
-				)
-			}
-			if a.currentWorkItemID != "" {
-				cmds = append(cmds, a.updateContentFromState())
-			}
+		// WorkItemImplementing is handled by typed WorkItemUpdatedMsg below
 
 		// Question events → handled by typed messages below
 		case domain.EventAgentQuestionRaised,
@@ -1356,8 +1341,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventReviewCompleted,
 			domain.EventCritiquesFound,
 			domain.EventReimplementationStarted,
-			domain.EventAdapterError,
-			domain.EventPRMerged:
+			domain.EventAdapterError:
 			// Handled by typed message cases below; no action needed here.
 
 			// Higher-level events that don't need targeted reload (all other untyped events)
@@ -1542,7 +1526,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
-		if msg.WorkItemID != "" {
+
+		// Run completion side effects when work item is completed
+		if msg.Session.State == domain.SessionCompleted {
+			a.cancelPipeline(msg.WorkItemID)
+			a.toasts.AddToast("Work item completed", components.ToastSuccess)
+			if a.provider.Foreman() != nil && a.foremanPlanID != "" {
+				cmds = append(cmds, StopForemanCmd(a.provider.Foreman()))
+				a.foremanPlanID = ""
+			}
+		}
+
+		// Only issue DB loads if the payload lacks data
+		if msg.Session.ID == "" && msg.WorkItemID != "" {
 			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
 		}
 		if a.currentWorkItemID != "" {
@@ -1564,6 +1560,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanUpdatedMsg:
 		a.plans[msg.WorkItemID] = msg.Plan
+		if msg.Plan != nil {
+			a.subPlans[msg.Plan.ID] = msg.SubPlans
+		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -1640,17 +1639,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(fmt.Sprintf("Adapter error (%s): %v", msg.Adapter, msg.Err), components.ToastWarning)
 		return a, nil
 
-	case ImplementationStartedMsg:
-		if msg.WorkItemID != "" {
-			cmds = append(cmds,
-				LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
-				LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
-			)
-		}
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		return a, tea.Batch(cmds...)
+	// ImplementationStartedMsg removed — use EventWorkItemImplementing via WorkItemUpdatedMsg
 
 	case PRReviewStateChangedMsg:
 		if msg.WorkItemID != "" {
@@ -2046,7 +2035,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case OverrideAcceptMsg:
-		cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), a.provider.Plan(), a.provider.Task(), a.provider.Bus(), msg.WorkItemID))
+		cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case LoadNewSessionFiltersMsg:
@@ -2335,18 +2324,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Message != "" {
 			a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		}
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		if msg.WorkItemID != "" {
-			// Event-driven: targeted reload of the specific work item's tasks.
+		if msg.Task.ID != "" {
+			a.upsertSession(msg.Task)
+			a.rebuildSidebar()
+			a.refreshSessionSearchEntriesFromLocalState()
+		} else if msg.WorkItemID != "" {
+			// Fallback: targeted reload when full payload is not available.
 			cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
 		} else if a.runtimeCtx.WorkspaceID != "" {
-			// Command-driven: full reload.
+			// Command-driven: full reload when no routing info available.
 			cmds = append(cmds,
 				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
 				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
 			)
+		}
+		if a.currentWorkItemID != "" {
+			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
 
@@ -4196,18 +4189,6 @@ func extractWorkItemID(payload string) string {
 		return ""
 	}
 	if id, ok := m["work_item_id"].(string); ok {
-		return id
-	}
-	return ""
-}
-
-// extractSessionID extracts the session_id from an event payload.
-func extractSessionID(payload string) string {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(payload), &m); err != nil {
-		return ""
-	}
-	if id, ok := m["agent_session_id"].(string); ok {
 		return id
 	}
 	return ""

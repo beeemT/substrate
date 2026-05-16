@@ -230,7 +230,7 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher())
 	bus := event.NewBus(event.BusConfig{})
 	defer bus.Close()
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus)
 
 	sub, err := bus.Subscribe("approve-test", string(domain.EventPlanApproved))
 	if err != nil {
@@ -256,24 +256,12 @@ func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	}
 }
 
-func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T) {
-	worktreePath := createReviewContextRepo(t, "sub-branch")
+func TestOverrideAcceptCmd_EmitsWorkItemCompletedEvent(t *testing.T) {
 	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.Session{
 		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42"}, State: domain.SessionReviewing},
 	}}
-	planRepo := &cmdPlanRepo{plans: map[string]domain.Plan{
-		"plan-1": {ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved},
-	}}
-	subPlanRepo := &cmdSubPlanRepo{subPlans: map[string]domain.TaskPlan{
-		"sp-1": {ID: "sp-1", PlanID: "plan-1", RepositoryName: filepath.Base(worktreePath)},
-	}}
-	sessionRepo := &cmdSessionRepo{sessions: map[string]domain.AgentSession{
-		"sess-1": {ID: "sess-1", WorkspaceID: "ws-1", SubPlanID: "sp-1", WorktreePath: worktreePath},
-	}}
 	bus := event.NewBus(event.BusConfig{})
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
-	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus)
 	defer bus.Close()
 
 	sub, err := bus.Subscribe("complete-test", string(domain.EventWorkItemCompleted))
@@ -281,20 +269,18 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	msg := OverrideAcceptCmd(workItemSvc, planSvc, sessionSvc, bus, "wi-1")()
+	msg := OverrideAcceptCmd(workItemSvc, "wi-1")()
 	if done, ok := msg.(ActionDoneMsg); !ok || done.Message != "Work item accepted" {
 		t.Fatalf("msg = %#v, want successful ActionDoneMsg", msg)
 	}
 
-	// Two events are emitted: emitStateChange and emitWorkItemCompleted.
-	// Skip the first (session object payload) and check the second.
+	// EventWorkItemCompleted is emitted by CompleteWorkItem → Transition → emitStateChange.
 	var payload struct {
-		ExternalID string           `json:"external_id"`
-		Branch     string           `json:"branch"`
-		Review     domain.ReviewRef `json:"review"`
+		WorkItemID    string   `json:"work_item_id"`
+		ExternalID    string   `json:"external_id"`
+		SourceItemIDs []string `json:"source_item_ids"`
+		ExternalIDs   []string `json:"external_ids"`
 	}
-	// Two events are emitted: emitStateChange (from Transition) and emitWorkItemCompleted.
-	// Skip the first (session object payload) and check the second.
 	for {
 		select {
 		case evt, ok := <-sub.C:
@@ -304,7 +290,7 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
 				t.Fatalf("Unmarshal payload: %v", err)
 			}
-			if payload.ExternalID == "gh:issue:acme/rocket#42" {
+			if payload.WorkItemID == "wi-1" {
 				goto found
 			}
 		case <-time.After(time.Second):
@@ -312,11 +298,16 @@ func TestOverrideAcceptCmd_PublishesCompletedEventWithReviewContext(t *testing.T
 		}
 	}
 found:
-	if payload.Branch != "sub-branch" {
-		t.Fatalf("branch = %q, want sub-branch", payload.Branch)
+	if payload.ExternalID != "gh:issue:acme/rocket#42" {
+		t.Fatalf("external_id = %q, want gh:issue:acme/rocket#42", payload.ExternalID)
 	}
-	if payload.Review.BaseRepo.Owner != "acme" || payload.Review.BaseRepo.Repo != "rocket" {
-		t.Fatalf("base repo = %+v, want acme/rocket", payload.Review.BaseRepo)
+	// Verify the work item is now completed
+	updatedItem, err := workItemRepo.Get(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("Get work item: %v", err)
+	}
+	if updatedItem.State != domain.SessionCompleted {
+		t.Fatalf("work item state = %q, want completed", updatedItem.State)
 	}
 }
 

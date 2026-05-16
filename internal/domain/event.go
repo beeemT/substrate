@@ -52,20 +52,17 @@ const (
 	EventWorkspaceStatusChanged EventType = "workspace.status_changed"
 
 	// Plan events
-	EventPlanGenerated          EventType = "plan.generated"
-	EventPlanSubmittedForReview EventType = "plan.submitted_for_review"
-	EventPlanApproved           EventType = "plan.approved"
-	EventPlanRejected           EventType = "plan.rejected"
-	EventPlanRevised            EventType = "plan.revised"
-	EventPlanFailed             EventType = "plan.failed"
-	EventPlanSuperseded         EventType = "plan.superseded"
-	EventPlanStatusChanged      EventType = "plan.status_changed"
+	EventPlanGenerated     EventType = "plan.generated"
+	EventPlanSubmitted     EventType = "plan.submitted"
+	EventPlanApproved      EventType = "plan.approved"
+	EventPlanRejected      EventType = "plan.rejected"
+	EventPlanRevised       EventType = "plan.revised"
+	EventPlanFailed        EventType = "plan.failed"
+	EventPlanSuperseded    EventType = "plan.superseded"
+	EventPlanStatusChanged EventType = "plan.status_changed"
 
 	// Sub-plan events
 	EventSubPlanStatusChanged EventType = "subplan.status_changed"
-
-	// Implementation events
-	EventImplementationStarted EventType = "work_item.implementation_started"
 
 	// Worktree events
 	EventWorktreeRemoved EventType = "worktree.removed"
@@ -76,10 +73,9 @@ const (
 	EventAgentSessionFailed      EventType = "agent_session.failed"
 	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
 
-	EventAgentSessionStatusChanged EventType = "agent_session.status_changed"
-
 	// Agent session events (resumption lifecycle)
-	EventAgentSessionResumed EventType = "agent_session.resumed"
+	EventAgentSessionResumed  EventType = "agent_session.resumed"
+	EventAgentSessionFollowUp EventType = "agent_session.follow_up"
 
 	// Question events
 	EventAgentQuestionRaised   EventType = "agent_question.raised"

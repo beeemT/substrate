@@ -562,9 +562,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
 		slog.Warn("failed to complete planning session", "error", completeErr, "agent_session_id", sessionID)
 	}
-
-	// 15. Emit PlanGenerated event (async).
-	s.emitPlanGeneratedEvent(ctx, plan.ID, req.workItemID, plan.Version, workspace.ID)
+	// EventPlanGenerated is emitted by planSvc.CreatePlanAtomic
 
 	return &domain.PlanningResult{
 		Plan:     plan,
@@ -883,17 +881,6 @@ func (s *PlanningService) buildAndPersistPlan(
 	}
 
 	return plan, subPlans, nil
-}
-
-// emitPlanGeneratedEvent emits a PlanGenerated event asynchronously.
-func (s *PlanningService) emitPlanGeneratedEvent(ctx context.Context, planID, workItemID string, version int, workspaceID string) {
-	service.Emit(s.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventPlanGenerated),
-		WorkspaceID: workspaceID,
-		Payload:     fmt.Sprintf(`{"plan_id":"%s","work_item_id":"%s","version":%d}`, planID, workItemID, version),
-		CreatedAt:   time.Now().UTC(),
-	})
 }
 
 // emitPlanFailedEvent emits a PlanFailed event asynchronously.

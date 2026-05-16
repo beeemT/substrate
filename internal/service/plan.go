@@ -28,9 +28,38 @@ func NewPlanService(transacter atomic.Transacter[repository.Resources], eventBus
 
 // planEventPayload holds the JSON payload for plan lifecycle events.
 type planEventPayload struct {
-	WorkItemID string `json:"work_item_id"`
-	PlanID     string `json:"plan_id,omitempty"`
-	SubPlanID  string `json:"sub_plan_id,omitempty"`
+	WorkItemID        string            `json:"work_item_id"`
+	PlanID            string            `json:"plan_id,omitempty"`
+	SubPlanID         string            `json:"sub_plan_id,omitempty"`
+	Plan              *domain.Plan      `json:"plan,omitempty"`
+	SubPlans          []domain.TaskPlan `json:"sub_plans,omitempty"`
+	ExternalID        string            `json:"external_id,omitempty"`
+	ExternalIDs       []string          `json:"external_ids,omitempty"`
+	CommentBody       string            `json:"comment_body,omitempty"`
+	RepoCommentScopes map[string]string `json:"repo_comment_scopes,omitempty"`
+}
+
+// PlanApprovalEventContext holds adapter-specific context for plan approval events.
+type PlanApprovalEventContext struct {
+	ExternalID        string
+	ExternalIDs       []string
+	CommentBody       string
+	RepoCommentScopes map[string]string
+}
+
+// planEventExtra holds internal options for plan events.
+type planEventExtra struct {
+	approvalContext PlanApprovalEventContext
+}
+
+// PlanOption is a functional option for plan service methods.
+type PlanOption func(*planEventExtra)
+
+// WithPlanApprovalEventContext sets adapter-specific context for plan approval events.
+func WithPlanApprovalEventContext(ctx PlanApprovalEventContext) PlanOption {
+	return func(e *planEventExtra) {
+		e.approvalContext = ctx
+	}
 }
 
 // planStatusChangedPayload holds the JSON payload for generic plan status changes.
@@ -143,6 +172,7 @@ func (s *PlanService) CreatePlan(ctx context.Context, plan domain.Plan) error {
 func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.PlanStatus) error {
 	var plan domain.Plan
 	var from domain.PlanStatus
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		p, err := res.Plans.Get(ctx, id)
 		if err != nil {
@@ -165,6 +195,14 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 			return err
 		}
 		plan = p
+
+		// Load work item to get real WorkspaceID
+		workItem, err := res.Sessions.Get(ctx, p.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", p.WorkItemID, "error", err)
+			return nil // Non-fatal: continue without workspace ID
+		}
+		workspaceID = workItem.WorkspaceID
 		return nil
 	})
 	if err != nil {
@@ -174,7 +212,7 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanStatusChanged),
-		WorkspaceID: plan.WorkItemID,
+		WorkspaceID: workspaceID,
 		Payload:     marshalJSONOrEmpty(string(domain.EventPlanStatusChanged), planStatusChangedPayload{WorkItemID: plan.WorkItemID, PlanID: plan.ID, From: string(from), To: string(to)}),
 		CreatedAt:   time.Now(),
 	})
@@ -184,12 +222,26 @@ func (s *PlanService) TransitionPlan(ctx context.Context, id string, to domain.P
 // SubmitForReview transitions a plan from draft to pending_review.
 func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 	var plan domain.Plan
+	var subPlans []domain.TaskPlan
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
 		plan, err = res.Plans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
+		// Load sub-plans for the event payload
+		subPlans, err = res.SubPlans.ListByPlanID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("list sub-plans: %w", err)
+		}
+		// Load work item to get real WorkspaceID
+		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", plan.WorkItemID, "error", err)
+			return nil // Non-fatal: continue without workspace ID
+		}
+		workspaceID = workItem.WorkspaceID
 		return nil
 	})
 	if err != nil {
@@ -200,17 +252,26 @@ func (s *PlanService) SubmitForReview(ctx context.Context, id string) error {
 	}
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
-		EventType:   string(domain.EventPlanSubmittedForReview),
-		WorkspaceID: plan.WorkItemID,
-		Payload:     marshalJSONOrEmpty(string(domain.EventPlanSubmittedForReview), planEventPayload{WorkItemID: plan.WorkItemID}),
+		EventType:   string(domain.EventPlanSubmitted),
+		WorkspaceID: workspaceID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanSubmitted), planEventPayload{WorkItemID: plan.WorkItemID, PlanID: plan.ID, Plan: &plan, SubPlans: subPlans}),
 		CreatedAt:   time.Now(),
 	})
 	return nil
 }
 
 // ApprovePlan transitions a plan from pending_review to approved.
-func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
+// It accepts optional PlanOptions for adapter-specific event context.
+func (s *PlanService) ApprovePlan(ctx context.Context, id string, opts ...PlanOption) error {
+	// Apply options
+	var extra planEventExtra
+	for _, opt := range opts {
+		opt(&extra)
+	}
+
 	var plan domain.Plan
+	var subPlans []domain.TaskPlan
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
 		plan, err = res.Plans.Get(ctx, id)
@@ -226,27 +287,55 @@ func (s *PlanService) ApprovePlan(ctx context.Context, id string) error {
 		}
 		plan.Status = domain.PlanApproved
 		plan.UpdatedAt = time.Now()
-		return res.Plans.Update(ctx, plan)
+		if err := res.Plans.Update(ctx, plan); err != nil {
+			return err
+		}
+		// Load sub-plans for the event payload
+		subPlans, err = res.SubPlans.ListByPlanID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("list sub-plans: %w", err)
+		}
+		// Load work item to get real WorkspaceID
+		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", plan.WorkItemID, "error", err)
+			return nil // Non-fatal: continue with plan.WorkItemID as fallback
+		}
+		workspaceID = workItem.WorkspaceID
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 
+	// Emit enriched event with full plan, sub-plans, and adapter context
 	Emit(s.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventPlanApproved),
-		WorkspaceID: plan.WorkItemID,
-		Payload:     marshalJSONOrEmpty(string(domain.EventPlanApproved), planEventPayload{WorkItemID: plan.WorkItemID}),
-		CreatedAt:   time.Now(),
+		WorkspaceID: workspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventPlanApproved), planEventPayload{
+			WorkItemID:        plan.WorkItemID,
+			PlanID:            plan.ID,
+			Plan:              &plan,
+			SubPlans:          subPlans,
+			ExternalID:        extra.approvalContext.ExternalID,
+			ExternalIDs:       extra.approvalContext.ExternalIDs,
+			CommentBody:       extra.approvalContext.CommentBody,
+			RepoCommentScopes: extra.approvalContext.RepoCommentScopes,
+		}),
+		CreatedAt: time.Now(),
 	})
 	return nil
 }
 
 // RejectPlan transitions a plan from pending_review to rejected.
 func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
-	var workItemID string
+	var plan domain.Plan
+	var subPlans []domain.TaskPlan
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		plan, err := res.Plans.Get(ctx, id)
+		var err error
+		plan, err = res.Plans.Get(ctx, id)
 		if err != nil {
 			return newNotFoundError("plan", id)
 		}
@@ -259,17 +348,32 @@ func (s *PlanService) RejectPlan(ctx context.Context, id string) error {
 		}
 		plan.Status = domain.PlanRejected
 		plan.UpdatedAt = time.Now()
-		workItemID = plan.WorkItemID
-		return res.Plans.Update(ctx, plan)
+		if err := res.Plans.Update(ctx, plan); err != nil {
+			return err
+		}
+		// Load sub-plans for the event payload
+		subPlans, err = res.SubPlans.ListByPlanID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("list sub-plans: %w", err)
+		}
+		// Load work item to get real WorkspaceID
+		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", id, "work_item_id", plan.WorkItemID, "error", err)
+			return nil // Non-fatal
+		}
+		workspaceID = workItem.WorkspaceID
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 	Emit(s.eventBus, domain.SystemEvent{
-		ID:        domain.NewID(),
-		EventType: string(domain.EventPlanRejected),
-		Payload:   marshalJSONOrEmpty(string(domain.EventPlanRejected), planEventPayload{WorkItemID: workItemID}),
-		CreatedAt: time.Now(),
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanRejected),
+		WorkspaceID: workspaceID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventPlanRejected), planEventPayload{WorkItemID: plan.WorkItemID, PlanID: plan.ID, Plan: &plan, SubPlans: subPlans}),
+		CreatedAt:   time.Now(),
 	})
 	return nil
 }
@@ -392,11 +496,26 @@ func (s *PlanService) ApplyReviewedPlanOutput(ctx context.Context, id string, ra
 	}
 
 	if planChanged {
+		// Load work item to get real WorkspaceID
+		var workspaceID string
+		err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+			workItem, err := res.Sessions.Get(ctx, resultPlan.WorkItemID)
+			if err != nil {
+				slog.Warn("failed to load work item for event workspace ID", "plan_id", resultPlan.ID, "work_item_id", resultPlan.WorkItemID, "error", err)
+				return nil // Non-fatal
+			}
+			workspaceID = workItem.WorkspaceID
+			return nil
+		})
+		if err != nil {
+			return domain.Plan{}, nil, err
+		}
+
 		Emit(s.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventPlanRevised),
-			WorkspaceID: resultPlan.WorkItemID,
-			Payload:     marshalJSONOrEmpty(string(domain.EventPlanRevised), planEventPayload{WorkItemID: resultPlan.WorkItemID, PlanID: resultPlan.ID}),
+			WorkspaceID: workspaceID,
+			Payload:     marshalJSONOrEmpty(string(domain.EventPlanRevised), planEventPayload{WorkItemID: resultPlan.WorkItemID, PlanID: resultPlan.ID, Plan: &resultPlan, SubPlans: resultSubPlans}),
 			CreatedAt:   time.Now(),
 		})
 	}
@@ -440,8 +559,10 @@ func (s *PlanService) AppendFAQ(ctx context.Context, entry domain.FAQEntry) erro
 // The partial unique index on plans(work_item_id) WHERE status != 'superseded' ensures
 // at most one active plan per work item. The old plan and its sub-plans remain in the
 // database for historical reference.
+// It emits EventPlanGenerated with the full plan and sub-plans after successful creation.
 func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string, plan *domain.Plan, subPlans []domain.TaskPlan) error {
 	var supersededWorkItemID string
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		if replacePlanID != "" {
 			old, err := res.Plans.Get(ctx, replacePlanID)
@@ -464,17 +585,53 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 				return fmt.Errorf("create sub-plan for %s: %w", subPlans[i].RepositoryName, err)
 			}
 		}
+		// Load work item to get real WorkspaceID for events
+		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", plan.ID, "work_item_id", plan.WorkItemID, "error", err)
+			return nil // Non-fatal: continue without workspace ID
+		}
+		workspaceID = workItem.WorkspaceID
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
+	// Emit EventPlanGenerated with full plan and sub-plans
+	Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventPlanGenerated),
+		WorkspaceID: workspaceID,
+		Payload: marshalJSONOrEmpty(string(domain.EventPlanGenerated), planEventPayload{
+			WorkItemID: plan.WorkItemID,
+			PlanID:     plan.ID,
+			Plan:       plan,
+			SubPlans:   subPlans,
+		}),
+		CreatedAt: time.Now(),
+	})
+
 	if supersededWorkItemID != "" {
+		// Load work item to get real WorkspaceID for superseded event
+		var supersededWorkspaceID string
+		_ = s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+			if res.Sessions == nil {
+				slog.Warn("Sessions repository not available for superseded event workspace ID")
+				return nil // Non-fatal
+			}
+			workItem, err := res.Sessions.Get(ctx, supersededWorkItemID)
+			if err != nil {
+				slog.Warn("failed to load work item for superseded event workspace ID", "work_item_id", supersededWorkItemID, "error", err)
+				return nil // Non-fatal
+			}
+			supersededWorkspaceID = workItem.WorkspaceID
+			return nil
+		})
 		Emit(s.eventBus, domain.SystemEvent{
 			ID:          domain.NewID(),
 			EventType:   string(domain.EventPlanSuperseded),
-			WorkspaceID: supersededWorkItemID,
+			WorkspaceID: supersededWorkspaceID,
 			Payload:     marshalJSONOrEmpty(string(domain.EventPlanSuperseded), planEventPayload{WorkItemID: supersededWorkItemID, PlanID: replacePlanID}),
 			CreatedAt:   time.Now(),
 		})
@@ -535,6 +692,7 @@ func (s *PlanService) CreateSubPlan(ctx context.Context, sp domain.TaskPlan) err
 // TransitionSubPlan transitions a sub-plan to a new status.
 func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domain.TaskPlanStatus) error {
 	var workItemID string
+	var workspaceID string
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		sp, err := res.SubPlans.Get(ctx, id)
 		if err != nil {
@@ -557,9 +715,22 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 		}
 
 		plan, err := res.Plans.Get(ctx, sp.PlanID)
-		if err == nil {
-			workItemID = plan.WorkItemID
+		if err != nil {
+			return nil // Non-fatal: continue without workspace ID
 		}
+		workItemID = plan.WorkItemID
+
+		// Load work item to get real WorkspaceID
+		if res.Sessions == nil {
+			slog.Warn("Sessions repository not available for workspace ID lookup in TransitionSubPlan")
+			return nil // Non-fatal
+		}
+		workItem, err := res.Sessions.Get(ctx, plan.WorkItemID)
+		if err != nil {
+			slog.Warn("failed to load work item for event workspace ID", "plan_id", plan.ID, "work_item_id", plan.WorkItemID, "error", err)
+			return nil // Non-fatal: continue without workspace ID
+		}
+		workspaceID = workItem.WorkspaceID
 		return nil
 	})
 	if err != nil {
@@ -567,10 +738,11 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 	}
 
 	Emit(s.eventBus, domain.SystemEvent{
-		ID:        domain.NewID(),
-		EventType: string(domain.EventSubPlanStatusChanged),
-		Payload:   marshalJSONOrEmpty(string(domain.EventSubPlanStatusChanged), planEventPayload{WorkItemID: workItemID, PlanID: "", SubPlanID: id}),
-		CreatedAt: time.Now(),
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventSubPlanStatusChanged),
+		WorkspaceID: workspaceID,
+		Payload:     marshalJSONOrEmpty(string(domain.EventSubPlanStatusChanged), planEventPayload{WorkItemID: workItemID, PlanID: "", SubPlanID: id}),
+		CreatedAt:   time.Now(),
 	})
 	return nil
 }

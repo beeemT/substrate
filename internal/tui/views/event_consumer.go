@@ -54,7 +54,7 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventWorkItemFailed:          decodeWorkItemState,
 	domain.EventWorkItemMerged:          decodeWorkItemState,
 	domain.EventPlanGenerated:           decodePlanGenerated,
-	domain.EventPlanSubmittedForReview:  decodePlanUpdated,
+	domain.EventPlanSubmitted:           decodePlanUpdated,
 	domain.EventPlanApproved:            decodePlanUpdated,
 	domain.EventPlanRejected:            decodePlanUpdated,
 	domain.EventPlanRevised:             decodePlanUpdated,
@@ -64,6 +64,7 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventAgentSessionFailed:      decodeAgentSessionUpdated,
 	domain.EventAgentSessionInterrupted: decodeAgentSessionUpdated,
 	domain.EventAgentSessionResumed:     decodeAgentSessionResumed,
+	domain.EventAgentSessionFollowUp:    decodeAgentSessionFollowUp,
 	domain.EventAgentQuestionRaised:     decodeQuestionRaised,
 	domain.EventAgentQuestionAnswered:   decodeQuestionAnswered,
 	domain.EventReviewStarted:           decodeReviewStarted,
@@ -72,7 +73,6 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventReimplementationStarted: decodeReimplementationStarted,
 	domain.EventAdapterError:            decodeAdapterError,
 	domain.EventPRMerged:                decodePRMerged,
-	domain.EventImplementationStarted:   decodeImplementationStarted,
 	domain.EventPRReviewStateChanged:    decodePRReviewStateChanged,
 }
 
@@ -130,14 +130,15 @@ func decodePlanGenerated(payload string) tea.Msg {
 
 func decodePlanUpdated(payload string) tea.Msg {
 	var p struct {
-		WorkItemID string       `json:"work_item_id"`
-		Plan       *domain.Plan `json:"plan"`
+		WorkItemID string            `json:"work_item_id"`
+		Plan       *domain.Plan      `json:"plan"`
+		SubPlans   []domain.TaskPlan `json:"sub_plans"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode plan event payload", "error", err)
 		return nil
 	}
-	return PlanUpdatedMsg{WorkItemID: p.WorkItemID, Plan: p.Plan}
+	return PlanUpdatedMsg{WorkItemID: p.WorkItemID, Plan: p.Plan, SubPlans: p.SubPlans}
 }
 
 func decodeAgentSessionStarted(payload string) tea.Msg {
@@ -172,18 +173,36 @@ func decodeAgentSessionUpdated(payload string) tea.Msg {
 	}
 }
 
-// decodeAgentSessionResumed handles EventAgentSessionResumed by extracting the work_item_id
-// and triggering a targeted reload of the affected tasks. The full task data is loaded
-// by the TUI command that reads from the repository.
+// decodeAgentSessionResumed decodes EventAgentSessionResumed with the full new agent session
+// for direct upsert, plus top-level work_item_id so the TUI can route the message.
 func decodeAgentSessionResumed(payload string) tea.Msg {
 	var p struct {
-		WorkItemID string `json:"work_item_id"`
+		Session      domain.AgentSession `json:"session"`
+		WorkItemID   string              `json:"work_item_id"`
+		OldSessionID string              `json:"old_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventAgentSessionResumed payload", "error", err)
 		return nil
 	}
-	return SessionResumedMsg{WorkItemID: p.WorkItemID, Message: ""}
+	return SessionResumedMsg{WorkItemID: p.WorkItemID, Task: p.Session, Message: ""}
+}
+
+// decodeAgentSessionFollowUp handles EventAgentSessionFollowUp with full agent session payload.
+func decodeAgentSessionFollowUp(payload string) tea.Msg {
+	var p struct {
+		Session    domain.AgentSession `json:"session"`
+		SessionID  string              `json:"agent_session_id"`
+		WorkItemID string              `json:"work_item_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventAgentSessionFollowUp payload", "error", err)
+		return nil
+	}
+	return TaskUpdatedMsg{
+		WorkItemID: p.WorkItemID,
+		Task:       p.Session,
+	}
 }
 
 func decodeQuestionRaised(payload string) tea.Msg {
@@ -212,13 +231,16 @@ func decodeQuestionAnswered(payload string) tea.Msg {
 
 func decodeReviewStarted(payload string) tea.Msg {
 	var p struct {
-		SessionID string `json:"agent_session_id"`
+		SessionID   string             `json:"agent_session_id"`
+		WorkItemID  string             `json:"work_item_id"`
+		CycleNumber int                `json:"cycle_number"`
+		Cycle       domain.ReviewCycle `json:"cycle"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventReviewStarted payload", "error", err)
 		return nil
 	}
-	return ReviewStartedMsg{SessionID: p.SessionID}
+	return ReviewStartedMsg{SessionID: p.SessionID, Cycle: p.Cycle}
 }
 
 func decodeReviewCompleted(payload string) tea.Msg {
@@ -276,18 +298,6 @@ func decodePRReviewStateChanged(payload string) tea.Msg {
 		return nil
 	}
 	return PRReviewStateChangedMsg{WorkItemID: p.WorkItemID}
-}
-
-func decodeImplementationStarted(payload string) tea.Msg {
-	var p struct {
-		PlanID     string `json:"plan_id"`
-		WorkItemID string `json:"work_item_id"`
-	}
-	if err := json.Unmarshal([]byte(payload), &p); err != nil {
-		slog.Warn("failed to decode EventImplementationStarted payload", "error", err)
-		return nil
-	}
-	return ImplementationStartedMsg{WorkItemID: p.WorkItemID}
 }
 
 func decodePRMerged(payload string) tea.Msg {

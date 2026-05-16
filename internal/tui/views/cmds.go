@@ -22,7 +22,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/adapter"
-	"github.com/beeemT/substrate/internal/app/remotedetect"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -380,7 +379,7 @@ func LoadReviewsCmd(revSvc *service.ReviewService, sessionID string) tea.Cmd {
 }
 
 // ApprovePlanCmd transitions work item to approved.
-// Note: PlanService.ApprovePlan emits EventPlanApproved via the event bus.
+// Note: PlanService.ApprovePlan emits EventPlanApproved with adapter context via the event bus.
 func ApprovePlanCmd(
 	workItemSvc *service.SessionService,
 	planSvc *service.PlanService,
@@ -390,19 +389,55 @@ func ApprovePlanCmd(
 ) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		if err := planSvc.ApprovePlan(ctx, planID); err != nil {
+
+		// Build adapter context for plan approval event
+		approvalCtx := buildPlanApprovalEventContext(ctx, planSvc, workItemSvc, cfg, planID, workItemID)
+
+		if err := planSvc.ApprovePlan(ctx, planID, service.WithPlanApprovalEventContext(approvalCtx)); err != nil {
 			return ErrMsg{Err: err}
 		}
 		if err := workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
-		// Emit plan-approved event with issue comment metadata for GitHub/GitLab adapters.
-		if err := emitPlanApproved(ctx, bus, planSvc, workItemSvc, cfg, planID, workItemID); err != nil {
-			slog.Warn("failed to emit plan approved event", "plan_id", planID, "work_item_id", workItemID, "err", err)
-		}
 
 		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
 	}
+}
+
+// buildPlanApprovalEventContext builds adapter-specific context for plan approval events.
+func buildPlanApprovalEventContext(ctx context.Context, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) service.PlanApprovalEventContext {
+	approvalCtx := service.PlanApprovalEventContext{}
+
+	workItem, err := workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		slog.Warn("failed to get work item for plan approval context", "work_item_id", workItemID, "error", err)
+		return approvalCtx
+	}
+
+	approvalCtx.ExternalID = workItem.ExternalID
+	approvalCtx.ExternalIDs = service.WorkItemEventExternalIDs(workItem)
+
+	plan, err := planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		slog.Warn("failed to get plan for approval context", "plan_id", planID, "error", err)
+		return approvalCtx
+	}
+
+	var commentMode config.IssueCommentContent
+	if cfg != nil {
+		commentMode = cfg.IssueCommentContentForSource(workItem.Source)
+	} else {
+		commentMode = config.IssueCommentSubPlan
+	}
+	if commentBody := buildIssueCommentBody(ctx, planSvc, commentMode, plan); commentBody != "" {
+		approvalCtx.CommentBody = commentBody
+	}
+
+	if cfg != nil {
+		approvalCtx.RepoCommentScopes = cfg.IssueActionScopesForWorkItem(workItem)
+	}
+
+	return approvalCtx
 }
 
 // AnswerQuestionCmd delivers a human answer through the route required by the question's stage.
@@ -865,20 +900,15 @@ func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, 
 }
 
 // OverrideAcceptCmd marks a work item completed despite outstanding critiques.
+// EventWorkItemCompleted is emitted by CompleteWorkItem → Transition → emitStateChange.
 func OverrideAcceptCmd(
 	workItemSvc *service.SessionService,
-	planSvc *service.PlanService,
-	sessionSvc *service.AgentSessionService,
-	bus *event.Bus,
 	workItemID string,
 ) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if err := workItemSvc.CompleteWorkItem(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
-		}
-		if err := emitWorkItemCompleted(ctx, bus, planSvc, sessionSvc, workItemSvc, workItemID); err != nil {
-			slog.Warn("failed to emit work item completed event", "work_item_id", workItemID, "err", err)
 		}
 
 		return ActionDoneMsg{Message: "Work item accepted"}
@@ -1005,40 +1035,7 @@ func buildIssueCommentBody(ctx context.Context, planSvc *service.PlanService, mo
 	}
 }
 
-func emitWorkItemCompleted(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, sessionSvc *service.AgentSessionService, workItemSvc *service.SessionService, workItemID string) error {
-	workItem, err := workItemSvc.Get(ctx, workItemID)
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"workspace_id":    workItem.WorkspaceID,
-		"work_item_id":    workItemID,
-		"external_id":     workItem.ExternalID,
-		"work_item_title": workItem.Title,
-	}
-	if review, branch, subPlanContent, err := completionReviewContext(ctx, planSvc, sessionSvc, workItemID); err == nil {
-		if branch != "" {
-			payload["branch"] = branch
-		}
-		if review.BaseRepo.Owner != "" || review.BaseRepo.Repo != "" || review.HeadRepo.Owner != "" || review.HeadRepo.Repo != "" {
-			payload["review"] = review
-		}
-		if subPlanContent != "" {
-			payload["sub_plan"] = subPlanContent
-		}
-	} else {
-		slog.Warn("failed to derive work item completion context", "work_item_id", workItemID, "err", err)
-	}
-	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
-		payload["external_ids"] = externalIDs
-	}
-	if trackerRefs := sessionTrackerRefs(workItem.Metadata); len(trackerRefs) > 0 {
-		payload["tracker_refs"] = trackerRefs
-	}
-
-	return publishSystemEvent(ctx, bus, domain.EventWorkItemCompleted, workItem.WorkspaceID, payload)
-}
-
+// publishSystemEvent publishes a system event to the event bus.
 func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.EventType, workspaceID string, payload map[string]any) error {
 	serialized, err := json.Marshal(payload)
 	if err != nil {
@@ -1052,111 +1049,6 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 		Payload:     string(serialized),
 		CreatedAt:   time.Now(),
 	})
-}
-
-// emitPlanApproved posts the EventPlanApproved system event with issue comment metadata
-// (comment_body, external_ids, repo_comment_scopes) so GitHub/GitLab adapters can post
-// plan-composite comments to the relevant issues/PRs.
-func emitPlanApproved(ctx context.Context, bus *event.Bus, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) error {
-	plan, err := planSvc.GetPlan(ctx, planID)
-	if err != nil {
-		return err
-	}
-	workItem, err := workItemSvc.Get(ctx, workItemID)
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"plan_id":      planID,
-		"work_item_id": workItemID,
-		"external_id":  workItem.ExternalID,
-	}
-	var commentMode config.IssueCommentContent
-	if cfg != nil {
-		commentMode = cfg.IssueCommentContentForSource(workItem.Source)
-	} else {
-		commentMode = config.IssueCommentSubPlan
-	}
-	if commentBody := buildIssueCommentBody(ctx, planSvc, commentMode, plan); commentBody != "" {
-		payload["comment_body"] = commentBody
-	}
-	if externalIDs := workItemEventExternalIDs(workItem); len(externalIDs) > 0 {
-		payload["external_ids"] = externalIDs
-	}
-	if cfg != nil {
-		if scopes := cfg.IssueActionScopesForWorkItem(workItem); len(scopes) > 0 {
-			payload["repo_comment_scopes"] = scopes
-		}
-	}
-
-	return publishSystemEvent(ctx, bus, domain.EventPlanApproved, workItem.WorkspaceID, payload)
-}
-
-func completionReviewContext(ctx context.Context, planSvc *service.PlanService, sessionSvc *service.AgentSessionService, workItemID string) (domain.ReviewRef, string, string, error) {
-	plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
-	if err != nil {
-		return domain.ReviewRef{}, "", "", err
-	}
-	subPlans, err := planSvc.ListSubPlansByPlanID(ctx, plan.ID)
-	if err != nil {
-		return domain.ReviewRef{}, "", "", err
-	}
-	for _, subPlan := range subPlans {
-		sessions, err := sessionSvc.ListBySubPlanID(ctx, subPlan.ID)
-		if err != nil {
-			return domain.ReviewRef{}, "", "", err
-		}
-		for _, agentSession := range sessions {
-			if strings.TrimSpace(agentSession.WorktreePath) == "" {
-				continue
-			}
-			reviewCtx, err := remotedetect.ResolveReviewContext(ctx, agentSession.WorktreePath)
-			if err != nil {
-				slog.Warn("failed to resolve review context for agent session", "agent_session_id", agentSession.ID, "worktree", agentSession.WorktreePath, "error", err)
-				continue
-			}
-			branch := strings.TrimSpace(reviewCtx.Review.HeadBranch)
-			if branch == "" {
-				branch = strings.TrimSpace(reviewCtx.Review.BaseBranch)
-			}
-			if branch == "" {
-				continue
-			}
-
-			return reviewCtx.Review, branch, subPlan.Content, nil
-		}
-	}
-
-	return domain.ReviewRef{}, "", "", fmt.Errorf("no session worktree context found for work item %s", workItemID)
-}
-
-func workItemEventExternalIDs(workItem domain.Session) []string {
-	seen := make(map[string]struct{})
-	ids := make([]string, 0, len(workItem.SourceItemIDs)+1)
-	appendID := func(id string) {
-		trimmed := strings.TrimSpace(id)
-		if trimmed == "" {
-			return
-		}
-		if _, ok := seen[trimmed]; ok {
-			return
-		}
-		seen[trimmed] = struct{}{}
-		ids = append(ids, trimmed)
-	}
-	switch {
-	case workItem.Source == "github" && workItem.SourceScope == domain.ScopeIssues:
-		for _, id := range workItem.SourceItemIDs {
-			appendID("gh:issue:" + id)
-		}
-	case workItem.Source == "gitlab" && workItem.SourceScope == domain.ScopeIssues:
-		for _, id := range workItem.SourceItemIDs {
-			appendID("gl:issue:" + id)
-		}
-	}
-	appendID(workItem.ExternalID)
-
-	return ids
 }
 
 // SkipQuestionCmd marks a question as skipped and unblocks the pending live harness when possible.

@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -722,8 +721,8 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
-		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		nil,
@@ -778,11 +777,16 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 	if workItem.State != domain.SessionFailed {
 		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionFailed)
 	}
-	if len(eventRepo.events) != 1 {
-		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
+	// EventWorkItemImplementing is emitted by workItemSvc.StartImplementation
+	foundImplementing := false
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemImplementing) {
+			foundImplementing = true
+			break
+		}
 	}
-	if got := eventRepo.events[0].EventType; got != string(domain.EventImplementationStarted) {
-		t.Fatalf("event type = %q, want %q", got, domain.EventImplementationStarted)
+	if !foundImplementing {
+		t.Fatal("expected EventWorkItemImplementing event")
 	}
 }
 
@@ -819,11 +823,16 @@ func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.
 	if workItem.State != domain.SessionFailed {
 		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionFailed)
 	}
-	if len(eventRepo.events) != 1 {
-		t.Fatalf("expected one implementation-started event, got %d", len(eventRepo.events))
+	// EventWorkItemImplementing is emitted by workItemSvc.StartImplementation
+	foundImplementing := false
+	for _, evt := range eventRepo.events {
+		if evt.EventType == string(domain.EventWorkItemImplementing) {
+			foundImplementing = true
+			break
+		}
 	}
-	if got := eventRepo.events[0].EventType; got != string(domain.EventImplementationStarted) {
-		t.Fatalf("event type = %q, want %q", got, domain.EventImplementationStarted)
+	if !foundImplementing {
+		t.Fatal("expected EventWorkItemImplementing event")
 	}
 }
 
@@ -2445,153 +2454,6 @@ func TestFinalizeWorkItemRejectsIncompleteSubPlan(t *testing.T) {
 	if got.State != domain.SessionImplementing {
 		t.Fatalf("work item state = %q, want %q", got.State, domain.SessionImplementing)
 	}
-}
-
-func TestEmitWorkItemCompleted(t *testing.T) {
-	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
-	workItem := &domain.Session{
-		ID:          "wi-1",
-		WorkspaceID: "ws-1",
-		ExternalID:  "EXT-1",
-		Title:       "Implement feature",
-		Source:      "manual",
-		Metadata:    map[string]any{},
-	}
-	subPlans := []domain.TaskPlan{{
-		ID:             "sp-1",
-		Content:        "Implement the feature",
-		RepositoryName: "repo-a",
-	}}
-	sessions := []SessionResult{{
-		Repository:   "repo-a",
-		WorktreePath: "", // empty — no review context available
-	}}
-	repoPaths := map[string]string{"repo-a": "/nonexistent"}
-
-	err := svc.emitWorkItemCompleted(context.Background(), workItem, "ws-1", sessions, repoPaths, "feature-branch", subPlans)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify the event was published.
-	found := false
-	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventWorkItemCompleted) {
-			found = true
-			// Verify payload contains required fields.
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
-				t.Fatalf("failed to unmarshal payload: %v", err)
-			}
-			assertPayloadField(t, payload, "workspace_id", "ws-1")
-			assertPayloadField(t, payload, "work_item_id", "wi-1")
-			assertPayloadField(t, payload, "external_id", "EXT-1")
-			assertPayloadField(t, payload, "work_item_title", "Implement feature")
-			assertPayloadField(t, payload, "branch", "feature-branch")
-			assertPayloadField(t, payload, "sub_plan", "Implement the feature")
-			break
-		}
-	}
-	if !found {
-		t.Fatal("work_item.completed event not found")
-	}
-}
-
-func TestEmitWorkItemCompleted_WithTrackerRefs(t *testing.T) {
-	svc, _, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
-	workItem := &domain.Session{
-		ID:            "wi-1",
-		WorkspaceID:   "ws-1",
-		ExternalID:    "EXT-1",
-		Title:         "Fix bug",
-		Source:        "github",
-		SourceScope:   domain.ScopeIssues,
-		SourceItemIDs: []string{"123"},
-		Metadata: map[string]any{
-			"tracker_refs": []domain.TrackerReference{{
-				Provider: "linear",
-				Kind:     "issue",
-				ID:       "ENG-42",
-			}},
-		},
-	}
-	subPlans := []domain.TaskPlan{{Content: "Fix the bug"}}
-	err := svc.emitWorkItemCompleted(context.Background(), workItem, "ws-1", nil, nil, "fix-branch", subPlans)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var payload map[string]any
-	for _, evt := range eventRepo.events {
-		if evt.EventType == string(domain.EventWorkItemCompleted) {
-			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
-				t.Fatalf("failed to unmarshal payload: %v", err)
-			}
-			break
-		}
-	}
-	if payload == nil {
-		t.Fatal("work_item.completed event not found")
-	}
-	assertPayloadField(t, payload, "external_id", "EXT-1")
-	// Verify external_ids includes both the source item ID and the work item external ID.
-	ids, ok := payload["external_ids"].([]any)
-	if !ok || len(ids) == 0 {
-		t.Fatalf("expected external_ids in payload, got %v", payload["external_ids"])
-	}
-	// Verify tracker_refs are present.
-	if _, ok := payload["tracker_refs"]; !ok {
-		t.Fatal("expected tracker_refs in payload")
-	}
-}
-
-func TestWorkItemEventExternalIDs(t *testing.T) {
-	t.Run("github issues source", func(t *testing.T) {
-		wi := domain.Session{
-			Source:        "github",
-			SourceScope:   domain.ScopeIssues,
-			SourceItemIDs: []string{"42", "99"},
-			ExternalID:    "EXT-1",
-		}
-		ids := workItemEventExternalIDs(wi)
-		expected := map[string]bool{
-			"gh:issue:42": true,
-			"gh:issue:99": true,
-			"EXT-1":       true,
-		}
-		if len(ids) != len(expected) {
-			t.Fatalf("expected %d IDs, got %d: %v", len(expected), len(ids), ids)
-		}
-		for _, id := range ids {
-			if !expected[id] {
-				t.Errorf("unexpected ID %q", id)
-			}
-		}
-	})
-
-	t.Run("manual source has no prefixed IDs", func(t *testing.T) {
-		wi := domain.Session{
-			Source:     "manual",
-			ExternalID: "MAN-1",
-		}
-		ids := workItemEventExternalIDs(wi)
-		if len(ids) != 1 || ids[0] != "MAN-1" {
-			t.Fatalf("expected [MAN-1], got %v", ids)
-		}
-	})
-
-	t.Run("deduplicates IDs", func(t *testing.T) {
-		wi := domain.Session{
-			Source:        "github",
-			SourceScope:   domain.ScopeIssues,
-			SourceItemIDs: []string{"42", "42"},
-			ExternalID:    "42", // same as source item ID
-		}
-		ids := workItemEventExternalIDs(wi)
-		if len(ids) != 2 {
-			t.Fatalf("expected 2 deduplicated IDs, got %d: %v", len(ids), ids)
-		}
-	})
 }
 
 // --- Test helpers ---

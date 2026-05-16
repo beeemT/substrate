@@ -396,13 +396,14 @@ func TestSessionService_EmitsEvents(t *testing.T) {
 }
 
 func TestPlanService_EmitsEvents(t *testing.T) {
-	t.Run("SubmitForReview emits EventPlanSubmittedForReview", func(t *testing.T) {
+	t.Run("SubmitForReview emits EventPlanSubmitted", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, bus)
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
 
-		sub, _ := bus.Subscribe("test", string(domain.EventPlanSubmittedForReview))
+		sub, _ := bus.Subscribe("test", string(domain.EventPlanSubmitted))
 
 		// Create a draft plan first
 		plan := domain.Plan{
@@ -415,25 +416,29 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 			t.Fatalf("Create plan: %v", err)
 		}
 
+		// Create work item so SubmitForReview can load it for WorkspaceID
+		sessionRepo.Create(context.Background(), domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
+
 		if err := svc.SubmitForReview(context.Background(), "plan-submit-test"); err != nil {
 			t.Fatalf("SubmitForReview: %v", err)
 		}
 
 		select {
 		case evt := <-sub.C:
-			if evt.EventType != string(domain.EventPlanSubmittedForReview) {
-				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventPlanSubmittedForReview)
+			if evt.EventType != string(domain.EventPlanSubmitted) {
+				t.Errorf("event type = %q, want %q", evt.EventType, domain.EventPlanSubmitted)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("timeout waiting for EventPlanSubmittedForReview")
+			t.Error("timeout waiting for EventPlanSubmitted")
 		}
 	})
 
 	t.Run("ApprovePlan emits EventPlanApproved", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, bus)
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventPlanApproved))
 
@@ -447,6 +452,9 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 		if err := repo.Create(context.Background(), plan); err != nil {
 			t.Fatalf("Create plan: %v", err)
 		}
+
+		// Create work item so ApprovePlan can load it for WorkspaceID
+		sessionRepo.Create(context.Background(), domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
 
 		if err := svc.ApprovePlan(context.Background(), "plan-approve-test"); err != nil {
 			t.Fatalf("ApprovePlan: %v", err)
@@ -465,8 +473,9 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 	t.Run("RejectPlan emits EventPlanRejected", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
+		sessionRepo := NewMockWorkItemRepository()
 		bus := event.NewBus(event.BusConfig{EventRepo: &mockEventRepoForEmit{events: []domain.SystemEvent{}}})
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, bus)
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
 
 		sub, _ := bus.Subscribe("test", string(domain.EventPlanRejected))
 
@@ -530,7 +539,8 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 	t.Run("nil bus does not panic", func(t *testing.T) {
 		repo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
-		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo}}, newTestBus())
+		sessionRepo := NewMockWorkItemRepository()
+		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: repo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
 
 		// Should not panic
 		plan := domain.Plan{
@@ -542,6 +552,9 @@ func TestPlanService_EmitsEvents(t *testing.T) {
 		if err := repo.Create(context.Background(), plan); err != nil {
 			t.Fatalf("Create plan: %v", err)
 		}
+
+		// Create work item so ApprovePlan can load WorkspaceID
+		sessionRepo.Create(context.Background(), domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
 
 		if err := svc.ApprovePlan(context.Background(), "plan-nil-bus-test"); err != nil {
 			t.Fatalf("ApprovePlan with nil bus: %v", err)

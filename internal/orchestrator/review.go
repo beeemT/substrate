@@ -107,7 +107,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 		return nil, fmt.Errorf("create review cycle: %w", err)
 	}
 
-	// Emit ReviewStarted event (async)
+	// Emit ReviewStarted event with the full cycle so TUI can upsert without a reload
 	service.Emit(p.eventBus, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewStarted),
@@ -116,7 +116,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 			"agent_session_id": agentSession.ID,
 			"work_item_id":     agentSession.WorkItemID,
 			"cycle_number":     cycleNumber,
-			"cycle_id":         cycle.ID,
+			"cycle":            cycle,
 		}),
 		CreatedAt: time.Now(),
 	})

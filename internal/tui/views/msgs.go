@@ -88,6 +88,7 @@ type PlanGeneratedMsg struct {
 type PlanUpdatedMsg struct {
 	WorkItemID string
 	Plan       *domain.Plan
+	SubPlans   []domain.TaskPlan
 }
 
 // SessionStartedMsg is sent when an agent session starts.
@@ -127,7 +128,10 @@ type QuestionAnsweredMsg struct {
 }
 
 // ReviewStartedMsg is sent when a review cycle starts.
-type ReviewStartedMsg struct{ SessionID string }
+type ReviewStartedMsg struct {
+	SessionID string
+	Cycle     domain.ReviewCycle
+}
 
 // ReviewCompletedMsg is sent when a review cycle completes.
 type ReviewCompletedMsg struct{ SessionID string }
@@ -145,9 +149,6 @@ type AdapterErrorMsg struct {
 	Err       error  // underlying error
 	Retries   int    // number of retries attempted
 }
-
-// ImplementationStartedMsg is sent when implementation starts for a work item.
-type ImplementationStartedMsg struct{ WorkItemID string }
 
 // PRReviewStateChangedMsg is sent when a PR review state changes.
 type PRReviewStateChangedMsg struct{ WorkItemID string }
@@ -242,6 +243,7 @@ type RestartPlanMsg struct{ WorkItemID string }
 type SessionResumedMsg struct {
 	Message    string
 	WorkItemID string
+	Task       domain.AgentSession // Full agent session for direct upsert
 }
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
@@ -520,7 +522,6 @@ type WorkspaceInitDoneMsg struct {
 
 // NewReposInitDoneMsg is sent after new plain-git repos are converted to git-work layout.
 type NewReposInitDoneMsg struct{ Count int }
-
 
 // RepoInitProgressMsg is emitted after each repo is initialized during batch init.
 type RepoInitProgressMsg struct {

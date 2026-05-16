@@ -530,14 +530,21 @@ func (a *LinearAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 
 // extractExternalID unmarshals a JSON payload and returns the "external_id" field.
 // Returns empty string if the payload is malformed or the field is absent.
+// Prefers external_ids (prefixed list), falls back to single external_id.
 func extractExternalID(payload string) string {
 	var p struct {
-		ExternalID string `json:"external_id"`
+		ExternalID  string   `json:"external_id"`
+		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		return ""
 	}
-
+	// Prefer external_ids (prefixed list), fall back to single external_id
+	for _, id := range p.ExternalIDs {
+		if strings.HasPrefix(id, "LIN-") {
+			return id
+		}
+	}
 	return p.ExternalID
 }
 

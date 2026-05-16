@@ -176,7 +176,8 @@ func newPhase9bFixture() *phase9bFixture {
 	}
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	bus := event.NewBus(event.BusConfig{})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
 
 	return &phase9bFixture{
 		instanceRepo: instanceRepo,
@@ -184,9 +185,9 @@ func newPhase9bFixture() *phase9bFixture {
 		subPlanRepo:  subPlanRepo,
 		planRepo:     planRepo,
 		instanceSvc:  service.NewInstanceService(repository.NoopTransacter{Res: repository.Resources{Instances: instanceRepo}}),
-		sessionSvc:   service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
+		sessionSvc:   service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		planSvc:      planSvc,
-		bus:          event.NewBus(event.BusConfig{}),
+		bus:          bus,
 		workspaceID:  "ws-test",
 	}
 }
@@ -409,8 +410,8 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	if err == nil {
 		t.Fatal("expected ResumeSession to fail when transition to running fails")
 	}
-	if !strings.Contains(err.Error(), "transition resumed session to running") {
-		t.Fatalf("expected original start-transition error, got %v", err)
+	if !strings.Contains(err.Error(), "create resumed session") {
+		t.Fatalf("expected resumed session error, got %v", err)
 	}
 
 	if len(harness.captured) != 0 {
@@ -463,8 +464,8 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	if err == nil {
 		t.Fatal("expected ResumeSession to fail when transition to running fails")
 	}
-	if !strings.Contains(err.Error(), "transition resumed session to running") {
-		t.Fatalf("expected original start-transition error, got %v", err)
+	if !strings.Contains(err.Error(), "create resumed session") {
+		t.Fatalf("expected resumed session error, got %v", err)
 	}
 	if len(harness.captured) != 0 {
 		t.Fatalf("expected no harness start, got %d", len(harness.captured))

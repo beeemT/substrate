@@ -88,14 +88,13 @@
 ### TUI reads IDs from `Payload`, not from `SystemEvent.WorkspaceID`
 
 The TUI receives `domain.SystemEvent` via the event bus and decodes the JSON `Payload` field
-to extract IDs. Two helpers exist:
+to extract IDs. One helper exists:
 
 ```go
 func extractWorkItemID(payload string) string  // reads m["work_item_id"]
-func extractSessionID(payload string) string   // reads m["agent_session_id"]
 ```
 
-If `Payload` is empty, both return `""`. This breaks every handler that calls them.
+If `Payload` is empty, it returns `""`. This breaks every handler that calls it.
 **Do not rely on `WorkspaceID`** — it is the workspace context for persistence/routing, not the work item ID.
 
 ### Event payload requirements
@@ -110,7 +109,7 @@ contract and helper functions.
 domain.SystemEvent{Payload: JSON} 
   → eventHandlerRegistry[EventType] 
   → typed decoder function 
-  → tea.Msg (WorkItemUpdatedMsg, ImplementationStartedMsg, etc.) 
+  → tea.Msg (WorkItemUpdatedMsg, TaskStartedMsg, etc.) 
   → App.Update case block
 ```
 

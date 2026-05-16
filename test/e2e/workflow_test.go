@@ -207,9 +207,9 @@ func TestE2E_WorkItem_TraversesAllStates(t *testing.T) {
 	if !seen[string(domain.EventWorkItemPlanning)] {
 		t.Error("expected EventWorkItemPlanning event — work item never entered planning state")
 	}
-	// EventImplementationStarted: emitted after Transition→WorkItemImplementing.
-	if !seen[string(domain.EventImplementationStarted)] {
-		t.Error("expected EventImplementationStarted event — work item never entered implementing state")
+	// EventWorkItemImplementing: emitted by SessionService.StartImplementation → Transition → emitStateChange.
+	if !seen[string(domain.EventWorkItemImplementing)] {
+		t.Error("expected EventWorkItemImplementing event — work item never entered implementing state")
 	}
 }
 

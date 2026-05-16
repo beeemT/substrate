@@ -56,6 +56,7 @@ type ResumeSessionResult struct {
 // The interrupted session remains in the DB as interrupted (audit trail).
 // The new session links to the same SubPlan and reuses the existing worktree.
 // currentInstanceID becomes the owner of the new session.
+// EventAgentSessionResumed is emitted by AgentSessionService.Resume().
 func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.AgentSession, currentInstanceID string) (ResumeSessionResult, error) {
 	if interrupted.Status != domain.AgentSessionInterrupted {
 		return ResumeSessionResult{}, fmt.Errorf("session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
@@ -90,32 +91,14 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 	hasResume := len(interrupted.ResumeInfo) > 0
 	systemPrompt := buildResumeSystemPrompt(subPlan, lastLines, loadGlobalCommitConfig())
 
-	// Create the new session record (pending).
-	now := time.Now()
-	newSession := domain.AgentSession{
-		ID:              domain.NewID(),
-		WorkItemID:      interrupted.WorkItemID,
-		WorkspaceID:     interrupted.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseImplementation,
-		SubPlanID:       interrupted.SubPlanID,
-		RepositoryName:  interrupted.RepositoryName,
-		WorktreePath:    interrupted.WorktreePath,
-		HarnessName:     r.harness.Name(),
-		OwnerInstanceID: &currentInstanceID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	if err := r.sessionSvc.Create(ctx, newSession); err != nil {
+	// Create the new session, transition to running, and emit EventAgentSessionResumed
+	// in a single service call. This ensures the event is always emitted with both
+	// old and new session IDs.
+	newSession, err := r.sessionSvc.Resume(ctx, interrupted, r.harness.Name(), &currentInstanceID)
+	if err != nil {
 		return ResumeSessionResult{}, fmt.Errorf("create resumed session: %w", err)
 	}
 
-	// Transition the new session to running before launching the harness so the
-	// durable session row never lags external state.
-	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
-		_ = r.sessionSvc.Transition(ctx, newSession.ID, domain.AgentSessionFailed)
-
-		return ResumeSessionResult{}, fmt.Errorf("transition resumed session to running: %w", err)
-	}
 	// Start the harness session once the row is durably running.
 	opts := adapter.SessionOpts{
 		SessionID:    newSession.ID,
@@ -154,19 +137,6 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 				"agent_session_id", newSession.ID)
 		}
 	}
-
-	service.Emit(r.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionResumed),
-		WorkspaceID: interrupted.WorkspaceID,
-		Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
-			"old_session_id": interrupted.ID,
-			"new_session_id": newSession.ID,
-			"sub_plan_id":    interrupted.SubPlanID,
-			"work_item_id":   interrupted.WorkItemID,
-		}),
-		CreatedAt: time.Now(),
-	})
 
 	// Register session for steering; deregister when the session finishes.
 	if r.registry != nil {
@@ -300,28 +270,12 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedSession do
 
 	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
-	// Create a fresh agent session row — the failed session is audit trail and must not be modified.
-	now := time.Now()
-	newSession := domain.AgentSession{
-		ID:              domain.NewID(),
-		WorkItemID:      failedSession.WorkItemID,
-		WorkspaceID:     failedSession.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseImplementation,
-		SubPlanID:       failedSession.SubPlanID,
-		RepositoryName:  failedSession.RepositoryName,
-		WorktreePath:    failedSession.WorktreePath,
-		HarnessName:     r.harness.Name(),
-		OwnerInstanceID: &currentInstanceID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	if err := r.sessionSvc.Create(ctx, newSession); err != nil {
-		return FollowUpSessionResult{}, fmt.Errorf("create follow-up session for failed session: %w", err)
-	}
-
-	if err := r.sessionSvc.Start(ctx, newSession.ID); err != nil {
-		_ = r.sessionSvc.Transition(ctx, newSession.ID, domain.AgentSessionFailed)
-		return FollowUpSessionResult{}, fmt.Errorf("transition follow-up session to running: %w", err)
+	// Create, transition to running, and emit EventAgentSessionResumed in one service call.
+	// The failed session row is preserved as audit trail. EventAgentSessionResumed is emitted
+	// by AgentSessionService.FollowUpFailed with the full new session and old session ID.
+	newSession, err := r.sessionSvc.FollowUpFailed(ctx, failedSession, r.harness.Name(), &currentInstanceID)
+	if err != nil {
+		return FollowUpSessionResult{}, fmt.Errorf("create and start follow-up session: %w", err)
 	}
 	opts := adapter.SessionOpts{
 		SessionID:    newSession.ID,
@@ -345,19 +299,6 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedSession do
 		}
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
-
-	service.Emit(r.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventAgentSessionResumed),
-		WorkspaceID: failedSession.WorkspaceID,
-		Payload: marshalJSONOrEmpty(string(domain.EventAgentSessionResumed), map[string]any{
-			"old_session_id": failedSession.ID,
-			"new_session_id": newSession.ID,
-			"sub_plan_id":    failedSession.SubPlanID,
-			"work_item_id":   failedSession.WorkItemID,
-		}),
-		CreatedAt: time.Now(),
-	})
 
 	if r.registry != nil {
 		r.registry.Register(newSession.ID, harnessSession)

@@ -51,16 +51,62 @@ func canTransition(from, to domain.SessionState) bool {
 
 // workItemPayload holds the JSON payload for work-item lifecycle events.
 type workItemPayload struct {
-	WorkItemID  string         `json:"work_item_id"`
-	WorkspaceID string         `json:"workspace_id,omitempty"`
-	Session     domain.Session `json:"session,omitempty"`
+	WorkItemID    string         `json:"work_item_id"`
+	WorkspaceID   string         `json:"workspace_id,omitempty"`
+	ExternalID    string         `json:"external_id,omitempty"`
+	SourceItemIDs []string       `json:"source_item_ids,omitempty"`
+	ExternalIDs   []string       `json:"external_ids,omitempty"`
+	Session       domain.Session `json:"session,omitempty"`
 }
 
 // marshalWorkItemPayload serializes a work-item event payload to JSON.
 func marshalWorkItemPayload(item domain.Session) string {
-	p := workItemPayload{WorkItemID: item.ID, WorkspaceID: item.WorkspaceID, Session: item}
+	p := workItemPayload{
+		WorkItemID:    item.ID,
+		WorkspaceID:   item.WorkspaceID,
+		ExternalID:    item.ExternalID,
+		SourceItemIDs: item.SourceItemIDs,
+		ExternalIDs:   WorkItemEventExternalIDs(item),
+		Session:       item,
+	}
 	b, _ := json.Marshal(p)
 	return string(b)
+}
+
+// WorkItemEventExternalIDs builds the external_ids list for work item event payloads.
+// It prefixes source item IDs with the provider namespace and deduplicates.
+func WorkItemEventExternalIDs(item domain.Session) []string {
+	if len(item.SourceItemIDs) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var ids []string
+	appendID := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	switch item.Source {
+	case "github":
+		for _, itemID := range item.SourceItemIDs {
+			appendID("gh:" + itemID)
+		}
+	case "gitlab":
+		for _, itemID := range item.SourceItemIDs {
+			appendID("gl:" + itemID)
+		}
+	case "linear":
+		for _, itemID := range item.SourceItemIDs {
+			appendID("lin:" + itemID)
+		}
+	default:
+		for _, itemID := range item.SourceItemIDs {
+			appendID(itemID)
+		}
+	}
+	return ids
 }
 
 // Get retrieves a work item by ID.
@@ -378,30 +424,28 @@ func stateToEventType(state domain.SessionState) domain.EventType {
 	}
 }
 
-// emitStateChange emits a state change event asynchronously.
+// emitStateChange emits a state change event.
 func (s *SessionService) emitStateChange(ctx context.Context, from, to domain.SessionState, item domain.Session) {
 	eventType := stateToEventType(to)
 	if eventType == "" {
 		return // no event for this state
 	}
 
-	go func() {
-		if err := s.bus.Publish(ctx, domain.SystemEvent{
-			ID:          domain.NewID(),
-			EventType:   string(eventType),
-			WorkspaceID: item.WorkspaceID,
-			Payload:     marshalWorkItemPayload(item),
-			CreatedAt:   time.Now(),
-		}); err != nil {
-			slog.Error("failed to emit state change event",
-				"error", err,
-				"session_id", item.ID,
-				"from", from,
-				"to", to,
-				"event_type", eventType,
-			)
-		}
-	}()
+	if err := s.bus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(eventType),
+		WorkspaceID: item.WorkspaceID,
+		Payload:     marshalWorkItemPayload(item),
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		slog.Error("failed to emit state change event",
+			"error", err,
+			"session_id", item.ID,
+			"from", from,
+			"to", to,
+			"event_type", eventType,
+		)
+	}
 }
 
 // StartPlanning transitions a work item from ingested to planning.
@@ -586,10 +630,7 @@ func (s *SessionService) Unarchive(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// Emit state change event asynchronously.
-	go func() {
-		s.emitStateChange(context.Background(), committed.from, committed.to, *committed.item)
-	}()
+	s.emitStateChange(context.Background(), committed.from, committed.to, *committed.item)
 	return nil
 }
 

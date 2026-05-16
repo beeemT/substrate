@@ -1936,12 +1936,18 @@ func parseExternalID(externalID string) (projectPath string, iid int64, err erro
 
 func extractExternalID(payload string) string {
 	var parsed struct {
-		ExternalID string `json:"external_id"`
+		ExternalID  string   `json:"external_id"`
+		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return ""
 	}
-
+	// Prefer external_ids (prefixed list), fall back to single external_id
+	for _, id := range parsed.ExternalIDs {
+		if strings.HasPrefix(id, "gl:") {
+			return id
+		}
+	}
 	return parsed.ExternalID
 }
 

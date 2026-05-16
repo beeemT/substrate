@@ -75,7 +75,8 @@ func TestPlanService_ValidTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			planRepo := NewMockPlanRepository()
 			subPlanRepo := NewMockSubPlanRepository()
-			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+			sessionRepo := NewMockWorkItemRepository()
+			svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
 
 			plan := domain.Plan{
 				ID:               "plan-test",
@@ -84,6 +85,9 @@ func TestPlanService_ValidTransitions(t *testing.T) {
 				Status:           tc.from,
 			}
 			planRepo.plans["plan-test"] = plan
+
+			// Create work item so TransitionPlan can load WorkspaceID
+			sessionRepo.Create(ctx, domain.Session{ID: "wi-1", WorkspaceID: "ws-1"})
 
 			if err := svc.TransitionPlan(ctx, "plan-test", tc.to); err != nil {
 				t.Fatalf("Transition from %s to %s failed: %v", tc.from, tc.to, err)
@@ -146,7 +150,8 @@ func TestPlanService_ApplyReviewedPlanOutput(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+	sessionRepo := NewMockWorkItemRepository()
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
 
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:               "plan-1",
@@ -208,7 +213,8 @@ func TestPlanService_ApplyReviewedPlanOutput_NoOpPreservesVersion(t *testing.T) 
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+	sessionRepo := NewMockWorkItemRepository()
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
 
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:               "plan-1",
@@ -243,7 +249,8 @@ func TestPlanService_CreatePlanAtomic_VersionGeneration(t *testing.T) {
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, newTestBus())
+	sessionRepo := NewMockWorkItemRepository()
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, newTestBus())
 
 	// First plan starts at version 1.
 	planV1 := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", OrchestratorPlan: "v1", Version: 1}
@@ -427,9 +434,11 @@ func TestPlanService_ApplyReviewedPlanOutput_EmitsEventWithPlanID(t *testing.T) 
 	ctx := context.Background()
 	planRepo := NewMockPlanRepository()
 	subPlanRepo := NewMockSubPlanRepository()
+	sessionRepo := NewMockWorkItemRepository()
+	sessionRepo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	repo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
 	bus := event.NewBus(event.BusConfig{EventRepo: repo})
-	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus)
+	svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo}}, bus)
 
 	planRepo.plans["plan-1"] = domain.Plan{
 		ID:               "plan-1",
@@ -461,8 +470,8 @@ func TestPlanService_ApplyReviewedPlanOutput_EmitsEventWithPlanID(t *testing.T) 
 	if got.EventType != string(domain.EventPlanRevised) {
 		t.Errorf("event type = %q, want %q", got.EventType, domain.EventPlanRevised)
 	}
-	if got.WorkspaceID != "wi-1" {
-		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, "wi-1")
+	if got.WorkspaceID != "ws-1" {
+		t.Errorf("WorkspaceID = %q, want %q", got.WorkspaceID, "ws-1")
 	}
 	if got.Payload == "" || got.Payload == "{}" {
 		t.Errorf("Payload = %q, want non-empty JSON with plan_id", got.Payload)

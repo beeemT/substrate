@@ -1849,12 +1849,18 @@ func parseExternalID(externalID string) (string, string, int64, error) {
 
 func extractExternalID(payload string) string {
 	var parsed struct {
-		ExternalID string `json:"external_id"`
+		ExternalID  string   `json:"external_id"`
+		ExternalIDs []string `json:"external_ids"`
 	}
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return ""
 	}
-
+	// Prefer external_ids (prefixed list), fall back to single external_id
+	for _, id := range parsed.ExternalIDs {
+		if strings.HasPrefix(id, "gh:") {
+			return id
+		}
+	}
 	return parsed.ExternalID
 }
 
