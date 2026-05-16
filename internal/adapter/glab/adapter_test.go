@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	coreadapter "github.com/beeemT/substrate/internal/adapter"
@@ -15,11 +16,14 @@ import (
 )
 
 // stubRunner returns a commandRunner that records calls and returns the configured
-// output/error.
+// output/error. If outputs is set (multiple), they are returned in order and
+// rotated. Otherwise, output (single) is returned on every call.
 type stubRunner struct {
-	calls  []stubCall
-	output []byte
-	err    error
+	calls    []stubCall
+	output   []byte
+	outputs  [][]byte
+	outputMu sync.Mutex
+	err      error
 }
 
 type stubCall struct {
@@ -30,7 +34,13 @@ type stubCall struct {
 
 func (s *stubRunner) run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	s.calls = append(s.calls, stubCall{dir: dir, name: name, args: args})
-
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	if len(s.outputs) > 0 {
+		out := s.outputs[0]
+		s.outputs = s.outputs[1:]
+		return out, s.err
+	}
 	return s.output, s.err
 }
 
@@ -257,7 +267,13 @@ func TestOnEvent_WorktreeCreated_MalformedPayload_ReturnsNil(t *testing.T) {
 // --- OnEvent SubPlanPRReady ---
 
 func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
-	stub := &stubRunner{output: []byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/5"}`)}
+	// Two mr view outputs: first finds the MR, second refreshes state after undrafting.
+	stub := &stubRunner{
+		outputs: [][]byte{
+			[]byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/5"}`),
+			[]byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/5"}`),
+		},
+	}
 	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
 
 	branch := "sub-LIN-FOO-99-complete-me"

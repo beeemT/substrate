@@ -581,6 +581,11 @@ func (a RepoLifecycleAdapter) OnEvent(ctx context.Context, event domain.SystemEv
 			slog.Warn("github: worktree reused handler failed", "err", err)
 		}
 		return nil
+	case domain.EventWorkItemCompleted:
+		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
+			slog.Warn("github: work-item completed handler failed", "err", err)
+		}
+		return nil
 	case domain.EventSubPlanPRReady:
 		if err := a.onSubPlanPRReady(ctx, event.Payload); err != nil {
 			slog.Warn("github: sub-plan PR-ready handler failed", "err", err)
@@ -970,10 +975,12 @@ func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) er
 		// Only touch artifacts for this sub-plan's repo to avoid undrafting
 		// unrelated PRs in multi-repo work items that share a branch.
 		targetRepo := baseOwner + "/" + baseRepo
+		found := false
 		for _, artifact := range artifacts {
 			if artifact.RepoName != targetRepo {
 				continue
 			}
+			found = true
 			owner, repo, ok := splitGitHubRepoName(artifact.RepoName)
 			if !ok {
 				continue
@@ -990,7 +997,11 @@ func (a *GithubAdapter) onSubPlanPRReady(ctx context.Context, payload string) er
 			artifact.UpdatedAt = time.Now()
 			a.recordGithubPR(ctx, p.WorkspaceID, p.WorkItemID, artifact, owner, repo, prNumber)
 		}
-		return nil
+		// If we found and updated an artifact for this repo, we're done.
+		// Otherwise, fall through to search for existing PRs via API.
+		if found {
+			return nil
+		}
 	}
 
 	// No artifacts found via event repo. Try to find existing PR via API.

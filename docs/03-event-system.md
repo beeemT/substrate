@@ -81,25 +81,36 @@ const (
 	EventWorkItemMerged       EventType = "work_item.merged"
 
 	EventWorkspaceCreated        EventType = "workspace.created"
-	EventPlanGenerated EventType = "plan.generated"
-	EventPlanSubmitted  EventType = "plan.submitted"
-	EventPlanApproved   EventType = "plan.approved"
+	EventPlanGenerated          EventType = "plan.generated"
+	EventPlanSubmitted          EventType = "plan.submitted"
+	EventPlanApproved           EventType = "plan.approved"
 	EventPlanRejected            EventType = "plan.rejected"
 	EventPlanRevised             EventType = "plan.revised"
 	EventPlanFailed             EventType = "plan.failed"
+
+	// Sub-plan state events (supersede subplan.status_changed)
+	EventSubPlanStarted   EventType = "subplan.started"
+	EventSubPlanCompleted EventType = "subplan.completed"
+	EventSubPlanFailed    EventType = "subplan.failed"
+	EventSubPlanPRReady   EventType = "subplan.pr_ready"
+
+	// Deprecated: use EventSubPlanStarted/Completed/Failed instead
 	EventSubPlanStatusChanged EventType = "subplan.status_changed"
-	EventWorktreeRemoved       EventType = "worktree.removed"
-	EventAgentSessionStarted     EventType = "agent_session.started"
-	EventAgentSessionCompleted   EventType = "agent_session.completed"
-	EventAgentSessionFailed      EventType = "agent_session.failed"
-	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
-	EventAgentSessionResumed     EventType = "agent_session.resumed"
-	EventAgentQuestionRaised     EventType = "agent_question.raised"
-	EventAgentQuestionAnswered   EventType = "agent_question.answered"
-	EventReviewStarted           EventType = "review.started"
-	EventReviewCompleted         EventType = "review.completed"
-	EventCritiquesFound          EventType = "review.critiques_found"
-	EventReimplementationStarted EventType = "reimplementation.started"
+
+	EventWorktreeRemoved        EventType = "worktree.removed"
+	EventAgentSessionStarted          EventType = "agent_session.started"
+	EventAgentSessionCompleted        EventType = "agent_session.completed"
+	EventAgentSessionFailed           EventType = "agent_session.failed"
+	EventAgentSessionInterrupted      EventType = "agent_session.interrupted"
+	EventAgentSessionResumed          EventType = "agent_session.resumed"
+	EventAgentSessionFollowUp         EventType = "agent_session.follow_up"
+	EventAgentSessionWaitingForAnswer EventType = "agent_session.waiting_for_answer"
+	EventAgentQuestionRaised          EventType = "agent_question.raised"
+	EventAgentQuestionAnswered        EventType = "agent_question.answered"
+	EventReviewStarted                EventType = "review.started"
+	EventReviewCompleted              EventType = "review.completed"
+	EventCritiquesFound              EventType = "review.critiques_found"
+	EventReimplementationStarted      EventType = "reimplementation.started"
 
 	// Review artifact events
 	EventReviewArtifactRecorded  EventType = "review.artifact_recorded"
@@ -133,30 +144,31 @@ All events flow through `event.Bus.Publish(...)` via the shared `service.Emit()`
 
 Services emit via `service.Emit(bus, evt)` after database transactions commit:
 
-||| Service | Methods | Event types |
-|||---|---|---|
-||| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged` |
-||| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
-|||| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
+| Service | Methods | Event types |
+|---|---|---|
+| `SessionService` | `Transition()` | `work_item.planning`, `work_item.plan_review`, `work_item.approved`, `work_item.implementing`, `work_item.reviewing`, `work_item.completed`, `work_item.failed`, `work_item.merged`, `work_item.archived` |
+| `TaskService` | `Create`, `Complete`, `Fail`, `Interrupt` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+| `PlanService` | `SubmitForReview`, `ApprovePlan`, `RejectPlan`, `ApplyReviewedPlanOutput`, `TransitionSubPlan` | `plan.submitted`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.started`, `subplan.completed`, `subplan.failed` |
+| `AgentSessionService` | `Transition()`, `FollowUpRestart()` | `agent_session.follow_up`, `agent_session.waiting_for_answer` |
 
 ### Orchestrator-layer emitters (workflow events)
 
 Orchestrators emit higher-level workflow events via `service.Emit()`:
 
-|| Orchestrator | Event types | Notes |
-||---|---|---|
-|| `PlanningService` | `plan.generated`, `plan.failed` | Plan generation is an orchestrator action |
-||| `ImplementationService` | `work_item.completed` (rich payload), `worktree.created`, `worktree.reused` | `agent_session.*` events removed — services emit these |
-|| `ReviewPipeline` | `review.started`, `review.critiques_found`, `review.completed`, `reimplementation.started` | |
-|| `Resumption` | `agent_session.resumed` | |
+| Orchestrator | Event types | Notes |
+|---|---|
+| `PlanningService` | `plan.generated`, `plan.failed` | Plan generation is an orchestrator action |
+| `ImplementationService` | `work_item.completed` (rich payload), `worktree.created`, `worktree.reused`, `subplan.pr_ready` | `agent_session.*` events removed — services emit these |
+| `ReviewPipeline` | `review.started`, `review.critiques_found`, `review.completed`, `reimplementation.started` | |
+| `Resumption` | `agent_session.resumed` | |
 
 ### Adapter and TUI emitters
 
-|| Emitter | Event types | Notes |
-||---|---|---|
-|| GitHub/GitLab adapters (`PersistReviewArtifact`) | `review.artifact_recorded` | Direct persistence via `EventService.Create` |
-||| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.merged` | `pr.merged` emitted on post-merge transition; review state and CI check rows are maintained in the DB by the refresh loop but do not emit bus events |
-|| Adapter dispatch loops | `adapter.error` | Published through bus on handler failure |
+| Emitter | Event types | Notes |
+|---|---|
+| GitHub/GitLab adapters (`PersistReviewArtifact`) | `review.artifact_recorded` | Direct persistence via `EventService.Create` |
+| GitHub `refreshPRs` / GitLab `refreshSingleMR` | `pr.merged` | `pr.merged` emitted on post-merge transition; review state and CI check rows are maintained in the DB by the refresh loop but do not emit bus events |
+| Adapter dispatch loops | `adapter.error` | Published through bus on handler failure |
 
 ### Unused event constants
 

@@ -167,6 +167,17 @@ type SubPlanStatusChangedMsg struct {
 	Status     domain.TaskPlanStatus
 }
 
+// SubPlanPRReadyMsg is sent when a sub-plan's branch has been finalized and the PR/MR is ready.
+// The TUI uses this to refresh session/plan data and update artifact state.
+type SubPlanPRReadyMsg struct {
+	WorkItemID   string
+	PlanID       string
+	SubPlanID    string
+	Repository   string
+	Branch       string
+	WorktreePath string
+}
+
 // QuestionsLoadedMsg is sent when questions for a session are loaded.
 type QuestionsLoadedMsg struct {
 	SessionID string

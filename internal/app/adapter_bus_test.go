@@ -69,7 +69,7 @@ func wireAdapterSubscriptions(bus *event.Bus, workItemAdapters []adapter.WorkIte
 		}(workItemAdapter, sub.C)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventPRMerged), string(domain.EventPlanApproved), string(domain.EventSubPlanPRReady))
+		sub, err := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted), string(domain.EventSubPlanPRReady), string(domain.EventPRMerged), string(domain.EventPlanApproved))
 		if err != nil {
 			return err
 		}

@@ -623,6 +623,11 @@ func (a *GitlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) e
 			}
 		}
 		return nil
+	case domain.EventSubPlanPRReady:
+		// EventSubPlanPRReady is handled by the glab adapter via repo-lifecycle routing.
+		// The gitlab adapter itself does not have a handler since it relies on the glab
+		// adapter (registered as a repo-lifecycle adapter) for MR lifecycle management.
+		return nil
 	default:
 		return nil
 	}

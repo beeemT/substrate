@@ -114,6 +114,10 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
 			slog.Warn("glab: worktree reused handler failed", "error", err)
 		}
+	case domain.EventWorkItemCompleted:
+		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
+			slog.Warn("glab: work-item completed handler failed", "error", err)
+		}
 	case domain.EventSubPlanPRReady:
 		if err := a.onSubPlanPRReady(ctx, event.Payload); err != nil {
 			slog.Warn("glab: sub-plan PR-ready handler failed", "error", err)
@@ -367,7 +371,10 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 			slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
 		}
 		// Refresh MR state after undrafting to capture the post-update draft flag.
-		mr, _ = a.mrView(ctx, worktreePath, p.Branch)
+		// Preserve the original MR data if refresh fails, since we already have valid metadata.
+		if refreshed, refreshOk := a.mrView(ctx, worktreePath, p.Branch); refreshOk {
+			mr = refreshed
+		}
 		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
 			Provider:     "gitlab",
 			Kind:         "MR",

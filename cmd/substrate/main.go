@@ -249,7 +249,6 @@ func openDatabase(ctx context.Context) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-
 	if err := repository.Migrate(ctx, db, migrations.FS); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
@@ -462,6 +461,7 @@ func subscribeRepoLifecycleAdapters(
 			domain.EventWorktreeCreated,
 			domain.EventWorktreeReused,
 			domain.EventWorkItemCompleted,
+			domain.EventSubPlanPRReady,
 			domain.EventPRMerged,
 			domain.EventPlanApproved,
 		},
@@ -639,7 +639,7 @@ func buildOrchestrationRuntime(
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
 		foreman = orchestrator.NewForeman(
-				cfg, harnesses.Foreman, services.plan, services.question, services.session, bus,
+			cfg, harnesses.Foreman, services.plan, services.question, services.session, bus,
 		)
 	}
 

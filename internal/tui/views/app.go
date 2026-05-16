@@ -312,6 +312,7 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventWorkItemCompleted),
 				string(domain.EventWorkItemFailed),
 				string(domain.EventWorkItemMerged),
+				string(domain.EventWorkItemArchived),
 				// Session lifecycle
 				string(domain.EventAgentSessionStarted),
 				string(domain.EventAgentSessionCompleted),
@@ -331,6 +332,7 @@ func (a *App) Init() tea.Cmd {
 				string(domain.EventSubPlanStarted),
 				string(domain.EventSubPlanCompleted),
 				string(domain.EventSubPlanFailed),
+				string(domain.EventSubPlanPRReady),
 				// Review
 				string(domain.EventReviewStarted),
 				string(domain.EventReviewCompleted),
@@ -1310,7 +1312,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventWorkItemReviewing,
 			domain.EventWorkItemCompleted,
 			domain.EventWorkItemFailed,
-			domain.EventWorkItemMerged:
+			domain.EventWorkItemMerged,
+			domain.EventWorkItemArchived:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
 				cmds = append(cmds,
@@ -1649,6 +1652,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if msg.WorkItemID != "" {
 				cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID))
 			}
+		}
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		if a.currentWorkItemID == msg.WorkItemID {
+			cmds = append(cmds, a.updateContentFromState())
+		}
+		return a, tea.Batch(cmds...)
+
+	case SubPlanPRReadyMsg:
+		// Refresh session and plan data when a PR/MR becomes ready.
+		if msg.WorkItemID != "" {
+			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
+			cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID))
+			cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
 		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()

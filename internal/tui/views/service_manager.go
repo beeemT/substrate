@@ -192,7 +192,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		go wireAdapterToBus(workItemAdapter, sub.C, bus)
 	}
 	for _, lifecycleAdapter := range repoLifecycleAdapters {
-		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventPRMerged), string(domain.EventPlanApproved), string(domain.EventSubPlanPRReady))
+		sub, subErr := bus.Subscribe("repo-lifecycle-adapter:"+lifecycleAdapter.Name(), string(domain.EventWorktreeCreated), string(domain.EventWorktreeReused), string(domain.EventWorkItemCompleted), string(domain.EventSubPlanPRReady), string(domain.EventPRMerged), string(domain.EventPlanApproved))
 		if subErr != nil {
 			return nil, fmt.Errorf("subscribe repo lifecycle adapter %s: %w", lifecycleAdapter.Name(), subErr)
 		}

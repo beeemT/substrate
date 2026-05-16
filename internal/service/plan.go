@@ -848,6 +848,8 @@ func (s *PlanService) RetrySubPlan(ctx context.Context, id string) error {
 // finalized and pushed. It validates that the sub-plan status is SubPlanCompleted
 // and that required fields (Repository, Branch, Review) are present. This method
 // is event-only: it does not mutate sub-plan status or persist a separate readiness state.
+// It is idempotent: if EventSubPlanPRReady was already emitted for this sub-plan,
+// the event is not emitted again.
 func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, ready SubPlanPRReadyContext) error {
 	if ready.Repository == "" {
 		return newInvalidInputError("repository is required for PR-ready event", "repository")
@@ -883,6 +885,23 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 		workItem, err = res.Sessions.Get(ctx, plan.WorkItemID)
 		if err != nil {
 			return fmt.Errorf("get work item for sub-plan PR-ready event: %w", err)
+		}
+
+		// Idempotency check: if EventSubPlanPRReady was already emitted for this sub-plan,
+		// skip emitting again. Check the event log for a previous emission.
+		if res.Events != nil {
+			events, listErr := res.Events.ListByType(ctx, string(domain.EventSubPlanPRReady), 100)
+			if listErr == nil {
+				for _, evt := range events {
+					// Check if this event is for the same sub-plan by parsing the payload.
+					if strings.Contains(evt.Payload, subPlanID) {
+						slog.Debug("plan: sub-plan PR-ready already emitted, skipping", "sub_plan_id", subPlanID)
+						return nil // Already emitted, idempotent success
+					}
+				}
+			} else {
+				slog.Warn("plan: failed to check for previous PR-ready event, proceeding", "error", listErr)
+			}
 		}
 
 		return nil

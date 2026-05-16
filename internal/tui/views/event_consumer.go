@@ -53,6 +53,7 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventWorkItemCompleted:    decodeWorkItemState,
 	domain.EventWorkItemFailed:       decodeWorkItemState,
 	domain.EventWorkItemMerged:       decodeWorkItemState,
+	domain.EventWorkItemArchived:     decodeWorkItemState,
 	domain.EventPlanGenerated:        decodePlanGenerated,
 	domain.EventPlanSubmitted:        decodePlanUpdated,
 	domain.EventPlanApproved:         decodePlanUpdated,
@@ -63,6 +64,7 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventSubPlanStarted:   decodeSubPlanEvent,
 	domain.EventSubPlanCompleted: decodeSubPlanEvent,
 	domain.EventSubPlanFailed:    decodeSubPlanEvent,
+	domain.EventSubPlanPRReady:   decodeSubPlanPRReady,
 	// Agent session events
 	domain.EventAgentSessionStarted:          decodeAgentSessionStarted,
 	domain.EventAgentSessionCompleted:        decodeAgentSessionUpdated,
@@ -154,7 +156,6 @@ func decodeSubPlanEvent(payload string) tea.Msg {
 		WorkItemID  string                `json:"work_item_id"`
 		WorkspaceID string                `json:"workspace_id"`
 		PlanID      string                `json:"plan_id"`
-		SubPlanID   string                `json:"sub_plan_id"`
 		SubPlan     domain.TaskPlan       `json:"sub_plan"`
 		Status      domain.TaskPlanStatus `json:"status"`
 	}
@@ -167,6 +168,31 @@ func decodeSubPlanEvent(payload string) tea.Msg {
 		PlanID:     p.PlanID,
 		SubPlan:    p.SubPlan,
 		Status:     p.Status,
+	}
+}
+
+// decodeSubPlanPRReady decodes EventSubPlanPRReady and returns SubPlanPRReadyMsg
+// to trigger a session/plan refresh in the TUI.
+func decodeSubPlanPRReady(payload string) tea.Msg {
+	var p struct {
+		WorkItemID   string `json:"work_item_id"`
+		PlanID       string `json:"plan_id"`
+		SubPlanID    string `json:"sub_plan_id"`
+		Repository   string `json:"repository"`
+		Branch       string `json:"branch"`
+		WorktreePath string `json:"worktree_path"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventSubPlanPRReady payload", "error", err)
+		return nil
+	}
+	return SubPlanPRReadyMsg{
+		WorkItemID:   p.WorkItemID,
+		PlanID:       p.PlanID,
+		SubPlanID:    p.SubPlanID,
+		Repository:   p.Repository,
+		Branch:       p.Branch,
+		WorktreePath: p.WorktreePath,
 	}
 }
 
