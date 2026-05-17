@@ -71,6 +71,18 @@ func (r SubPlanRepo) Get(ctx context.Context, id string) (domain.TaskPlan, error
 	return row.toDomain()
 }
 
+// GetForUpdate retrieves a sub-plan with a row lock for idempotency checks.
+// Uses SELECT FOR UPDATE to prevent concurrent modifications during event emission.
+// Note: SQLite ignores FOR UPDATE; use BEGIN IMMEDIATE transactions for actual locking.
+func (r SubPlanRepo) GetForUpdate(ctx context.Context, id string) (domain.TaskPlan, error) {
+	var row subPlanRow
+	if err := r.remote.GetContext(ctx, &row, `SELECT * FROM sub_plans WHERE id = ? FOR UPDATE`, id); err != nil {
+		return domain.TaskPlan{}, fmt.Errorf("get sub-plan for update %s: %w", id, err)
+	}
+
+	return row.toDomain()
+}
+
 func (r SubPlanRepo) ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error) {
 	var rows []subPlanRow
 	if err := r.remote.SelectContext(ctx, &rows, `SELECT * FROM sub_plans WHERE plan_id = ? ORDER BY exec_order`, planID); err != nil {

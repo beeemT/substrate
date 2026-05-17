@@ -334,7 +334,6 @@ type subPlanPRReadyPayload struct {
 	WorkItemID     string                    `json:"work_item_id"`
 	WorkspaceID    string                    `json:"workspace_id"`
 	PlanID         string                    `json:"plan_id"`
-	SubPlanID      string                    `json:"sub_plan_id"`
 	Repository     string                    `json:"repository"`
 	Branch         string                    `json:"branch"`
 	WorktreePath   string                    `json:"worktree_path"`
@@ -357,7 +356,9 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 		return fmt.Errorf("glab: sub-plan PR-ready payload has no branch")
 	}
 	// Validate review coordinates are present.
-	if p.Review.BaseRepo.Provider == "" && p.Review.BaseRepo.Repo == "" && p.Review.HeadRepo.Repo == "" {
+	// Require at least BaseRepo.Provider or BaseRepo.Repo to identify the GitLab project.
+	// HeadRepo fields are optional since glab uses --source-branch directly without owner:branch format.
+	if p.Review.BaseRepo.Provider == "" && p.Review.BaseRepo.Repo == "" {
 		return fmt.Errorf("glab: sub-plan PR-ready payload missing review coordinates")
 	}
 

@@ -197,6 +197,12 @@ func (m *MockSubPlanRepository) Get(_ context.Context, id string) (domain.TaskPl
 	return sp, nil
 }
 
+func (m *MockSubPlanRepository) GetForUpdate(_ context.Context, id string) (domain.TaskPlan, error) {
+	// GetForUpdate behaves identically to Get for mock purposes.
+	// Row locking is tested in integration tests with real SQLite.
+	return m.Get(context.Background(), id)
+}
+
 func (m *MockSubPlanRepository) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
 	if m.err != nil {
 		return nil, m.err

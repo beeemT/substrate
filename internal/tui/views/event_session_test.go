@@ -272,6 +272,10 @@ func (r *mockSubPlanRepo) Get(_ context.Context, _ string) (domain.TaskPlan, err
 	return domain.TaskPlan{}, repository.ErrNotFound
 }
 
+func (r *mockSubPlanRepo) GetForUpdate(_ context.Context, _ string) (domain.TaskPlan, error) {
+	return domain.TaskPlan{}, repository.ErrNotFound
+}
+
 func (r *mockSubPlanRepo) ListByPlanID(_ context.Context, _ string) ([]domain.TaskPlan, error) {
 	return nil, nil
 }

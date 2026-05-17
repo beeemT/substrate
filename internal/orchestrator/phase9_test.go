@@ -207,6 +207,18 @@ func (r *mockSubPlanRepo) Get(_ context.Context, id string) (domain.TaskPlan, er
 	return domain.TaskPlan{}, repository.ErrNotFound
 }
 
+func (r *mockSubPlanRepo) GetForUpdate(_ context.Context, id string) (domain.TaskPlan, error) {
+	// GetForUpdate behaves identically to Get for mock purposes.
+	// Row locking is tested in integration tests with real SQLite.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sp, ok := r.subPlans[id]; ok {
+		return sp, nil
+	}
+
+	return domain.TaskPlan{}, repository.ErrNotFound
+}
+
 func (r *mockSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

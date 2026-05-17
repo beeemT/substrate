@@ -7,9 +7,21 @@
 | Term | Code | Description |
 |---|---|---|
 | **Session / Work item** | `domain.Session` | Root aggregate. One external ticket/PR. Has many AgentSessions and one Plan. |
-| **Agent session** | `domain.Task` | One harness invocation (implement OR review). Phase = planning \| implementation \| review. Status = pending \| running \| waiting_for_answer \| completed \| interrupted \| failed. A task goes through many agent sessions: implement → review → implement → review → ... → completed. The service layer is called `AgentSessionService`. |
+| **Agent session** | `domain.AgentSession` | One harness invocation (implement OR review). Phase = planning \| implementation \| review. Status = pending \| running \| waiting_for_answer \| completed \| interrupted \| failed. A work item goes through many agent sessions: implement → review → implement → review → ... → completed. The service layer is called `AgentSessionService`.
 | **Task plan / Sub-plan** | `domain.TaskPlan` | One repo's work. One worktree. One PR. Status: pending \| in_progress \| completed \| failed. `Content` field holds the implementation plan for this repo. One sub-plan per repository (enforced at plan creation time). |
 | **Plan** | `domain.Plan` | The orchestration plan produced by the planning agent. Contains the full task breakdown into TaskPlans. |
+
+### TUI: The Tasks View
+
+The "Tasks" view (also "Tasks pane", "tasks sidebar") is a **product-level concept** — the agent sessions for a work item grouped together with virtual navigation nodes (Source Details, Artifacts, Foreman session). The following symbols are product names and MUST NOT be renamed to `AgentSession`:
+
+- `LoadTasksCmd`, `LoadTasksForSessionCmd`, `ReconcileOrphanedTasksCmd` — TUI command functions
+- `Task() *service.AgentSessionService` and `Services.Task` — service provider accessor and struct field
+- `taskSidebar*` constants and functions (e.g. `taskSidebarEntries`, `taskSidebarSessionTitle`, `selectedTaskSessionID`)
+- `sidebarPaneTasks` — sidebar pane mode constant
+- `"Task"` labels rendered in the sidebar — product copy
+
+Only the domain-level message field `Task domain.AgentSession` should be renamed to `AgentSession domain.AgentSession`. The service provider method `Task()` returns `*AgentSessionService` and its name is a product concept, not a domain alias.
 
 ### Event Naming Conventions
 
@@ -21,7 +33,7 @@
 
 ### Key Distinction: `EventAgentSessionCompleted` vs `EventSubPlanCompleted`
 
-A task (one repo's work = one sub-plan) goes through multiple agent sessions. `EventAgentSessionCompleted` fires after every harness invocation. `EventSubPlanCompleted` fires once — when the task is done (review passed). Adapters must listen to `EventSubPlanCompleted` for PR finalization, not `EventWorkItemCompleted`.
+A sub-plan (one repo's work) goes through multiple agent sessions. `EventAgentSessionCompleted` fires after every harness invocation. `EventSubPlanCompleted` fires once — when the task is done (review passed). Adapters must listen to `EventSubPlanCompleted` for PR finalization, not `EventWorkItemCompleted`.
 
 ---
 

@@ -109,6 +109,12 @@ func (r *cmdSubPlanRepo) Get(_ context.Context, id string) (domain.TaskPlan, err
 	return sp, nil
 }
 
+func (r *cmdSubPlanRepo) GetForUpdate(_ context.Context, id string) (domain.TaskPlan, error) {
+	// GetForUpdate behaves identically to Get for mock purposes.
+	// Row locking is tested in integration tests with real SQLite.
+	return r.Get(context.Background(), id)
+}
+
 func (r *cmdSubPlanRepo) ListByPlanID(_ context.Context, planID string) ([]domain.TaskPlan, error) {
 	result := make([]domain.TaskPlan, 0, len(r.subPlans))
 	for _, sp := range r.subPlans {

@@ -171,7 +171,6 @@ type subPlanPRReadyPayload struct {
 	WorkItemID     string                    `json:"work_item_id"`
 	WorkspaceID    string                    `json:"workspace_id"`
 	PlanID         string                    `json:"plan_id"`
-	SubPlanID      string                    `json:"sub_plan_id"`
 	Repository     string                    `json:"repository"`
 	Branch         string                    `json:"branch"`
 	WorktreePath   string                    `json:"worktree_path"`

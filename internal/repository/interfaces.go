@@ -44,6 +44,7 @@ type PlanRepository interface {
 // TaskPlanRepository provides CRUD for task plans.
 type TaskPlanRepository interface {
 	Get(ctx context.Context, id string) (domain.TaskPlan, error)
+	GetForUpdate(ctx context.Context, id string) (domain.TaskPlan, error)
 	ListByPlanID(ctx context.Context, planID string) ([]domain.TaskPlan, error)
 	Create(ctx context.Context, sp domain.TaskPlan) error
 	Update(ctx context.Context, sp domain.TaskPlan) error

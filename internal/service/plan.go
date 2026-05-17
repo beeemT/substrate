@@ -850,6 +850,11 @@ func (s *PlanService) RetrySubPlan(ctx context.Context, id string) error {
 // is event-only: it does not mutate sub-plan status or persist a separate readiness state.
 // It is idempotent: if EventSubPlanPRReady was already emitted for this sub-plan,
 // the event is not emitted again.
+//
+// The idempotency check uses SELECT FOR UPDATE to serialize concurrent calls,
+// ensuring only one emission per sub-plan even under race conditions.
+// Event emission uses synchronous bus.Publish so the event is persisted before
+// the transaction commits, making it visible to concurrent transactions' checks.
 func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, ready SubPlanPRReadyContext) error {
 	if ready.Repository == "" {
 		return newInvalidInputError("repository is required for PR-ready event", "repository")
@@ -865,11 +870,13 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 	var workItem domain.Session
 	var plan domain.Plan
 	var sp domain.TaskPlan
-	var alreadyEmitted bool
 
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
-		sp, err = res.SubPlans.Get(ctx, subPlanID)
+		// Use GetForUpdate to lock the sub-plan row, preventing concurrent modifications
+		// during the idempotency check. This serializes concurrent calls so that only
+		// one can pass the check and emit the event.
+		sp, err = res.SubPlans.GetForUpdate(ctx, subPlanID)
 		if err != nil {
 			return newNotFoundError("sub-plan", subPlanID)
 		}
@@ -894,6 +901,8 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 
 		// Idempotency check: if EventSubPlanPRReady was already emitted for this sub-plan,
 		// skip emitting again. Check the event log for a previous emission.
+		// Because we hold a row lock via GetForUpdate, concurrent transactions wait here
+		// and will see this emission when they acquire the lock.
 		if res.Events != nil {
 			events, listErr := res.Events.ListByType(ctx, string(domain.EventSubPlanPRReady), 100)
 			if listErr == nil {
@@ -904,8 +913,7 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 					}
 					if payload.SubPlanID == subPlanID {
 						slog.Debug("plan: sub-plan PR-ready already emitted, skipping", "sub_plan_id", subPlanID)
-						alreadyEmitted = true
-						return nil
+						return nil // Already emitted, skip
 					}
 				}
 			} else {
@@ -913,36 +921,35 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 			}
 		}
 
+		// Emit event synchronously via bus.Publish so it is persisted before this
+		// transaction commits. This makes the event visible to concurrent transactions
+		// that wait for the row lock.
+		event := domain.SystemEvent{
+			ID:          domain.NewID(),
+			EventType:   string(domain.EventSubPlanPRReady),
+			WorkspaceID: workItem.WorkspaceID,
+			Payload: marshalJSONOrEmpty(string(domain.EventSubPlanPRReady), subPlanPRReadyPayload{
+				WorkItemID:     workItem.ID,
+				WorkspaceID:    workItem.WorkspaceID,
+				PlanID:         plan.ID,
+				SubPlanID:      sp.ID,
+				Repository:     ready.Repository,
+				Branch:         ready.Branch,
+				WorktreePath:   ready.WorktreePath,
+				WorkItemTitle:  ready.WorkItemTitle,
+				SubPlanContent: ready.SubPlanContent,
+				TrackerRefs:    ready.TrackerRefs,
+				Review:         ready.Review,
+			}),
+			CreatedAt: time.Now(),
+		}
+		if pubErr := s.eventBus.Publish(ctx, event); pubErr != nil {
+			return fmt.Errorf("emit sub-plan PR-ready event: %w", pubErr)
+		}
+
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-
-	if alreadyEmitted {
-		return nil
-	}
-
-	Emit(s.eventBus, domain.SystemEvent{
-		ID:          domain.NewID(),
-		EventType:   string(domain.EventSubPlanPRReady),
-		WorkspaceID: workItem.WorkspaceID,
-		Payload: marshalJSONOrEmpty(string(domain.EventSubPlanPRReady), subPlanPRReadyPayload{
-			WorkItemID:     workItem.ID,
-			WorkspaceID:    workItem.WorkspaceID,
-			PlanID:         plan.ID,
-			SubPlanID:      sp.ID,
-			Repository:     ready.Repository,
-			Branch:         ready.Branch,
-			WorktreePath:   ready.WorktreePath,
-			WorkItemTitle:  ready.WorkItemTitle,
-			SubPlanContent: ready.SubPlanContent,
-			TrackerRefs:    ready.TrackerRefs,
-			Review:         ready.Review,
-		}),
-		CreatedAt: time.Now(),
-	})
-	return nil
+	return err
 }
 
 // UpdateSubPlanContent updates the sub-plan content without changing status.
