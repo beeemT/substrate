@@ -1764,7 +1764,7 @@ func (s *ImplementationService) persistSubPlanStatus(ctx context.Context, sp *do
 const (
 	durableCleanupTimeout      = 30 * time.Second
 	commitAgentTimeout         = 5 * time.Minute
-	preReceiveFixAgentTimeout  = 5 * time.Minute
+	preReceiveFixAgentTimeout  = 15 * time.Minute
 	durableFinalizationTimeout = commitAgentTimeout + preReceiveFixAgentTimeout + time.Minute
 )
 
@@ -1854,11 +1854,11 @@ func isPreReceiveRejection(errOutput string) bool {
 // requests, changing branch-protection rules, or interacting with the remote
 // hosting platform in any way.
 func (s *ImplementationService) fixPreReceiveRejectionViaAgent(ctx context.Context, worktreePath, hookOutput string) error {
-	prompt := "A branch push was rejected by the remote's pre-receive hook. The full output from the failed push is shown below.\n\n" +
+	prompt := "A branch push was rejected by the remote's pre-receive hook.\n\n" +
 		"Your task:\n" +
-		"  1. Read the hook output carefully and identify why the push was rejected.\n" +
-		"  2. Fix the problem using only local git operations (amend or interactive rebase).\n" +
-		"  3. Verify the fix with `git log --not --remotes --oneline` before finishing.\n\n" +
+		"  1. Identify which commits don't match the required commit message pattern.\n" +
+		"  2. Fix the commit messages using 'git filter-branch --msg-filter' or 'git rebase -i'.\n" +
+		"  3. Verify the fix by checking the commit messages match the pattern.\n\n" +
 		"You MUST stop and report without making any changes if the rejection requires anything beyond " +
 		"rewording or removing a commit — for example: branch protection that requires a merge request, " +
 		"repository access controls, missing GPG signing keys, secrets detected in file content, or any " +
