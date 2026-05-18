@@ -203,6 +203,8 @@ func TestProcessAllVoid_EmptyItems(t *testing.T) {
 func TestEffectiveWorkers(t *testing.T) {
 	t.Parallel()
 
+	defaultWorkers := DefaultWorkers()
+
 	tests := []struct {
 		name        string
 		cfg         Config
@@ -210,7 +212,7 @@ func TestEffectiveWorkers(t *testing.T) {
 		wantWorkers int
 	}{
 		{"zero workers with few items", Config{Workers: 0}, 3, 3},
-		{"zero workers with many items", Config{Workers: 0}, 100, 8},
+		{"zero workers with many items", Config{Workers: 0}, 100, defaultWorkers},
 		{"explicit workers less than items", Config{Workers: 4}, 10, 4},
 		{"explicit workers more than items", Config{Workers: 10}, 3, 3},
 		{"exact match", Config{Workers: 5}, 5, 5},
