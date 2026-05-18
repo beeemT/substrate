@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"sync"
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -9,11 +10,14 @@ import (
 
 // mockPublisher implements event.Publisher for testing.
 type mockPublisher struct {
+	mu        sync.Mutex
 	Published []domain.SystemEvent
 	Err       error
 }
 
 func (m *mockPublisher) Publish(_ context.Context, evt domain.SystemEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Published = append(m.Published, evt)
 	return m.Err
 }
