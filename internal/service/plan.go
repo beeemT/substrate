@@ -666,10 +666,6 @@ func (s *PlanService) CreatePlanAtomic(ctx context.Context, replacePlanID string
 		// Load work item to get real WorkspaceID for superseded event
 		var supersededWorkspaceID string
 		_ = s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-			if res.Sessions == nil {
-				slog.Warn("Sessions repository not available for superseded event workspace ID")
-				return nil // Non-fatal
-			}
 			workItem, err := res.Sessions.Get(ctx, supersededWorkItemID)
 			if err != nil {
 				slog.Warn("failed to load work item for superseded event workspace ID", "work_item_id", supersededWorkItemID, "error", err)
@@ -903,22 +899,20 @@ func (s *PlanService) MarkSubPlanPRReady(ctx context.Context, subPlanID string, 
 		// skip emitting again. Check the event log for a previous emission.
 		// Because we hold a row lock via GetForUpdate, concurrent transactions wait here
 		// and will see this emission when they acquire the lock.
-		if res.Events != nil {
-			events, listErr := res.Events.ListByType(ctx, string(domain.EventSubPlanPRReady), 100)
-			if listErr == nil {
-				for _, evt := range events {
-					var payload subPlanPRReadyPayload
-					if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
-						continue // Skip malformed payloads
-					}
-					if payload.SubPlanID == subPlanID {
-						slog.Debug("plan: sub-plan PR-ready already emitted, skipping", "sub_plan_id", subPlanID)
-						return nil // Already emitted, skip
-					}
+		events, listErr := res.Events.ListByType(ctx, string(domain.EventSubPlanPRReady), 100)
+		if listErr == nil {
+			for _, evt := range events {
+				var payload subPlanPRReadyPayload
+				if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+					continue // Skip malformed payloads
 				}
-			} else {
-				slog.Warn("plan: failed to check for previous PR-ready event, proceeding", "error", listErr)
+				if payload.SubPlanID == subPlanID {
+					slog.Debug("plan: sub-plan PR-ready already emitted, skipping", "sub_plan_id", subPlanID)
+					return nil // Already emitted, skip
+				}
 			}
+		} else {
+			slog.Warn("plan: failed to check for previous PR-ready event, proceeding", "error", listErr)
 		}
 
 		// Emit event synchronously via bus.Publish so it is persisted before this

@@ -28,7 +28,7 @@ type ReviewArtifactRepos struct {
 }
 
 func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {
-	if eventSvc == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
+	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
 	payload, err := json.Marshal(domain.ReviewArtifactEventPayload{WorkItemID: workItemID, Artifact: artifact})
@@ -60,9 +60,6 @@ func PersistGithubPR(
 ) error {
 	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
 		return err
-	}
-	if repos.GithubPRs == nil || repos.SessionArtifacts == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
-		return nil
 	}
 	now := time.Now()
 	pr := domain.GithubPullRequest{
@@ -112,7 +109,7 @@ func PersistGitlabMR(
 		return err
 	}
 	iid = gitlabMRIID(iid, artifact)
-	if repos.GitlabMRs == nil || repos.SessionArtifacts == nil || iid == 0 || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
+	if iid == 0 || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
 	now := time.Now()

@@ -722,7 +722,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		&config.Config{},
 		&mockAgentHarness{},
 		nil, bus,
-		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus),
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo, Events: eventRepo}}, bus),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),

@@ -1603,7 +1603,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionStartedMsg:
-		a.sessions = append(a.sessions, msg.Task)
+		a.sessions = append(a.sessions, msg.AgentSession)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID != "" {
@@ -1613,8 +1613,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionUpdatedMsg:
 		for i := range a.sessions {
-			if a.sessions[i].ID == msg.Task.ID {
-				a.sessions[i] = msg.Task
+			if a.sessions[i].ID == msg.AgentSession.ID {
+				a.sessions[i] = msg.AgentSession
 				break
 			}
 		}
@@ -1626,7 +1626,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskStartedMsg:
-		a.upsertSession(msg.Task)
+		a.upsertSession(msg.AgentSession)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -1635,7 +1635,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case TaskUpdatedMsg:
-		a.upsertSession(msg.Task)
+		a.upsertSession(msg.AgentSession)
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
 		if a.currentWorkItemID == msg.WorkItemID {
@@ -2389,8 +2389,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Message != "" {
 			a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		}
-		if msg.Task.ID != "" {
-			a.upsertSession(msg.Task)
+		if msg.AgentSession.ID != "" {
+			a.upsertSession(msg.AgentSession)
 			a.rebuildSidebar()
 			a.refreshSessionSearchEntriesFromLocalState()
 		} else if msg.WorkItemID != "" {
@@ -3999,15 +3999,6 @@ func deleteSessionCmd(provider ServiceProvider, sessionsDir, sessionID string, r
 
 func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvider, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
 	svcs := provider.GetServices()
-	if svcs.Session == nil {
-		return sessionDeleteResult{}, errors.New("session service not configured")
-	}
-	if svcs.Plan == nil {
-		return sessionDeleteResult{}, errors.New("plan service not configured")
-	}
-	if svcs.Task == nil {
-		return sessionDeleteResult{}, errors.New("task service not configured")
-	}
 
 	result := sessionDeleteResult{TaskIDs: make([]string, 0)}
 	artifactDeletes := make([]struct {
@@ -4137,9 +4128,6 @@ func existingWorkItemByExternalID(svc *service.SessionService, workspaceID, exte
 
 func persistCreatedWorkItemMsg(provider ServiceProvider, wi domain.Session) tea.Msg {
 	svcs := provider.GetServices()
-	if svcs.Session == nil {
-		return ErrMsg{Err: errors.New("work item service not configured")}
-	}
 	if strings.TrimSpace(svcs.WorkspaceID) == "" {
 		return ErrMsg{Err: errors.New("workspace not configured")}
 	}

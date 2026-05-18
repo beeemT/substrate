@@ -94,25 +94,25 @@ type PlanUpdatedMsg struct {
 // SessionStartedMsg is sent when an agent session starts.
 // Deprecated: use TaskStartedMsg instead.
 type SessionStartedMsg struct {
-	Task domain.AgentSession
+	AgentSession domain.AgentSession
 }
 
 // SessionUpdatedMsg is sent when an agent session state changes.
 // Deprecated: use TaskUpdatedMsg instead.
 type SessionUpdatedMsg struct {
-	Task domain.AgentSession
+	AgentSession domain.AgentSession
 }
 
 // TaskStartedMsg is sent when an agent task (agent session) starts.
 type TaskStartedMsg struct {
-	WorkItemID string
-	Task       domain.AgentSession
+	WorkItemID   string
+	AgentSession domain.AgentSession
 }
 
 // TaskUpdatedMsg is sent when an agent task (agent session) state changes.
 type TaskUpdatedMsg struct {
-	WorkItemID string
-	Task       domain.AgentSession
+	WorkItemID   string
+	AgentSession domain.AgentSession
 }
 
 // QuestionRaisedMsg is sent when a question is raised by an agent.
@@ -260,9 +260,9 @@ type RestartPlanMsg struct{ WorkItemID string }
 // has been replaced by a new running session, or sent by the event consumer
 // when EventAgentSessionResumed is received.
 type SessionResumedMsg struct {
-	Message    string
-	WorkItemID string
-	Task       domain.AgentSession // Full agent session for direct upsert
+	Message      string
+	WorkItemID   string
+	AgentSession domain.AgentSession // Full agent session for direct upsert
 }
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning

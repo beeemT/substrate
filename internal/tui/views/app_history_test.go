@@ -17,6 +17,17 @@ import (
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
+type emptyEventRepo struct{}
+
+func (emptyEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (emptyEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (emptyEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
 type duplicateCreateWorkItemRepo struct {
 	items     []domain.Session
 	createErr error
@@ -160,9 +171,6 @@ func (r *sessionSearchDeleteRepo) Delete(_ context.Context, id string) error {
 
 	return nil
 }
-
-
-
 
 func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	now := time.Now()
@@ -786,6 +794,12 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 	app.workItems = []domain.Session{{
 		ID:          "wi-old",
@@ -942,6 +956,12 @@ func newDuplicatePromptTestApp() (*App, domain.Session, domain.Session, domain.S
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 		Planning:      new(orchestrator.PlanningService),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 	app.content.SetSize(80, 20)
 	app.workItems = []domain.Session{existing, other}
@@ -1105,6 +1125,12 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
 		Planning:      &orchestrator.PlanningService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 
 	model, cmd := app.Update(SessionCreatedMsg{
@@ -1140,6 +1166,12 @@ func newSidebarDrilldownTestApp() *App {
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 	workItem := domain.Session{
 		ID:            "wi-1",
@@ -1222,6 +1254,12 @@ func newPlanningDrilldownTestApp() *App {
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 	workItem := domain.Session{
 		ID:            "wi-plan",
@@ -2148,6 +2186,12 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
 		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
 	})
 	workItem := domain.Session{
 		ID:          "wi-group",

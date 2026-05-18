@@ -42,7 +42,17 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
+	})
 	app.content.SetSize(90, 24)
 	app.workItems = []domain.Session{{
 		ID:          "wi-1",
@@ -152,7 +162,17 @@ func TestOverviewUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
+	})
 	app.content.SetSize(100, 40)
 	app.workItems = []domain.Session{{
 		ID:            "wi-1",
@@ -402,7 +422,15 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 	})
 	repo := &overviewEventRepo{events: noise}
 	eventSvc := service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}, Events: eventSvc})
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		Events:        eventSvc,
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+	})
 	app.content.SetSize(100, 40)
 	app.workItems = []domain.Session{{
 		ID:          "wi-1",
@@ -448,7 +476,17 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
+	})
 	app.content.SetSize(90, 24)
 	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-local", ExternalID: "SUB-1", Title: "Review plan", State: domain.SessionReviewing, CreatedAt: now, UpdatedAt: now}}
 	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved, Version: 1, UpdatedAt: now}
@@ -1292,7 +1330,17 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      &SettingsService{},
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
+	})
 	app.content.SetSize(90, 40)
 
 	failedWI := domain.Session{

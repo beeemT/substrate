@@ -35,7 +35,11 @@ func jsonResp(t *testing.T, status int, v any) *http.Response {
 
 func newTestAdapter(t *testing.T, rt roundTripFunc) *GithubAdapter {
 	t.Helper()
-	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"}}, adapter.ReviewArtifactRepos{}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
+	a, err := newWithDeps(context.Background(), config.GithubConfig{PollInterval: "10ms", StateMappings: map[string]string{"in_progress": "open", "in_review": "open", "done": "closed"}}, adapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: &githubArtifactEventRepo{}}}),
+		GithubPRs:        service.NewGithubPRService(repository.NoopTransacter{Res: repository.Resources{GithubPRs: &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{}}}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{}}}}),
+	}, rt, func(context.Context) (string, error) { return "token-from-gh", nil })
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
@@ -732,7 +736,11 @@ func TestLifecycleAppliesReviewersAndLabels(t *testing.T) {
 			Labels:        []string{"needs-review"},
 			StateMappings: map[string]string{"in_progress": "open", "done": "closed"},
 		},
-		adapter.ReviewArtifactRepos{},
+		adapter.ReviewArtifactRepos{
+			Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: &githubArtifactEventRepo{}}}),
+			GithubPRs:        service.NewGithubPRService(repository.NoopTransacter{Res: repository.Resources{GithubPRs: &inMemGithubPRRepo{prs: map[string]domain.GithubPullRequest{}}}}),
+			SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{}}}}),
+		},
 		rt,
 		func(context.Context) (string, error) { return "tok", nil },
 	)

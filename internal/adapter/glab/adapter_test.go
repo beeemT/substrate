@@ -274,7 +274,15 @@ func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
 			[]byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/5"}`),
 		},
 	}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
+	eventRepo := &glabArtifactEventRepo{}
+	repos := coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}
+	a := newWithRunner(config.GlabConfig{}, repos, "", stub.run)
 
 	branch := "sub-LIN-FOO-99-complete-me"
 	payload := mustJSON(subPlanPRReadyPayload{
@@ -474,7 +482,11 @@ func TestOnEvent_SubPlanPRReady_CreatesMRWhenNoneExists(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", runner)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: &glabArtifactEventRepo{}}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: &inMemGitlabMRRepo{}}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: &inMemArtifactLinkRepo{}}}),
+	}, "", runner)
 
 	branch := "sub-LIN-FOO-7-create-missing"
 	payload := mustJSON(subPlanPRReadyPayload{

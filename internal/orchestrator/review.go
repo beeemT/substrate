@@ -299,7 +299,6 @@ func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.TaskPlan, plan domain.
 	}
 
 	prompt := `## Role
-
 ` + "You are a code reviewer. Your sole responsibility is to review the changes — do NOT edit, fix, or write any code. Produce only the structured output described below." + `
 
 ## Task

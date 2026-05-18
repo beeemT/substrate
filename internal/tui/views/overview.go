@@ -1803,47 +1803,40 @@ func reviewRowsForWorkItem(ctx context.Context, svcs *Services, wi *domain.Sessi
 		return nil
 	}
 	var reviews []OverviewReviewRow
-	if svcs.SessionArtifacts != nil {
-		links, err := svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
-		if err != nil {
-			slog.Warn("failed to list session artifacts for overview", "error", err, "workItemID", wi.ID)
-		} else {
-			for _, link := range links {
-				switch link.Provider {
-				case "github":
-					if svcs.GithubPRs != nil {
-						pr, err := svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
-						if err != nil {
-							slog.Warn("failed to get github PR for overview", "error", err, "id", link.ProviderArtifactID)
-							continue
-						}
-						reviews = append(reviews, OverviewReviewRow{
-							Kind:     "PR",
-							RepoName: pr.Owner + "/" + pr.Repo,
-							Ref:      fmt.Sprintf("#%d", pr.Number),
-							URL:      pr.HTMLURL,
-							State:    pr.State,
-							Branch:   pr.HeadBranch,
-						})
-					}
-				case providerGitlab:
-					if svcs.GitlabMRs != nil {
-						mr, err := svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
-						if err != nil {
-							slog.Warn("failed to get gitlab MR for overview", "error", err, "id", link.ProviderArtifactID)
-							continue
-						}
-						reviews = append(reviews, OverviewReviewRow{
-							Kind:     "MR",
-							RepoName: mr.ProjectPath,
-							Ref:      fmt.Sprintf("!%d", mr.IID),
-							URL:      mr.WebURL,
-							State:    mr.State,
-							Branch:   mr.SourceBranch,
-						})
-					}
-				}
+	links, err := svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
+	if err != nil {
+		slog.Warn("failed to list session artifacts for overview", "error", err, "workItemID", wi.ID)
+	}
+	for _, link := range links {
+		switch link.Provider {
+		case "github":
+			pr, err := svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("failed to get github PR for overview", "error", err, "id", link.ProviderArtifactID)
+				continue
 			}
+			reviews = append(reviews, OverviewReviewRow{
+				Kind:     "PR",
+				RepoName: pr.Owner + "/" + pr.Repo,
+				Ref:      fmt.Sprintf("#%d", pr.Number),
+				URL:      pr.HTMLURL,
+				State:    pr.State,
+				Branch:   pr.HeadBranch,
+			})
+		case providerGitlab:
+			mr, err := svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+			if err != nil {
+				slog.Warn("failed to get gitlab MR for overview", "error", err, "id", link.ProviderArtifactID)
+				continue
+			}
+			reviews = append(reviews, OverviewReviewRow{
+				Kind:     "MR",
+				RepoName: mr.ProjectPath,
+				Ref:      fmt.Sprintf("!%d", mr.IID),
+				URL:      mr.WebURL,
+				State:    mr.State,
+				Branch:   mr.SourceBranch,
+			})
 		}
 	}
 	reviewKeys := make(map[string]struct{}, len(reviews))
@@ -1915,7 +1908,7 @@ func reviewArtifactKey(repoName, branch, ref string) string {
 }
 
 func recordedReviewArtifacts(ctx context.Context, svcs *Services, wi *domain.Session) []domain.ReviewArtifact {
-	if wi == nil || wi.WorkspaceID == "" || svcs.Events == nil {
+	if wi == nil || wi.WorkspaceID == "" {
 		return nil
 	}
 	events, err := svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)

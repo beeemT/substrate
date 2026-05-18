@@ -64,8 +64,14 @@ func TestWorktreeCreatedPersistsReviewArtifactEvent(t *testing.T) {
 	t.Parallel()
 
 	repo := &glabArtifactEventRepo{}
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", stub.run)
 	payload := mustJSON(worktreePayload{
 		WorkspaceID:  "ws-1",
 		WorkItemID:   "wi-1",
@@ -100,8 +106,10 @@ func TestWorktreeCreatedPersistsGitlabMRLinkFromCreatedURL(t *testing.T) {
 
 	mrRepo := &inMemGitlabMRRepo{}
 	artifactRepo := &inMemArtifactLinkRepo{}
+	eventRepo := &glabArtifactEventRepo{}
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
 	repos := coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
 		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
 	}
@@ -185,8 +193,14 @@ func TestExistingDraftMergeRequestRemainsDraft(t *testing.T) {
 	t.Parallel()
 
 	repo := &glabArtifactEventRepo{}
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/5","draft":true}`)}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", stub.run)
 	payload := mustJSON(worktreePayload{WorkspaceID: "ws-1", WorkItemID: "wi-1", Repository: "group/repo", Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt"})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)
@@ -209,8 +223,14 @@ func TestSubPlanPRReady_UsesPersistedArtifactAfterRestart(t *testing.T) {
 	// Simulate adapter restart: event repo returns no artifacts for this work item.
 	// onSubPlanPRReady should still work - it uses the payload's WorktreePath and Review.
 	repo := &glabArtifactEventRepo{events: []domain.SystemEvent{}} // empty - no persisted artifacts
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/5"}`)}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", stub.run)
 
 	payload := mustJSON(subPlanPRReadyPayload{
 		WorkItemID:   "wi-1",
@@ -267,8 +287,14 @@ func TestClosedDraftMergeRequestRemainsClosed(t *testing.T) {
 	t.Parallel()
 
 	repo := &glabArtifactEventRepo{}
+	mrRepo := &inMemGitlabMRRepo{}
+	artifactRepo := &inMemArtifactLinkRepo{}
 	stub := &stubRunner{output: []byte(`{"iid":5,"state":"closed","web_url":"https://gitlab.com/org/repo/-/merge_requests/5","draft":true}`)}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}})}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: repo}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", stub.run)
 	payload := mustJSON(worktreePayload{WorkspaceID: "ws-1", WorkItemID: "wi-1", Repository: "group/repo", Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt"})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent: %v", err)

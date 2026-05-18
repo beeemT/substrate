@@ -53,14 +53,14 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 	if typed.WorkItemID != task.WorkItemID {
 		t.Errorf("WorkItemID = %q, want %q", typed.WorkItemID, task.WorkItemID)
 	}
-	if typed.Task.ID != task.ID {
-		t.Errorf("Task.ID = %q, want %q", typed.Task.ID, task.ID)
+	if typed.AgentSession.ID != task.ID {
+		t.Errorf("AgentSession.ID = %q, want %q", typed.AgentSession.ID, task.ID)
 	}
-	if typed.Task.Phase != domain.AgentSessionPhasePlanning {
-		t.Errorf("Task.Phase = %q, want %q", typed.Task.Phase, domain.AgentSessionPhasePlanning)
+	if typed.AgentSession.Phase != domain.AgentSessionPhasePlanning {
+		t.Errorf("AgentSession.Phase = %q, want %q", typed.AgentSession.Phase, domain.AgentSessionPhasePlanning)
 	}
-	if typed.Task.Status != domain.AgentSessionRunning {
-		t.Errorf("Task.Status = %q, want %q", typed.Task.Status, domain.AgentSessionRunning)
+	if typed.AgentSession.Status != domain.AgentSessionRunning {
+		t.Errorf("AgentSession.Status = %q, want %q", typed.AgentSession.Status, domain.AgentSessionRunning)
 	}
 }
 
@@ -110,11 +110,11 @@ func TestEventConsumer_toMsg_AgentSessionUpdated(t *testing.T) {
 	if typed.WorkItemID != task.WorkItemID {
 		t.Errorf("WorkItemID = %q, want %q", typed.WorkItemID, task.WorkItemID)
 	}
-	if typed.Task.ID != task.ID {
-		t.Errorf("Task.ID = %q, want %q", typed.Task.ID, task.ID)
+	if typed.AgentSession.ID != task.ID {
+		t.Errorf("AgentSession.ID = %q, want %q", typed.AgentSession.ID, task.ID)
 	}
-	if typed.Task.Status != domain.AgentSessionFailed {
-		t.Errorf("Task.Status = %q, want %q", typed.Task.Status, domain.AgentSessionFailed)
+	if typed.AgentSession.Status != domain.AgentSessionFailed {
+		t.Errorf("AgentSession.Status = %q, want %q", typed.AgentSession.Status, domain.AgentSessionFailed)
 	}
 }
 

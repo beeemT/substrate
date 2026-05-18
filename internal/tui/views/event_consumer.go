@@ -207,8 +207,8 @@ func decodeAgentSessionStarted(payload string) tea.Msg {
 		return nil
 	}
 	return TaskStartedMsg{
-		WorkItemID: p.WorkItemID,
-		Task:       p.Session,
+		WorkItemID:   p.WorkItemID,
+		AgentSession: p.Session,
 	}
 }
 
@@ -223,8 +223,8 @@ func decodeAgentSessionUpdated(payload string) tea.Msg {
 		return nil
 	}
 	return TaskUpdatedMsg{
-		WorkItemID: p.WorkItemID,
-		Task:       p.Session,
+		WorkItemID:   p.WorkItemID,
+		AgentSession: p.Session,
 	}
 }
 
@@ -240,7 +240,7 @@ func decodeAgentSessionResumed(payload string) tea.Msg {
 		slog.Warn("failed to decode EventAgentSessionResumed payload", "error", err)
 		return nil
 	}
-	return SessionResumedMsg{WorkItemID: p.WorkItemID, Task: p.Session, Message: ""}
+	return SessionResumedMsg{WorkItemID: p.WorkItemID, AgentSession: p.Session, Message: ""}
 }
 
 // decodeAgentSessionFollowUp handles EventAgentSessionFollowUp with full agent session payload.
@@ -255,8 +255,8 @@ func decodeAgentSessionFollowUp(payload string) tea.Msg {
 		return nil
 	}
 	return TaskUpdatedMsg{
-		WorkItemID: p.WorkItemID,
-		Task:       p.Session,
+		WorkItemID:   p.WorkItemID,
+		AgentSession: p.Session,
 	}
 }
 

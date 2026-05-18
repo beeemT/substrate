@@ -13,7 +13,37 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
+
+type emptyEventRepoForInit struct{}
+
+func (emptyEventRepoForInit) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (emptyEventRepoForInit) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (emptyEventRepoForInit) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+type emptySessionArtifactRepoForInit struct{}
+
+func (emptySessionArtifactRepoForInit) Upsert(_ context.Context, _ domain.SessionReviewArtifact) error {
+	return nil
+}
+
+func (emptySessionArtifactRepoForInit) ListByWorkItemID(_ context.Context, _ string) ([]domain.SessionReviewArtifact, error) {
+	return nil, nil
+}
+
+func (emptySessionArtifactRepoForInit) ListByWorkspaceID(_ context.Context, _ string) ([]domain.SessionReviewArtifact, error) {
+	return nil, nil
+}
+
+func (emptySessionArtifactRepoForInit) TransferArtifactLinks(_ context.Context, _, _ string) error {
+	return nil
+}
 
 type stubWorkspaceInitAdapter struct{ name string }
 
@@ -438,6 +468,12 @@ func TestApp_SessionResumedMsg_ReloadsWorkItemsAndSessions(t *testing.T) {
 		WorkspaceName: "workspace",
 		Settings:      &SettingsService{},
 		SettingsData:  snapshot,
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepoForInit{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepoForInit{},
+		}}),
 	})
 
 	// Simulate an interrupted work item that is currently viewed.
