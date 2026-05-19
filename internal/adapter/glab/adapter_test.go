@@ -550,6 +550,67 @@ func TestOnEvent_SubPlanPRReady_CreatesMRWhenNoneExists(t *testing.T) {
 	}
 }
 
+func TestOnEvent_SubPlanPRReady_UsesTrackedArtifactBeforeCreate(t *testing.T) {
+	callCount := 0
+	runner := func(_ context.Context, _ string, _ string, args ...string) ([]byte, error) {
+		callCount++
+		joined := strings.Join(args, " ")
+		switch {
+		case callCount == 1 && strings.Contains(joined, "mr update"):
+			return []byte("updated"), nil
+		case callCount == 2 && strings.Contains(joined, "mr view"):
+			return []byte(`{"iid":979,"state":"opened","web_url":"https://gitlab.justtrack.io/justtrack/backend/management/-/merge_requests/979"}`), nil
+		case strings.Contains(joined, "mr create"):
+			t.Fatalf("must not create MR when tracked artifact exists: %q", joined)
+		}
+		t.Fatalf("unexpected glab call %d: %q", callCount, joined)
+		return nil, errors.New("unexpected")
+	}
+
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-979": {
+			ID:           "mr-979",
+			ProjectPath:  "justtrack/backend/management",
+			IID:          979,
+			State:        "opened",
+			Draft:        true,
+			SourceBranch: "sub-gl-issue-justtrack-general-tickets-14-security-deactivated-manager-c",
+			WebURL:       "https://gitlab.justtrack.io/justtrack/backend/management/-/merge_requests/979",
+		},
+	}}
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{{
+		ID:                 "link-1",
+		WorkspaceID:        "ws-1",
+		WorkItemID:         "wi-409",
+		Provider:           "gitlab",
+		ProviderArtifactID: "mr-979",
+	}}}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: &glabArtifactEventRepo{}}}),
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", runner)
+
+	payload := mustJSON(subPlanPRReadyPayload{
+		WorkItemID:     "wi-409",
+		WorkspaceID:    "ws-1",
+		Branch:         "sub-gl-issue-justtrack-general-tickets-14-security-deactivated-manager-c",
+		WorktreePath:   "/tmp/wt",
+		Repository:     "justtrack/backend/management",
+		WorkItemTitle:  "Fix deactivation bug",
+		SubPlanContent: "Implementation details",
+		Review: domain.ReviewRef{
+			BaseRepo: domain.RepoRef{Provider: "gitlab", Owner: "justtrack", Repo: "backend/management"},
+		},
+	})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventSubPlanPRReady), Payload: payload}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 glab calls (update + refresh), got %d", callCount)
+	}
+}
+
 // --- mrExists (JSON parsing from `glab mr view`) ---
 
 func TestMRExists_MRPresent_ReturnsTrue(t *testing.T) {

@@ -3,6 +3,7 @@ package views
 import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
@@ -17,7 +18,7 @@ type testProvider struct {
 func (tp *testProvider) GetServices() *Services               { return &tp.svcs }
 func (tp *testProvider) Session() *service.SessionService     { return tp.svcs.Session }
 func (tp *testProvider) Plan() *service.PlanService           { return tp.svcs.Plan }
-func (tp *testProvider) Task() *service.AgentSessionService           { return tp.svcs.Task }
+func (tp *testProvider) Task() *service.AgentSessionService   { return tp.svcs.Task }
 func (tp *testProvider) Question() *service.QuestionService   { return tp.svcs.Question }
 func (tp *testProvider) Instance() *service.InstanceService   { return tp.svcs.Instance }
 func (tp *testProvider) Workspace() *service.WorkspaceService { return tp.svcs.Workspace }
@@ -72,13 +73,23 @@ func (tp *testProvider) StartupWarnings() []string { return tp.svcs.StartupWarni
 
 // newTestApp creates an App for testing with a testProvider wrapping svcs.
 func newTestApp(svcs Services) *App {
+	cfg := svcs.Cfg
+	if cfg == nil {
+		cfg = &config.Config{
+			UI: config.UIConfig{
+				DefaultFilter: "all",
+				DefaultGroup:  "state",
+				LogLevel:      "info",
+			},
+		}
+	}
 	ctx := RuntimeContext{
 		InstanceID:    svcs.InstanceID,
 		WorkspaceID:   svcs.WorkspaceID,
 		WorkspaceDir:  svcs.WorkspaceDir,
 		WorkspaceName: svcs.WorkspaceName,
 		SettingsData:  svcs.SettingsData,
-		Cfg:           svcs.Cfg,
+		Cfg:           cfg,
 		LogStore:      svcs.LogStore,
 		LogToasts:     svcs.LogToasts,
 	}

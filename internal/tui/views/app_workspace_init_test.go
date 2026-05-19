@@ -228,6 +228,7 @@ func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 			Settings:      &SettingsService{},
 			SettingsData:  snapshot,
 		},
+		Cfg: cfg,
 	}
 
 	model, cmd := app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})
@@ -284,6 +285,7 @@ func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
 			Settings:      &SettingsService{},
 			SettingsData:  snapshot,
 		},
+		Cfg: cfg,
 	}
 
 	model, _ = app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})

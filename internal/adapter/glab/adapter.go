@@ -114,10 +114,6 @@ func (a *GlabAdapter) OnEvent(ctx context.Context, event domain.SystemEvent) err
 		if err := a.onWorktreeReused(ctx, event.Payload); err != nil {
 			slog.Warn("glab: worktree reused handler failed", "error", err)
 		}
-	case domain.EventWorkItemCompleted:
-		if err := a.onWorkItemCompleted(ctx, event.Payload); err != nil {
-			slog.Warn("glab: work-item completed handler failed", "error", err)
-		}
 	case domain.EventSubPlanPRReady:
 		if err := a.onSubPlanPRReady(ctx, event.Payload); err != nil {
 			slog.Warn("glab: sub-plan PR-ready handler failed", "error", err)
@@ -147,9 +143,9 @@ type worktreePayload struct {
 	Review        domain.ReviewRef          `json:"review"`
 }
 
-// completedPayload is the expected shape of EventWorkItemCompleted.
-// Emitters must populate Branch so the glab adapter can locate the MRs.
-// external_id is included for symmetry with the linear adapter's OnEvent.
+// completedPayload is the legacy shape for the old EventWorkItemCompleted MR lifecycle.
+// MR finalization now uses EventSubPlanPRReady because branches are per sub-plan,
+// not work-item-level data. This remains only for the old completion helper code.
 type completedPayload struct {
 	WorkspaceID   string           `json:"workspace_id"`
 	WorkItemID    string           `json:"work_item_id"`
@@ -368,32 +364,21 @@ func (a *GlabAdapter) onSubPlanPRReady(ctx context.Context, payload string) erro
 		worktreePath = a.workspaceDir
 	}
 
-	// Check if MR exists via glab.
-	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
-		// MR exists — mark it ready.
-		if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
-			slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
-		}
-		// Refresh MR state after undrafting to capture the post-update draft flag.
-		// Preserve the original MR data if refresh fails, since we already have valid metadata.
-		if refreshed, refreshOk := a.mrView(ctx, worktreePath, p.Branch); refreshOk {
-			mr = refreshed
-		}
-		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
-			Provider:     "gitlab",
-			Kind:         "MR",
-			RepoName:     projectPath,
-			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
-			URL:          strings.TrimSpace(mr.WebURL),
-			State:        glabArtifactState(mr),
-			Branch:       p.Branch,
-			WorktreePath: worktreePath,
-			UpdatedAt:    time.Now(),
-		}, projectPath, mr.IID)
+	// Prefer the durable artifact link created when the draft MR was first recorded.
+	// `glab mr view` can fail when local worktree/remote discovery is stale, but the
+	// tracked artifact is the product-owned source of truth for an MR we already know.
+	if mr, ok := a.trackedMRForSubPlanPRReady(ctx, p, projectPath); ok {
+		a.handleExistingMR(ctx, mr, p, projectPath, worktreePath)
 		return nil
 	}
 
-	// No existing MR — create one non-draft
+	// Check if MR exists via glab.
+	if mr, ok := a.mrView(ctx, worktreePath, p.Branch); ok {
+		a.handleExistingMR(ctx, mr, p, projectPath, worktreePath)
+		return nil
+	}
+
+	// No existing tracked or discoverable MR — create one non-draft
 	title := mrTitle(p.WorkItemTitle, p.Branch)
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlanContent), renderGitLabTrackerRefs(p.TrackerRefs))
 	mrURL, err := a.createMRNonDraft(ctx, worktreePath, p.Branch, title, description)
@@ -616,6 +601,63 @@ func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
 	_, ok := a.mrView(ctx, dir, branch)
 
 	return ok
+}
+
+func (a *GlabAdapter) trackedMRForSubPlanPRReady(ctx context.Context, p subPlanPRReadyPayload, projectPath string) (glabMRView, bool) {
+	if a.repos.SessionArtifacts == nil || a.repos.GitlabMRs == nil || strings.TrimSpace(p.WorkItemID) == "" {
+		return glabMRView{}, false
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkItemID(ctx, p.WorkItemID)
+	if err != nil {
+		slog.Warn("glab: list tracked MR artifacts failed", "work_item_id", p.WorkItemID, "error", err)
+		return glabMRView{}, false
+	}
+	for _, link := range links {
+		if link.Provider != "gitlab" || strings.TrimSpace(link.ProviderArtifactID) == "" {
+			continue
+		}
+		mr, err := a.repos.GitlabMRs.Get(ctx, link.ProviderArtifactID)
+		if err != nil {
+			slog.Warn("glab: get tracked MR artifact failed", "work_item_id", p.WorkItemID, "artifact_id", link.ProviderArtifactID, "error", err)
+			continue
+		}
+		if strings.TrimSpace(mr.ProjectPath) != strings.TrimSpace(projectPath) || strings.TrimSpace(mr.SourceBranch) != strings.TrimSpace(p.Branch) || mr.IID <= 0 {
+			continue
+		}
+		return glabMRView{
+			IID:            mr.IID,
+			State:          mr.State,
+			WebURL:         mr.WebURL,
+			Draft:          mr.Draft,
+			WorkInProgress: mr.Draft,
+		}, true
+	}
+	return glabMRView{}, false
+}
+
+// handleExistingMR undrafts an MR that already exists and records it in the artifact store.
+// This is the canonical path for both the initial mrView check and the 409-conflict recovery path.
+func (a *GlabAdapter) handleExistingMR(ctx context.Context, mr glabMRView, p subPlanPRReadyPayload, projectPath, worktreePath string) {
+	// Mark the MR ready (undraft it) so it's ready for review.
+	if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
+		slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
+	}
+	// Refresh MR state after undrafting to capture the post-update draft flag.
+	// Preserve the original MR data if refresh fails, since we already have valid metadata.
+	if refreshed, refreshOk := a.mrView(ctx, worktreePath, p.Branch); refreshOk {
+		mr = refreshed
+	}
+	a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+		Provider:     "gitlab",
+		Kind:         "MR",
+		RepoName:     projectPath,
+		Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+		URL:          strings.TrimSpace(mr.WebURL),
+		State:        glabArtifactState(mr),
+		Branch:       p.Branch,
+		WorktreePath: worktreePath,
+		UpdatedAt:    time.Now(),
+	}, projectPath, mr.IID)
 }
 
 // markMRReady runs `glab mr update <branch> --ready --yes`.

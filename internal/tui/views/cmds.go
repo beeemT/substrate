@@ -581,6 +581,7 @@ func initializeWorkspaceServicesCmd(provider ServiceProvider, runtimeCtx Runtime
 		return WorkspaceServicesReloadedMsg{Reload: viewsServicesReload{
 			Services:    *reloaded,
 			SessionsDir: sessionsDir,
+			Cfg:         runtimeCtx.Cfg,
 		}, Message: "Workspace initialized"}
 	}
 }
