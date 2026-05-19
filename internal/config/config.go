@@ -167,18 +167,20 @@ type LinearConfig struct {
 	StateMappings  map[string]string `yaml:"state_mappings"`  // TrackerState -> Linear workflow state UUID
 }
 
+const DefaultGitLabInProgressStatus = "In progress"
+
 type GitlabConfig struct {
 	TokenRef              string              `yaml:"token_ref"` // keychain reference for GitLab REST API
 	Token                 string              `yaml:"-"`
 	BaseURL               string              `yaml:"base_url"`                // default: https://gitlab.com
-	Assignee              string              `yaml:"assignee"`                // username filter for Watch
+	Assignee              string              `yaml:"assignee"`                // username filter for Watch; "me" resolves via /user
 	PollInterval          string              `yaml:"poll_interval"`           // default: 5m
 	StatusRefreshInterval string              `yaml:"status_refresh_interval"` // default: 5m
 	StateMappings         map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent   IssueCommentContent `yaml:"issue_comment_content"`
 	IssueActionScope      IssueActionScope    `yaml:"issue_comment_scope"` // all, mine, none
 	// InProgressStatus is the Work Item status name to set on linked issues
-	// at plan approval via GraphQL. Leave empty to skip.
+	// at plan approval via GraphQL. Defaults to GitLab's built-in "In progress" status.
 	InProgressStatus string `yaml:"in_progress_status"`
 }
 
@@ -566,6 +568,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Adapters.GitLab.IssueActionScope == "" {
 		cfg.Adapters.GitLab.IssueActionScope = IssueActionScopeAll
+	}
+	if cfg.Adapters.GitLab.InProgressStatus == "" {
+		cfg.Adapters.GitLab.InProgressStatus = DefaultGitLabInProgressStatus
 	}
 	if cfg.Adapters.Sentry.BaseURL == "" {
 		cfg.Adapters.Sentry.BaseURL = DefaultSentryBaseURL

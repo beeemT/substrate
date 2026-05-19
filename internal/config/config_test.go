@@ -64,6 +64,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Adapters.GitLab.PollInterval != "5m" {
 		t.Errorf("adapters.gitlab.poll_interval = %q, want %q", cfg.Adapters.GitLab.PollInterval, "5m")
 	}
+	if cfg.Adapters.GitLab.InProgressStatus != DefaultGitLabInProgressStatus {
+		t.Errorf("adapters.gitlab.in_progress_status = %q, want %q", cfg.Adapters.GitLab.InProgressStatus, DefaultGitLabInProgressStatus)
+	}
 	if cfg.Adapters.GitHub.PollInterval != "5m" {
 		t.Errorf("adapters.github.poll_interval = %q, want %q", cfg.Adapters.GitHub.PollInterval, "5m")
 	}

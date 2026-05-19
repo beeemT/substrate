@@ -700,7 +700,7 @@ func extractProjectPathFromExternalID(externalID string) string {
 // Best-effort: errors are logged but never returned.
 func (a *GitlabAdapter) assignIssueToCurrentUser(ctx context.Context, externalID string) error {
 	assignee := strings.TrimSpace(a.cfg.Assignee)
-	if assignee == "" || assignee == "me" {
+	if assignee == "" {
 		return nil
 	}
 	projectPath, iid, err := parseExternalID(externalID)
@@ -711,21 +711,45 @@ func (a *GitlabAdapter) assignIssueToCurrentUser(ctx context.Context, externalID
 	if err != nil {
 		return err
 	}
+	assigneeID, err := a.resolveAssigneeID(ctx, assignee)
+	if err != nil {
+		return err
+	}
+	return a.putJSON(ctx,
+		fmt.Sprintf("/api/v4/projects/%d/issues/%d", proj.ID, iid),
+		map[string]any{"assignee_ids": []int64{assigneeID}},
+		nil,
+	)
+}
+
+func (a *GitlabAdapter) resolveAssigneeID(ctx context.Context, assignee string) (int64, error) {
+	if isSelfAssignee(assignee) {
+		var user struct {
+			ID int64 `json:"id"`
+		}
+		if err := a.getJSON(ctx, "/api/v4/user", nil, &user); err != nil {
+			return 0, err
+		}
+		if user.ID == 0 {
+			return 0, errors.New("gitlab: current user has no id")
+		}
+		return user.ID, nil
+	}
+
 	var users []struct {
 		ID       int64  `json:"id"`
 		Username string `json:"username"`
 	}
 	if err := a.getJSON(ctx, "/api/v4/users", url.Values{"username": {assignee}}, &users); err != nil {
-		return err
+		return 0, err
 	}
 	if len(users) == 0 {
-		return fmt.Errorf("gitlab: user %q not found", assignee)
+		return 0, fmt.Errorf("gitlab: user %q not found", assignee)
 	}
-	return a.putJSON(ctx,
-		fmt.Sprintf("/api/v4/projects/%d/issues/%d", proj.ID, iid),
-		map[string]any{"assignee_ids": []int64{users[0].ID}},
-		nil,
-	)
+	if users[0].ID == 0 {
+		return 0, fmt.Errorf("gitlab: user %q has no id", assignee)
+	}
+	return users[0].ID, nil
 }
 
 // transitionIssueStatus transitions the GitLab Work Item to the named status via GraphQL.
@@ -742,14 +766,15 @@ func (a *GitlabAdapter) transitionIssueStatus(ctx context.Context, externalID, s
 		return nil
 	}
 
-	// Resolve status name to Global ID from cache
+	// Resolve status name to Global ID from cache. On a cache miss, resolve
+	// synchronously so the first plan approval can perform the transition.
 	statusID := a.resolveStatusID(projectPath, statusName)
 	if statusID == "" {
-		// Cache miss: resolve asynchronously for next time, but try to build a quick query
-		go func() {
-			a.resolveAndCacheStatusIDs(context.Background(), projectPath)
-		}()
-		return fmt.Errorf("gitlab: status %q not cached for project %s", statusName, projectPath)
+		a.resolveAndCacheStatusIDs(ctx, projectPath)
+		statusID = a.resolveStatusID(projectPath, statusName)
+		if statusID == "" {
+			return fmt.Errorf("gitlab: status %q not found for project %s", statusName, projectPath)
+		}
 	}
 
 	workItemID, err := a.resolveWorkItemID(ctx, projectPath, iid)
@@ -835,10 +860,17 @@ func (a *GitlabAdapter) resolveStatusID(projectPath, statusName string) string {
 	if !ok {
 		return ""
 	}
-	// Search all work item types for the status name
+	// Search all work item types for the status name.
 	for _, byName := range byType {
 		if id, ok := byName[statusName]; ok {
 			return id
+		}
+	}
+	for _, byName := range byType {
+		for cachedName, id := range byName {
+			if strings.EqualFold(cachedName, statusName) {
+				return id
+			}
 		}
 	}
 	return ""
@@ -1497,8 +1529,17 @@ func (a *GitlabAdapter) fetchEpic(ctx context.Context, groupID, iid int64) (epic
 func (a *GitlabAdapter) fetchAssignedOpenedIssues(ctx context.Context) ([]issue, error) {
 	query := url.Values{}
 	query.Set("state", "opened")
-	if strings.TrimSpace(a.cfg.Assignee) != "" {
-		query.Set("assignee_username", a.cfg.Assignee)
+	if assignee := strings.TrimSpace(a.cfg.Assignee); assignee != "" {
+		username := assignee
+		if isSelfAssignee(assignee) {
+			if err := a.resolveUsername(ctx); err != nil {
+				return nil, err
+			}
+			a.usernameMu.RLock()
+			username = a.username
+			a.usernameMu.RUnlock()
+		}
+		query.Set("assignee_username", username)
 	}
 	var issues []issue
 	if err := a.getJSON(ctx, "/api/v4/issues", query, &issues); err != nil {
@@ -1507,6 +1548,11 @@ func (a *GitlabAdapter) fetchAssignedOpenedIssues(ctx context.Context) ([]issue,
 	sort.Slice(issues, func(i, j int) bool { return issues[i].IID < issues[j].IID })
 
 	return issues, nil
+}
+
+func isSelfAssignee(assignee string) bool {
+	trimmed := strings.TrimSpace(assignee)
+	return strings.EqualFold(trimmed, "me") || strings.EqualFold(trimmed, "@me")
 }
 
 func (a *GitlabAdapter) getJSON(ctx context.Context, endpoint string, query url.Values, dst any) error {

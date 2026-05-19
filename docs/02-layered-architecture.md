@@ -607,6 +607,7 @@ adapters:
     base_url: "https://gitlab.com"
     assignee: ""
     poll_interval: "60s"
+    in_progress_status: "In progress"
     state_mappings: {}
   github:
     token_ref: ""

@@ -522,6 +522,148 @@ func TestUpdateStateDefaultMappings(t *testing.T) {
 	}
 }
 
+func TestPlanApprovedAssignsCurrentUserWhenAssigneeIsMe(t *testing.T) {
+	var assigned bool
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "me", PollInterval: "5s", StateMappings: map[string]string{"in_progress": "reopen"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v4/projects/1234":
+			return jsonResponse(t, http.StatusOK, map[string]any{"id": int64(1234), "namespace": map[string]any{"id": 55, "kind": "group"}}), nil
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v4/user":
+			return jsonResponse(t, http.StatusOK, map[string]any{"id": int64(99), "username": "alice"}), nil
+		case req.Method == http.MethodGet && req.URL.Path == "/api/v4/users":
+			t.Fatal("assignee 'me' must resolve through /user, not /users")
+			return nil, nil
+		case req.Method == http.MethodPut && req.URL.Path == "/api/v4/projects/1234/issues/42":
+			var body map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			if ids, ok := body["assignee_ids"].([]any); ok && len(ids) == 1 && ids[0].(float64) == 99 {
+				assigned = true
+			}
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42}), nil
+		default:
+			return jsonResponse(t, http.StatusOK, map[string]any{}), nil
+		}
+	}))
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventPlanApproved), Payload: `{"external_ids":["gl:issue:1234#42"]}`}); err != nil {
+		t.Fatalf("plan approved: %v", err)
+	}
+	if !assigned {
+		t.Fatal("issue was not assigned to current user")
+	}
+}
+
+func TestFetchAssignedOpenedIssuesResolvesMeAssignee(t *testing.T) {
+	var gotAssignee string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", Assignee: "me", PollInterval: "5s"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/v4/user":
+			return jsonResponse(t, http.StatusOK, map[string]any{"id": int64(99), "username": "alice"}), nil
+		case "/api/v4/issues":
+			gotAssignee = req.URL.Query().Get("assignee_username")
+			return jsonResponse(t, http.StatusOK, []map[string]any{}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}
+	}))
+	if _, err := a.fetchAssignedOpenedIssues(context.Background()); err != nil {
+		t.Fatalf("fetchAssignedOpenedIssues: %v", err)
+	}
+	if gotAssignee != "alice" {
+		t.Fatalf("assignee_username = %q, want alice", gotAssignee)
+	}
+}
+
+func TestResolveStatusIDMatchesGitLabDefaultCaseInsensitively(t *testing.T) {
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com"}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		return nil, nil
+	}))
+	a.statusCache.byProject = map[string]map[string]map[string]string{
+		"group/project": {"Issue": {"In progress": "gid://gitlab/WorkItems::Statuses::Status/2"}},
+	}
+	if got := a.resolveStatusID("group/project", "In Progress"); got != "gid://gitlab/WorkItems::Statuses::Status/2" {
+		t.Fatalf("status id = %q", got)
+	}
+}
+
+func TestPlanApprovedResolvesStatusOnCacheMiss(t *testing.T) {
+	const statusID = "gid://gitlab/WorkItems::Statuses::Status/2"
+	statusListResponse := map[string]any{
+		"data": map[string]any{
+			"project": map[string]any{
+				"workItems": map[string]any{
+					"nodes": []any{map[string]any{
+						"workItemType": map[string]any{"name": "Issue"},
+						"widgets": []any{map[string]any{
+							"type":   "STATUS",
+							"status": map[string]any{"id": statusID, "name": "In progress"},
+						}},
+					}},
+				},
+			},
+		},
+	}
+	workItemIDResponse := map[string]any{
+		"data": map[string]any{
+			"project": map[string]any{
+				"workItems": map[string]any{
+					"nodes": []any{map[string]any{"id": "gid://gitlab/WorkItem/42"}},
+				},
+			},
+		},
+	}
+	var statusResolveCalls int
+	var mutationStatusID string
+	a := makeAdapterWithConfig(t, config.GitlabConfig{Token: "token", BaseURL: "https://gitlab.example.com", InProgressStatus: "In Progress", StateMappings: map[string]string{"in_progress": "reopen"}}, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/graphql":
+			var body struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatalf("decode graphql request: %v", err)
+			}
+			switch {
+			case strings.Contains(body.Query, "__typename"):
+				return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{"__typename": "Query"}}), nil
+			case strings.Contains(body.Query, "projectWorkItemStatuses"):
+				statusResolveCalls++
+				return jsonResponse(t, http.StatusOK, statusListResponse), nil
+			case strings.Contains(body.Query, "query workItemID"):
+				return jsonResponse(t, http.StatusOK, workItemIDResponse), nil
+			case strings.Contains(body.Query, "workItemUpdate"):
+				if got, ok := body.Variables["statusID"].(string); ok {
+					mutationStatusID = got
+				}
+				return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{"workItemUpdate": map[string]any{"errors": []string{}}}}), nil
+			default:
+				t.Fatalf("unexpected graphql query: %s", body.Query)
+				return nil, nil
+			}
+		case "/api/v4/projects/group%2Fproject", "/api/v4/projects/group/project":
+			return jsonResponse(t, http.StatusOK, map[string]any{"id": int64(1234), "namespace": map[string]any{"id": 55, "kind": "group"}}), nil
+		case "/api/v4/projects/1234/issues/42":
+			return jsonResponse(t, http.StatusOK, map[string]any{"iid": 42}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}
+	}))
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventPlanApproved), Payload: `{"external_ids":["gl:issue:group/project#42"]}`}); err != nil {
+		t.Fatalf("plan approved: %v", err)
+	}
+	if statusResolveCalls != 1 {
+		t.Fatalf("status resolve calls = %d, want 1", statusResolveCalls)
+	}
+	if mutationStatusID != statusID {
+		t.Fatalf("mutation statusID = %q, want %q", mutationStatusID, statusID)
+	}
+}
+
 func TestPlanApprovedAddsComments(t *testing.T) {
 	var commentPaths []string
 	a := makeAdapter(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
