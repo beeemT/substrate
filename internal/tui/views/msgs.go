@@ -117,8 +117,9 @@ type TaskUpdatedMsg struct {
 
 // QuestionRaisedMsg is sent when a question is raised by an agent.
 type QuestionRaisedMsg struct {
-	SessionID string
-	Question  domain.Question
+	WorkItemID string
+	SessionID  string
+	Question   domain.Question
 }
 
 // QuestionAnsweredMsg is sent when a question is answered.

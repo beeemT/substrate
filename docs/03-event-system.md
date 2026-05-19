@@ -160,7 +160,8 @@ Orchestrators emit higher-level workflow events via `service.Emit()`:
 | `PlanningService` | `plan.generated`, `plan.failed` | Plan generation is an orchestrator action |
 | `ImplementationService` | `work_item.completed` (rich payload), `worktree.created`, `worktree.reused`, `subplan.pr_ready` | `agent_session.*` events removed — services emit these |
 | `ReviewPipeline` | `review.started`, `review.critiques_found`, `review.completed`, `reimplementation.started` | |
-| `Resumption` | `agent_session.resumed` | |
+|| `Resumption` | `agent_session.resumed` | |
+|| `ManualSessionService` | `agent_session.resumed` (for follow-up linking) | Manual sessions emit `agent_session.*` events via `AgentSessionService`; stream events forwarded as raw harness event types with manual-safe payloads. Questions routed via `QuestionRouter.routeManual` — answers come from the operator inline (not Foreman). |
 
 ### Adapter and TUI emitters
 
@@ -180,7 +181,13 @@ The following declared constants are not currently emitted in the assigned code 
 
 `pr.review_state_changed` and `pr.ci_failed` are declared but not emitted through the bus. The 120-second refresh loop maintains review and check rows in the database, but does not publish events when those rows change. The TUI reads review and check state from the database tables directly.
 
-Also reserved but not currently emitted in the active runtime path: `agent_question.raised` and `agent_question.answered`. These event types are defined and handled in the TUI, but the current question routing in `QuestionService.EscalateWithProposal` does not publish them through the bus — the TUI receives question updates via targeted load commands from orchestrator completion messages instead.
+Note: `agent_question.raised` and `agent_question.answered` are now emitted by `QuestionRouter.persistAndPublish`. The event payload uses a named struct with top-level `work_item_id`, `agent_session_id`, and nested `question` object:
+
+```json
+{"work_item_id":"...","agent_session_id":"...","question":{"id":"...","stage":"manual",...}}
+```
+
+Manual session questions use `QuestionRouter.routeManual` which persists the question and marks the session `waiting_for_answer`. Answers come from the operator inline (not Foreman).
 
 ---
 

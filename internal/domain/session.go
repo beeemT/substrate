@@ -9,6 +9,7 @@ const (
 	AgentSessionPhasePlanning       AgentSessionPhase = "planning"
 	AgentSessionPhaseImplementation AgentSessionPhase = "implementation"
 	AgentSessionPhaseReview         AgentSessionPhase = "review"
+	AgentSessionPhaseManual         AgentSessionPhase = "manual"
 )
 
 // AgentSession is a single child agent session for a work item.

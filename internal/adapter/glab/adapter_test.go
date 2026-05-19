@@ -44,6 +44,16 @@ func (s *stubRunner) run(_ context.Context, dir, name string, args ...string) ([
 	return s.output, s.err
 }
 
+// emptyReviewArtifactRepos is used by tests that verify CLI output only.
+// These tests intentionally omit WorkItemID and WorkspaceID from payloads
+// to exercise the early-return guard in PersistGitlabMR/PersistReviewArtifact.
+// This prevents nil panics when repos are not initialized.
+//
+// Tests that verify persistence behavior should use proper in-memory repos
+// (e.g., inMemGitlabMRRepo, inMemArtifactLinkRepo) and include
+// WorkItemID/WorkspaceID in the payload.
+var emptyReviewArtifactRepos = coreadapter.ReviewArtifactRepos{}
+
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -141,8 +151,11 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 	stub := &stubRunner{
 		output: []byte("https://gitlab.com/org/repo/-/merge_requests/1\n"),
 	}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
 
+	// WorkItemID intentionally omitted: this test verifies CLI output only,
+	// not persistence. The early-return guard in PersistGitlabMR prevents
+	// nil panics when WorkItemID is empty.
 	payload := mustJSON(worktreePayload{
 		WorkspaceID:   "ws-1",
 		Repository:    "myrepo",
@@ -181,8 +194,10 @@ func TestOnEvent_WorktreeCreated_CreatesMR(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_DraftTitleFromSlug(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/2\n")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
 
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI output only, not persistence. Early-return guard prevents nil panics.
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-MAN-7-refactor-auth",
 		WorktreePath: "/tmp/wt2",
@@ -204,8 +219,10 @@ func TestOnEvent_WorktreeCreated_ReviewersAndLabels(t *testing.T) {
 	a := newWithRunner(config.GlabConfig{
 		Reviewers: []string{"alice", "bob"},
 		Labels:    []string{"backend"},
-	}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	}, emptyReviewArtifactRepos, "", stub.run)
 
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI output only, not persistence. Early-return guard prevents nil panics.
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-X-1-thing",
 		WorktreePath: "/tmp/wt3",
@@ -225,8 +242,10 @@ func TestOnEvent_WorktreeCreated_ReviewersAndLabels(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_GlabFailure_ReturnsNil(t *testing.T) {
 	stub := &stubRunner{err: errors.New("glab: authentication required")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
 
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI error handling only, not persistence. Early-return guard prevents nil panics.
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-FOO-2-fail",
 		WorktreePath: "/tmp/wt-fail",
@@ -594,8 +613,10 @@ func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 
 		return nil, errors.New("unexpected")
 	}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", runner)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", runner)
 
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI behavior only (idempotency check), not persistence.
 	payload := mustJSON(worktreePayload{
 		Branch:       "sub-LIN-FOO-7-existing-mr",
 		WorktreePath: "/wt/exist",
@@ -614,7 +635,9 @@ func TestOnEvent_WorktreeCreated_SkipsCreateWhenMRExists(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/4\n")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI description formatting only, not persistence.
 	payload := mustJSON(worktreePayload{Branch: "sub-GL-1234-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Number: 40}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)
@@ -627,7 +650,9 @@ func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsLinearResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/5\n")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI description formatting only, not persistence.
 	payload := mustJSON(worktreePayload{Branch: "sub-LIN-FOO-123-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "linear", Kind: "issue", ID: "FOO-123", URL: "https://linear.app/acme/issue/FOO-123"}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)
@@ -640,7 +665,9 @@ func TestOnEvent_WorktreeCreated_AddsLinearResolvesFooter(t *testing.T) {
 
 func TestOnEvent_WorktreeCreated_AddsCrossProjectGitLabResolvesFooter(t *testing.T) {
 	stub := &stubRunner{output: []byte("https://gitlab.com/org/repo/-/merge_requests/6\n")}
-	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", stub.run)
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", stub.run)
+	// WorkItemID and WorkspaceID intentionally omitted: this test verifies
+	// CLI description formatting only, not persistence.
 	payload := mustJSON(worktreePayload{Branch: "sub-GL-9999-40-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Repo specific implementation plan", TrackerRefs: []domain.TrackerReference{{Provider: "gitlab", Kind: "issue", ID: "40", Repo: "other-group/other-project", URL: "https://gitlab.example.com/other-group/other-project/-/issues/40", Number: 40}}})
 	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeCreated), Payload: payload}); err != nil {
 		t.Fatalf("OnEvent returned error: %v", err)

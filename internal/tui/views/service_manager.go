@@ -275,6 +275,27 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, bus, registry)
 	}
 
+	// Build QuestionRouter for stage-aware question routing
+	questionRouter := orchestrator.NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, bus)
+
+	// Build ManualSessionService with default agent harness
+	var manualSvc *orchestrator.ManualSessionService
+	var defaultHarness adapter.AgentHarness
+	if harnesses.Planning != nil {
+		defaultHarness = harnesses.Planning
+	} else if harnesses.Implementation != nil {
+		defaultHarness = harnesses.Implementation
+	} else if harnesses.Review != nil {
+		defaultHarness = harnesses.Review
+	} else if harnesses.Foreman != nil {
+		defaultHarness = harnesses.Foreman
+	} else if harnesses.Resume != nil {
+		defaultHarness = harnesses.Resume
+	}
+	if defaultHarness != nil {
+		manualSvc = orchestrator.NewManualSessionService(cfg, defaultHarness, gitClient, sessionSvc, workItemSvc, workspaceSvc, registry, questionRouter, bus)
+	}
+
 	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
 
 	return &Services{
@@ -303,6 +324,8 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		Resumption:            resumption,
 		Foreman:               foreman,
 		SessionRegistry:       registry,
+		QuestionRouter:        questionRouter,
+		Manual:                manualSvc,
 		Cfg:                   cfg,
 		Adapters:              adapters,
 		Harnesses:             harnesses,
@@ -599,6 +622,13 @@ func (sm *ServiceManager) ReviewComments() *adapter.ReviewCommentDispatcher {
 func (sm *ServiceManager) StartupWarnings() []string {
 	if s := sm.GetServices(); s != nil {
 		return s.StartupWarnings
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Manual() *orchestrator.ManualSessionService {
+	if s := sm.GetServices(); s != nil {
+		return s.Manual
 	}
 	return nil
 }

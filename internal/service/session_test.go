@@ -72,6 +72,74 @@ func TestSessionService_Create(t *testing.T) {
 			t.Fatalf("Create planning session failed: %v", err)
 		}
 	})
+
+	t.Run("allows manual session with required fields", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:             "manual-1",
+			WorkItemID:     "wi-1",
+			WorkspaceID:    "ws-1",
+			Phase:          domain.AgentSessionPhaseManual,
+			RepositoryName: "repo1",
+			WorktreePath:   "/path/to/worktree",
+			HarnessName:    "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create manual session failed: %v", err)
+		}
+	})
+
+	t.Run("rejects manual session without repository", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:           "manual-2",
+			WorkItemID:   "wi-1",
+			WorkspaceID:  "ws-1",
+			Phase:        domain.AgentSessionPhaseManual,
+			WorktreePath: "/path/to/worktree",
+			HarnessName:  "omp",
+		}
+		err := svc.Create(ctx, session)
+		if err == nil {
+			t.Fatal("expected error for manual session without repository")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("rejects manual session without worktree path", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:             "manual-3",
+			WorkItemID:     "wi-1",
+			WorkspaceID:    "ws-1",
+			Phase:          domain.AgentSessionPhaseManual,
+			RepositoryName: "repo1",
+			HarnessName:    "omp",
+		}
+		err := svc.Create(ctx, session)
+		if err == nil {
+			t.Fatal("expected error for manual session without worktree path")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
+
+	t.Run("rejects manual session without both repository and worktree path", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "manual-4",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Phase:       domain.AgentSessionPhaseManual,
+			HarnessName: "omp",
+		}
+		err := svc.Create(ctx, session)
+		if err == nil {
+			t.Fatal("expected error for manual session without both repository and worktree path")
+		}
+		if _, ok := err.(ErrInvalidInput); !ok {
+			t.Errorf("error type = %T, want ErrInvalidInput", err)
+		}
+	})
 }
 
 func TestSessionService_ValidTransitions(t *testing.T) {

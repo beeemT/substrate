@@ -56,6 +56,10 @@ func (tp *testProvider) Foreman() *orchestrator.Foreman               { return t
 func (tp *testProvider) SessionRegistry() *orchestrator.SessionRegistry {
 	return tp.svcs.SessionRegistry
 }
+
+func (tp *testProvider) Manual() *orchestrator.ManualSessionService {
+	return tp.svcs.Manual
+}
 func (tp *testProvider) Bus() *event.Bus                     { return tp.svcs.Bus }
 func (tp *testProvider) GitClient() *gitwork.Client          { return tp.svcs.GitClient }
 func (tp *testProvider) Adapters() []adapter.WorkItemAdapter { return tp.svcs.Adapters }

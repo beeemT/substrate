@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -40,9 +41,24 @@ func (r *QuestionRouter) Route(ctx context.Context, stage domain.AgentSessionPha
 		return r.routePlanning(ctx, evt, sessionID)
 	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview:
 		return r.routeImplementation(ctx, evt, sessionID)
+	case domain.AgentSessionPhaseManual:
+		return r.routeManual(ctx, evt, sessionID)
 	default:
 		return fmt.Errorf("route question: unsupported stage %q", stage)
 	}
+}
+
+func (r *QuestionRouter) routeManual(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhaseManual)
+	if err := r.persistAndPublish(ctx, q, "manual question raised"); err != nil {
+		return err
+	}
+	if r.sessionSvc != nil {
+		if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
+			return fmt.Errorf("mark manual session waiting for answer: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
@@ -98,16 +114,50 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 	if err := r.questionSvc.Create(ctx, q); err != nil {
 		return fmt.Errorf("%s: persist question: %w", label, err)
 	}
+	// Publish with top-level work_item_id (looked up from the session) and nested question.
+	workItemID, err := r.sessionWorkItemID(ctx, q.AgentSessionID)
+	if err != nil {
+		slog.Warn("failed to look up work_item_id for question event", "error", err, "session_id", q.AgentSessionID)
+		workItemID = ""
+	}
+	payload := questionRaisedPayload{
+		WorkItemID:     workItemID,
+		AgentSessionID: q.AgentSessionID,
+		Question:       q,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("%s: marshal question raised payload: %w", label, err)
+	}
 	if err := r.eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionRaised),
 		WorkspaceID: "",
-		Payload:     marshalJSONOrEmpty("agent_question.raised", map[string]string{"id": q.ID, "agent_session_id": q.AgentSessionID, "question": q.Content, "stage": string(q.Stage), "source": string(q.Source)}),
+		Payload:     string(data),
 		CreatedAt:   time.Now(),
 	}); err != nil {
 		slog.Warn("failed to publish question raised event", "error", err, "question_id", q.ID)
 	}
 	return nil
+}
+
+// questionRaisedPayload is the typed payload for EventAgentQuestionRaised.
+type questionRaisedPayload struct {
+	WorkItemID     string          `json:"work_item_id,omitempty"`
+	AgentSessionID string          `json:"agent_session_id"`
+	Question       domain.Question `json:"question"`
+}
+
+// sessionWorkItemID looks up the work item ID for an agent session.
+func (r *QuestionRouter) sessionWorkItemID(ctx context.Context, sessionID string) (string, error) {
+	if r.sessionSvc == nil {
+		return "", nil
+	}
+	session, err := r.sessionSvc.Get(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return session.WorkItemID, nil
 }
 
 func PublishQuestionAnswered(ctx context.Context, eventBus event.Publisher, questionID, sessionID string) error {

@@ -150,6 +150,7 @@ const (
 	TaskPhasePlanning       TaskPhase = "planning"
 	TaskPhaseImplementation TaskPhase = "implementation"
 	TaskPhaseReview         TaskPhase = "review"
+	TaskPhaseManual         TaskPhase = "manual"
 )
 ```
 
@@ -339,7 +340,7 @@ const (
 
 Nuance: the constants still use the historical `AgentSession...` prefix. That is legacy naming on the status enum, not evidence that the persisted aggregate is still named `AgentSession`.
 
-`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar. `Phase` discriminates the session kind: `planning`, `implementation`, or `review`.
+`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar. `Phase` discriminates the session kind: `planning`, `implementation`, `review`, or `manual`. Manual sessions are harness invocations the operator drives directly without sub-plan context, automatic commit/push, or Foreman involvement.
 
 `ResumeInfo` carries harness-specific resume metadata as a generic string map instead of dedicated harness file/id fields.
 

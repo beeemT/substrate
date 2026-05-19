@@ -262,14 +262,15 @@ func decodeAgentSessionFollowUp(payload string) tea.Msg {
 
 func decodeQuestionRaised(payload string) tea.Msg {
 	var p struct {
-		SessionID string          `json:"agent_session_id"`
-		Question  domain.Question `json:"question"`
+		WorkItemID string          `json:"work_item_id"`
+		SessionID  string          `json:"agent_session_id"`
+		Question   domain.Question `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventAgentQuestionRaised payload", "error", err)
 		return nil
 	}
-	return QuestionRaisedMsg{SessionID: p.SessionID, Question: p.Question}
+	return QuestionRaisedMsg{WorkItemID: p.WorkItemID, SessionID: p.SessionID, Question: p.Question}
 }
 
 func decodeQuestionAnswered(payload string) tea.Msg {

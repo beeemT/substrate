@@ -586,6 +586,7 @@ func TestPlanService_MarkSubPlanPRReady(t *testing.T) {
 		planRepo := NewMockPlanRepository()
 		subPlanRepo := NewMockSubPlanRepository()
 		sessionRepo := NewMockWorkItemRepository()
+		eventRepo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
 
 		planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 		sessionRepo.items["wi-1"] = domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
@@ -597,7 +598,7 @@ func TestPlanService_MarkSubPlanPRReady(t *testing.T) {
 		}
 
 		svc := NewPlanService(repository.NoopTransacter{Res: repository.Resources{
-			Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo,
+			Plans: planRepo, SubPlans: subPlanRepo, Sessions: sessionRepo, Events: eventRepo,
 		}}, newTestBus())
 
 		err := svc.MarkSubPlanPRReady(ctx, "sp-1", SubPlanPRReadyContext{

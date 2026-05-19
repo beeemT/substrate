@@ -37,6 +37,10 @@ type Services struct {
 	Resumption      *orchestrator.Resumption
 	Foreman         *orchestrator.Foreman
 	SessionRegistry *orchestrator.SessionRegistry
+	// QuestionRouter is the single stage-aware routing point for normalized agent questions.
+	QuestionRouter *orchestrator.QuestionRouter
+	// Manual is the manual agent session orchestration service.
+	Manual *orchestrator.ManualSessionService
 	Cfg             *config.Config
 	Adapters        []adapter.WorkItemAdapter
 	RepoSources     []adapter.RepoSource

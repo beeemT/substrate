@@ -152,6 +152,9 @@ type SessionOpts struct {
 	// own default (e.g. OMP's default for ohmypi). When set to a non-empty string,
 	// it overrides the harness default for this specific session.
 	Model *string
+	// QuestionToolPolicy controls how question tool calls are routed.
+	// Default ("") uses harness-specific defaults.
+	QuestionToolPolicy QuestionToolPolicy
 }
 
 // CommitConfig contains commit strategy settings.
@@ -160,6 +163,20 @@ type CommitConfig struct {
 	MessageFormat   string // "ai-generated", "conventional", "custom"
 	MessageTemplate string // Required when MessageFormat = "custom"
 }
+
+// QuestionToolPolicy controls how question tool calls are routed during an agent session.
+type QuestionToolPolicy string
+
+const (
+	// QuestionToolPolicyDefault routes questions per harness default (foreman in impl/review).
+	QuestionToolPolicyDefault QuestionToolPolicy = ""
+	// QuestionToolPolicyForeman routes questions to Foreman for answers.
+	QuestionToolPolicyForeman QuestionToolPolicy = "foreman"
+	// QuestionToolPolicyHuman routes questions to the operator inline; no Foreman involvement.
+	QuestionToolPolicyHuman QuestionToolPolicy = "human"
+	// QuestionToolPolicyNone disables question tools in the agent session.
+	QuestionToolPolicyNone QuestionToolPolicy = "none"
+)
 
 // AgentEvent represents an event from a running agent session.
 type AgentEvent struct {

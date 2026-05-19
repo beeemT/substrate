@@ -479,6 +479,24 @@ func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.AgentSe
 				return ErrMsg{Err: err}
 			}
 			return ActionDoneMsg{Message: "Answer submitted"}
+
+		case domain.AgentSessionPhaseManual:
+			// Manual sessions receive answers directly via the registry.
+			if registry != nil {
+				if err := registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
+					return ErrMsg{Err: fmt.Errorf("answer manual question %s: %w", questionID, err)}
+				}
+			}
+			if sessionSvc != nil {
+				if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
+					slog.Warn("failed to resume manual session from answer", "error", err, "question_id", questionID)
+				}
+			}
+			if err := svc.Answer(ctx, questionID, answer, answeredBy); err != nil {
+				return ErrMsg{Err: err}
+			}
+			return ActionDoneMsg{Message: "Answer submitted"}
+
 		default:
 			return ErrMsg{Err: fmt.Errorf("answer question %s: unsupported stage %q", questionID, q.Stage)}
 		}

@@ -238,6 +238,13 @@ func (s *AgentSessionService) Create(ctx context.Context, agentSession domain.Ag
 		if agentSession.SubPlanID == "" {
 			return newInvalidInputError("sub-plan is required for this phase", "sub_plan_id")
 		}
+	case domain.AgentSessionPhaseManual:
+		if agentSession.RepositoryName == "" {
+			return newInvalidInputError("repository is required for manual session", "repository_name")
+		}
+		if agentSession.WorktreePath == "" {
+			return newInvalidInputError("worktree path is required for manual session", "worktree_path")
+		}
 	default:
 		return newInvalidInputError("unknown session phase", "phase")
 	}

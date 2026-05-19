@@ -43,6 +43,8 @@ type ServiceProvider interface {
 	Resumption() *orchestrator.Resumption
 	Foreman() *orchestrator.Foreman
 	SessionRegistry() *orchestrator.SessionRegistry
+	// Manual returns the manual session service.
+	Manual() *orchestrator.ManualSessionService
 
 	// Infrastructure / derived state rebuilt with services
 	Bus() *event.Bus
