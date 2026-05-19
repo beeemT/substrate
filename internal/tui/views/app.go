@@ -27,6 +27,7 @@ import (
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
+	"github.com/beeemT/substrate/internal/tuilog"
 )
 
 // overlayKind identifies which overlay is active.
@@ -247,11 +248,10 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 	app.syncNewSessionFilterOverlays()
 
 	// Apply config-based defaults for the home view.
-	if runtimeCtx.Cfg != nil {
-		app.sidebar.filter = sidebarFilterFromString(runtimeCtx.Cfg.UI.DefaultFilter)
-		app.sidebar.dimension = sidebarDimFromString(runtimeCtx.Cfg.UI.DefaultGroup)
-		*app.sidebar.viewDirty = true
-	}
+	app.sidebar.filter = sidebarFilterFromString(runtimeCtx.Cfg.UI.DefaultFilter)
+	app.sidebar.dimension = sidebarDimFromString(runtimeCtx.Cfg.UI.DefaultGroup)
+	*app.sidebar.viewDirty = true
+	tuilog.SetDefaultLevel(logLevelFromConfig(runtimeCtx.Cfg))
 
 	if !app.hasWorkspace {
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, provider.Workspace())
@@ -381,6 +381,27 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.runtimeCtx.WorkspaceID != ""
 	a.syncNewSessionFilterOverlays()
+
+	// Update log level filter.
+	tuilog.SetDefaultLevel(logLevelFromConfig(reload.Cfg))
+}
+
+func logLevelFromConfig(cfg *config.Config) slog.Level {
+	if cfg.UI.LogLevel == "" {
+		return slog.LevelInfo
+	}
+	switch cfg.UI.LogLevel {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func sameSessionHistoryFilter(current, incoming domain.SessionHistoryFilter) bool {

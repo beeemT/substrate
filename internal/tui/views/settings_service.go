@@ -117,6 +117,7 @@ type viewsServicesReload struct {
 	ConfigPath   string
 	SessionsDir  string
 	SettingsData SettingsSnapshot
+	Cfg          *config.Config
 }
 
 func NewSettingsService(
@@ -252,6 +253,7 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 			ConfigPath:   cfgPath,
 			SessionsDir:  sessionsDir,
 			SettingsData: snapshot,
+			Cfg:          cfg,
 		},
 		Message: "Settings applied",
 	}, nil
@@ -484,6 +486,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "ui", Key: "default_filter", Label: "Default Filter", Type: SettingsFieldEnum, Value: cfg.UI.DefaultFilter, Options: []string{"all", "active", "attention", "completed"}},
 				{Section: "ui", Key: "default_group", Label: "Default Group", Type: SettingsFieldEnum, Value: cfg.UI.DefaultGroup, Options: []string{"none", "state", "source", "created", "activity"}},
+				{Section: "ui", Key: "log_level", Label: "Log Level", Type: SettingsFieldEnum, Value: cfg.UI.LogLevel, Options: []string{"debug", "info", "warn", "error"}},
 			},
 		},
 		{
@@ -884,6 +887,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.UI.DefaultFilter = value
 	case "ui.default_group":
 		cfg.UI.DefaultGroup = value
+	case "ui.log_level":
+		cfg.UI.LogLevel = value
 	}
 
 	return nil

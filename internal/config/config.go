@@ -81,6 +81,9 @@ type UIConfig struct {
 	// DefaultGroup sets the initial grouping dimension for the sessions list.
 	// Valid values: "none", "state", "source", "created", "activity".
 	DefaultGroup string `yaml:"default_group"`
+	// LogLevel sets the minimum log level captured to the in-memory log buffer.
+	// Valid values: "debug", "info", "warn", "error".
+	LogLevel string `yaml:"log_level"`
 }
 
 // Config is the top-level configuration loaded from config.yaml.
@@ -173,10 +176,10 @@ type GitlabConfig struct {
 	StatusRefreshInterval string              `yaml:"status_refresh_interval"` // default: 5m
 	StateMappings         map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent   IssueCommentContent `yaml:"issue_comment_content"`
-	IssueActionScope     IssueActionScope   `yaml:"issue_comment_scope"` // all, mine, none
+	IssueActionScope      IssueActionScope    `yaml:"issue_comment_scope"` // all, mine, none
 	// InProgressStatus is the Work Item status name to set on linked issues
 	// at plan approval via GraphQL. Leave empty to skip.
-	InProgressStatus      string              `yaml:"in_progress_status"`
+	InProgressStatus string `yaml:"in_progress_status"`
 }
 
 type GithubConfig struct {
@@ -189,11 +192,11 @@ type GithubConfig struct {
 	Labels              []string            `yaml:"labels"`
 	StateMappings       map[string]string   `yaml:"state_mappings"`
 	IssueCommentContent IssueCommentContent `yaml:"issue_comment_content"`
-	IssueActionScope   IssueActionScope   `yaml:"issue_comment_scope"` // all, mine, none
+	IssueActionScope    IssueActionScope    `yaml:"issue_comment_scope"` // all, mine, none
 	PostMergeCloseIssue bool                `yaml:"post_merge_close_issue"`
 	// InProgressStatus is the issue label to apply to linked issues at plan
 	// approval. Leave empty to skip.
-	InProgressStatus   string `yaml:"in_progress_status"`
+	InProgressStatus string `yaml:"in_progress_status"`
 }
 
 type SentryConfig struct {
@@ -575,6 +578,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.UI.DefaultGroup == "" {
 		cfg.UI.DefaultGroup = "state"
+	}
+	if cfg.UI.LogLevel == "" {
+		cfg.UI.LogLevel = "info"
 	}
 }
 

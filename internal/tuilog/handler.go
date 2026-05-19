@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,7 +84,7 @@ type ToastEntry struct {
 type Handler struct {
 	store  *Store
 	toasts chan<- ToastEntry
-	level  slog.Level
+	level  atomic.Int64 // stored as int64 for atomic access
 	group  string
 	attrs  []slog.Attr
 }
@@ -92,15 +93,36 @@ type Handler struct {
 // Entries at or above toastLevel are also sent to the toasts channel.
 // The channel should be buffered to avoid blocking the caller.
 func NewHandler(store *Store, toasts chan<- ToastEntry) *Handler {
-	return &Handler{
+	h := &Handler{
 		store:  store,
 		toasts: toasts,
-		level:  slog.LevelDebug,
 	}
+	h.level.Store(int64(slog.LevelDebug))
+	return h
 }
 
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
+	return level >= slog.Level(h.level.Load())
+}
+
+// SetLevel updates the minimum log level. Entries below this level are dropped.
+func (h *Handler) SetLevel(level slog.Level) {
+	h.level.Store(int64(level))
+}
+
+// Level returns the current minimum log level.
+func (h *Handler) Level() slog.Level {
+	return slog.Level(h.level.Load())
+}
+
+// SetDefaultLevel updates the level of the default logger's tuilog handler,
+// if one is installed. This allows runtime reconfiguration of log filtering
+// without restarting the logger.
+func SetDefaultLevel(level slog.Level) {
+	logger := slog.Default()
+	if handler, ok := logger.Handler().(*Handler); ok {
+		handler.SetLevel(level)
+	}
 }
 
 func (h *Handler) Handle(_ context.Context, r slog.Record) error {
