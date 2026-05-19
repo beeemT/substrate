@@ -109,6 +109,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	tuilog.SetDefaultLevelFromConfig(cfg.UI.LogLevel)
 
 	ctx := context.Background()
 	db, err := openDatabase(ctx)

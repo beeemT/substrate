@@ -97,8 +97,28 @@ func NewHandler(store *Store, toasts chan<- ToastEntry) *Handler {
 		store:  store,
 		toasts: toasts,
 	}
-	h.level.Store(int64(slog.LevelDebug))
+	h.level.Store(int64(slog.LevelInfo))
 	return h
+}
+
+// SetDefaultLevelFromConfig parses the log level string and updates the default
+// logger's handler level. Valid values: "debug", "info", "warn", "error".
+// If the value is empty or invalid, it defaults to info.
+func SetDefaultLevelFromConfig(level string) {
+	var lvl slog.Level
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "info":
+		lvl = slog.LevelInfo
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	SetDefaultLevel(lvl)
 }
 
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {

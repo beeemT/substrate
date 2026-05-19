@@ -1525,6 +1525,10 @@ func (a *GlabAdapter) checkAllMerged(ctx context.Context, mrID string) {
 	}
 	wi, err := a.repos.Sessions.Get(ctx, workItemID)
 	if err != nil {
+		if coreadapter.IsWorkItemNotFound(err) {
+			slog.Debug("glab: skip merge check for stale review artifact", "work_item_id", workItemID, "mr_id", mrID, "error", err)
+			return
+		}
 		slog.Warn("glab: get work item for merge check failed", "work_item_id", workItemID, "error", err)
 		return
 	}

@@ -1,11 +1,13 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
@@ -1030,6 +1033,52 @@ func (r *inMemArtifactLinkRepo) TransferArtifactLinks(_ context.Context, fromID,
 		}
 	}
 	return nil
+}
+
+type missingWorkItemRepo struct{}
+
+func (missingWorkItemRepo) Get(_ context.Context, _ string) (domain.Session, error) {
+	return domain.Session{}, repository.ErrNotFound
+}
+
+func (missingWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
+	return nil, nil
+}
+
+func (missingWorkItemRepo) Create(_ context.Context, _ domain.Session) error { return nil }
+func (missingWorkItemRepo) Update(_ context.Context, _ domain.Session) error { return nil }
+func (missingWorkItemRepo) Delete(_ context.Context, _ string) error         { return nil }
+
+func TestCheckAllMergedSkipsStaleReviewArtifactLink(t *testing.T) {
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{{
+		ID:                 "link-1",
+		WorkspaceID:        "ws-1",
+		WorkItemID:         "wi-deleted",
+		Provider:           "github",
+		ProviderArtifactID: "pr-1",
+	}}}
+	a := &GithubAdapter{
+		repos: adapter.ReviewArtifactRepos{
+			SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+			Sessions:         service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: missingWorkItemRepo{}}}, nil),
+			Bus:              event.NewBus(event.BusConfig{}),
+		},
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(previous)
+
+	a.checkAllMerged(context.Background(), "ws-1", "pr-1")
+
+	logged := logs.String()
+	if strings.Contains(logged, "WARN") || strings.Contains(logged, "get work item for merge check failed") {
+		t.Fatalf("unexpected warning log: %s", logged)
+	}
+	if !strings.Contains(logged, "skip merge check for stale review artifact") {
+		t.Fatalf("log = %q, want stale-link debug entry", logged)
+	}
 }
 
 // --- Test helpers for PR description sync ---

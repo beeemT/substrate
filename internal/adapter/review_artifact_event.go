@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,6 +26,14 @@ type ReviewArtifactRepos struct {
 	GithubPRChecks   *service.GithubPRCheckService
 	GitlabMRChecks   *service.GitlabMRCheckService
 	Bus              *event.Bus
+}
+
+// IsWorkItemNotFound reports whether err is the service-layer not-found result
+// for a work item. Transaction wrappers preserve this via %w, so this also
+// matches errors returned through atomic transacters.
+func IsWorkItemNotFound(err error) bool {
+	var notFound service.ErrNotFound
+	return errors.As(err, &notFound) && notFound.Entity == "work item"
 }
 
 func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {

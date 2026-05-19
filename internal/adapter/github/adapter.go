@@ -2354,6 +2354,10 @@ func (a *GithubAdapter) checkAllMerged(ctx context.Context, workspaceID, prID st
 	// Check work item is in completed state.
 	wi, err := a.repos.Sessions.Get(ctx, workItemID)
 	if err != nil {
+		if adapter.IsWorkItemNotFound(err) {
+			slog.Debug("github: skip merge check for stale review artifact", "work_item_id", workItemID, "pr_id", prID, "error", err)
+			return
+		}
 		slog.Warn("github: get work item for merge check failed", "work_item_id", workItemID, "error", err)
 		return
 	}

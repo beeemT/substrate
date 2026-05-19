@@ -138,6 +138,53 @@ func TestMigrateOrdersCorrectly(t *testing.T) {
 	}
 }
 
+func TestMigratePrunesOrphanReviewArtifacts(t *testing.T) {
+	db := openTestDB(t)
+
+	testFS := fstest.MapFS{
+		"001_create_review_artifacts.sql": &fstest.MapFile{Data: []byte(`
+CREATE TABLE work_items (id TEXT PRIMARY KEY);
+CREATE TABLE session_review_artifacts (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL,
+    provider_artifact_id TEXT NOT NULL
+);
+INSERT INTO work_items (id) VALUES ('wi-live');
+INSERT INTO session_review_artifacts (id, work_item_id, provider_artifact_id) VALUES
+    ('link-live', 'wi-live', 'pr-1'),
+    ('link-orphan', 'wi-deleted', 'pr-2');
+`)},
+		"018_prune_orphan_review_artifacts.sql": &fstest.MapFile{Data: []byte(`
+DELETE FROM session_review_artifacts
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM work_items
+    WHERE work_items.id = session_review_artifacts.work_item_id
+);
+`)},
+	}
+
+	if err := Migrate(context.Background(), db, testFS); err != nil {
+		t.Fatalf("Migrate() error: %v", err)
+	}
+
+	var count int
+	if err := db.Get(&count, "SELECT COUNT(*) FROM session_review_artifacts"); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("links after migration = %d, want 1", count)
+	}
+
+	var id string
+	if err := db.Get(&id, "SELECT id FROM session_review_artifacts"); err != nil {
+		t.Fatal(err)
+	}
+	if id != "link-live" {
+		t.Fatalf("remaining link = %q, want link-live", id)
+	}
+}
+
 func TestMigrateWithRealMigrations(t *testing.T) {
 	db := openTestDB(t)
 
