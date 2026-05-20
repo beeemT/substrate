@@ -113,6 +113,40 @@ func TestMRTitle_FallsBackToBranch(t *testing.T) {
 	}
 }
 
+func TestMRTitle_ClampsLongWorkItemTitle(t *testing.T) {
+	longTitle := strings.Repeat("x", 300)
+	got := mrTitle(longTitle, "sub-SEN-acme-123-fmt-wraperror-post-api-v6-kpi")
+	want := strings.Repeat("x", 254) + gitlabMRTitleEllipsisSuffix
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if len([]rune(got)) != gitlabMRTitleMaxRunes {
+		t.Fatalf("title has %d runes, want %d", len([]rune(got)), gitlabMRTitleMaxRunes)
+	}
+}
+
+func TestMRTitle_ClampsLongWorkItemTitleAtRuneBoundary(t *testing.T) {
+	longTitle := strings.Repeat("å", 300)
+	got := mrTitle(longTitle, "sub-SEN-acme-123-fmt-wraperror-post-api-v6-kpi")
+	want := strings.Repeat("å", 254) + gitlabMRTitleEllipsisSuffix
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if len([]rune(got)) != gitlabMRTitleMaxRunes {
+		t.Fatalf("title has %d runes, want %d", len([]rune(got)), gitlabMRTitleMaxRunes)
+	}
+}
+
+func TestMRTitle_ClampsLongBranchFallback(t *testing.T) {
+	got := mrTitle("", "sub-"+strings.Repeat("very-long-", 40))
+	if len([]rune(got)) != gitlabMRTitleMaxRunes {
+		t.Fatalf("title has %d runes, want %d", len([]rune(got)), gitlabMRTitleMaxRunes)
+	}
+	if !strings.HasSuffix(got, gitlabMRTitleEllipsisSuffix) {
+		t.Fatalf("title = %q, want ellipsis suffix", got)
+	}
+}
+
 // --- parseMRURL ---
 
 func TestParseMRURL_FoundInOutput(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	coreadapter "github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
@@ -43,6 +44,11 @@ type mrRefresher interface {
 }
 
 var _ mrRefresher = &GlabAdapter{}
+
+const (
+	gitlabMRTitleMaxRunes       = 255
+	gitlabMRTitleEllipsisSuffix = "…"
+)
 
 // commandRunner executes an external command in dir and returns its combined output.
 // Injected for testing.
@@ -1011,11 +1017,29 @@ func (a *GlabAdapter) recordGitlabMR(ctx context.Context, workspaceID, workItemI
 //  2. Parsed from branch slug: "sub-LIN-FOO-123-fix-auth-flow" → "Fix auth flow [LIN-FOO-123]"
 //  3. Branch name as fallback
 func mrTitle(workItemTitle, branch string) string {
-	if workItemTitle != "" {
-		return workItemTitle
+	title := workItemTitle
+	if title == "" {
+		title = titleFromBranch(branch)
 	}
 
-	return titleFromBranch(branch)
+	return clampMRTitle(title)
+}
+
+// clampMRTitle keeps titles within GitLab's 255-character MR title limit.
+func clampMRTitle(title string) string {
+	cut := -1
+	runeCount := 0
+	for i := range title {
+		if runeCount == gitlabMRTitleMaxRunes-1 {
+			cut = i
+		}
+		runeCount++
+		if runeCount > gitlabMRTitleMaxRunes {
+			return strings.TrimRightFunc(title[:cut], unicode.IsSpace) + gitlabMRTitleEllipsisSuffix
+		}
+	}
+
+	return title
 }
 
 // titleFromBranch converts a branch slug to a human-readable MR title.
