@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -153,6 +154,76 @@ func TestNewSessionOverlay_ScrollLoadMore_DoesNotTriggerWhenNoMoreItems(t *testi
 	}
 	if updated.loading {
 		t.Error("loading should not be set when hasMore=false")
+	}
+}
+
+func TestNewSessionOverlay_ScrollLoadMore_TriggersWhenVisiblePageUnderfilled(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {SupportsOffset: true},
+		},
+	}
+	githubAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+		return &adapter.ListResult{
+			Items: []adapter.ListItem{
+				{ID: "gh-1", Provider: "github", Title: "First"},
+				{ID: "gh-2", Provider: "github", Title: "Second"},
+			},
+			HasMore: true,
+		}, nil
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 30)
+	_ = overlay.View()
+	overlay = applyOverlayCmds(t, overlay, overlay.reloadItems())
+	overlay.setBrowseListFocus()
+
+	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !updated.loading {
+		t.Fatal("expected loading when visible list page is underfilled but provider has more")
+	}
+	if cmd == nil {
+		t.Fatal("expected append command when visible list page is underfilled")
+	}
+}
+
+func TestNewSessionOverlay_EndMarkerAppearsOnlyAfterExhaustion(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{
+		name:         "github",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {SupportsOffset: true},
+		},
+	}
+	githubAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+		return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-1", Provider: "github", Title: "First"}}}, nil
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.Open()
+	overlay.SetSize(120, 30)
+	_ = overlay.View()
+	overlay = applyOverlayCmds(t, overlay, overlay.reloadItems())
+
+	items := overlay.issueList.Items()
+	if len(items) != 2 {
+		t.Fatalf("list items len = %d, want real item plus end marker", len(items))
+	}
+	if _, ok := items[1].(browseEndMarkerItem); !ok {
+		t.Fatalf("last item type = %T, want browseEndMarkerItem", items[1])
+	}
+	overlay.issueList.Select(1)
+	if item, ok := overlay.currentListItem(); ok {
+		t.Fatalf("end marker resolved as selectable item %#v", item)
+	}
+	if got := overlay.View(); !strings.Contains(got, "No more work items") {
+		t.Fatal("rendered overlay does not include end-of-list marker")
 	}
 }
 

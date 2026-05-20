@@ -165,6 +165,16 @@ type selectableItem struct {
 	selected bool
 }
 
+type browseEndMarkerItem struct{}
+
+func (browseEndMarkerItem) Title() string { return "No more work items" }
+
+func (browseEndMarkerItem) Description() string {
+	return "You've reached the end of the available results."
+}
+
+func (browseEndMarkerItem) FilterValue() string { return "" }
+
 func (i selectableItem) Title() string {
 	prefix := i.item.Title
 	if i.item.Identifier != "" {
@@ -1686,9 +1696,12 @@ func (m *NewSessionOverlay) pruneSelectedIDs() {
 }
 
 func (m *NewSessionOverlay) refreshBrowseListItems() {
-	items := make([]list.Item, len(m.allItems))
-	for i, it := range m.allItems {
-		items[i] = selectableItem{item: it, selected: m.selectedIDs[it.ID]}
+	items := make([]list.Item, 0, len(m.allItems)+1)
+	for _, it := range m.allItems {
+		items = append(items, selectableItem{item: it, selected: m.selectedIDs[it.ID]})
+	}
+	if len(m.allItems) > 0 && !m.loading && !m.hasMore {
+		items = append(items, browseEndMarkerItem{})
 	}
 	m.issueList.SetItems(items)
 }
@@ -1704,7 +1717,7 @@ func (m NewSessionOverlay) currentListItem() (adapter.ListItem, bool) {
 	if index >= 0 && index < len(m.allItems) {
 		return m.allItems[index], true
 	}
-	return m.allItems[0], true
+	return adapter.ListItem{}, false
 }
 
 func (m NewSessionOverlay) openCurrentItemInBrowserCmd() tea.Cmd {
@@ -1747,6 +1760,10 @@ func overviewSourceForListItem(item adapter.ListItem) OverviewSourceItem {
 func (m *NewSessionOverlay) maybeLoadMore() tea.Cmd {
 	if m.browseFocus != browseFocusList || m.loading || !m.hasMore || len(m.allItems) == 0 {
 		return nil
+	}
+	visibleItems := len(m.issueList.VisibleItems())
+	if visibleItems > 0 && visibleItems < m.issueList.Height() {
+		return m.loadMoreItems()
 	}
 	viewportBottom := m.issueList.Index() + m.issueList.Height()
 	if viewportBottom < len(m.allItems) {

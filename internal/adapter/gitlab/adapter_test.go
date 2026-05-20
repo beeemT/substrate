@@ -272,7 +272,7 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 				t.Fatalf("per_page = %q, want 5", req.URL.Query().Get("per_page"))
 			}
 
-			return jsonResponse(t, http.StatusOK, []map[string]any{{
+			resp := jsonResponse(t, http.StatusOK, []map[string]any{{
 				"iid":         42,
 				"project_id":  5678,
 				"title":       "Cross-project issue",
@@ -281,7 +281,9 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 				"labels":      []string{"bug"},
 				"web_url":     "https://gitlab.example.com/other-group/other-project/-/issues/42",
 				"references":  map[string]any{"full": "other-group/other-project#42"},
-			}}), nil
+			}})
+			resp.Header.Set("Link", `<https://gitlab.example.com/api/v4/issues?page=2>; rel="next", <https://gitlab.example.com/api/v4/issues?page=4>; rel="last"`)
+			return resp, nil
 		case "/api/graphql":
 			// GraphQL capability probe.
 			return jsonResponse(t, http.StatusOK, map[string]any{"data": map[string]any{}}), nil
@@ -302,6 +304,9 @@ func TestListSelectableIssuesUsesGlobalInbox(t *testing.T) {
 	}
 	if result.TotalCount != 1 || len(result.Items) != 1 {
 		t.Fatalf("result count = %d items=%d, want 1", result.TotalCount, len(result.Items))
+	}
+	if !result.HasMore {
+		t.Fatal("HasMore = false, want true from GitLab Link rel=next header")
 	}
 	item := result.Items[0]
 	if item.ID != "5678#42" {

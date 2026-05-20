@@ -426,8 +426,10 @@ type ArchiveSessionMsg struct{ WorkItemID string }
 
 // SessionArchivedMsg is sent after the work item is archived.
 type SessionArchivedMsg struct {
-	WorkItemID string
-	Message    string
+	WorkItemID        string
+	Message           string
+	FocusAfterArchive bool
+	FocusWorkItemID   string
 }
 
 // ConfirmUnarchiveMsg requests a confirmation dialog before unarchiving a session.

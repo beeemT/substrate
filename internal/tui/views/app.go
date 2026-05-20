@@ -2041,7 +2041,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ArchiveSessionMsg:
-		cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID))
+		focusAfterArchive := a.currentWorkItemID == msg.WorkItemID || a.currentHistoryEntry.WorkItemID == msg.WorkItemID
+		focusWorkItemID := ""
+		if focusAfterArchive {
+			focusWorkItemID = a.workItemFocusTargetAfterRemoval(msg.WorkItemID)
+		}
+		cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case UnarchiveSessionMsg:
@@ -2054,9 +2059,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slog.Error("failed to fetch archived work item", "error", err, "work_item_id", msg.WorkItemID)
 		} else {
 			a.upsertWorkItem(updated)
+			if msg.FocusAfterArchive {
+				a.currentWorkItemID = msg.FocusWorkItemID
+				a.currentHistorySessionID = ""
+				a.currentHistoryEntry = SidebarEntry{}
+				a.sidebarMode = sidebarPaneSessions
+				a.mainFocus = mainFocusSidebar
+			}
 			a.rebuildSidebar()
 			a.refreshSessionSearchEntriesFromLocalState()
-			if a.currentWorkItemID == msg.WorkItemID {
+			if msg.FocusAfterArchive || a.currentWorkItemID == msg.WorkItemID {
 				cmds = append(cmds, a.updateContentFromState())
 			}
 		}
@@ -3620,6 +3632,35 @@ func aggregateCIState(items []ArtifactItem) string {
 		}
 	}
 	return "success"
+}
+
+func (a App) workItemFocusTargetAfterRemoval(workItemID string) string {
+	entries := a.sessionSidebarEntries()
+	entries = FilterSidebarEntries(entries, a.sidebar.FilterMode())
+	entries = ApplyDimensionAndDirection(entries, a.sidebar.DimensionMode(), a.sidebar.DirectionMode())
+
+	removedIndex := -1
+	for i, entry := range entries {
+		if entry.Kind == SidebarEntryWorkItem && entry.WorkItemID == workItemID {
+			removedIndex = i
+			break
+		}
+	}
+	if removedIndex < 0 {
+		return ""
+	}
+
+	for i := removedIndex - 1; i >= 0; i-- {
+		if entries[i].Kind == SidebarEntryWorkItem {
+			return entries[i].WorkItemID
+		}
+	}
+	for i := removedIndex + 1; i < len(entries); i++ {
+		if entries[i].Kind == SidebarEntryWorkItem {
+			return entries[i].WorkItemID
+		}
+	}
+	return ""
 }
 
 func (a *App) rebuildSidebar() {

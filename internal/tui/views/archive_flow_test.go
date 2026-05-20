@@ -48,8 +48,6 @@ func (r *archFlowRepo) Delete(_ context.Context, _ string) error { return nil }
 //
 // Unarchive reverses: archived → completed (or merged/failed).
 
-
-
 func TestArchAppFlow(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -166,6 +164,101 @@ func TestArchAppFlow(t *testing.T) {
 				if _, ok := completionMsg.(SessionUnarchivedMsg); !ok {
 					t.Errorf("completion msg = %T, want SessionUnarchivedMsg", completionMsg)
 				}
+			}
+		})
+	}
+}
+
+func TestArchiveSelectedSessionFocusesVisibleNeighbor(t *testing.T) {
+	now := time.Now()
+	items := []domain.Session{
+		{ID: "newer", WorkspaceID: "ws-local", State: domain.SessionCompleted, CreatedAt: now, UpdatedAt: now.Add(3 * time.Minute)},
+		{ID: "middle", WorkspaceID: "ws-local", State: domain.SessionCompleted, CreatedAt: now, UpdatedAt: now.Add(2 * time.Minute)},
+		{ID: "older", WorkspaceID: "ws-local", State: domain.SessionCompleted, CreatedAt: now, UpdatedAt: now.Add(time.Minute)},
+	}
+
+	cases := []struct {
+		name      string
+		currentID string
+		wantID    string
+	}{
+		{
+			name:      "previous visible session exists",
+			currentID: "middle",
+			wantID:    "newer",
+		},
+		{
+			name:      "first visible session falls back to next",
+			currentID: "newer",
+			wantID:    "middle",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repoItems := make(map[string]domain.Session, len(items))
+			for _, item := range items {
+				repoItems[item.ID] = item
+			}
+			repo := &archFlowRepo{items: repoItems}
+			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher())
+
+			app := newTestApp(Services{
+				WorkspaceID:   "ws-local",
+				WorkspaceName: "local",
+				Session:       svc,
+				Settings:      &SettingsService{},
+				SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+					SessionReviewArtifacts: emptySessionArtifactRepo{},
+				}}),
+				Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+					Events: emptyEventRepo{},
+				}}),
+			})
+			app.workItems = append([]domain.Session(nil), items...)
+			app.content.SetSize(80, 20)
+			app.currentWorkItemID = tc.currentID
+			app.rebuildSidebar()
+			if !app.sidebar.SelectWorkItem(tc.currentID) {
+				t.Fatalf("test setup: selected work item %q not visible", tc.currentID)
+			}
+
+			model, cmd := app.Update(ArchiveSessionMsg{WorkItemID: tc.currentID})
+			app = model.(*App)
+			if cmd == nil {
+				t.Fatal("ArchiveSessionMsg returned nil command")
+			}
+			completionMsg := cmd()
+			archivedMsg, ok := completionMsg.(SessionArchivedMsg)
+			if !ok {
+				t.Fatalf("completion msg = %T, want SessionArchivedMsg", completionMsg)
+			}
+			if !archivedMsg.FocusAfterArchive {
+				t.Fatal("FocusAfterArchive = false, want true")
+			}
+			if archivedMsg.FocusWorkItemID != tc.wantID {
+				t.Fatalf("FocusWorkItemID = %q, want %q", archivedMsg.FocusWorkItemID, tc.wantID)
+			}
+
+			model, _ = app.Update(archivedMsg)
+			app = model.(*App)
+
+			if app.currentWorkItemID != tc.wantID {
+				t.Fatalf("currentWorkItemID = %q, want %q", app.currentWorkItemID, tc.wantID)
+			}
+			selected := app.sidebar.Selected()
+			if selected == nil {
+				t.Fatal("sidebar selection is nil")
+			}
+			if selected.WorkItemID != tc.wantID {
+				t.Fatalf("selected WorkItemID = %q, want %q", selected.WorkItemID, tc.wantID)
+			}
+			if app.sidebarMode != sidebarPaneSessions {
+				t.Fatalf("sidebarMode = %v, want %v", app.sidebarMode, sidebarPaneSessions)
+			}
+			if app.mainFocus != mainFocusSidebar {
+				t.Fatalf("mainFocus = %v, want %v", app.mainFocus, mainFocusSidebar)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -335,7 +336,7 @@ func (a *GitlabAdapter) checkGraphQLSupport() bool {
 func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
 	switch opts.Scope {
 	case domain.ScopeIssues:
-		issues, err := a.listIssues(ctx, opts)
+		issues, hasMore, err := a.listIssues(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -368,9 +369,9 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			items = append(items, item)
 		}
 
-		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+		return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: hasMore}, nil
 	case domain.ScopeProjects:
-		milestones, err := a.listMilestones(ctx, opts)
+		milestones, hasMore, err := a.listMilestones(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -386,9 +387,9 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			})
 		}
 
-		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+		return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: hasMore}, nil
 	case domain.ScopeInitiatives:
-		epics, err := a.listEpics(ctx, opts)
+		epics, hasMore, err := a.listEpics(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -404,7 +405,7 @@ func (a *GitlabAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			})
 		}
 
-		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+		return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: hasMore}, nil
 	default:
 		return nil, adapter.ErrBrowseNotSupported
 	}
@@ -1284,10 +1285,10 @@ func (a *GitlabAdapter) graphqlBatchFetchStatus(ctx context.Context, projectPath
 	return result
 }
 
-func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]issue, error) {
+func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]issue, bool, error) {
 	query, err := gitlabIssueListQuery(opts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Route to the project-specific endpoint when a repo is provided; the global
 	// /api/v4/issues endpoint does not support filtering by project path.
@@ -1296,8 +1297,9 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		endpoint = "/api/v4/projects/" + url.PathEscape(repo) + "/issues"
 	}
 	var issues []issue
-	if err := a.getJSON(ctx, endpoint, query, &issues); err != nil {
-		return nil, err
+	headers, err := a.getJSONWithHeaders(ctx, endpoint, query, &issues)
+	if err != nil {
+		return nil, false, err
 	}
 
 	// Enrich all issues with Work Item status from GraphQL for display.
@@ -1313,7 +1315,7 @@ func (a *GitlabAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 		}
 	}
 
-	return issues, nil
+	return issues, parseLinkHeaderNext(headers.Get("Link")), nil
 }
 
 func parseIntFromMetadata(meta map[string]any, key string) int64 {
@@ -1381,39 +1383,41 @@ func resolveListGroupID(opts adapter.ListOpts) int64 {
 	return 0
 }
 
-func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]milestone, error) {
+func (a *GitlabAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]milestone, bool, error) {
 	projectID := resolveListProjectID(opts)
 	if projectID == 0 {
-		return nil, errors.New("gitlab milestones browse requires project_id in repo filter")
+		return nil, false, errors.New("gitlab milestones browse requires project_id in repo filter")
 	}
 	query := url.Values{}
 	applyListOpts(query, opts)
 	var milestones []milestone
-	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/projects/%d/milestones", projectID), query, &milestones); err != nil {
-		return nil, err
+	headers, err := a.getJSONWithHeaders(ctx, fmt.Sprintf("/api/v4/projects/%d/milestones", projectID), query, &milestones)
+	if err != nil {
+		return nil, false, err
 	}
 
-	return milestones, nil
+	return milestones, parseLinkHeaderNext(headers.Get("Link")), nil
 }
 
-func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([]epic, error) {
+func (a *GitlabAdapter) listEpics(ctx context.Context, opts adapter.ListOpts) ([]epic, bool, error) {
 	groupID := resolveListGroupID(opts)
 	if groupID == 0 {
-		return nil, adapter.ErrBrowseNotSupported
+		return nil, false, adapter.ErrBrowseNotSupported
 	}
 	query := url.Values{}
 	applyListOpts(query, opts)
 	var epics []epic
-	if err := a.getJSON(ctx, fmt.Sprintf("/api/v4/groups/%d/epics", groupID), query, &epics); err != nil {
+	headers, err := a.getJSONWithHeaders(ctx, fmt.Sprintf("/api/v4/groups/%d/epics", groupID), query, &epics)
+	if err != nil {
 		var permErr *adapter.PermissionError
 		if errors.As(err, &permErr) && permErr.StatusCode == http.StatusForbidden {
-			return nil, adapter.ErrBrowseNotSupported
+			return nil, false, adapter.ErrBrowseNotSupported
 		}
 
-		return nil, err
+		return nil, false, err
 	}
 
-	return epics, nil
+	return epics, parseLinkHeaderNext(headers.Get("Link")), nil
 }
 
 func (a *GitlabAdapter) fetchIssue(ctx context.Context, projectID, iid int64) (issue, error) {
@@ -1556,7 +1560,12 @@ func isSelfAssignee(assignee string) bool {
 }
 
 func (a *GitlabAdapter) getJSON(ctx context.Context, endpoint string, query url.Values, dst any) error {
-	return a.doJSON(ctx, http.MethodGet, endpoint, query, nil, dst)
+	_, err := a.getJSONWithHeaders(ctx, endpoint, query, dst)
+	return err
+}
+
+func (a *GitlabAdapter) getJSONWithHeaders(ctx context.Context, endpoint string, query url.Values, dst any) (http.Header, error) {
+	return a.doJSONWithHeaders(ctx, http.MethodGet, endpoint, query, nil, dst)
 }
 
 func (a *GitlabAdapter) postJSON(ctx context.Context, endpoint string, body any, dst any) error {
@@ -1617,6 +1626,11 @@ func (a *GitlabAdapter) doJSONRaw(ctx context.Context, method, endpoint string, 
 }
 
 func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) error {
+	_, err := a.doJSONWithHeaders(ctx, method, endpoint, query, body, dst)
+	return err
+}
+
+func (a *GitlabAdapter) doJSONWithHeaders(ctx context.Context, method, endpoint string, query url.Values, body any, dst any) (http.Header, error) {
 	// Build the full URL by string-concatenating base and endpoint so that
 	// pre-encoded path segments (e.g. owner%2Frepo) survive intact.
 	// url.Parse populates RawPath when the escaped form differs from Path,
@@ -1624,7 +1638,7 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	rawURL := strings.TrimRight(a.baseURL, "/") + endpoint
 	fullURL, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("parse url: %w", err)
+		return nil, fmt.Errorf("parse url: %w", err)
 	}
 	if query != nil {
 		fullURL.RawQuery = query.Encode()
@@ -1633,13 +1647,13 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
-		bodyReader = strings.NewReader(string(payload))
+		bodyReader = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL.String(), bodyReader)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.Token))
 	if body != nil {
@@ -1647,31 +1661,34 @@ func (a *GitlabAdapter) doJSON(ctx context.Context, method, endpoint string, que
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	limitedBody := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(limitedBody)
+		data, err := io.ReadAll(limitedBody)
+		if err != nil {
+			return nil, fmt.Errorf("read error response: %w", err)
+		}
 		body := strings.TrimSpace(string(data))
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return adapter.NewPermissionError(adapterName, resp.StatusCode, body)
+			return nil, adapter.NewPermissionError(adapterName, resp.StatusCode, body)
 		case resp.StatusCode == http.StatusNotFound:
 			resource := adapter.DetectGitLabResource(body)
-			return adapter.NewNotFoundError(adapterName, resource, body)
+			return nil, adapter.NewNotFoundError(adapterName, resource, body)
 		default:
-			return &apiError{StatusCode: resp.StatusCode, Body: body}
+			return nil, &apiError{StatusCode: resp.StatusCode, Body: body}
 		}
 	}
 	if dst == nil {
-		return nil
+		return resp.Header.Clone(), nil
 	}
 	if err := json.NewDecoder(limitedBody).Decode(dst); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return nil
+	return resp.Header.Clone(), nil
 }
 
 func issueToWorkItem(iss issue) domain.Session {

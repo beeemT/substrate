@@ -283,10 +283,12 @@ func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t
 			issuePath = req.URL.Path
 			issueQuery = req.URL.RawQuery
 
-			return jsonResp(t, http.StatusOK, map[string]any{"items": []any{
+			resp := jsonResp(t, http.StatusOK, map[string]any{"items": []any{
 				map[string]any{"number": 7, "title": "Shared bug", "state": "closed", "labels": []any{map[string]any{"name": "bug"}}, "body": "body", "html_url": "https://github.com/other/engine/issues/7", "repository_url": "https://api.github.com/repos/other/engine"},
 				map[string]any{"number": 8, "title": "PR", "state": "open", "labels": []any{}, "pull_request": map[string]any{}, "html_url": "https://github.com/acme/rocket/pull/8", "repository_url": "https://api.github.com/repos/acme/rocket"},
-			}}), nil
+			}})
+			resp.Header.Set("Link", `<https://api.github.com/search/issues?page=2>; rel="next", <https://api.github.com/search/issues?page=4>; rel="last"`)
+			return resp, nil
 		case "/repos/other/engine/issues/7/timeline":
 
 			return jsonResp(t, http.StatusOK, []any{}), nil
@@ -315,6 +317,9 @@ func TestListIssuesUsesIssueSearchForCreatedByMeAndPreservesRepositoryMetadata(t
 	}
 	if values.Get("per_page") != "25" {
 		t.Fatalf("per_page = %q, want 25", values.Get("per_page"))
+	}
+	if !res.HasMore {
+		t.Fatal("HasMore = false, want true from GitHub Link rel=next header")
 	}
 	if len(res.Items) != 1 {
 		t.Fatalf("items = %+v, want 1 issue", res.Items)

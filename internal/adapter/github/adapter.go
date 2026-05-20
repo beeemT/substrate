@@ -315,7 +315,7 @@ func (a *GithubAdapter) Capabilities() adapter.AdapterCapabilities {
 func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpts) (*adapter.ListResult, error) {
 	switch opts.Scope {
 	case domain.ScopeIssues:
-		issues, err := a.listIssues(ctx, opts)
+		issues, hasMore, err := a.listIssues(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -338,9 +338,9 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			items = append(items, item)
 		}
 
-		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+		return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: hasMore}, nil
 	case domain.ScopeProjects:
-		milestones, err := a.listMilestones(ctx, opts)
+		milestones, hasMore, err := a.listMilestones(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -356,7 +356,7 @@ func (a *GithubAdapter) ListSelectable(ctx context.Context, opts adapter.ListOpt
 			})
 		}
 
-		return &adapter.ListResult{Items: items, TotalCount: len(items)}, nil
+		return &adapter.ListResult{Items: items, TotalCount: len(items), HasMore: hasMore}, nil
 	case domain.ScopeInitiatives:
 		// TODO(phase-N): GitHub Projects v2 via GraphQL
 		return nil, adapter.ErrBrowseNotSupported
@@ -1104,7 +1104,7 @@ func (a *GithubAdapter) applyPRLabels(ctx context.Context, owner, repo string, p
 	}
 }
 
-func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
+func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, bool, error) {
 	if strings.TrimSpace(opts.View) == "created_by_me" {
 		return a.listCreatedIssues(ctx, opts)
 	}
@@ -1112,14 +1112,15 @@ func (a *GithubAdapter) listIssues(ctx context.Context, opts adapter.ListOpts) (
 	return a.listInboxIssues(ctx, opts)
 }
 
-func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
+func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, bool, error) {
 	query, err := githubIssueListQuery(opts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var issues []githubIssue
-	if err := a.getJSON(ctx, "/issues", query, &issues); err != nil {
-		return nil, err
+	headers, err := a.getJSONWithHeaders(ctx, "/issues", query, &issues)
+	if err != nil {
+		return nil, false, err
 	}
 	normalizeGitHubIssueRepositories(issues)
 	filtered := filterIssues(issues)
@@ -1146,7 +1147,7 @@ func (a *GithubAdapter) listInboxIssues(ctx context.Context, opts adapter.ListOp
 		return filtered[i].Number < filtered[j].Number
 	})
 
-	return filtered, nil
+	return filtered, githubLinkHasRelNext(headers.Get("Link")), nil
 }
 
 func (a *GithubAdapter) issueReviewArtifacts(ctx context.Context, iss githubIssue) []domain.ReviewArtifact {
@@ -1224,18 +1225,19 @@ func githubReviewArtifactsFromTimeline(events []githubTimelineEvent) []domain.Re
 	return artifacts
 }
 
-func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, error) {
+func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.ListOpts) ([]githubIssue, bool, error) {
 	viewer, err := a.viewerLogin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	query, err := githubCreatedIssueSearchQuery(viewer, opts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var result githubIssueSearchResult
-	if err := a.getJSON(ctx, "/search/issues", query, &result); err != nil {
-		return nil, err
+	headers, err := a.getJSONWithHeaders(ctx, "/search/issues", query, &result)
+	if err != nil {
+		return nil, false, err
 	}
 	issues := filterIssues(result.Items)
 	normalizeGitHubIssueRepositories(issues)
@@ -1257,7 +1259,7 @@ func (a *GithubAdapter) listCreatedIssues(ctx context.Context, opts adapter.List
 		return issues[i].Number < issues[j].Number
 	})
 
-	return issues, nil
+	return issues, githubLinkHasRelNext(headers.Get("Link")), nil
 }
 
 func githubIssueListQuery(opts adapter.ListOpts) (url.Values, error) {
@@ -1466,22 +1468,26 @@ func githubRepositoryOwnerRepo(repo githubRepository) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (a *GithubAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]githubMilestone, error) {
+func (a *GithubAdapter) listMilestones(ctx context.Context, opts adapter.ListOpts) ([]githubMilestone, bool, error) {
 	owner := strings.TrimSpace(opts.Owner)
 	repo := strings.TrimSpace(opts.Repo)
 	if owner == "" || repo == "" {
-		return nil, errors.New("github milestones browse requires owner and repo filters")
+		return nil, false, errors.New("github milestones browse requires owner and repo filters")
 	}
 	query := url.Values{}
 	if opts.Limit > 0 {
 		query.Set("per_page", strconv.Itoa(opts.Limit))
 	}
+	if opts.Limit > 0 && opts.Offset > 0 {
+		query.Set("page", strconv.Itoa((opts.Offset/opts.Limit)+1))
+	}
 	var milestones []githubMilestone
-	if err := a.getJSON(ctx, fmt.Sprintf("/repos/%s/%s/milestones", owner, repo), query, &milestones); err != nil {
-		return nil, err
+	headers, err := a.getJSONWithHeaders(ctx, fmt.Sprintf("/repos/%s/%s/milestones", owner, repo), query, &milestones)
+	if err != nil {
+		return nil, false, err
 	}
 
-	return milestones, nil
+	return milestones, githubLinkHasRelNext(headers.Get("Link")), nil
 }
 
 func (a *GithubAdapter) fetchIssue(ctx context.Context, owner, repo string, number int64) (githubIssue, error) {

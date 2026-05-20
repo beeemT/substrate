@@ -164,7 +164,6 @@ func TestNewSessionOverlayRejectsMixedProviderSelection(t *testing.T) {
 	overlay.setBrowseListFocus()
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
-	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 
 	updated, cmd := overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	if cmd == nil {

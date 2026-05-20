@@ -957,12 +957,17 @@ func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, im
 }
 
 // archiveSessionCmd archives a work item and returns a completion message.
-func archiveSessionCmd(svc *service.SessionService, workItemID string) tea.Cmd {
+func archiveSessionCmd(svc *service.SessionService, workItemID string, focusAfterArchive bool, focusWorkItemID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := svc.Archive(context.Background(), workItemID); err != nil {
 			return ErrMsg{Err: fmt.Errorf("archive session: %w", err)}
 		}
-		return SessionArchivedMsg{WorkItemID: workItemID, Message: "Session archived"}
+		return SessionArchivedMsg{
+			WorkItemID:        workItemID,
+			Message:           "Session archived",
+			FocusAfterArchive: focusAfterArchive,
+			FocusWorkItemID:   focusWorkItemID,
+		}
 	}
 }
 
