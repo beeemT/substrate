@@ -608,53 +608,85 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		return "", 0, warnings, &PlanningError{Err: fmt.Errorf("render planning prompt: %w", err)}
 	}
 
-	// Create session options
-	sessionOpts := adapter.SessionOpts{
-		SessionID:    planningCtx.SessionID,
-		Mode:         adapter.SessionModeAgent,
-		WorkspaceID:  workspaceID,
-		DraftPath:    draftPath,
-		SystemPrompt: systemPrompt,
-		UserPrompt: fmt.Sprintf(
-			"Your role is to plan this change. You are not implementing anything.\n\n"+
-				"Begin planning. Write the plan progressively to %s. "+
-				"Explore the workspace and determine which repos need changes.",
-			draftPath,
-		),
-		WorktreePath: "", // Planning uses workspace root
-	}
-	if len(planningCtx.PriorResumeInfo) > 0 {
-		sessionOpts.ResumeFromSessionID = planningCtx.PriorSessionID
-		sessionOpts.ResumeInfo = planningCtx.PriorResumeInfo
-		// Clear user prompt — revision feedback will be sent as a follow-up message
-		// after the session starts, preserving the model's conversation context.
-		sessionOpts.UserPrompt = ""
+	baseUserPrompt := fmt.Sprintf(
+		"Your role is to plan this change. You are not implementing anything.\n\n"+
+			"Begin planning. Write the plan progressively to %s. "+
+			"Explore the workspace and determine which repos need changes.",
+		draftPath,
+	)
+	initialUserPrompt := baseUserPrompt
+	resumeFromSessionID := ""
+	resumeInfo := planningCtx.PriorResumeInfo
+	if len(resumeInfo) > 0 {
+		resumeFromSessionID = planningCtx.PriorSessionID
+		if planningCtx.RevisionFeedback != "" {
+			initialUserPrompt = fmt.Sprintf("%s\n\nWrite the revised plan to `%s`.", planningCtx.RevisionFeedback, draftPath)
+		}
 	}
 
 	// Apply session timeout — bounds the entire planning session lifetime.
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.cfg.SessionTimeout)
 	defer sessionCancel()
 
-	// Start the session
-	session, err := s.harness.StartSession(sessionCtx, sessionOpts)
+	startSession := func(userPrompt string, fromSessionID string, info map[string]string) (adapter.AgentSession, error) {
+		sessionOpts := adapter.SessionOpts{
+			SessionID:    planningCtx.SessionID,
+			Mode:         adapter.SessionModeAgent,
+			WorkspaceID:  workspaceID,
+			DraftPath:    draftPath,
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userPrompt,
+			WorktreePath: "", // Planning uses workspace root
+		}
+		if len(info) > 0 {
+			sessionOpts.ResumeFromSessionID = fromSessionID
+			sessionOpts.ResumeInfo = info
+		}
+		return s.harness.StartSession(sessionCtx, sessionOpts)
+	}
+
+	// Start the first planning turn.
+	session, err := startSession(initialUserPrompt, resumeFromSessionID, resumeInfo)
 	if err != nil {
 		return "", 0, warnings, &PlanningError{Err: fmt.Errorf("start planning session: %w", err)}
 	}
-	defer session.Abort(sessionCtx)
-
-	// Send revision feedback as a follow-up message when resuming a previous session.
-	// This triggers the model's turn while preserving the conversation history.
-	if len(planningCtx.PriorResumeInfo) > 0 && planningCtx.RevisionFeedback != "" {
-		triggerMsg := fmt.Sprintf("%s\n\nWrite the revised plan to `%s`.", planningCtx.RevisionFeedback, draftPath)
-		if err := session.SendMessage(sessionCtx, triggerMsg); err != nil {
-			slog.Warn("failed to send revision feedback to resumed planning session", "error", err, "agent_session_id", planningCtx.SessionID)
+	defer func() {
+		if session == nil {
+			return
 		}
-	}
+		if err := session.Abort(sessionCtx); err != nil {
+			slog.Warn("failed to abort planning session", "error", err, "agent_session_id", planningCtx.SessionID)
+		}
+	}()
 
 	// Register session for steering.
 	if s.registry != nil {
 		s.registry.Register(planningCtx.SessionID, session)
 		defer s.registry.Deregister(planningCtx.SessionID)
+	}
+
+	restartWithCorrection := func(correctionMsg string) error {
+		if info := session.ResumeInfo(); len(info) > 0 {
+			resumeInfo = info
+			resumeFromSessionID = planningCtx.SessionID
+		}
+		if err := session.Abort(sessionCtx); err != nil {
+			slog.Warn("failed to abort completed planning turn before retry", "error", err, "agent_session_id", planningCtx.SessionID)
+		}
+
+		nextPrompt := correctionMsg
+		if len(resumeInfo) == 0 {
+			nextPrompt = baseUserPrompt + "\n\n" + correctionMsg
+		}
+		nextSession, err := startSession(nextPrompt, resumeFromSessionID, resumeInfo)
+		if err != nil {
+			return err
+		}
+		session = nextSession
+		if s.registry != nil {
+			s.registry.Register(planningCtx.SessionID, session)
+		}
+		return nil
 	}
 
 	parser := NewPlanParser()
@@ -670,18 +702,21 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		draftContent, err := os.ReadFile(draftPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Draft file doesn't exist - send correction.
+				missingBlockErrors := domain.ParseErrors{MissingBlock: true}
 				if attempt < maxRetries {
-					correctionMsg := s.buildCorrectionMessage(domain.ParseErrors{MissingBlock: true}, discoveredRepoNames, draftPath)
-					if sendErr := session.SendMessage(sessionCtx, correctionMsg); sendErr != nil {
-						slog.Warn("failed to send correction message", "error", sendErr)
+					correctionMsg := s.buildCorrectionMessage(missingBlockErrors, discoveredRepoNames, draftPath)
+					if err := restartWithCorrection(correctionMsg); err != nil {
+						return "", attempt, warnings, &PlanningError{
+							Err:         fmt.Errorf("start corrected planning session: %w", err),
+							ParseErrors: &missingBlockErrors,
+						}
 					}
 					attempt++
 					continue
 				}
 				return "", attempt, warnings, &PlanningError{
 					Err:         fmt.Errorf("plan draft file not created after %d attempts", attempt),
-					ParseErrors: &domain.ParseErrors{MissingBlock: true},
+					ParseErrors: &missingBlockErrors,
 				}
 			}
 			return "", attempt, warnings, &PlanningError{Err: fmt.Errorf("read draft file: %w", err)}
@@ -705,8 +740,11 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			})
 
 			correctionMsg := s.buildCorrectionMessage(parseErrors, discoveredRepoNames, draftPath)
-			if sendErr := session.SendMessage(sessionCtx, correctionMsg); sendErr != nil {
-				slog.Warn("failed to send correction message", "error", sendErr)
+			if err := restartWithCorrection(correctionMsg); err != nil {
+				return "", attempt, warnings, &PlanningError{
+					Err:         fmt.Errorf("start corrected planning session: %w", err),
+					ParseErrors: &parseErrors,
+				}
 			}
 			attempt++
 			continue

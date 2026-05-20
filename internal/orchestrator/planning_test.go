@@ -163,6 +163,7 @@ type scriptedPlanningSession struct {
 	wait        func(context.Context) error
 	sendMessage func(context.Context, string) error
 	sendAnswer  func(context.Context, string) error
+	resumeInfo  map[string]string
 }
 
 func (s *scriptedPlanningSession) ID() string { return s.id }
@@ -193,7 +194,7 @@ func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string)
 	return adapter.ErrSendAnswerNotSupported
 }
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
-func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return nil }
+func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return s.resumeInfo }
 
 func TestRenderPlanRunFeedbackIncludesFollowUpDraftPath(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -435,7 +436,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	}
 }
 
-func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraft(t *testing.T) {
+func TestRunPlanningWithCorrectionLoopResumesPlannerAfterDoneWithoutDraft(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
@@ -444,29 +445,29 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 	tmpDir := t.TempDir()
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-456", "plan-draft.md")
 	finalPlan := validPlanningPlan("Recovered after the planner was asked to rewrite the missing draft.", "Produce the final repo plan.")
-	correctionMessages := make([]string, 0, 1)
+	const resumeFile = "/tmp/omp-session.jsonl"
+	startOpts := make([]adapter.SessionOpts, 0, 2)
 	harness := &scriptedPlanningHarness{
 		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
-			events := make(chan adapter.AgentEvent, 2)
-			session := &scriptedPlanningSession{
-				id:     opts.SessionID,
-				events: events,
-			}
-			session.sendMessage = func(_ context.Context, msg string) error {
-				correctionMessages = append(correctionMessages, msg)
+			startOpts = append(startOpts, opts)
+			events := make(chan adapter.AgentEvent, 1)
+			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+			close(events)
+
+			if len(startOpts) == 2 {
 				if err := os.MkdirAll(filepath.Dir(opts.DraftPath), 0o755); err != nil {
-					return err
+					return nil, err
 				}
 				if err := os.WriteFile(opts.DraftPath, []byte(finalPlan), 0o644); err != nil {
-					return err
+					return nil, err
 				}
-				events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
-
-				return nil
 			}
-			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
 
-			return session, nil
+			return &scriptedPlanningSession{
+				id:         opts.SessionID,
+				events:     events,
+				resumeInfo: map[string]string{"omp_session_file": resumeFile},
+			}, nil
 		},
 	}
 	svc := &PlanningService{
@@ -498,18 +499,76 @@ func TestRunPlanningWithCorrectionLoopRequestsRewriteAfterPlannerDoneWithoutDraf
 	if retries != 1 {
 		t.Fatalf("retries = %d, want 1", retries)
 	}
-	if len(correctionMessages) != 1 {
-		t.Fatalf("correction messages = %d, want 1", len(correctionMessages))
+	if len(startOpts) != 2 {
+		t.Fatalf("StartSession calls = %d, want 2", len(startOpts))
 	}
-	if !strings.Contains(correctionMessages[0], draftPath) {
-		t.Fatalf("correction message missing draft path %q\nmessage:\n%s", draftPath, correctionMessages[0])
+	if got := startOpts[1].ResumeInfo["omp_session_file"]; got != resumeFile {
+		t.Fatalf("resumed correction ResumeInfo[omp_session_file] = %q, want %q", got, resumeFile)
+	}
+	if !strings.Contains(startOpts[1].UserPrompt, draftPath) {
+		t.Fatalf("correction prompt missing draft path %q\nprompt:\n%s", draftPath, startOpts[1].UserPrompt)
 	}
 	if rawContent != finalPlan {
 		t.Fatalf("runPlanningWithCorrectionLoop() returned %q, want final rewritten plan", rawContent)
 	}
 }
 
-func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeedbackAsMessage(t *testing.T) {
+func TestRunPlanningWithCorrectionLoopDoesNotBurnRetriesWhenCorrectionSessionCannotStart(t *testing.T) {
+	templates, err := NewPlanningTemplates()
+	if err != nil {
+		t.Fatalf("NewPlanningTemplates(): %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-789", "plan-draft.md")
+	startCount := 0
+	harness := &scriptedPlanningHarness{
+		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			startCount++
+			if startCount == 2 {
+				return nil, errors.New("resume unavailable")
+			}
+			events := make(chan adapter.AgentEvent, 1)
+			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+			close(events)
+			return &scriptedPlanningSession{
+				id:         opts.SessionID,
+				events:     events,
+				resumeInfo: map[string]string{"omp_session_file": "/tmp/omp-session.jsonl"},
+			}, nil
+		},
+	}
+	svc := &PlanningService{
+		cfg:       &PlanningConfig{MaxParseRetries: 5, SessionTimeout: time.Minute},
+		harness:   harness,
+		templates: templates,
+	}
+
+	_, retries, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
+		WorkItem: domain.WorkItemSnapshot{Title: "Recover missing planning draft", ExternalID: "ISSUE-790"},
+		Repos: []domain.RepoPointer{{
+			Name:     "repo-a",
+			Language: "go",
+			MainDir:  filepath.Join(tmpDir, "repo-a", "main"),
+		}},
+		SessionID:        "plan-789",
+		SessionDraftPath: draftPath,
+	}, "workspace-123")
+	if planErr == nil {
+		t.Fatal("runPlanningWithCorrectionLoop() error = nil, want correction start failure")
+	}
+	if retries != 0 {
+		t.Fatalf("retries = %d, want 0 because correction turn never started", retries)
+	}
+	if startCount != 2 {
+		t.Fatalf("StartSession calls = %d, want 2", startCount)
+	}
+	if !strings.Contains(planErr.Error(), "start corrected planning session") {
+		t.Fatalf("planErr = %v, want corrected-session start context", planErr)
+	}
+}
+
+func TestRunPlanningWithCorrectionLoop_NativeResumeStartsWithRevisionFeedbackPrompt(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
@@ -520,7 +579,6 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 	feedback := "Add error-handling section to repo-a sub-plan."
 	const resumeFile = "/some/prior-session.jsonl"
 
-	var capturedMessages []string
 	harness := &scriptedPlanningHarness{
 		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
 			if err := os.MkdirAll(filepath.Dir(opts.DraftPath), 0o755); err != nil {
@@ -529,21 +587,10 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 			if err := os.WriteFile(opts.DraftPath, []byte(validPlanningPlan("Revised orchestration.", "Add error handling.")), 0o644); err != nil {
 				return nil, err
 			}
-			events := make(chan adapter.AgentEvent, 2)
-			sess := &scriptedPlanningSession{
-				id:     opts.SessionID,
-				events: events,
-			}
-			sess.sendMessage = func(_ context.Context, msg string) error {
-				capturedMessages = append(capturedMessages, msg)
-				events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
-				return nil
-			}
-			// Emit done after a tick to simulate the model completing a turn after SendMessage.
-			// Without resume, the harness emits done immediately; with resume the trigger
-			// message is what starts the turn.
-			go func() { events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()} }()
-			return sess, nil
+			events := make(chan adapter.AgentEvent, 1)
+			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+			close(events)
+			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
 		},
 	}
 
@@ -571,25 +618,17 @@ func TestRunPlanningWithCorrectionLoop_NativeResume_ClearsUserPromptAndSendsFeed
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
 
-	// UserPrompt must be empty when resuming natively.
-	if harness.lastOpts.UserPrompt != "" {
-		t.Errorf("UserPrompt = %q, want empty when PriorResumeInfo is set", harness.lastOpts.UserPrompt)
+	// Revision feedback must be the prompt that starts the resumed planning turn.
+	if !strings.Contains(harness.lastOpts.UserPrompt, feedback) {
+		t.Errorf("UserPrompt = %q, want it to contain feedback %q", harness.lastOpts.UserPrompt, feedback)
+	}
+	if !strings.Contains(harness.lastOpts.UserPrompt, draftPath) {
+		t.Errorf("UserPrompt = %q, want it to contain draft path %q", harness.lastOpts.UserPrompt, draftPath)
 	}
 
 	// PriorResumeInfo must be forwarded to the harness via ResumeInfo.
 	if harness.lastOpts.ResumeInfo["omp_session_file"] != resumeFile {
 		t.Errorf("ResumeInfo[omp_session_file] = %q, want %q", harness.lastOpts.ResumeInfo["omp_session_file"], resumeFile)
-	}
-
-	// Feedback must be sent as a follow-up message.
-	if len(capturedMessages) == 0 {
-		t.Fatal("expected at least one SendMessage call with revision feedback")
-	}
-	if !strings.Contains(capturedMessages[0], feedback) {
-		t.Errorf("first SendMessage = %q, want it to contain feedback %q", capturedMessages[0], feedback)
-	}
-	if !strings.Contains(capturedMessages[0], draftPath) {
-		t.Errorf("first SendMessage = %q, want it to contain draft path %q", capturedMessages[0], draftPath)
 	}
 }
 
