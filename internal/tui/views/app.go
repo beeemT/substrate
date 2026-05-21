@@ -590,8 +590,7 @@ func (a *App) openSessionSearch() tea.Cmd {
 
 func (a *App) openNewSession() tea.Cmd {
 	a.activeOverlay = overlayNewSession
-	a.newSession.Open()
-	return a.newSession.reloadItems()
+	return a.newSession.Open()
 }
 
 func (a *App) syncNewSessionFilterOverlays() {

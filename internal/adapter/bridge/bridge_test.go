@@ -11,6 +11,20 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 )
 
+func TestNewBridgeSessionUsesLargeEventBuffer(t *testing.T) {
+	t.Parallel()
+
+	s := NewBridgeSession("test-session", "agent")
+	defer s.CloseEvents()
+
+	if got := cap(s.Events); got != bridgeEventChannelSize {
+		t.Fatalf("event channel capacity = %d, want %d", got, bridgeEventChannelSize)
+	}
+	if bridgeEventChannelSize != 256 {
+		t.Fatalf("bridgeEventChannelSize = %d, want 256", bridgeEventChannelSize)
+	}
+}
+
 func TestBridgeMsgJSONRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

@@ -129,6 +129,9 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 	if err != nil {
 		return fmt.Errorf("%s: marshal question raised payload: %w", label, err)
 	}
+	if r.eventBus == nil {
+		return fmt.Errorf("%s: event bus is not available", label)
+	}
 	if err := r.eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionRaised),
@@ -161,6 +164,9 @@ func (r *QuestionRouter) sessionWorkItemID(ctx context.Context, sessionID string
 }
 
 func PublishQuestionAnswered(ctx context.Context, eventBus event.Publisher, questionID, sessionID string) error {
+	if eventBus == nil {
+		return fmt.Errorf("publish question answered: event bus is not available")
+	}
 	return eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionAnswered),

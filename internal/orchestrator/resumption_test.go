@@ -256,7 +256,7 @@ func TestAbandonSession_TransitionsToFailed(t *testing.T) {
 	fix := newPhase9bFixture()
 	fix.seedInterruptedSession("sess-abandoned")
 
-	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	if err := r.AbandonSession(context.Background(), "sess-abandoned"); err != nil {
 		t.Fatalf("AbandonSession: %v", err)
@@ -272,7 +272,7 @@ func TestAbandonSession_RejectsNonInterrupted(t *testing.T) {
 	fix := newPhase9bFixture()
 	fix.seedRunningSession("sess-running", "inst-x")
 
-	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	if err := r.AbandonSession(context.Background(), "sess-running"); err == nil {
 		t.Error("expected error when abandoning a non-interrupted session, got nil")
@@ -316,7 +316,7 @@ func TestResumeSession_StartsNewSessionWithLogContext(t *testing.T) {
 	defer fix.bus.Unsubscribe(sub.ID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	interrupted := fix.sessionRepo.sessions[intID]
 	result, err := resumption.ResumeSession(ctx, interrupted, "inst-new")
@@ -375,7 +375,7 @@ func TestResumeSession_OldSessionTransitionsToFailed(t *testing.T) {
 	// No log file — readLastNLines falls back to "unavailable" gracefully.
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	interrupted := fix.sessionRepo.sessions["sess-int2"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new2")
@@ -404,7 +404,7 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 	interrupted := fix.sessionRepo.sessions["sess-int3"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new3")
 	if err == nil {
@@ -457,7 +457,7 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	}
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	interrupted := fix.sessionRepo.sessions["sess-int4"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new4")
@@ -505,7 +505,7 @@ func TestResumeSession_WithResumeInfo(t *testing.T) {
 	})
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	interrupted := fix.sessionRepo.sessions[intID]
 	result, err := resumption.ResumeSession(ctx, interrupted, "inst-resume")
@@ -569,7 +569,7 @@ func TestResumeSession_WithoutResumeInfo(t *testing.T) {
 	fix.seedInterruptedSession(intID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	resumption := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	interrupted := fix.sessionRepo.sessions[intID]
 	result, err := resumption.ResumeSession(ctx, interrupted, "inst-no-resume")
@@ -657,7 +657,7 @@ func TestFollowUpSession_WaitAndComplete_CompletesSessionInDB(t *testing.T) {
 	fix.seedCompletedSession(sessionID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	completedTask := fix.sessionRepo.sessions[sessionID]
 	result, err := r.FollowUpSession(ctx, completedTask, "please also add tests", "inst-1")
@@ -690,7 +690,7 @@ func TestFollowUpSession_WaitAndComplete_FailsSessionOnHarnessError(t *testing.T
 	fix.seedCompletedSession(sessionID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	completedTask := fix.sessionRepo.sessions[sessionID]
 	result, err := r.FollowUpSession(ctx, completedTask, "retry with extra tests", "inst-2")
@@ -726,7 +726,7 @@ func TestFollowUpFailedSession_WaitAndComplete_CompletesNewSessionInDB(t *testin
 	fix.seedFailedSession(origID)
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
-	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil)
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
 
 	failedTask := fix.sessionRepo.sessions[origID]
 	result, err := r.FollowUpFailedSession(ctx, failedTask, "fix the compilation error", "inst-3")
@@ -767,3 +767,102 @@ func (s *immediatelyCompletingSession) Steer(_ context.Context, _ string) error 
 func (s *immediatelyCompletingSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *immediatelyCompletingSession) Compact(_ context.Context) error               { return nil }
 func (s *immediatelyCompletingSession) ResumeInfo() map[string]string                 { return nil }
+
+// TestFollowUpSession_SetsOwnerInstance verifies reused follow-up rows are owned
+// by the current process so startup reconciliation does not treat them as orphaned.
+func TestFollowUpSession_SetsOwnerInstance(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	sessionID := "sess-follow-up-owner"
+	fix.seedCompletedSession(sessionID)
+
+	r := NewResumption(&captureHarness{sessionsDir: sessionsDir}, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
+	result, err := r.FollowUpSession(ctx, fix.sessionRepo.sessions[sessionID], "please also add tests", "inst-owner")
+	if err != nil {
+		t.Fatalf("FollowUpSession: %v", err)
+	}
+
+	got := fix.sessionRepo.sessions[result.Session.ID]
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != "inst-owner" {
+		t.Fatalf("OwnerInstanceID = %v, want inst-owner", got.OwnerInstanceID)
+	}
+}
+
+// TestFollowUpSession_WaitAndComplete_DrainsTerminalEvent verifies a bridge-style
+// terminal done event cannot block WaitAndComplete before it marks the row completed.
+func TestFollowUpSession_WaitAndComplete_DrainsTerminalEvent(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	sessionID := "sess-follow-up-drain"
+	fix.seedCompletedSession(sessionID)
+	owner := "inst-owner"
+	if err := fix.sessionSvc.FollowUpRestart(ctx, sessionID, &owner); err != nil {
+		t.Fatalf("FollowUpRestart: %v", err)
+	}
+
+	r := NewResumption(&captureHarness{sessionsDir: t.TempDir()}, fix.sessionSvc, fix.planSvc, fix.bus, nil, nil)
+	sess := newWaitBlockedByTerminalEventSession(sessionID)
+	done := make(chan struct{})
+	go func() {
+		r.WaitAndComplete(ctx, sessionID, sess)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WaitAndComplete blocked on unconsumed terminal event")
+	}
+
+	if got := fix.getSessionStatus(sessionID); got != domain.AgentSessionCompleted {
+		t.Fatalf("status = %q, want %q", got, domain.AgentSessionCompleted)
+	}
+}
+
+type waitBlockedByTerminalEventSession struct {
+	id     string
+	events chan adapter.AgentEvent
+	done   chan struct{}
+}
+
+func newWaitBlockedByTerminalEventSession(id string) *waitBlockedByTerminalEventSession {
+	s := &waitBlockedByTerminalEventSession{
+		id:     id,
+		events: make(chan adapter.AgentEvent),
+		done:   make(chan struct{}),
+	}
+	go func() {
+		s.events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+		close(s.events)
+		close(s.done)
+	}()
+	return s
+}
+
+func (s *waitBlockedByTerminalEventSession) ID() string { return s.id }
+func (s *waitBlockedByTerminalEventSession) Wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return nil
+	}
+}
+func (s *waitBlockedByTerminalEventSession) Events() <-chan adapter.AgentEvent { return s.events }
+func (s *waitBlockedByTerminalEventSession) SendMessage(_ context.Context, _ string) error {
+	return nil
+}
+func (s *waitBlockedByTerminalEventSession) Abort(_ context.Context) error                { return nil }
+func (s *waitBlockedByTerminalEventSession) Steer(_ context.Context, _ string) error      { return nil }
+func (s *waitBlockedByTerminalEventSession) SendAnswer(_ context.Context, _ string) error { return nil }
+func (s *waitBlockedByTerminalEventSession) Compact(_ context.Context) error              { return nil }
+func (s *waitBlockedByTerminalEventSession) ResumeInfo() map[string]string                { return nil }

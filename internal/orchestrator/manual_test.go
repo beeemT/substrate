@@ -6,6 +6,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/event"
 )
 
 // mockManualHarness is a mock harness for testing ManualSessionService.
@@ -107,22 +108,24 @@ func TestStartManualSessionRequest_OptionalSubPlanID(t *testing.T) {
 	}
 }
 
-func TestManualEventPayload_Structure(t *testing.T) {
-	// Verify the manual event payload includes top-level work_item_id.
-	// The TUI reads work_item_id from Payload, not from SystemEvent.WorkspaceID.
-	payload := manualEventPayload{
-		WorkItemID:     "wi-test",
-		AgentSessionID: "session-test",
-		Event: adapter.AgentEvent{
-			Type:    "text_delta",
-			Payload: "hello",
-		},
-	}
-	if payload.WorkItemID == "" {
-		t.Error("WorkItemID should not be empty in manual event payload")
-	}
-	if payload.AgentSessionID == "" {
-		t.Error("AgentSessionID should not be empty in manual event payload")
+func TestManualForwardEventsDoesNotPublishTranscriptEvents(t *testing.T) {
+	t.Parallel()
+
+	eventRepo := &implementationEventRepo{}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	defer bus.Close()
+	svc := &ManualSessionService{eventBus: bus}
+	events := make(chan adapter.AgentEvent, 2)
+	events <- adapter.AgentEvent{Type: "text_delta", Payload: "stream text"}
+	events <- adapter.AgentEvent{Type: "tool_result", Payload: "tool output"}
+	close(events)
+
+	svc.forwardEvents(context.Background(), events, "manual-session-1")
+
+	eventRepo.mu.Lock()
+	defer eventRepo.mu.Unlock()
+	if len(eventRepo.events) != 0 {
+		t.Fatalf("forwardEvents published %d events, want 0", len(eventRepo.events))
 	}
 }
 

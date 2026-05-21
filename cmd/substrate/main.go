@@ -660,7 +660,7 @@ func buildOrchestrationRuntime(
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, services.session, services.plan, bus, registry,
+			harnesses.Resume, services.session, services.plan, bus, registry, nil,
 		)
 	}
 

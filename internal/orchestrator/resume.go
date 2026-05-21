@@ -22,11 +22,12 @@ const resumeLogLines = 50
 
 // Resumption handles Resume and Abandon workflows for interrupted agent sessions.
 type Resumption struct {
-	harness    adapter.AgentHarness
-	sessionSvc *service.AgentSessionService
-	planSvc    *service.PlanService
-	eventBus   event.Publisher
-	registry   *SessionRegistry
+	harness        adapter.AgentHarness
+	sessionSvc     *service.AgentSessionService
+	planSvc        *service.PlanService
+	eventBus       event.Publisher
+	registry       *SessionRegistry
+	questionRouter *QuestionRouter
 }
 
 // NewResumption creates a Resumption instance.
@@ -36,13 +37,15 @@ func NewResumption(
 	planSvc *service.PlanService,
 	eventBus event.Publisher,
 	registry *SessionRegistry,
+	questionRouter *QuestionRouter,
 ) *Resumption {
 	return &Resumption{
-		harness:    harness,
-		sessionSvc: sessionSvc,
-		planSvc:    planSvc,
-		eventBus:   eventBus,
-		registry:   registry,
+		harness:        harness,
+		sessionSvc:     sessionSvc,
+		planSvc:        planSvc,
+		eventBus:       eventBus,
+		registry:       registry,
+		questionRouter: questionRouter,
 	}
 }
 
@@ -186,7 +189,7 @@ type FollowUpSessionResult struct {
 // FollowUpSession restarts a completed session with a user follow-up message.
 // Reuses the same AgentSession row (same ID/log file), transitions completed → running,
 // and resumes the native OMP session if available.
-func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domain.AgentSession, feedback, _ string) (FollowUpSessionResult, error) {
+func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domain.AgentSession, feedback, currentInstanceID string) (FollowUpSessionResult, error) {
 	if completedSession.Status != domain.AgentSessionCompleted {
 		return FollowUpSessionResult{}, fmt.Errorf("session %s is not completed (status: %s)", completedSession.ID, completedSession.Status)
 	}
@@ -206,13 +209,18 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domai
 
 	systemPrompt := buildFollowUpSystemPrompt(subPlan, lastLines, feedback, loadGlobalCommitConfig())
 
-	if err := r.sessionSvc.FollowUpRestart(ctx, completedSession.ID); err != nil {
+	ownerInstanceID := (*string)(nil)
+	if currentInstanceID != "" {
+		ownerInstanceID = &currentInstanceID
+	}
+	if err := r.sessionSvc.FollowUpRestart(ctx, completedSession.ID, ownerInstanceID); err != nil {
 		return FollowUpSessionResult{}, fmt.Errorf("restart task for follow-up: %w", err)
 	}
 
 	now := time.Now()
 	completedSession.Status = domain.AgentSessionRunning
 	completedSession.CompletedAt = nil
+	completedSession.OwnerInstanceID = ownerInstanceID
 	completedSession.UpdatedAt = now
 
 	opts := adapter.SessionOpts{
@@ -403,6 +411,32 @@ func readLastNLines(sessionID string, n int) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// forwardEvents drains follow-up harness events so terminal bridge events cannot block
+// BridgeSession.Wait. Detailed transcript events stay in session logs; questions are
+// routed with implementation semantics because follow-up sessions continue implementation work.
+func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-events:
+			if !ok {
+				return
+			}
+
+			if evt.Type == "question" {
+				if r.questionRouter != nil {
+					if err := r.questionRouter.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
+						slog.Error("failed to route follow-up question", "error", err, "agent_session_id", sessionID)
+					}
+				}
+				continue
+			}
+
+		}
+	}
+}
+
 // WaitAndComplete blocks until harnessSession finishes, then transitions
 // sessionID to the appropriate terminal state in the DB and saves resume info.
 // It deregisters the session from the registry on completion. Callers must
@@ -412,6 +446,10 @@ func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harn
 	if r.registry != nil {
 		defer r.registry.Deregister(sessionID)
 	}
+
+	drainCtx, drainCancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer drainCancel()
+	go r.forwardEvents(drainCtx, harnessSession.Events(), sessionID)
 
 	waitErr := harnessSession.Wait(ctx)
 	if waitErr != nil {

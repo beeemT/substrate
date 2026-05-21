@@ -68,12 +68,14 @@ type BridgeSession struct {
 	closeOnce sync.Once
 }
 
+const bridgeEventChannelSize = 256
+
 // NewBridgeSession creates a BridgeSession with initialized channels.
 func NewBridgeSession(id string, mode adapter.SessionMode) *BridgeSession {
 	return &BridgeSession{
 		ID:       id,
 		Mode:     mode,
-		Events:   make(chan adapter.AgentEvent, 64),
+		Events:   make(chan adapter.AgentEvent, bridgeEventChannelSize),
 		readDone: make(chan struct{}),
 	}
 }

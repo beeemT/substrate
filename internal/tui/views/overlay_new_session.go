@@ -120,13 +120,13 @@ const (
 	newSessionFilterModalLoadPicker
 )
 
-const browseDebounceDelay = 500 * time.Millisecond
+const (
+	browseDebounceDelay  = 500 * time.Millisecond
+	browseResultCacheTTL = 5 * time.Minute
+)
 
 // browseSpinnerFrames reuses the session search animation frames.
 var browseSpinnerFrames = sessionSearchSpinnerFrames
-
-// browseSpinnerDelay is the initial delay before showing the spinner.
-const browseSpinnerDelay = 500 * time.Millisecond
 
 // browseSpinnerInterval is how fast the spinner animates.
 const browseSpinnerInterval = 100 * time.Millisecond
@@ -142,6 +142,32 @@ type (
 		Offset     int
 		NextCursor string
 		HasMore    bool
+	}
+	browseQueryKey struct {
+		Provider   string
+		Scope      domain.SelectionScope
+		View       string
+		State      string
+		Search     string
+		Labels     string
+		Owner      string
+		Repository string
+		Group      string
+		TeamID     string
+		Status     string
+	}
+	browseResultCache struct {
+		valid         bool
+		key           browseQueryKey
+		cachedAt      time.Time
+		pages         map[string]browsePageState
+		hasMore       bool
+		listIndex     int
+		browseFocus   browseFocusArea
+		browseControl browseControl
+		detailYOffset int
+		detailItemID  string
+		selectedIDs   map[string]bool
 	}
 )
 
@@ -276,6 +302,10 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	detailWidth                    int
 	requestSeq                     int
 	browseDebounceSeq              int
+	browseResultKey                browseQueryKey
+	browseResultValid              bool
+	browseResultCache              browseResultCache
+	now                            func() time.Time
 	savedFilters                   []domain.NewSessionFilter
 	savedFilterCycleIndexByAdapter map[string]int
 	saveFilterNameInput            textinput.Model
@@ -397,12 +427,13 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		loadFilterList:                 filterPicker,
 		filterModalMode:                newSessionFilterModalNone,
 		styles:                         st,
+		now:                            time.Now,
 		openBrowserCmd:                 OpenBrowserCmd,
 	}
 }
 
 // Open activates the overlay and sets initial focus.
-func (m *NewSessionOverlay) Open() {
+func (m *NewSessionOverlay) Open() tea.Cmd {
 	m.active = true
 	m.showManual = false
 	m.showExtraContext = false
@@ -413,9 +444,110 @@ func (m *NewSessionOverlay) Open() {
 	m.loadFilterList.SetItems(nil)
 	m.loadFilterChoices = nil
 	m.normalizeSelectionOptions()
+	if m.restoreBrowseResultCache() {
+		m.syncDetailViewport(false)
+		return nil
+	}
+	m.clearBrowseResults()
 	m.syncBrowseListState(true)
 	m.setBrowseControlFocus(browseControlSearch)
 	m.syncDetailViewport(true)
+	return m.reloadItems()
+}
+
+func (m NewSessionOverlay) browseQueryKey() browseQueryKey {
+	criteria := m.currentFilterCriteria()
+	return browseQueryKey{
+		Provider:   strings.TrimSpace(m.currentProvider()),
+		Scope:      criteria.Scope,
+		View:       strings.TrimSpace(criteria.View),
+		State:      strings.TrimSpace(criteria.State),
+		Search:     strings.TrimSpace(criteria.Search),
+		Labels:     strings.Join(criteria.Labels, "\x00"),
+		Owner:      strings.TrimSpace(criteria.Owner),
+		Repository: strings.TrimSpace(criteria.Repository),
+		Group:      strings.TrimSpace(criteria.Group),
+		TeamID:     strings.TrimSpace(criteria.TeamID),
+		Status:     strings.TrimSpace(criteria.Status),
+	}
+}
+
+func cloneSelectedIDs(src map[string]bool) map[string]bool {
+	if len(src) == 0 {
+		return make(map[string]bool)
+	}
+	dst := make(map[string]bool, len(src))
+	for id, selected := range src {
+		dst[id] = selected
+	}
+	return dst
+}
+
+func (m *NewSessionOverlay) storeBrowseResultCache() {
+	if !m.browseResultValid || m.browseResultKey != m.browseQueryKey() {
+		m.browseResultCache.valid = false
+		return
+	}
+	if m.now == nil {
+		m.now = time.Now
+	}
+	m.browseResultCache = browseResultCache{
+		valid:         true,
+		key:           m.browseQueryKey(),
+		cachedAt:      m.now(),
+		pages:         cloneBrowsePages(m.browsePages),
+		hasMore:       m.hasMore,
+		listIndex:     m.issueList.Index(),
+		browseFocus:   m.browseFocus,
+		browseControl: m.browseControl,
+		detailYOffset: m.detailViewport.YOffset,
+		detailItemID:  m.detailItemID,
+		selectedIDs:   cloneSelectedIDs(m.selectedIDs),
+	}
+}
+
+func (m *NewSessionOverlay) restoreBrowseResultCache() bool {
+	if !m.browseResultCache.valid {
+		return false
+	}
+	if m.now == nil {
+		m.now = time.Now
+	}
+	if m.now().Sub(m.browseResultCache.cachedAt) > browseResultCacheTTL {
+		m.browseResultCache.valid = false
+		return false
+	}
+	if m.browseResultCache.key != m.browseQueryKey() {
+		return false
+	}
+	m.loading = false
+	m.browseSpinnerVisible = false
+	m.browseSpinnerFrame = 0
+	m.browsePages = cloneBrowsePages(m.browseResultCache.pages)
+	m.browseResultKey = m.browseResultCache.key
+	m.browseResultValid = true
+	m.allItems = flattenBrowsePages(m.browsePages)
+	m.hasMore = m.browseResultCache.hasMore
+	m.selectedIDs = cloneSelectedIDs(m.browseResultCache.selectedIDs)
+	m.refreshBrowseListItems()
+	if len(m.allItems) == 0 {
+		m.issueList.ResetSelected()
+	} else {
+		index := m.browseResultCache.listIndex
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(m.allItems) {
+			index = len(m.allItems) - 1
+		}
+		m.issueList.Select(index)
+	}
+	m.browseFocus = m.browseResultCache.browseFocus
+	m.browseControl = m.browseResultCache.browseControl
+	m.normalizeBrowseFocus()
+	m.detailItemID = m.browseResultCache.detailItemID
+	m.detailViewport.YOffset = m.browseResultCache.detailYOffset
+	return true
 }
 
 func (m *NewSessionOverlay) syncBrowseListState(resetCursor bool) {
@@ -433,6 +565,8 @@ func (m *NewSessionOverlay) syncBrowseListState(resetCursor bool) {
 
 // Close deactivates the overlay.
 func (m *NewSessionOverlay) Close() {
+	m.storeBrowseResultCache()
+	m.requestSeq++
 	m.active = false
 	m.blurBrowseInputs()
 	m.manualTitle.SetValue("")
@@ -446,6 +580,7 @@ func (m *NewSessionOverlay) Close() {
 	m.loadFilterChoices = nil
 	m.filterModalMode = newSessionFilterModalNone
 	m.browsePages = make(map[string]browsePageState)
+	m.browseResultValid = false
 	m.selectedIDs = make(map[string]bool)
 	m.allItems = nil
 	m.issueList.ResetSelected()
@@ -984,12 +1119,16 @@ func (m *NewSessionOverlay) nextRequestID() int {
 	return m.requestSeq
 }
 
+func browseSpinnerTickCmd() tea.Cmd {
+	return func() tea.Msg { return browseSpinnerTickMsg{} }
+}
+
 func (m *NewSessionOverlay) reloadItems() tea.Cmd {
 	m.loading = true
 	m.browseSpinnerFrame = 0
 	m.browseSpinnerVisible = false
 
-	return m.loadItemsCmd(browseLoadReset, m.nextRequestID())
+	return tea.Batch(m.loadItemsCmd(browseLoadReset, m.nextRequestID()), browseSpinnerTickCmd())
 }
 
 func (m *NewSessionOverlay) SetSavedNewSessionFilters(filters []domain.NewSessionFilter) {
@@ -1116,6 +1255,7 @@ func (m *NewSessionOverlay) closeFilterModal() {
 
 func (m *NewSessionOverlay) clearBrowseResults() {
 	m.browsePages = make(map[string]browsePageState)
+	m.browseResultValid = false
 	m.selectedIDs = make(map[string]bool)
 	m.allItems = nil
 	m.loading = false
@@ -1187,7 +1327,9 @@ func (m *NewSessionOverlay) loadMoreItems() tea.Cmd {
 		return nil
 	}
 	m.loading = true
-	return m.loadItemsCmd(browseLoadAppend, m.nextRequestID())
+	m.browseSpinnerFrame = 0
+	m.browseSpinnerVisible = false
+	return tea.Batch(m.loadItemsCmd(browseLoadAppend, m.nextRequestID()), browseSpinnerTickCmd())
 }
 
 func (m *NewSessionOverlay) cycleProvider(delta int) tea.Cmd {
@@ -1783,10 +1925,11 @@ func providerSortKey(name string) int {
 
 // loadItemsCmd fetches items from the selected browse-capable adapters.
 func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.Cmd {
+	key := m.browseQueryKey()
 	adapters := m.adaptersForProvider()
 	if len(adapters) == 0 {
 		return func() tea.Msg {
-			return issueListLoadedMsg{requestID: requestID, pages: make(map[string]browsePageState)}
+			return issueListLoadedMsg{requestID: requestID, key: key, pages: make(map[string]browsePageState)}
 		}
 	}
 	provider := m.currentProvider()
@@ -1881,7 +2024,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 			page.HasMore = result.HasMore
 			nextPages[a.Name()] = page
 		}
-		return issueListLoadedMsg{requestID: requestID, pages: nextPages, errs: errs}
+		return issueListLoadedMsg{requestID: requestID, key: key, pages: nextPages, errs: errs}
 	}
 }
 
@@ -1890,6 +2033,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 // overlay always transitions out of the loading state.
 type issueListLoadedMsg struct {
 	requestID int
+	key       browseQueryKey
 	pages     map[string]browsePageState
 	errs      []error
 }
@@ -1906,10 +2050,6 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 	case browseDebounceMsg:
 		if msg.seq == m.browseDebounceSeq {
 			cmds = append(cmds, m.reloadItems())
-			// Schedule the spinner to appear after the initial delay
-			cmds = append(cmds, tea.Tick(browseSpinnerDelay, func(time.Time) tea.Msg {
-				return browseSpinnerTickMsg{}
-			}))
 		}
 
 	case browseSpinnerTickMsg:
@@ -1927,9 +2067,18 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 		if msg.requestID != 0 && msg.requestID != m.requestSeq {
 			break
 		}
+		msgKey := msg.key
+		if msgKey == (browseQueryKey{}) {
+			msgKey = m.browseQueryKey()
+		}
+		if msgKey != m.browseQueryKey() {
+			break
+		}
 		m.loading = false
 		m.browseSpinnerVisible = false
 		m.browsePages = cloneBrowsePages(msg.pages)
+		m.browseResultKey = msgKey
+		m.browseResultValid = true
 		m.allItems = flattenBrowsePages(m.browsePages)
 		m.hasMore = anyPageHasMore(m.browsePages)
 		m.pruneSelectedIDs()
@@ -2461,21 +2610,10 @@ func (m *NewSessionOverlay) browserView(layout components.SplitOverlayLayout) st
 	m.syncDetailViewportWithLayout(layout, false)
 
 	leftContent := m.issueList.View()
-	if m.loading && len(m.allItems) == 0 {
-		leftContent = lipgloss.NewStyle().Width(layout.LeftInnerWidth).Height(layout.ViewportHeight).Render(m.styles.Muted.Render("Loading…"))
-	}
-	if m.loading && len(m.allItems) > 0 {
-		leftContent += "\n" + m.styles.Muted.Render("Loading more…")
-	}
 
 	leftPaneTitle := "Work Items"
 	if m.browseSpinnerVisible {
-		spinner := m.styles.Accent.Render(browseSpinnerFrames[m.browseSpinnerFrame])
-		// Right-align spinner in the title row
-		titleWidth := ansi.StringWidth(leftPaneTitle) + 1
-		paneWidth := layout.LeftPaneWidth - m.styles.Chrome.OverlayPane.HorizontalFrame()
-		pad := max(0, paneWidth-titleWidth-1)
-		leftPaneTitle += strings.Repeat(" ", pad) + spinner
+		leftPaneTitle += " " + m.styles.Accent.Render(browseSpinnerFrames[m.browseSpinnerFrame])
 	}
 	rightPaneTitle := "Details"
 	if item, ok := m.currentListItem(); ok {

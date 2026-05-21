@@ -319,7 +319,7 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	}
 }
 
-func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
+func TestSessionService_FollowUpRestartClearsCompletedAtAndSetsOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
@@ -329,7 +329,8 @@ func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 	session.CompletedAt = &now
 	repo.sessions["session-1"] = session
 
-	if err := svc.FollowUpRestart(ctx, "session-1"); err != nil {
+	owner := "inst-follow-up"
+	if err := svc.FollowUpRestart(ctx, "session-1", &owner); err != nil {
 		t.Fatalf("FollowUpRestart failed: %v", err)
 	}
 
@@ -340,6 +341,9 @@ func TestSessionService_FollowUpRestartClearsCompletedAt(t *testing.T) {
 	if got.CompletedAt != nil {
 		t.Error("CompletedAt should be nil after FollowUpRestart")
 	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Fatalf("OwnerInstanceID = %v, want %q", got.OwnerInstanceID, owner)
+	}
 }
 
 func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
@@ -349,7 +353,7 @@ func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 
 	repo.sessions["session-1"] = implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
 
-	err := svc.FollowUpRestart(ctx, "session-1")
+	err := svc.FollowUpRestart(ctx, "session-1", nil)
 	if err == nil {
 		t.Fatal("expected error for FollowUpRestart on running session")
 	}

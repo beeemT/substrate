@@ -667,7 +667,7 @@ func (s *ImplementationService) runImplementation(
 		defer s.registry.Deregister(sessionID)
 	}
 
-	go s.forwardEvents(sessionCtx, harnessSession.Events(), workspace.ID, sessionID)
+	go s.forwardEvents(sessionCtx, harnessSession.Events(), sessionID)
 
 	waitErr := harnessSession.Wait(sessionCtx)
 
@@ -1086,11 +1086,9 @@ func buildCommitAgentSystemPrompt(cfg adapter.CommitConfig) string {
 	return sb.String()
 }
 
-// forwardEvents forwards agent events to the event bus.
-// When a "question" event is received and a foreman is available,
-// it routes the question to the foreman and delivers the answer back
-// to the originating agent session.
-func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, workspaceID, sessionID string) {
+// forwardEvents drains harness events so producer channels cannot fill.
+// Detailed transcript events stay in session logs; only questions need live routing.
+func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1107,17 +1105,6 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 				continue
 			}
 
-			// Convert agent event to system event and publish to bus
-			sysEvent := domain.SystemEvent{
-				ID:          domain.NewID(),
-				EventType:   evt.Type,
-				WorkspaceID: workspaceID,
-				Payload:     marshalJSONOrEmpty(evt.Type, evt.Payload),
-				CreatedAt:   time.Now(),
-			}
-			if err := s.eventBus.Publish(ctx, sysEvent); err != nil {
-				slog.Warn("failed to forward agent event to bus", "error", err, "type", evt.Type)
-			}
 		}
 	}
 }
@@ -1683,7 +1670,7 @@ func (s *ImplementationService) commitViaAgent(ctx context.Context, worktreePath
 	}
 	defer sess.Abort(ctx)
 
-	go s.forwardEvents(ctx, sess.Events(), "", "")
+	go s.forwardEvents(ctx, sess.Events(), "")
 
 	commitCtx, cancel := context.WithTimeout(ctx, commitAgentTimeout)
 	defer cancel()
@@ -1881,7 +1868,7 @@ func (s *ImplementationService) fixPreReceiveRejectionViaAgent(ctx context.Conte
 	}
 	defer sess.Abort(ctx)
 
-	go s.forwardEvents(ctx, sess.Events(), "", "")
+	go s.forwardEvents(ctx, sess.Events(), "")
 	fixCtx, cancel := context.WithTimeout(ctx, preReceiveFixAgentTimeout)
 	defer cancel()
 	if err := sess.Wait(fixCtx); err != nil {

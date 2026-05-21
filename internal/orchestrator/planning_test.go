@@ -365,6 +365,37 @@ func TestWaitForPlanningTurnReportsProcessFailureWhenStreamEndsWithoutDone(t *te
 	}
 }
 
+func TestNewPlanningServiceWiresQuestionRouterEventBus(t *testing.T) {
+	t.Parallel()
+
+	questionRepo := newMockQuestionRepo()
+	sessionRepo := newMockSessionRepo()
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
+
+	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{})
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
+	bus := &mockPublisher{}
+
+	svc, err := NewPlanningService(nil, nil, nil, nil, nil, nil, sessionSvc, bus, nil, nil, questionSvc, nil)
+	if err != nil {
+		t.Fatalf("NewPlanningService: %v", err)
+	}
+
+	evt := adapter.AgentEvent{Type: "question", Payload: "Full cutover?", Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)}}
+	if err := svc.questionRouter.Route(context.Background(), domain.AgentSessionPhasePlanning, evt, "plan-session"); err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	if len(bus.Published) != 1 {
+		t.Fatalf("published events len = %d, want 1", len(bus.Published))
+	}
+	if bus.Published[0].EventType != string(domain.EventAgentQuestionRaised) {
+		t.Fatalf("published event type = %s, want %s", bus.Published[0].EventType, domain.EventAgentQuestionRaised)
+	}
+}
+
 func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	t.Parallel()
 

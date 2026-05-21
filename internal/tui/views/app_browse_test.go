@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -124,6 +125,9 @@ func applyOverlayCmds(t *testing.T, overlay NewSessionOverlay, cmd tea.Cmd) NewS
 	for _, msg := range runOverlayCmd(t, cmd) {
 		var follow tea.Cmd
 		overlay, follow = overlay.Update(msg)
+		if _, ok := msg.(browseSpinnerTickMsg); ok {
+			follow = nil
+		}
 		if follow != nil {
 			overlay = applyOverlayCmds(t, overlay, follow)
 		}
@@ -141,6 +145,9 @@ func applyAppCmds(t *testing.T, app *App, cmd tea.Cmd) *App {
 			t.Fatalf("model = %T, want *App", model)
 		}
 		app = updated
+		if _, ok := msg.(browseSpinnerTickMsg); ok {
+			follow = nil
+		}
 		if follow != nil {
 			app = applyAppCmds(t, app, follow)
 		}
@@ -271,6 +278,130 @@ func TestNewSessionOverlayClosePreservesFilterInputs(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlaySpinnerOnlyLoadingState(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.SetSize(100, 30)
+	cmd := overlay.Open()
+	if cmd == nil {
+		t.Fatal("expected initial open to start browse loading")
+	}
+	if !overlay.loading {
+		t.Fatal("expected overlay to enter loading state")
+	}
+
+	overlay, _ = overlay.Update(browseSpinnerTickMsg{})
+	if !overlay.browseSpinnerVisible {
+		t.Fatal("expected spinner to become visible while loading")
+	}
+	view := stripBrowseANSI(overlay.View())
+	assertOverlayFits(t, view, 100, 30)
+	if strings.Contains(view, "Loading") {
+		t.Fatalf("view = %q, want spinner-only loading state without loading text", view)
+	}
+	foundFrame := false
+	for _, frame := range browseSpinnerFrames {
+		if strings.Contains(view, frame) {
+			foundFrame = true
+			break
+		}
+	}
+	if !foundFrame {
+		t.Fatalf("view = %q, want spinner frame rendered", view)
+	}
+}
+
+func TestNewSessionOverlayCachedReopenRestoresResultsAndCursor(t *testing.T) {
+	t.Parallel()
+
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.now = func() time.Time { return baseTime }
+	overlay.SetSize(100, 30)
+	_ = overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "gh-1", Provider: "github", Title: "First"},
+		adapter.ListItem{ID: "gh-2", Provider: "github", Title: "Second"},
+	))
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if overlay.issueList.Index() != 1 || overlay.browseFocus != browseFocusList {
+		t.Fatalf("pre-close focus/index = %v/%d, want list/1", overlay.browseFocus, overlay.issueList.Index())
+	}
+
+	overlay.Close()
+	baseTime = baseTime.Add(4 * time.Minute)
+	cmd := overlay.Open()
+	if cmd != nil {
+		t.Fatal("expected cached reopen within TTL not to reload")
+	}
+	if len(githubAdapter.listCalls) != 0 {
+		t.Fatalf("list calls = %d, want cached reopen to avoid adapter call", len(githubAdapter.listCalls))
+	}
+	if overlay.issueList.Index() != 1 || overlay.browseFocus != browseFocusList {
+		t.Fatalf("restored focus/index = %v/%d, want list/1", overlay.browseFocus, overlay.issueList.Index())
+	}
+	view := stripBrowseANSI(overlay.View())
+	if !strings.Contains(view, "First") || !strings.Contains(view, "Second") {
+		t.Fatalf("view = %q, want cached items", view)
+	}
+}
+
+func TestNewSessionOverlayCacheExpiresAfterFiveMinutes(t *testing.T) {
+	t.Parallel()
+
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	githubAdapter.listSelectable = func(_ adapter.ListOpts) (*adapter.ListResult, error) {
+		return &adapter.ListResult{Items: []adapter.ListItem{{ID: "gh-fresh", Provider: "github", Title: "Fresh"}}}, nil
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.now = func() time.Time { return baseTime }
+	overlay.SetSize(100, 30)
+	_ = overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-old", Provider: "github", Title: "Old"}))
+	overlay.Close()
+
+	baseTime = baseTime.Add(browseResultCacheTTL + time.Second)
+	cmd := overlay.Open()
+	if cmd == nil {
+		t.Fatal("expected expired cache reopen to reload")
+	}
+	overlay = applyOverlayCmds(t, overlay, cmd)
+	if len(githubAdapter.listCalls) != 1 {
+		t.Fatalf("list calls = %d, want expired cache to call adapter once", len(githubAdapter.listCalls))
+	}
+	if len(overlay.allItems) != 1 || overlay.allItems[0].Title != "Fresh" {
+		t.Fatalf("items = %#v, want fresh reload result", overlay.allItems)
+	}
+}
+
+func TestNewSessionOverlayCachedReopenIgnoresStalePriorLoad(t *testing.T) {
+	t.Parallel()
+
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.now = func() time.Time { return baseTime }
+	overlay.SetSize(100, 30)
+	_ = overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(adapter.ListItem{ID: "gh-cached", Provider: "github", Title: "Cached"}))
+	staleCmd := overlay.reloadItems()
+	overlay.Close()
+	baseTime = baseTime.Add(time.Minute)
+	if cmd := overlay.Open(); cmd != nil {
+		t.Fatal("expected cached reopen not to reload")
+	}
+
+	overlay = applyOverlayCmds(t, overlay, staleCmd)
+	if len(overlay.allItems) != 1 || overlay.allItems[0].Title != "Cached" {
+		t.Fatalf("items = %#v, want stale prior load ignored after cached reopen", overlay.allItems)
+	}
+}
+
 func TestNewSessionOverlaySpaceTypedIntoLabelsInputNotToggleSelection(t *testing.T) {
 	t.Parallel()
 
@@ -382,22 +513,19 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 	if !ok {
 		t.Fatalf("model = %T, want *App", model)
 	}
-	if cmd == nil {
-		t.Fatal("expected reopening new session to trigger a browse reload")
+	if cmd != nil {
+		t.Fatal("expected reopening new session within cache TTL to reuse cached browse results")
 	}
-	if !updated.newSession.loading {
-		t.Fatal("expected new session overlay to enter loading state on reopen")
+	if updated.newSession.loading {
+		t.Fatal("expected cached reopen not to enter loading state")
 	}
 	if got := updated.newSession.currentView(); got != "all" {
 		t.Fatalf("view = %q, want all preserved on reopen", got)
 	}
-	app = applyAppCmds(t, updated, cmd)
+	app = updated
 
-	if len(githubAdapter.listCalls) != 3 {
-		t.Fatalf("list calls = %d, want 3 (open, change view, reopen)", len(githubAdapter.listCalls))
-	}
-	if got := githubAdapter.listCalls[2].View; got != "all" {
-		t.Fatalf("reopen list view = %q, want all", got)
+	if len(githubAdapter.listCalls) != 2 {
+		t.Fatalf("list calls = %d, want 2 (open, change view; cached reopen)", len(githubAdapter.listCalls))
 	}
 	view = stripBrowseANSI(app.newSession.View())
 	assertOverlayFits(t, view, 100, 30)
@@ -430,19 +558,18 @@ func TestNewSessionOverlayReopenIgnoresStaleLoadFromPriorSession(t *testing.T) {
 	overlay.SetSize(100, 30)
 
 	staleCmd := overlay.reloadItems()
-	if overlay.requestSeq != 1 {
-		t.Fatalf("requestSeq = %d, want 1 after initial reload", overlay.requestSeq)
+	if overlay.requestSeq != 2 {
+		t.Fatalf("requestSeq = %d, want 2 after initial reload", overlay.requestSeq)
 	}
 
 	overlay.Close()
-	if overlay.requestSeq != 1 {
-		t.Fatalf("requestSeq = %d, want close to preserve request sequence", overlay.requestSeq)
+	if overlay.requestSeq != 3 {
+		t.Fatalf("requestSeq = %d, want close to invalidate pending request", overlay.requestSeq)
 	}
 
-	overlay.Open()
-	freshCmd := overlay.reloadItems()
-	if overlay.requestSeq != 2 {
-		t.Fatalf("requestSeq = %d, want 2 after reopen reload", overlay.requestSeq)
+	freshCmd := overlay.Open()
+	if overlay.requestSeq != 4 {
+		t.Fatalf("requestSeq = %d, want 4 after reopen reload", overlay.requestSeq)
 	}
 
 	overlay = applyOverlayCmds(t, overlay, staleCmd)
@@ -476,35 +603,26 @@ func TestNewSessionOverlayOpenResyncsBrowseListAfterStaleReopen(t *testing.T) {
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 
-	overlay.active = false
-	overlay.issueList.ResetSelected()
-	overlay.issueList.SetItems(nil)
-	overlay.setBrowseDetailsFocus()
-
-	overlay.Open()
+	overlay.Close()
+	cmd := overlay.Open()
+	if cmd != nil {
+		t.Fatal("expected cached reopen not to reload")
+	}
 
 	view := stripBrowseANSI(overlay.View())
 	assertOverlayFits(t, view, 100, 30)
 	if !strings.Contains(view, "First") || !strings.Contains(view, "Second") {
 		t.Fatalf("view = %q, want canonical browse items rendered after reopen", view)
 	}
-	if overlay.browseFocus != browseFocusControls || overlay.browseControl != browseControlSearch {
-		t.Fatalf("focus = (%v, %v), want search control after reopen", overlay.browseFocus, overlay.browseControl)
+	if overlay.browseFocus != browseFocusList {
+		t.Fatalf("focus = %v, want list focus restored after cached reopen", overlay.browseFocus)
 	}
-	if overlay.issueList.Index() != 0 {
-		t.Fatalf("list index = %d, want reset to first item after reopen", overlay.issueList.Index())
+	if overlay.issueList.Index() != 1 {
+		t.Fatalf("list index = %d, want cached cursor restored", overlay.issueList.Index())
 	}
-
-	focused, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if focused.browseFocus != browseFocusList {
-		t.Fatalf("browseFocus = %v, want browseFocusList after reopening", focused.browseFocus)
-	}
-	if focused.issueList.Index() != 0 {
-		t.Fatalf("list index = %d, want first item on entry after reopen", focused.issueList.Index())
-	}
-	moved, _ := focused.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if moved.issueList.Index() != 1 {
-		t.Fatalf("list index = %d, want immediate navigation after reopen", moved.issueList.Index())
+	moved, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if moved.issueList.Index() != 0 {
+		t.Fatalf("list index = %d, want immediate navigation after cached reopen", moved.issueList.Index())
 	}
 }
 
@@ -722,8 +840,9 @@ func TestNewSessionOverlaySearchChangeTriggersReload(t *testing.T) {
 
 	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
-	overlay.Open()
+	_ = overlay.Open()
 	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg())
 
 	// Typing schedules a debounce tick; loading is NOT set immediately.
 	postKey, _ := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
@@ -837,8 +956,9 @@ func TestNewSessionOverlayArrowKeysPreserveSearchEditing(t *testing.T) {
 
 	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
-	overlay.Open()
+	_ = overlay.Open()
 	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg())
 	overlay.filterInput.SetValue("bug")
 	overlay.filterInput.SetCursor(1)
 
@@ -1270,10 +1390,13 @@ func TestNewSessionOverlayKeepsStablePaneGeometryAcrossLoadingAndLoadedState(t *
 	if got := overlay.detailViewport.Height; got != loadingLayout.ViewportHeight {
 		t.Fatalf("loading detail viewport height = %d, want %d", got, loadingLayout.ViewportHeight)
 	}
-	for _, want := range []string{"Work Items", "Details", "Loading…"} {
+	for _, want := range []string{"Work Items", "Details"} {
 		if !strings.Contains(loadingView, want) {
 			t.Fatalf("view = %q, want %q in loading state", loadingView, want)
 		}
+	}
+	if strings.Contains(loadingView, "Loading") {
+		t.Fatalf("view = %q, want spinner-only loading state without loading text", loadingView)
 	}
 
 	overlay.loading = false
@@ -1825,8 +1948,9 @@ func TestNewSessionOverlayAdvancedFilterChangeTriggersReload(t *testing.T) {
 	}
 	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{gitlabAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
 	overlay.providerIndex = 3
-	overlay.Open()
+	_ = overlay.Open()
 	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg())
 	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
 
 	// Typing schedules a debounce tick; loading is NOT set immediately.

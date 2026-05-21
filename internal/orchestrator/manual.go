@@ -180,7 +180,7 @@ func (s *ManualSessionService) StartManualSession(ctx context.Context, req Start
 	s.registry.Register(agentSession.ID, harnessSession)
 
 	// 12. Start event forwarding and completion waiter goroutines.
-	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), agentSession.WorkItemID, agentSession.ID)
+	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), agentSession.ID)
 	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, agentSession.ID, agentSession.WorkItemID)
 
 	// Refresh agent session state from DB (StartedAt is now set).
@@ -278,7 +278,7 @@ func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrup
 
 	s.registry.Register(newSession.ID, harnessSession)
 
-	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.WorkItemID, newSession.ID)
+	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.ID)
 	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID, newSession.WorkItemID)
 
 	newSession, _ = s.sessionSvc.Get(ctx, newSession.ID)
@@ -295,7 +295,7 @@ func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, comple
 
 	// If the harness supports native resume, reuse the existing row.
 	if len(completed.ResumeInfo) > 0 {
-		if err := s.sessionSvc.FollowUpRestart(ctx, completed.ID); err != nil {
+		if err := s.sessionSvc.FollowUpRestart(ctx, completed.ID, completed.OwnerInstanceID); err != nil {
 			return domain.AgentSession{}, fmt.Errorf("follow up restart manual session: %w", err)
 		}
 
@@ -319,13 +319,15 @@ func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, comple
 		harnessSession, err := s.harness.StartSession(ctx, opts)
 		if err != nil {
 			// Transition back to completed and start a new session instead.
-			_ = failSessionDurably(context.WithoutCancel(ctx), s.sessionSvc, completed.ID, nil)
+			if failErr := failSessionDurably(context.WithoutCancel(ctx), s.sessionSvc, completed.ID, nil); failErr != nil {
+				slog.Warn("failed to fail manual follow-up session after harness start error", "error", failErr, "agent_session_id", completed.ID)
+			}
 			return s.startNewFollowUpSession(ctx, completed, message)
 		}
 
 		s.registry.Register(completed.ID, harnessSession)
 
-		go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), completed.WorkItemID, completed.ID)
+		go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), completed.ID)
 		go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, completed.ID, completed.WorkItemID)
 
 		updated, _ := s.sessionSvc.Get(ctx, completed.ID)
@@ -386,7 +388,7 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 
 	s.registry.Register(newSession.ID, harnessSession)
 
-	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.WorkItemID, newSession.ID)
+	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.ID)
 	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID, newSession.WorkItemID)
 
 	// Emit EventAgentSessionResumed with old→new linkage so TUI can link the sessions.
@@ -403,10 +405,9 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 	return newSession, nil
 }
 
-// forwardEvents forwards agent events to the event bus.
-// For "question" events, it routes to the question router (manual/human path).
-// For other events, it publishes a manual-safe payload with top-level IDs.
-func (s *ManualSessionService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, workItemID, sessionID string) {
+// forwardEvents drains harness events so producer channels cannot fill.
+// Detailed transcript events stay in session logs; only questions need live routing.
+func (s *ManualSessionService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -425,26 +426,8 @@ func (s *ManualSessionService) forwardEvents(ctx context.Context, events <-chan 
 				continue
 			}
 
-			// For non-question events, publish with top-level work_item_id.
-			sysEvent := domain.SystemEvent{
-				ID:          domain.NewID(),
-				EventType:   evt.Type,
-				WorkspaceID: "", // TUI should use Payload.work_item_id, not WorkspaceID
-				Payload:     marshalManualEventPayload(workItemID, sessionID, evt),
-				CreatedAt:   time.Now(),
-			}
-			if err := s.eventBus.Publish(ctx, sysEvent); err != nil {
-				slog.Warn("failed to forward manual agent event to bus", "error", err, "type", evt.Type)
-			}
 		}
 	}
-}
-
-// manualEventPayload holds the payload for manual session agent events.
-type manualEventPayload struct {
-	WorkItemID     string             `json:"work_item_id"`
-	AgentSessionID string             `json:"agent_session_id"`
-	Event          adapter.AgentEvent `json:"event"`
 }
 
 // manualSessionEventPayload holds the payload for manual session lifecycle events.
@@ -453,21 +436,6 @@ type manualSessionEventPayload struct {
 	WorkItemID   string              `json:"work_item_id"`
 	SessionID    string              `json:"agent_session_id"`
 	OldSessionID string              `json:"old_session_id,omitempty"`
-}
-
-// marshalManualEventPayload serializes a manual session agent event with top-level IDs.
-func marshalManualEventPayload(workItemID, sessionID string, evt adapter.AgentEvent) string {
-	payload := manualEventPayload{
-		WorkItemID:     workItemID,
-		AgentSessionID: sessionID,
-		Event:          evt,
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		slog.Warn("failed to marshal manual event payload", "error", err)
-		return "{}"
-	}
-	return string(b)
 }
 
 // marshalManualSessionPayloadWithOld serializes a resumed manual session event payload.

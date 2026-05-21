@@ -604,6 +604,23 @@ type codexFileChange struct {
 	Kind string `json:"kind"`
 }
 
+func isTerminalAgentEvent(eventType string) bool {
+	return eventType == "done" || eventType == "error" || eventType == "question"
+}
+
+func (s *session) emitEvent(evt adapter.AgentEvent) {
+	if isTerminalAgentEvent(evt.Type) {
+		s.events <- evt
+		return
+	}
+
+	select {
+	case s.events <- evt:
+	default:
+		slog.Warn("codex event channel full", "type", evt.Type) //nolint:gosec // G706: evt.Type is a string constant from our event schema, not user input
+	}
+}
+
 func (s *session) readStdout(r io.ReadCloser) {
 	defer r.Close()
 	scanner := bufio.NewScanner(r)
@@ -612,11 +629,7 @@ func (s *session) readStdout(r io.ReadCloser) {
 		line := scanner.Text()
 		s.writeLogLine(line)
 		if evt, ok := s.mapCodexEvent(line); ok {
-			select {
-			case s.events <- evt:
-			default:
-				slog.Warn("codex event channel full", "type", evt.Type) //nolint:gosec // G706: evt.Type is a string constant from our event schema, not user input
-			}
+			s.emitEvent(evt)
 		}
 	}
 	if err := scanner.Err(); err != nil {

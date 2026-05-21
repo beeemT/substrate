@@ -270,13 +270,13 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc, hookRegistry)
 	}
 
-	var resumption *orchestrator.Resumption
-	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, bus, registry)
-	}
-
 	// Build QuestionRouter for stage-aware question routing
 	questionRouter := orchestrator.NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, bus)
+
+	var resumption *orchestrator.Resumption
+	if harnesses.Resume != nil {
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, bus, registry, questionRouter)
+	}
 
 	// Build ManualSessionService with default agent harness
 	var manualSvc *orchestrator.ManualSessionService

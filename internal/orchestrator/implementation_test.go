@@ -675,6 +675,27 @@ func (r *implementationEventRepo) ListByWorkspaceID(_ context.Context, workspace
 	return events, nil
 }
 
+func TestImplementationForwardEventsDoesNotPublishTranscriptEvents(t *testing.T) {
+	t.Parallel()
+
+	eventRepo := &implementationEventRepo{}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	defer bus.Close()
+	svc := &ImplementationService{eventBus: bus}
+	events := make(chan adapter.AgentEvent, 2)
+	events <- adapter.AgentEvent{Type: "text_delta", Payload: "stream text"}
+	events <- adapter.AgentEvent{Type: "tool_result", Payload: "tool output"}
+	close(events)
+
+	svc.forwardEvents(context.Background(), events, "agent-session-1")
+
+	eventRepo.mu.Lock()
+	defer eventRepo.mu.Unlock()
+	if len(eventRepo.events) != 0 {
+		t.Fatalf("forwardEvents published %d events, want 0", len(eventRepo.events))
+	}
+}
+
 func newImplementationServiceForTest(workspaceRoot, repoName string) (*ImplementationService, *implementationWorkItemRepo, *implementationEventRepo, *mockSessionRepo, *mockSubPlanRepo) {
 	planRepo := newMockPlanRepo()
 	planRepo.plans["plan-1"] = domain.Plan{

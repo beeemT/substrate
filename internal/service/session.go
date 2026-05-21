@@ -466,7 +466,7 @@ func (s *AgentSessionService) Interrupt(ctx context.Context, id string) error {
 
 // FollowUpRestart transitions a completed agent session back to running for a follow-up session.
 // Unlike Start(), this preserves the original StartedAt and clears CompletedAt.
-func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) error {
+func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string, ownerInstanceID *string) error {
 	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
 		var err error
@@ -486,6 +486,7 @@ func (s *AgentSessionService) FollowUpRestart(ctx context.Context, id string) er
 		now := time.Now()
 		agentSession.Status = domain.AgentSessionRunning
 		agentSession.CompletedAt = nil
+		agentSession.OwnerInstanceID = ownerInstanceID
 		agentSession.UpdatedAt = now
 
 		if err := res.AgentSessions.Update(ctx, agentSession); err != nil {

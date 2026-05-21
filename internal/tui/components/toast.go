@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,12 +24,16 @@ type Toast struct {
 	Message string
 	Level   ToastLevel
 	Expires time.Time
+	Count   int
 
 	rendered      string
 	renderedWidth int
 }
 
-const maxToastContentLines = 4
+const (
+	maxToastContentLines = 4
+	toastDuration        = 20 * time.Second
+)
 
 type ToastModel struct {
 	styles   styles.Styles
@@ -45,10 +50,30 @@ func (m *ToastModel) SetWidth(terminalWidth int) {
 }
 
 func (m *ToastModel) AddToast(msg string, level ToastLevel) {
+	now := time.Now()
+	expires := now.Add(toastDuration)
+	for i := len(m.toasts) - 1; i >= 0; i-- {
+		toast := m.toasts[i]
+		if !toast.Expires.After(now) || toast.Message != msg || toast.Level != level {
+			continue
+		}
+		if toast.Count < 1 {
+			toast.Count = 1
+		}
+		toast.Count++
+		toast.Expires = expires
+		toast.rendered = renderToast(m.styles, toast, m.maxWidth)
+		toast.renderedWidth = lipgloss.Width(toast.rendered)
+		copy(m.toasts[i:], m.toasts[i+1:])
+		m.toasts[len(m.toasts)-1] = toast
+		return
+	}
+
 	toast := Toast{
 		Message: msg,
 		Level:   level,
-		Expires: time.Now().Add(20 * time.Second),
+		Expires: expires,
+		Count:   1,
 	}
 	toast.rendered = renderToast(m.styles, toast, m.maxWidth)
 	toast.renderedWidth = lipgloss.Width(toast.rendered)
@@ -129,7 +154,7 @@ func renderToast(st styles.Styles, t Toast, capWidth int) string {
 }
 
 func renderToastAtWidth(st styles.Styles, t Toast, width, capWidth int) string {
-	contentText := prefixForLevel(t.Level) + t.Message
+	contentText := prefixForLevel(t.Level) + toastMessage(t)
 	contentWidth := lipgloss.Width(contentText)
 	if width <= 0 {
 		width = contentWidth + 4
@@ -160,6 +185,13 @@ func renderToastAtWidth(st styles.Styles, t Toast, width, capWidth int) string {
 	parts = append(parts, bottom)
 
 	return strings.Join(parts, "\n")
+}
+
+func toastMessage(t Toast) string {
+	if t.Count > 1 {
+		return strconv.Itoa(t.Count) + "x " + t.Message
+	}
+	return t.Message
 }
 
 func wrapToastText(text string, width, maxLines int) []string {

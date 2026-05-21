@@ -15,6 +15,34 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+func TestSessionEmitEventBlocksTerminalEventsWhenChannelFull(t *testing.T) {
+	t.Parallel()
+
+	s := &session{events: make(chan adapter.AgentEvent, 1)}
+	s.events <- adapter.AgentEvent{Type: "text_delta", Payload: "filler"}
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		s.emitEvent(adapter.AgentEvent{Type: "done"})
+	}()
+
+	select {
+	case <-sent:
+		t.Fatal("terminal event send completed while channel was full")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	<-s.events
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("terminal event send did not complete after draining channel")
+	}
+	if got := <-s.events; got.Type != "done" {
+		t.Fatalf("event type = %q, want done", got.Type)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // buildArgs
 // ---------------------------------------------------------------------------

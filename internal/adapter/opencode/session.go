@@ -240,6 +240,23 @@ func (s *session) setOpenCodeID(id string) {
 	s.mu.Unlock()
 }
 
+func isTerminalAgentEvent(eventType string) bool {
+	return eventType == "done" || eventType == "error" || eventType == "question"
+}
+
+func (s *session) emitEvent(evt adapter.AgentEvent) {
+	if isTerminalAgentEvent(evt.Type) {
+		s.events <- evt
+		return
+	}
+
+	select {
+	case s.events <- evt:
+	default:
+		slog.Warn("opencode: event channel full", "type", evt.Type)
+	}
+}
+
 // finishSession closes the waitDone channel with the given error exactly once.
 // Called from the SSE reader goroutine when the SSE stream ends.
 func (s *session) finishSession(err error) {
@@ -326,11 +343,7 @@ func (s *session) startSSEReader(ctx context.Context) {
 
 			// Send events to the channel.
 			for _, evt := range events {
-				select {
-				case s.events <- evt:
-				default:
-					slog.Warn("opencode: event channel full", "type", evt.Type)
-				}
+				s.emitEvent(evt)
 			}
 
 			// If we got a done or error event, finish the session.
@@ -393,7 +406,6 @@ func (s *session) closeResources() {
 				slog.Debug("opencode: failed to kill child process", "error", err)
 			}
 		}
-
 	})
 }
 

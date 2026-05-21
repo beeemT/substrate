@@ -120,7 +120,7 @@ func NewPlanningService(
 		return nil, fmt.Errorf("create templates: %w", err)
 	}
 
-	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, nil)
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, eventBus)
 	return &PlanningService{
 		cfg:            cfg,
 		discoverer:     discoverer,
