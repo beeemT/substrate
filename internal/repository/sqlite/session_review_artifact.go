@@ -92,6 +92,18 @@ func (r SessionReviewArtifactRepo) ListByWorkspaceID(ctx context.Context, worksp
 	return r.toDomainSlice(rows)
 }
 
+// DeleteByWorkItemID deletes all session_review_artifacts for a work item.
+// Used when deleting a session to clean up associated review artifacts.
+func (r SessionReviewArtifactRepo) DeleteByWorkItemID(ctx context.Context, workItemID string) error {
+	_, err := r.remote.NamedExecContext(ctx,
+		`DELETE FROM session_review_artifacts WHERE work_item_id = :work_item_id`,
+		map[string]any{"work_item_id": workItemID})
+	if err != nil {
+		return fmt.Errorf("delete session review artifacts for work item %s: %w", workItemID, err)
+	}
+	return nil
+}
+
 // TransferArtifactLinks moves all session_review_artifacts from one provider_artifact_id to another.
 // This is used when correcting duplicate MR/PR records to preserve session links.
 func (r SessionReviewArtifactRepo) TransferArtifactLinks(ctx context.Context, fromID, toID string) error {

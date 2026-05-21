@@ -80,3 +80,10 @@ func (s *GithubPRService) ListNonTerminal(ctx context.Context, workspaceID strin
 	})
 	return result, err
 }
+
+// Delete deletes a GitHub pull request.
+func (s *GithubPRService) Delete(ctx context.Context, id string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.GithubPRs.Delete(ctx, id)
+	})
+}

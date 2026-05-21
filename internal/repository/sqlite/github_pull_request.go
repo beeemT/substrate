@@ -157,3 +157,11 @@ func (r GithubPRRepo) toDomainSlice(rows []githubPRRow) ([]domain.GithubPullRequ
 
 	return prs, nil
 }
+
+func (r GithubPRRepo) Delete(ctx context.Context, id string) error {
+	_, err := r.remote.NamedExecContext(ctx, `DELETE FROM github_pull_requests WHERE id = :id`, map[string]any{"id": id})
+	if err != nil {
+		return fmt.Errorf("delete github pull request %s: %w", id, err)
+	}
+	return nil
+}

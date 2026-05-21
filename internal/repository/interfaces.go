@@ -136,6 +136,7 @@ type GithubPullRequestRepository interface {
 	GetByNumber(ctx context.Context, owner, repo string, number int) (domain.GithubPullRequest, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
 	ListNonTerminal(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
+	Delete(ctx context.Context, id string) error
 }
 
 // GitlabMergeRequestRepository provides persistence for GitLab merge requests.
@@ -154,6 +155,7 @@ type SessionReviewArtifactRepository interface {
 	ListByWorkItemID(ctx context.Context, workItemID string) ([]domain.SessionReviewArtifact, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.SessionReviewArtifact, error)
 	TransferArtifactLinks(ctx context.Context, fromID, toID string) error
+	DeleteByWorkItemID(ctx context.Context, workItemID string) error
 }
 
 // GithubPRReviewRepository provides persistence for GitHub PR reviews.

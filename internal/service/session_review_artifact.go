@@ -60,3 +60,11 @@ func (s *SessionReviewArtifactService) TransferArtifactLinks(ctx context.Context
 		return res.SessionReviewArtifacts.TransferArtifactLinks(ctx, fromID, toID)
 	})
 }
+
+// DeleteByWorkItemID deletes all session review artifacts for a work item.
+// Used when deleting a session to clean up associated review artifacts.
+func (s *SessionReviewArtifactService) DeleteByWorkItemID(ctx context.Context, workItemID string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		return res.SessionReviewArtifacts.DeleteByWorkItemID(ctx, workItemID)
+	})
+}
