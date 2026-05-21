@@ -527,7 +527,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Title:       "Harness Routing",
 			Description: "Select the harness used for all agent phases",
 			Fields: []SettingsField{
-				{Section: settingHarness, Key: "default", Label: "Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex", "opencode"}, Required: true},
+				{Section: settingHarness, Key: "default", Label: "Harness", Type: SettingsFieldEnum, Value: string(cfg.Harness.Default), Options: []string{"ohmypi", "claude-code", "codex", "opencode", "acp"}, Required: true},
 			},
 		},
 		{
@@ -574,6 +574,18 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.opencode", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.OpenCode.Model},
 				{Section: "adapters.opencode", Key: "agent", Label: "Agent", Type: SettingsFieldEnum, Value: cfg.Adapters.OpenCode.Agent, Options: []string{"build", "plan"}},
 				{Section: "adapters.opencode", Key: "variant", Label: "Thinking Level", Type: SettingsFieldEnum, Value: cfg.Adapters.OpenCode.Variant, Options: []string{"", "low", "medium", "high", "max"}, Description: "Model variant (reasoning effort). Anthropic: low, medium, high, max. OpenAI: none, minimal, low, medium, high, xhigh. Google: low, high, max. Empty defers to model default. Unsupported values are silently ignored."},
+			},
+		},
+		{
+			ID:          "harness.acp",
+			Title:       "Harness · ACP",
+			Description: "Agent Client Protocol harness configuration",
+			Fields: []SettingsField{
+				{Section: "adapters.acp", Key: "agent", Label: "Agent", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Agent},
+				{Section: "adapters.acp", Key: "command", Label: "Command", Type: SettingsFieldPath, Value: cfg.Adapters.ACP.Command},
+				{Section: "adapters.acp", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Model},
+				{Section: "adapters.acp", Key: "mode", Label: "Mode", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Mode},
+				{Section: "adapters.acp", Key: "thought_level", Label: "Thought Level", Type: SettingsFieldString, Value: cfg.Adapters.ACP.ThoughtLevel},
 			},
 		},
 		{
@@ -685,6 +697,10 @@ func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, dia
 		case "harness.opencode":
 			if cfg.Harness.Default == config.HarnessOpenCode {
 				setSectionWarning(&sections[i], harnessWarnings[config.HarnessOpenCode])
+			}
+		case "harness.acp":
+			if cfg.Harness.Default == config.HarnessACP {
+				setSectionWarning(&sections[i], harnessWarnings[config.HarnessACP])
 			}
 		}
 	}
@@ -818,6 +834,16 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.OpenCode.Agent = value
 	case "adapters.opencode.variant":
 		cfg.Adapters.OpenCode.Variant = value
+	case "adapters.acp.agent":
+		cfg.Adapters.ACP.Agent = value
+	case "adapters.acp.command":
+		cfg.Adapters.ACP.Command = value
+	case "adapters.acp.model":
+		cfg.Adapters.ACP.Model = value
+	case "adapters.acp.mode":
+		cfg.Adapters.ACP.Mode = value
+	case "adapters.acp.thought_level":
+		cfg.Adapters.ACP.ThoughtLevel = value
 	case "adapters.linear.api_key_ref":
 		cfg.Adapters.Linear.APIKey, cfg.Adapters.Linear.APIKeyRef = applySecretField(value, "linear.api_key")
 	case "adapters.linear.team_id":
@@ -1021,6 +1047,16 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "OpenCode agent type: build (full-access) or plan (read-only).", "build"
 	case "adapters.opencode.variant":
 		return "Model variant (reasoning effort). Anthropic: low, medium, high, max. OpenAI: none, minimal, low, medium, high, xhigh. Google: low, high, max. Empty defers to model default. Unsupported values are silently ignored.", ""
+	case "adapters.acp.agent":
+		return "ACP agent name or identifier for the registry (if using registry-based discovery).", statusEmpty
+	case "adapters.acp.command":
+		return "Path to the ACP-enabled agent binary or script.", statusEmpty
+	case "adapters.acp.model":
+		return "Provider/model identifier for new sessions, e.g. anthropic/claude-sonnet-4-20250514. Empty uses the agent's default.", statusEmpty
+	case "adapters.acp.mode":
+		return "ACP agent mode (agent-specific; consult your agent's documentation).", statusEmpty
+	case "adapters.acp.thought_level":
+		return "Thought level hint forwarded to the ACP agent.", statusEmpty
 	case "adapters.linear.api_key_ref":
 		return "Linear API credential stored in config or the OS keychain.", statusEmpty
 	case "adapters.linear.team_id":

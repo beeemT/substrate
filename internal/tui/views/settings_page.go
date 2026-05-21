@@ -221,6 +221,8 @@ func displaySettingsOption(field *SettingsField, value string) string {
 			return "Codex"
 		case config.HarnessOpenCode:
 			return "OpenCode"
+		case config.HarnessACP:
+			return "ACP"
 		}
 	case "ui":
 		switch field.Key {

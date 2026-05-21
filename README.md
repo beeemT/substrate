@@ -123,7 +123,7 @@ Substrate delegates agent work to an external harness. Set the harness in `~/.su
 
 ```yaml
 harness:
-  default: ohmypi   # ohmypi (default) | claude-code | codex | opencode
+  default: ohmypi   # ohmypi (default) | claude-code | codex | opencode | acp
 ```
 
 The harness selection is also surfaced in the TUI under **Settings → Harness Routing** and can be changed at runtime.
@@ -203,6 +203,29 @@ adapters:
     # binary_path: /usr/local/bin/opencode
     # port: 0     # 0 = auto-assign a free port
 ```
+
+### Agent Client Protocol (`acp`)
+
+Uses any local Agent Client Protocol v1 stdio agent. Substrate is the ACP client: it starts the configured command directly, initializes ACP, creates/resumes sessions, serves ACP filesystem and terminal client methods inside the session worktree, and exposes `ask_foreman` through the bundled Foreman MCP bridge when available.
+
+Compaction is conditional because ACP has no generic compact method. Substrate uses advertised `/compact` or `/compress` slash commands, with known profiles for Kilo Code (`kilo acp`, `/compact`) and Cursor (`agent acp`, `/compress`). Steering cancels the in-flight `session/prompt` via the local context and sends a replacement prompt.
+
+```yaml
+harness:
+  default: acp
+
+adapters:
+  acp:
+    agent: cursor
+    command: agent
+    args: ["acp"]
+    registry_id: cursor
+    model: ""
+    mode: ""
+    thought_level: ""
+    client_fs: true
+    client_terminal: true
+```
 ---
 
 ## Quick Start
@@ -235,7 +258,7 @@ Example configuration:
 
 ```yaml
 harness:
-  default: ohmypi              # ohmypi | claude-code | codex | opencode
+  default: ohmypi              # ohmypi | claude-code | codex | opencode | acp
 
 commit:
   strategy: semi-regular        # granular | semi-regular | single

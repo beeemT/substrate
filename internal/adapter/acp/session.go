@@ -1,0 +1,456 @@
+package acp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/adapter/bridge"
+	"github.com/beeemT/substrate/internal/config"
+)
+
+// Verify Session implements adapter.AgentSession at compile time.
+var _ adapter.AgentSession = (*Session)(nil)
+
+const acpLogMaxBytes int64 = 10 * 1024 * 1024
+
+type Session struct {
+	id       string
+	mode     adapter.SessionMode
+	root     string
+	cmd      *exec.Cmd
+	client   *rpcClient
+	events   chan adapter.AgentEvent
+	done     chan struct{}
+	doneOnce sync.Once
+	doneErr  error
+	finished atomic.Bool // set true when finish is called; emit guards against send-on-closed
+
+	logMu    sync.Mutex
+	logFile  *os.File
+	logPath  string
+	logDir   string
+	logBytes int64
+	segment  int
+
+	init          initializeResponse
+	acpSessionID  string
+	resumeMethod  string
+	configOptions []configOption
+	compact       compactStrategy
+	compactMu     sync.Mutex // protects compact field
+
+	promptMu     sync.Mutex
+	promptActive bool
+	foremanText  string
+	steerCancel  chan struct{} // closed to signal current prompt to abort for steering
+	steerDone    chan struct{} // closed when steer-aborter prompt has finished
+
+	questions     *questionBroker
+	terminals     *terminalManager
+	foremanSocket *foremanSocket
+	closeOnce     sync.Once
+	acpCfg        config.ACPConfig // stored for compact detection in handleNotification
+}
+
+// makeOpenSteerCancel returns a new open (never-closed) channel for the initial steerCancel.
+// This prevents the watch goroutine from blocking on a nil channel receive when a
+// prompt is started without a preceding Steer call.
+func makeOpenSteerCancel() chan struct{} { return make(chan struct{}) }
+
+func newSession(id string, mode adapter.SessionMode, root string, cmd *exec.Cmd, logFile *os.File, logPath, logDir string, acpCfg config.ACPConfig) *Session {
+	s := &Session{
+		id: id, mode: mode, root: root, cmd: cmd,
+		logFile: logFile, logPath: logPath, logDir: logDir,
+		events: make(chan adapter.AgentEvent, 256),
+		done:   make(chan struct{}),
+		// Initialize steerCancel to an open channel so runPrompt's watch goroutine
+		// never blocks on a nil channel receive when no Steer call preceded the prompt.
+		steerCancel: makeOpenSteerCancel(),
+		acpCfg:      acpCfg,
+	}
+	return s
+}
+
+func (s *Session) ID() string                        { return s.id }
+func (s *Session) Events() <-chan adapter.AgentEvent { return s.events }
+
+func (s *Session) Wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return s.doneErr
+	}
+}
+
+func (s *Session) SendMessage(ctx context.Context, msg string) error {
+	return s.runPrompt(ctx, msg, true)
+}
+
+func (s *Session) Steer(ctx context.Context, msg string) error {
+	s.promptMu.Lock()
+	var prevSteerDone chan struct{}
+	active := s.promptActive
+	if active {
+		// Capture the old steerDone before replacing it. The old prompt's runPrompt
+		// will close this channel when its defer runs after the cancellation.
+		prevSteerDone = s.steerDone
+		// Signal the old prompt to abort. Its watch goroutine will receive on
+		// isSteerAborted (the closed steerCancel), cancel mergedCtx, and runPrompt
+		// will return without closing steerDone (since wasSteerCancelled=true).
+		close(s.steerCancel) // signal old prompt to abort
+		// Create a new steerCancel for the new prompt (always non-nil).
+		s.steerCancel = make(chan struct{})
+		// Clear steerDone so the new prompt starts with nil. The new prompt's
+		// runPrompt will set a new steerDone when it captures s.steerDone.
+		s.steerDone = nil
+	}
+	s.promptMu.Unlock()
+	// Wait for the old prompt's runPrompt to fully exit (its defer must close
+	// isSteerDone and set promptActive=false) before starting a new runPrompt,
+	// otherwise the new runPrompt would find promptActive==true and return an error.
+	// prevSteerDone is nil if there was no active prompt, so this select is a no-op.
+	if prevSteerDone != nil {
+		<-prevSteerDone
+	}
+	return s.runPrompt(ctx, "Steering update from operator:\n\n"+msg, true)
+}
+
+func (s *Session) SendAnswer(_ context.Context, answer string) error {
+	return s.questions.answer(answer)
+}
+
+func (s *Session) Compact(ctx context.Context) error {
+	s.compactMu.Lock()
+	cmd := s.compact.command
+	s.compactMu.Unlock()
+	if cmd == "" {
+		return adapter.ErrCompactNotSupported
+	}
+	return s.runPrompt(ctx, "/"+cmd, true)
+}
+
+func (s *Session) Abort(ctx context.Context) error {
+	var outErr error
+	if s.client != nil && s.acpSessionID != "" {
+		if err := s.client.Notify(ctx, "session/cancel", sessionIDParams{SessionID: s.acpSessionID}); err != nil {
+			outErr = errors.Join(outErr, fmt.Errorf("cancel acp session: %w", err))
+		}
+		if s.init.AgentCapabilities.SessionCapabilities.supportsClose() {
+			if err := s.client.Call(ctx, "session/close", sessionIDParams{SessionID: s.acpSessionID}, nil); err != nil {
+				outErr = errors.Join(outErr, fmt.Errorf("close acp session: %w", err))
+			}
+		}
+	}
+	s.cleanup()
+	if s.cmd != nil && s.cmd.Process != nil {
+		if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			outErr = errors.Join(outErr, fmt.Errorf("kill acp process: %w", err))
+		}
+	}
+	s.finish(context.Canceled)
+	return outErr
+}
+
+func (s *Session) ResumeInfo() map[string]string {
+	if s.acpSessionID == "" {
+		return nil
+	}
+	info := map[string]string{"acp_agent_session_id": s.acpSessionID, "acp_protocol_version": "1", "acp_resume_method": s.resumeMethod}
+	if s.init.AgentInfo.Name != "" {
+		info["acp_agent_name"] = s.init.AgentInfo.Name
+	}
+	if s.init.AgentInfo.Version != "" {
+		info["acp_agent_version"] = s.init.AgentInfo.Version
+	}
+	return info
+}
+
+func (s *Session) setupACPSession(ctx context.Context, opts adapter.SessionOpts, mcpServers []mcpServer) (sessionResponse, string, error) {
+	params := sessionCreateParams{CWD: s.root, MCPServers: mcpServers}
+	if existing := opts.ResumeInfo["acp_agent_session_id"]; existing != "" {
+		params.SessionID = existing
+		if s.init.AgentCapabilities.SessionCapabilities.supportsResume() {
+			var resp sessionResponse
+			if err := s.client.Call(ctx, "session/resume", params, &resp); err != nil {
+				return resp, "", fmt.Errorf("resume acp session: %w", err)
+			}
+			return resp, "resume", nil
+		}
+		if s.init.AgentCapabilities.LoadSession {
+			var resp sessionResponse
+			if err := s.client.Call(ctx, "session/load", params, &resp); err != nil {
+				return resp, "", fmt.Errorf("load acp session: %w", err)
+			}
+			return resp, "load", nil
+		}
+		// Resume info present but agent doesn't support resume or load.
+		// Clear the stale session ID before creating a new session.
+		params.SessionID = ""
+	}
+	var resp sessionResponse
+	if err := s.client.Call(ctx, "session/new", params, &resp); err != nil {
+		return resp, "", fmt.Errorf("create acp session: %w", err)
+	}
+	return resp, "new", nil
+}
+
+func (s *Session) applyConfiguredOptions(ctx context.Context, cfg config.ACPConfig, opts adapter.SessionOpts) error {
+	model := cfg.Model
+	if opts.Model != nil {
+		model = *opts.Model
+	}
+	requests := []struct{ category, value string }{{"model", model}, {"mode", cfg.Mode}, {"thought_level", cfg.ThoughtLevel}}
+	for _, req := range requests {
+		if req.value == "" {
+			continue
+		}
+		opt := findConfigOption(s.configOptions, req.category)
+		if opt.ID != "" {
+			var resp setConfigOptionResponse
+			if err := s.client.Call(ctx, "session/set_config_option", setConfigOptionParams{SessionID: s.acpSessionID, ConfigID: opt.ID, Value: req.value}, &resp); err != nil {
+				return fmt.Errorf("set acp config option %s: %w", req.category, err)
+			}
+			s.configOptions = resp.ConfigOptions
+			continue
+		}
+		if req.category == "mode" && s.init.AgentCapabilities.SessionCapabilities.supportsSetMode() {
+			if err := s.client.Call(ctx, "session/set_mode", setModeParams{SessionID: s.acpSessionID, ModeID: req.value}, nil); err != nil {
+				return fmt.Errorf("set acp mode: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func findConfigOption(options []configOption, category string) configOption {
+	for _, opt := range options {
+		if opt.Category == category || opt.ID == category {
+			return opt
+		}
+	}
+	return configOption{}
+}
+
+func (s *Session) startPrompt(text string) {
+	go func() {
+		if err := s.runPrompt(context.Background(), text, true); err != nil {
+			slog.Warn("acp: initial prompt failed", "error", err)
+		}
+	}()
+}
+
+func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool) error {
+	s.promptMu.Lock()
+	if s.promptActive {
+		s.promptMu.Unlock()
+		return errors.New("acp prompt already active")
+	}
+	s.promptActive = true
+	// Capture the steer channels. steerCancel is always non-nil (initialized in newSession).
+	// steerDone may be nil if this is the first prompt (not started via Steer).
+	isSteerAborted := s.steerCancel
+	isSteerDone := s.steerDone
+	s.promptMu.Unlock()
+	// Track whether this prompt was cancelled due to steering so we know whether to
+	// close isSteerDone in the defer. If mergedCtx is cancelled (steering cancelled us),
+	// the defer must NOT close isSteerDone because Steer has already created a new
+	// steerDone channel and is waiting on that instead.
+	wasSteerCancelled := false
+	defer func() {
+		s.promptMu.Lock()
+		s.promptActive = false
+		// Only close isSteerDone if the prompt completed normally. If it was cancelled
+		// due to steering, Steer created a new steerDone and is waiting on that.
+		if isSteerDone != nil && !wasSteerCancelled {
+			close(isSteerDone) // signal that steer-aborter prompt has finished
+		}
+		s.promptMu.Unlock()
+	}()
+	// Merge context with steerCancel to abort when steering cancels this prompt.
+	mergedCtx, cancelMerge := context.WithCancel(ctx)
+	defer cancelMerge()
+	go func() {
+		select {
+		case <-mergedCtx.Done():
+			// Context cancelled, don't need to watch steerCancel.
+			return
+		case <-isSteerAborted:
+			wasSteerCancelled = true
+			cancelMerge() // abort the prompt's Call
+		}
+	}()
+	var resp promptResponse
+	err := s.client.Call(mergedCtx, "session/prompt", promptParams{SessionID: s.acpSessionID, Prompt: []contentBlock{{Type: "text", Text: text}}}, &resp)
+	if err != nil {
+		// If cancelled due to steering, don't finalize the session.
+		if wasSteerCancelled {
+			s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: "ACP prompt cancelled for steering", Metadata: map[string]any{"stop_reason": "steer_cancel"}})
+			return nil
+		}
+		s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: err.Error()})
+		s.finish(err)
+		return err
+	}
+	if s.mode == adapter.SessionModeForeman {
+		s.emit(adapter.AgentEvent{Type: "foreman_proposed", Timestamp: now(), Payload: s.foremanText, Metadata: map[string]any{"uncertain": false}})
+		s.foremanText = ""
+	} else if resp.StopReason == "end_turn" || resp.StopReason == "" {
+		s.emit(adapter.AgentEvent{Type: "done", Timestamp: now(), Metadata: map[string]any{"stop_reason": resp.StopReason}})
+		if finishOnDone {
+			s.finish(nil)
+		}
+	} else if resp.StopReason == "cancelled" {
+		// Cancelled response from ACP (not from steering) - finalize the session.
+		err := context.Canceled
+		s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: "ACP prompt cancelled", Metadata: map[string]any{"stop_reason": resp.StopReason}})
+		s.finish(err)
+		return err
+	} else {
+		err := fmt.Errorf("acp prompt stopped: %s", resp.StopReason)
+		s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: err.Error(), Metadata: map[string]any{"stop_reason": resp.StopReason}})
+		s.finish(err)
+		return err
+	}
+	return nil
+}
+
+func (s *Session) emit(evt adapter.AgentEvent) {
+	if s.finished.Load() {
+		return
+	}
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = now()
+	}
+	if s.mode == adapter.SessionModeForeman && evt.Type == "text_delta" {
+		s.foremanText += evt.Payload
+	}
+	// Terminal events use blocking sends per project convention. The caller
+	// (e.g. Wait) is responsible for not calling emit after finish.
+	if evt.Type == "done" || evt.Type == "error" || evt.Type == "question" {
+		s.events <- evt
+		return
+	}
+	// Non-terminal events: drop if session finished or channel full.
+	select {
+	case s.events <- evt:
+	case <-s.done:
+		slog.Debug("acp: dropping event because session finished", "type", evt.Type)
+	default:
+		slog.Warn("acp: dropping non-terminal event because buffer is full", "type", evt.Type)
+	}
+}
+
+func (s *Session) finish(err error) {
+	s.doneOnce.Do(func() {
+		s.finished.Store(true)
+		s.doneErr = err
+		s.cleanup()
+		close(s.events)
+		close(s.done)
+	})
+}
+
+func (s *Session) cleanup() {
+	s.closeOnce.Do(func() {
+		if s.questions != nil {
+			s.questions.cancelAll()
+		}
+		if s.terminals != nil {
+			s.terminals.cleanup()
+		}
+		if s.foremanSocket != nil {
+			s.foremanSocket.close()
+		}
+		if s.cmd != nil && s.cmd.Process != nil {
+			if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				slog.Debug("acp: process kill during cleanup failed", "error", err)
+			}
+		}
+		s.logMu.Lock()
+		if s.logFile != nil {
+			if err := s.logFile.Close(); err != nil {
+				slog.Warn("acp: close log failed", "error", err)
+			}
+			s.logFile = nil
+			go func() {
+				if err := bridge.CompressFile(s.logPath, s.logPath+".gz"); err != nil && !errors.Is(err, os.ErrNotExist) {
+					slog.Warn("acp: compress log failed", "error", err)
+				}
+				bridge.CleanupOldSegments(s.logDir, s.id)
+			}()
+		}
+		s.logMu.Unlock()
+	})
+}
+
+func (s *Session) reapProcess() {
+	err := s.cmd.Wait()
+	select {
+	case <-s.done:
+		return // Already finished (e.g., from Abort or session cancellation).
+	default:
+	}
+	if err != nil {
+		s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: err.Error()})
+		s.finish(err)
+	} else {
+		// Process exited cleanly. Signal completion to unblock Wait().
+		s.finish(nil)
+	}
+}
+
+func (s *Session) writeProtocolLog(direction string, data []byte) {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	if s.logFile == nil {
+		return
+	}
+	line := timestampedLogLine(direction, data)
+	if s.logBytes+int64(len(line)) > acpLogMaxBytes {
+		s.rotateLogLocked()
+	}
+	if _, err := s.logFile.Write(line); err != nil {
+		slog.Warn("acp: write log failed", "error", err)
+	} else {
+		s.logBytes += int64(len(line))
+	}
+}
+
+func (s *Session) rotateLogLocked() {
+	if s.logFile == nil {
+		return
+	}
+	if err := s.logFile.Close(); err != nil {
+		slog.Warn("acp: close log segment failed", "error", err)
+	}
+	segPath := fmt.Sprintf("%s.%d", s.logPath, s.segment)
+	s.segment++
+	if err := os.Rename(s.logPath, segPath); err != nil {
+		slog.Warn("acp: rotate log failed", "error", err)
+		return
+	}
+	go func() {
+		if err := bridge.CompressFile(segPath, segPath+".gz"); err != nil {
+			slog.Warn("acp: compress rotated log failed", "error", err)
+		}
+	}()
+	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		slog.Warn("acp: reopen log failed", "error", err)
+		s.logFile = nil
+		return
+	}
+	s.logFile = f
+	s.logBytes = 0
+}
+
+func now() time.Time { return time.Now() }

@@ -14,7 +14,8 @@ func HarnessCredentialFields() map[string][]string {
 		string(HarnessClaudeCode): {"bun_path", "bridge_path", "model", "thinking", "effort"},
 		string(HarnessCodex):      {"binary_path", "model", "reasoning_effort"},
 		string(HarnessOhMyPi):     {"bun_path", "bridge_path", "model", "thinking_level"},
-		string(HarnessOpenCode): {"binary_path", "hostname", "port", "model", "agent", "variant"},
+		string(HarnessOpenCode):   {"binary_path", "hostname", "port", "model", "agent", "variant"},
+		string(HarnessACP):        {"agent", "command", "args", "registry_id", "model", "mode", "thought_level", "env", "client_fs", "client_terminal", "auth_terminal"},
 	}
 }
 

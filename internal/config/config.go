@@ -136,6 +136,7 @@ const (
 	HarnessClaudeCode HarnessName = "claude-code"
 	HarnessCodex      HarnessName = "codex"
 	HarnessOpenCode   HarnessName = "opencode"
+	HarnessACP        HarnessName = "acp"
 )
 const defaultPollInterval = "5m"
 
@@ -150,6 +151,7 @@ type AdaptersConfig struct {
 	ClaudeCode ClaudeCodeConfig `yaml:"claude_code"`
 	Codex      CodexConfig      `yaml:"codex"`
 	OpenCode   OpenCodeConfig   `yaml:"opencode"`
+	ACP        ACPConfig        `yaml:"acp"`
 	Linear     LinearConfig     `yaml:"linear"`
 	Glab       GlabConfig       `yaml:"glab"`
 	GitLab     GitlabConfig     `yaml:"gitlab"`
@@ -223,6 +225,21 @@ type GlabConfig struct {
 	Labels []string `yaml:"labels"`
 	// PostMergeCloseIssue closes the linked GitLab issue when all MRs for a work item are merged.
 	PostMergeCloseIssue bool `yaml:"post_merge_close_issue"`
+}
+
+// ACPConfig configures a generic Agent Client Protocol stdio harness.
+type ACPConfig struct {
+	Agent          string            `yaml:"agent"`
+	Command        string            `yaml:"command"`
+	Args           []string          `yaml:"args"`
+	Env            map[string]string `yaml:"env"`
+	RegistryID     string            `yaml:"registry_id"`
+	Model          string            `yaml:"model"`
+	Mode           string            `yaml:"mode"`
+	ThoughtLevel   string            `yaml:"thought_level"`
+	ClientFS       *bool             `yaml:"client_fs"`
+	ClientTerminal *bool             `yaml:"client_terminal"`
+	AuthTerminal   *bool             `yaml:"auth_terminal"`
 }
 
 // ValidThinkingLevels lists the accepted values for OhMyPiConfig.ThinkingLevel.
@@ -532,6 +549,16 @@ func applyDefaults(cfg *Config) {
 	if cfg.Harness.Default == "" {
 		cfg.Harness.Default = HarnessOhMyPi
 	}
+	// ACP client-side filesystem and terminal methods default on for OMP parity.
+	if cfg.Adapters.ACP.ClientFS == nil {
+		cfg.Adapters.ACP.ClientFS = ptr(true)
+	}
+	if cfg.Adapters.ACP.ClientTerminal == nil {
+		cfg.Adapters.ACP.ClientTerminal = ptr(true)
+	}
+	if cfg.Adapters.ACP.AuthTerminal == nil {
+		cfg.Adapters.ACP.AuthTerminal = ptr(true)
+	}
 	if cfg.Foreman.QuestionTimeout == "" {
 		cfg.Foreman.QuestionTimeout = "0"
 	}
@@ -675,6 +702,7 @@ func validate(cfg *Config) error {
 		HarnessClaudeCode: true,
 		HarnessCodex:      true,
 		HarnessOpenCode:   true,
+		HarnessACP:        true,
 	}
 	if !validHarnesses[cfg.Harness.Default] {
 		return fmt.Errorf("invalid harness.default: %q", cfg.Harness.Default)

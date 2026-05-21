@@ -610,6 +610,12 @@ Current shipped harnesses:
   - native resume: yes (`SupportsNativeResume`, via `codex_thread_id`)
   - compact: no (`SupportsCompact: false`)
   - supported tools: `sandboxed-cli`
+- `internal/adapter/acp` (`Name() == "acp"`)
+  - streaming: yes (`session/update` notifications over ACP stdio JSON-RPC)
+  - messaging: yes (`session/prompt`); steering cancels the in-flight prompt via the local context and sends a replacement prompt
+  - native resume: conditional (`session/resume` or `session/load` when advertised)
+  - compact: conditional; advertised `/compact` or `/compress`, plus Kilo Code `/compact` and Cursor `/compress` profiles
+  - supported tools: `read`, `write`, `bash`, `ask_foreman` MCP, ACP client filesystem, and ACP client terminal
 
 Routing behavior from `internal/app/harness.go`:
 
@@ -625,7 +631,7 @@ Provider login notes:
   - all three harness implementations also support `RunAction(Action="login_provider", Provider="sentry")`
 - self-hosted Sentry login uses `config.SentryCLIEnvironment(...)` so `SENTRY_URL` points at the root host, not `/api/0`
 
-The practical boundary today is steering support: oh-my-pi and claude-agent both expose `Steer()` for mid-stream interruption. Codex returns `ErrSteerNotSupported` from `Steer()` but supports `SendMessage` via thread resume. All three harnesses support `SendMessage` and native resume. Compaction support differs: oh-my-pi and claude-agent support compact; codex does not.
+The practical boundary today is steering support: oh-my-pi, claude-agent, and ACP all expose `Steer()` for mid-stream interruption. Codex returns `ErrSteerNotSupported` from `Steer()` but supports `SendMessage` via thread resume. All four harnesses support `SendMessage`. Native resume is unconditional for oh-my-pi, claude-agent, and codex; ACP supports it conditionally, based on agent capabilities. Compaction is supported by oh-my-pi and claude-agent unconditionally; ACP supports it conditionally based on agent capabilities; codex does not support compaction.
 
 ### OMP-specific capabilities
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	acpadapter "github.com/beeemT/substrate/internal/adapter/acp"
 	claudeagent "github.com/beeemT/substrate/internal/adapter/claudeagent"
 	codexadapter "github.com/beeemT/substrate/internal/adapter/codex"
 	omp "github.com/beeemT/substrate/internal/adapter/ohmypi"
@@ -121,8 +122,24 @@ func settingsHarnessFailureReason(harness config.HarnessName, message string) st
 		return settingsBinaryFailureReason("Codex", "codex", message)
 	case config.HarnessOpenCode:
 		return settingsBinaryFailureReason("OpenCode", "opencode", message)
+	case config.HarnessACP:
+		return settingsACPFailureReason(message)
 	default:
 		return message
+	}
+}
+
+func settingsACPFailureReason(message string) string {
+	detail := strings.TrimSpace(strings.TrimPrefix(message, "acp unavailable:"))
+	switch {
+	case strings.Contains(detail, "not found"):
+		return "ACP command not found"
+	case strings.Contains(detail, "command is required"):
+		return "ACP command not configured"
+	case strings.Contains(detail, "invalid"):
+		return "Invalid ACP configuration"
+	default:
+		return "ACP unavailable"
 	}
 }
 
@@ -223,7 +240,6 @@ func resolveHarnessPhase(cfg *config.Config, phase string, name config.HarnessNa
 	return resolvedHarnessPhase{diagnostic: diagnostic}
 }
 
-
 func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRoot string) (adapter.AgentHarness, error) {
 	switch name {
 	case config.HarnessOhMyPi:
@@ -250,6 +266,11 @@ func instantiateHarness(cfg *config.Config, name config.HarnessName, workspaceRo
 			return nil, fmt.Errorf("opencode unavailable: %w", err)
 		}
 		return opencodeadapter.NewHarness(cfg.Adapters.OpenCode, workspaceRoot), nil
+	case config.HarnessACP:
+		if err := acpadapter.ValidateReadiness(cfg.Adapters.ACP); err != nil {
+			return nil, fmt.Errorf("acp unavailable: %w", err)
+		}
+		return acpadapter.NewHarness(cfg.Adapters.ACP, workspaceRoot), nil
 	default:
 		return nil, errors.New("unsupported harness: " + string(name))
 	}

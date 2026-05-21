@@ -111,6 +111,51 @@ func TestBuildAgentHarnesses_UsesOhMyPiWhenSourceBridgeAndBunReady(t *testing.T)
 	}
 }
 
+func TestBuildAgentHarnesses_UsesACPWhenCommandReady(t *testing.T) {
+	cfg := newHarnessConfig(config.HarnessACP)
+	cfg.Adapters.ACP.Command = "/bin/sh"
+
+	harnesses, err := BuildAgentHarnesses(cfg, "/tmp")
+	if err != nil {
+		t.Fatalf("BuildAgentHarnesses() error = %v", err)
+	}
+	if got := harnesses.Planning.Name(); got != "acp" {
+		t.Fatalf("planning harness = %q, want acp", got)
+	}
+	if got := harnesses.Resume.Name(); got != "acp" {
+		t.Fatalf("resume harness = %q, want acp", got)
+	}
+}
+
+func TestBuildAgentHarnesses_DoesNotBlockWhenACPCommandMissing(t *testing.T) {
+	cfg := newHarnessConfig(config.HarnessACP)
+	// Empty command should fail validation.
+	cfg.Adapters.ACP.Command = ""
+
+	harnesses, err := BuildAgentHarnesses(cfg, "/tmp")
+	if err != nil {
+		t.Fatalf("BuildAgentHarnesses() error = %v", err)
+	}
+	if harnesses.Planning != nil {
+		t.Fatalf("planning harness = %v, want nil when ACP command is empty", harnesses.Planning)
+	}
+	if harnesses.Resume != nil {
+		t.Fatalf("resume harness = %v, want nil when ACP command is empty", harnesses.Resume)
+	}
+
+	diagnostics := DiagnoseHarnesses(cfg, "/tmp")
+	if !diagnostics.HasWarnings() {
+		t.Fatal("expected harness diagnostics to report warnings")
+	}
+	warnings := diagnostics.PhaseWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("phase warnings = %d, want 1 grouped warning", len(warnings))
+	}
+	if warnings[0] != "Harness: ACP command not configured." {
+		t.Fatalf("planning warning = %q, want ACP command not configured", warnings[0])
+	}
+}
+
 func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessCodex)
 	cfg.Adapters.Codex.BinaryPath = filepath.Join(t.TempDir(), "missing-codex")
@@ -141,7 +186,6 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) 
 		t.Fatalf("planning warning = %q, want grouped codex detail", warnings[0])
 	}
 }
-
 
 func TestDiagnoseHarnesses_SummarizesOhMyPiBridgeLookupForUsers(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
