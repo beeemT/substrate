@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/tui/components"
 )
 
@@ -74,6 +75,49 @@ func updateToastTestApp(t *testing.T, app *App, msg tea.Msg) *App {
 
 func toastCount(app *App) int {
 	return reflect.ValueOf(app.toasts).FieldByName("toasts").Len()
+}
+
+func toastMessageAndLevel(app *App, index int) (string, components.ToastLevel) {
+	toast := reflect.ValueOf(app.toasts).FieldByName("toasts").Index(index)
+	return toast.FieldByName("Message").String(), components.ToastLevel(toast.FieldByName("Level").Int())
+}
+
+func TestQuestionRaisedMsgShowsInfoToastAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.currentWorkItemID = "wi-current"
+	app.workItems = []domain.Session{{ID: "wi-current", WorkspaceID: "ws-1", State: domain.SessionPlanning}}
+	app.sessions = []domain.AgentSession{{ID: "plan-session", WorkItemID: "wi-question", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}}
+
+	longQuestion := "  Should we cut over all services now?\nPlease include the legacy path and deployment order before answering.  "
+	updated := updateToastTestApp(t, app, QuestionRaisedMsg{
+		WorkItemID: "wi-question",
+		SessionID:  "plan-session",
+		Question: domain.Question{
+			ID:      "q-1",
+			Content: longQuestion,
+			Stage:   domain.AgentSessionPhasePlanning,
+		},
+	})
+
+	if got := toastCount(updated); got != 1 {
+		t.Fatalf("toast count = %d, want 1", got)
+	}
+	message, level := toastMessageAndLevel(updated, 0)
+	if level != components.ToastInfo {
+		t.Fatalf("toast level = %v, want ToastInfo", level)
+	}
+	if !strings.HasPrefix(message, "Planning question: ") {
+		t.Fatalf("toast message = %q, want planning question prefix", message)
+	}
+	preview := strings.TrimPrefix(message, "Planning question: ")
+	if len([]rune(preview)) > 60 {
+		t.Fatalf("preview rune length = %d, want <= 60 (%q)", len([]rune(preview)), preview)
+	}
+	if strings.Contains(preview, "\n") || strings.Contains(preview, "  ") {
+		t.Fatalf("preview = %q, want collapsed whitespace", preview)
+	}
 }
 
 func TestRenderTopRightOverlay_RespectsBottomInset(t *testing.T) {

@@ -50,7 +50,7 @@ func (m InterruptedModel) KeybindHints() []KeybindHint {
 			}
 		}
 		return []KeybindHint{
-			{Key: "r", Label: "Resume"},
+			{Key: "r", Label: "Resume all"},
 			{Key: "a", Label: "Abandon"},
 		}
 	}
@@ -65,18 +65,13 @@ func (m InterruptedModel) Update(msg tea.Msg) (InterruptedModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "r":
+			wID := m.workItemID
 			if m.isPlanningPhase {
-				wID := m.workItemID
-
-				return m, func() tea.Msg {
-					return RestartPlanMsg{WorkItemID: wID}
-				}
+				return m, func() tea.Msg { return RestartPlanMsg{WorkItemID: wID} }
 			}
 
-			sID, spID := m.sessionID, m.subPlanID
-
 			return m, func() tea.Msg {
-				return ResumeSessionMsg{OldSessionID: sID, SubPlanID: spID}
+				return ResumeSessionMsg{WorkItemID: wID}
 			}
 		case "a":
 			sID := m.sessionID
@@ -108,9 +103,9 @@ func (m InterruptedModel) View() string {
 	lines := append(strings.Split(header, "\n"), "")
 
 	if m.isPlanningPhase {
-		lines = append(lines, m.styles.Interrupted.Render("⊘ Planning was interrupted (previous substrate owner stopped heartbeating while planning was in progress)"), "")
+		lines = append(lines, m.styles.Interrupted.Render("⊘ Planning was interrupted (the harness was explicitly stopped while planning was in progress)"), "")
 		lines = append(lines,
-			m.styles.Subtitle.Render("Restart will begin a fresh planning session from the beginning."),
+			m.styles.Subtitle.Render("Resume will continue the planning session when native resume data is available."),
 			"",
 		)
 	} else {

@@ -61,6 +61,12 @@ type ResumeSessionResult struct {
 // currentInstanceID becomes the owner of the new session.
 // EventAgentSessionResumed is emitted by AgentSessionService.Resume().
 func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.AgentSession, currentInstanceID string) (ResumeSessionResult, error) {
+	return r.ResumeSessionWithPrompt(ctx, interrupted, "", currentInstanceID)
+}
+
+// ResumeSessionWithPrompt starts a resumed agent session and optionally delivers
+// operator guidance as the first resumed user message.
+func (r *Resumption) ResumeSessionWithPrompt(ctx context.Context, interrupted domain.AgentSession, prompt, currentInstanceID string) (ResumeSessionResult, error) {
 	if interrupted.Status != domain.AgentSessionInterrupted {
 		return ResumeSessionResult{}, fmt.Errorf("session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
 	}
@@ -112,10 +118,14 @@ func (r *Resumption) ResumeSession(ctx context.Context, interrupted domain.Agent
 		WorktreePath: interrupted.WorktreePath,
 		SystemPrompt: systemPrompt,
 	}
+	trimmedPrompt := strings.TrimSpace(prompt)
 	if hasResume {
 		opts.ResumeFromSessionID = interrupted.ID
 		opts.ResumeInfo = interrupted.ResumeInfo
-		// Harness resumes the native conversation; no synthetic prompt turn needed.
+		// Harness resumes the native conversation; optional operator guidance is the first resumed user turn.
+		opts.UserPrompt = trimmedPrompt
+	} else if trimmedPrompt != "" {
+		opts.UserPrompt = "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items.\n\nOperator guidance:\n" + trimmedPrompt
 	} else {
 		opts.UserPrompt = "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items."
 	}
@@ -458,7 +468,7 @@ func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harn
 				slog.Warn("failed to interrupt follow-up session after cancellation",
 					"error", err, "agent_session_id", sessionID)
 			}
-		} else {
+		} else if !agentSessionAlreadyInterrupted(ctx, r.sessionSvc, sessionID) {
 			if err := failSessionDurably(ctx, r.sessionSvc, sessionID, nil); err != nil {
 				slog.Warn("failed to fail follow-up session",
 					"error", err, "agent_session_id", sessionID)

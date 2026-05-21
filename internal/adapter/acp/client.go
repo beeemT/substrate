@@ -219,7 +219,7 @@ func (c *rpcClient) handleMessage(msg rpcMessage) {
 		return
 	}
 	if msg.ID != nil {
-		go c.respondToServerRequest(msg)
+		go c.respondToServerRequest(msg, context.Background())
 		return
 	}
 	if c.handleNotification != nil {
@@ -227,13 +227,12 @@ func (c *rpcClient) handleMessage(msg rpcMessage) {
 	}
 }
 
-func (c *rpcClient) respondToServerRequest(msg rpcMessage) {
+func (c *rpcClient) respondToServerRequest(msg rpcMessage, ctx context.Context) {
 	var result any
 	var err error
 	if c.handleRequest == nil {
 		err = fmt.Errorf("unsupported client method %q", msg.Method)
 	} else {
-		ctx := context.Background()
 		result, err = c.handleRequest(ctx, msg.Method, msg.Params)
 	}
 	resp := rpcMessage{JSONRPC: "2.0", ID: msg.ID}

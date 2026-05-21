@@ -1281,15 +1281,16 @@ func TestOverviewInterruptedPlanningDispatchesRestartPlanMsg(t *testing.T) {
 		t.Fatal("pressing r on interrupted planning session must return a command")
 	}
 	msg := cmd()
-	if _, ok := msg.(RestartPlanMsg); !ok {
+	restart, ok := msg.(RestartPlanMsg)
+	if !ok {
 		t.Fatalf("expected RestartPlanMsg, got %T", msg)
 	}
-	if msg.(RestartPlanMsg).WorkItemID != "wi-1" {
-		t.Fatalf("RestartPlanMsg.WorkItemID = %q, want %q", msg.(RestartPlanMsg).WorkItemID, "wi-1")
+	if restart.WorkItemID != "wi-1" {
+		t.Fatalf("RestartPlanMsg.WorkItemID = %q, want %q", restart.WorkItemID, "wi-1")
 	}
 }
 
-func TestOverviewInterruptedImplementationDispatchesResumeSessionMsg(t *testing.T) {
+func TestOverviewInterruptedActionCard_FiresResumeSessionMsgWithWorkItemID(t *testing.T) {
 	t.Parallel()
 
 	st := styles.NewStyles(styles.DefaultTheme)
@@ -1325,12 +1326,38 @@ func TestOverviewInterruptedImplementationDispatchesResumeSessionMsg(t *testing.
 		t.Fatalf("expected ResumeSessionMsg, got %T", msg)
 	}
 	resumeMsg := msg.(ResumeSessionMsg)
-	if resumeMsg.OldSessionID != "sess-impl" {
-		t.Fatalf("ResumeSessionMsg.OldSessionID = %q, want %q", resumeMsg.OldSessionID, "sess-impl")
+	if resumeMsg.WorkItemID != "wi-1" {
+		t.Fatalf("ResumeSessionMsg.WorkItemID = %q, want %q", resumeMsg.WorkItemID, "wi-1")
 	}
-	if resumeMsg.SubPlanID != "sp-1" {
-		t.Fatalf("ResumeSessionMsg.SubPlanID = %q, want %q", resumeMsg.SubPlanID, "sp-1")
+}
+
+func TestOverviewInterruptedKeybindHints_Pluralizes(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionOverviewModel(st)
+	m.SetTerminalSize(80, 40)
+	m.SetSize(80, 40)
+	first := domain.AgentSession{ID: "sess-1", WorkItemID: "wi-1", Phase: domain.AgentSessionPhaseImplementation, Status: domain.AgentSessionInterrupted}
+	second := domain.AgentSession{ID: "sess-2", WorkItemID: "wi-1", Phase: domain.AgentSessionPhaseReview, Status: domain.AgentSessionInterrupted}
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-1",
+		Actions: []OverviewActionCard{
+			{Kind: overviewActionInterrupted, Title: "Interrupted task", Session: &first, CanAct: true},
+			{Kind: overviewActionInterrupted, Title: "Interrupted task", Session: &second, CanAct: true},
+		},
+	})
+
+	hints := m.KeybindHints()
+	for _, hint := range hints {
+		if hint.Key == "r" {
+			if hint.Label != "Resume all (2)" {
+				t.Fatalf("resume hint label = %q, want %q", hint.Label, "Resume all (2)")
+			}
+			return
+		}
 	}
+	t.Fatalf("hints = %#v, want resume hint", hints)
 }
 
 // TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg verifies that the plan is
@@ -1411,6 +1438,53 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	if retryMsg.WorkItemID != "wi-failed" {
 		t.Fatalf("RetryFailedMsg.WorkItemID = %q, want %q", retryMsg.WorkItemID, "wi-failed")
 	}
+}
+
+func TestOverviewConsolidatesInterruptedImplementationSessions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", Title: "Interrupted work", State: domain.SessionImplementing, CreatedAt: now, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{
+		{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress},
+		{ID: "sp-2", PlanID: "plan-1", RepositoryName: "repo-b", Status: domain.SubPlanInProgress},
+	}
+	app.sessions = []domain.AgentSession{
+		{ID: "sess-a", WorkItemID: "wi-1", WorkspaceID: "ws-local", SubPlanID: "sp-1", RepositoryName: "repo-a", Phase: domain.AgentSessionPhaseImplementation, Status: domain.AgentSessionInterrupted, UpdatedAt: now.Add(-time.Minute)},
+		{ID: "sess-b", WorkItemID: "wi-1", WorkspaceID: "ws-local", SubPlanID: "sp-2", RepositoryName: "repo-b", Phase: domain.AgentSessionPhaseReview, Status: domain.AgentSessionInterrupted, UpdatedAt: now},
+	}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	if len(actions) != 1 {
+		t.Fatalf("actions len = %d, want 1: %#v", len(actions), actions)
+	}
+	action := actions[0]
+	if action.Kind != overviewActionInterrupted {
+		t.Fatalf("action kind = %q, want %q", action.Kind, overviewActionInterrupted)
+	}
+	if len(action.InterruptedSessions) != 2 {
+		t.Fatalf("interrupted sessions = %d, want 2", len(action.InterruptedSessions))
+	}
+	if got := strings.Join(action.Affected, ","); got != "repo-a,repo-b" {
+		t.Fatalf("affected = %q, want repo-a,repo-b", got)
+	}
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(100, 30)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{WorkItemID: "wi-1", State: domain.SessionImplementing, Actions: actions})
+	hints := m.KeybindHints()
+	for _, hint := range hints {
+		if hint.Key == "r" {
+			if hint.Label != "Resume all (2)" {
+				t.Fatalf("resume hint label = %q, want Resume all (2)", hint.Label)
+			}
+			return
+		}
+	}
+	t.Fatalf("hints = %#v, want resume hint", hints)
 }
 
 func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testing.T) {

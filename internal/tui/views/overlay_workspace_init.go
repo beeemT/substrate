@@ -2,7 +2,6 @@ package views
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -122,6 +122,11 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 
 	case NewReposInitDoneMsg:
 		m.active = false
+
+	case ErrMsg:
+		// Reset progress state and close modal on error during init.
+		m.initProgress.active = false
+		m.active = false
 	}
 
 	return m, nil
@@ -214,11 +219,11 @@ func (m WorkspaceInitModal) View() string {
 				m.styles.KeybindAccent.Render("[y]")+m.styles.Subtitle.Render(" Initialize  ")+
 					m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Skip"),
 			)
-			// Render progress counter in bottom-right if init is running
+			// Render progress bar if init is running
 			if m.initProgress.active {
 				lines = append(lines,
 					"",
-					m.styles.Muted.Render(fmt.Sprintf("%d/%d", m.initProgress.initialized, m.initProgress.total)),
+					components.RenderProgressBar(m.styles, m.initProgress.initialized, m.initProgress.total, w-4),
 				)
 			}
 		}

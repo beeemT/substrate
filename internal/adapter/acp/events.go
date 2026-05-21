@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/beeemT/substrate/internal/adapter"
 )
@@ -142,7 +143,20 @@ func contentPayload(raw json.RawMessage) string {
 	}
 	const max = 8192
 	if len(raw) > max {
-		return string(raw[:max]) + "…"
+		// Truncate at a valid UTF-8 boundary to avoid corrupting multi-byte characters.
+		truncated := raw[:max]
+		// DecodeLastRune returns (RuneError, 1) for incomplete sequences;
+		// loop backward until we land on a valid rune start.
+		for len(truncated) > 0 {
+			r, size := utf8.DecodeLastRune(truncated)
+			// RuneError with size==1 means an invalid/incomplete byte sequence; a valid
+			// U+FFFD character is encoded as 3 bytes (size==3) and must not be trimmed.
+			if !(r == utf8.RuneError && size == 1) {
+				return string(truncated) + "…"
+			}
+			truncated = truncated[:len(truncated)-size]
+		}
+		return "…"
 	}
 	return string(raw)
 }

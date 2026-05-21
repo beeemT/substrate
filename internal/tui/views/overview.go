@@ -70,21 +70,22 @@ type OverviewHeader struct {
 }
 
 type OverviewActionCard struct {
-	Kind           OverviewActionKind
-	Title          string
-	Blocked        string
-	Why            string
-	Affected       []string
-	Context        []string
-	Plan           *domain.Plan
-	Question       *domain.Question
-	QuestionRepo   string
-	QuestionTask   string
-	QuestionAsked  time.Time
-	ProposedAnswer string
-	Session        *domain.AgentSession
-	ReviewRepos    []RepoReviewResult
-	CanAct         bool
+	Kind                OverviewActionKind
+	Title               string
+	Blocked             string
+	Why                 string
+	Affected            []string
+	Context             []string
+	Plan                *domain.Plan
+	Question            *domain.Question
+	QuestionRepo        string
+	QuestionTask        string
+	QuestionAsked       time.Time
+	ProposedAnswer      string
+	Session             *domain.AgentSession
+	InterruptedSessions []domain.AgentSession
+	ReviewRepos         []RepoReviewResult
+	CanAct              bool
 }
 
 type OverviewSourceItem struct {
@@ -296,7 +297,7 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 		hints = append(hints, KeybindHint{Key: "Tab", Label: "Next action"})
 	}
 	if action := m.selectedActionCard(); action != nil {
-		hints = append(hints, actionKeybindHints(*action)...)
+		hints = append(hints, actionKeybindHints(*action, m.data.Actions)...)
 	} else if len(m.data.Sources) > 0 || len(m.data.External.Reviews) > 0 {
 		hints = append(hints, KeybindHint{Key: "o", Label: "Links"})
 	} else if m.data.State == domain.SessionIngested {
@@ -442,9 +443,11 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, nil
 				case overviewActionInterrupted:
-					m.overlay = overviewOverlayInterrupted
+					if len(action.InterruptedSessions) <= 1 {
+						m.overlay = overviewOverlayInterrupted
 
-					return m, nil
+						return m, nil
+					}
 				case overviewActionReviewing:
 					m.overlay = overviewOverlayReviewing
 
@@ -484,7 +487,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 						return m, func() tea.Msg { return PlanApproveMsg{PlanID: action.Plan.ID, WorkItemID: m.data.WorkItemID} }
 					}
 				case overviewActionInterrupted:
-					if action.Session != nil && action.CanAct {
+					if action.Session != nil && action.CanAct && len(action.InterruptedSessions) <= 1 {
 						sessionID := action.Session.ID
 
 						return m, func() tea.Msg { return ConfirmAbandonMsg{SessionID: sessionID} }
@@ -505,10 +508,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 							wID := action.Session.WorkItemID
 							return m, func() tea.Msg { return RestartPlanMsg{WorkItemID: wID} }
 						}
-						oldSessionID := action.Session.ID
-						subPlanID := action.Session.SubPlanID
 						return m, func() tea.Msg {
-							return ResumeSessionMsg{OldSessionID: oldSessionID, SubPlanID: subPlanID}
+							return ResumeSessionMsg{WorkItemID: m.data.WorkItemID}
 						}
 					}
 				case overviewActionReviewing:
@@ -608,7 +609,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 			m.question.SetQuestion(*action.Question, action.ProposedAnswer, action.ProposedAnswer == "")
 		}
 	case overviewActionInterrupted:
-		if action.Session != nil {
+		if action.Session != nil && len(action.InterruptedSessions) <= 1 {
 			isPlanningPhase := action.Session.Phase == domain.AgentSessionPhasePlanning
 			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.Session.WorkItemID, isPlanningPhase, action.CanAct)
 		}
@@ -821,20 +822,40 @@ func (m SessionOverviewModel) overlayView(width, height int) string {
 	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{Body: fitViewHeight(body, innerHeight), Focused: true})
 }
 
-func actionKeybindHints(action OverviewActionCard) []KeybindHint {
+func actionKeybindHints(action OverviewActionCard, actions []OverviewActionCard) []KeybindHint {
 	switch action.Kind {
 	case overviewActionPlanReview:
 		return []KeybindHint{{Key: "a", Label: "Approve"}, {Key: "i", Label: "Inspect / Request changes"}}
 	case overviewActionQuestion:
 		return []KeybindHint{{Key: "Enter", Label: "Answer"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionInterrupted:
-		hints := []KeybindHint{{Key: "i", Label: "Inspect"}}
+		hints := make([]KeybindHint, 0, 3)
+		if len(action.InterruptedSessions) <= 1 {
+			hints = append(hints, KeybindHint{Key: "i", Label: "Inspect"})
+		}
 		if action.CanAct {
-			resumeLabel := "Resume"
+			resumeLabel := "Resume all"
 			if action.Session != nil && action.Session.Phase == domain.AgentSessionPhasePlanning {
 				resumeLabel = "Restart planning"
+			} else if count := len(action.InterruptedSessions); count > 1 {
+				resumeLabel = fmt.Sprintf("Resume all (%d)", count)
+			} else {
+				resumableCount := 0
+				for _, card := range actions {
+					if card.Kind == overviewActionInterrupted && card.Session != nil &&
+						card.Session.Phase != domain.AgentSessionPhasePlanning {
+						resumableCount++
+					}
+				}
+				if resumableCount > 1 {
+					resumeLabel = fmt.Sprintf("Resume all (%d)", resumableCount)
+				}
 			}
-			hints = append([]KeybindHint{{Key: "r", Label: resumeLabel}, {Key: "a", Label: "Abandon"}}, hints...)
+			prefix := []KeybindHint{{Key: "r", Label: resumeLabel}}
+			if len(action.InterruptedSessions) <= 1 {
+				prefix = append(prefix, KeybindHint{Key: "a", Label: "Abandon"})
+			}
+			hints = append(prefix, hints...)
 		}
 
 		return hints
@@ -890,8 +911,9 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 			lines = append(lines, ansi.Hardwrap(st.SettingsText.Render(line), innerWidth, true))
 		}
 	}
-	hintLabels := make([]string, 0, len(actionKeybindHints(action)))
-	for _, hint := range actionKeybindHints(action) {
+	hints := actionKeybindHints(action, nil)
+	hintLabels := make([]string, 0, len(hints))
+	for _, hint := range hints {
 		hintLabels = append(hintLabels, hint.Key+" "+hint.Label)
 	}
 	if len(hintLabels) > 0 {
@@ -1546,6 +1568,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			}
 		}
 	}
+	interruptedSessions := make([]domain.AgentSession, 0)
 	for _, agentSession := range wiSessions {
 		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[agentSession.ID] {
@@ -1586,32 +1609,73 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			if superseded[agentSession.ID] {
 				continue
 			}
-			card := OverviewActionCard{
-				Kind:     overviewActionInterrupted,
-				Blocked:  firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession)),
-				Affected: []string{firstNonEmptyString(agentSession.RepositoryName, taskSessionDisplayName(&agentSession))},
-				Context: []string{
-					"Last update: " + formatAbsoluteTime(agentSession.UpdatedAt),
-					"Cause: previous substrate owner stopped heartbeating while the agent was running",
-				},
-				Session: &agentSession,
-				CanAct:  a.canActOnSession(agentSession),
-			}
 			if agentSession.Phase == domain.AgentSessionPhasePlanning {
-				card.Title = "Planning was interrupted"
-				card.Why = "The planning agent stopped unexpectedly. Restart will begin a fresh planning session."
-				card.Blocked = "Planning"
-				card.Affected = nil
-			} else {
-				card.Title = "Interrupted task needs recovery"
-				card.Why = "This task was interrupted and cannot continue until it is resumed or abandoned."
-				card.Context = append(card.Context, "Task: "+taskSidebarSessionTitle(&agentSession))
+				session := agentSession
+				actions = append(actions, OverviewActionCard{
+					Kind:    overviewActionInterrupted,
+					Title:   "Planning was interrupted",
+					Blocked: "Planning",
+					Why:     "The planning harness was explicitly stopped. Resume will restart planning from the beginning.",
+					Context: []string{
+						"Last update: " + formatAbsoluteTime(agentSession.UpdatedAt),
+						"Cause: planning harness was explicitly stopped",
+					},
+					Session: &session,
+					CanAct:  a.canActOnSession(agentSession),
+				})
+				continue
 			}
-			actions = append(actions, card)
+			interruptedSessions = append(interruptedSessions, agentSession)
 		}
+	}
+	if len(interruptedSessions) > 0 {
+		actions = append(actions, buildInterruptedTasksActionCard(interruptedSessions, a.canActOnSession))
 	}
 
 	return actions
+}
+
+func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func(domain.AgentSession) bool) OverviewActionCard {
+	affected := make([]string, 0, len(sessions))
+	context := []string{
+		fmt.Sprintf("Interrupted tasks: %d", len(sessions)),
+		"Cause: previous substrate owner stopped heartbeating while the agents were running",
+	}
+	latest := sessions[0].UpdatedAt
+	allowed := false
+	for _, session := range sessions {
+		displayName := firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))
+		affected = append(affected, displayName)
+		context = append(context, displayName+": "+taskSidebarSessionTitle(&session))
+		if session.UpdatedAt.After(latest) {
+			latest = session.UpdatedAt
+		}
+		if canAct == nil || canAct(session) {
+			allowed = true
+		}
+	}
+	context = append([]string{"Last update: " + formatAbsoluteTime(latest)}, context...)
+
+	session := sessions[0]
+	title := "Interrupted tasks need recovery"
+	blocked := "Interrupted tasks need recovery"
+	why := "These tasks were interrupted and cannot continue until they are resumed."
+	if len(sessions) == 1 {
+		title = "Interrupted task needs recovery"
+		blocked = firstNonEmptyString(session.RepositoryName, taskSessionDisplayName(&session))
+		why = "This task was interrupted and cannot continue until it is resumed or abandoned."
+	}
+	return OverviewActionCard{
+		Kind:                overviewActionInterrupted,
+		Title:               title,
+		Blocked:             blocked,
+		Why:                 why,
+		Affected:            affected,
+		Context:             context,
+		Session:             &session,
+		InterruptedSessions: append([]domain.AgentSession(nil), sessions...),
+		CanAct:              allowed,
+	}
 }
 
 func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {

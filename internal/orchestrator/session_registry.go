@@ -81,6 +81,14 @@ func (r *SessionRegistry) IsRunning(sessionID string) bool {
 	return ok
 }
 
+// Registered returns the running session handle for sessionID when it is still registered.
+func (r *SessionRegistry) Registered(sessionID string) (adapter.AgentSession, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	session, ok := r.sessions[sessionID]
+	return session, ok
+}
+
 // AbortAndDeregister aborts the agent session identified by sessionID and removes
 // it from the registry. If the session is not registered this is a no-op.
 // Abort errors are logged but not returned because the caller's intent is to

@@ -583,6 +583,8 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields: []SettingsField{
 				{Section: "adapters.acp", Key: "agent", Label: "Agent", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Agent},
 				{Section: "adapters.acp", Key: "command", Label: "Command", Type: SettingsFieldPath, Value: cfg.Adapters.ACP.Command},
+				{Section: "adapters.acp", Key: "args", Label: "Args", Type: SettingsFieldString, Value: strings.Join(cfg.Adapters.ACP.Args, ","), Description: "Comma-separated arguments passed to the ACP agent command"},
+				{Section: "adapters.acp", Key: "env", Label: "Environment", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.ACP.Env), Description: "Environment variables as KEY=VALUE pairs, comma-separated"},
 				{Section: "adapters.acp", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Model},
 				{Section: "adapters.acp", Key: "mode", Label: "Mode", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Mode},
 				{Section: "adapters.acp", Key: "thought_level", Label: "Thought Level", Type: SettingsFieldString, Value: cfg.Adapters.ACP.ThoughtLevel},
@@ -838,6 +840,10 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.ACP.Agent = value
 	case "adapters.acp.command":
 		cfg.Adapters.ACP.Command = value
+	case "adapters.acp.args":
+		cfg.Adapters.ACP.Args = parseList(value)
+	case "adapters.acp.env":
+		cfg.Adapters.ACP.Env = parseMap(value)
 	case "adapters.acp.model":
 		cfg.Adapters.ACP.Model = value
 	case "adapters.acp.mode":

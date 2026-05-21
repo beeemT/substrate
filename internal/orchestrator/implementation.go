@@ -211,6 +211,24 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
+	foremanStarted := false
+	if s.foreman != nil {
+		if err := s.foreman.Start(ctx, planID, ""); err != nil {
+			return nil, fmt.Errorf("start foreman: %w", err)
+		}
+		foremanStarted = true
+		defer func() {
+			if !foremanStarted {
+				return
+			}
+			stopCtx, stopCancel := durableCleanupContext(ctx)
+			defer stopCancel()
+			if stopErr := s.foreman.Stop(stopCtx); stopErr != nil {
+				slog.Warn("failed to stop foreman after implementation", "error", stopErr, "plan_id", planID)
+			}
+		}()
+	}
+
 	// 7. Transition work item to implementing once non-mutating preflight succeeds.
 	// On retry (work item already in implementing after RetryFailedWorkItem), skip.
 	if workItem.State != domain.SessionImplementing {
@@ -673,12 +691,19 @@ func (s *ImplementationService) runImplementation(
 
 	if waitErr != nil {
 		if errors.Is(waitErr, context.Canceled) {
+			if info := harnessSession.ResumeInfo(); len(info) > 0 {
+				cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
+				defer cleanupCancel()
+				if err := s.sessionSvc.UpdateResumeInfo(cleanupCtx, sessionID, info); err != nil {
+					slog.Warn("failed to store resume info before interrupting session", "error", err, "agent_session_id", sessionID)
+				}
+			}
 			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
 			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
 				slog.Warn("failed to interrupt session on context cancellation",
 					"error", interruptErr, "agent_session_id", sessionID)
 			}
-		} else {
+		} else if !agentSessionAlreadyInterrupted(ctx, s.sessionSvc, sessionID) {
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 				slog.Warn("failed to fail session", "error", failErr, "agent_session_id", sessionID)
 			}
@@ -1775,6 +1800,18 @@ func failSessionDurably(parent context.Context, sessionSvc *service.AgentSession
 	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
 	defer cleanupCancel()
 	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
+}
+
+func agentSessionAlreadyInterrupted(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) bool {
+	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
+	defer cleanupCancel()
+
+	agentSession, err := sessionSvc.Get(cleanupCtx, sessionID)
+	if err != nil {
+		slog.Warn("failed to inspect agent session before failure transition", "error", err, "agent_session_id", sessionID)
+		return false
+	}
+	return agentSession.Status == domain.AgentSessionInterrupted
 }
 
 // interruptSessionDurably marks a session as interrupted using a context detached from

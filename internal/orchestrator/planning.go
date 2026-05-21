@@ -25,14 +25,12 @@ import (
 // PlanningConfig contains configuration for the planning pipeline.
 type PlanningConfig struct {
 	MaxParseRetries int
-	SessionTimeout  time.Duration
 }
 
 // DefaultPlanningConfig returns the default planning configuration.
 func DefaultPlanningConfig() *PlanningConfig {
 	return &PlanningConfig{
 		MaxParseRetries: 2,
-		SessionTimeout:  30 * time.Minute,
 	}
 }
 
@@ -204,8 +202,41 @@ func (s *PlanningService) PlanWithFeedback(ctx context.Context, workItemID, oldP
 	})
 }
 
-// FollowUpPlan transitions a completed work item back to planning with differential context.
-// It captures the current plan, implementation results, and user feedback to produce an updated plan.
+// ResumeInterruptedPlanning resumes an interrupted planning session with native harness
+// resume data when available. The interrupted session remains as audit history;
+// planRun creates a replacement planning agent session.
+func (s *PlanningService) ResumeInterruptedPlanning(ctx context.Context, interrupted domain.AgentSession, prompt string) (*domain.PlanningResult, error) {
+	if interrupted.Status != domain.AgentSessionInterrupted {
+		return nil, fmt.Errorf("planning session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
+	}
+	if interrupted.Phase != domain.AgentSessionPhasePlanning {
+		return nil, fmt.Errorf("agent session %s is %s, not planning", interrupted.ID, interrupted.Phase)
+	}
+	workItem, err := s.workItemSvc.Get(ctx, interrupted.WorkItemID)
+	if err != nil {
+		return nil, fmt.Errorf("get work item: %w", err)
+	}
+	if workItem.State != domain.SessionPlanning {
+		if err := s.workItemSvc.StartPlanning(ctx, interrupted.WorkItemID); err != nil {
+			return nil, fmt.Errorf("transition work item to planning: %w", err)
+		}
+	}
+	var replacePlanID string
+	if existing, err := s.planSvc.GetPlanByWorkItemID(ctx, interrupted.WorkItemID); err == nil {
+		replacePlanID = existing.ID
+	}
+	// Capture plan text so the revision prompt has context (same as PlanWithFeedback).
+	currentPlanText := s.buildPlanText(ctx, replacePlanID)
+	return s.planRun(ctx, planRunRequest{
+		workItemID:       interrupted.WorkItemID,
+		revisionFeedback: strings.TrimSpace(prompt),
+		currentPlanText:  currentPlanText,
+		priorSessionID:   interrupted.ID,
+		priorResumeInfo:  interrupted.ResumeInfo,
+		replacePlanID:    replacePlanID,
+	})
+}
+
 func (s *PlanningService) FollowUpPlan(ctx context.Context, workItemID, feedback string) (*domain.PlanningResult, error) {
 	// 1. Verify work item is completed
 	workItem, err := s.workItemSvc.Get(ctx, workItemID)
@@ -494,7 +525,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 				slog.Warn("failed to interrupt planning session on context cancellation",
 					"error", interruptErr, "agent_session_id", sessionID)
 			}
-		} else {
+		} else if !agentSessionAlreadyInterrupted(ctx, s.sessionSvc, sessionID) {
 			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
 				slog.Warn("failed to fail planning session", "error", failErr, "agent_session_id", sessionID)
 			}
@@ -624,8 +655,11 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		}
 	}
 
-	// Apply session timeout — bounds the entire planning session lifetime.
-	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.cfg.SessionTimeout)
+	// Preserve parent values for tracing/log correlation, but remove parent
+	// cancellation and deadlines. The harness session is cancelled only by explicit
+	// orchestration cleanup: normal return, confirmed quit, focused interrupt, or
+	// retry restart.
+	sessionCtx, sessionCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer sessionCancel()
 
 	startSession := func(userPrompt string, fromSessionID string, info map[string]string) (adapter.AgentSession, error) {

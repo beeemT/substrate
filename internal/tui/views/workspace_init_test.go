@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"errors"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -179,6 +180,30 @@ func TestNewReposModal_NewReposInitDoneMsg_SetsInactive(t *testing.T) {
 	}
 }
 
+func TestNewReposModal_ErrMsg_ResetsProgressAndCloses(t *testing.T) {
+	st := newTestStyles(t)
+	m := views.NewNewReposModal("/tmp/ws", st, nil)
+	m.SetSize(120, 40)
+
+	// Advance past loading and start init.
+	healthMsg := views.WorkspaceHealthCheckMsg{
+		Check: domain.WorkspaceHealthCheck{PlainGitClones: []string{"/tmp/ws/repo1", "/tmp/ws/repo2"}},
+	}
+	m, _ = m.Update(healthMsg)
+
+	// Start progress tracking.
+	progressMsg := views.RepoInitProgressMsg{Initialized: 1, Total: 2}
+	m, _ = m.Update(progressMsg)
+	if !m.Active() {
+		t.Fatal("expected Active() == true before error")
+	}
+
+	// Simulate error during init.
+	updated, _ := m.Update(views.ErrMsg{Err: errors.New("git-work init failed")})
+	if updated.Active() {
+		t.Fatal("expected Active() == false after ErrMsg")
+	}
+}
 
 // containsSubstring is a test helper; strings.Contains import-free alternative.
 func containsSubstring(s, sub string) bool {
@@ -213,6 +238,10 @@ func TestNewReposModal_RepoInitProgressMsg_UpdatesProgress(t *testing.T) {
 	// View must contain "1/3" progress counter.
 	if !containsSubstring(v, "1/3") {
 		t.Fatalf("view does not contain progress counter 1/3, got: %s", v)
+	}
+	// View must contain progress bar characters (█ or ░).
+	if !containsSubstring(v, "█") || !containsSubstring(v, "░") {
+		t.Fatalf("view does not contain progress bar characters, got: %s", v)
 	}
 }
 

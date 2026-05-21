@@ -1593,7 +1593,7 @@ func TestInterruptedPlanningSessionShowsRecoveryContent(t *testing.T) {
 		t.Fatalf("content mode = %v, want %v", app.content.Mode(), ContentModeOverview)
 	}
 	view := stripBrowseANSI(app.content.View())
-	for _, want := range []string{"Action required", "Planning was interrupted", "previous substrate owner stopped heartbeating"} {
+	for _, want := range []string{"Action required", "Planning was interrupted", "harness was explicitly stopped"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}

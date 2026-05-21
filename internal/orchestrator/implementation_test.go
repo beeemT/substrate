@@ -812,6 +812,33 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 	}
 }
 
+func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
+	svc, _, _, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	foremanHarness := &completingHarness{}
+	svc.foreman = NewForeman(&config.Config{}, foremanHarness, svc.planSvc, nil, svc.sessionSvc, svc.eventBus)
+
+	_, err := svc.Implement(context.Background(), "plan-1")
+	if err == nil {
+		t.Fatal("expected implementation to fail when worktree preparation fails")
+	}
+
+	foremanHarness.mu.Lock()
+	foremanSession := foremanHarness.lastSess
+	foremanHarness.mu.Unlock()
+	if foremanSession == nil {
+		t.Fatal("foreman session was not started")
+	}
+	if foremanSession.opts.Mode != adapter.SessionModeForeman {
+		t.Fatalf("foreman mode = %q, want %q", foremanSession.opts.Mode, adapter.SessionModeForeman)
+	}
+	if svc.foreman.IsRunning() {
+		t.Fatal("foreman is still running after implementation returned")
+	}
+	if got := svc.foreman.LastPlanID(); got != "plan-1" {
+		t.Fatalf("foreman last plan ID = %q, want plan-1", got)
+	}
+}
+
 func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.T) {
 	svc, workItemRepo, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	ctx, cancel := context.WithCancel(context.Background())

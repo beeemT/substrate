@@ -106,7 +106,7 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-123", "plan-draft.md")
 	harness := &planningHarnessSpy{planText: validPlanningPlan("Keep repo-a isolated.", "Update the planner.")}
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
+		cfg:       &PlanningConfig{MaxParseRetries: 0},
 		harness:   harness,
 		templates: templates,
 	}
@@ -145,13 +145,15 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 
 type scriptedPlanningHarness struct {
 	lastOpts     adapter.SessionOpts
+	lastCtx      context.Context
 	startSession func(adapter.SessionOpts) (adapter.AgentSession, error)
 }
 
 func (h *scriptedPlanningHarness) SupportsCompact() bool { return true }
 func (h *scriptedPlanningHarness) Name() string          { return "planning-scripted" }
 
-func (h *scriptedPlanningHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+func (h *scriptedPlanningHarness) StartSession(ctx context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	h.lastCtx = ctx
 	h.lastOpts = opts
 
 	return h.startSession(opts)
@@ -195,6 +197,47 @@ func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string)
 }
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
 func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return s.resumeInfo }
+
+func TestPlanningServiceUsesContextWithoutDeadline(t *testing.T) {
+	t.Parallel()
+
+	templates, err := NewPlanningTemplates()
+	if err != nil {
+		t.Fatalf("NewPlanningTemplates(): %v", err)
+	}
+	draftPath := filepath.Join(t.TempDir(), "plan-draft.md")
+	finalPlan := validPlanningPlan("no timeout", "keep repo-a isolated")
+	harness := &scriptedPlanningHarness{
+		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			if _, ok := opts.ResumeInfo["unused"]; ok {
+				t.Fatal("unexpected resume info")
+			}
+			if err := os.WriteFile(draftPath, []byte(finalPlan), 0o644); err != nil {
+				return nil, err
+			}
+			events := make(chan adapter.AgentEvent, 1)
+			events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+			close(events)
+			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
+		},
+	}
+	svc := &PlanningService{cfg: &PlanningConfig{MaxParseRetries: 0}, harness: harness, templates: templates}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(parentCtx, &domain.PlanningContext{
+		WorkItem:         domain.WorkItemSnapshot{Title: "No timeout", ExternalID: "ISSUE-NT"},
+		Repos:            []domain.RepoPointer{{Name: "repo-a", Language: "go", MainDir: t.TempDir()}},
+		SessionID:        "plan-no-timeout",
+		SessionDraftPath: draftPath,
+	}, "workspace-123")
+	if planErr != nil {
+		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
+	}
+	if _, ok := harness.lastCtx.Deadline(); ok {
+		t.Fatal("planning harness context unexpectedly has a deadline")
+	}
+}
 
 func TestRenderPlanRunFeedbackIncludesFollowUpDraftPath(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -263,7 +306,7 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 		},
 	}
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
+		cfg:       &PlanningConfig{MaxParseRetries: 0},
 		harness:   harness,
 		templates: templates,
 	}
@@ -424,12 +467,18 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	registry.Register("plan-session", sess)
 	defer registry.Deregister("plan-session")
 
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.waitForPlanningTurn(context.Background(), sess)
+	}()
+
 	events <- adapter.AgentEvent{Type: "question", Payload: "Full cutover?", Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)}}
-	routeCtx, routeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	if err := svc.waitForPlanningTurn(routeCtx, sess); err == nil {
-		t.Fatal("waitForPlanningTurn returned nil before planner done")
+
+	select {
+	case err := <-done:
+		t.Fatalf("waitForPlanningTurn returned before planner done: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
-	routeCancel()
 
 	questions, err := svc.questionSvc.ListBySessionID(context.Background(), "plan-session")
 	if err != nil {
@@ -462,8 +511,13 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	}
 
 	events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
-	if err := svc.waitForPlanningTurn(context.Background(), sess); err != nil {
-		t.Fatalf("waitForPlanningTurn after answer: %v", err)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForPlanningTurn after answer: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for planner turn to finish after done")
 	}
 }
 
@@ -502,7 +556,7 @@ func TestRunPlanningWithCorrectionLoopResumesPlannerAfterDoneWithoutDraft(t *tes
 		},
 	}
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 1, SessionTimeout: time.Minute},
+		cfg:       &PlanningConfig{MaxParseRetries: 1},
 		harness:   harness,
 		templates: templates,
 	}
@@ -570,7 +624,7 @@ func TestRunPlanningWithCorrectionLoopDoesNotBurnRetriesWhenCorrectionSessionCan
 		},
 	}
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 5, SessionTimeout: time.Minute},
+		cfg:       &PlanningConfig{MaxParseRetries: 5},
 		harness:   harness,
 		templates: templates,
 	}
@@ -626,7 +680,7 @@ func TestRunPlanningWithCorrectionLoop_NativeResumeStartsWithRevisionFeedbackPro
 	}
 
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
+		cfg:       &PlanningConfig{MaxParseRetries: 0},
 		harness:   harness,
 		templates: templates,
 	}
@@ -698,7 +752,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 	}
 
 	svc := &PlanningService{
-		cfg:        &PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute},
+		cfg:        &PlanningConfig{MaxParseRetries: 0},
 		harness:    harness,
 		templates:  templates,
 		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
@@ -1212,7 +1266,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate safely.", "Implement safely.")}
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1299,7 +1353,7 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate.", "Implement.")}
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0, SessionTimeout: time.Minute}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}

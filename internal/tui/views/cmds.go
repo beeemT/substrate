@@ -903,18 +903,97 @@ func FinalizeWorkItemCmd(ctx context.Context, svc *orchestrator.ImplementationSe
 	}
 }
 
-// ResumeSessionCmd resumes an interrupted agent session.
-func ResumeSessionCmd(ctx context.Context, resumption *orchestrator.Resumption, sessionSvc *service.AgentSessionService, oldSessionID, instanceID string) tea.Cmd {
+// ResumeAllSessionsForWorkItemCmd resumes all non-superseded, non-planning-phase
+// interrupted sessions for a work item. Planning-phase interruptions are handled
+// by RestartPlanningCmd instead.
+func ResumeAllSessionsForWorkItemCmd(
+	ctx context.Context,
+	workItemSvc *service.SessionService,
+	planningSvc *orchestrator.PlanningService,
+	resumption *orchestrator.Resumption,
+	sessionSvc *service.AgentSessionService,
+	planSvc *service.PlanService,
+	foreman *orchestrator.Foreman,
+	workItemID string,
+	instanceID string,
+) tea.Cmd {
 	return func() tea.Msg {
-		session, err := sessionSvc.Get(ctx, oldSessionID)
+		sessions, err := sessionSvc.ListByWorkItemID(ctx, workItemID)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		if _, err := resumption.ResumeSession(ctx, session, instanceID); err != nil {
-			return ErrMsg{Err: err}
+
+		activeSubPlans := make(map[string]bool)
+		hasPlanningActive := false
+		for _, s := range sessions {
+			if s.Status == domain.AgentSessionRunning || s.Status == domain.AgentSessionPending ||
+				s.Status == domain.AgentSessionCompleted || s.Status == domain.AgentSessionWaitingForAnswer {
+				if s.Phase == domain.AgentSessionPhasePlanning {
+					hasPlanningActive = true
+				} else if s.SubPlanID != "" {
+					activeSubPlans[s.SubPlanID] = true
+				}
+			}
 		}
 
-		return SessionResumedMsg{Message: "Session resumed"}
+		toResume := make([]domain.AgentSession, 0, len(sessions))
+		var planningInterrupted *domain.AgentSession
+		for _, s := range sessions {
+			if s.Status != domain.AgentSessionInterrupted {
+				continue
+			}
+			if s.Phase == domain.AgentSessionPhasePlanning {
+				if !hasPlanningActive {
+					planningInterrupted = &s
+				}
+				continue
+			}
+			if s.SubPlanID != "" && activeSubPlans[s.SubPlanID] {
+				continue
+			}
+			toResume = append(toResume, s)
+		}
+
+		if planningInterrupted != nil {
+			if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
+				return ErrMsg{Err: err}
+			}
+			return RestartPlanningCmd(ctx, workItemSvc, planningSvc, sessionSvc, workItemID)()
+		}
+
+		if len(toResume) == 0 {
+			return SessionResumedMsg{WorkItemID: workItemID, Message: "No resumable tasks"}
+		}
+
+		foremanPlanID := ""
+		if foreman != nil && planSvc != nil {
+			plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("get plan for foreman resume: %w", err)}
+			}
+			if plan.Status == domain.PlanApproved {
+				if err := foreman.Start(ctx, plan.ID, ""); err != nil {
+					return ErrMsg{Err: fmt.Errorf("start foreman for resume: %w", err)}
+				}
+				foremanPlanID = plan.ID
+			}
+		}
+
+		succeeded := 0
+		for _, s := range toResume {
+			if _, err := resumption.ResumeSession(ctx, s, instanceID); err != nil {
+				slog.Warn("resume all: failed to resume session",
+					"agent_session_id", s.ID, "error", err)
+				continue
+			}
+			succeeded++
+		}
+
+		msg := "Resumed 1 task"
+		if succeeded != 1 {
+			msg = fmt.Sprintf("Resumed %d tasks", succeeded)
+		}
+		return SessionResumedMsg{WorkItemID: workItemID, ForemanPlanID: foremanPlanID, Message: msg}
 	}
 }
 

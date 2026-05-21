@@ -462,9 +462,12 @@ func (s *ManualSessionService) waitForCompletion(ctx context.Context, harnessSes
 		slog.Warn("manual harness session wait returned error", "error", err, "agent_session_id", sessionID)
 	}
 
+	cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
+	defer cleanupCancel()
+
 	// Persist resume info if available.
 	if resumeInfo := harnessSession.ResumeInfo(); len(resumeInfo) > 0 {
-		if updateErr := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, resumeInfo); updateErr != nil {
+		if updateErr := s.sessionSvc.UpdateResumeInfo(cleanupCtx, sessionID, resumeInfo); updateErr != nil {
 			slog.Error("failed to update resume info for manual session", "error", updateErr, "agent_session_id", sessionID)
 		}
 	}
@@ -472,13 +475,15 @@ func (s *ManualSessionService) waitForCompletion(ctx context.Context, harnessSes
 	// Transition to terminal state based on how the session ended.
 	if ctx.Err() != nil {
 		// Context cancelled: user aborted.
-		if interruptErr := s.sessionSvc.Interrupt(ctx, sessionID); interruptErr != nil {
+		if interruptErr := s.sessionSvc.Interrupt(cleanupCtx, sessionID); interruptErr != nil {
 			slog.Error("failed to interrupt manual session", "error", interruptErr, "agent_session_id", sessionID)
 		}
 	} else if err != nil {
 		// Harness error.
-		if failErr := s.sessionSvc.Fail(ctx, sessionID, nil); failErr != nil {
-			slog.Error("failed to fail manual session", "error", failErr, "agent_session_id", sessionID)
+		if !agentSessionAlreadyInterrupted(cleanupCtx, s.sessionSvc, sessionID) {
+			if failErr := s.sessionSvc.Fail(cleanupCtx, sessionID, nil); failErr != nil {
+				slog.Error("failed to fail manual session", "error", failErr, "agent_session_id", sessionID)
+			}
 		}
 	} else {
 		// Natural completion.

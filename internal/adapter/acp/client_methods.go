@@ -202,49 +202,47 @@ func (s *Session) handleWriteTextFile(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("decode fs/write_text_file params: %w", err)
 	}
-	// ensureWritePathInsideRoot validates the path is inside the sandbox and creates
-	// parent directories as its last step, so no separate MkdirAll is needed.
-	if err := ensureWritePathInsideRoot(s.root, p.Path); err != nil {
+	// resolveWritePath validates the path is inside the sandbox and creates parent
+	// directories as its last step. We resolve the path after validation to use the
+	// resolved path for I/O (prevents TOCTOU).
+	resolvedPath, err := resolveWritePath(s.root, p.Path)
+	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(p.Path, []byte(p.Content), 0o600); err != nil {
+	if err := os.WriteFile(resolvedPath, []byte(p.Content), 0o600); err != nil {
 		return fmt.Errorf("write text file: %w", err)
 	}
 	return nil
 }
 
-func ensureWritePathInsideRoot(root, p string) error {
+// resolveWritePath validates and resolves a write path to prevent TOCTOU.
+// Returns the resolved absolute path suitable for I/O operations.
+// Creates parent directories if they don't exist.
+func resolveWritePath(root, p string) (string, error) {
 	if !filepath.IsAbs(p) {
-		return fmt.Errorf("path %q is not absolute", p)
+		return "", fmt.Errorf("path %q is not absolute", p)
 	}
-	// Resolve the root's symlinks once. For the target path, we clean it and
-	// walk each component to resolve symlinks along the way. This handles the case
-	// where the file and its parent directories don't exist yet.
 	rootEval, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		rootEval = filepath.Clean(root)
 	}
-	// Clean and walk the target path to resolve any symlinks or .. components.
-	// WalkComponent resolves symlinks for each existing directory component.
 	pEval, err := filepath.EvalSymlinks(p)
 	if err != nil {
-		// File doesn't exist; walk the path components to resolve symlinks.
 		pEval = filepath.Clean(p)
 		pEval, err = walkPathResolveSymlinks(pEval)
 		if err != nil {
 			pEval = filepath.Clean(p)
 		}
 	}
-	// Validate the resolved path is inside root.
 	if !strings.HasPrefix(pEval+string(filepath.Separator), rootEval+string(filepath.Separator)) {
-		return fmt.Errorf("path %q is outside sandbox root %q", p, root)
+		return "", fmt.Errorf("path %q is outside sandbox root %q", p, root)
 	}
-	// Now safe to create parent directories.
-	parent := filepath.Dir(p)
+	// Create parent directories using the resolved path.
+	parent := filepath.Dir(pEval)
 	if err := os.MkdirAll(parent, 0o750); err != nil {
-		return fmt.Errorf("create parent dir: %w", err)
+		return "", fmt.Errorf("create parent dir: %w", err)
 	}
-	return nil
+	return pEval, nil
 }
 
 // walkPathResolveSymlinks walks the path and resolves symlinks for each component.
@@ -364,7 +362,9 @@ func (s *foremanSocket) handleConn(conn net.Conn) {
 	if req.Question == "" {
 		return
 	}
-	ctx := context.Background()
+	// Use a timeout to prevent indefinite blocking if the question is never answered.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	answer, err := s.broker.ask(ctx, adapter.AgentQuestionSourceAskForeman, req.Question, nil, map[string]any{"context": req.Context}, nil)
 	if err != nil {
 		slog.Warn("acp: foreman question failed", "error", err)

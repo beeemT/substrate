@@ -31,7 +31,8 @@ type Session struct {
 	done     chan struct{}
 	doneOnce sync.Once
 	doneErr  error
-	finished atomic.Bool // set true when finish is called; emit guards against send-on-closed
+	finished atomic.Bool // set true when finish is called
+	emitMu   sync.Mutex  // guards finished check and channel send to prevent send-on-closed
 
 	logMu    sync.Mutex
 	logFile  *os.File
@@ -109,9 +110,9 @@ func (s *Session) Steer(ctx context.Context, msg string) error {
 		close(s.steerCancel) // signal old prompt to abort
 		// Create a new steerCancel for the new prompt (always non-nil).
 		s.steerCancel = make(chan struct{})
-		// Clear steerDone so the new prompt starts with nil. The new prompt's
-		// runPrompt will set a new steerDone when it captures s.steerDone.
-		s.steerDone = nil
+		// Create a new steerDone for the new prompt. The new prompt's runPrompt
+		// will close this channel when it finishes (unless cancelled by steering).
+		s.steerDone = make(chan struct{})
 	}
 	s.promptMu.Unlock()
 	// Wait for the old prompt's runPrompt to fully exit (its defer must close
@@ -145,7 +146,10 @@ func (s *Session) Abort(ctx context.Context) error {
 			outErr = errors.Join(outErr, fmt.Errorf("cancel acp session: %w", err))
 		}
 		if s.init.AgentCapabilities.SessionCapabilities.supportsClose() {
-			if err := s.client.Call(ctx, "session/close", sessionIDParams{SessionID: s.acpSessionID}, nil); err != nil {
+			// Use a short timeout for graceful shutdown; it's best-effort.
+			closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := s.client.Call(closeCtx, "session/close", sessionIDParams{SessionID: s.acpSessionID}, nil); err != nil {
 				outErr = errors.Join(outErr, fmt.Errorf("close acp session: %w", err))
 			}
 		}
@@ -262,16 +266,16 @@ func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool)
 	s.promptMu.Unlock()
 	// Track whether this prompt was cancelled due to steering so we know whether to
 	// close isSteerDone in the defer. If mergedCtx is cancelled (steering cancelled us),
-	// the defer must NOT close isSteerDone because Steer has already created a new
-	// steerDone channel and is waiting on that instead.
-	wasSteerCancelled := false
+	// the defer must close isSteerDone so that the previous Steer call (which waits
+	// on prevSteerDone = the old isSteerDone) unblocks. Each prompt owns its channel
+	// exclusively, so double-close is impossible.
+	wasSteerCancelled := atomic.Bool{}
+	wasSteerCancelled.Store(false)
 	defer func() {
 		s.promptMu.Lock()
 		s.promptActive = false
-		// Only close isSteerDone if the prompt completed normally. If it was cancelled
-		// due to steering, Steer created a new steerDone and is waiting on that.
-		if isSteerDone != nil && !wasSteerCancelled {
-			close(isSteerDone) // signal that steer-aborter prompt has finished
+		if isSteerDone != nil {
+			close(isSteerDone) // signal that this prompt has finished (normal or steer-cancelled)
 		}
 		s.promptMu.Unlock()
 	}()
@@ -284,7 +288,7 @@ func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool)
 			// Context cancelled, don't need to watch steerCancel.
 			return
 		case <-isSteerAborted:
-			wasSteerCancelled = true
+			wasSteerCancelled.Store(true)
 			cancelMerge() // abort the prompt's Call
 		}
 	}()
@@ -292,7 +296,7 @@ func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool)
 	err := s.client.Call(mergedCtx, "session/prompt", promptParams{SessionID: s.acpSessionID, Prompt: []contentBlock{{Type: "text", Text: text}}}, &resp)
 	if err != nil {
 		// If cancelled due to steering, don't finalize the session.
-		if wasSteerCancelled {
+		if wasSteerCancelled.Load() {
 			s.emit(adapter.AgentEvent{Type: "error", Timestamp: now(), Payload: "ACP prompt cancelled for steering", Metadata: map[string]any{"stop_reason": "steer_cancel"}})
 			return nil
 		}
@@ -324,6 +328,9 @@ func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool)
 }
 
 func (s *Session) emit(evt adapter.AgentEvent) {
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+	// Check finished under lock to prevent race with finish().
 	if s.finished.Load() {
 		return
 	}
@@ -350,6 +357,8 @@ func (s *Session) emit(evt adapter.AgentEvent) {
 }
 
 func (s *Session) finish(err error) {
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
 	s.doneOnce.Do(func() {
 		s.finished.Store(true)
 		s.doneErr = err

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +23,7 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
+	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
@@ -203,6 +205,9 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// orchestrator goroutine (implementation/planning). Used to tear down
 	// agent processes when the session is deleted.
 	pipelineCancels map[string]context.CancelFunc
+
+	// program is the bubble tea program instance, used to send messages from goroutines.
+	program *tea.Program
 }
 
 // NewApp creates a new App from the given ServiceProvider and RuntimeContext.
@@ -264,6 +269,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 func RunTUI(provider ServiceProvider, runtimeCtx RuntimeContext) error {
 	app := NewApp(provider, runtimeCtx)
 	p := tea.NewProgram(app, tea.WithMouseCellMotion(), tea.WithFilter(macOSKeyFilter))
+	app.program = p
 
 	// Intercept SIGTERM so the quit-confirmation modal can run before exit.
 	// SIGINT is delivered by bubbletea as a ctrl+c key event; only SIGTERM needs
@@ -643,18 +649,24 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return hints
 	}
+	prependInterrupt := func(hints []KeybindHint) []KeybindHint {
+		if len(a.interruptibleFocusedSessionIDs()) == 0 {
+			return hints
+		}
+		return append([]KeybindHint{{Key: "I", Label: "Interrupt"}}, hints...)
+	}
 	if a.mainFocus == mainFocusContent {
 		hints := append([]KeybindHint{{Key: "←/Esc", Label: "Back"}}, a.content.KeybindHints()...)
-		return append(prependArchive(prependDelete(hints)), global...)
+		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
 		hints := []KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}
 		if a.selectedTaskSessionID() != "" && a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			hints = append([]KeybindHint{{Key: "Enter", Label: "Open overview"}}, hints...)
 		}
-		return append(prependArchive(prependDelete(hints)), global...)
+		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
 	}
-	return append(prependArchive(prependDelete([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}})), global...)
+	return append(prependDelete(prependInterrupt(prependArchive([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}))), global...)
 }
 
 func (a App) overviewOverlayOpen() bool {
@@ -719,6 +731,21 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func summarizeQuestionText(text string, limit int) string {
+	trimmed := strings.Join(strings.Fields(text), " ")
+	if limit <= 0 || trimmed == "" {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return trimmed
+	}
+	if limit == 1 {
+		return string(runes[:1])
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func (a App) workItemByID(workItemID string) *domain.Session {
@@ -1258,6 +1285,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleQuitRequest()
 
 	case QuitConfirmedMsg:
+		if err := a.interruptActiveAgentSessions(context.Background()); err != nil {
+			slog.Error("failed to interrupt agent sessions during quit", "error", err)
+		}
 		a.teardownAllPipelines()
 		if a.busSub != nil {
 			a.provider.Bus().Unsubscribe("tui:" + a.runtimeCtx.WorkspaceID)
@@ -1699,7 +1729,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case QuestionRaisedMsg:
 		a.upsertQuestion(msg.SessionID, msg.Question)
 		a.rebuildSidebar()
-		if a.currentWorkItemID != "" {
+
+		stageLabel := "Question"
+		if msg.Question.Stage == domain.AgentSessionPhasePlanning {
+			stageLabel = "Planning question"
+		}
+		a.toasts.AddToast(
+			fmt.Sprintf("%s: %s", stageLabel, summarizeQuestionText(msg.Question.Content, 60)),
+			components.ToastInfo,
+		)
+
+		if a.currentWorkItemID == msg.WorkItemID {
 			cmds = append(cmds, a.updateContentFromState())
 		}
 		return a, tea.Batch(cmds...)
@@ -1782,6 +1822,61 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		return a, nil
 
+	case ConfirmInterruptSessionsMsg:
+		ids := append([]string(nil), msg.SessionIDs...)
+		if len(ids) == 0 {
+			return a, nil
+		}
+		title := "Interrupt agent session?"
+		body := "This will stop the harness process, save resume state, and leave the session resumable."
+		if len(ids) > 1 {
+			title = "Interrupt agent sessions?"
+			body = fmt.Sprintf("This will stop %d harness processes, save resume state, and leave the sessions resumable.", len(ids))
+		}
+		a.showConfirm(title, body, func() tea.Msg { return InterruptSessionsMsg{SessionIDs: ids} })
+		return a, nil
+
+	case InterruptSessionsMsg:
+		ids := append([]string(nil), msg.SessionIDs...)
+		// Cancel pipelines synchronously to avoid racing with the event loop.
+		for _, id := range ids {
+			for _, session := range a.sessions {
+				if session.ID == id && isInterruptibleAgentSession(session) {
+					a.cancelPipeline(session.WorkItemID)
+				}
+			}
+		}
+		cmds = append(cmds, func() tea.Msg {
+			go func() {
+				err := a.interruptAgentSessionsByID(context.Background(), ids)
+				a.program.Send(SessionsInterruptedMsg{SessionIDs: ids, Err: err})
+			}()
+			return nil
+		})
+		return a, tea.Batch(cmds...)
+
+	case SessionsInterruptedMsg:
+		if msg.Err != nil {
+			a.toasts.AddToast(fmt.Sprintf("Interrupt failed: %v", msg.Err), components.ToastError)
+			return a, nil
+		}
+		for i := range a.sessions {
+			for _, id := range msg.SessionIDs {
+				if a.sessions[i].ID == id {
+					a.sessions[i].Status = domain.AgentSessionInterrupted
+				}
+			}
+		}
+		a.rebuildSidebar()
+		cmds = append(cmds, a.updateContentFromState())
+		n := len(msg.SessionIDs)
+		toastMsg := "Agent session interrupted"
+		if n > 1 {
+			toastMsg = fmt.Sprintf("%d agent sessions interrupted", n)
+		}
+		a.toasts.AddToast(toastMsg, components.ToastSuccess)
+		return a, tea.Batch(cmds...)
+
 	case ConfirmDeleteSessionMsg:
 		a.showDeleteSessionConfirm(msg.SessionID)
 		return a, nil
@@ -1827,7 +1922,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.provider.Foreman() != nil {
 			a.foremanPlanID = msg.PlanID
-			cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), msg.PlanID, ""))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1999,8 +2093,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResumeSessionMsg:
 		if a.provider.Resumption() != nil {
-			ctx := a.pipelineCtxForTask(msg.OldSessionID)
-			cmds = append(cmds, ResumeSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.OldSessionID, a.runtimeCtx.InstanceID))
+			if plan := a.plans[msg.WorkItemID]; plan != nil && a.provider.Foreman() != nil {
+				a.foremanPlanID = plan.ID
+			}
+			cmds = append(cmds, ResumeAllSessionsForWorkItemCmd(
+				context.Background(),
+				a.provider.Session(),
+				a.provider.Planning(),
+				a.provider.Resumption(),
+				a.provider.Task(),
+				a.provider.Plan(),
+				a.provider.Foreman(),
+				msg.WorkItemID,
+				a.runtimeCtx.InstanceID,
+			))
 		} else {
 			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
 		}
@@ -2095,7 +2201,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), plan.ID))
 				if a.provider.Foreman() != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
@@ -2112,7 +2217,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Implementation(), plan.ID, msg.WorkItemID))
 				if a.provider.Foreman() != nil {
 					a.foremanPlanID = plan.ID
-					cmds = append(cmds, StartForemanCmd(a.provider.Foreman(), plan.ID, ""))
 				}
 			} else {
 				a.toasts.AddToast("Plan not found for retry", components.ToastError)
@@ -2421,6 +2525,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Message != "" {
 			a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		}
+		if msg.ForemanPlanID != "" {
+			a.foremanPlanID = msg.ForemanPlanID
+		}
 		if msg.AgentSession.ID != "" {
 			a.upsertSession(msg.AgentSession)
 			a.rebuildSidebar()
@@ -2544,6 +2651,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ErrMsg:
+		// Route workspace init errors to the modal for cleanup (overlay close + progress reset).
+		if a.activeOverlay == overlayWorkspaceInit {
+			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
+			cmds = append(cmds, cmd)
+			slog.Error("operation failed", "toast", false, "error", msg.Err)
+			a.toasts.AddToast(formatOperationErrorToast(msg.Err), components.ToastError)
+			return a, tea.Batch(cmds...)
+		}
 		// Silently drop context cancellations — these fire when a pipeline is
 		// intentionally torn down on session delete or quit, not from real errors.
 		if errors.Is(msg.Err, context.Canceled) || errors.Is(msg.Err, context.DeadlineExceeded) {
@@ -2731,6 +2846,11 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sessionID := a.unarchivablSessionID(); sessionID != "" {
 			a.showUnarchiveConfirm(sessionID)
 			return a, nil
+		}
+	case "I":
+		ids := a.interruptibleFocusedSessionIDs()
+		if len(ids) > 0 {
+			return a, func() tea.Msg { return ConfirmInterruptSessionsMsg{SessionIDs: ids} }
 		}
 	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {
@@ -2976,6 +3096,10 @@ func sourceDetailsNoticeFromOverviewAction(action OverviewActionCard) *sourceDet
 			notice.Body += " Question: " + question
 		}
 	case overviewActionInterrupted:
+		if len(action.InterruptedSessions) > 1 {
+			notice.Body = fmt.Sprintf("%d repo tasks were interrupted and cannot continue until they are resumed: %s.", len(action.InterruptedSessions), strings.Join(action.Affected, ", "))
+			break
+		}
 		target := firstNonEmptyString(strings.TrimSpace(action.Blocked), firstSourceDetailsAffected(action.Affected), "A repo task")
 		notice.Body = target + " was interrupted and cannot continue until it is resumed or abandoned."
 	case overviewActionReviewing:
@@ -3106,6 +3230,85 @@ func (a *App) canActOnSession(s domain.AgentSession) bool {
 func (a *App) showConfirm(title, message string, onYes tea.Cmd) {
 	a.confirm = components.NewConfirmDialog(a.statusBar.styles, title, message, onYes)
 	a.confirmActive = true
+}
+
+func (a App) interruptibleFocusedSessionIDs() []string {
+	if a.currentWorkItemID == "" {
+		return nil
+	}
+	selectedID := a.selectedTaskSessionID()
+	if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
+		if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && isInterruptibleAgentSession(*session) {
+			return []string{session.ID}
+		}
+		return nil
+	}
+	ids := make([]string, 0, len(a.sessions))
+	for _, session := range a.sessionsForWorkItem(a.currentWorkItemID) {
+		if isInterruptibleAgentSession(session) {
+			ids = append(ids, session.ID)
+		}
+	}
+	return ids
+}
+
+func isInterruptibleAgentSession(session domain.AgentSession) bool {
+	return session.Status == domain.AgentSessionRunning || session.Status == domain.AgentSessionWaitingForAnswer
+}
+
+func (a *App) interruptActiveAgentSessions(ctx context.Context) error {
+	ids := make([]string, 0)
+	for _, session := range a.sessions {
+		if isInterruptibleAgentSession(session) {
+			ids = append(ids, session.ID)
+		}
+	}
+	return a.interruptAgentSessionsByID(ctx, ids)
+}
+
+func (a *App) interruptAgentSessionsByID(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	taskSvc := a.provider.Task()
+	if taskSvc == nil {
+		return errors.New("agent session service is unavailable")
+	}
+	byID := make(map[string]domain.AgentSession, len(a.sessions))
+	for _, session := range a.sessions {
+		byID[session.ID] = session
+	}
+	for _, id := range ids {
+		session, ok := byID[id]
+		if !ok || !isInterruptibleAgentSession(session) {
+			continue
+		}
+		if err := interruptAgentSession(ctx, taskSvc, a.provider.SessionRegistry(), session); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func interruptAgentSession(ctx context.Context, taskSvc *service.AgentSessionService, registry *orchestrator.SessionRegistry, session domain.AgentSession) error {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cleanupCancel()
+	if registry != nil {
+		if harnessSession, ok := registry.Registered(session.ID); ok {
+			if info := harnessSession.ResumeInfo(); len(info) > 0 {
+				if err := taskSvc.UpdateResumeInfo(cleanupCtx, session.ID, info); err != nil {
+					return fmt.Errorf("update resume info for %s: %w", session.ID, err)
+				}
+			}
+		}
+	}
+	if err := taskSvc.Interrupt(cleanupCtx, session.ID); err != nil {
+		return fmt.Errorf("interrupt agent session %s: %w", session.ID, err)
+	}
+	if registry != nil {
+		registry.AbortAndDeregister(cleanupCtx, session.ID)
+	}
+	return nil
 }
 
 func (a *App) showDeleteSessionConfirm(sessionID string) {
@@ -3312,7 +3515,7 @@ func (a App) handleQuitRequest() (tea.Model, tea.Cmd) {
 		}
 		a.showConfirm(
 			"Quit",
-			fmt.Sprintf("%d agent %s running and will be killed. Quit anyway?", n, sessionWord),
+			fmt.Sprintf("%d agent %s running. Quit will interrupt them so they can be resumed later. Quit anyway?", n, sessionWord),
 			func() tea.Msg { return QuitConfirmedMsg{} },
 		)
 		return &a, nil

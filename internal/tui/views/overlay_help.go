@@ -63,7 +63,7 @@ func (h HelpOverlay) View() string {
 			{"o", "Override accept"},
 		}},
 		{"Interrupted", []entry{
-			{"r", "Resume session"},
+			{"r", "Resume all"},
 			{"a", "Abandon session"},
 		}},
 		{"Repo Manager", []entry{

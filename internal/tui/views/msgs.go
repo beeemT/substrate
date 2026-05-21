@@ -248,22 +248,22 @@ type AnswerQuestionMsg struct {
 // SkipQuestionMsg fires when an explicit skip action resolves a question without an answer.
 type SkipQuestionMsg struct{ QuestionID string }
 
-// ResumeSessionMsg fires when the user presses [r] on interrupted.
+// ResumeSessionMsg fires when the user presses [r] on an interrupted session.
 type ResumeSessionMsg struct {
-	SubPlanID    string
-	OldSessionID string
+	WorkItemID string
 }
 
-// RestartPlanMsg fires when the user presses [r] on an interrupted planning task.
+// RestartPlanMsg fires when the user requests a fresh planning restart.
 type RestartPlanMsg struct{ WorkItemID string }
 
-// SessionResumedMsg is returned by ResumeSessionCmd after the interrupted session
-// has been replaced by a new running session, or sent by the event consumer
+// SessionResumedMsg is returned after interrupted sessions have been resumed,
+// or sent by the event consumer
 // when EventAgentSessionResumed is received.
 type SessionResumedMsg struct {
-	Message      string
-	WorkItemID   string
-	AgentSession domain.AgentSession // Full agent session for direct upsert
+	Message       string
+	WorkItemID    string
+	ForemanPlanID string
+	AgentSession  domain.AgentSession // Full agent session for direct upsert
 }
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
@@ -277,8 +277,20 @@ type PlanningRestartedMsg struct {
 type QuitRequestMsg struct{}
 
 // QuitConfirmedMsg fires when the user confirms the quit dialog. The handler
-// tears down all running pipelines and agent sessions before exiting.
+// interrupts running agent sessions before tearing down pipelines and exiting.
 type QuitConfirmedMsg struct{}
+
+// ConfirmInterruptSessionsMsg requests a confirmation dialog before interrupting sessions.
+type ConfirmInterruptSessionsMsg struct{ SessionIDs []string }
+
+// InterruptSessionsMsg fires when the user confirms interrupting sessions.
+type InterruptSessionsMsg struct{ SessionIDs []string }
+
+// SessionsInterruptedMsg reports focused session interruption completion.
+type SessionsInterruptedMsg struct {
+	SessionIDs []string
+	Err        error
+}
 
 // AbandonSessionMsg fires when the user confirms abandonment.
 type AbandonSessionMsg struct{ SessionID string }

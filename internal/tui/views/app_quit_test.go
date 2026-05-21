@@ -10,6 +10,8 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/orchestrator"
+	"github.com/beeemT/substrate/internal/repository"
+	"github.com/beeemT/substrate/internal/service"
 )
 
 // newQuitTestApp creates a minimal App with the given sessions list.
@@ -20,16 +22,22 @@ func newQuitTestApp(sessions []domain.AgentSession) *App {
 }
 
 // newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
-func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, *orchestrator.SessionRegistry) {
+func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, *orchestrator.SessionRegistry, *mockTaskRepoForSession) {
 	reg := orchestrator.NewSessionRegistry()
+	tasks := make(map[string]domain.AgentSession, len(sessions))
+	for _, session := range sessions {
+		tasks[session.ID] = session
+	}
+	taskRepo := &mockTaskRepoForSession{tasks: tasks}
 	app := newTestApp(Services{
 		WorkspaceID:     "ws-1",
 		WorkspaceName:   "test",
 		Settings:        &SettingsService{},
 		SessionRegistry: reg,
+		Task:            service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, NewNoopPublisher()),
 	})
 	app.sessions = sessions
-	return app, reg
+	return app, reg, taskRepo
 }
 
 func runningSessions(n int) []domain.AgentSession {
@@ -230,8 +238,9 @@ func TestQuitConfirmEscCancels(t *testing.T) {
 
 // quitTestMockSession is a minimal adapter.AgentSession that tracks Abort calls.
 type quitTestMockSession struct {
-	id      string
-	aborted bool
+	id         string
+	aborted    bool
+	resumeInfo map[string]string
 }
 
 func (m *quitTestMockSession) ID() string                                    { return m.id }
@@ -241,7 +250,7 @@ func (m *quitTestMockSession) SendMessage(_ context.Context, _ string) error { r
 func (m *quitTestMockSession) Abort(_ context.Context) error                 { m.aborted = true; return nil }
 func (m *quitTestMockSession) Steer(_ context.Context, _ string) error       { return nil }
 func (m *quitTestMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
-func (m *quitTestMockSession) ResumeInfo() map[string]string                 { return nil }
+func (m *quitTestMockSession) ResumeInfo() map[string]string                 { return m.resumeInfo }
 func (m *quitTestMockSession) Compact(_ context.Context) error               { return nil }
 
 // TestQuitConfirmedMsgAbortsRegistrySessions verifies that dispatching
@@ -255,10 +264,10 @@ func TestQuitConfirmedMsgAbortsRegistrySessions(t *testing.T) {
 		{ID: "task-2", WorkItemID: "wi-1", Status: domain.AgentSessionCompleted},
 		{ID: "task-3", WorkItemID: "wi-2", Status: domain.AgentSessionRunning},
 	}
-	app, reg := newQuitTestAppWithRegistry(sessions)
+	app, reg, taskRepo := newQuitTestAppWithRegistry(sessions)
 
 	// Register running sessions in the registry.
-	mock1 := &quitTestMockSession{id: "task-1"}
+	mock1 := &quitTestMockSession{id: "task-1", resumeInfo: map[string]string{"session": "resume-1"}}
 	mock3 := &quitTestMockSession{id: "task-3"}
 	reg.Register("task-1", mock1)
 	reg.Register("task-3", mock3)
@@ -287,10 +296,144 @@ func TestQuitConfirmedMsgAbortsRegistrySessions(t *testing.T) {
 	if reg.IsRunning("task-3") {
 		t.Fatal("task-3 should be deregistered")
 	}
+	if got := taskRepo.tasks["task-1"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("task-1 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["task-1"].ResumeInfo["session"]; got != "resume-1" {
+		t.Fatalf("task-1 resume info = %q, want resume-1", got)
+	}
 }
 
 // TestQuitConfirmedMsgCancelsPipelineContexts verifies that pipeline
 // cancel functions are actually invoked during quit teardown.
+func TestFocusedInterruptInterruptsSelectedAgentSession(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "task-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "task-2", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app, reg, taskRepo := newQuitTestAppWithRegistry(sessions)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}}
+	app.currentWorkItemID = "wi-1"
+	app.sidebarMode = sidebarPaneTasks
+	app.setSelectedTaskSessionID("task-1")
+
+	mock1 := &quitTestMockSession{id: "task-1", resumeInfo: map[string]string{"session": "resume-focused"}}
+	mock2 := &quitTestMockSession{id: "task-2"}
+	reg.Register("task-1", mock1)
+	reg.Register("task-2", mock2)
+	pipelineCtx := app.registerPipelineCancel("wi-1")
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	if cmd == nil {
+		t.Fatal("interrupt key returned nil cmd")
+	}
+	confirm, ok := cmd().(ConfirmInterruptSessionsMsg)
+	if !ok {
+		t.Fatalf("cmd message = %T, want ConfirmInterruptSessionsMsg", cmd())
+	}
+	if len(confirm.SessionIDs) != 1 || confirm.SessionIDs[0] != "task-1" {
+		t.Fatalf("interrupt ids = %#v, want [task-1]", confirm.SessionIDs)
+	}
+
+	model, _ = updated.Update(confirm)
+	updated = model.(*App)
+	if !updated.confirmActive {
+		t.Fatal("expected interrupt confirm modal")
+	}
+	if !strings.Contains(updated.confirm.Message, "resumable") {
+		t.Fatalf("confirm message = %q, want resumable copy", updated.confirm.Message)
+	}
+
+	msg := updated.confirm.OnYes()
+	interruptMsg, ok := msg.(InterruptSessionsMsg)
+	if !ok {
+		t.Fatalf("confirm OnYes = %T, want InterruptSessionsMsg", msg)
+	}
+	// Pipeline cancellation happens in the InterruptSessionsMsg handler before calling
+	// interruptAgentSessionsByID. Simulate that here.
+	for _, id := range interruptMsg.SessionIDs {
+		for _, session := range updated.sessions {
+			if session.ID == id {
+				updated.cancelPipeline(session.WorkItemID)
+			}
+		}
+	}
+	result := updated.interruptAgentSessionsByID(context.Background(), interruptMsg.SessionIDs)
+	if result != nil {
+		t.Fatalf("interruptAgentSessionsByID: %v", result)
+	}
+	if pipelineCtx.Err() == nil {
+		t.Fatal("pipeline context should be cancelled before aborting focused session")
+	}
+	if !mock1.aborted {
+		t.Fatal("task-1 should have been aborted")
+	}
+	if mock2.aborted {
+		t.Fatal("task-2 should not have been aborted")
+	}
+	if got := taskRepo.tasks["task-1"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("task-1 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["task-2"].Status; got != domain.AgentSessionRunning {
+		t.Fatalf("task-2 status = %q, want running", got)
+	}
+	if got := taskRepo.tasks["task-1"].ResumeInfo["session"]; got != "resume-focused" {
+		t.Fatalf("task-1 resume info = %q, want resume-focused", got)
+	}
+}
+
+func TestFocusedInterruptWorkItemInterruptsRunningChildren(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "task-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "task-2", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionWaitingForAnswer},
+		{ID: "task-3", WorkItemID: "wi-2", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app, reg, taskRepo := newQuitTestAppWithRegistry(sessions)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}}
+	app.currentWorkItemID = "wi-1"
+	app.sidebarMode = sidebarPaneSessions
+	app.setSelectedTaskSessionID("")
+
+	mock1 := &quitTestMockSession{id: "task-1"}
+	mock2 := &quitTestMockSession{id: "task-2"}
+	mock3 := &quitTestMockSession{id: "task-3"}
+	reg.Register("task-1", mock1)
+	reg.Register("task-2", mock2)
+	reg.Register("task-3", mock3)
+
+	ids := app.interruptibleFocusedSessionIDs()
+	idSet := map[string]bool{}
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	if len(ids) != 2 || !idSet["task-1"] || !idSet["task-2"] {
+		t.Fatalf("interruptibleFocusedSessionIDs = %#v, want task-1 and task-2", ids)
+	}
+	if err := app.interruptAgentSessionsByID(context.Background(), ids); err != nil {
+		t.Fatalf("interruptAgentSessionsByID: %v", err)
+	}
+	if !mock1.aborted || !mock2.aborted {
+		t.Fatal("work item children should have been aborted")
+	}
+	if mock3.aborted {
+		t.Fatal("other work item session should not have been aborted")
+	}
+	if got := taskRepo.tasks["task-1"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("task-1 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["task-2"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("task-2 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["task-3"].Status; got != domain.AgentSessionRunning {
+		t.Fatalf("task-3 status = %q, want running", got)
+	}
+}
+
 func TestQuitConfirmedMsgCancelsPipelineContexts(t *testing.T) {
 	t.Parallel()
 
