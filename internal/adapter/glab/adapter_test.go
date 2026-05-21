@@ -116,7 +116,7 @@ func TestMRTitle_FallsBackToBranch(t *testing.T) {
 func TestMRTitle_ClampsLongWorkItemTitle(t *testing.T) {
 	longTitle := strings.Repeat("x", 300)
 	got := mrTitle(longTitle, "sub-SEN-acme-123-fmt-wraperror-post-api-v6-kpi")
-	want := strings.Repeat("x", 254) + gitlabMRTitleEllipsisSuffix
+	want := strings.Repeat("x", 244) + gitlabMRTitleEllipsisSuffix
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -128,7 +128,7 @@ func TestMRTitle_ClampsLongWorkItemTitle(t *testing.T) {
 func TestMRTitle_ClampsLongWorkItemTitleAtRuneBoundary(t *testing.T) {
 	longTitle := strings.Repeat("å", 300)
 	got := mrTitle(longTitle, "sub-SEN-acme-123-fmt-wraperror-post-api-v6-kpi")
-	want := strings.Repeat("å", 254) + gitlabMRTitleEllipsisSuffix
+	want := strings.Repeat("å", 244) + gitlabMRTitleEllipsisSuffix
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -865,6 +865,17 @@ func (r *inMemArtifactLinkRepo) TransferArtifactLinks(_ context.Context, fromID,
 			r.links[i].ProviderArtifactID = toID
 		}
 	}
+	return nil
+}
+
+func (r *inMemArtifactLinkRepo) DeleteByWorkItemID(_ context.Context, workItemID string) error {
+	filtered := r.links[:0]
+	for _, l := range r.links {
+		if l.WorkItemID != workItemID {
+			filtered = append(filtered, l)
+		}
+	}
+	r.links = filtered
 	return nil
 }
 

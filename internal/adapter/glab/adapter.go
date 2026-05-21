@@ -46,7 +46,7 @@ type mrRefresher interface {
 var _ mrRefresher = &GlabAdapter{}
 
 const (
-	gitlabMRTitleMaxRunes       = 255
+	gitlabMRTitleMaxRunes       = 245
 	gitlabMRTitleEllipsisSuffix = "…"
 )
 
