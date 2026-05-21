@@ -128,6 +128,10 @@ func (r emptySessionArtifactRepo) TransferArtifactLinks(_ context.Context, _, _ 
 	return nil
 }
 
+func (r emptySessionArtifactRepo) DeleteByWorkItemID(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestTaskSidebarEntries_GitlabIncludesRecordedArtifactWithoutLink(t *testing.T) {
 	t.Parallel()
 

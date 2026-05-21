@@ -45,6 +45,10 @@ func (emptySessionArtifactRepoForInit) TransferArtifactLinks(_ context.Context, 
 	return nil
 }
 
+func (emptySessionArtifactRepoForInit) DeleteByWorkItemID(_ context.Context, _ string) error {
+	return nil
+}
+
 type stubWorkspaceInitAdapter struct{ name string }
 
 func (a stubWorkspaceInitAdapter) Name() string { return a.name }

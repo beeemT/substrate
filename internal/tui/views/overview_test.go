@@ -280,6 +280,17 @@ func (r *overviewArtifactLinkRepo) TransferArtifactLinks(_ context.Context, from
 	return nil
 }
 
+func (r *overviewArtifactLinkRepo) DeleteByWorkItemID(_ context.Context, workItemID string) error {
+	filtered := make([]domain.SessionReviewArtifact, 0, len(r.links))
+	for _, link := range r.links {
+		if link.WorkItemID != workItemID {
+			filtered = append(filtered, link)
+		}
+	}
+	r.links = filtered
+	return nil
+}
+
 type overviewGitlabMRRepo struct {
 	mrs map[string]domain.GitlabMergeRequest
 }

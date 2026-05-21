@@ -4060,12 +4060,18 @@ func deleteSessionCmd(provider ServiceProvider, sessionsDir, sessionID string, r
 
 func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvider, sessionsDir, sessionID string, reviewSessionLogs map[string]string) (sessionDeleteResult, error) {
 	svcs := provider.GetServices()
+	gitClient := provider.GitClient()
 
 	result := sessionDeleteResult{TaskIDs: make([]string, 0)}
 	artifactDeletes := make([]struct {
 		taskID        string
 		reviewLogPath string
 	}, 0)
+
+	// Collect worktree paths before deleting sessions so we can remove them.
+	// Worktree paths are needed for git-work rm and for emitting cleanup events.
+	var worktreePaths []string
+	var worktreeByRepo map[string]string // repo -> worktree path for git-work rm
 
 	plan, err := svcs.Plan.GetPlanByWorkItemID(ctx, sessionID)
 	var notFound service.ErrNotFound
@@ -4088,6 +4094,17 @@ func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvide
 					taskID        string
 					reviewLogPath string
 				}{taskID: agentSession.ID, reviewLogPath: reviewSessionLogs[agentSession.ID]})
+
+				// Collect worktree paths before deletion
+				if agentSession.WorktreePath != "" {
+					worktreePaths = append(worktreePaths, agentSession.WorktreePath)
+					// Dedupe by repo - last session wins, but paths should be same for same repo
+					if worktreeByRepo == nil {
+						worktreeByRepo = make(map[string]string)
+					}
+					worktreeByRepo[agentSession.RepositoryName] = agentSession.WorktreePath
+				}
+
 				if err := svcs.Task.Delete(ctx, agentSession.ID); err != nil {
 					return sessionDeleteResult{}, err
 				}
@@ -4101,6 +4118,12 @@ func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvide
 		}
 	}
 
+	// Delete session review artifacts (links to MRs/PRs) and their associated records.
+	// This must happen before deleting the work_item so we can still look up the work_item.
+	if err := deleteSessionReviewArtifacts(ctx, svcs, sessionID); err != nil {
+		return sessionDeleteResult{}, fmt.Errorf("delete session review artifacts: %w", err)
+	}
+
 	if err := svcs.Session.Delete(ctx, sessionID); err != nil {
 		return sessionDeleteResult{}, err
 	}
@@ -4111,8 +4134,86 @@ func deleteSessionTasksAndArtifacts(ctx context.Context, provider ServiceProvide
 			cleanupErrs = append(cleanupErrs, err)
 		}
 	}
+
+	// Remove worktrees using git-work rm.
+	// Skip if gitClient is nil (e.g., in tests without a real client).
+	for repo, worktreePath := range worktreeByRepo {
+		if worktreePath == "" || gitClient == nil {
+			continue
+		}
+		// Get the repo dir (parent of worktree)
+		repoDir := filepath.Dir(worktreePath)
+		// Get branch name from worktree path (last component)
+		branch := filepath.Base(worktreePath)
+		if err := gitClient.Remove(ctx, repoDir, branch); err != nil {
+			slog.Warn("failed to remove worktree during session delete",
+				"worktree", worktreePath, "repo", repo, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("remove worktree %s: %w", worktreePath, err))
+		} else {
+			slog.Debug("removed worktree during session delete", "worktree", worktreePath, "repo", repo)
+		}
+	}
+
 	result.CleanupWarning = errors.Join(cleanupErrs...)
 	return result, nil
+}
+
+// deleteSessionReviewArtifacts deletes all review artifact records for a work item,
+// including linked MRs/PRs, reviews, and checks.
+// If SessionArtifacts service is nil (e.g., in tests), this is a no-op.
+func deleteSessionReviewArtifacts(ctx context.Context, svcs *Services, workItemID string) error {
+	// Skip if SessionArtifacts is nil (e.g., in tests without full service setup)
+	if svcs.SessionArtifacts == nil {
+		return nil
+	}
+
+	// Get all session review artifacts for this work item
+	artifacts, err := svcs.SessionArtifacts.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return fmt.Errorf("list session review artifacts: %w", err)
+	}
+
+	for _, artifact := range artifacts {
+		switch artifact.Provider {
+		case "gitlab":
+			// Delete MR reviews and checks first (FK dependencies)
+			if err := svcs.GitlabMRReviews.DeleteByMRID(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete MR reviews during session delete",
+					"artifact_id", artifact.ID, "mr_id", artifact.ProviderArtifactID, "error", err)
+			}
+			if err := svcs.GitlabMRChecks.DeleteByMRID(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete MR checks during session delete",
+					"artifact_id", artifact.ID, "mr_id", artifact.ProviderArtifactID, "error", err)
+			}
+			// Delete the MR itself
+			if err := svcs.GitlabMRs.Delete(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete MR during session delete",
+					"artifact_id", artifact.ID, "mr_id", artifact.ProviderArtifactID, "error", err)
+			}
+		case "github":
+			// Delete PR reviews and checks first (FK dependencies)
+			if err := svcs.GithubPRReviews.DeleteByPRID(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete PR reviews during session delete",
+					"artifact_id", artifact.ID, "pr_id", artifact.ProviderArtifactID, "error", err)
+			}
+			if err := svcs.GithubPRChecks.DeleteByPRID(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete PR checks during session delete",
+					"artifact_id", artifact.ID, "pr_id", artifact.ProviderArtifactID, "error", err)
+			}
+			// Delete the PR itself
+			if err := svcs.GithubPRs.Delete(ctx, artifact.ProviderArtifactID); err != nil {
+				slog.Warn("failed to delete PR during session delete",
+					"artifact_id", artifact.ID, "pr_id", artifact.ProviderArtifactID, "error", err)
+			}
+		}
+	}
+
+	// Delete the session review artifacts themselves
+	if err := svcs.SessionArtifacts.DeleteByWorkItemID(ctx, workItemID); err != nil {
+		return fmt.Errorf("delete session review artifacts: %w", err)
+	}
+
+	return nil
 }
 
 func deleteTaskArtifacts(sessionsDir, taskID, reviewLogPath string) error {

@@ -503,7 +503,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	now := time.Now()
 	taskRepo := &sessionSearchDeleteRepo{
 		sessions: map[string]domain.AgentSession{
-			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", WorktreePath: "/tmp/worktrees/repo-a/sub-branch", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
@@ -514,9 +514,11 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	sessionsDir := filepath.Join(t.TempDir(), "[")
 
 	msg := deleteSessionCmd(servicesToProvider(Services{
-		Task:    service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, NewNoopPublisher()),
-		Session: service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
-		Plan:    planSvc,
+		Task:             service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, NewNoopPublisher()),
+		Session:          service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, NewNoopPublisher()),
+		Plan:             planSvc,
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: &emptySessionArtifactRepo{}}}),
+		// GitClient intentionally nil to test graceful handling
 	}), sessionsDir, "wi-1", map[string]string{"sess-1": filepath.Join(sessionsDir, "review-1.log")})()
 	deleted, ok := msg.(SessionDeletedMsg)
 	if !ok {
