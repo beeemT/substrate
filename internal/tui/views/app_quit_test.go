@@ -452,3 +452,59 @@ func TestQuitConfirmedMsgCancelsPipelineContexts(t *testing.T) {
 		t.Fatal("pipeline context was not cancelled by QuitConfirmedMsg")
 	}
 }
+
+// TestFocusedInterruptModalFitsNarrowTerminal verifies that the interrupt confirmation
+// modal renders correctly and contains expected content.
+func TestFocusedInterruptModalFitsNarrowTerminal(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "task-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app := newQuitTestApp(sessions)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}}
+	app.currentWorkItemID = "wi-1"
+	app.sidebarMode = sidebarPaneTasks
+	app.setSelectedTaskSessionID("task-1")
+
+	// Set a realistic terminal size.
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// Trigger the interrupt confirmation modal.
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	app = model.(*App)
+	if cmd == nil {
+		t.Fatal("interrupt key returned nil cmd")
+	}
+
+	confirmMsg, ok := cmd().(ConfirmInterruptSessionsMsg)
+	if !ok {
+		t.Fatalf("cmd message = %T, want ConfirmInterruptSessionsMsg", cmd())
+	}
+	if len(confirmMsg.SessionIDs) != 1 {
+		t.Fatalf("interrupt ids = %#v, want [task-1]", confirmMsg.SessionIDs)
+	}
+
+	// Show the confirmation dialog.
+	model, _ = app.Update(confirmMsg)
+	app = model.(*App)
+
+	if !app.confirmActive {
+		t.Fatal("expected confirm modal to be active")
+	}
+
+	// Verify the modal renders without crashing.
+	confirmView := app.confirm.View()
+	if confirmView == "" {
+		t.Fatal("confirm view returned empty string")
+	}
+
+	// Verify the modal contains expected content.
+	plain := confirmView
+	for _, want := range []string{"Interrupt", "session", "[y]", "[n]"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("confirm view missing %q\nview:\n%s", want, plain)
+		}
+	}
+}

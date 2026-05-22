@@ -675,6 +675,118 @@ func TestResumeSession_WithoutResumeInfo(t *testing.T) {
 	}
 }
 
+// TestInterruptedSession_ResumeWithManualPrompt verifies that when resuming an
+// interrupted session with an operator-supplied prompt, the prompt is delivered
+// through native resume when ResumeInfo is available, or as a fallback message
+// when ResumeInfo is not available.
+func TestInterruptedSession_ResumeWithManualPrompt(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	const manualPrompt = "Please prioritize the authentication module first."
+
+	// Test with resume info available (native resume path).
+	{
+		fix2 := newPhase9bFixture()
+		intID := "sess-int-with-resume"
+		fix2.seedInterruptedSessionWithResumeInfo(intID, map[string]string{"session": "native-resume-data"})
+
+		harness := &captureHarness{sessionsDir: sessionsDir}
+		resumption := NewResumption(harness, fix2.sessionSvc, fix2.planSvc, fix2.workItemSvc, fix2.bus, nil, nil)
+
+		interrupted := fix2.sessionRepo.sessions[intID]
+		result, err := resumption.ResumeSessionWithPrompt(ctx, interrupted, manualPrompt, "inst-native")
+		if err != nil {
+			t.Fatalf("ResumeSessionWithPrompt (native): %v", err)
+		}
+
+		if got := fix2.getSessionStatus(result.NewSession.ID); got != domain.AgentSessionRunning {
+			t.Errorf("new session (native): expected running, got %q", got)
+		}
+
+		opts := harness.lastOpts()
+		// Native resume: ResumeFromSessionID and ResumeInfo should be set.
+		if opts.ResumeFromSessionID != interrupted.ID {
+			t.Errorf("ResumeFromSessionID (native) = %q, want %q", opts.ResumeFromSessionID, interrupted.ID)
+		}
+		if opts.ResumeInfo == nil || opts.ResumeInfo["session"] != "native-resume-data" {
+			t.Errorf("ResumeInfo (native) missing session key, got %v", opts.ResumeInfo)
+		}
+		// Manual prompt should be passed as UserPrompt.
+		if opts.UserPrompt != manualPrompt {
+			t.Errorf("UserPrompt (native) = %q, want %q", opts.UserPrompt, manualPrompt)
+		}
+
+		// SendMessage should be called with orientation.
+		sess := harness.lastSession
+		sess.mu.Lock()
+		hasOrientation := false
+		for _, msg := range sess.messages {
+			if strings.Contains(msg, "previous session was interrupted") {
+				hasOrientation = true
+				break
+			}
+		}
+		sess.mu.Unlock()
+		if !hasOrientation {
+			t.Error("native resume should send orientation via SendMessage")
+		}
+	}
+
+	// Test without resume info (fallback path).
+	{
+		fix3 := newPhase9bFixture()
+		intID := "sess-int-no-resume-prompt"
+		fix3.seedInterruptedSession(intID)
+
+		harness2 := &captureHarness{sessionsDir: sessionsDir}
+		resumption2 := NewResumption(harness2, fix3.sessionSvc, fix3.planSvc, fix3.workItemSvc, fix3.bus, nil, nil)
+
+		interrupted := fix3.sessionRepo.sessions[intID]
+		result, err := resumption2.ResumeSessionWithPrompt(ctx, interrupted, manualPrompt, "inst-fallback")
+		if err != nil {
+			t.Fatalf("ResumeSessionWithPrompt (fallback): %v", err)
+		}
+
+		if got := fix3.getSessionStatus(result.NewSession.ID); got != domain.AgentSessionRunning {
+			t.Errorf("new session (fallback): expected running, got %q", got)
+		}
+
+		opts := harness2.lastOpts()
+		// Fallback path: no ResumeFromSessionID or ResumeInfo.
+		if opts.ResumeFromSessionID != "" {
+			t.Errorf("ResumeFromSessionID (fallback) = %q, want empty", opts.ResumeFromSessionID)
+		}
+		if len(opts.ResumeInfo) != 0 {
+			t.Errorf("ResumeInfo (fallback) = %v, want empty", opts.ResumeInfo)
+		}
+		// UserPrompt should include both orientation and manual prompt.
+		if opts.UserPrompt == "" {
+			t.Error("UserPrompt (fallback) should be non-empty")
+		}
+		if !strings.Contains(opts.UserPrompt, "continuing work") {
+			t.Errorf("UserPrompt (fallback) missing orientation, got: %q", opts.UserPrompt)
+		}
+		if !strings.Contains(opts.UserPrompt, manualPrompt) {
+			t.Errorf("UserPrompt (fallback) missing manual prompt, got: %q", opts.UserPrompt)
+		}
+
+		// No SendMessage in fallback path.
+		sess := harness2.lastSession
+		sess.mu.Lock()
+		if len(sess.messages) != 0 {
+			t.Errorf("expected 0 SendMessage calls in fallback path, got %d", len(sess.messages))
+		}
+		sess.mu.Unlock()
+	}
+}
+
 // ============================================================
 // FollowUpSession / WaitAndComplete tests
 // ============================================================

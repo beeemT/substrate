@@ -521,6 +521,169 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	}
 }
 
+func TestWaitForPlanningTurn_StaysAliveWhileWaitingForAnswer(t *testing.T) {
+	t.Parallel()
+
+	questionRepo := newMockQuestionRepo()
+	sessionRepo := newMockSessionRepo()
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{
+		ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1",
+		Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock",
+		Status: domain.AgentSessionRunning,
+	}
+
+	registry := NewSessionRegistry()
+	svc := &PlanningService{
+		questionSvc: service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{}),
+		sessionSvc:  service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
+		registry:    registry,
+	}
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
+
+	// Use a buffered channel so we can emit events without blocking.
+	answered := make(chan string, 1)
+	events := make(chan adapter.AgentEvent, 2)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+		sendAnswer: func(_ context.Context, answer string) error {
+			answered <- answer
+			return nil
+		},
+	}
+	registry.Register("plan-session", sess)
+	defer registry.Deregister("plan-session")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.waitForPlanningTurn(context.Background(), sess)
+	}()
+
+	// Emit question event - this should NOT cause waitForPlanningTurn to return.
+	events <- adapter.AgentEvent{
+		Type:     "question",
+		Payload:  "Should we proceed with the cutover?",
+		Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)},
+	}
+
+	// Wait a bit and verify waitForPlanningTurn has NOT returned yet.
+	select {
+	case err := <-done:
+		t.Fatalf("waitForPlanningTurn returned prematurely after question: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		// Expected: still waiting.
+	}
+
+	// Verify session is now waiting_for_answer.
+	session, err := svc.sessionSvc.Get(context.Background(), "plan-session")
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if session.Status != domain.AgentSessionWaitingForAnswer {
+		t.Fatalf("session status = %s, want waiting_for_answer", session.Status)
+	}
+
+	// Now emit answer via registry.
+	if err := registry.SendAnswer(context.Background(), "plan-session", "Yes, proceed"); err != nil {
+		t.Fatalf("SendAnswer: %v", err)
+	}
+
+	// Emit done event.
+	events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+
+	// Now waitForPlanningTurn should return.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForPlanningTurn returned error after done: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForPlanningTurn did not return after done event")
+	}
+}
+
+func TestRunPlanningWithCorrectionLoop_DoesNotRetryWhileWaitingForAnswer(t *testing.T) {
+	t.Parallel()
+
+	// Set up question routing infrastructure.
+	questionRepo := newMockQuestionRepo()
+	sessionRepo := newMockSessionRepo()
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{
+		ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1",
+		Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock",
+		Status: domain.AgentSessionRunning,
+	}
+
+	registry := NewSessionRegistry()
+	questionSvc := service.NewQuestionService(
+		repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}},
+		&mockPublisher{},
+	)
+	sessionSvc := service.NewAgentSessionService(
+		repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}},
+		&mockPublisher{},
+	)
+
+	// Buffered channel so the goroutine can send the question without blocking.
+	events := make(chan adapter.AgentEvent, 2)
+	sess := &scriptedPlanningSession{
+		id:     "plan-session",
+		events: events,
+	}
+	registry.Register("plan-session", sess)
+
+	svc := &PlanningService{
+		questionSvc: questionSvc,
+		sessionSvc:  sessionSvc,
+		registry:    registry,
+	}
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
+
+	// Track whether waitForPlanningTurn has returned.
+	waitDone := make(chan error, 1)
+
+	go func() {
+		waitDone <- svc.waitForPlanningTurn(context.Background(), sess)
+	}()
+
+	// Emit the question event.
+	events <- adapter.AgentEvent{
+		Type:     "question",
+		Payload:  "What is the deployment order?",
+		Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)},
+	}
+
+	// waitForPlanningTurn should NOT return after routing the question.
+	select {
+	case err := <-waitDone:
+		t.Fatalf("waitForPlanningTurn returned prematurely after question: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		// Expected: still waiting.
+	}
+
+	// Verify session is in waiting_for_answer state.
+	session, err := sessionSvc.Get(context.Background(), "plan-session")
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if session.Status != domain.AgentSessionWaitingForAnswer {
+		t.Fatalf("session status = %s, want waiting_for_answer", session.Status)
+	}
+
+	// Emit done event to complete the turn.
+	events <- adapter.AgentEvent{Type: "done", Timestamp: time.Now()}
+
+	// Now waitForPlanningTurn should return.
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("waitForPlanningTurn returned error after done: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForPlanningTurn did not return after done event")
+	}
+}
+
 func TestRunPlanningWithCorrectionLoopResumesPlannerAfterDoneWithoutDraft(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
