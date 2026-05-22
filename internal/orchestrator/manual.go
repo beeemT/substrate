@@ -181,7 +181,7 @@ func (s *ManualSessionService) StartManualSession(ctx context.Context, req Start
 
 	// 12. Start event forwarding and completion waiter goroutines.
 	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), agentSession.ID)
-	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, agentSession.ID, agentSession.WorkItemID)
+	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, agentSession.ID)
 
 	// Refresh agent session state from DB (StartedAt is now set).
 	agentSession, _ = s.sessionSvc.Get(ctx, agentSession.ID)
@@ -279,7 +279,7 @@ func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrup
 	s.registry.Register(newSession.ID, harnessSession)
 
 	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.ID)
-	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID, newSession.WorkItemID)
+	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID)
 
 	newSession, _ = s.sessionSvc.Get(ctx, newSession.ID)
 	return newSession, nil
@@ -328,7 +328,7 @@ func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, comple
 		s.registry.Register(completed.ID, harnessSession)
 
 		go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), completed.ID)
-		go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, completed.ID, completed.WorkItemID)
+		go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, completed.ID)
 
 		updated, _ := s.sessionSvc.Get(ctx, completed.ID)
 		return updated, nil
@@ -389,7 +389,7 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 	s.registry.Register(newSession.ID, harnessSession)
 
 	go s.forwardEvents(context.WithoutCancel(ctx), harnessSession.Events(), newSession.ID)
-	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID, newSession.WorkItemID)
+	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID)
 
 	// Emit EventAgentSessionResumed with old→new linkage so TUI can link the sessions.
 	updated, err := s.sessionSvc.Get(ctx, newSession.ID)
@@ -466,7 +466,7 @@ func marshalManualSessionPayloadWithOld(agentSession domain.AgentSession, oldSes
 
 // waitForCompletion blocks until the harness session finishes, then transitions
 // the session to the appropriate terminal state in the DB and saves resume info.
-func (s *ManualSessionService) waitForCompletion(ctx context.Context, harnessSession adapter.AgentSession, sessionID, workItemID string) {
+func (s *ManualSessionService) waitForCompletion(ctx context.Context, harnessSession adapter.AgentSession, sessionID string) {
 	err := harnessSession.Wait(ctx)
 	if err != nil {
 		slog.Warn("manual harness session wait returned error", "error", err, "agent_session_id", sessionID)
@@ -496,8 +496,10 @@ func (s *ManualSessionService) waitForCompletion(ctx context.Context, harnessSes
 			}
 		}
 	} else {
-		// Natural completion.
-		if completeErr := s.sessionSvc.Complete(ctx, sessionID); completeErr != nil {
+		// Natural completion. AgentSessionService.Complete emits EventAgentSessionCompleted
+		// and the TUI reacts via the event bus. Work item state is owned by the
+		// implementation orchestrator — manual sessions do not touch it.
+		if completeErr := s.sessionSvc.Complete(cleanupCtx, sessionID); completeErr != nil {
 			slog.Error("failed to complete manual session", "error", completeErr, "agent_session_id", sessionID)
 		}
 	}
