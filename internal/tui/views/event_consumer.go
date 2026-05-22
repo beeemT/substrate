@@ -82,6 +82,8 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventAdapterError:                 decodeAdapterError,
 	domain.EventPRMerged:                     decodePRMerged,
 	domain.EventPRReviewStateChanged:         decodePRReviewStateChanged,
+	domain.EventForemanStarted:               decodeForemanStarted,
+	domain.EventForemanStopped:               decodeForemanStopped,
 }
 
 // toMsg converts a domain.SystemEvent to a tea.Msg for the update loop.
@@ -366,4 +368,30 @@ func decodePRMerged(payload string) tea.Msg {
 		return nil
 	}
 	return PRMergedMsg{WorkItemID: p.WorkItemID, ExternalID: p.ExternalID}
+}
+
+func decodeForemanStarted(payload string) tea.Msg {
+	var p domain.ForemanEventPayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventForemanStarted payload", "error", err)
+		return nil
+	}
+	return ForemanStartedMsg{
+		WorkItemID: p.WorkItemID,
+		PlanID:     p.PlanID,
+		SessionID:  p.SessionID,
+	}
+}
+
+func decodeForemanStopped(payload string) tea.Msg {
+	var p domain.ForemanEventPayload
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		slog.Warn("failed to decode EventForemanStopped payload", "error", err)
+		return nil
+	}
+	return ForemanStoppedMsg{
+		WorkItemID:    p.WorkItemID,
+		LastPlanID:    p.LastPlanID,
+		LastSessionID: p.LastSessionID,
+	}
 }

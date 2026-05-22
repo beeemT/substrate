@@ -28,7 +28,7 @@ type ManualSessionService struct {
 	sessionSvc     *service.AgentSessionService
 	workItemSvc    *service.SessionService
 	workspaceSvc   *service.WorkspaceService
-	registry       *SessionRegistry
+	registry       SessionRegistry
 	questionRouter *QuestionRouter
 	eventBus       event.Publisher
 }
@@ -41,7 +41,7 @@ func NewManualSessionService(
 	sessionSvc *service.AgentSessionService,
 	workItemSvc *service.SessionService,
 	workspaceSvc *service.WorkspaceService,
-	registry *SessionRegistry,
+	registry SessionRegistry,
 	questionRouter *QuestionRouter,
 	eventBus event.Publisher,
 ) *ManualSessionService {
@@ -428,10 +428,8 @@ func (s *ManualSessionService) forwardEvents(ctx context.Context, events <-chan 
 			}
 
 			if evt.Type == "question" {
-				if s.questionRouter != nil {
-					if err := s.questionRouter.Route(ctx, domain.AgentSessionPhaseManual, evt, sessionID); err != nil {
-						slog.Error("failed to route manual question", "error", err, "agent_session_id", sessionID)
-					}
+				if err := s.questionRouter.Route(ctx, domain.AgentSessionPhaseManual, evt, sessionID); err != nil {
+					slog.Error("failed to route manual question", "error", err, "agent_session_id", sessionID)
 				}
 				continue
 			}

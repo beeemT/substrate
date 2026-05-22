@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,14 +21,14 @@ import (
 // question that was escalated to a human. Storing the session ID here avoids
 // a round-trip to the DB when ResolveEscalated needs to resume the session.
 type escalatedEntry struct {
-	answerCh       chan<- string
+	answerCh       chan string // bidirectional so we can close it on Stop
 	agentSessionID string
 }
 
 // pendingQuestion represents a question waiting to be answered.
 type pendingQuestion struct {
 	question    domain.Question
-	answerCh    chan<- string
+	answerCh    chan string
 	submittedAt time.Time
 }
 
@@ -43,6 +44,7 @@ type Foreman struct {
 	mu            sync.Mutex
 	sessionMu     sync.Mutex           // serializes SendMessage+waitForAnswer; prevents concurrent Events() readers
 	session       adapter.AgentSession // Current persistent foreman session
+	workItemID    string
 	planID        string
 	questionCh    chan pendingQuestion
 	questionFront chan pendingQuestion // Priority channel for re-queued questions
@@ -109,6 +111,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 	if err != nil {
 		return fmt.Errorf("get plan: %w", err)
 	}
+	f.workItemID = plan.WorkItemID
 
 	// Build system prompt with plan and FAQ
 	systemPrompt := f.buildSystemPrompt(ctx, plan)
@@ -136,6 +139,13 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 
 	// Start the question processing loop
 	go f.run(ctx)
+
+	// Publish EventForemanStarted
+	f.publishEvent(ctx, domain.EventForemanStarted, domain.ForemanEventPayload{
+		WorkItemID: plan.WorkItemID,
+		PlanID:     planID,
+		SessionID:  session.ID(),
+	})
 
 	return nil
 }
@@ -550,8 +560,10 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	}
 	session := f.session
 	stopCh := f.stopCh
-	f.lastSessionID = session.ID()
-	f.lastPlanID = f.planID
+	lastSessionID := session.ID()
+	lastPlanID := f.planID
+	f.lastSessionID = lastSessionID
+	f.lastPlanID = lastPlanID
 	f.session = nil
 	f.mu.Unlock()
 
@@ -559,8 +571,30 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	f.wg.Wait()
 
 	if err := session.Abort(ctx); err != nil {
-		return fmt.Errorf("abort session: %w", err)
+		slog.Warn("abort foreman session on stop", "error", err, "session_id", lastSessionID)
 	}
+
+	// Drain and close any open entries in escalatedChs.
+	// This prevents goroutine leaks for questions that were escalated to humans
+	// but not yet resolved when the foreman is stopped.
+	f.escalatedMu.Lock()
+	for questionID, entry := range f.escalatedChs {
+		select {
+		case <-entry.answerCh:
+		default:
+			// Channel not received yet; close it to unblock any waiting goroutines.
+			close(entry.answerCh)
+		}
+		delete(f.escalatedChs, questionID)
+	}
+	f.escalatedMu.Unlock()
+
+	// Publish EventForemanStopped
+	f.publishEvent(ctx, domain.EventForemanStopped, domain.ForemanEventPayload{
+		WorkItemID:    f.workItemID,
+		LastPlanID:    lastPlanID,
+		LastSessionID: lastSessionID,
+	})
 
 	return nil
 }
@@ -606,4 +640,26 @@ func (f *Foreman) SendUserMessage(ctx context.Context, questionID, text string) 
 	}
 
 	return newProposal, uncertain, nil
+}
+
+// publishEvent constructs a SystemEvent and publishes it to the event bus.
+func (f *Foreman) publishEvent(ctx context.Context, eventType domain.EventType, payload domain.ForemanEventPayload) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal foreman event: %w", err)
+	}
+	return f.eventBus.Publish(ctx, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(eventType),
+		WorkspaceID: "",
+		Payload:     string(data),
+		CreatedAt:   time.Now(),
+	})
+}
+
+// RefineAnswer sends human follow-up text to get a revised answer proposal.
+// The escalation remains open; human must still call ResolveEscalated to finalize.
+// This is the ForemanHandler interface implementation; it delegates to SendUserMessage.
+func (f *Foreman) RefineAnswer(ctx context.Context, questionID, text string) (newProposal string, uncertain bool, err error) {
+	return f.SendUserMessage(ctx, questionID, text)
 }

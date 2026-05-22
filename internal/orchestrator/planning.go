@@ -54,7 +54,7 @@ type PlanningService struct {
 	sessionSvc     *service.AgentSessionService
 	eventBus       event.Publisher
 	workspaceSvc   *service.WorkspaceService
-	registry       *SessionRegistry
+	registry       SessionRegistry
 	globalCfg      *config.Config
 	questionSvc    *service.QuestionService
 	questionRouter *QuestionRouter
@@ -109,7 +109,7 @@ func NewPlanningService(
 	sessionSvc *service.AgentSessionService,
 	eventBus event.Publisher,
 	workspaceSvc *service.WorkspaceService,
-	registry *SessionRegistry,
+	registry SessionRegistry,
 	questionSvc *service.QuestionService,
 	globalCfg *config.Config,
 ) (*PlanningService, error) {
@@ -118,7 +118,8 @@ func NewPlanningService(
 		return nil, fmt.Errorf("create templates: %w", err)
 	}
 
-	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, eventBus)
+	// questionRouter: foreman is looked up dynamically per question.
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, eventBus)
 	return &PlanningService{
 		cfg:            cfg,
 		discoverer:     discoverer,
@@ -359,9 +360,6 @@ func (s *PlanningService) buildPlanText(ctx context.Context, planID string) stri
 // from the most recently completed planning session for the given work item.
 // Returns ("", nil) if none exists or the prior session produced no resume data.
 func (s *PlanningService) findPriorPlanningSessionResumeInfo(ctx context.Context, workItemID string) (string, map[string]string) {
-	if s.sessionSvc == nil {
-		return "", nil
-	}
 	tasks, err := s.sessionSvc.ListByWorkItemID(ctx, workItemID)
 	if err != nil {
 		return "", nil
@@ -380,9 +378,6 @@ func (s *PlanningService) findPriorPlanningSessionResumeInfo(ctx context.Context
 // persists it for future resume operations.
 // It is a no-op when the harness does not produce resume data.
 func (s *PlanningService) storeResumeInfo(ctx context.Context, sessionID string, session adapter.AgentSession) {
-	if s.sessionSvc == nil {
-		return
-	}
 	info := session.ResumeInfo()
 	if len(info) == 0 {
 		return
@@ -690,10 +685,8 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 	}()
 
 	// Register session for steering.
-	if s.registry != nil {
-		s.registry.Register(planningCtx.SessionID, session)
-		defer s.registry.Deregister(planningCtx.SessionID)
-	}
+	s.registry.Register(planningCtx.SessionID, session)
+	defer s.registry.Deregister(planningCtx.SessionID)
 
 	restartWithCorrection := func(correctionMsg string) error {
 		if info := session.ResumeInfo(); len(info) > 0 {
@@ -713,9 +706,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			return err
 		}
 		session = nextSession
-		if s.registry != nil {
-			s.registry.Register(planningCtx.SessionID, session)
-		}
+		s.registry.Register(planningCtx.SessionID, session)
 		return nil
 	}
 
@@ -835,9 +826,6 @@ func waitForClosedPlanningSession(session adapter.AgentSession) error {
 func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, agentSession adapter.AgentSession, evt adapter.AgentEvent) (bool, error) {
 	switch evt.Type {
 	case "question":
-		if s.questionRouter == nil {
-			return false, errors.New("planner asked a question but question routing is not configured")
-		}
 		if err := s.questionRouter.Route(ctx, domain.AgentSessionPhasePlanning, evt, agentSession.ID()); err != nil {
 			return false, fmt.Errorf("route planning question: %w", err)
 		}

@@ -27,24 +27,22 @@ import (
 // ImplementationService orchestrates the implementation phase after plan approval.
 // It manages wave-based execution of sub-plans, worktree creation, and agent sessions.
 type ImplementationService struct {
-	cfg             *config.Config
-	harness         adapter.AgentHarness
-	gitClient       *gitwork.Client
-	eventBus        event.Publisher
-	planSvc         *service.PlanService
-	workItemSvc     *service.SessionService
-	sessionSvc      *service.AgentSessionService
-	workspaceSvc    *service.WorkspaceService
-	registry        *SessionRegistry
-	reviewPipeline  *ReviewPipeline
-	foremanHarness  adapter.AgentHarness
-	foreman         *Foreman // session-scoped; created fresh per Implement call
-	questionSvc     *service.QuestionService
-	reviewSvc       *service.ReviewService
-	questionRouter  *QuestionRouter // session-scoped; recreated per Implement call
-	sessTimeout     time.Duration
-	hookRegistry    *worktree.HookRegistry
-	foremanMu        sync.Mutex // guards foreman and questionRouter during session swap
+	cfg              *config.Config
+	harness          adapter.AgentHarness
+	gitClient        *gitwork.Client
+	eventBus         event.Publisher
+	planSvc          *service.PlanService
+	workItemSvc      *service.SessionService
+	sessionSvc       *service.AgentSessionService
+	workspaceSvc     *service.WorkspaceService
+	registry         SessionRegistry
+	reviewPipeline   *ReviewPipeline
+	foremanHarness   adapter.AgentHarness
+	questionSvc      *service.QuestionService
+	reviewSvc        *service.ReviewService
+	questionRouter   *QuestionRouter // session-scoped; recreated per Implement call
+	sessTimeout      time.Duration
+	hookRegistry     *worktree.HookRegistry
 	questionRouterMu sync.Mutex // guards questionRouter read in forwardEvents
 }
 
@@ -69,7 +67,7 @@ func NewImplementationService(
 	workItemSvc *service.SessionService,
 	sessionSvc *service.AgentSessionService,
 	workspaceSvc *service.WorkspaceService,
-	registry *SessionRegistry,
+	registry SessionRegistry,
 	reviewPipeline *ReviewPipeline,
 	foremanHarness adapter.AgentHarness,
 	questionSvc *service.QuestionService,
@@ -77,27 +75,87 @@ func NewImplementationService(
 	hookRegistry *worktree.HookRegistry,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
-	// questionRouter is created fresh per Implement call; seed with nil foreman here.
-	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, eventBus)
+	// questionRouter is created fresh per Implement call; foreman is looked up dynamically per question.
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, eventBus)
 	return &ImplementationService{
-		cfg:             cfg,
-		harness:         harness,
-		gitClient:       gitClient,
-		eventBus:        eventBus,
-		planSvc:         planSvc,
-		workItemSvc:     workItemSvc,
-		sessionSvc:      sessionSvc,
-		workspaceSvc:    workspaceSvc,
-		registry:        registry,
-		reviewPipeline:  reviewPipeline,
-		foremanHarness:  foremanHarness,
-		foreman:         nil,
-		questionSvc:     questionSvc,
-		reviewSvc:       reviewSvc,
-		questionRouter:  questionRouter,
-		sessTimeout:     implCfg.SessionTimeout,
-		hookRegistry:    hookRegistry,
+		cfg:            cfg,
+		harness:        harness,
+		gitClient:      gitClient,
+		eventBus:       eventBus,
+		planSvc:        planSvc,
+		workItemSvc:    workItemSvc,
+		sessionSvc:     sessionSvc,
+		workspaceSvc:   workspaceSvc,
+		registry:       registry,
+		reviewPipeline: reviewPipeline,
+		foremanHarness: foremanHarness,
+		questionSvc:    questionSvc,
+		reviewSvc:      reviewSvc,
+		questionRouter: questionRouter,
+		sessTimeout:    implCfg.SessionTimeout,
+		hookRegistry:   hookRegistry,
 	}
+}
+
+// BeginForeman starts a foreman for the work item, tied to the plan.
+// Called when implementation starts (from TUI after plan approval, before Implement()).
+// Creates a fresh *Foreman instance registered in SessionRegistry.
+func (s *ImplementationService) BeginForeman(ctx context.Context, workItemID, planID string) error {
+	// Check if foreman already exists for this work item
+	if existing := s.registry.GetForeman(workItemID); existing != nil {
+		if existing.IsRunning() {
+			// Already running for this work item - no-op
+			return nil
+		}
+	}
+
+	// Create new foreman instance
+	foreman := NewForeman(s.cfg, s.foremanHarness, s.planSvc, s.questionSvc, s.sessionSvc, s.eventBus)
+
+	// Start the foreman
+	if err := foreman.Start(ctx, planID, ""); err != nil {
+		return fmt.Errorf("start foreman: %w", err)
+	}
+
+	// Register in session registry
+	s.registry.RegisterForeman(workItemID, foreman)
+
+	return nil
+}
+
+// EndForeman stops the foreman for the work item.
+// Called when implementation completes or is abandoned.
+func (s *ImplementationService) EndForeman(ctx context.Context, workItemID string) error {
+	foreman := s.registry.GetForeman(workItemID)
+	if foreman == nil {
+		return nil
+	}
+
+	// Stop with durable context to ensure completion
+	stopCtx, stopCancel := durableCleanupContext(ctx)
+	defer stopCancel()
+
+	if err := foreman.Stop(stopCtx); err != nil {
+		slog.Warn("failed to stop foreman", "error", err, "work_item_id", workItemID)
+		// Continue with deregistration even on error
+	}
+
+	// Deregister from session registry
+	s.registry.DeregisterForeman(workItemID)
+
+	return nil
+}
+
+// RestartForemanWithPlan stops and starts the foreman with the new plan.
+// Called after replanning to update foreman's context with new plan/FAQ.
+func (s *ImplementationService) RestartForemanWithPlan(ctx context.Context, workItemID, planID string) error {
+	// End existing foreman
+	if err := s.EndForeman(ctx, workItemID); err != nil {
+		slog.Warn("error ending foreman before restart", "error", err)
+	}
+
+	// Begin new foreman with fresh context
+	return s.BeginForeman(ctx, workItemID, planID)
 }
 
 // ImplementResult contains the result of implementation execution.
@@ -216,38 +274,9 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
-	// Create a per-session foreman so concurrent Implement calls don't stomp each other.
-	var foreman *Foreman
-	if s.foremanHarness != nil {
-		foreman = NewForeman(s.cfg, s.foremanHarness, s.planSvc, s.questionSvc, s.sessionSvc, s.eventBus)
-	}
-
-	// Swap session-scoped foreman and questionRouter into the struct atomically so
-	// forwardEvents (running in goroutines) always sees a consistent pair.
-	if foreman != nil {
-		s.foremanMu.Lock()
-		s.foreman = foreman
-		s.questionRouter = NewQuestionRouter(s.questionSvc, s.sessionSvc, s.registry, foreman, s.eventBus)
-		s.foremanMu.Unlock()
-	}
-
-	foremanStarted := false
-	if foreman != nil {
-		if err := foreman.Start(ctx, planID, ""); err != nil {
-			return nil, fmt.Errorf("start foreman: %w", err)
-		}
-		foremanStarted = true
-		defer func() {
-			if !foremanStarted {
-				return
-			}
-			stopCtx, stopCancel := durableCleanupContext(ctx)
-			defer stopCancel()
-			if stopErr := foreman.Stop(stopCtx); stopErr != nil {
-				slog.Warn("failed to stop foreman after implementation", "error", stopErr, "plan_id", planID)
-			}
-		}()
-	}
+	// Note: Foreman lifecycle is managed externally via BeginForeman/EndForeman.
+	// The foreman (if any) is registered in the session registry and looked up
+	// dynamically by the question router.
 
 	// 7. Transition work item to implementing once non-mutating preflight succeeds.
 	// On retry (work item already in implementing after RetryFailedWorkItem), skip.
@@ -700,10 +729,8 @@ func (s *ImplementationService) runImplementation(
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
 	defer sessionCancel()
 
-	if s.registry != nil {
-		s.registry.Register(sessionID, harnessSession)
-		defer s.registry.Deregister(sessionID)
-	}
+	s.registry.Register(sessionID, harnessSession)
+	defer s.registry.Deregister(sessionID)
 
 	go s.forwardEvents(sessionCtx, harnessSession.Events(), sessionID)
 
@@ -774,12 +801,9 @@ func buildCritiqueFeedback(critiques []domain.Critique) string {
 
 // loadCritiqueFeedback looks up outstanding review critiques for a sub-plan
 // and formats them for injection into the next implementation session.
-// Returns "" when no reviewSvc is configured, when no prior implementation
-// session exists, or when no review cycle with critiques is found.
+// Returns "" when no prior implementation session exists, or when no review cycle
+// with critiques is found.
 func (s *ImplementationService) loadCritiqueFeedback(ctx context.Context, subPlanID string) string {
-	if s.reviewSvc == nil {
-		return ""
-	}
 	prev := s.latestCompletedImplSession(ctx, subPlanID)
 	if prev == nil {
 		return ""
@@ -1003,7 +1027,7 @@ func (s *ImplementationService) buildSessionOpts(
 // milliseconds for the bridge's ask_foreman answer wait. Returns 0 when no
 // timeout is configured (0 = wait indefinitely).
 func (s *ImplementationService) foremanAnswerTimeoutMs() int64 {
-	if s.cfg == nil || s.cfg.Foreman.QuestionTimeout == "" || s.cfg.Foreman.QuestionTimeout == "0" {
+	if s.cfg.Foreman.QuestionTimeout == "" || s.cfg.Foreman.QuestionTimeout == "0" {
 		return 0
 	}
 	if d, err := time.ParseDuration(s.cfg.Foreman.QuestionTimeout); err == nil && d > 0 {

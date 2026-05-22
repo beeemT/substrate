@@ -181,9 +181,6 @@ func TestSettingsApply_PersistsConfigAndReportsHarnessWarnings(t *testing.T) {
 	if result.Services.Services.Implementation != nil {
 		t.Fatal("Apply() implementation service = non-nil, want nil when harness is unavailable")
 	}
-	if result.Services.Services.Foreman != nil {
-		t.Fatal("Apply() foreman service = non-nil, want nil when harness is unavailable")
-	}
 
 	// Snapshot is cached in the service after Apply.
 	snapshot := svc.Snapshot()
@@ -256,9 +253,6 @@ func TestSettingsApply_ReturnsRebuiltServicesOnSuccess(t *testing.T) {
 	}
 	if got := result.Services.Services.Cfg.Adapters.ClaudeCode.Model; got != cfg.Adapters.ClaudeCode.Model {
 		t.Fatalf("Apply() rebuilt model = %q, want %q", got, cfg.Adapters.ClaudeCode.Model)
-	}
-	if result.Services.Services.Foreman == nil {
-		t.Fatal("Apply() returned nil foreman service")
 	}
 	// Snapshot is cached in the service after Apply.
 	snapshot := svc.Snapshot()

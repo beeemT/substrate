@@ -45,7 +45,7 @@ func TestRouteManual_RoutesQuestionToHuman(t *testing.T) {
 	questionSvc, _ := newServiceAndRepoForQuestions()
 	registry := NewSessionRegistry()
 	bus := &mockPublisher{}
-	router := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, bus)
+	router := NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
 
 	evt := adapter.AgentEvent{
 		Type:    "question",
@@ -79,38 +79,6 @@ func TestRouteManual_RoutesQuestionToHuman(t *testing.T) {
 	}
 }
 
-// TestRouteManual_WithNilSessionSvc verifies that routeManual works when sessionSvc is nil.
-func TestRouteManual_WithNilSessionSvc(t *testing.T) {
-	t.Parallel()
-
-	questionSvc, _ := newServiceAndRepoForQuestions()
-	registry := NewSessionRegistry()
-	bus := &mockPublisher{}
-	router := NewQuestionRouter(questionSvc, nil, registry, nil, bus)
-
-	evt := adapter.AgentEvent{
-		Type:    "question",
-		Payload: "Continue?",
-		Metadata: map[string]any{
-			"id":     "q-2",
-			"source": string(adapter.AgentQuestionSourceAskForeman),
-		},
-	}
-
-	err := router.Route(context.Background(), domain.AgentSessionPhaseManual, evt, "manual-session")
-	if err != nil {
-		t.Fatalf("Route returned error: %v", err)
-	}
-
-	questions, err := questionSvc.ListBySessionID(context.Background(), "manual-session")
-	if err != nil {
-		t.Fatalf("ListBySessionID returned error: %v", err)
-	}
-	if len(questions) != 1 {
-		t.Fatalf("questions len = %d, want 1", len(questions))
-	}
-}
-
 // TestSessionWorkItemID_ErrorPropagation verifies that sessionWorkItemID returns
 // an error when the session is not found, but the caller handles it gracefully.
 func TestSessionWorkItemID_ErrorPropagation(t *testing.T) {
@@ -120,7 +88,7 @@ func TestSessionWorkItemID_ErrorPropagation(t *testing.T) {
 	questionSvc, _ := newServiceAndRepoForQuestions()
 	registry := NewSessionRegistry()
 	bus := &mockPublisher{}
-	router := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, bus)
+	router := NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
 
 	workItemID, err := router.sessionWorkItemID(context.Background(), "non-existent-session")
 	if err == nil {
@@ -143,7 +111,7 @@ func TestQuestionRouter_Route_UnsupportedStage(t *testing.T) {
 	questionSvc, _ := newServiceAndRepoForQuestions()
 	registry := NewSessionRegistry()
 	bus := &mockPublisher{}
-	router := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, bus)
+	router := NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
 
 	evt := adapter.AgentEvent{
 		Type:    "question",
@@ -179,7 +147,7 @@ func TestRouteManual_WaitForAnswer(t *testing.T) {
 	questionSvc, _ := newServiceAndRepoForQuestions()
 	registry := NewSessionRegistry()
 	bus := &mockPublisher{}
-	router := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, bus)
+	router := NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
 
 	evt := adapter.AgentEvent{
 		Type:    "question",

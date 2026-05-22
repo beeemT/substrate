@@ -1002,6 +1002,11 @@ func (r *inMemGithubPRRepo) ListNonTerminal(_ context.Context, _ string) ([]doma
 	return out, nil
 }
 
+func (r *inMemGithubPRRepo) Delete(_ context.Context, id string) error {
+	delete(r.prs, id)
+	return nil
+}
+
 type inMemArtifactLinkRepo struct {
 	links []domain.SessionReviewArtifact
 }
@@ -1037,6 +1042,17 @@ func (r *inMemArtifactLinkRepo) TransferArtifactLinks(_ context.Context, fromID,
 			r.links[i].ProviderArtifactID = toID
 		}
 	}
+	return nil
+}
+
+func (r *inMemArtifactLinkRepo) DeleteByWorkItemID(_ context.Context, workItemID string) error {
+	var filtered []domain.SessionReviewArtifact
+	for _, l := range r.links {
+		if l.WorkItemID != workItemID {
+			filtered = append(filtered, l)
+		}
+	}
+	r.links = filtered
 	return nil
 }
 

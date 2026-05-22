@@ -115,6 +115,29 @@ type TaskUpdatedMsg struct {
 	AgentSession domain.AgentSession
 }
 
+// ForemanStartedMsg is sent when a foreman starts for a work item.
+type ForemanStartedMsg struct {
+	WorkItemID string
+	PlanID     string
+	SessionID  string
+}
+
+// ForemanStoppedMsg is sent when a foreman stops for a work item.
+type ForemanStoppedMsg struct {
+	WorkItemID    string
+	LastPlanID    string
+	LastSessionID string
+}
+
+// foremanSessionState tracks the foreman session for a work item.
+// Sourced entirely from foreman.started / foreman.stopped events.
+type foremanSessionState struct {
+	sessionID     string // current (live) session ID while running
+	lastPlanID    string
+	lastSessionID string
+	running       bool
+}
+
 // QuestionRaisedMsg is sent when a question is raised by an agent.
 type QuestionRaisedMsg struct {
 	WorkItemID string

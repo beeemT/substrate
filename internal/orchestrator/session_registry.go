@@ -12,26 +12,34 @@ import (
 // ErrSessionNotRunning indicates the target session is not in the registry.
 var ErrSessionNotRunning = errors.New("session is not running or not registered")
 
-// SessionRegistry maps session IDs to running adapter.AgentSession handles.
+// sessionRegistry maps session IDs to running adapter.AgentSession handles
+// and foreman instances per work item.
 // It is safe for concurrent use.
-type SessionRegistry struct {
+type sessionRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]adapter.AgentSession
+	foremen  map[string]*Foreman // workItemID → foreman
 }
 
-func NewSessionRegistry() *SessionRegistry {
-	return &SessionRegistry{sessions: make(map[string]adapter.AgentSession)}
+// Verify sessionRegistry satisfies SessionRegistry interface.
+var _ SessionRegistry = (*sessionRegistry)(nil)
+
+func NewSessionRegistry() *sessionRegistry {
+	return &sessionRegistry{
+		sessions: make(map[string]adapter.AgentSession),
+		foremen:  make(map[string]*Foreman),
+	}
 }
 
 // Register adds a running session to the registry.
-func (r *SessionRegistry) Register(sessionID string, session adapter.AgentSession) {
+func (r *sessionRegistry) Register(sessionID string, session adapter.AgentSession) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[sessionID] = session
 }
 
 // Deregister removes a session from the registry.
-func (r *SessionRegistry) Deregister(sessionID string) {
+func (r *sessionRegistry) Deregister(sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sessions, sessionID)
@@ -39,7 +47,7 @@ func (r *SessionRegistry) Deregister(sessionID string) {
 
 // SendMessage sends a follow-up message to a running session.
 // Returns ErrSessionNotRunning if the session is not registered.
-func (r *SessionRegistry) SendMessage(ctx context.Context, sessionID string, msg string) error {
+func (r *sessionRegistry) SendMessage(ctx context.Context, sessionID string, msg string) error {
 	r.mu.RLock()
 	session, ok := r.sessions[sessionID]
 	r.mu.RUnlock()
@@ -51,7 +59,7 @@ func (r *SessionRegistry) SendMessage(ctx context.Context, sessionID string, msg
 
 // Steer sends a steering prompt that interrupts a running session's active streaming turn.
 // Returns ErrSessionNotRunning if the session is not registered.
-func (r *SessionRegistry) Steer(ctx context.Context, sessionID string, msg string) error {
+func (r *sessionRegistry) Steer(ctx context.Context, sessionID string, msg string) error {
 	r.mu.RLock()
 	session, ok := r.sessions[sessionID]
 	r.mu.RUnlock()
@@ -63,7 +71,7 @@ func (r *SessionRegistry) Steer(ctx context.Context, sessionID string, msg strin
 
 // SendAnswer sends an answer to resolve a pending ask_foreman tool call.
 // Returns ErrSessionNotRunning if the session is not registered.
-func (r *SessionRegistry) SendAnswer(ctx context.Context, sessionID string, answer string) error {
+func (r *sessionRegistry) SendAnswer(ctx context.Context, sessionID string, answer string) error {
 	r.mu.RLock()
 	session, ok := r.sessions[sessionID]
 	r.mu.RUnlock()
@@ -74,7 +82,7 @@ func (r *SessionRegistry) SendAnswer(ctx context.Context, sessionID string, answ
 }
 
 // IsRunning reports whether the given session ID is registered.
-func (r *SessionRegistry) IsRunning(sessionID string) bool {
+func (r *sessionRegistry) IsRunning(sessionID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, ok := r.sessions[sessionID]
@@ -82,7 +90,7 @@ func (r *SessionRegistry) IsRunning(sessionID string) bool {
 }
 
 // Registered returns the running session handle for sessionID when it is still registered.
-func (r *SessionRegistry) Registered(sessionID string) (adapter.AgentSession, bool) {
+func (r *sessionRegistry) Registered(sessionID string) (adapter.AgentSession, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	session, ok := r.sessions[sessionID]
@@ -93,7 +101,7 @@ func (r *SessionRegistry) Registered(sessionID string) (adapter.AgentSession, bo
 // it from the registry. If the session is not registered this is a no-op.
 // Abort errors are logged but not returned because the caller's intent is to
 // tear down the session unconditionally.
-func (r *SessionRegistry) AbortAndDeregister(ctx context.Context, sessionID string) {
+func (r *sessionRegistry) AbortAndDeregister(ctx context.Context, sessionID string) {
 	r.mu.Lock()
 	session, ok := r.sessions[sessionID]
 	if ok {
@@ -106,4 +114,25 @@ func (r *SessionRegistry) AbortAndDeregister(ctx context.Context, sessionID stri
 	if err := session.Abort(ctx); err != nil {
 		slog.Warn("session abort during deregister", "agent_session_id", sessionID, "err", err)
 	}
+}
+
+// RegisterForeman registers a foreman instance for a work item.
+func (r *sessionRegistry) RegisterForeman(workItemID string, foreman *Foreman) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.foremen[workItemID] = foreman
+}
+
+// GetForeman returns the foreman for a work item, or nil if none exists.
+func (r *sessionRegistry) GetForeman(workItemID string) *Foreman {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.foremen[workItemID]
+}
+
+// DeregisterForeman removes the foreman for a work item.
+func (r *sessionRegistry) DeregisterForeman(workItemID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.foremen, workItemID)
 }

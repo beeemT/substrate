@@ -54,8 +54,9 @@ func (tp *testProvider) Implementation() *orchestrator.ImplementationService {
 }
 func (tp *testProvider) ReviewPipeline() *orchestrator.ReviewPipeline { return tp.svcs.ReviewPipeline }
 func (tp *testProvider) Resumption() *orchestrator.Resumption         { return tp.svcs.Resumption }
-func (tp *testProvider) Foreman() *orchestrator.Foreman               { return tp.svcs.Foreman }
-func (tp *testProvider) SessionRegistry() *orchestrator.SessionRegistry {
+func (tp *testProvider) AnswerRouter() orchestrator.AnswerRouter      { return tp.svcs.AnswerRouter }
+func (tp *testProvider) ReviewFollowup() *orchestrator.ReviewFollowup { return tp.svcs.ReviewFollowup }
+func (tp *testProvider) SessionRegistry() orchestrator.SessionRegistry {
 	return tp.svcs.SessionRegistry
 }
 

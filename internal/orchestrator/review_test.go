@@ -60,6 +60,7 @@ func newReviewPipelineForTest(harness adapter.AgentHarness, sessionRepo *mockSes
 		harness:       harness,
 		sessionSvc:    sessionSvc,
 		reviewTimeout: reviewTimeoutDur,
+		registry:      NewSessionRegistry(),
 	}
 }
 

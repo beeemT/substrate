@@ -14,6 +14,15 @@ type SystemEvent struct {
 	CreatedAt   time.Time
 }
 
+// ForemanEventPayload is the payload for foreman lifecycle events.
+type ForemanEventPayload struct {
+	WorkItemID    string
+	PlanID        string
+	SessionID     string
+	LastPlanID    string
+	LastSessionID string
+}
+
 // Event type constants for system events.
 // These are used for routing and persistence.
 //
@@ -106,4 +115,8 @@ const (
 
 	// Adapter error events
 	EventAdapterError EventType = "adapter.error"
+
+	// Foreman lifecycle events
+	EventForemanStarted EventType = "foreman.started"
+	EventForemanStopped EventType = "foreman.stopped"
 )

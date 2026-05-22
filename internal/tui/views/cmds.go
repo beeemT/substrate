@@ -441,65 +441,13 @@ func buildPlanApprovalEventContext(ctx context.Context, planSvc *service.PlanSer
 }
 
 // AnswerQuestionCmd delivers a human answer through the route required by the question's stage.
-func AnswerQuestionCmd(svc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID, answer, answeredBy string) tea.Cmd {
+func AnswerQuestionCmd(router orchestrator.AnswerRouter, questionID, answer, answeredBy string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		q, err := svc.Get(ctx, questionID)
-		if err != nil {
-			return ErrMsg{Err: err}
+		if err := router.Answer(ctx, questionID, answer, answeredBy); err != nil {
+			return ErrMsg{Err: fmt.Errorf("answer question %s: %w", questionID, err)}
 		}
-		switch q.Stage {
-		case domain.AgentSessionPhasePlanning:
-			if registry != nil {
-				if err := registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
-					return ErrMsg{Err: fmt.Errorf("answer planning question %s: %w", questionID, err)}
-				}
-			}
-			if err := answerPlanningQuestion(ctx, svc, sessionSvc, bus, q, answer, answeredBy); err != nil {
-				return ErrMsg{Err: err}
-			}
-			return ActionDoneMsg{Message: "Answer sent to planner"}
-
-		case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview, "":
-			if foreman != nil {
-				err := foreman.ResolveEscalated(context.Background(), questionID, answer)
-				if err == nil {
-					return ActionDoneMsg{Message: "Answer submitted"}
-				}
-				if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
-					return ErrMsg{Err: err}
-				}
-			}
-			if sessionSvc != nil && q.AgentSessionID != "" {
-				if err := sessionSvc.ResumeFromAnswer(context.Background(), q.AgentSessionID); err != nil {
-					slog.Warn("failed to resume session on answer fallback", "error", err, "question_id", questionID)
-				}
-			}
-			if err := svc.Answer(context.Background(), questionID, answer, answeredBy); err != nil {
-				return ErrMsg{Err: err}
-			}
-			return ActionDoneMsg{Message: "Answer submitted"}
-
-		case domain.AgentSessionPhaseManual:
-			// Manual sessions receive answers directly via the registry.
-			if registry != nil {
-				if err := registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
-					return ErrMsg{Err: fmt.Errorf("answer manual question %s: %w", questionID, err)}
-				}
-			}
-			if sessionSvc != nil {
-				if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
-					slog.Warn("failed to resume manual session from answer", "error", err, "question_id", questionID)
-				}
-			}
-			if err := svc.Answer(ctx, questionID, answer, answeredBy); err != nil {
-				return ErrMsg{Err: err}
-			}
-			return ActionDoneMsg{Message: "Answer submitted"}
-
-		default:
-			return ErrMsg{Err: fmt.Errorf("answer question %s: unsupported stage %q", questionID, q.Stage)}
-		}
+		return ActionDoneMsg{Message: "Answer submitted"}
 	}
 }
 
@@ -931,7 +879,7 @@ func ResumeAllSessionsForWorkItemCmd(
 	resumption *orchestrator.Resumption,
 	sessionSvc *service.AgentSessionService,
 	planSvc *service.PlanService,
-	foreman *orchestrator.Foreman,
+	implSvc *orchestrator.ImplementationService,
 	workItemID string,
 	instanceID string,
 ) tea.Cmd {
@@ -992,17 +940,13 @@ func ResumeAllSessionsForWorkItemCmd(
 			return SessionResumedMsg{WorkItemID: workItemID, Message: "No resumable tasks"}
 		}
 
-		foremanPlanID := ""
-		if foreman != nil && planSvc != nil {
+		// Restart foreman with current plan if implementation service is available
+		if implSvc != nil && planSvc != nil {
 			plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
-			if err != nil {
-				return ErrMsg{Err: fmt.Errorf("get plan for foreman resume: %w", err)}
-			}
-			if plan.Status == domain.PlanApproved {
-				if err := foreman.Start(ctx, plan.ID, ""); err != nil {
-					return ErrMsg{Err: fmt.Errorf("start foreman for resume: %w", err)}
+			if err == nil && plan.Status == domain.PlanApproved {
+				if err := implSvc.BeginForeman(ctx, workItemID, plan.ID); err != nil {
+					slog.Warn("failed to start foreman for resume", "error", err, "work_item_id", workItemID)
 				}
-				foremanPlanID = plan.ID
 			}
 		}
 
@@ -1036,7 +980,7 @@ func ResumeAllSessionsForWorkItemCmd(
 		if succeeded != 1 {
 			msg = fmt.Sprintf("Resumed %d tasks", succeeded)
 		}
-		return SessionResumedMsg{WorkItemID: workItemID, ForemanPlanID: foremanPlanID, Message: msg}
+		return SessionResumedMsg{WorkItemID: workItemID, Message: msg}
 	}
 }
 
@@ -1197,57 +1141,14 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 	})
 }
 
-// SkipQuestionCmd marks a question as skipped and unblocks the pending live harness when possible.
-func SkipQuestionCmd(svc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *orchestrator.SessionRegistry, foreman *orchestrator.Foreman, bus *event.Bus, questionID string) tea.Cmd {
+// SkipQuestionCmd marks a question as skipped through AnswerRouter.
+func SkipQuestionCmd(router orchestrator.AnswerRouter, questionID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		q, err := svc.Get(ctx, questionID)
-		if err != nil {
-			return ErrMsg{Err: err}
+		if err := router.Skip(ctx, questionID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("skip question %s: %w", questionID, err)}
 		}
-		if q.Stage == domain.AgentSessionPhasePlanning {
-			if registry != nil {
-				if err := registry.SendAnswer(ctx, q.AgentSessionID, ""); err != nil && !errors.Is(err, orchestrator.ErrSessionNotRunning) {
-					return ErrMsg{Err: fmt.Errorf("skip planning question %s: %w", questionID, err)}
-				}
-			}
-			if err := answerPlanningQuestion(ctx, svc, sessionSvc, bus, q, "", "human"); err != nil {
-				return ErrMsg{Err: err}
-			}
-			return ActionDoneMsg{Message: "Question skipped"}
-		} else if foreman != nil {
-			err := foreman.ResolveEscalated(ctx, questionID, "")
-			if err == nil {
-				return ActionDoneMsg{Message: "Question skipped"}
-			}
-			if !errors.Is(err, orchestrator.ErrQuestionNotEscalated) {
-				return ErrMsg{Err: err}
-			}
-		}
-		if sessionSvc != nil && q.AgentSessionID != "" {
-			if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
-				slog.Warn("failed to resume session on skip fallback", "error", err, "question_id", questionID)
-			}
-		}
-		if err := svc.Answer(ctx, questionID, "", "human"); err != nil {
-			return ErrMsg{Err: err}
-		}
-
 		return ActionDoneMsg{Message: "Question skipped"}
-	}
-}
-
-// StartForemanCmd starts the Foreman session for a given plan.
-// Uses a background context; Stop() is the proper shutdown mechanism.
-// followUpContext is optional; when non-empty it is forwarded to the foreman's
-// initial prompt so it is aware of follow-up feedback.
-func StartForemanCmd(foreman *orchestrator.Foreman, planID string, followUpContext string) tea.Cmd {
-	return func() tea.Msg {
-		if err := foreman.Start(context.Background(), planID, followUpContext); err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		return ActionDoneMsg{Message: "Foreman started"}
 	}
 }
 
@@ -1298,20 +1199,78 @@ func OpenTerminalCmd(dir string) tea.Cmd {
 	}
 }
 
-// StopForemanCmd stops the Foreman session after implementation ends.
-func StopForemanCmd(foreman *orchestrator.Foreman) tea.Cmd {
+// BeginForemanOrchestratedCmd calls ImplementationService.BeginForeman.
+func BeginForemanOrchestratedCmd(impl *orchestrator.ImplementationService, workItemID, planID string) tea.Cmd {
 	return func() tea.Msg {
-		// Error is logged but not surfaced: a failed Stop should not block the TUI.
-		if err := foreman.Stop(context.Background()); err != nil {
-			slog.Warn("foreman stop returned an error", "err", err)
+		ctx := context.Background()
+		if impl == nil {
+			return nil
 		}
+		if err := impl.BeginForeman(ctx, workItemID, planID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("begin foreman: %w", err)}
+		}
+		return ActionDoneMsg{Message: "Foreman started"}
+	}
+}
 
+// EndForemanOrchestratedCmd calls ImplementationService.EndForeman.
+func EndForemanOrchestratedCmd(impl *orchestrator.ImplementationService, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if impl == nil {
+			return nil
+		}
+		if err := impl.EndForeman(ctx, workItemID); err != nil {
+			slog.Warn("end foreman returned an error", "err", err, "work_item_id", workItemID)
+		}
 		return nil
 	}
 }
 
+// RestartForemanWithPlanOrchestratedCmd calls ImplementationService.RestartForemanWithPlan.
+func RestartForemanWithPlanOrchestratedCmd(impl *orchestrator.ImplementationService, workItemID, planID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if impl == nil {
+			return nil
+		}
+		if err := impl.RestartForemanWithPlan(ctx, workItemID, planID); err != nil {
+			return ErrMsg{Err: fmt.Errorf("restart foreman with plan: %w", err)}
+		}
+		return ActionDoneMsg{Message: "Foreman restarted with new plan"}
+	}
+}
+
+// FollowUpOrchestratedCmd calls ReviewFollowup.FollowUp.
+func FollowUpOrchestratedCmd(rf *orchestrator.ReviewFollowup, workItemID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if rf == nil {
+			return nil
+		}
+		if err := rf.FollowUp(ctx, workItemID, feedback); err != nil {
+			return ErrMsg{Err: fmt.Errorf("follow-up: %w", err)}
+		}
+		return ActionDoneMsg{Message: "Follow-up started"}
+	}
+}
+
+// FollowUpFailedOrchestratedCmd calls ReviewFollowup.FollowUpFailed.
+func FollowUpFailedOrchestratedCmd(rf *orchestrator.ReviewFollowup, workItemID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if rf == nil {
+			return nil
+		}
+		if err := rf.FollowUpFailed(ctx, workItemID, feedback); err != nil {
+			return ErrMsg{Err: fmt.Errorf("follow-up failed: %w", err)}
+		}
+		return ActionDoneMsg{Message: "Failed follow-up started"}
+	}
+}
+
 // SteerSessionCmd sends a steering/follow-up message to a running agent session.
-func SteerSessionCmd(registry *orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
+func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
 	return func() tea.Msg {
 		if err := registry.Steer(context.Background(), sessionID, message); err != nil {
 			return ErrMsg{Err: fmt.Errorf("steer session %s: %w", sessionID, err)}

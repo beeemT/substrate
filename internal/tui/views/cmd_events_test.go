@@ -277,7 +277,7 @@ type resumeAllCmdFixture struct {
 	resumption     *orchestrator.Resumption
 	sessionSvc     *service.AgentSessionService
 	planSvc        *service.PlanService
-	foreman        *orchestrator.Foreman
+	registry       orchestrator.SessionRegistry
 }
 
 func newResumeAllCmdFixture(t *testing.T, sessions []domain.AgentSession) resumeAllCmdFixture {
@@ -300,22 +300,16 @@ func newResumeAllCmdFixture(t *testing.T, sessions []domain.AgentSession) resume
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, publisher)
 	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, publisher)
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, publisher)
+	registry := orchestrator.NewSessionRegistry()
 	harness := &resumeAllHarness{failSubID: make(map[string]bool)}
-	foremanHarness := &resumeAllHarness{failSubID: make(map[string]bool)}
-	foreman := orchestrator.NewForeman(&config.Config{}, foremanHarness, planSvc, nil, sessionSvc, publisher)
-	t.Cleanup(func() {
-		if err := foreman.Stop(context.Background()); err != nil {
-			t.Fatalf("stop foreman: %v", err)
-		}
-	})
-	resumption := orchestrator.NewResumption(harness, sessionSvc, planSvc, workItemSvc, publisher, nil, nil)
+	resumption := orchestrator.NewResumption(harness, sessionSvc, planSvc, workItemSvc, publisher, registry, nil)
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: resumeAllWorkspaceRepo{}}}, publisher)
-	planningSvc, err := orchestrator.NewPlanningService(orchestrator.DefaultPlanningConfig(), nil, nil, harness, planSvc, workItemSvc, sessionSvc, publisher, workspaceSvc, nil, nil, &config.Config{})
+	planningSvc, err := orchestrator.NewPlanningService(orchestrator.DefaultPlanningConfig(), nil, nil, harness, planSvc, workItemSvc, sessionSvc, publisher, workspaceSvc, registry, nil, &config.Config{})
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
 
-	return resumeAllCmdFixture{sessionRepo: sessionRepo, workItemRepo: workItemRepo, harness: harness, foremanHarness: foremanHarness, workItemSvc: workItemSvc, planningSvc: planningSvc, resumption: resumption, sessionSvc: sessionSvc, planSvc: planSvc, foreman: foreman}
+	return resumeAllCmdFixture{sessionRepo: sessionRepo, workItemRepo: workItemRepo, harness: harness, workItemSvc: workItemSvc, planningSvc: planningSvc, resumption: resumption, sessionSvc: sessionSvc, planSvc: planSvc, registry: registry}
 }
 
 func resumeAllSession(id, subPlanID string, status domain.AgentSessionStatus) domain.AgentSession {
@@ -328,7 +322,7 @@ func TestResumeAllSessionsForWorkItemCmd_ResumesAll(t *testing.T) {
 		resumeAllSession("sess-2", "sp-2", domain.AgentSessionInterrupted),
 	})
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	resumed, ok := msg.(SessionResumedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
@@ -336,17 +330,8 @@ func TestResumeAllSessionsForWorkItemCmd_ResumesAll(t *testing.T) {
 	if resumed.Message != "Resumed 2 tasks" {
 		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 2 tasks")
 	}
-	if resumed.ForemanPlanID != "plan-1" {
-		t.Fatalf("foreman plan ID = %q, want plan-1", resumed.ForemanPlanID)
-	}
 	if len(fix.harness.starts) != 2 {
 		t.Fatalf("starts = %d, want 2", len(fix.harness.starts))
-	}
-	if len(fix.foremanHarness.starts) != 1 {
-		t.Fatalf("foreman starts = %d, want 1", len(fix.foremanHarness.starts))
-	}
-	if fix.foremanHarness.starts[0].Mode != adapter.SessionModeForeman {
-		t.Fatalf("foreman mode = %q, want %q", fix.foremanHarness.starts[0].Mode, adapter.SessionModeForeman)
 	}
 }
 
@@ -356,7 +341,7 @@ func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
 		resumeAllSession("sess-new", "sp-1", domain.AgentSessionRunning),
 	})
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	resumed, ok := msg.(SessionResumedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
@@ -366,9 +351,6 @@ func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
 	}
 	if len(fix.harness.starts) != 0 {
 		t.Fatalf("starts = %d, want 0", len(fix.harness.starts))
-	}
-	if len(fix.foremanHarness.starts) != 0 {
-		t.Fatalf("foreman starts = %d, want 0", len(fix.foremanHarness.starts))
 	}
 }
 
@@ -380,7 +362,7 @@ func TestResumeAllSessionsForWorkItemCmd_PlanningTriggersRestart(t *testing.T) {
 	item.State = domain.SessionPlanning
 	fix.workItemRepo.items["wi-1"] = item
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	if _, ok := msg.(ErrMsg); !ok {
 		t.Fatalf("msg = %T, want ErrMsg from planning restart attempt", msg)
 	}
@@ -396,7 +378,7 @@ func TestResumeAllSessionsForWorkItemCmd_ReportsCorrectCount(t *testing.T) {
 		resumeAllSession("sess-3", "sp-3", domain.AgentSessionInterrupted),
 	})
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	resumed, ok := msg.(SessionResumedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
@@ -412,7 +394,7 @@ func TestResumeAllSessionsForWorkItemCmd_NoResumableTasks(t *testing.T) {
 		resumeAllSession("sess-running", "sp-2", domain.AgentSessionRunning),
 	})
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	resumed, ok := msg.(SessionResumedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
@@ -431,7 +413,7 @@ func TestResumeAllSessionsForWorkItemCmd_PartialFailure(t *testing.T) {
 	fix.harness.failSubID["sp-2"] = true
 	fix.harness.failSubID["sp-3"] = true
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, fix.foreman, "wi-1", "inst-1")()
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
 	resumed, ok := msg.(SessionResumedMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want SessionResumedMsg", msg)

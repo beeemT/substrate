@@ -33,11 +33,14 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 		t.Fatalf("Subscribe: %v", err)
 	}
 
+	registry := orchestrator.NewSessionRegistry()
+	router := orchestrator.NewAnswerRouter(registry, questionSvc, taskSvc, bus)
+
 	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
 	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
 
-	msg := views.AnswerQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, bus, "q-plan", "use full cutover", "human")()
-	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Answer sent to planner" {
+	msg := views.AnswerQuestionCmd(router, "q-plan", "use full cutover", "human")()
+	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Answer submitted" {
 		t.Fatalf("message = %T %#v, want ActionDoneMsg", msg, msg)
 	}
 
@@ -76,11 +79,16 @@ func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
 	taskRepo := newCmdTaskRepo()
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, views.NewNoopPublisher())
 	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, views.NewNoopPublisher())
+	bus := event.NewBus(event.BusConfig{})
+	defer bus.Close()
+
+	registry := orchestrator.NewSessionRegistry()
+	router := orchestrator.NewAnswerRouter(registry, questionSvc, taskSvc, bus)
 
 	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
 	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
 
-	msg := views.SkipQuestionCmd(questionSvc, taskSvc, orchestrator.NewSessionRegistry(), nil, views.MockBus(), "q-skip")()
+	msg := views.SkipQuestionCmd(router, "q-skip")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Question skipped" {
 		t.Fatalf("message = %T %#v, want ActionDoneMsg", msg, msg)
 	}

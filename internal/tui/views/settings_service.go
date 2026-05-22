@@ -50,7 +50,7 @@ type SettingsDiagnosticsState string
 const (
 	SettingsDiagnosticsPending SettingsDiagnosticsState = "pending"
 	SettingsDiagnosticsReady   SettingsDiagnosticsState = "ready"
-	SettingsDiagnosticsFailed SettingsDiagnosticsState = "failed"
+	SettingsDiagnosticsFailed  SettingsDiagnosticsState = "failed"
 )
 
 type SettingsField struct {
@@ -370,12 +370,6 @@ func (s *settingsService) Save(ctx context.Context, sections []SettingsSection, 
 	reloaded, err := s.serviceMgr.Rebuild(ctx, cfg, current)
 	if err != nil {
 		return SettingsApplyResult{}, err
-	}
-
-	if current.Foreman != nil {
-		if stopErr := current.Foreman.Stop(ctx); stopErr != nil {
-			slog.Warn("failed to stop foreman on settings apply", "error", stopErr)
-		}
 	}
 
 	// Refresh cached snapshot with diagnostics.

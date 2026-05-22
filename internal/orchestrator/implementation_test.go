@@ -739,6 +739,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 	eventRepo := &implementationEventRepo{}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
 
+	registry := NewSessionRegistry()
 	svc := NewImplementationService(
 		&config.Config{},
 		&mockAgentHarness{},
@@ -747,7 +748,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
-		nil,
+		registry,
 		nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
@@ -817,6 +818,14 @@ func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	foremanHarness := &completingHarness{}
 	svc.foremanHarness = foremanHarness
 
+	// Provide a registry for foreman storage
+	svc.registry = NewSessionRegistry()
+
+	// Begin foreman before implementation (TUI responsibility)
+	if err := svc.BeginForeman(context.Background(), "wi-1", "plan-1"); err != nil {
+		t.Fatalf("BeginForeman: %v", err)
+	}
+
 	_, err := svc.Implement(context.Background(), "plan-1")
 	if err == nil {
 		t.Fatal("expected implementation to fail when worktree preparation fails")
@@ -831,11 +840,22 @@ func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	if foremanSession.opts.Mode != adapter.SessionModeForeman {
 		t.Fatalf("foreman mode = %q, want %q", foremanSession.opts.Mode, adapter.SessionModeForeman)
 	}
-	svc.foremanMu.Lock()
-	foreman := svc.foreman
-	svc.foremanMu.Unlock()
+
+	// Foreman is still running after Implement() (TUI stops it via EndForeman)
+	foreman := svc.registry.GetForeman("wi-1")
+	if foreman == nil {
+		t.Fatal("foreman not found in registry after implementation")
+	}
+	if !foreman.IsRunning() {
+		t.Fatal("foreman should still be running after implementation returned")
+	}
+
+	// TUI responsibility: stop the foreman via EndForeman
+	if err := svc.EndForeman(context.Background(), "wi-1"); err != nil {
+		t.Fatalf("EndForeman: %v", err)
+	}
 	if foreman.IsRunning() {
-		t.Fatal("foreman is still running after implementation returned")
+		t.Fatal("foreman is still running after EndForeman")
 	}
 	if got := foreman.LastPlanID(); got != "plan-1" {
 		t.Fatalf("foreman last plan ID = %q, want plan-1", got)
@@ -1297,6 +1317,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		},
 	}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	registry := NewSessionRegistry()
 
 	svc := NewImplementationService(
 		cfg,
@@ -1306,7 +1327,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
-		nil, nil,
+		registry, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
 		worktree.NewHookRegistry(),
@@ -1403,6 +1424,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		},
 	}
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	registry := NewSessionRegistry()
 
 	svc := NewImplementationService(
 		cfg,
@@ -1412,7 +1434,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
-		nil, nil,
+		registry, nil,
 		nil, nil, // foreman, questionSvc
 		nil, // reviewSvc
 		worktree.NewHookRegistry(),
@@ -1460,16 +1482,6 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	lastSess.mu.Unlock()
 	if len(msgs) != 0 {
 		t.Errorf("SendMessage should not be called in non-resume mode, got %v", msgs)
-	}
-}
-
-// TestLoadCritiqueFeedback_NoReviewSvc verifies that loadCritiqueFeedback returns
-// empty string when reviewSvc is not configured.
-func TestLoadCritiqueFeedback_NoReviewSvc(t *testing.T) {
-	svc := &ImplementationService{}
-	result := svc.loadCritiqueFeedback(context.Background(), "sp-1")
-	if result != "" {
-		t.Errorf("expected empty string when reviewSvc is nil, got %q", result)
 	}
 }
 

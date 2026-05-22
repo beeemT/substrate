@@ -27,7 +27,7 @@ type Resumption struct {
 	planSvc        *service.PlanService
 	workItemSvc    *service.SessionService
 	eventBus       event.Publisher
-	registry       *SessionRegistry
+	registry       SessionRegistry
 	questionRouter *QuestionRouter
 }
 
@@ -38,7 +38,7 @@ func NewResumption(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
-	registry *SessionRegistry,
+	registry SessionRegistry,
 	questionRouter *QuestionRouter,
 ) *Resumption {
 	return &Resumption{
@@ -155,15 +155,13 @@ func (r *Resumption) ResumeSessionWithPrompt(ctx context.Context, interrupted do
 	}
 
 	// Register session for steering; deregister when the session finishes.
-	if r.registry != nil {
-		r.registry.Register(newSession.ID, harnessSession)
-		go func() {
-			if waitErr := harnessSession.Wait(ctx); waitErr != nil {
-				slog.Warn("harness session wait failed", "error", waitErr)
-			}
-			r.registry.Deregister(newSession.ID)
-		}()
-	}
+	r.registry.Register(newSession.ID, harnessSession)
+	go func() {
+		if waitErr := harnessSession.Wait(ctx); waitErr != nil {
+			slog.Warn("harness session wait failed", "error", waitErr)
+		}
+		r.registry.Deregister(newSession.ID)
+	}()
 
 	// Transition the old interrupted session to failed now that its replacement
 	// is durably running. This clears the interrupted action from the overview.
@@ -290,9 +288,7 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domai
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-	if r.registry != nil {
-		r.registry.Register(completedSession.ID, harnessSession)
-	}
+	r.registry.Register(completedSession.ID, harnessSession)
 
 	return FollowUpSessionResult{
 		Session:        completedSession,
@@ -352,9 +348,7 @@ func (r *Resumption) FollowUpFailedSession(ctx context.Context, failedSession do
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}
 
-	if r.registry != nil {
-		r.registry.Register(newSession.ID, harnessSession)
-	}
+	r.registry.Register(newSession.ID, harnessSession)
 
 	return FollowUpSessionResult{
 		Session:        newSession,
@@ -487,9 +481,7 @@ func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.Ag
 // have previously registered the session via registry.Register.
 // Intended for follow-up sessions where the TUI command goroutine drives the wait.
 func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harnessSession adapter.AgentSession) {
-	if r.registry != nil {
-		defer r.registry.Deregister(sessionID)
-	}
+	defer r.registry.Deregister(sessionID)
 
 	drainCtx, drainCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer drainCancel()

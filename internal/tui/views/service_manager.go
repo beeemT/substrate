@@ -310,12 +310,21 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, harnesses.Foreman, questionSvc, reviewSvc, hookRegistry)
 	}
 
-	// Build QuestionRouter for stage-aware question routing (foreman is session-scoped; passed here is only for non-implementation phases)
-	var foreman *orchestrator.Foreman
-	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus)
+	// Build QuestionRouter for stage-aware question routing.
+	// Foreman is looked up dynamically per question via registry.
+	questionRouter := orchestrator.NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
+
+	// Build AnswerRouter for stateless question routing
+	var answerRouter orchestrator.AnswerRouter
+	if harnesses.Foreman != nil || harnesses.Implementation != nil || harnesses.Planning != nil {
+		answerRouter = orchestrator.NewAnswerRouter(registry, questionSvc, sessionSvc, bus)
 	}
-	questionRouter := orchestrator.NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, bus)
+
+	// Build ReviewFollowup for foreman lifecycle during follow-up sessions
+	var reviewFollowup *orchestrator.ReviewFollowup
+	if harnesses.Foreman != nil {
+		reviewFollowup = orchestrator.NewReviewFollowup(cfg, harnesses.Foreman, registry, planSvc, questionSvc, sessionSvc, bus)
+	}
 
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
@@ -371,7 +380,8 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		Implementation:        implSvc,
 		ReviewPipeline:        reviewPipeline,
 		Resumption:            resumption,
-		Foreman:               foreman,
+		AnswerRouter:          answerRouter,
+		ReviewFollowup:        reviewFollowup,
 		SessionRegistry:       registry,
 		QuestionRouter:        questionRouter,
 		Manual:                manualSvc,
@@ -613,14 +623,21 @@ func (sm *ServiceManager) Resumption() *orchestrator.Resumption {
 	return nil
 }
 
-func (sm *ServiceManager) Foreman() *orchestrator.Foreman {
+func (sm *ServiceManager) AnswerRouter() orchestrator.AnswerRouter {
 	if s := sm.GetServices(); s != nil {
-		return s.Foreman
+		return s.AnswerRouter
 	}
 	return nil
 }
 
-func (sm *ServiceManager) SessionRegistry() *orchestrator.SessionRegistry {
+func (sm *ServiceManager) ReviewFollowup() *orchestrator.ReviewFollowup {
+	if s := sm.GetServices(); s != nil {
+		return s.ReviewFollowup
+	}
+	return nil
+}
+
+func (sm *ServiceManager) SessionRegistry() orchestrator.SessionRegistry {
 	if s := sm.GetServices(); s != nil {
 		return s.SessionRegistry
 	}

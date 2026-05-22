@@ -27,7 +27,7 @@ type ReviewPipeline struct {
 	planSvc       *service.PlanService
 	workItemSvc   *service.SessionService
 	eventBus      event.Publisher
-	registry      *SessionRegistry
+	registry      SessionRegistry
 	reviewTimeout time.Duration
 }
 
@@ -40,7 +40,7 @@ func NewReviewPipeline(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
-	registry *SessionRegistry,
+	registry SessionRegistry,
 ) *ReviewPipeline {
 	return &ReviewPipeline{
 		cfg:           cfg,
@@ -252,10 +252,8 @@ func (p *ReviewPipeline) startReviewAgent(
 	defer cancel()
 
 	// Register session for steering.
-	if p.registry != nil {
-		p.registry.Register(reviewSessionID, reviewSession)
-		defer p.registry.Deregister(reviewSessionID)
-	}
+	p.registry.Register(reviewSessionID, reviewSession)
+	defer p.registry.Deregister(reviewSessionID)
 	for {
 		select {
 		case <-timeoutCtx.Done():

@@ -14,28 +14,24 @@ import (
 )
 
 // QuestionRouter is the single stage-aware routing point for normalized agent questions.
+// It looks up the correct foreman dynamically per question using the work item ID.
 type QuestionRouter struct {
 	questionSvc *service.QuestionService
 	sessionSvc  *service.AgentSessionService
-	registry    *SessionRegistry
-	foreman     *Foreman
+	registry    SessionRegistry
 	eventBus    event.Publisher
 }
 
-func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.AgentSessionService, registry *SessionRegistry, foreman *Foreman, eventBus event.Publisher) *QuestionRouter {
+func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service.AgentSessionService, registry SessionRegistry, eventBus event.Publisher) *QuestionRouter {
 	return &QuestionRouter{
 		questionSvc: questionSvc,
 		sessionSvc:  sessionSvc,
 		registry:    registry,
-		foreman:     foreman,
 		eventBus:    eventBus,
 	}
 }
 
 func (r *QuestionRouter) Route(ctx context.Context, stage domain.AgentSessionPhase, evt adapter.AgentEvent, sessionID string) error {
-	if r == nil {
-		return fmt.Errorf("route question: router is nil")
-	}
 	switch stage {
 	case domain.AgentSessionPhasePlanning:
 		return r.routePlanning(ctx, evt, sessionID)
@@ -53,10 +49,8 @@ func (r *QuestionRouter) routeManual(ctx context.Context, evt adapter.AgentEvent
 	if err := r.persistAndPublish(ctx, q, "manual question raised"); err != nil {
 		return err
 	}
-	if r.sessionSvc != nil {
-		if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
-			return fmt.Errorf("mark manual session waiting for answer: %w", err)
-		}
+	if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
+		return fmt.Errorf("mark manual session waiting for answer: %w", err)
 	}
 	return nil
 }
@@ -66,10 +60,8 @@ func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEve
 	if err := r.persistAndPublish(ctx, q, "planning question raised"); err != nil {
 		return err
 	}
-	if r.sessionSvc != nil {
-		if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
-			return fmt.Errorf("mark planning session waiting for answer: %w", err)
-		}
+	if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
+		return fmt.Errorf("mark planning session waiting for answer: %w", err)
 	}
 	return nil
 }
@@ -79,11 +71,18 @@ func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.Ag
 	if err := r.persistAndPublish(ctx, q, "implementation question raised"); err != nil {
 		return err
 	}
-	if r.foreman == nil {
-		return fmt.Errorf("route implementation question: foreman is not available")
+
+	// Look up the foreman dynamically for this question's work item
+	workItemID, err := r.sessionWorkItemID(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("route implementation question: look up work item: %w", err)
+	}
+	foreman := r.registry.GetForeman(workItemID)
+	if foreman == nil {
+		return fmt.Errorf("route implementation question: no foreman registered for work item %q", workItemID)
 	}
 
-	answerCh := r.foreman.Ask(ctx, q)
+	answerCh := foreman.Ask(ctx, q)
 	go func() {
 		select {
 		case answer, ok := <-answerCh:
@@ -91,11 +90,9 @@ func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.Ag
 				slog.Warn("foreman answer channel closed without answer", "question_id", q.ID)
 				return
 			}
-			if r.registry != nil {
-				if err := r.registry.SendAnswer(ctx, sessionID, answer); err != nil {
-					slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", q.ID, "agent_session_id", sessionID)
-					return
-				}
+			if err := r.registry.SendAnswer(ctx, sessionID, answer); err != nil {
+				slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", q.ID, "agent_session_id", sessionID)
+				return
 			}
 			if err := r.publishAnswered(ctx, q.ID, sessionID); err != nil {
 				slog.Warn("failed to publish question answered event", "error", err)
@@ -108,9 +105,6 @@ func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.Ag
 }
 
 func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Question, label string) error {
-	if r.questionSvc == nil {
-		return fmt.Errorf("%s: question service is not available", label)
-	}
 	if err := r.questionSvc.Create(ctx, q); err != nil {
 		return fmt.Errorf("%s: persist question: %w", label, err)
 	}
@@ -128,9 +122,6 @@ func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Questio
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("%s: marshal question raised payload: %w", label, err)
-	}
-	if r.eventBus == nil {
-		return fmt.Errorf("%s: event bus is not available", label)
 	}
 	if err := r.eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -153,9 +144,6 @@ type questionRaisedPayload struct {
 
 // sessionWorkItemID looks up the work item ID for an agent session.
 func (r *QuestionRouter) sessionWorkItemID(ctx context.Context, sessionID string) (string, error) {
-	if r.sessionSvc == nil {
-		return "", nil
-	}
 	session, err := r.sessionSvc.Get(ctx, sessionID)
 	if err != nil {
 		return "", err
@@ -164,9 +152,6 @@ func (r *QuestionRouter) sessionWorkItemID(ctx context.Context, sessionID string
 }
 
 func PublishQuestionAnswered(ctx context.Context, eventBus event.Publisher, questionID, sessionID string) error {
-	if eventBus == nil {
-		return fmt.Errorf("publish question answered: event bus is not available")
-	}
 	return eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentQuestionAnswered),

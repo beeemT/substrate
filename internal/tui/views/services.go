@@ -31,12 +31,15 @@ type Services struct {
 	NewSessionFilters     *service.SessionFilterService
 	NewSessionFilterLocks *service.SessionFilterLockService
 	// Orchestration pipelines backed by the configured agent harnesses.
-	Planning        *orchestrator.PlanningService
-	Implementation  *orchestrator.ImplementationService
-	ReviewPipeline  *orchestrator.ReviewPipeline
-	Resumption      *orchestrator.Resumption
-	Foreman         *orchestrator.Foreman
-	SessionRegistry *orchestrator.SessionRegistry
+	Planning       *orchestrator.PlanningService
+	Implementation *orchestrator.ImplementationService
+	ReviewPipeline *orchestrator.ReviewPipeline
+	Resumption     *orchestrator.Resumption
+	// AnswerRouter routes human answers and skips based on question phase.
+	AnswerRouter orchestrator.AnswerRouter
+	// ReviewFollowup owns Foreman lifecycle for follow-up sessions.
+	ReviewFollowup  *orchestrator.ReviewFollowup
+	SessionRegistry orchestrator.SessionRegistry
 	// QuestionRouter is the single stage-aware routing point for normalized agent questions.
 	QuestionRouter *orchestrator.QuestionRouter
 	// Manual is the manual agent session orchestration service.

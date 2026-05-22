@@ -95,7 +95,7 @@ type orchestrationRuntime struct {
 	foreman        *orchestrator.Foreman
 	implementation *orchestrator.ImplementationService
 	resumption     *orchestrator.Resumption
-	registry       *orchestrator.SessionRegistry
+	registry       orchestrator.SessionRegistry
 }
 
 func run() error {

@@ -22,7 +22,7 @@ func newQuitTestApp(sessions []domain.AgentSession) *App {
 }
 
 // newQuitTestAppWithRegistry creates a minimal App with a real SessionRegistry.
-func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, *orchestrator.SessionRegistry, *mockTaskRepoForSession) {
+func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, orchestrator.SessionRegistry, *mockTaskRepoForSession) {
 	reg := orchestrator.NewSessionRegistry()
 	tasks := make(map[string]domain.AgentSession, len(sessions))
 	for _, session := range sessions {

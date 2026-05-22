@@ -105,10 +105,13 @@ func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *te
 	tmpDir := t.TempDir()
 	draftPath := filepath.Join(tmpDir, ".substrate", "sessions", "plan-123", "plan-draft.md")
 	harness := &planningHarnessSpy{planText: validPlanningPlan("Keep repo-a isolated.", "Update the planner.")}
+	sessionRepo := newMockSessionRepo()
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0},
-		harness:   harness,
-		templates: templates,
+		cfg:        &PlanningConfig{MaxParseRetries: 0},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
 	}
 
 	rawContent, retries, warnings, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -221,7 +224,14 @@ func TestPlanningServicePreservesParentContextDeadline(t *testing.T) {
 			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
 		},
 	}
-	svc := &PlanningService{cfg: &PlanningConfig{MaxParseRetries: 0}, harness: harness, templates: templates}
+	sessionRepo := newMockSessionRepo()
+	svc := &PlanningService{
+		cfg:        &PlanningConfig{MaxParseRetries: 0},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
+	}
 
 	parentCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
@@ -311,10 +321,13 @@ func TestRunPlanningWithCorrectionLoopWaitsForPlannerDoneBeforeAcceptingDraft(t 
 			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
 		},
 	}
+	sessionRepo := newMockSessionRepo()
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0},
-		harness:   harness,
-		templates: templates,
+		cfg:        &PlanningConfig{MaxParseRetries: 0},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
 	}
 
 	rawContent, retries, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -458,7 +471,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 		sessionSvc:  service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
 		registry:    registry,
 	}
-	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, &mockPublisher{})
 
 	answered := make(chan string, 1)
 	events := make(chan adapter.AgentEvent, 2)
@@ -544,7 +557,7 @@ func TestWaitForPlanningTurn_StaysAliveWhileWaitingForAnswer(t *testing.T) {
 		sessionSvc:  service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
 		registry:    registry,
 	}
-	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, &mockPublisher{})
 
 	// Use a buffered channel so we can emit events without blocking.
 	answered := make(chan string, 1)
@@ -643,7 +656,7 @@ func TestRunPlanningWithCorrectionLoop_DoesNotRetryWhileWaitingForAnswer(t *test
 		sessionSvc:  sessionSvc,
 		registry:    registry,
 	}
-	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, nil, &mockPublisher{})
+	svc.questionRouter = NewQuestionRouter(svc.questionSvc, svc.sessionSvc, registry, &mockPublisher{})
 
 	// Track whether waitForPlanningTurn has returned.
 	waitDone := make(chan error, 1)
@@ -724,10 +737,13 @@ func TestRunPlanningWithCorrectionLoopResumesPlannerAfterDoneWithoutDraft(t *tes
 			}, nil
 		},
 	}
+	sessionRepo := newMockSessionRepo()
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 1},
-		harness:   harness,
-		templates: templates,
+		cfg:        &PlanningConfig{MaxParseRetries: 1},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -792,10 +808,13 @@ func TestRunPlanningWithCorrectionLoopDoesNotBurnRetriesWhenCorrectionSessionCan
 			}, nil
 		},
 	}
+	sessionRepo := newMockSessionRepo()
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 5},
-		harness:   harness,
-		templates: templates,
+		cfg:        &PlanningConfig{MaxParseRetries: 5},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
 	}
 
 	_, retries, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -847,11 +866,13 @@ func TestRunPlanningWithCorrectionLoop_NativeResumeStartsWithRevisionFeedbackPro
 			return &scriptedPlanningSession{id: opts.SessionID, events: events}, nil
 		},
 	}
-
+	sessionRepo := newMockSessionRepo()
 	svc := &PlanningService{
-		cfg:       &PlanningConfig{MaxParseRetries: 0},
-		harness:   harness,
-		templates: templates,
+		cfg:        &PlanningConfig{MaxParseRetries: 0},
+		harness:    harness,
+		templates:  templates,
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		registry:   NewSessionRegistry(),
 	}
 
 	if _, _, _, planErr := svc.runPlanningWithCorrectionLoop(context.Background(), &domain.PlanningContext{
@@ -925,6 +946,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		harness:    harness,
 		templates:  templates,
 		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{}),
+		registry:   NewSessionRegistry(),
 	}
 
 	// Override StartSession to return a session that exposes OMP metadata.
@@ -1243,7 +1265,8 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	registry := NewSessionRegistry()
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1365,7 +1388,8 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 
 	pcfg := DefaultPlanningConfig()
 	pcfg.MaxParseRetries = 0
-	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	registry := NewSessionRegistry()
+	svc, err := NewPlanningService(pcfg, discoverer, gitClient, harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1435,7 +1459,8 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate safely.", "Implement safely.")}
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	registry := NewSessionRegistry()
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1522,7 +1547,8 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	harness := &planningHarnessSpy{planText: validPlanningPlanWithRepo(repoName, "Orchestrate.", "Implement.")}
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, nil, nil, globalCfg)
+	registry := NewSessionRegistry()
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}

@@ -41,8 +41,11 @@ type ServiceProvider interface {
 	Implementation() *orchestrator.ImplementationService
 	ReviewPipeline() *orchestrator.ReviewPipeline
 	Resumption() *orchestrator.Resumption
-	Foreman() *orchestrator.Foreman
-	SessionRegistry() *orchestrator.SessionRegistry
+	// AnswerRouter routes human answers based on question phase.
+	AnswerRouter() orchestrator.AnswerRouter
+	// ReviewFollowup owns Foreman lifecycle for follow-up sessions.
+	ReviewFollowup() *orchestrator.ReviewFollowup
+	SessionRegistry() orchestrator.SessionRegistry
 	// Manual returns the manual session service.
 	Manual() *orchestrator.ManualSessionService
 
