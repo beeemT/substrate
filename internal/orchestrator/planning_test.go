@@ -198,7 +198,7 @@ func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string)
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
 func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return s.resumeInfo }
 
-func TestPlanningServiceUsesContextWithoutDeadline(t *testing.T) {
+func TestPlanningServicePreservesParentContextDeadline(t *testing.T) {
 	t.Parallel()
 
 	templates, err := NewPlanningTemplates()
@@ -206,7 +206,7 @@ func TestPlanningServiceUsesContextWithoutDeadline(t *testing.T) {
 		t.Fatalf("NewPlanningTemplates(): %v", err)
 	}
 	draftPath := filepath.Join(t.TempDir(), "plan-draft.md")
-	finalPlan := validPlanningPlan("no timeout", "keep repo-a isolated")
+	finalPlan := validPlanningPlan("preserves deadline", "keep repo-a isolated")
 	harness := &scriptedPlanningHarness{
 		startSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
 			if _, ok := opts.ResumeInfo["unused"]; ok {
@@ -226,16 +226,22 @@ func TestPlanningServiceUsesContextWithoutDeadline(t *testing.T) {
 	parentCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 	_, _, _, planErr := svc.runPlanningWithCorrectionLoop(parentCtx, &domain.PlanningContext{
-		WorkItem:         domain.WorkItemSnapshot{Title: "No timeout", ExternalID: "ISSUE-NT"},
+		WorkItem:         domain.WorkItemSnapshot{Title: "Preserves deadline", ExternalID: "ISSUE-NT"},
 		Repos:            []domain.RepoPointer{{Name: "repo-a", Language: "go", MainDir: t.TempDir()}},
-		SessionID:        "plan-no-timeout",
+		SessionID:        "plan-deadline",
 		SessionDraftPath: draftPath,
 	}, "workspace-123")
 	if planErr != nil {
 		t.Fatalf("runPlanningWithCorrectionLoop(): %v", planErr)
 	}
-	if _, ok := harness.lastCtx.Deadline(); ok {
-		t.Fatal("planning harness context unexpectedly has a deadline")
+	// The harness context must inherit the parent's deadline so the harness can be
+	// cancelled when the TUI pipeline is torn down.
+	deadline, ok := harness.lastCtx.Deadline()
+	if !ok {
+		t.Fatal("planning harness context must have a deadline inherited from parent")
+	}
+	if deadline.IsZero() {
+		t.Fatal("deadline should not be zero")
 	}
 }
 

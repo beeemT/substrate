@@ -655,11 +655,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 		}
 	}
 
-	// Preserve parent values for tracing/log correlation, but remove parent
-	// cancellation and deadlines. The harness session is cancelled only by explicit
-	// orchestration cleanup: normal return, confirmed quit, focused interrupt, or
-	// retry restart.
-	sessionCtx, sessionCancel := context.WithCancel(context.WithoutCancel(ctx))
+	sessionCtx, sessionCancel := context.WithCancel(ctx)
 	defer sessionCancel()
 
 	startSession := func(userPrompt string, fromSessionID string, info map[string]string) (adapter.AgentSession, error) {

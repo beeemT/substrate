@@ -658,7 +658,7 @@ func buildOrchestrationRuntime(
 			cfg, harnesses.Implementation, gitClient, bus,
 			services.plan, services.workItem, services.session, services.workspace, registry,
 			reviewPipeline,
-			foreman, services.question,
+			harnesses.Foreman, services.question,
 			services.review,
 			hookRegistry,
 		)
