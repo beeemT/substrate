@@ -305,17 +305,16 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		reviewPipeline = orchestrator.NewReviewPipeline(cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc, bus, registry)
 	}
 
+	var implSvc *orchestrator.ImplementationService
+	if harnesses.Implementation != nil {
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, harnesses.Foreman, questionSvc, reviewSvc, hookRegistry)
+	}
+
+	// Build QuestionRouter for stage-aware question routing (foreman is session-scoped; passed here is only for non-implementation phases)
 	var foreman *orchestrator.Foreman
 	if harnesses.Foreman != nil {
 		foreman = orchestrator.NewForeman(cfg, harnesses.Foreman, planSvc, questionSvc, sessionSvc, bus)
 	}
-
-	var implSvc *orchestrator.ImplementationService
-	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, foreman, questionSvc, reviewSvc, hookRegistry)
-	}
-
-	// Build QuestionRouter for stage-aware question routing
 	questionRouter := orchestrator.NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, bus)
 
 	var resumption *orchestrator.Resumption

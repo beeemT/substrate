@@ -27,22 +27,25 @@ import (
 // ImplementationService orchestrates the implementation phase after plan approval.
 // It manages wave-based execution of sub-plans, worktree creation, and agent sessions.
 type ImplementationService struct {
-	cfg            *config.Config
-	harness        adapter.AgentHarness
-	gitClient      *gitwork.Client
-	eventBus       event.Publisher
-	planSvc        *service.PlanService
-	workItemSvc    *service.SessionService
-	sessionSvc     *service.AgentSessionService
-	workspaceSvc   *service.WorkspaceService
-	registry       *SessionRegistry
-	reviewPipeline *ReviewPipeline
-	foreman        *Foreman
-	questionSvc    *service.QuestionService
-	reviewSvc      *service.ReviewService
-	questionRouter *QuestionRouter
-	sessTimeout    time.Duration
-	hookRegistry   *worktree.HookRegistry
+	cfg             *config.Config
+	harness         adapter.AgentHarness
+	gitClient       *gitwork.Client
+	eventBus        event.Publisher
+	planSvc         *service.PlanService
+	workItemSvc     *service.SessionService
+	sessionSvc      *service.AgentSessionService
+	workspaceSvc    *service.WorkspaceService
+	registry        *SessionRegistry
+	reviewPipeline  *ReviewPipeline
+	foremanHarness  adapter.AgentHarness
+	foreman         *Foreman // session-scoped; created fresh per Implement call
+	questionSvc     *service.QuestionService
+	reviewSvc       *service.ReviewService
+	questionRouter  *QuestionRouter // session-scoped; recreated per Implement call
+	sessTimeout     time.Duration
+	hookRegistry    *worktree.HookRegistry
+	foremanMu        sync.Mutex // guards foreman and questionRouter during session swap
+	questionRouterMu sync.Mutex // guards questionRouter read in forwardEvents
 }
 
 // ImplementationConfig contains configuration for the implementation service.
@@ -68,30 +71,32 @@ func NewImplementationService(
 	workspaceSvc *service.WorkspaceService,
 	registry *SessionRegistry,
 	reviewPipeline *ReviewPipeline,
-	foreman *Foreman,
+	foremanHarness adapter.AgentHarness,
 	questionSvc *service.QuestionService,
 	reviewSvc *service.ReviewService,
 	hookRegistry *worktree.HookRegistry,
 ) *ImplementationService {
 	implCfg := DefaultImplementationConfig()
-	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, foreman, eventBus)
+	// questionRouter is created fresh per Implement call; seed with nil foreman here.
+	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, nil, eventBus)
 	return &ImplementationService{
-		cfg:            cfg,
-		harness:        harness,
-		gitClient:      gitClient,
-		eventBus:       eventBus,
-		planSvc:        planSvc,
-		workItemSvc:    workItemSvc,
-		sessionSvc:     sessionSvc,
-		workspaceSvc:   workspaceSvc,
-		registry:       registry,
-		reviewPipeline: reviewPipeline,
-		foreman:        foreman,
-		questionSvc:    questionSvc,
-		reviewSvc:      reviewSvc,
-		questionRouter: questionRouter,
-		sessTimeout:    implCfg.SessionTimeout,
-		hookRegistry:   hookRegistry,
+		cfg:             cfg,
+		harness:         harness,
+		gitClient:       gitClient,
+		eventBus:        eventBus,
+		planSvc:         planSvc,
+		workItemSvc:     workItemSvc,
+		sessionSvc:      sessionSvc,
+		workspaceSvc:    workspaceSvc,
+		registry:        registry,
+		reviewPipeline:  reviewPipeline,
+		foremanHarness:  foremanHarness,
+		foreman:         nil,
+		questionSvc:     questionSvc,
+		reviewSvc:       reviewSvc,
+		questionRouter:  questionRouter,
+		sessTimeout:     implCfg.SessionTimeout,
+		hookRegistry:    hookRegistry,
 	}
 }
 
@@ -211,9 +216,24 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("discover repo paths: %w", err)
 	}
 
+	// Create a per-session foreman so concurrent Implement calls don't stomp each other.
+	var foreman *Foreman
+	if s.foremanHarness != nil {
+		foreman = NewForeman(s.cfg, s.foremanHarness, s.planSvc, s.questionSvc, s.sessionSvc, s.eventBus)
+	}
+
+	// Swap session-scoped foreman and questionRouter into the struct atomically so
+	// forwardEvents (running in goroutines) always sees a consistent pair.
+	if foreman != nil {
+		s.foremanMu.Lock()
+		s.foreman = foreman
+		s.questionRouter = NewQuestionRouter(s.questionSvc, s.sessionSvc, s.registry, foreman, s.eventBus)
+		s.foremanMu.Unlock()
+	}
+
 	foremanStarted := false
-	if s.foreman != nil {
-		if err := s.foreman.Start(ctx, planID, ""); err != nil {
+	if foreman != nil {
+		if err := foreman.Start(ctx, planID, ""); err != nil {
 			return nil, fmt.Errorf("start foreman: %w", err)
 		}
 		foremanStarted = true
@@ -223,7 +243,7 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 			}
 			stopCtx, stopCancel := durableCleanupContext(ctx)
 			defer stopCancel()
-			if stopErr := s.foreman.Stop(stopCtx); stopErr != nil {
+			if stopErr := foreman.Stop(stopCtx); stopErr != nil {
 				slog.Warn("failed to stop foreman after implementation", "error", stopErr, "plan_id", planID)
 			}
 		}()
@@ -1114,6 +1134,11 @@ func buildCommitAgentSystemPrompt(cfg adapter.CommitConfig) string {
 // forwardEvents drains harness events so producer channels cannot fill.
 // Detailed transcript events stay in session logs; only questions need live routing.
 func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string) {
+	// Snapshot the session-scoped router so we read a consistent pair (router + foreman)
+	// even if a concurrent Implement call swaps them.
+	s.questionRouterMu.Lock()
+	router := s.questionRouter
+	s.questionRouterMu.Unlock()
 	for {
 		select {
 		case <-ctx.Done():
@@ -1124,7 +1149,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			}
 
 			if evt.Type == "question" {
-				if err := s.questionRouter.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
+				if err := router.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
 					slog.Error("failed to route implementation question", "error", err, "agent_session_id", sessionID)
 				}
 				continue

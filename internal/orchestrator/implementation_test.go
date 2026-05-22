@@ -815,7 +815,7 @@ func TestImplement_PrepareWorktreesFailureMarksWorkItemFailed(t *testing.T) {
 func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	svc, _, _, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	foremanHarness := &completingHarness{}
-	svc.foreman = NewForeman(&config.Config{}, foremanHarness, svc.planSvc, nil, svc.sessionSvc, svc.eventBus)
+	svc.foremanHarness = foremanHarness
 
 	_, err := svc.Implement(context.Background(), "plan-1")
 	if err == nil {
@@ -831,10 +831,13 @@ func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	if foremanSession.opts.Mode != adapter.SessionModeForeman {
 		t.Fatalf("foreman mode = %q, want %q", foremanSession.opts.Mode, adapter.SessionModeForeman)
 	}
-	if svc.foreman.IsRunning() {
+	svc.foremanMu.Lock()
+	foreman := svc.foreman
+	svc.foremanMu.Unlock()
+	if foreman.IsRunning() {
 		t.Fatal("foreman is still running after implementation returned")
 	}
-	if got := svc.foreman.LastPlanID(); got != "plan-1" {
+	if got := foreman.LastPlanID(); got != "plan-1" {
 		t.Fatalf("foreman last plan ID = %q, want plan-1", got)
 	}
 }
