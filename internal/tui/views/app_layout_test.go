@@ -18,7 +18,7 @@ func TestAppStatusBarTextIncludesWorkspace(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	if got := app.statusBarText(); got != "workspace · 0 active sessions" {
@@ -32,7 +32,7 @@ func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.sessions = []domain.AgentSession{
 		{ID: "pending", Status: domain.AgentSessionPending},
@@ -51,7 +51,7 @@ func TestAppStatusBarTextCountsOnlyActiveSessions(t *testing.T) {
 func TestAppDeleteShortcutAppearsAndTriggersForSelectedTaskSession(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: newTestSettingsService()})
 	app.sidebarMode = sidebarPaneTasks
 	app.currentWorkItemID = "wi-1"
 	app.taskSessionSelectionByWorkItem["wi-1"] = "sess-1"
@@ -262,7 +262,7 @@ func TestAppViewUsesFooterForWorkspaceInfo(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
@@ -320,7 +320,7 @@ func sizedLayoutTestApp(t *testing.T, width, height int) *App {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: width, Height: height})
@@ -653,7 +653,7 @@ func TestAppViewWithDuplicateSessionDialogFitsWindow(t *testing.T) {
 func TestSidebarSessionsHintsIncludeFilterGroupSort(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", Settings: newTestSettingsService()})
 	// Default state: sidebar focused, sessions pane.
 	if app.mainFocus != mainFocusSidebar || app.sidebarMode != sidebarPaneSessions {
 		t.Fatal("expected default app state to be sidebar-focused on the sessions pane")

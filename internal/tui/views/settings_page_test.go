@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,10 +15,60 @@ import (
 )
 
 func newTestSettingsPageWithSnapshot(snapshot SettingsSnapshot) SettingsPage {
-	page := NewSettingsPage(&SettingsService{}, snapshot, styles.NewStyles(styles.DefaultTheme))
+	// Build a minimal fake SettingsService that returns the given snapshot.
+	testSvc := &testSettingsService{snapshot: snapshot}
+	page := NewSettingsPage(testSvc, styles.NewStyles(styles.DefaultTheme))
 	page.SetSize(120, 40)
 
 	return page
+}
+
+// testSettingsService is a fake SettingsService for settings page tests.
+// It tracks provider status set via TestProvider so that RefreshFromService
+// returns the current status rather than the construction-time snapshot.
+type testSettingsService struct {
+	snapshot       SettingsSnapshot
+	providerStatus map[string]ProviderStatus
+}
+
+func (t *testSettingsService) Snapshot() SettingsSnapshot {
+	snap := t.snapshot
+	if len(t.providerStatus) > 0 {
+		snap.Providers = make(map[string]ProviderStatus, len(t.providerStatus))
+		for k, v := range t.providerStatus {
+			snap.Providers[k] = v
+		}
+	}
+	return snap
+}
+
+func (t *testSettingsService) RefreshConfigOnly(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (t *testSettingsService) RefreshWithDiagnostics(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (t *testSettingsService) Save(_ context.Context, _ []SettingsSection, _ Services) (SettingsApplyResult, error) {
+	return SettingsApplyResult{}, errors.New("Save not implemented in test")
+}
+
+func (t *testSettingsService) TestProvider(_ context.Context, provider string, _ []SettingsSection) (ProviderStatus, error) {
+	if t.providerStatus == nil {
+		t.providerStatus = make(map[string]ProviderStatus)
+	}
+	status := buildProviderStatuses(&config.Config{})[provider]
+	t.providerStatus[provider] = status
+	return status, nil
+}
+
+func (t *testSettingsService) LoginProvider(_ context.Context, _, _ string, _ []SettingsSection, _ Services) (SettingsLoginResult, error) {
+	return SettingsLoginResult{}, errors.New("LoginProvider not implemented in test")
+}
+
+func (t *testSettingsService) RefreshLoginSnapshot(_ context.Context, _ []SettingsSection) error {
+	return nil
 }
 
 func newTestSettingsPage(cfg *config.Config) SettingsPage {

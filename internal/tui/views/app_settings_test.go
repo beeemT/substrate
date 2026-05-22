@@ -4,22 +4,15 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/beeemT/substrate/internal/config"
 )
 
 func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData: SettingsSnapshot{
-			Sections:  buildSettingsSections(cfg),
-			Providers: buildProviderStatuses(cfg),
-		},
+		Settings:      newTestSettingsService(),
 	})
 	app.activeOverlay = overlaySettings
 	app.settingsPage.Open()
@@ -55,15 +48,10 @@ func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 func TestApp_SOpensSettingsOverlay(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData: SettingsSnapshot{
-			Sections:  buildSettingsSections(cfg),
-			Providers: buildProviderStatuses(cfg),
-		},
+		Settings:      newTestSettingsService(),
 	})
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})

@@ -227,7 +227,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		newSession:                     NewNewSessionOverlay(provider.Adapters(), runtimeCtx.WorkspaceID, st),
 		newSessionAutonomousOverlay:    NewNewSessionAutonomousOverlay(st),
 		sessionSearch:                  NewSessionSearchOverlay(st),
-		settingsPage:                   NewSettingsPage(provider.Settings(), runtimeCtx.SettingsData, st),
+		settingsPage:                   NewSettingsPage(provider.Settings(), st),
 		helpOverlay:                    NewHelpOverlay(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		overviewLinksOverlay:           NewOverviewLinksOverlay(st),
@@ -298,6 +298,12 @@ func (a *App) Init() tea.Cmd {
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
 	if a.runtimeCtx.StartupIntegrationsInProgress {
 		cmds = append(cmds, StartupIntegrationsStartCmd())
+	} else {
+		// Non-workspace startup: schedule diagnostics if still pending.
+		snapshot := a.provider.Settings().Snapshot()
+		if snapshot.DiagnosticsState == SettingsDiagnosticsPending {
+			cmds = append(cmds, SettingsDiagnosticsStartCmd())
+		}
 	}
 
 	if a.runtimeCtx.WorkspaceID != "" {
@@ -348,7 +354,7 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
 	a.repoManager = NewRepoManagerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
 	a.repoManager.SetSize(a.windowWidth, a.windowHeight)
-	a.settingsPage.SetSnapshot(reload.SettingsData)
+	a.settingsPage.RefreshFromService()
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.runtimeCtx.WorkspaceID != ""
 	a.syncNewSessionFilterOverlays()
@@ -1117,7 +1123,11 @@ func (a App) readOnlyToast() (components.Toast, bool) {
 }
 
 func (a App) harnessWarningToast() (components.Toast, bool) {
-	warning := strings.TrimSpace(a.runtimeCtx.SettingsData.HarnessWarning)
+	snapshot := a.provider.Settings().Snapshot()
+	if snapshot.DiagnosticsState != SettingsDiagnosticsReady {
+		return components.Toast{}, false
+	}
+	warning := strings.TrimSpace(snapshot.HarnessWarning)
 	if warning == "" {
 		return components.Toast{}, false
 	}
@@ -1261,6 +1271,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, StartupIntegrationsCmd(a.provider, a.runtimeCtx))
 		}
 		return a, tea.Batch(cmds...)
+
+	case SettingsDiagnosticsStartMsg:
+		snapshot := a.provider.Settings().Snapshot()
+		if snapshot.DiagnosticsState == SettingsDiagnosticsPending {
+			cmds = append(cmds, SettingsDiagnosticsCmd(a.provider.Settings(), a.runtimeCtx.Cfg))
+		}
+		return a, tea.Batch(cmds...)
+
+	case SettingsDiagnosticsReadyMsg:
+		if msg.Err != nil {
+			slog.Warn("settings diagnostics failed", "error", msg.Err)
+		}
+		a.settingsPage.RefreshFromService()
+		return a, nil
 
 	case WorkspaceServicesReloadedMsg:
 		oldWorkspaceID := a.runtimeCtx.WorkspaceID
@@ -1918,7 +1942,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RestartPlanMsg:
 		if a.provider.Planning() != nil && a.provider.Session() != nil {
-			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), msg.WorkItemID))
+			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), msg.WorkItemID, msg.Prompt))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}

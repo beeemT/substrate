@@ -253,8 +253,13 @@ type ResumeSessionMsg struct {
 	WorkItemID string
 }
 
-// RestartPlanMsg fires when the user requests a fresh planning restart.
-type RestartPlanMsg struct{ WorkItemID string }
+// RestartPlanMsg fires when the user requests a planning restart.
+// Prompt is optional operator guidance delivered as revision feedback when
+// native resume is available; it is ignored for fresh restarts.
+type RestartPlanMsg struct {
+	WorkItemID string
+	Prompt     string
+}
 
 // SessionResumedMsg is returned after interrupted sessions have been resumed,
 // or sent by the event consumer
@@ -267,7 +272,7 @@ type SessionResumedMsg struct {
 }
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
-// pipeline has been re-launched from scratch.
+// pipeline has been launched or resumed (native resume when available).
 type PlanningRestartedMsg struct {
 	WorkItemID string
 	Message    string
@@ -576,6 +581,14 @@ type StartupIntegrationsStartMsg struct{}
 type StartupIntegrationsReadyMsg struct {
 	Reload viewsServicesReload
 	Err    error
+}
+
+// SettingsDiagnosticsStartMsg fires after the first frame to kick off async diagnostics.
+type SettingsDiagnosticsStartMsg struct{}
+
+// SettingsDiagnosticsReadyMsg is sent when async diagnostics complete.
+type SettingsDiagnosticsReadyMsg struct {
+	Err error
 }
 
 // PlanEditedMsg is sent when the user edits a full plan document in $EDITOR and saves.

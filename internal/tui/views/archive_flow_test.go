@@ -88,7 +88,7 @@ func TestArchAppFlow(t *testing.T) {
 				WorkspaceID:   "ws-local",
 				WorkspaceName: "local",
 				Session:       svc,
-				Settings:      &SettingsService{},
+				Settings:      newTestSettingsService(),
 			})
 			app.workItems = []domain.Session{tc.workItem}
 			app.content.SetSize(80, 20)
@@ -208,7 +208,7 @@ func TestArchiveSelectedSessionFocusesVisibleNeighbor(t *testing.T) {
 				WorkspaceID:   "ws-local",
 				WorkspaceName: "local",
 				Session:       svc,
-				Settings:      &SettingsService{},
+				Settings:      newTestSettingsService(),
 				SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 					SessionReviewArtifacts: emptySessionArtifactRepo{},
 				}}),

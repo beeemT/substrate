@@ -45,7 +45,7 @@ func TestPlanReviewOverviewExposesActionControls(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -165,7 +165,7 @@ func TestOverviewUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -382,7 +382,7 @@ func TestBuildArtifactItemsMergesRecordedGitLabWorktreePath(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:      "ws-local",
 		WorkspaceName:    "local",
-		Settings:         &SettingsService{},
+		Settings:         newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
 		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
 		Events:           service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
@@ -436,7 +436,7 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		Events:        eventSvc,
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
@@ -490,7 +490,7 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -1371,7 +1371,7 @@ func TestRetryFromSessionsSidebar_PlanLoadedViaSessionsMsg(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -1444,7 +1444,7 @@ func TestOverviewConsolidatesInterruptedImplementationSessions(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
 	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", Title: "Interrupted work", State: domain.SessionImplementing, CreatedAt: now, UpdatedAt: now}
 	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
 	subPlans := []domain.TaskPlan{
@@ -1491,7 +1491,7 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
 	workItem := domain.Session{
 		ID:          "wi-stuck",
 		WorkspaceID: "ws-local",
@@ -1550,7 +1550,7 @@ func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
 	workItem := domain.Session{ID: "wi-active", WorkspaceID: "ws-local", State: domain.SessionImplementing, UpdatedAt: now}
 	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-active", Status: domain.PlanApproved}
 	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}

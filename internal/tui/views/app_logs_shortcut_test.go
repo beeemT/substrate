@@ -13,7 +13,7 @@ func TestAppLKeyOpensLogsOverlay(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated, ok := model.(*App)

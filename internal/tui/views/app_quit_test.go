@@ -16,7 +16,7 @@ import (
 
 // newQuitTestApp creates a minimal App with the given sessions list.
 func newQuitTestApp(sessions []domain.AgentSession) *App {
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "test", Settings: newTestSettingsService()})
 	app.sessions = sessions
 	return app
 }
@@ -32,7 +32,7 @@ func newQuitTestAppWithRegistry(sessions []domain.AgentSession) (*App, *orchestr
 	app := newTestApp(Services{
 		WorkspaceID:     "ws-1",
 		WorkspaceName:   "test",
-		Settings:        &SettingsService{},
+		Settings:        newTestSettingsService(),
 		SessionRegistry: reg,
 		Task:            service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: taskRepo}}, NewNoopPublisher()),
 	})

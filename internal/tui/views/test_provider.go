@@ -7,6 +7,7 @@ import (
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/orchestrator"
+	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -46,7 +47,7 @@ func (tp *testProvider) NewSessionFilters() *service.SessionFilterService {
 func (tp *testProvider) NewSessionFilterLocks() *service.SessionFilterLockService {
 	return tp.svcs.NewSessionFilterLocks
 }
-func (tp *testProvider) Settings() *SettingsService              { return tp.svcs.Settings }
+func (tp *testProvider) Settings() SettingsService               { return tp.svcs.Settings }
 func (tp *testProvider) Planning() *orchestrator.PlanningService { return tp.svcs.Planning }
 func (tp *testProvider) Implementation() *orchestrator.ImplementationService {
 	return tp.svcs.Implementation
@@ -88,7 +89,6 @@ func newTestApp(svcs Services) *App {
 		WorkspaceID:   svcs.WorkspaceID,
 		WorkspaceDir:  svcs.WorkspaceDir,
 		WorkspaceName: svcs.WorkspaceName,
-		SettingsData:  svcs.SettingsData,
 		Cfg:           cfg,
 		LogStore:      svcs.LogStore,
 		LogToasts:     svcs.LogToasts,
@@ -99,4 +99,14 @@ func newTestApp(svcs Services) *App {
 // servicesToProvider wraps a Services struct in a testProvider.
 func servicesToProvider(svcs Services) ServiceProvider {
 	return &testProvider{svcs: svcs}
+}
+
+// newTestSettingsService creates a settings service for tests.
+// It uses NewSettingsService with noop dependencies.
+func newTestSettingsService() *settingsService {
+	return NewSettingsService(
+		repository.NoopTransacter{},
+		config.NoopKeychainStore{},
+		NewServiceManager(repository.NoopTransacter{}, nil),
+	)
 }

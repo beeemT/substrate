@@ -13,7 +13,7 @@ import (
 func TestAppAKeyNoLongerOpensAddRepoOverlay(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -28,7 +28,7 @@ func TestAppAKeyNoLongerOpensAddRepoOverlay(t *testing.T) {
 func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -61,7 +61,7 @@ func TestAppEscClosesAddRepoOverlay(t *testing.T) {
 func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -108,7 +108,7 @@ func TestAppEscFromAddRepoReturnsToRepoManager(t *testing.T) {
 func TestAppRepoClonedMsgShowsSuccessToast(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -134,7 +134,7 @@ func TestAppRepoClonedMsgShowsSuccessToast(t *testing.T) {
 func TestAppAddRepoViewFitsWindowWhenOpen(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -158,7 +158,7 @@ func TestAppAddRepoViewFitsWindowWhenOpen(t *testing.T) {
 func TestAppManagedRepoSlugsRebuildOnScan(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -203,7 +203,7 @@ func TestAppOpenAddRepoTriggersScanWhenSlugsNil(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "ws",
 		WorkspaceDir:  "/tmp/workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
@@ -229,7 +229,7 @@ func TestAppOpenAddRepoTriggersScanWhenSlugsNil(t *testing.T) {
 func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -278,7 +278,7 @@ func TestAppManagedRepoSlugsForwardedToAddRepoOnScan(t *testing.T) {
 func TestAppRepoClonedMsgUpdatesSlugs(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 
@@ -305,7 +305,7 @@ func TestAppRepoClonedMsgUpdatesSlugs(t *testing.T) {
 func TestAppRepoClonedMsgErrorDoesNotUpdateSlugs(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	updated := model.(*App)
 

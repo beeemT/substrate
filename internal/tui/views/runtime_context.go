@@ -10,7 +10,6 @@ import (
 // lifetime of the App.
 type RuntimeContext struct {
 	Cfg                           *config.Config
-	SettingsData                  SettingsSnapshot
 	LogStore                      *tuilog.Store
 	LogToasts                     <-chan tuilog.ToastEntry
 	InstanceID                    string

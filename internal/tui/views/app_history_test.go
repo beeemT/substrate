@@ -174,7 +174,7 @@ func (r *sessionSearchDeleteRepo) Delete(_ context.Context, id string) error {
 
 func TestSessionSearchPollingRefreshStaysSilent(t *testing.T) {
 	now := time.Now()
-	app := newTestApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: newTestSettingsService()})
 	app.activeOverlay = overlaySessionSearch
 	app.sessionSearch.Open(sessionHistoryScopeGlobal, false)
 	app.sessionSearch.SetEntries([]domain.SessionHistoryEntry{{
@@ -224,7 +224,7 @@ func TestApp_OpenSessionSearchIncludesWorkItemWithoutAgentSessions(t *testing.T)
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.workItems = []domain.Session{{
 		ID:          "wi-preplan",
@@ -379,7 +379,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 		Plan:          planSvc,
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	tempDir := t.TempDir()
 	for _, path := range []string{
@@ -540,7 +540,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 		t.Fatalf("work item repo items = %d, want 0 after successful delete", len(workItemRepo.items))
 	}
 
-	model, cmd := newTestApp(Services{Settings: &SettingsService{}}).Update(deleted)
+	model, cmd := newTestApp(Services{Settings: newTestSettingsService()}).Update(deleted)
 	if cmd != nil {
 		t.Fatalf("unexpected follow-up command for warning toast: %v", cmd)
 	}
@@ -561,7 +561,7 @@ func TestLoadHistoryEntry_LocalWorkspaceUsesWorkItemContent(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.content.SetSize(80, 20)
 	app.workItems = []domain.Session{{
@@ -617,7 +617,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceUsesSessionInteraction(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	cmd := app.loadHistoryEntry(SidebarEntry{
@@ -664,7 +664,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.content.SetSize(80, 20)
 
@@ -694,7 +694,7 @@ func TestLoadHistoryEntry_RemoteWorkspaceWithoutAgentSessionShowsSummary(t *test
 func TestSessionDeletedMsg_ClearsOpenRemoteHistoryEntry(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: newTestSettingsService()})
 	app.content.SetSize(80, 20)
 
 	cmd := app.loadHistoryEntry(SidebarEntry{
@@ -746,7 +746,7 @@ func TestRebuildSidebarLeavesSessionsUnselectedUntilNavigation(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.workItems = []domain.Session{
 		{ID: "wi-old", ExternalID: "SUB-1", Title: "Old", State: domain.SessionIngested, CreatedAt: older, UpdatedAt: older},
@@ -795,7 +795,7 @@ func TestWorkItemCreatedMsgUpdatesSidebarImmediately(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -956,7 +956,7 @@ func newDuplicatePromptTestApp() (*App, domain.Session, domain.Session, domain.S
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		Planning:      new(orchestrator.PlanningService),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
@@ -1125,7 +1125,7 @@ func TestWorkItemCreatedMsgAutoStartsPlanningWhenConfigured(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		Planning:      &orchestrator.PlanningService{},
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
@@ -1167,7 +1167,7 @@ func newSidebarDrilldownTestApp() *App {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -1255,7 +1255,7 @@ func newPlanningDrilldownTestApp() *App {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),
@@ -2187,7 +2187,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-local",
 		WorkspaceName: "local",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},
 		}}),

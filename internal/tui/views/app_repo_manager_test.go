@@ -13,7 +13,7 @@ var errRepoManagerTest = errors.New("test error")
 
 func newRepoManagerTestApp(t *testing.T) *App {
 	t.Helper()
-	return newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: &SettingsService{}})
+	return newTestApp(Services{WorkspaceID: "ws-1", WorkspaceName: "ws", Settings: newTestSettingsService()})
 }
 
 // TestAppRKeyOpensRepoManagerOverlay asserts that pressing 'R' on the main screen

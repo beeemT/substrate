@@ -459,7 +459,7 @@ func TestAppOpenNewSessionReloadsPreservedBrowseViewOnReopen(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.newSession.SetSize(100, 30)
 
@@ -1285,7 +1285,7 @@ func TestOverviewLinksCloseReturnsToNewSessionOverlay(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		Adapters:      []adapter.WorkItemAdapter{githubAdapter},
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.activeOverlay = overlayNewSession
 	model, _ := app.Update(OpenOverviewLinksMsg{
@@ -2631,7 +2631,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 	})
 
 	app := newTestApp(Services{
-		Settings:  &SettingsService{},
+		Settings:  newTestSettingsService(),
 		LogStore:  store,
 		LogToasts: logToasts,
 	})
@@ -2670,7 +2670,7 @@ func TestAppErrMsgShowsUserToastWithoutLogToastEcho(t *testing.T) {
 func TestAppErrMsgFormatsGitHubSearchValidationError(t *testing.T) {
 	errMsg := `github: github api status 422: {"message":"Validation Failed","errors":[{"message":"The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.","resource":"Search","field":"q","code":"invalid"}],"documentation_url":"https://docs.github.com/v3/search/","status":"422"}`
 
-	app := newTestApp(Services{Settings: &SettingsService{}})
+	app := newTestApp(Services{Settings: newTestSettingsService()})
 	model, _ := app.Update(ErrMsg{Err: errors.New(errMsg)})
 	updated, ok := model.(*App)
 	if !ok {

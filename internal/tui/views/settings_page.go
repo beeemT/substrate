@@ -76,7 +76,7 @@ type settingsSyntheticGroup struct {
 }
 
 type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
-	service            *SettingsService
+	service            SettingsService
 	sections           []SettingsSection
 	providerStatus     map[string]ProviderStatus
 	rawContent         string
@@ -107,11 +107,12 @@ type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
 	warningText        string
 }
 
-func NewSettingsPage(svc *SettingsService, snapshot SettingsSnapshot, st styles.Styles) SettingsPage {
+func NewSettingsPage(svc SettingsService, st styles.Styles) SettingsPage {
 	ti := components.NewGrowingTextInput()
 	ti.SetCharLimit(1000)
 	ti.SetPrompt("")
 	vp := viewport.New(0, 0)
+	snapshot := svc.Snapshot()
 	return SettingsPage{
 		service:          svc,
 		sections:         snapshot.Sections,
@@ -164,6 +165,23 @@ func (m *SettingsPage) SetSnapshot(snapshot SettingsSnapshot) {
 	m.invalidateMainDocument()
 	m.clampCursor()
 	m.syncMainViewport()
+}
+
+// RefreshFromService replaces editable state from the service's cached snapshot.
+// If dirty, it preserves user edits and only updates status surfaces.
+func (m *SettingsPage) RefreshFromService() {
+	snapshot := m.service.Snapshot()
+	if m.dirty {
+		// Preserve user edits; update status surfaces only.
+		m.providerStatus = snapshot.Providers
+		m.rawContent = snapshot.RawYAML
+		m.warningText = snapshot.HarnessWarning
+		m.statusText = ""
+		m.errorText = ""
+		m.invalidateMainDocument()
+		return
+	}
+	m.SetSnapshot(snapshot)
 }
 
 func (m *SettingsPage) currentSection() *SettingsSection {
@@ -1049,7 +1067,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 	case SettingsAppliedMsg:
 		m.statusText = msg.Message
 		m.errorText = ""
-		m.SetSnapshot(msg.Reload.SettingsData)
+		m.RefreshFromService()
 	case SettingsProviderTestedMsg:
 		m.providerStatus[msg.Provider] = msg.Status
 		m.invalidateMainDocument()
@@ -1064,15 +1082,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		wasDirty := m.dirty
 		expanded := make(map[string]bool, len(m.expandedSections))
 		maps.Copy(expanded, m.expandedSections)
-		snapshot := msg.Snapshot
-		for name, status := range snapshot.Providers {
-			if prior, ok := m.providerStatus[name]; ok {
-				status.Connected = prior.Connected
-				status.LastError = prior.LastError
-				snapshot.Providers[name] = status
-			}
-		}
-		m.SetSnapshot(snapshot)
+		m.RefreshFromService()
 		for key, value := range expanded {
 			if _, ok := m.expandedSections[key]; ok {
 				m.expandedSections[key] = value
@@ -1092,11 +1102,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 
 func (m SettingsPage) applyCmd(svcs Services) tea.Cmd {
 	return func() tea.Msg {
-		raw, _, err := m.service.Serialize(m.sections)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		result, err := m.service.Apply(context.Background(), raw, svcs)
+		result, err := m.service.Save(context.Background(), m.sections, svcs)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -1134,12 +1140,10 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 			if err != nil {
 				return ErrMsg{Err: fmt.Errorf("sentry auth login: %w", err)}
 			}
-			snapshotCfg, cfgErr := configFromSections(m.sections)
-			if cfgErr != nil {
-				return ErrMsg{Err: cfgErr}
+			if refreshErr := m.service.RefreshLoginSnapshot(context.Background(), m.sections); refreshErr != nil {
+				return ErrMsg{Err: fmt.Errorf("refresh snapshot after sentry login: %w", refreshErr)}
 			}
-			snapshot := settingsSnapshotFromConfig(snapshotCfg)
-			return SettingsLoginCompletedMsg{Snapshot: snapshot, Message: "sentry login complete", Dirty: false}
+			return SettingsLoginCompletedMsg{Message: "sentry login complete", Dirty: false}
 		})
 	}
 	harness := harnessForProvider(provider)
@@ -1148,7 +1152,7 @@ func (m SettingsPage) loginProviderCmd(svcs Services) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return SettingsLoginCompletedMsg(result)
+		return SettingsLoginCompletedMsg{Message: result.Message, Dirty: result.Dirty}
 	}
 }
 
@@ -1629,6 +1633,12 @@ func (m SettingsPage) footerText() string {
 		extras = append(extras, "error: "+m.errorText)
 	} else if m.statusText != "" {
 		extras = append(extras, m.statusText)
+	} else {
+		// Show checking message when diagnostics are still pending.
+		snapshot := m.service.Snapshot()
+		if snapshot.DiagnosticsState == SettingsDiagnosticsPending {
+			extras = append(extras, "Checking harness availability…")
+		}
 	}
 	if len(extras) == 0 {
 		return hint

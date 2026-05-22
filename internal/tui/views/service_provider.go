@@ -34,7 +34,7 @@ type ServiceProvider interface {
 	GitlabMRChecks() *service.GitlabMRCheckService
 	NewSessionFilters() *service.SessionFilterService
 	NewSessionFilterLocks() *service.SessionFilterLockService
-	Settings() *SettingsService
+	Settings() SettingsService
 
 	// Orchestration
 	Planning() *orchestrator.PlanningService

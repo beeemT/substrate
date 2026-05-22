@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -42,15 +44,10 @@ func findLineContaining(lines []string, needle string) int {
 func newToastTestApp(t *testing.T) *App {
 	t.Helper()
 
-	cfg := &config.Config{}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData: SettingsSnapshot{
-			Sections:  buildSettingsSections(cfg),
-			Providers: buildProviderStatuses(cfg),
-		},
+		Settings:      newTestSettingsService(),
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	updated, ok := model.(*App)
@@ -149,7 +146,7 @@ func TestAppView_RendersStartupIntegrationToastUntilReady(t *testing.T) {
 		Services: Services{
 			WorkspaceID:   "ws-1",
 			WorkspaceName: "workspace",
-			Settings:      &SettingsService{},
+			Settings:      newTestSettingsService(),
 		},
 		Cfg: &config.Config{},
 	}})
@@ -354,16 +351,25 @@ func TestAppView_ToastRendersOnSettingsOverlay(t *testing.T) {
 func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
+	svc := newTestSettingsService()
+	cfg := &config.Config{
+		Harness: config.HarnessConfig{
+			Default: config.HarnessClaudeCode,
+		},
+		Adapters: config.AdaptersConfig{
+			ClaudeCode: config.ClaudeCodeConfig{
+				BridgePath: filepath.Join(t.TempDir(), "missing-bridge"),
+			},
+		},
+	}
+	if err := svc.RefreshWithDiagnostics(context.Background(), cfg); err != nil {
+		t.Fatalf("RefreshWithDiagnostics: %v", err)
+	}
+
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData: SettingsSnapshot{
-			Sections:       buildSettingsSections(cfg),
-			Providers:      buildProviderStatuses(cfg),
-			HarnessWarning: "Planning unavailable. Check Harness Routing.",
-		},
+		Settings:      svc,
 	})
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	updated, ok := model.(*App)
@@ -375,7 +381,7 @@ func TestAppView_PinsHarnessWarningAboveTransientToasts(t *testing.T) {
 	rendered := updated.View()
 	assertAppViewFitsWindow(t, rendered, 80, 16)
 	lines := strings.Split(stripToastANSI(rendered), "\n")
-	warningLine := findLineContaining(lines, "Planning")
+	warningLine := findLineContaining(lines, "unavailable. Check")
 	syncLine := findLineContaining(lines, "Sync complete")
 	if warningLine == -1 || syncLine == -1 {
 		t.Fatalf("view missing warning stack: %q", strings.Join(lines, "\n"))

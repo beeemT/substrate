@@ -75,7 +75,7 @@ type coreServices struct {
 	glMRCheck            *service.GitlabMRCheckService
 	newSessionFilter     *service.SessionFilterService
 	newSessionFilterLock *service.SessionFilterLockService
-	settings             *views.SettingsService
+	settings             views.SettingsService
 }
 
 type adapterSetup struct {
@@ -163,15 +163,13 @@ func run() error {
 		}
 	}
 
-	// Load settings snapshot
-	settingsData, err := serviceMgr.Settings().Snapshot(cfg)
-	if err != nil {
-		return fmt.Errorf("load settings snapshot: %w", err)
+	// Load settings snapshot without running diagnostics (deferred to after first frame).
+	if err := serviceMgr.Settings().RefreshConfigOnly(context.Background(), cfg); err != nil {
+		return fmt.Errorf("load settings: %w", err)
 	}
 
 	return views.RunTUI(serviceMgr, views.RuntimeContext{
 		Cfg:                           cfg,
-		SettingsData:                  settingsData,
 		LogStore:                      logStore,
 		LogToasts:                     logToasts,
 		InstanceID:                    instanceID,

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	atomic "github.com/beeemT/go-atomic"
@@ -42,6 +43,13 @@ const (
 	statusEmpty         = "empty"
 	statusUnset         = "unset"
 	sentryAuthSourceCLI = "sentry cli"
+)
+
+type SettingsDiagnosticsState string
+
+const (
+	SettingsDiagnosticsPending SettingsDiagnosticsState = "pending"
+	SettingsDiagnosticsReady   SettingsDiagnosticsState = "ready"
 )
 
 type SettingsField struct {
@@ -79,10 +87,11 @@ type ProviderStatus struct {
 }
 
 type SettingsSnapshot struct {
-	Sections       []SettingsSection
-	Providers      map[string]ProviderStatus
-	RawYAML        string
-	HarnessWarning string
+	Sections         []SettingsSection
+	Providers        map[string]ProviderStatus
+	RawYAML          string
+	HarnessWarning   string
+	DiagnosticsState SettingsDiagnosticsState
 }
 
 type SettingsApplyResult struct {
@@ -91,70 +100,138 @@ type SettingsApplyResult struct {
 }
 
 type SettingsLoginResult struct {
-	Snapshot SettingsSnapshot
-	Message  string
-	Dirty    bool
+	Message string
+	Dirty   bool
 }
 
-func settingsSnapshotFromConfig(cfg *config.Config) SettingsSnapshot {
-	diagnostics := app.DiagnoseHarnesses(cfg, "")
-
-	return SettingsSnapshot{
-		Sections:       buildSettingsSections(cfg),
-		Providers:      buildProviderStatuses(cfg),
-		HarnessWarning: diagnostics.WarningSummary(),
-	}
+// SettingsService is the interface for settings management.
+// Implementations must be safe for concurrent reads; write operations are exclusive.
+type SettingsService interface {
+	Snapshot() SettingsSnapshot
+	RefreshConfigOnly(ctx context.Context, cfg *config.Config) error
+	RefreshWithDiagnostics(ctx context.Context, cfg *config.Config) error
+	Save(ctx context.Context, sections []SettingsSection, current Services) (SettingsApplyResult, error)
+	TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error)
+	LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsLoginResult, error)
+	RefreshLoginSnapshot(ctx context.Context, sections []SettingsSection) error
 }
 
-type SettingsService struct {
+type settingsService struct {
 	transacter  atomic.Transacter[repository.Resources]
 	secretStore config.SecretStore
 	serviceMgr  *ServiceManager
+
+	mu       sync.RWMutex
+	snapshot SettingsSnapshot
 }
 
+var _ SettingsService = (*settingsService)(nil)
+
 type viewsServicesReload struct {
-	Services     Services
-	ConfigPath   string
-	SessionsDir  string
-	SettingsData SettingsSnapshot
-	Cfg          *config.Config
+	Services    Services
+	ConfigPath  string
+	SessionsDir string
+	Cfg         *config.Config
 }
 
 func NewSettingsService(
 	transacter atomic.Transacter[repository.Resources],
 	secretStore config.SecretStore,
 	serviceMgr *ServiceManager,
-) *SettingsService {
-	return &SettingsService{
+) *settingsService {
+	return &settingsService{
 		transacter:  transacter,
 		secretStore: secretStore,
 		serviceMgr:  serviceMgr,
 	}
 }
 
-func (s *SettingsService) Snapshot(cfg *config.Config) (SettingsSnapshot, error) {
+func (s *settingsService) Snapshot() SettingsSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshot.defensiveCopy()
+}
+
+func (s *settingsService) RefreshConfigOnly(ctx context.Context, cfg *config.Config) error {
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
-		return SettingsSnapshot{}, err
+		return err
 	}
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil && !os.IsNotExist(err) {
-		return SettingsSnapshot{}, err
+		return err
 	}
-	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
-		return SettingsSnapshot{}, err
-	}
-	diagnostics := app.DiagnoseHarnesses(cfg, "")
 
-	return SettingsSnapshot{
-		Sections:       buildSettingsSections(cfg),
-		Providers:      buildProviderStatuses(cfg),
-		RawYAML:        string(raw),
-		HarnessWarning: diagnostics.WarningSummary(),
-	}, nil
+	snapshot := SettingsSnapshot{
+		Sections:         buildSettingsSectionsConfigOnly(cfg),
+		Providers:        buildProviderStatuses(cfg),
+		RawYAML:          string(raw),
+		DiagnosticsState: SettingsDiagnosticsPending,
+	}
+
+	s.mu.Lock()
+	s.snapshot = snapshot
+	s.mu.Unlock()
+
+	return nil
 }
 
-func (s *SettingsService) SaveRaw(raw string) error {
+func (s *settingsService) RefreshWithDiagnostics(ctx context.Context, cfg *config.Config) error {
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var workspaceRoot string
+	if svcs := s.serviceMgr.GetServices(); svcs != nil {
+		workspaceRoot = svcs.WorkspaceDir
+	}
+
+	diagnostics := app.DiagnoseHarnesses(cfg, workspaceRoot)
+
+	snapshot := buildSettingsSnapshotWithDiagnostics(cfg, string(raw), diagnostics)
+
+	s.mu.Lock()
+	s.snapshot = snapshot
+	s.mu.Unlock()
+
+	return nil
+}
+
+func (s *settingsService) RefreshLoginSnapshot(ctx context.Context, sections []SettingsSection) error {
+	cfg, err := configFromSections(sections)
+	if err != nil {
+		return err
+	}
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var workspaceRoot string
+	if svcs := s.serviceMgr.GetServices(); svcs != nil {
+		workspaceRoot = svcs.WorkspaceDir
+	}
+
+	diagnostics := app.DiagnoseHarnesses(cfg, workspaceRoot)
+	snapshot := buildSettingsSnapshotWithDiagnostics(cfg, string(raw), diagnostics)
+
+	s.mu.Lock()
+	s.snapshot = snapshot
+	s.mu.Unlock()
+
+	return nil
+}
+
+func (s *settingsService) saveRaw(raw string) error {
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
 		return err
@@ -163,7 +240,7 @@ func (s *SettingsService) SaveRaw(raw string) error {
 	return os.WriteFile(cfgPath, []byte(raw), 0o600)
 }
 
-func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) {
+func (s *settingsService) loadConfigFromRaw(raw string) (*config.Config, error) {
 	tmp, err := os.CreateTemp("", "substrate-settings-*.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("create temp YAML config: %w", err)
@@ -191,7 +268,7 @@ func (s *SettingsService) loadConfigFromRaw(raw string) (*config.Config, error) 
 	return cfg, nil
 }
 
-func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config.Config, error) {
+func serializeSections(sections []SettingsSection, secretStore config.SecretStore) (string, *config.Config, error) {
 	cfg, err := configFromSections(sections)
 	if err != nil {
 		return "", nil, err
@@ -199,7 +276,7 @@ func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config
 	if err := validateSettingsConfig(cfg); err != nil {
 		return "", nil, err
 	}
-	if err := config.SaveSecrets(cfg, s.secretStore); err != nil {
+	if err := config.SaveSecrets(cfg, secretStore); err != nil {
 		return "", nil, err
 	}
 	data, err := yaml.Marshal(cfg)
@@ -210,9 +287,59 @@ func (s *SettingsService) Serialize(sections []SettingsSection) (string, *config
 	return string(data), cfg, nil
 }
 
-func (s *SettingsService) Apply(ctx context.Context, raw string, current Services) (SettingsApplyResult, error) {
-	cfg, err := s.loadConfigFromRaw(raw)
+// Serialize is exposed for package tests. Production callers should use Save.
+func (s *settingsService) Serialize(sections []SettingsSection) (string, *config.Config, error) {
+	return serializeSections(sections, s.secretStore)
+}
+
+// Apply is exposed for package tests. Production callers should use Save.
+func (s *settingsService) Apply(ctx context.Context, raw string, current Services) (SettingsApplyResult, error) {
+	sections, err := sectionsFromRaw(raw, s.secretStore)
 	if err != nil {
+		return SettingsApplyResult{}, err
+	}
+	return s.Save(ctx, sections, current)
+}
+
+func sectionsFromRaw(raw string, secretStore config.SecretStore) ([]SettingsSection, error) {
+	tmp, err := os.CreateTemp("", "substrate-settings-*.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("create temp YAML config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(raw); err != nil {
+		if closeErr := tmp.Close(); closeErr != nil {
+			slog.Warn("failed to close temp config file on write error", "error", closeErr)
+		}
+		return nil, fmt.Errorf("write temp YAML config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("close temp YAML config: %w", err)
+	}
+	cfg, err := config.Load(tmpPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.LoadSecrets(cfg, secretStore); err != nil {
+		return nil, err
+	}
+	return buildSettingsSections(cfg), nil
+}
+
+// SaveRaw is exposed for package tests. Production callers should use Save.
+func (s *settingsService) SaveRaw(raw string) error {
+	return s.saveRaw(raw)
+}
+
+func (s *settingsService) Save(ctx context.Context, sections []SettingsSection, current Services) (SettingsApplyResult, error) {
+	raw, cfg, err := serializeSections(sections, s.secretStore)
+	if err != nil {
+		return SettingsApplyResult{}, err
+	}
+
+	// Save raw config first — runtime services must never use unpersisted config.
+	if err := s.saveRaw(raw); err != nil {
 		return SettingsApplyResult{}, err
 	}
 
@@ -222,21 +349,16 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 		return SettingsApplyResult{}, err
 	}
 
-	if err := s.SaveRaw(raw); err != nil {
-		return SettingsApplyResult{}, err
-	}
 	if current.Foreman != nil {
 		if stopErr := current.Foreman.Stop(ctx); stopErr != nil {
 			slog.Warn("failed to stop foreman on settings apply", "error", stopErr)
 		}
 	}
 
-	// Get snapshot for settings data
-	snapshot, err := s.Snapshot(cfg)
-	if err != nil {
-		return SettingsApplyResult{}, err
+	// Refresh cached snapshot with diagnostics.
+	if err := s.RefreshWithDiagnostics(ctx, cfg); err != nil {
+		slog.Warn("failed to refresh settings snapshot after apply", "error", err)
 	}
-	snapshot.RawYAML = raw
 
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
@@ -249,17 +371,16 @@ func (s *SettingsService) Apply(ctx context.Context, raw string, current Service
 
 	return SettingsApplyResult{
 		Services: viewsServicesReload{
-			Services:     *reloaded,
-			ConfigPath:   cfgPath,
-			SessionsDir:  sessionsDir,
-			SettingsData: snapshot,
-			Cfg:          cfg,
+			Services:    *reloaded,
+			ConfigPath:  cfgPath,
+			SessionsDir: sessionsDir,
+			Cfg:         cfg,
 		},
 		Message: "Settings applied",
 	}, nil
 }
 
-func (s *SettingsService) TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error) {
+func (s *settingsService) TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error) {
 	cfg, err := configFromSections(sections)
 	if err != nil {
 		return ProviderStatus{}, err
@@ -350,7 +471,7 @@ func (s *SettingsService) TestProvider(ctx context.Context, provider string, sec
 	}
 }
 
-func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsLoginResult, error) {
+func (s *settingsService) LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsLoginResult, error) {
 	cfg, err := configFromSections(sections)
 	if err != nil {
 		return SettingsLoginResult{}, err
@@ -394,7 +515,11 @@ func (s *SettingsService) LoginProvider(ctx context.Context, provider, harness s
 		return SettingsLoginResult{}, fmt.Errorf("login not implemented for provider %q", provider)
 	}
 
-	return SettingsLoginResult{Snapshot: settingsSnapshotFromConfig(cfg), Message: message, Dirty: dirty}, nil
+	if err := s.RefreshLoginSnapshot(ctx, sections); err != nil {
+		slog.Warn("failed to refresh settings snapshot after login", "error", err)
+	}
+
+	return SettingsLoginResult{Message: message, Dirty: dirty}, nil
 }
 
 func providerLoginInputs(cfg *config.Config, provider string) map[string]string {
@@ -670,9 +795,53 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 		annotateFieldPresentation(&sections[i])
 		sections[i].Status = sectionStatus(sections[i])
 	}
-	annotateHarnessWarnings(sections, cfg, app.DiagnoseHarnesses(cfg, ""))
 
 	return sections
+}
+
+func buildSettingsSectionsConfigOnly(cfg *config.Config) []SettingsSection {
+	return buildSettingsSections(cfg)
+}
+
+func buildSettingsSectionsWithDiagnostics(cfg *config.Config, diagnostics app.HarnessDiagnostics) []SettingsSection {
+	sections := buildSettingsSections(cfg)
+	annotateHarnessWarnings(sections, cfg, diagnostics)
+	return sections
+}
+
+func buildSettingsSnapshotWithDiagnostics(cfg *config.Config, raw string, diagnostics app.HarnessDiagnostics) SettingsSnapshot {
+	sections := buildSettingsSectionsWithDiagnostics(cfg, diagnostics)
+	providers := buildProviderStatuses(cfg)
+
+	return SettingsSnapshot{
+		Sections:         sections,
+		Providers:        providers,
+		RawYAML:          raw,
+		HarnessWarning:   diagnostics.WarningSummary(),
+		DiagnosticsState: SettingsDiagnosticsReady,
+	}
+}
+
+func (s SettingsSnapshot) defensiveCopy() SettingsSnapshot {
+	sections := make([]SettingsSection, len(s.Sections))
+	for i := range s.Sections {
+		sections[i] = s.Sections[i]
+		fields := make([]SettingsField, len(s.Sections[i].Fields))
+		copy(fields, s.Sections[i].Fields)
+		sections[i].Fields = fields
+	}
+	providers := make(map[string]ProviderStatus, len(s.Providers))
+	for k, v := range s.Providers {
+		providers[k] = v
+	}
+
+	return SettingsSnapshot{
+		Sections:         sections,
+		Providers:        providers,
+		RawYAML:          s.RawYAML,
+		HarnessWarning:   s.HarnessWarning,
+		DiagnosticsState: s.DiagnosticsState,
+	}
 }
 
 func annotateHarnessWarnings(sections []SettingsSection, cfg *config.Config, diagnostics app.HarnessDiagnostics) {

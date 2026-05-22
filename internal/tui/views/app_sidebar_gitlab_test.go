@@ -15,7 +15,7 @@ func TestSidebarEntryFromWorkItem_GitlabUsesProjectPath(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	wi := domain.Session{
@@ -58,7 +58,7 @@ func TestSidebarEntryFromWorkItem_GitlabNoTrackerRefs_FallsBackToNumeric(t *test
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	wi := domain.Session{
@@ -84,7 +84,7 @@ func TestSidebarEntryFromWorkItem_NonGitlabUnaffected(t *testing.T) {
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	wi := domain.Session{
@@ -163,7 +163,7 @@ func TestTaskSidebarEntries_GitlabIncludesRecordedArtifactWithoutLink(t *testing
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 		Events:        service.NewEventService(repository.NoopTransacter{Res: repository.Resources{Events: eventRepo}}),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepo{},

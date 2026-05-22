@@ -43,7 +43,7 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 		Bus:           bus,
 		Task:          taskSvc,
 		Session:       sessionSvc,
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	// Set up event subscription
@@ -172,7 +172,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	app := newTestApp(Services{WorkspaceID: "ws-integration", WorkspaceName: "integration-test", Settings: &SettingsService{}})
+	app := newTestApp(Services{WorkspaceID: "ws-integration", WorkspaceName: "integration-test", Settings: newTestSettingsService()})
 	app.busSub = &event.Subscriber{}
 	app.eventConsumer = NewEventConsumer(app, app.busSub)
 	updated, cmd := app.Update(DomainEventMsg{Event: domain.SystemEvent{
@@ -215,7 +215,7 @@ func TestDomainEventMsg_ImplementationStartedReloadsWorkItemAndTasks(t *testing.
 		Plan: service.NewPlanService(repository.NoopTransacter{
 			Res: repository.Resources{Plans: &mockPlanRepo{}, SubPlans: &mockSubPlanRepo{}},
 		}, bus),
-		Settings: &SettingsService{},
+		Settings: newTestSettingsService(),
 	})
 	app.busSub = &event.Subscriber{}
 	app.eventConsumer = NewEventConsumer(app, app.busSub)

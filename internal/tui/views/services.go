@@ -40,16 +40,15 @@ type Services struct {
 	// QuestionRouter is the single stage-aware routing point for normalized agent questions.
 	QuestionRouter *orchestrator.QuestionRouter
 	// Manual is the manual agent session orchestration service.
-	Manual *orchestrator.ManualSessionService
-	Cfg             *config.Config
-	Adapters        []adapter.WorkItemAdapter
-	RepoSources     []adapter.RepoSource
-	Harnesses       app.AgentHarnesses
-	Settings        *SettingsService
-	SettingsData    SettingsSnapshot
-	GitClient       *gitwork.Client
-	Bus             *event.Bus
-	ReviewComments  *adapter.ReviewCommentDispatcher
+	Manual         *orchestrator.ManualSessionService
+	Cfg            *config.Config
+	Adapters       []adapter.WorkItemAdapter
+	RepoSources    []adapter.RepoSource
+	Harnesses      app.AgentHarnesses
+	Settings       SettingsService
+	GitClient      *gitwork.Client
+	Bus            *event.Bus
+	ReviewComments *adapter.ReviewCommentDispatcher
 	// StartupWarnings collects adapter initialisation warnings to surface
 	// as toasts when the TUI starts.
 	StartupWarnings []string

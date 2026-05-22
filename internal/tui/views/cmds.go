@@ -831,32 +831,50 @@ func ReconcileOrphanedTasksCmd(
 	}
 }
 
-// RestartPlanningCmd rolls a work item back from planning to ingested (if needed)
-// and then re-runs the planning pipeline from the beginning. This handles the case
-// where a planning task was interrupted and the user wants to start fresh.
-func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, workItemID string) tea.Cmd {
+// RestartPlanningCmd resumes an interrupted planning session with native harness
+// resume data when available, falling back to a fresh planning start when no
+// interrupted session exists. Prompt is optional operator guidance delivered as
+// revision feedback when native resume is used.
+func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, workItemID string, prompt string) tea.Cmd {
 	return func() tea.Msg {
+		// Roll work item back from interrupted state so the resume can transition it
+		// back to planning (ResumeInterruptedPlanning requires SessionPlanning state).
 		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
 
-		// Fail any interrupted sessions so the overview clears the action card.
+		// Find the interrupted planning session for this work item to resume it.
 		sessions, listErr := sessionSvc.ListByWorkItemID(ctx, workItemID)
-		if listErr == nil {
-			for _, s := range sessions {
-				if s.Status == domain.AgentSessionInterrupted {
-					if failErr := sessionSvc.Fail(ctx, s.ID, nil); failErr != nil {
-						slog.Warn("failed to fail interrupted agent session during planning restart",
-							"agent_session_id", s.ID, "error", failErr)
-					}
-				}
+		if listErr != nil {
+			return ErrMsg{Err: fmt.Errorf("list sessions for work item: %w", listErr)}
+		}
+		var interrupted *domain.AgentSession
+		for i := range sessions {
+			if sessions[i].Status == domain.AgentSessionInterrupted &&
+				sessions[i].Phase == domain.AgentSessionPhasePlanning {
+				interrupted = &sessions[i]
+				break
 			}
 		}
 
+		if interrupted != nil {
+			// Resume the interrupted planning session with native resume data.
+			// Fail the old interrupted session so the overview clears the action card.
+			if failErr := sessionSvc.Fail(ctx, interrupted.ID, nil); failErr != nil {
+				slog.Warn("failed to fail interrupted planning session before resume",
+					"agent_session_id", interrupted.ID, "error", failErr)
+			}
+			_, err := planningSvc.ResumeInterruptedPlanning(ctx, *interrupted, prompt)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning resumed"}
+		}
+
+		// No interrupted session found — fall back to fresh planning.
 		if _, err := planningSvc.Plan(ctx, workItemID); err != nil {
 			return ErrMsg{Err: err}
 		}
-
 		return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning restarted"}
 	}
 }
@@ -958,7 +976,16 @@ func ResumeAllSessionsForWorkItemCmd(
 			if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
 				return ErrMsg{Err: err}
 			}
-			return RestartPlanningCmd(ctx, workItemSvc, planningSvc, sessionSvc, workItemID)()
+			// Fail the old interrupted session so the overview clears the action card.
+			if failErr := sessionSvc.Fail(ctx, planningInterrupted.ID, nil); failErr != nil {
+				slog.Warn("failed to fail interrupted planning session before resume",
+					"agent_session_id", planningInterrupted.ID, "error", failErr)
+			}
+			_, err := planningSvc.ResumeInterruptedPlanning(ctx, *planningInterrupted, "")
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning resumed"}
 		}
 
 		if len(toResume) == 0 {
@@ -1556,17 +1583,33 @@ func StartupIntegrationsCmd(provider ServiceProvider, runtimeCtx RuntimeContext)
 		if err != nil {
 			return StartupIntegrationsReadyMsg{Err: err}
 		}
-		settingsData, err := reloaded.Settings.Snapshot(runtimeCtx.Cfg)
-		if err != nil {
+
+		// Refresh settings diagnostics after rebuild.
+		if err := reloaded.Settings.RefreshWithDiagnostics(context.Background(), runtimeCtx.Cfg); err != nil {
 			return StartupIntegrationsReadyMsg{Err: err}
 		}
+
 		sessionsDir, _ := config.SessionsDir()
 		return StartupIntegrationsReadyMsg{Reload: viewsServicesReload{
-			Services:     *reloaded,
-			SessionsDir:  sessionsDir,
-			SettingsData: settingsData,
-			Cfg:          runtimeCtx.Cfg,
+			Services:    *reloaded,
+			SessionsDir: sessionsDir,
+			Cfg:         runtimeCtx.Cfg,
 		}}
+	}
+}
+
+// SettingsDiagnosticsStartCmd fires after the first frame to schedule diagnostics.
+func SettingsDiagnosticsStartCmd() tea.Cmd {
+	return func() tea.Msg {
+		return SettingsDiagnosticsStartMsg{}
+	}
+}
+
+// SettingsDiagnosticsCmd runs harness diagnostics asynchronously and delivers a completion message.
+func SettingsDiagnosticsCmd(settings SettingsService, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		err := settings.RefreshWithDiagnostics(context.Background(), cfg)
+		return SettingsDiagnosticsReadyMsg{Err: err}
 	}
 }
 

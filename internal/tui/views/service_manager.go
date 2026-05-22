@@ -579,7 +579,7 @@ func (sm *ServiceManager) NewSessionFilterLocks() *service.SessionFilterLockServ
 	return nil
 }
 
-func (sm *ServiceManager) Settings() *SettingsService {
+func (sm *ServiceManager) Settings() SettingsService {
 	if s := sm.GetServices(); s != nil {
 		return s.Settings
 	}

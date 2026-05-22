@@ -188,13 +188,8 @@ func TestInitializeWorkspaceServicesCmd_RebuildsServicesAndRegistersInstance(t *
 func TestApp_WorkspaceInitDoneTriggersServiceReload(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
 	app := newTestApp(Services{
-		Settings: &SettingsService{},
-		SettingsData: SettingsSnapshot{
-			Sections:  buildSettingsSections(cfg),
-			Providers: buildProviderStatuses(cfg),
-		},
+		Settings: newTestSettingsService(),
 	})
 
 	model, cmd := app.Update(WorkspaceInitDoneMsg{WorkspaceID: "ws-1", WorkspaceName: "workspace", WorkspaceDir: "/tmp/ws"})
@@ -216,23 +211,19 @@ func TestApp_WorkspaceInitDoneTriggersServiceReload(t *testing.T) {
 func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
-	app := newTestApp(Services{Settings: &SettingsService{}, SettingsData: snapshot})
+	app := newTestApp(Services{Settings: newTestSettingsService()})
 	app.activeOverlay = overlayWorkspaceInit
 
 	reload := viewsServicesReload{
-		SessionsDir:  "/tmp/sessions",
-		SettingsData: snapshot,
+		SessionsDir: "/tmp/sessions",
 		Services: Services{
 			WorkspaceID:   "ws-1",
 			WorkspaceName: "workspace",
 			WorkspaceDir:  "/tmp/ws",
 			Adapters:      []adapter.WorkItemAdapter{stubWorkspaceInitAdapter{name: "manual"}},
-			Settings:      &SettingsService{},
-			SettingsData:  snapshot,
+			Settings:      newTestSettingsService(),
 		},
-		Cfg: cfg,
+		Cfg: &config.Config{},
 	}
 
 	model, cmd := app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})
@@ -269,9 +260,7 @@ func TestApp_WorkspaceServicesReloadedMsgAppliesReload(t *testing.T) {
 func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
-	app := newTestApp(Services{Settings: &SettingsService{}, SettingsData: snapshot})
+	app := newTestApp(Services{Settings: newTestSettingsService()})
 
 	// Establish terminal size before the services reload.
 	const wantWidth, wantHeight = 160, 48
@@ -279,17 +268,15 @@ func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
 	app = model.(*App)
 
 	reload := viewsServicesReload{
-		SessionsDir:  "/tmp/sessions",
-		SettingsData: snapshot,
+		SessionsDir: "/tmp/sessions",
 		Services: Services{
 			WorkspaceID:   "ws-1",
 			WorkspaceName: "workspace",
 			WorkspaceDir:  "/tmp/ws",
 			Adapters:      []adapter.WorkItemAdapter{stubWorkspaceInitAdapter{name: "manual"}},
-			Settings:      &SettingsService{},
-			SettingsData:  snapshot,
+			Settings:      newTestSettingsService(),
 		},
-		Cfg: cfg,
+		Cfg: &config.Config{},
 	}
 
 	model, _ = app.Update(WorkspaceServicesReloadedMsg{Reload: reload, Message: "Workspace initialized"})
@@ -313,13 +300,10 @@ func TestApp_WorkspaceServicesReloadedMsgRestoresOverlaySizes(t *testing.T) {
 func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-new",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 	})
 	app.workItems = []domain.Session{{ID: "wi-current", WorkspaceID: "ws-new", Title: "current"}}
 	app.sessions = []domain.AgentSession{{ID: "sess-current", WorkspaceID: "ws-new"}}
@@ -358,14 +342,11 @@ func TestApp_IgnoresStaleWorkspaceLoadMessages(t *testing.T) {
 func TestApp_InitIncludesReconciliation(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		InstanceID:    "inst-1",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 	})
 
 	cmd := app.Init()
@@ -377,14 +358,11 @@ func TestApp_InitIncludesReconciliation(t *testing.T) {
 func TestApp_NewReposHealthCheckMsg_ActivatesModalWhenPlainReposFound(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		WorkspaceDir:  "/tmp/ws",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 	})
 
 	// Simulate the startup health check arriving with plain git repos.
@@ -409,14 +387,11 @@ func TestApp_NewReposHealthCheckMsg_ActivatesModalWhenPlainReposFound(t *testing
 func TestApp_NewReposHealthCheckMsg_IgnoredWhenNoPlainRepos(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		WorkspaceDir:  "/tmp/ws",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 	})
 
 	msg := WorkspaceHealthCheckMsg{
@@ -437,14 +412,11 @@ func TestApp_NewReposHealthCheckMsg_IgnoredWhenNoPlainRepos(t *testing.T) {
 func TestApp_NewReposInitDoneMsg_ClearsOverlayAndShowsToast(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
 		WorkspaceDir:  "/tmp/ws",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 	})
 
 	// Put the app in new-repos modal state.
@@ -467,13 +439,10 @@ func TestApp_NewReposInitDoneMsg_ClearsOverlayAndShowsToast(t *testing.T) {
 func TestApp_SessionResumedMsg_ReloadsWorkItemsAndSessions(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{}
-	snapshot := SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)}
 	app := newTestApp(Services{
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "workspace",
-		Settings:      &SettingsService{},
-		SettingsData:  snapshot,
+		Settings:      newTestSettingsService(),
 		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
 			SessionReviewArtifacts: emptySessionArtifactRepoForInit{},
 		}}),

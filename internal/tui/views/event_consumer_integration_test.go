@@ -26,7 +26,7 @@ func TestEventConsumerEndToEnd(t *testing.T) {
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	// Wire up the event consumer bridge.
@@ -94,7 +94,7 @@ func TestEventConsumerBridgeWaitsForFutureEvent(t *testing.T) {
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	sub, err := bus.Subscribe("tui:ws-integration", string(domain.EventAgentSessionStarted))
@@ -159,7 +159,7 @@ func TestEventConsumer_questionAnsweredEndToEnd(t *testing.T) {
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 	app.questions = map[string]map[string]domain.Question{
 		"sess-1": {
@@ -233,7 +233,7 @@ func TestEventConsumer_unknownEventReturnsNil(t *testing.T) {
 		WorkspaceID:   "ws-integration",
 		WorkspaceName: "integration-test",
 		Bus:           bus,
-		Settings:      &SettingsService{},
+		Settings:      newTestSettingsService(),
 	})
 
 	sub, err := bus.Subscribe(
