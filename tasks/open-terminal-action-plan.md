@@ -52,6 +52,10 @@ func Detect() TerminalType {
     if _, ok := os.LookupEnv("KITTY_WINDOW_ID"); ok {
         return TerminalKitty
     }
+    // Kitty remote control requires allow_remote_control=yes in kitty.conf.
+    // If KITTY_WINDOW_ID is not set, we cannot use kitten @ for the initial
+    // tab open. Treat as unknown unless a socket is explicitly provided.
+    // callers should verify KittyRemoteControlEnabled() before using kitten @.
     // Check for wezterm socket
     if _, ok := os.LookupEnv("WEZTERM_SOCK"); ok {
         return TerminalWezTerm
@@ -60,6 +64,22 @@ func Detect() TerminalType {
     // ...
     return TerminalUnknown
 }
+
+// KittyRemoteControlEnabled checks whether Kitty's remote control is enabled.
+// It returns true if either the KITTY_WINDOW_ID env var is set (indicating an
+// active Kitty session that can be remote-controlled) or if the --listen-on
+// flag was used when launching Kitty (socket path in KITTY_LISTEN_ON).
+// Without this, kitten @ commands will fail.
+func KittyRemoteControlEnabled() bool {
+    if _, ok := os.LookupEnv("KITTY_WINDOW_ID"); ok {
+        return true
+    }
+    // Also check for explicitly configured listen socket.
+    if _, ok := os.LookupEnv("KITTY_LISTEN_ON"); ok {
+        return true
+    }
+    return false
+}
 ```
 
 ### 1.3 Terminal-Specific Opening Commands
@@ -67,7 +87,7 @@ func Detect() TerminalType {
 | Terminal | Support | Command |
 |----------|---------|---------|
 | **WezTerm** | ✅ Full | `wezterm start --new-tab --cwd /path` |
-| **Kitty** | ✅ Full | `kitten @ launch --type=tab --cwd /path` |
+| **Kitty** | ✅ Full (requires remote control) | `kitten @ launch --type=tab --cwd /path` |
 | **iTerm2** | ✅ Full | `osascript` AppleScript (new tab with profile) |
 | **Terminal.app** | ✅ Full | `osascript` AppleScript (do script in front window) |
 | **Warp** | ❌ None | Only workarounds (see below) |
@@ -196,15 +216,20 @@ type PaneConfig struct {
 type SplitListPicker struct {
     Left  PaneConfig
     Right PaneConfig
-    
+
     // Which pane has focus
     FocusLeft bool
-    
+
     // Styling
     Styles styles.Styles
-    
+
     // Computed layout
     layout SplitOverlayLayout
+
+    // prevLeftIndex tracks the left pane index before the last Update call,
+    // enabling callers to detect selection changes that should trigger side
+    // effects (e.g. reloading worktrees when the repo selection changes).
+    prevLeftIndex int
 }
 
 // NewSplitListPicker creates a new split-list picker with the given pane configs.
@@ -271,23 +296,30 @@ func (m *SplitListPicker) Update(msg tea.Msg) (SplitListPicker, tea.Cmd) {
 
 // View renders the split pane layout.
 func (m SplitListPicker) View() string {
-    leftView := m.renderPane(m.Left, m.FocusLeft)
-    rightView := m.renderPane(m.Right, !m.FocusLeft)
-    
     return RenderSplitOverlayBody(m.Styles, m.layout, SplitOverlaySpec{
-        Left:  leftView,
-        Right: rightView,
+        LeftPane:  m.paneSpec(m.Left, m.FocusLeft),
+        RightPane: m.paneSpec(m.Right, !m.FocusLeft),
     })
 }
 
-func (m SplitListPicker) renderPane(pane PaneConfig, focused bool) string {
+// paneSpec returns the OverlayPaneSpec for the given pane, with the rendered body.
+func (m SplitListPicker) paneSpec(pane PaneConfig, focused bool) OverlayPaneSpec {
+    var body string
     switch pane.Type {
     case PaneTypeList:
-        return pane.List.View()
+        if pane.List != nil {
+            body = pane.List.View()
+        }
     case PaneTypeViewport:
-        return pane.Viewport.View()
-    default:
-        return ""
+        if pane.Viewport != nil {
+            body = pane.Viewport.View()
+        }
+    }
+    return OverlayPaneSpec{
+        Title:       pane.Title,
+        DividerWidth: m.layout.LeftPaneWidth,
+        Body:         body,
+        Focused:      focused,
     }
 }
 
@@ -306,6 +338,51 @@ func (m *SplitListPicker) SetSelectedIndex(idx int) {
     if pane.Type == PaneTypeList && pane.List != nil {
         pane.List.Select(idx)
     }
+}
+
+// FocusRight sets focus to the right pane.
+func (m *SplitListPicker) FocusRight() {
+    m.FocusLeft = false
+}
+
+// SetLeft replaces the left pane configuration.
+func (m *SplitListPicker) SetLeft(pane PaneConfig) {
+    m.Left = pane
+    // Reset prevLeftIndex since pane content changed.
+    m.prevLeftIndex = 0
+}
+
+// SetRight replaces the right pane configuration.
+func (m *SplitListPicker) SetRight(pane PaneConfig) {
+    m.Right = pane
+}
+
+// LeftIndex returns the selected index of the left pane's list, or -1.
+func (m SplitListPicker) LeftIndex() int {
+    if m.Left.Type == PaneTypeList && m.Left.List != nil {
+        return m.Left.List.Index()
+    }
+    return -1
+}
+
+// RightIndex returns the selected index of the right pane's list, or -1.
+func (m SplitListPicker) RightIndex() int {
+    if m.Right.Type == PaneTypeList && m.Right.List != nil {
+        return m.Right.List.Index()
+    }
+    return -1
+}
+
+// PrevLeftIndex returns the selected index before the last Update call,
+// useful for detecting selection changes to trigger side effects (e.g. loading
+// worktrees when the repo selection changes).
+func (m *SplitListPicker) PrevLeftIndex() int {
+    return m.prevLeftIndex
+}
+
+// TrackPrevLeft saves the current left pane index as the previous value.
+func (m *SplitListPicker) TrackPrevLeft() {
+    m.prevLeftIndex = m.LeftIndex()
 }
 ```
 
@@ -534,6 +611,9 @@ func NewWorktreePickerOverlay(
 
 ### 5.5 Worktree Loading (Reuse Existing Pattern)
 
+The `SplitListPicker` does not automatically trigger side effects on selection change.
+`WorktreePickerOverlay` must detect left-pane selection changes and fire `LoadWorktreesCmd`:
+
 ```go
 // maybeLoadWorktrees fires LoadWorktreesCmd for the currently selected repo.
 func (m *WorktreePickerOverlay) maybeLoadWorktrees() tea.Cmd {
@@ -541,19 +621,30 @@ func (m *WorktreePickerOverlay) maybeLoadWorktrees() tea.Cmd {
     if selected < 0 || selected >= len(m.repos) {
         return nil
     }
-    
+
     // Clear stale worktrees
     m.worktrees = nil
     m.worktreeList.SetItems([]list.Item{})
     m.worktreesLoad = true
     m.worktreeReqID++
-    
+
     return LoadWorktreesCmd(
         m.gitClient,
         m.repos[selected].Path,
         m.worktreeReqID,
     )
 }
+
+// In WorktreePickerOverlay.Update:
+case tea.KeyMsg:
+    // Track selection before processing so we can compare after.
+    m.picker.TrackPrevLeft()
+    m.picker, cmd := m.picker.Update(msg)
+    // Detect left-pane selection change → reload worktrees.
+    if m.picker.PrevLeftIndex() != m.picker.LeftIndex() {
+        cmds = append(cmds, m.maybeLoadWorktrees())
+    }
+    return m, tea.Batch(cmds...)
 
 // On receiving WorktreesLoadedMsg:
 if msg.RequestID == m.worktreeReqID {
@@ -584,12 +675,8 @@ type SessionOverviewData struct {
 // OverviewWorktreeRow represents one repo with its worktrees for the picker.
 type OverviewWorktreeRow struct {
     RepoName  string
-    RepoPath  string  // .bare path for git-work repos
-    Worktrees []struct {
-        Path    string  // Absolute worktree path
-        Branch  string
-        IsMain  bool
-    }
+    RepoPath  string // .bare path for git-work repos
+    Worktrees []gitwork.Worktree
 }
 ```
 
@@ -598,6 +685,8 @@ type OverviewWorktreeRow struct {
 In `buildOverviewData()` (or wherever `SessionOverviewData` is constructed):
 
 ```go
+import "internal/gitwork"
+
 // For each repo in the plan, load its worktrees
 for _, task := range plan.Tasks {
     // Get repo path from TaskPlan
@@ -917,10 +1006,11 @@ func TestOpen_Alacritty(t *testing.T) { /* ... */ }
 - macOS may require user permission for AppleScript
 - Log detailed error for debugging
 
-### 12.5 Terminal Not Running
-- For terminals that require running instance (Kitty remote control):
-  - Kitty: needs `allow_remote_control=yes` in config
-  - Fall back to `open /path` if not available
+### 12.5 Kitty Remote Control Not Enabled
+- Kitty requires `allow_remote_control=yes` in `~/.config/kitty/kitty.conf`
+- Verify with `KittyRemoteControlEnabled()` before attempting `kitten @` (checks `KITTY_WINDOW_ID` or `KITTY_LISTEN_ON`)
+- If not enabled: show user a one-time info message with instructions
+- Fall back to `open /path` (opens file manager) if user declines
 
 ### 12.6 Empty Repo List
 - Show "No repositories found" in left pane
@@ -1073,15 +1163,23 @@ func (m *SplitListPicker) SetSize(width, height int)
 func (m *SplitListPicker) SetLeft(pane PaneConfig)
 func (m *SplitListPicker) SetRight(pane PaneConfig)
 
-// State
+// Focus
 func (m *SplitListPicker) FocusedPane() *PaneConfig
-func (m *SplitListPicker) IsFocusLeft() bool
-func (m *SplitListPicker) SelectedIndex() int
+func (m *SplitListPicker) IsFocusLeft() bool       // Returns true if left pane is focused
+func (m *SplitListPicker) SwitchFocus()            // Toggle focus between panes
+func (m *SplitListPicker) FocusRight()             // Set focus to right pane
 
-// Navigation
-func (m *SplitListPicker) SwitchFocus()
-func (m *SplitListPicker) FocusLeft()
-func (m *SplitListPicker) FocusRight()
+// Selection — operate on the currently focused pane
+func (m *SplitListPicker) SelectedIndex() int      // Focused pane list index, or -1
+func (m *SplitListPicker) SetSelectedIndex(idx int)
+
+// Selection — operate on a specific pane (useful for detecting changes)
+func (m *SplitListPicker) LeftIndex() int         // Left pane list index, or -1
+func (m *SplitListPicker) RightIndex() int        // Right pane list index, or -1
+
+// Change tracking — call TrackPrevLeft before Update to detect selection changes
+func (m *SplitListPicker) PrevLeftIndex() int     // Left index before last Update
+func (m *SplitListPicker) TrackPrevLeft()         // Save current left index as previous
 
 // Lifecycle
 func (m *SplitListPicker) Update(msg tea.Msg) (SplitListPicker, tea.Cmd)
@@ -1092,4 +1190,6 @@ func (m *SplitListPicker) View() string
 
 *Plan generated: 2026-05-18*
 *Updated: 2026-05-18 — Added SplitListPicker component and RepoManagerOverlay refactor*
+*Updated: 2026-05-19 — Fixed SplitListPicker View() to use correct OverlayPaneSpec fields; added FocusRight/SetLeft/SetRight/LeftIndex/RightIndex/PrevLeftIndex/TrackPrevLeft methods; fixed OverviewWorktreeRow.Worktrees to use gitwork.Worktree type; added KittyRemoteControlEnabled() detection helper; clarified worktree reload hook pattern*
+*Updated: 2026-05-22 — Fixed KITTY_PUBLIC_HOST → KITTY_LISTEN_ON (correct env var for --listen-on socket); fixed worktree reload comparison to use picker state consistently; reset prevLeftIndex in SetLeft/SetRight*
 *Research sources: Warp GitHub Discussion #612, Issue #3959; iTerm2 AppleScript docs; Kitty remote control docs; WezTerm CLI docs; Alacritty Issue #6340*
