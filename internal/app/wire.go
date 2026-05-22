@@ -38,6 +38,15 @@ func BuildGithubAdapter(ctx context.Context, cfg *config.Config, repos adapter.R
 	return a, ""
 }
 
+// BuildManualWorkItemAdapters constructs only adapters that are guaranteed not to
+// perform external auth, CLI, network, or workspace scanning during startup.
+func BuildManualWorkItemAdapters(workspaceID string, workItemSvc *service.SessionService) []adapter.WorkItemAdapter {
+	store := manualadapter.NewWorkspaceStore(workItemSvc, workspaceID)
+	return []adapter.WorkItemAdapter{
+		manualadapter.New(store, workspaceID),
+	}
+}
+
 // BuildWorkItemAdapters constructs all available WorkItemAdapters for the given
 // configuration and workspace. The manual adapter is always included. The linear
 // adapter is included when an API key is present in configuration.
@@ -51,10 +60,7 @@ func BuildWorkItemAdapters(
 	workItemSvc *service.SessionService,
 	githubAdapter *githubadapter.GithubAdapter,
 ) ([]adapter.WorkItemAdapter, []string) {
-	store := manualadapter.NewWorkspaceStore(workItemSvc, workspaceID)
-	adapters := []adapter.WorkItemAdapter{
-		manualadapter.New(store, workspaceID),
-	}
+	adapters := BuildManualWorkItemAdapters(workspaceID, workItemSvc)
 	var warnings []string
 
 	if cfg.Adapters.Linear.APIKey != "" {

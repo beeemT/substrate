@@ -9,12 +9,13 @@ import (
 // These values are set once at startup and do not change during the
 // lifetime of the App.
 type RuntimeContext struct {
-	Cfg           *config.Config
-	SettingsData  SettingsSnapshot
-	LogStore      *tuilog.Store
-	LogToasts     <-chan tuilog.ToastEntry
-	InstanceID    string
-	WorkspaceID   string
-	WorkspaceDir  string
-	WorkspaceName string
+	Cfg                           *config.Config
+	SettingsData                  SettingsSnapshot
+	LogStore                      *tuilog.Store
+	LogToasts                     <-chan tuilog.ToastEntry
+	InstanceID                    string
+	WorkspaceID                   string
+	WorkspaceDir                  string
+	WorkspaceName                 string
+	StartupIntegrationsInProgress bool
 }

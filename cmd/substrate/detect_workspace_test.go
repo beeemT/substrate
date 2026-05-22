@@ -8,6 +8,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 )
 
@@ -45,6 +46,102 @@ func (m *mockWorkspaceRepo) List(_ context.Context) ([]domain.Workspace, error) 
 		result = append(result, ws)
 	}
 	return result, nil
+}
+
+type startupDetectPublisher struct{}
+
+func (startupDetectPublisher) Publish(context.Context, domain.SystemEvent) error { return nil }
+
+func TestInspectStartupWorkspace_ReportsCreatingWorkspaceWithoutTransition(t *testing.T) {
+	dir := t.TempDir()
+	wsFile := &gitwork.WorkspaceFile{
+		ID:        domain.NewID(),
+		Name:      "test-workspace",
+		CreatedAt: domain.Now(),
+	}
+	if err := gitwork.WriteWorkspaceFile(dir, wsFile); err != nil {
+		t.Fatalf("WriteWorkspaceFile() error = %v", err)
+	}
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldCWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	repo := &mockWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		wsFile.ID: {
+			ID:       wsFile.ID,
+			Name:     "db-workspace",
+			RootPath: dir,
+			Status:   domain.WorkspaceCreating,
+		},
+	}}
+	svc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: repo}}, startupDetectPublisher{})
+
+	workspace, markReady, err := inspectStartupWorkspace(context.Background(), svc)
+	if err != nil {
+		t.Fatalf("inspectStartupWorkspace() error = %v", err)
+	}
+	if !markReady {
+		t.Fatal("inspectStartupWorkspace() markReady = false, want true")
+	}
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if workspace.ID != wsFile.ID || workspace.Name != "db-workspace" || workspace.Dir != wantDir {
+		t.Fatalf("workspace = %+v, want ID %q, Name %q, Dir %q", workspace, wsFile.ID, "db-workspace", wantDir)
+	}
+	if got := repo.workspaces[wsFile.ID].Status; got != domain.WorkspaceCreating {
+		t.Fatalf("workspace status = %v, want unchanged %v", got, domain.WorkspaceCreating)
+	}
+}
+
+func TestInspectStartupWorkspace_MissingDatabaseWorkspacePromptsInit(t *testing.T) {
+	dir := t.TempDir()
+	wsFile := &gitwork.WorkspaceFile{
+		ID:        domain.NewID(),
+		Name:      "file-workspace",
+		CreatedAt: domain.Now(),
+	}
+	if err := gitwork.WriteWorkspaceFile(dir, wsFile); err != nil {
+		t.Fatalf("WriteWorkspaceFile() error = %v", err)
+	}
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldCWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	svc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: &mockWorkspaceRepo{workspaces: map[string]domain.Workspace{}}}}, startupDetectPublisher{})
+	workspace, markReady, err := inspectStartupWorkspace(context.Background(), svc)
+	if err != nil {
+		t.Fatalf("inspectStartupWorkspace() error = %v", err)
+	}
+	if markReady {
+		t.Fatal("inspectStartupWorkspace() markReady = true, want false")
+	}
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if workspace.ID != "" || workspace.Name != wsFile.Name || workspace.Dir != wantDir {
+		t.Fatalf("workspace = %+v, want empty ID with file Name %q Dir %q", workspace, wsFile.Name, wantDir)
+	}
 }
 
 func TestDetectWorkspace_TransitionsStuckCreatingWorkspace(t *testing.T) {

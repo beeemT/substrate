@@ -130,6 +130,37 @@ func TestRenderTopRightOverlay_RespectsBottomInset(t *testing.T) {
 	}
 }
 
+func TestAppView_RendersStartupIntegrationToastUntilReady(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.startupIntegrationsInProgress = true
+	view := stripToastANSI(app.toasts.StackView(app.pinnedToasts()...))
+	if !strings.Contains(view, "Starting") || !strings.Contains(view, "integrations") {
+		t.Fatalf("toast stack missing startup integrations toast: %q", view)
+	}
+
+	updated := updateToastTestApp(t, app, components.ToastTickMsg{})
+	if updated.startupIntegrationSpinner == 0 {
+		t.Fatal("startup spinner did not advance on toast tick")
+	}
+
+	updated = updateToastTestApp(t, updated, StartupIntegrationsReadyMsg{Reload: viewsServicesReload{
+		Services: Services{
+			WorkspaceID:   "ws-1",
+			WorkspaceName: "workspace",
+			Settings:      &SettingsService{},
+		},
+		Cfg: &config.Config{},
+	}})
+	if updated.startupIntegrationsInProgress {
+		t.Fatal("startup integrations toast still marked in progress after ready message")
+	}
+	if view := stripToastANSI(updated.toasts.StackView(updated.pinnedToasts()...)); strings.Contains(view, "Starting") || strings.Contains(view, "integrations") {
+		t.Fatalf("startup integrations toast still visible after ready message: %q", view)
+	}
+}
+
 func TestAppView_RendersToastInUpperRightWithoutGrowingLayout(t *testing.T) {
 	t.Parallel()
 

@@ -345,6 +345,7 @@ func TestWorkItemService_ValidTransitions(t *testing.T) {
 		{domain.SessionReviewing, domain.SessionCompleted, "reviewing -> completed"},
 		{domain.SessionReviewing, domain.SessionImplementing, "reviewing -> implementing"},
 		{domain.SessionReviewing, domain.SessionFailed, "reviewing -> failed"},
+		{domain.SessionCompleted, domain.SessionImplementing, "completed -> implementing"},
 		{domain.SessionCompleted, domain.SessionMerged, "completed -> merged"},
 		{domain.SessionCompleted, domain.SessionArchived, "completed -> archived"},
 		{domain.SessionMerged, domain.SessionArchived, "merged -> archived"},
@@ -404,7 +405,6 @@ func TestWorkItemService_InvalidTransitions(t *testing.T) {
 		{domain.SessionImplementing, domain.SessionPlanning, "implementing -> planning"},
 		{domain.SessionReviewing, domain.SessionPlanning, "reviewing -> planning"},
 		{domain.SessionReviewing, domain.SessionApproved, "reviewing -> approved"},
-		{domain.SessionCompleted, domain.SessionImplementing, "completed -> implementing"},
 		{domain.SessionFailed, domain.SessionPlanning, "failed -> planning"},
 		{domain.SessionFailed, domain.SessionIngested, "failed -> ingested"},
 	}

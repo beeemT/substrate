@@ -133,7 +133,9 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	styles                      styles.Styles
 
 	// Toasts
-	toasts components.ToastModel
+	toasts                        components.ToastModel
+	startupIntegrationsInProgress bool
+	startupIntegrationSpinner     int
 
 	// State cache (refreshed by DB poll)
 	workItems []domain.Session
@@ -234,6 +236,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		addRepo:                        NewAddRepoOverlay(provider.RepoSources(), runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		repoManager:                    NewRepoManagerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		toasts:                         components.NewToastModel(st),
+		startupIntegrationsInProgress:  runtimeCtx.StartupIntegrationsInProgress,
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
 		questions:                      make(map[string]map[string]domain.Question),
@@ -293,6 +296,9 @@ func (a *App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
+	if a.runtimeCtx.StartupIntegrationsInProgress {
+		cmds = append(cmds, StartupIntegrationsStartCmd())
+	}
 
 	if a.runtimeCtx.WorkspaceID != "" {
 		cmds = append(cmds,
@@ -306,53 +312,7 @@ func (a *App) Init() tea.Cmd {
 		// Subscribe to event bus for event-driven updates
 		if a.provider.Bus() != nil {
 			var err error
-			a.busSub, err = a.provider.Bus().Subscribe(
-				"tui:"+a.runtimeCtx.WorkspaceID,
-				// Work item lifecycle
-				string(domain.EventWorkItemIngested),
-				string(domain.EventWorkItemPlanning),
-				string(domain.EventWorkItemPlanReview),
-				string(domain.EventWorkItemApproved),
-				string(domain.EventWorkItemImplementing),
-				string(domain.EventWorkItemReviewing),
-				string(domain.EventWorkItemCompleted),
-				string(domain.EventWorkItemFailed),
-				string(domain.EventWorkItemMerged),
-				string(domain.EventWorkItemArchived),
-				// Session lifecycle
-				string(domain.EventAgentSessionStarted),
-				string(domain.EventAgentSessionCompleted),
-				string(domain.EventAgentSessionFailed),
-				string(domain.EventAgentSessionInterrupted),
-				string(domain.EventAgentSessionResumed),
-				string(domain.EventAgentSessionFollowUp),
-				string(domain.EventAgentSessionWaitingForAnswer),
-				// Plan lifecycle
-				string(domain.EventPlanGenerated),
-				string(domain.EventPlanApproved),
-				string(domain.EventPlanRejected),
-				string(domain.EventPlanRevised),
-				string(domain.EventPlanSubmitted),
-				string(domain.EventPlanFailed),
-				// Sub-plan lifecycle
-				string(domain.EventSubPlanStarted),
-				string(domain.EventSubPlanCompleted),
-				string(domain.EventSubPlanFailed),
-				string(domain.EventSubPlanPRReady),
-				// Review
-				string(domain.EventReviewStarted),
-				string(domain.EventReviewCompleted),
-				string(domain.EventCritiquesFound),
-				// Reimplementation
-				string(domain.EventReimplementationStarted),
-				string(domain.EventPRMerged),
-				string(domain.EventPRReviewStateChanged),
-				// Questions
-				string(domain.EventAgentQuestionRaised),
-				string(domain.EventAgentQuestionAnswered),
-				// Adapters
-				string(domain.EventAdapterError),
-			)
+			a.busSub, err = a.provider.Bus().Subscribe("tui:"+a.runtimeCtx.WorkspaceID, eventSubscriptionTopics()...)
 			if err != nil {
 				slog.Error("failed to subscribe TUI to event bus", "error", err)
 			} else {
@@ -383,6 +343,11 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.newSession.SetSize(a.windowWidth, a.windowHeight)
 	a.newSessionAutonomousOverlay = NewNewSessionAutonomousOverlay(a.statusBar.styles)
 	a.newSessionAutonomousOverlay.SetSize(a.windowWidth, a.windowHeight)
+	a.addRepo = NewAddRepoOverlay(reload.Services.RepoSources, a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
+	a.addRepo.SetSize(a.windowWidth, a.windowHeight)
+	a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
+	a.repoManager = NewRepoManagerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
+	a.repoManager.SetSize(a.windowWidth, a.windowHeight)
 	a.settingsPage.SetSnapshot(reload.SettingsData)
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.runtimeCtx.WorkspaceID != ""
@@ -390,6 +355,74 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 
 	// Update log level filter.
 	tuilog.SetDefaultLevel(logLevelFromConfig(reload.Cfg))
+}
+
+func (a *App) commandsAfterServiceReload(oldWorkspaceID string) []tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 6)
+	if a.provider.Bus() != nil {
+		if a.busSub != nil {
+			a.provider.Bus().Unsubscribe("tui:" + oldWorkspaceID)
+		}
+		var err error
+		a.busSub, err = a.provider.Bus().Subscribe("tui:"+a.runtimeCtx.WorkspaceID, eventSubscriptionTopics()...)
+		if err != nil {
+			slog.Error("failed to resubscribe TUI to event bus", "error", err)
+		} else {
+			a.eventConsumer = NewEventConsumer(a, a.busSub)
+			cmds = append(cmds, a.eventConsumer.BridgeCmd())
+		}
+	}
+	if a.runtimeCtx.WorkspaceID != "" {
+		cmds = append(cmds,
+			LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+			LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
+			LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
+			LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
+			ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
+		)
+	}
+	return cmds
+}
+
+func eventSubscriptionTopics() []string {
+	return []string{
+		string(domain.EventWorkItemIngested),
+		string(domain.EventWorkItemPlanning),
+		string(domain.EventWorkItemPlanReview),
+		string(domain.EventWorkItemApproved),
+		string(domain.EventWorkItemImplementing),
+		string(domain.EventWorkItemReviewing),
+		string(domain.EventWorkItemCompleted),
+		string(domain.EventWorkItemFailed),
+		string(domain.EventWorkItemMerged),
+		string(domain.EventWorkItemArchived),
+		string(domain.EventAgentSessionStarted),
+		string(domain.EventAgentSessionCompleted),
+		string(domain.EventAgentSessionFailed),
+		string(domain.EventAgentSessionInterrupted),
+		string(domain.EventAgentSessionResumed),
+		string(domain.EventAgentSessionFollowUp),
+		string(domain.EventAgentSessionWaitingForAnswer),
+		string(domain.EventPlanGenerated),
+		string(domain.EventPlanApproved),
+		string(domain.EventPlanRejected),
+		string(domain.EventPlanRevised),
+		string(domain.EventPlanSubmitted),
+		string(domain.EventPlanFailed),
+		string(domain.EventSubPlanStarted),
+		string(domain.EventSubPlanCompleted),
+		string(domain.EventSubPlanFailed),
+		string(domain.EventSubPlanPRReady),
+		string(domain.EventReviewStarted),
+		string(domain.EventReviewCompleted),
+		string(domain.EventCritiquesFound),
+		string(domain.EventReimplementationStarted),
+		string(domain.EventPRMerged),
+		string(domain.EventPRReviewStateChanged),
+		string(domain.EventAgentQuestionRaised),
+		string(domain.EventAgentQuestionAnswered),
+		string(domain.EventAdapterError),
+	}
 }
 
 func logLevelFromConfig(cfg *config.Config) slog.Level {
@@ -1091,8 +1124,24 @@ func (a App) harnessWarningToast() (components.Toast, bool) {
 	return components.Toast{Message: warning, Level: components.ToastWarning}, true
 }
 
+func (a App) startupIntegrationsToast() (components.Toast, bool) {
+	if !a.startupIntegrationsInProgress {
+		return components.Toast{}, false
+	}
+	spinner := startupIntegrationSpinner(a.startupIntegrationSpinner)
+	return components.Toast{Message: spinner + " Starting integrations…", Level: components.ToastInfo}, true
+}
+
+func startupIntegrationSpinner(frame int) string {
+	const frames = "|/-\\"
+	return string(frames[frame%len(frames)])
+}
+
 func (a App) pinnedToasts() []components.Toast {
-	pinned := make([]components.Toast, 0, 2)
+	pinned := make([]components.Toast, 0, 3)
+	if startupToast, ok := a.startupIntegrationsToast(); ok {
+		pinned = append(pinned, startupToast)
+	}
 	if readOnlyToast, ok := a.readOnlyToast(); ok {
 		pinned = append(pinned, readOnlyToast)
 	}
@@ -1207,77 +1256,34 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.AddToast(fmt.Sprintf("%d repo(s) initialized with git-work", msg.Count), components.ToastSuccess)
 		return a, tea.Batch(cmds...)
 
+	case StartupIntegrationsStartMsg:
+		if a.startupIntegrationsInProgress {
+			cmds = append(cmds, StartupIntegrationsCmd(a.provider, a.runtimeCtx))
+		}
+		return a, tea.Batch(cmds...)
+
 	case WorkspaceServicesReloadedMsg:
 		oldWorkspaceID := a.runtimeCtx.WorkspaceID
 		a.applyServicesReload(msg.Reload)
 		a.activeOverlay = overlayNone
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
 
-		// Re-subscribe to the new bus after workspace init or rebuild.
-		// Init() only subscribes once at startup; if the bus changes (new workspace
-		// or rebuild), we must create a fresh subscription to the new bus.
-		// Unsubscribe from the OLD workspace ID — a.runtimeCtx.WorkspaceID was just
-		// overwritten by applyServicesReload, so we saved it above.
-		if a.provider.Bus() != nil {
-			if a.busSub != nil {
-				a.provider.Bus().Unsubscribe("tui:" + oldWorkspaceID)
-			}
-			var err error
-			a.busSub, err = a.provider.Bus().Subscribe(
-				"tui:"+a.runtimeCtx.WorkspaceID,
-				string(domain.EventWorkItemIngested),
-				string(domain.EventWorkItemPlanning),
-				string(domain.EventWorkItemPlanReview),
-				string(domain.EventWorkItemApproved),
-				string(domain.EventWorkItemImplementing),
-				string(domain.EventWorkItemReviewing),
-				string(domain.EventWorkItemCompleted),
-				string(domain.EventWorkItemFailed),
-				string(domain.EventWorkItemMerged),
-				string(domain.EventWorkItemArchived),
-				string(domain.EventAgentSessionStarted),
-				string(domain.EventAgentSessionCompleted),
-				string(domain.EventAgentSessionFailed),
-				string(domain.EventAgentSessionInterrupted),
-				string(domain.EventAgentSessionResumed),
-				string(domain.EventAgentSessionFollowUp),
-				string(domain.EventAgentSessionWaitingForAnswer),
-				string(domain.EventPlanGenerated),
-				string(domain.EventPlanApproved),
-				string(domain.EventPlanRejected),
-				string(domain.EventPlanRevised),
-				string(domain.EventPlanSubmitted),
-				string(domain.EventPlanFailed),
-				string(domain.EventSubPlanStarted),
-				string(domain.EventSubPlanCompleted),
-				string(domain.EventSubPlanFailed),
-				string(domain.EventSubPlanPRReady),
-				string(domain.EventReviewStarted),
-				string(domain.EventReviewCompleted),
-				string(domain.EventCritiquesFound),
-				string(domain.EventReimplementationStarted),
-				string(domain.EventPRMerged),
-				string(domain.EventPRReviewStateChanged),
-				string(domain.EventAgentQuestionRaised),
-				string(domain.EventAgentQuestionAnswered),
-				string(domain.EventAdapterError),
-			)
-			if err != nil {
-				slog.Error("failed to resubscribe TUI to event bus", "error", err)
-			} else {
-				a.eventConsumer = NewEventConsumer(a, a.busSub)
-				cmds = append(cmds, a.eventConsumer.BridgeCmd())
-			}
-		}
+		cmds = append(cmds, a.commandsAfterServiceReload(oldWorkspaceID)...)
+		return a, tea.Batch(cmds...)
 
-		if a.runtimeCtx.WorkspaceID != "" {
-			cmds = append(cmds,
-				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
-				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
-				LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
-				LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
-				ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
-			)
+	case StartupIntegrationsReadyMsg:
+		a.startupIntegrationsInProgress = false
+		a.runtimeCtx.StartupIntegrationsInProgress = false
+		if msg.Err != nil {
+			slog.Warn("startup integrations failed", "error", msg.Err)
+			a.toasts.AddToast("Startup integrations failed", components.ToastWarning)
+			return a, nil
+		}
+		oldWorkspaceID := a.runtimeCtx.WorkspaceID
+		a.applyServicesReload(msg.Reload)
+		cmds = append(cmds, a.commandsAfterServiceReload(oldWorkspaceID)...)
+		for _, warning := range a.provider.StartupWarnings() {
+			a.toasts.AddToast(warning, components.ToastWarning)
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1440,6 +1446,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ToastTickMsg:
 		a.toasts.Prune()
+		if a.startupIntegrationsInProgress {
+			a.startupIntegrationSpinner++
+		}
 		cmds = append(cmds, components.ToastTickCmd())
 		return a, tea.Batch(cmds...)
 
@@ -1838,9 +1847,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InterruptSessionsMsg:
 		ids := append([]string(nil), msg.SessionIDs...)
+		// Snapshot sessions before spawning goroutine to avoid racing with concurrent
+		// event-loop writes (upsertSession, SessionsLoadedMsg, etc.).
+		sessions := append([]domain.AgentSession(nil), a.sessions...)
 		// Cancel pipelines synchronously to avoid racing with the event loop.
 		for _, id := range ids {
-			for _, session := range a.sessions {
+			for _, session := range sessions {
 				if session.ID == id && isInterruptibleAgentSession(session) {
 					a.cancelPipeline(session.WorkItemID)
 				}
@@ -1848,7 +1860,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, func() tea.Msg {
 			go func() {
-				err := a.interruptAgentSessionsByID(context.Background(), ids)
+				err := a.interruptAgentSessionsByID(context.Background(), ids, sessions)
 				a.program.Send(SessionsInterruptedMsg{SessionIDs: ids, Err: err})
 			}()
 			return nil
@@ -3263,10 +3275,10 @@ func (a *App) interruptActiveAgentSessions(ctx context.Context) error {
 			ids = append(ids, session.ID)
 		}
 	}
-	return a.interruptAgentSessionsByID(ctx, ids)
+	return a.interruptAgentSessionsByID(ctx, ids, a.sessions)
 }
 
-func (a *App) interruptAgentSessionsByID(ctx context.Context, ids []string) error {
+func (a *App) interruptAgentSessionsByID(ctx context.Context, ids []string, sessions []domain.AgentSession) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -3274,8 +3286,8 @@ func (a *App) interruptAgentSessionsByID(ctx context.Context, ids []string) erro
 	if taskSvc == nil {
 		return errors.New("agent session service is unavailable")
 	}
-	byID := make(map[string]domain.AgentSession, len(a.sessions))
-	for _, session := range a.sessions {
+	byID := make(map[string]domain.AgentSession, len(sessions))
+	for _, session := range sessions {
 		byID[session.ID] = session
 	}
 	for _, id := range ids {

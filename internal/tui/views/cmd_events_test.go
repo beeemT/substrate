@@ -308,7 +308,7 @@ func newResumeAllCmdFixture(t *testing.T, sessions []domain.AgentSession) resume
 			t.Fatalf("stop foreman: %v", err)
 		}
 	})
-	resumption := orchestrator.NewResumption(harness, sessionSvc, planSvc, publisher, nil, nil)
+	resumption := orchestrator.NewResumption(harness, sessionSvc, planSvc, workItemSvc, publisher, nil, nil)
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: resumeAllWorkspaceRepo{}}}, publisher)
 	planningSvc, err := orchestrator.NewPlanningService(orchestrator.DefaultPlanningConfig(), nil, nil, harness, planSvc, workItemSvc, sessionSvc, publisher, workspaceSvc, nil, nil, &config.Config{})
 	if err != nil {

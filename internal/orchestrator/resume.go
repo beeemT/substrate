@@ -25,6 +25,7 @@ type Resumption struct {
 	harness        adapter.AgentHarness
 	sessionSvc     *service.AgentSessionService
 	planSvc        *service.PlanService
+	workItemSvc    *service.SessionService
 	eventBus       event.Publisher
 	registry       *SessionRegistry
 	questionRouter *QuestionRouter
@@ -35,6 +36,7 @@ func NewResumption(
 	harness adapter.AgentHarness,
 	sessionSvc *service.AgentSessionService,
 	planSvc *service.PlanService,
+	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
 	registry *SessionRegistry,
 	questionRouter *QuestionRouter,
@@ -43,6 +45,7 @@ func NewResumption(
 		harness:        harness,
 		sessionSvc:     sessionSvc,
 		planSvc:        planSvc,
+		workItemSvc:    workItemSvc,
 		eventBus:       eventBus,
 		registry:       registry,
 		questionRouter: questionRouter,
@@ -227,6 +230,29 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domai
 		return FollowUpSessionResult{}, fmt.Errorf("restart task for follow-up: %w", err)
 	}
 
+	workItem, err := r.workItemSvc.Get(ctx, completedSession.WorkItemID)
+	if err != nil {
+		if revertErr := completeSessionDurably(ctx, r.sessionSvc, completedSession.ID); revertErr != nil {
+			slog.Warn("failed to revert agent session after loading work item for follow-up failed",
+				"error", revertErr,
+				"agent_session_id", completedSession.ID)
+		}
+		return FollowUpSessionResult{}, fmt.Errorf("get work item %s for follow-up: %w", completedSession.WorkItemID, err)
+	}
+	previousWorkItemState := workItem.State
+	workItemTransitioned := false
+	if workItem.State != domain.SessionImplementing {
+		if err := r.workItemSvc.StartImplementation(ctx, completedSession.WorkItemID); err != nil {
+			if revertErr := completeSessionDurably(ctx, r.sessionSvc, completedSession.ID); revertErr != nil {
+				slog.Warn("failed to revert agent session after work item follow-up transition failed",
+					"error", revertErr,
+					"agent_session_id", completedSession.ID)
+			}
+			return FollowUpSessionResult{}, fmt.Errorf("transition work item to implementing for follow-up: %w", err)
+		}
+		workItemTransitioned = true
+	}
+
 	now := time.Now()
 	completedSession.Status = domain.AgentSessionRunning
 	completedSession.CompletedAt = nil
@@ -252,6 +278,14 @@ func (r *Resumption) FollowUpSession(ctx context.Context, completedSession domai
 			slog.Warn("failed to revert agent session to completed after follow-up harness start error",
 				"error", revertErr,
 				"agent_session_id", completedSession.ID)
+		}
+		if workItemTransitioned {
+			if revertErr := r.workItemSvc.Transition(ctx, completedSession.WorkItemID, previousWorkItemState); revertErr != nil {
+				slog.Warn("failed to revert work item state after follow-up harness start error",
+					"error", revertErr,
+					"work_item_id", completedSession.WorkItemID,
+					"previous_state", previousWorkItemState)
+			}
 		}
 		return FollowUpSessionResult{}, fmt.Errorf("start harness session: %w", err)
 	}

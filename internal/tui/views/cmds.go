@@ -1530,6 +1530,46 @@ func gitLabProjectPathFromMRURL(rawURL string) string {
 	return projectPath
 }
 
+// StartupIntegrationsStartCmd defers heavy startup integrations until after the first frame.
+func StartupIntegrationsStartCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return StartupIntegrationsStartMsg{}
+	})
+}
+
+// StartupIntegrationsCmd completes the deferred startup service graph in the background.
+func StartupIntegrationsCmd(provider ServiceProvider, runtimeCtx RuntimeContext) tea.Cmd {
+	return func() tea.Msg {
+		serviceMgr, ok := provider.(*ServiceManager)
+		if !ok {
+			return StartupIntegrationsReadyMsg{Err: errors.New("service manager is unavailable")}
+		}
+		if runtimeCtx.Cfg == nil {
+			return StartupIntegrationsReadyMsg{Err: errors.New("config is unavailable")}
+		}
+		services := provider.GetServices()
+		if services == nil {
+			return StartupIntegrationsReadyMsg{Err: errors.New("services are unavailable")}
+		}
+		current := *services
+		reloaded, err := serviceMgr.Rebuild(context.Background(), runtimeCtx.Cfg, current)
+		if err != nil {
+			return StartupIntegrationsReadyMsg{Err: err}
+		}
+		settingsData, err := reloaded.Settings.Snapshot(runtimeCtx.Cfg)
+		if err != nil {
+			return StartupIntegrationsReadyMsg{Err: err}
+		}
+		sessionsDir, _ := config.SessionsDir()
+		return StartupIntegrationsReadyMsg{Reload: viewsServicesReload{
+			Services:     *reloaded,
+			SessionsDir:  sessionsDir,
+			SettingsData: settingsData,
+			Cfg:          runtimeCtx.Cfg,
+		}}
+	}
+}
+
 // StartupWarningsCmd returns a Cmd that fires a StartupWarningsMsg.
 func StartupWarningsCmd(warnings []string) tea.Cmd {
 	if len(warnings) == 0 {

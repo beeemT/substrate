@@ -361,7 +361,7 @@ func TestFocusedInterruptInterruptsSelectedAgentSession(t *testing.T) {
 			}
 		}
 	}
-	result := updated.interruptAgentSessionsByID(context.Background(), interruptMsg.SessionIDs)
+	result := updated.interruptAgentSessionsByID(context.Background(), interruptMsg.SessionIDs, updated.sessions)
 	if result != nil {
 		t.Fatalf("interruptAgentSessionsByID: %v", result)
 	}
@@ -414,7 +414,7 @@ func TestFocusedInterruptWorkItemInterruptsRunningChildren(t *testing.T) {
 	if len(ids) != 2 || !idSet["task-1"] || !idSet["task-2"] {
 		t.Fatalf("interruptibleFocusedSessionIDs = %#v, want task-1 and task-2", ids)
 	}
-	if err := app.interruptAgentSessionsByID(context.Background(), ids); err != nil {
+	if err := app.interruptAgentSessionsByID(context.Background(), ids, app.sessions); err != nil {
 		t.Fatalf("interruptAgentSessionsByID: %v", err)
 	}
 	if !mock1.aborted || !mock2.aborted {

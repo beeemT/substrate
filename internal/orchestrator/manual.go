@@ -392,17 +392,27 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 	go s.waitForCompletion(context.WithoutCancel(ctx), harnessSession, newSession.ID, newSession.WorkItemID)
 
 	// Emit EventAgentSessionResumed with old→new linkage so TUI can link the sessions.
-	updated, _ := s.sessionSvc.Get(ctx, newSession.ID)
-	s.eventBus.Publish(ctx, domain.SystemEvent{
+	updated, err := s.sessionSvc.Get(ctx, newSession.ID)
+	if err != nil {
+		slog.Warn("failed to load follow-up manual session before resumed event",
+			"error", err,
+			"agent_session_id", newSession.ID)
+		return newSession, nil
+	}
+	if err := s.eventBus.Publish(ctx, domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventAgentSessionResumed),
 		WorkspaceID: updated.WorkspaceID,
 		Payload:     marshalManualSessionPayloadWithOld(updated, completed.ID),
 		CreatedAt:   time.Now(),
-	})
+	}); err != nil {
+		slog.Warn("failed to emit follow-up manual session resumed event",
+			"error", err,
+			"agent_session_id", newSession.ID,
+			"old_agent_session_id", completed.ID)
+	}
 
-	newSession, _ = s.sessionSvc.Get(ctx, newSession.ID)
-	return newSession, nil
+	return updated, nil
 }
 
 // forwardEvents drains harness events so producer channels cannot fill.

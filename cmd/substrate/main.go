@@ -122,27 +122,44 @@ func run() error {
 	eventRepo := sqlite.NewEventRepo(remote)
 	transacter := sqlite.NewTransacter(db)
 
-	// Create ServiceManager and build initial service graph
-	serviceMgr := views.NewServiceManager(transacter, eventRepo)
-	if err := serviceMgr.Init(ctx, cfg); err != nil {
-		return fmt.Errorf("init service manager: %w", err)
-	}
-
 	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
 		return fmt.Errorf("load config secrets: %w", err)
 	}
 
-	// Detect workspace
-	workspace, err := detectWorkspace(ctx, serviceMgr.Workspace())
+	startupBus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	defer startupBus.Close()
+	workspaceSvc := service.NewWorkspaceService(transacter, startupBus)
+	workspace, markWorkspaceReady, err := inspectStartupWorkspace(ctx, workspaceSvc)
 	if err != nil {
 		return err
 	}
 
 	var instanceID string
 	if workspace.ID != "" {
-		instanceID = registerInstance(ctx, serviceMgr.Instance(), workspace.ID)
-		if _, err := serviceMgr.InitWorkspace(ctx, cfg, *serviceMgr.GetServices(), workspace.ID, workspace.Name, workspace.Dir); err != nil {
-			return fmt.Errorf("init workspace: %w", err)
+		instanceID = registerInstance(ctx, service.NewInstanceService(transacter), workspace.ID)
+	}
+
+	serviceMgr := views.NewServiceManager(transacter, eventRepo)
+	initialServices := views.Services{
+		InstanceID:    instanceID,
+		WorkspaceID:   workspace.ID,
+		WorkspaceName: workspace.Name,
+		WorkspaceDir:  workspace.Dir,
+	}
+	startupIntegrationsInProgress := workspace.ID != ""
+	if startupIntegrationsInProgress {
+		err = serviceMgr.InitWithDeferredIntegrations(ctx, cfg, initialServices)
+	} else {
+		err = serviceMgr.InitWithServices(ctx, cfg, initialServices)
+	}
+	if err != nil {
+		return fmt.Errorf("init service manager: %w", err)
+	}
+	if markWorkspaceReady {
+		if transitionErr := serviceMgr.Workspace().MarkReady(ctx, workspace.ID); transitionErr != nil {
+			slog.Warn("workspace found with status creating; failed to transition to ready", "id", workspace.ID, "err", transitionErr)
+		} else {
+			slog.Debug("workspace transitioned from creating to ready", "id", workspace.ID)
 		}
 	}
 
@@ -153,14 +170,15 @@ func run() error {
 	}
 
 	return views.RunTUI(serviceMgr, views.RuntimeContext{
-		Cfg:           cfg,
-		SettingsData:  settingsData,
-		LogStore:      logStore,
-		LogToasts:     logToasts,
-		InstanceID:    instanceID,
-		WorkspaceID:   workspace.ID,
-		WorkspaceDir:  workspace.Dir,
-		WorkspaceName: workspace.Name,
+		Cfg:                           cfg,
+		SettingsData:                  settingsData,
+		LogStore:                      logStore,
+		LogToasts:                     logToasts,
+		InstanceID:                    instanceID,
+		WorkspaceID:                   workspace.ID,
+		WorkspaceDir:                  workspace.Dir,
+		WorkspaceName:                 workspace.Name,
+		StartupIntegrationsInProgress: startupIntegrationsInProgress,
 	})
 }
 
@@ -314,18 +332,18 @@ func buildCoreServices(
 	}
 }
 
-func detectWorkspace(ctx context.Context, workspaceSvc *service.WorkspaceService) (workspaceContext, error) {
+func inspectStartupWorkspace(ctx context.Context, workspaceSvc *service.WorkspaceService) (workspaceContext, bool, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return workspaceContext{}, fmt.Errorf("getting working directory: %w", err)
+		return workspaceContext{}, false, fmt.Errorf("getting working directory: %w", err)
 	}
 
 	wsDir, wsFile, wsErr := gitwork.FindWorkspace(cwd)
 	if wsErr != nil {
 		if gitwork.IsNotInWorkspace(wsErr) {
-			return workspaceContext{}, nil
+			return workspaceContext{}, false, nil
 		}
-		return workspaceContext{}, fmt.Errorf("detecting workspace: %w", wsErr)
+		return workspaceContext{}, false, fmt.Errorf("detecting workspace: %w", wsErr)
 	}
 
 	workspace := workspaceContext{
@@ -336,22 +354,13 @@ func detectWorkspace(ctx context.Context, workspaceSvc *service.WorkspaceService
 	ws, err := workspaceSvc.Get(ctx, wsFile.ID)
 	if err != nil {
 		slog.Warn("workspace file found but not in DB; will prompt init", "id", wsFile.ID, "err", err)
-		return workspace, nil
-	}
-
-	// Transition stuck workspaces from "creating" to "ready".
-	if ws.Status == domain.WorkspaceCreating {
-		if transitionErr := workspaceSvc.MarkReady(ctx, ws.ID); transitionErr != nil {
-			slog.Warn("workspace found with status creating; failed to transition to ready", "id", wsFile.ID, "err", transitionErr)
-		} else {
-			slog.Debug("workspace transitioned from creating to ready", "id", wsFile.ID)
-		}
+		return workspace, false, nil
 	}
 
 	workspace.ID = ws.ID
 	workspace.Name = ws.Name
 
-	return workspace, nil
+	return workspace, ws.Status == domain.WorkspaceCreating, nil
 }
 
 func registerInstance(ctx context.Context, instanceSvc *service.InstanceService, workspaceID string) string {
@@ -660,7 +669,7 @@ func buildOrchestrationRuntime(
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
 		resumption = orchestrator.NewResumption(
-			harnesses.Resume, services.session, services.plan, bus, registry, nil,
+			harnesses.Resume, services.session, services.plan, services.workItem, bus, registry, nil,
 		)
 	}
 

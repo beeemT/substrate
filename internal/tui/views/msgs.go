@@ -569,6 +569,15 @@ type WorkspaceServicesReloadedMsg struct {
 	Message string
 }
 
+// StartupIntegrationsStartMsg starts deferred startup integration loading after the first frame.
+type StartupIntegrationsStartMsg struct{}
+
+// StartupIntegrationsReadyMsg is sent after deferred startup integrations finish loading.
+type StartupIntegrationsReadyMsg struct {
+	Reload viewsServicesReload
+	Err    error
+}
+
 // PlanEditedMsg is sent when the user edits a full plan document in $EDITOR and saves.
 type PlanEditedMsg struct {
 	PlanID     string

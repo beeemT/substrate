@@ -13,7 +13,7 @@ import (
 )
 
 func TestEmit(t *testing.T) {
-	t.Run("emits event asynchronously", func(t *testing.T) {
+	t.Run("emits event before returning", func(t *testing.T) {
 		// Create a real event bus with mock repo
 		repo := &mockEventRepoForEmit{events: []domain.SystemEvent{}}
 		bus := event.NewBus(event.BusConfig{EventRepo: repo})
@@ -30,7 +30,14 @@ func TestEmit(t *testing.T) {
 			EventType: string(domain.EventAgentSessionCompleted),
 		})
 
-		// Wait for async emission and receive
+		repo.mu.Lock()
+		persisted := len(repo.events)
+		repo.mu.Unlock()
+		if persisted != 1 {
+			t.Fatalf("persisted events = %d, want 1 before Emit returns", persisted)
+		}
+
+		// Emit returns only after the event is persisted and dispatched.
 		select {
 		case <-sub.C:
 			// Success

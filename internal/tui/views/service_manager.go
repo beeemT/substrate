@@ -10,6 +10,7 @@ import (
 
 	atomic "github.com/beeemT/go-atomic"
 	"github.com/beeemT/substrate/internal/adapter"
+	githubadapter "github.com/beeemT/substrate/internal/adapter/github"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
@@ -46,10 +47,35 @@ func NewServiceManager(
 
 // Init builds the initial service graph.
 func (sm *ServiceManager) Init(ctx context.Context, cfg *config.Config) error {
+	return sm.InitWithServices(ctx, cfg, Services{})
+}
+
+// InitWithServices builds the initial service graph from known runtime context.
+// Use this when startup has already resolved workspace/instance identity so the
+// service graph does not need to be built once globally and then rebuilt for the workspace.
+func (sm *ServiceManager) InitWithServices(ctx context.Context, cfg *config.Config, current Services) error {
+	return sm.initWithOptions(ctx, cfg, current, serviceBuildOptions{})
+}
+
+// InitWithDeferredIntegrations builds a usable initial service graph without
+// external provider initialization. Call Rebuild later to install the full graph.
+func (sm *ServiceManager) InitWithDeferredIntegrations(ctx context.Context, cfg *config.Config, current Services) error {
+	return sm.initWithOptions(ctx, cfg, current, serviceBuildOptions{deferIntegrations: true})
+}
+
+type serviceBuildOptions struct {
+	deferIntegrations bool
+}
+
+func (sm *ServiceManager) initWithOptions(ctx context.Context, cfg *config.Config, current Services, opts serviceBuildOptions) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	settingsSvc := NewSettingsService(sm.transacter, config.OSKeychainStore{}, sm)
-	svcs, err := sm.buildServices(ctx, cfg, Services{Settings: settingsSvc})
+	settingsSvc := current.Settings
+	if settingsSvc == nil {
+		settingsSvc = NewSettingsService(sm.transacter, config.OSKeychainStore{}, sm)
+	}
+	current.Settings = settingsSvc
+	svcs, err := sm.buildServicesWithOptions(ctx, cfg, current, opts)
 	if err != nil {
 		return err
 	}
@@ -115,6 +141,10 @@ func (sm *ServiceManager) InitWorkspace(ctx context.Context, cfg *config.Config,
 
 // buildServices constructs the complete service graph.
 func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config, current Services) (*Services, error) {
+	return sm.buildServicesWithOptions(ctx, cfg, current, serviceBuildOptions{})
+}
+
+func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *config.Config, current Services, opts serviceBuildOptions) (*Services, error) {
 	// Preserve settings service reference if already created
 	settingsSvc := current.Settings
 	if settingsSvc == nil {
@@ -171,17 +201,32 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		GitlabMRChecks:   glMRCheckSvc,
 		Bus:              bus,
 	}
-	githubAdapter, githubWarning := app.BuildGithubAdapter(ctx, cfg, repos)
+	var githubAdapter *githubadapter.GithubAdapter
+	var githubWarning string
+	if !opts.deferIntegrations {
+		github, warning := app.BuildGithubAdapter(ctx, cfg, repos)
+		githubAdapter = github
+		githubWarning = warning
+	}
 
 	var adapters []adapter.WorkItemAdapter
 	var adapterWarnings []string
 	if current.WorkspaceID != "" {
-		adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc, githubAdapter)
+		if opts.deferIntegrations {
+			adapters = app.BuildManualWorkItemAdapters(current.WorkspaceID, workItemSvc)
+		} else {
+			adapters, adapterWarnings = app.BuildWorkItemAdapters(cfg, current.WorkspaceID, workItemSvc, githubAdapter)
+		}
 	}
 	if githubWarning != "" {
 		adapterWarnings = append(adapterWarnings, githubWarning)
 	}
-	repoLifecycleAdapters := app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, repos, githubAdapter)
+	var repoLifecycleAdapters []adapter.RepoLifecycleAdapter
+	var repoSources []adapter.RepoSource
+	if !opts.deferIntegrations {
+		repoLifecycleAdapters = app.BuildRepoLifecycleAdapters(ctx, cfg, current.WorkspaceDir, repos, githubAdapter)
+		repoSources = app.BuildRepoSources(ctx, cfg)
+	}
 
 	// Wire adapters to bus
 	for _, workItemAdapter := range adapters {
@@ -275,7 +320,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 
 	var resumption *orchestrator.Resumption
 	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, bus, registry, questionRouter)
+		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, workItemSvc, bus, registry, questionRouter)
 	}
 
 	// Build ManualSessionService with default agent harness
@@ -296,7 +341,12 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		manualSvc = orchestrator.NewManualSessionService(cfg, defaultHarness, gitClient, sessionSvc, workItemSvc, workspaceSvc, registry, questionRouter, bus)
 	}
 
-	reviewCommentDispatcher := app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
+	var reviewCommentDispatcher *adapter.ReviewCommentDispatcher
+	if opts.deferIntegrations {
+		reviewCommentDispatcher = adapter.NewReviewCommentDispatcher(nil)
+	} else {
+		reviewCommentDispatcher = app.BuildReviewCommentFetcher(cfg, current.WorkspaceDir, githubAdapter)
+	}
 
 	return &Services{
 		Settings:              settingsSvc,
@@ -328,6 +378,7 @@ func (sm *ServiceManager) buildServices(ctx context.Context, cfg *config.Config,
 		Manual:                manualSvc,
 		Cfg:                   cfg,
 		Adapters:              adapters,
+		RepoSources:           repoSources,
 		Harnesses:             harnesses,
 		GitClient:             gitClient,
 		Bus:                   bus,
