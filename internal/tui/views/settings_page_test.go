@@ -83,6 +83,14 @@ func (t *testSettingsService) RefreshLoginSnapshot(_ context.Context, _ []Settin
 	return nil
 }
 
+func (t *testSettingsService) RefreshLoginSnapshotFromConfig(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (t *testSettingsService) SetDiagnosticsState(state SettingsDiagnosticsState) {
+	t.snapshot.DiagnosticsState = state
+}
+
 func newTestSettingsPage(cfg *config.Config) SettingsPage {
 	return newTestSettingsPageWithSnapshot(SettingsSnapshot{Sections: buildSettingsSections(cfg), Providers: buildProviderStatuses(cfg)})
 }

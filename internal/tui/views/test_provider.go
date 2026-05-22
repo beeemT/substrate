@@ -104,9 +104,21 @@ func servicesToProvider(svcs Services) ServiceProvider {
 // newTestSettingsService creates a settings service for tests.
 // It uses NewSettingsService with noop dependencies.
 func newTestSettingsService() *settingsService {
-	return NewSettingsService(
+	svc := NewSettingsService(
 		repository.NoopTransacter{},
 		config.NoopKeychainStore{},
 		NewServiceManager(repository.NoopTransacter{}, nil),
 	)
+	// Initialize with a valid snapshot so tests that depend on initialized state
+	// or populated sections pass correctly.
+	svc.mu.Lock()
+	svc.snapshot = SettingsSnapshot{
+		Sections:         []SettingsSection{},
+		Providers:        map[string]ProviderStatus{},
+		RawYAML:          "",
+		HarnessWarning:   "",
+		DiagnosticsState: SettingsDiagnosticsReady,
+	}
+	svc.mu.Unlock()
+	return svc
 }

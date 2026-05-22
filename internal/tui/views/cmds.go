@@ -1007,13 +1007,29 @@ func ResumeAllSessionsForWorkItemCmd(
 		}
 
 		succeeded := 0
-		for _, s := range toResume {
-			if _, err := resumption.ResumeSession(ctx, s, instanceID); err != nil {
-				slog.Warn("resume all: failed to resume session",
-					"agent_session_id", s.ID, "error", err)
+		var aggregatedErr error
+		for _, session := range toResume {
+			if _, err := resumption.ResumeSession(ctx, session, instanceID); err != nil {
+				slog.Warn("failed to resume session",
+					"error", err,
+					"session_id", session.ID,
+					"work_item_id", workItemID)
+				if aggregatedErr == nil {
+					aggregatedErr = err
+				} else {
+					aggregatedErr = errors.Join(aggregatedErr, err)
+				}
 				continue
 			}
 			succeeded++
+		}
+
+		if aggregatedErr != nil {
+			slog.Warn("resume all: some sessions failed to resume",
+				"error", aggregatedErr,
+				"work_item_id", workItemID,
+				"succeeded", succeeded,
+				"failed", len(toResume)-succeeded)
 		}
 
 		msg := "Resumed 1 task"

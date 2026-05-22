@@ -38,6 +38,9 @@ type WorkspaceInitModal struct {
 	gitClient    *gitwork.Client
 	workspaceSvc *service.WorkspaceService
 
+	// errorText holds an error to display inline instead of dismissing the modal.
+	errorText string
+
 	// initProgress tracks repo initialization progress during batch init.
 	initProgress struct {
 		initialized int
@@ -124,9 +127,9 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 		m.active = false
 
 	case ErrMsg:
-		// Reset progress state and close modal on error during init.
+		// Reset progress state but keep modal open to show the error.
 		m.initProgress.active = false
-		m.active = false
+		m.errorText = "Failed to initialize workspace: " + msg.Err.Error()
 	}
 
 	return m, nil
@@ -281,6 +284,11 @@ func (m WorkspaceInitModal) View() string {
 					m.styles.KeybindAccent.Render("[n]")+m.styles.Subtitle.Render(" Cancel"),
 			)
 		}
+	}
+
+	// Render error text if set (e.g., after failed init).
+	if m.errorText != "" {
+		lines = append(lines, "", m.styles.Muted.Render(m.errorText))
 	}
 
 	content := strings.Join(lines, "\n")

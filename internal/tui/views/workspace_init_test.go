@@ -198,10 +198,10 @@ func TestNewReposModal_ErrMsg_ResetsProgressAndCloses(t *testing.T) {
 		t.Fatal("expected Active() == true before error")
 	}
 
-	// Simulate error during init.
+	// Simulate error during init. Modal stays open to show the error.
 	updated, _ := m.Update(views.ErrMsg{Err: errors.New("git-work init failed")})
-	if updated.Active() {
-		t.Fatal("expected Active() == false after ErrMsg")
+	if !updated.Active() {
+		t.Fatal("expected Active() == true after ErrMsg (modal shows error, not closed)")
 	}
 }
 

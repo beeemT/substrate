@@ -50,6 +50,7 @@ type SettingsDiagnosticsState string
 const (
 	SettingsDiagnosticsPending SettingsDiagnosticsState = "pending"
 	SettingsDiagnosticsReady   SettingsDiagnosticsState = "ready"
+	SettingsDiagnosticsFailed SettingsDiagnosticsState = "failed"
 )
 
 type SettingsField struct {
@@ -114,6 +115,11 @@ type SettingsService interface {
 	TestProvider(ctx context.Context, provider string, sections []SettingsSection) (ProviderStatus, error)
 	LoginProvider(ctx context.Context, provider, harness string, sections []SettingsSection, svcs Services) (SettingsLoginResult, error)
 	RefreshLoginSnapshot(ctx context.Context, sections []SettingsSection) error
+	// RefreshLoginSnapshotFromConfig refreshes the snapshot from a config that may have
+	// been updated with new credentials (e.g., after a login). Unlike RefreshLoginSnapshot
+	// which reconstructs config from sections, this method uses the provided config directly.
+	RefreshLoginSnapshotFromConfig(ctx context.Context, cfg *config.Config) error
+	SetDiagnosticsState(state SettingsDiagnosticsState)
 }
 
 type settingsService struct {
@@ -150,6 +156,12 @@ func (s *settingsService) Snapshot() SettingsSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.snapshot.defensiveCopy()
+}
+
+func (s *settingsService) SetDiagnosticsState(state SettingsDiagnosticsState) {
+	s.mu.Lock()
+	s.snapshot.DiagnosticsState = state
+	s.mu.Unlock()
 }
 
 func (s *settingsService) RefreshConfigOnly(ctx context.Context, cfg *config.Config) error {
@@ -207,6 +219,10 @@ func (s *settingsService) RefreshLoginSnapshot(ctx context.Context, sections []S
 	if err != nil {
 		return err
 	}
+	return s.RefreshLoginSnapshotFromConfig(ctx, cfg)
+}
+
+func (s *settingsService) RefreshLoginSnapshotFromConfig(ctx context.Context, cfg *config.Config) error {
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
 		return err
@@ -341,6 +357,13 @@ func (s *settingsService) Save(ctx context.Context, sections []SettingsSection, 
 	// Save raw config first — runtime services must never use unpersisted config.
 	if err := s.saveRaw(raw); err != nil {
 		return SettingsApplyResult{}, err
+	}
+
+	// Reload secrets from keychain so Rebuild provisions services with credentials.
+	// serializeSections blanks cfg.Adapters.*.Token to keychain refs; LoadSecrets
+	// restores the actual tokens from the keychain.
+	if err := config.LoadSecrets(cfg, s.secretStore); err != nil {
+		slog.Warn("failed to reload secrets after save; services may lack credentials", "error", err)
 	}
 
 	// Rebuild services via ServiceManager
@@ -515,7 +538,7 @@ func (s *settingsService) LoginProvider(ctx context.Context, provider, harness s
 		return SettingsLoginResult{}, fmt.Errorf("login not implemented for provider %q", provider)
 	}
 
-	if err := s.RefreshLoginSnapshot(ctx, sections); err != nil {
+	if err := s.RefreshLoginSnapshotFromConfig(ctx, cfg); err != nil {
 		slog.Warn("failed to refresh settings snapshot after login", "error", err)
 	}
 

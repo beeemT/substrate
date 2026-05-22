@@ -2077,32 +2077,24 @@ func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T
 	if updated.content.sessionLog.sessionID != "sess-1" {
 		t.Fatalf("session log session id = %q, want sess-1", updated.content.sessionLog.sessionID)
 	}
+	// Interrupted sessions belonging to active (implementing/planning) work items are filtered
+	// from the grouped resume card and managed by the active pipeline, so no recovery notice.
 	notice := updated.content.sessionLog.notice
-	if notice == nil {
-		t.Fatal("expected interrupted task notice")
-	}
-	if notice.Title != "Interrupted task needs recovery" {
-		t.Fatalf("notice title = %q, want interrupted task notice", notice.Title)
-	}
-	if !strings.Contains(notice.Body, "resumed or abandoned") {
-		t.Fatalf("notice body = %q, want interrupted recovery guidance", notice.Body)
+	if notice != nil {
+		t.Fatalf("notice = %q, want nil for interrupted session belonging to active work item", notice.Title)
 	}
 	view := stripBrowseANSI(updated.content.View())
-	for _, want := range []string{"Interrupted task needs recovery", "Press [Enter] to open the overview.", "No session output captured."} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("content view = %q, want %q", view, want)
-		}
+	// Status label shows "Interrupted" but no recovery card is shown because
+	// the interrupted session belongs to an active implementing work item.
+	if !strings.Contains(view, "Interrupted") {
+		t.Fatalf("content view = %q, want Interrupted status", view)
 	}
-	foundEnter := false
+	// No "Enter/Open overview" hint since the interrupted session is filtered from
+	// the grouped resume card (managed by active pipeline, not user-resumable).
 	for _, hint := range updated.currentHints() {
 		if hint.Key == "Enter" && hint.Label == "Open overview" {
-			foundEnter = true
-
-			break
+			t.Fatalf("unexpected Open overview hint for filtered interrupted session")
 		}
-	}
-	if !foundEnter {
-		t.Fatalf("hints = %#v, want Enter/Open overview", updated.currentHints())
 	}
 }
 

@@ -109,6 +109,12 @@ func (f *fakeSettingsService) RefreshLoginSnapshot(_ context.Context, _ []Settin
 	return nil
 }
 
+func (f *fakeSettingsService) RefreshLoginSnapshotFromConfig(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsService) SetDiagnosticsState(_ SettingsDiagnosticsState) {}
+
 func TestAppHarnessWarningToast_ReadsSettingsService(t *testing.T) {
 	t.Parallel()
 

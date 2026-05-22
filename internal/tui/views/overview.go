@@ -1628,14 +1628,31 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			interruptedSessions = append(interruptedSessions, agentSession)
 		}
 	}
-	if len(interruptedSessions) > 0 {
-		actions = append(actions, buildInterruptedTasksActionCard(interruptedSessions, a.canActOnSession))
+	// Build a set of work-item IDs that are currently in planning or implementing
+	// state — sessions belonging to these work items are managed by the active pipeline
+	// and must not be included in the grouped interrupted-resume card.
+	activeWorkItemIDs := make(map[string]bool)
+	for _, wi := range a.workItems {
+		if wi.State == domain.SessionPlanning || wi.State == domain.SessionImplementing {
+			activeWorkItemIDs[wi.ID] = true
+		}
+	}
+	// Filter out sessions belonging to active work items.
+	filteredInterruptedSessions := make([]domain.AgentSession, 0, len(interruptedSessions))
+	for _, session := range interruptedSessions {
+		if activeWorkItemIDs[session.WorkItemID] {
+			continue
+		}
+		filteredInterruptedSessions = append(filteredInterruptedSessions, session)
+	}
+	if len(filteredInterruptedSessions) > 0 {
+		actions = append(actions, buildInterruptedTasksActionCard(filteredInterruptedSessions, a.canActOnSession, activeWorkItemIDs))
 	}
 
 	return actions
 }
 
-func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func(domain.AgentSession) bool) OverviewActionCard {
+func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func(domain.AgentSession) bool, activeWorkItemIDs map[string]bool) OverviewActionCard {
 	affected := make([]string, 0, len(sessions))
 	context := []string{
 		fmt.Sprintf("Interrupted tasks: %d", len(sessions)),
@@ -1649,6 +1666,11 @@ func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func
 		context = append(context, displayName+": "+taskSidebarSessionTitle(&session))
 		if session.UpdatedAt.After(latest) {
 			latest = session.UpdatedAt
+		}
+		// Skip sessions belonging to active work items — they are managed by the
+		// active pipeline and should not be acted upon from this card.
+		if activeWorkItemIDs[session.WorkItemID] {
+			continue
 		}
 		if canAct == nil || canAct(session) {
 			allowed = true

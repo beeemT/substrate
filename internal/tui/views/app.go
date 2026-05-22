@@ -136,6 +136,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	toasts                        components.ToastModel
 	startupIntegrationsInProgress bool
 	startupIntegrationSpinner     int
+	inputBlocked                  bool
 
 	// State cache (refreshed by DB poll)
 	workItems []domain.Session
@@ -297,6 +298,7 @@ func (a *App) Init() tea.Cmd {
 
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
 	if a.runtimeCtx.StartupIntegrationsInProgress {
+		a.inputBlocked = true
 		cmds = append(cmds, StartupIntegrationsStartCmd())
 	} else {
 		// Non-workspace startup: schedule diagnostics if still pending.
@@ -1268,7 +1270,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StartupIntegrationsStartMsg:
 		if a.startupIntegrationsInProgress {
-			cmds = append(cmds, StartupIntegrationsCmd(a.provider, a.runtimeCtx))
+			// Run rebuild off the Bubble Tea event loop to avoid freezing the TUI.
+			go func() {
+				cmd := StartupIntegrationsCmd(a.provider, a.runtimeCtx)
+				a.program.Send(cmd())
+			}()
 		}
 		return a, tea.Batch(cmds...)
 
@@ -1298,9 +1304,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StartupIntegrationsReadyMsg:
 		a.startupIntegrationsInProgress = false
 		a.runtimeCtx.StartupIntegrationsInProgress = false
+		a.inputBlocked = false
 		if msg.Err != nil {
 			slog.Warn("startup integrations failed", "error", msg.Err)
 			a.toasts.AddToast("Startup integrations failed", components.ToastWarning)
+			// Mark diagnostics as failed so the settings page doesn't show stale "checking" status.
+			a.provider.Settings().SetDiagnosticsState(SettingsDiagnosticsFailed)
 			return a, nil
 		}
 		oldWorkspaceID := a.runtimeCtx.WorkspaceID
@@ -2763,6 +2772,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
+	// Block all key input during deferred startup.
+	if a.inputBlocked {
+		return a, nil
+	}
 
 	// Confirm dialog captures all key input when active.
 	if a.confirmActive {
