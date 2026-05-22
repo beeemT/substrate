@@ -32,14 +32,26 @@ type testSettingsService struct {
 }
 
 func (t *testSettingsService) Snapshot() SettingsSnapshot {
-	snap := t.snapshot
-	if len(t.providerStatus) > 0 {
-		snap.Providers = make(map[string]ProviderStatus, len(t.providerStatus))
-		for k, v := range t.providerStatus {
-			snap.Providers[k] = v
-		}
+	// Defensive copy mirrors the production settingsService behavior.
+	// Callers must not be able to mutate the service's cached state.
+	sections := make([]SettingsSection, len(t.snapshot.Sections))
+	for i := range t.snapshot.Sections {
+		sections[i] = t.snapshot.Sections[i]
+		fields := make([]SettingsField, len(t.snapshot.Sections[i].Fields))
+		copy(fields, t.snapshot.Sections[i].Fields)
+		sections[i].Fields = fields
 	}
-	return snap
+	providers := make(map[string]ProviderStatus, len(t.snapshot.Providers))
+	for k, v := range t.snapshot.Providers {
+		providers[k] = v
+	}
+	return SettingsSnapshot{
+		Sections:         sections,
+		Providers:        providers,
+		RawYAML:          t.snapshot.RawYAML,
+		HarnessWarning:   t.snapshot.HarnessWarning,
+		DiagnosticsState: t.snapshot.DiagnosticsState,
+	}
 }
 
 func (t *testSettingsService) RefreshConfigOnly(_ context.Context, _ *config.Config) error {
@@ -1380,5 +1392,82 @@ func TestSettingsPage_StickyDetailsWrapsLongDescription(t *testing.T) {
 	// which proves it is not emitted as one long untruncated string.
 	if strings.Contains(strings.SplitN(stripped, "\n", 3)[1], "reads before") {
 		t.Fatal("description is not wrapping: first description line contains text from second wrapped line")
+	}
+}
+
+func TestSettingsPage_ShowsCheckingHarnessAvailabilityWhilePending(t *testing.T) {
+	t.Parallel()
+
+	// Create a fake service that returns a pending diagnostics snapshot.
+	fake := &testSettingsService{
+		snapshot: SettingsSnapshot{
+			DiagnosticsState: SettingsDiagnosticsPending,
+			Sections:         buildSettingsSections(&config.Config{}),
+			Providers:        buildProviderStatuses(&config.Config{}),
+		},
+	}
+	page := NewSettingsPage(fake, styles.NewStyles(styles.DefaultTheme))
+	page.SetSize(120, 40)
+	page.Open()
+
+	rendered := ansi.Strip(page.View())
+	if !strings.Contains(rendered, "Checking harness availability…") {
+		t.Fatalf("view = %q, want footer to contain %q", rendered, "Checking harness availability…")
+	}
+}
+
+func TestSettingsPage_DoesNotClobberDirtyEditsOnAsyncDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	// Create a fake that starts with a clean snapshot.
+	fake := &testSettingsService{
+		snapshot: SettingsSnapshot{
+			DiagnosticsState: SettingsDiagnosticsReady,
+			Sections:         buildSettingsSections(&config.Config{}),
+			Providers:        buildProviderStatuses(&config.Config{}),
+		},
+	}
+	page := NewSettingsPage(fake, styles.NewStyles(styles.DefaultTheme))
+	page.SetSize(120, 40)
+	page.Open()
+
+	// Simulate a user editing a field: mark dirty and change a field value.
+	if len(page.sections) == 0 {
+		t.Fatal("expected at least one section")
+	}
+	for i := range page.sections {
+		if len(page.sections[i].Fields) > 0 {
+			page.sections[i].Fields[0].Dirty = true
+			page.sections[i].Fields[0].Value = "user-edited-value"
+			page.dirty = true
+			break
+		}
+	}
+
+	// Simulate async diagnostics completing: update the service snapshot.
+	fake.snapshot.DiagnosticsState = SettingsDiagnosticsReady
+	fake.snapshot.HarnessWarning = "Harness unavailable."
+	// Also change the sections in the service snapshot so we can verify
+	// the page does NOT adopt the service's sections.
+	fake.snapshot.Sections[0].Fields[0].Value = "service-value"
+
+	// Refresh from service while dirty.
+	page.RefreshFromService()
+
+	// Verify the user's edit is preserved.
+	found := false
+	for _, sec := range page.sections {
+		for _, f := range sec.Fields {
+			if f.Value == "user-edited-value" && f.Dirty {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("dirty field edit was clobbered by RefreshFromService")
 	}
 }

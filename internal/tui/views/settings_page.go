@@ -55,9 +55,8 @@ type SettingsProviderTestedMsg struct {
 }
 
 type SettingsLoginCompletedMsg struct {
-	Snapshot SettingsSnapshot
-	Message  string
-	Dirty    bool
+	Message string
+	Dirty   bool
 }
 
 type settingsNavNode struct {
@@ -142,6 +141,11 @@ func (m *SettingsPage) Close() {
 	m.closeFieldEditor()
 	m.errorText = ""
 	m.syncMainViewport()
+}
+
+// SetDirty is exposed for testing.
+func (m *SettingsPage) SetDirty(dirty bool) {
+	m.dirty = dirty
 }
 
 func (m SettingsPage) Active() bool { return m.active }

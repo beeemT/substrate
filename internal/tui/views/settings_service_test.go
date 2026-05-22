@@ -697,3 +697,204 @@ func TestApplyField_GithubReviewersAndLabelsRoundTrip(t *testing.T) {
 		t.Fatalf("Labels = %#v, want [\"backend\"]", got)
 	}
 }
+
+func TestSettingsService_RefreshConfigOnly_SkipsHarnessDiagnostics(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SUBSTRATE_HOME", home)
+
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
+
+	// Build a config with a broken harness path that would warn if diagnostics ran.
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessClaudeCode
+	cfg.Adapters.ClaudeCode.BridgePath = "/nonexistent/claude"
+
+	if err := svc.RefreshConfigOnly(context.Background(), cfg); err != nil {
+		t.Fatalf("RefreshConfigOnly: %v", err)
+	}
+
+	snapshot := svc.Snapshot()
+	if snapshot.DiagnosticsState != SettingsDiagnosticsPending {
+		t.Fatalf("snapshot.DiagnosticsState = %q, want %q", snapshot.DiagnosticsState, SettingsDiagnosticsPending)
+	}
+	if snapshot.HarnessWarning != "" {
+		t.Fatalf("HarnessWarning = %q, want empty string when diagnostics are skipped", snapshot.HarnessWarning)
+	}
+
+	// Sections and providers must still be populated.
+	if len(snapshot.Sections) == 0 {
+		t.Fatal("expected non-empty sections in config-only snapshot")
+	}
+	if len(snapshot.Providers) == 0 {
+		t.Fatal("expected non-empty providers in config-only snapshot")
+	}
+
+	// Harness sections must not have warning annotations — a broken harness path
+	// would have triggered DiagnoseHarnesses and set warnings.
+	for i := range snapshot.Sections {
+		if snapshot.Sections[i].ID == "harness.claude" {
+			if snapshot.Sections[i].Status == statusWarning {
+				t.Fatalf("harness.claude status = %q (warning), want no warning annotation when diagnostics are skipped", snapshot.Sections[i].Status)
+			}
+		}
+	}
+}
+
+func TestSettingsSections_ConfigOnlyBuilder_DoesNotDiagnoseHarnesses(t *testing.T) {
+	t.Parallel()
+
+	// A config with a harness path that DiagnoseHarnesses would flag.
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessClaudeCode
+	cfg.Adapters.ClaudeCode.BridgePath = "/definitely/broken/path"
+
+	sections := buildSettingsSectionsConfigOnly(cfg)
+
+	// The config-only builder must not annotate harness warnings.
+	for i := range sections {
+		if sections[i].Status == statusWarning {
+			t.Fatalf("buildSettingsSectionsConfigOnly annotated a warning for section %q; config-only builder must not run harness diagnostics", sections[i].ID)
+		}
+	}
+}
+
+func TestSettingsService_Snapshot_ReturnsDefensiveCopy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SUBSTRATE_HOME", home)
+
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
+
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessClaudeCode
+	cfg.Adapters.ClaudeCode.BridgePath = "/bin/sh"
+	if err := svc.RefreshConfigOnly(context.Background(), cfg); err != nil {
+		t.Fatalf("RefreshConfigOnly: %v", err)
+	}
+
+	snap1 := svc.Snapshot()
+	// Mutate the returned snapshot.
+	snap1.Providers["linear"] = ProviderStatus{Title: "mutated"}
+	snap1.HarnessWarning = "mutated-warning"
+	snap1.Sections = nil
+
+	snap2 := svc.Snapshot()
+	if snap2.HarnessWarning == "mutated-warning" {
+		t.Fatal("subsequent Snapshot() reflects mutated HarnessWarning — defensive copy not returned")
+	}
+	if _, ok := snap2.Providers["linear"]; !ok || snap2.Providers["linear"].Title == "mutated" {
+		t.Fatal("subsequent Snapshot() reflects mutated Providers map — defensive copy not returned")
+	}
+	if len(snap2.Sections) == 0 {
+		t.Fatal("subsequent Snapshot() reflects mutated Sections — defensive copy not returned")
+	}
+}
+
+func TestSettingsService_Save_UpdatesCachedSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SUBSTRATE_HOME", home)
+
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
+
+	// Save a valid config first so we have something to compare against.
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessCodex
+	cfg.Commit.Strategy = config.CommitStrategyGranular
+	cfg.Commit.MessageFormat = config.CommitMessageConventional
+	cfg.UI.DefaultFilter = "active"
+	cfg.UI.DefaultGroup = "source"
+	raw := mustSerializeSettingsConfig(t, svc, cfg)
+	if err := svc.SaveRaw(raw); err != nil {
+		t.Fatalf("SaveRaw: %v", err)
+	}
+
+	// Make a different config.
+	cfg2 := &config.Config{}
+	cfg2.Harness.Default = config.HarnessOhMyPi
+	cfg2.Commit.Strategy = config.CommitStrategySemiRegular
+	cfg2.Commit.MessageFormat = config.CommitMessageAIGenerated
+	cfg2.UI.DefaultFilter = "all"
+	cfg2.UI.DefaultGroup = "state"
+	fields2 := buildSettingsSections(cfg2)
+
+	result, err := svc.Save(context.Background(), fields2, Services{})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if result.Message == "" {
+		t.Fatal("expected non-empty message in Save result")
+	}
+
+	// Cached snapshot must reflect saved config.
+	snapshot := svc.Snapshot()
+	if snapshot.DiagnosticsState != SettingsDiagnosticsReady {
+		t.Fatalf("snapshot.DiagnosticsState = %q, want %q after Save", snapshot.DiagnosticsState, SettingsDiagnosticsReady)
+	}
+	found := false
+	for _, sec := range snapshot.Sections {
+		if sec.ID == "ui" {
+			for _, f := range sec.Fields {
+				if f.Key == "default_filter" && f.Value == "all" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("cached snapshot does not reflect saved UI filter")
+	}
+
+	// RawYAML in snapshot must match persisted file.
+	cfgPath, _ := config.ConfigPath()
+	persisted, _ := os.ReadFile(cfgPath)
+	if snapshot.RawYAML != string(persisted) {
+		t.Fatal("snapshot.RawYAML does not match persisted file")
+	}
+}
+
+func TestSettingsService_Save_DoesNotPublishRebuildWhenRawSaveFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SUBSTRATE_HOME", home)
+
+	serviceMgr := NewServiceManager(repository.NoopTransacter{}, nil)
+	svc := NewSettingsService(repository.NoopTransacter{}, config.NoopKeychainStore{}, serviceMgr)
+
+	// Save a valid config and populate the service's cached snapshot.
+	cfg := &config.Config{}
+	cfg.Harness.Default = config.HarnessCodex
+	cfg.Commit.Strategy = config.CommitStrategyGranular
+	cfg.Commit.MessageFormat = config.CommitMessageConventional
+	raw := mustSerializeSettingsConfig(t, svc, cfg)
+	if err := svc.SaveRaw(raw); err != nil {
+		t.Fatalf("SaveRaw: %v", err)
+	}
+	if err := svc.RefreshConfigOnly(context.Background(), cfg); err != nil {
+		t.Fatalf("RefreshConfigOnly: %v", err)
+	}
+
+	// Snapshot is now cached; make the config file non-writable so Save fails.
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		t.Fatalf("ConfigPath: %v", err)
+	}
+	if err := os.Chmod(cfgPath, 0o000); err != nil {
+		t.Skip("cannot make config file non-writable on this platform")
+	}
+	defer os.Chmod(cfgPath, 0o600) //nolint:errcheck
+
+	// Attempt to save — the raw config write must fail before the service graph is swapped.
+	fields := buildSettingsSections(cfg)
+	_, err = svc.Save(context.Background(), fields, Services{})
+	if err == nil {
+		t.Fatal("expected Save to fail when raw config write fails, got nil error")
+	}
+
+	// The service manager must not have swapped to a rebuilt graph.
+	// The key invariant: no panic and no partial state.
+	svcs := serviceMgr.GetServices()
+	if svcs != nil {
+		t.Fatal("service graph was rebuilt after Save failed due to raw config write failure")
+	}
+}
