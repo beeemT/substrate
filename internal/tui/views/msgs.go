@@ -335,6 +335,12 @@ type ReimplementMsg struct{ WorkItemID string }
 // RetryFailedMsg fires when user retries a failed work item from the overview.
 type RetryFailedMsg struct{ WorkItemID string }
 
+// RetrySessionMsg fires when user retries a single failed session directly (without feedback prompt).
+type RetrySessionMsg struct {
+	WorkItemID string
+	SessionID  string
+}
+
 // FinalizeWorkItemMsg fires when user retries finalization for a completed-but-stuck work item.
 type FinalizeWorkItemMsg struct{ WorkItemID string }
 

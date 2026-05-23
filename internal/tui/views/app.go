@@ -709,6 +709,10 @@ func (a App) currentHints() []KeybindHint {
 		if a.selectedTaskSessionID() != "" && a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			hints = append([]KeybindHint{{Key: "Enter", Label: "Open overview"}}, hints...)
 		}
+		// Add 'r' hint when a failed session is selected for direct retry.
+		if a.retryableFocusedSessionID() != "" {
+			hints = append([]KeybindHint{{Key: "r", Label: "Retry"}}, hints...)
+		}
 		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
 	}
 	return append(prependDelete(prependInterrupt(prependArchive([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}))), global...)
@@ -2935,6 +2939,13 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(ids) > 0 {
 			return a, func() tea.Msg { return ConfirmInterruptSessionsMsg{SessionIDs: ids} }
 		}
+	case "r":
+		if sessionID := a.retryableFocusedSessionID(); sessionID != "" {
+			if a.provider.Resumption() != nil && a.provider.Task() != nil {
+				ctx := a.pipelineCtxForSession(sessionID)
+				return a, RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), sessionID, a.runtimeCtx.InstanceID)
+			}
+		}
 	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {
 			a.mainFocus = mainFocusSidebar
@@ -3319,13 +3330,29 @@ func (a App) interruptibleFocusedSessionIDs() []string {
 	if a.currentWorkItemID == "" {
 		return nil
 	}
-	selectedID := a.selectedTaskSessionID()
-	if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
-		if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && isInterruptibleAgentSession(*session) {
-			return []string{session.ID}
+
+	// When focused on a specific agent session in content, interrupt only that session.
+	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
+		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+			if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && isInterruptibleAgentSession(*session) {
+				return []string{sessionID}
+			}
 		}
 		return nil
 	}
+
+	// When focused on an agent session in the task sidebar, interrupt only that session.
+	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
+		selectedID := a.selectedTaskSessionID()
+		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
+			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && isInterruptibleAgentSession(*session) {
+				return []string{session.ID}
+			}
+			return nil
+		}
+	}
+
+	// When focused on overview/sessions view, interrupt all interruptible sessions.
 	ids := make([]string, 0, len(a.sessions))
 	for _, session := range a.sessionsForWorkItem(a.currentWorkItemID) {
 		if isInterruptibleAgentSession(session) {
@@ -3337,6 +3364,48 @@ func (a App) interruptibleFocusedSessionIDs() []string {
 
 func isInterruptibleAgentSession(session domain.AgentSession) bool {
 	return session.Status == domain.AgentSessionRunning || session.Status == domain.AgentSessionWaitingForAnswer
+}
+
+// retryableFocusedSessionID returns the session ID to retry based on current focus context.
+// Returns empty string if no retryable session is focused (use overview retry instead).
+func (a App) retryableFocusedSessionID() string {
+	if a.currentWorkItemID == "" {
+		return ""
+	}
+
+	// When focused on a specific session in content, retry only that session if it's failed.
+	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
+		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+			if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && session.Status == domain.AgentSessionFailed {
+				return sessionID
+			}
+		}
+		return ""
+	}
+
+	// When focused on a session in the task sidebar, retry only that session if it's failed.
+	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
+		selectedID := a.selectedTaskSessionID()
+		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
+			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.Status == domain.AgentSessionFailed {
+				return session.ID
+			}
+		}
+		return ""
+	}
+
+	// In overview/sessions mode, no direct session retry - use overview retry instead.
+	return ""
+}
+
+// pipelineCtxForSession returns a cancellable pipeline context for the given session's work item.
+func (a *App) pipelineCtxForSession(sessionID string) context.Context {
+	for _, s := range a.sessions {
+		if s.ID == sessionID {
+			return a.registerPipelineCancel(s.WorkItemID)
+		}
+	}
+	return context.Background()
 }
 
 func (a *App) interruptActiveAgentSessions(ctx context.Context) error {

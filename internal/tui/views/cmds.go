@@ -1314,6 +1314,23 @@ func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resu
 	}
 }
 
+// RetrySessionCmd directly retries a failed session without user feedback.
+// Returns FollowUpSessionCompleteMsg when done.
+func RetrySessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.AgentSessionService, sessionID, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		task, err := svc.Get(ctx, sessionID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("get session for retry: %w", err)}
+		}
+		result, err := resumption.FollowUpFailedSession(ctx, task, "", instanceID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("retry failed session: %w", err)}
+		}
+		resumption.WaitAndComplete(ctx, result.Session.ID, result.HarnessSession)
+		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
+	}
+}
+
 // FollowUpPlanCmd starts a follow-up re-planning cycle for a completed work item.
 func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
 	return func() tea.Msg {

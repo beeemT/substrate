@@ -508,3 +508,210 @@ func TestFocusedInterruptModalFitsNarrowTerminal(t *testing.T) {
 		}
 	}
 }
+
+// TestInterruptInAgentSessionContentInterruptsOnlyThatSession verifies that pressing
+// 'I' while focused on an agent session in the content area (mainFocusContent with
+// ContentModeAgentSession) interrupts only that session, not other running sessions.
+func TestInterruptInAgentSessionContentInterruptsOnlyThatSession(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-a", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-b", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app, reg, taskRepo := newQuitTestAppWithRegistry(sessions)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}}
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusContent
+	app.content.SetMode(ContentModeAgentSession)
+	app.content.sessionLog.SetLogPath("sess-a", "/tmp/session.log")
+
+	mockA := &quitTestMockSession{id: "sess-a", resumeInfo: map[string]string{"session": "resume-a"}}
+	mockB := &quitTestMockSession{id: "sess-b"}
+	reg.Register("sess-a", mockA)
+	reg.Register("sess-b", mockB)
+
+	ids := app.interruptibleFocusedSessionIDs()
+	if len(ids) != 1 || ids[0] != "sess-a" {
+		t.Fatalf("interruptibleFocusedSessionIDs = %#v, want [sess-a]", ids)
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'I'}})
+	updated := model.(*App)
+	if cmd == nil {
+		t.Fatal("interrupt key returned nil cmd")
+	}
+	confirm, ok := cmd().(ConfirmInterruptSessionsMsg)
+	if !ok {
+		t.Fatalf("cmd message = %T, want ConfirmInterruptSessionsMsg", cmd())
+	}
+	if len(confirm.SessionIDs) != 1 || confirm.SessionIDs[0] != "sess-a" {
+		t.Fatalf("interrupt ids = %#v, want [sess-a]", confirm.SessionIDs)
+	}
+
+	model, _ = updated.Update(confirm)
+	updated = model.(*App)
+
+	msg := updated.confirm.OnYes()
+	interruptMsg, ok := msg.(InterruptSessionsMsg)
+	if !ok {
+		t.Fatalf("confirm OnYes = %T, want InterruptSessionsMsg", msg)
+	}
+	for _, id := range interruptMsg.SessionIDs {
+		for _, session := range updated.sessions {
+			if session.ID == id {
+				updated.cancelPipeline(session.WorkItemID)
+			}
+		}
+	}
+	if err := updated.interruptAgentSessionsByID(context.Background(), interruptMsg.SessionIDs, updated.sessions); err != nil {
+		t.Fatalf("interruptAgentSessionsByID: %v", err)
+	}
+
+	if !mockA.aborted {
+		t.Fatal("sess-a should have been aborted")
+	}
+	if mockB.aborted {
+		t.Fatal("sess-b should not have been aborted")
+	}
+	if got := taskRepo.tasks["sess-a"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("sess-a status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["sess-b"].Status; got != domain.AgentSessionRunning {
+		t.Fatalf("sess-b status = %q, want running", got)
+	}
+}
+
+// TestInterruptInSessionsSidebarInterruptsAllActiveSessions verifies that pressing
+// 'I' while in sessions sidebar mode (sidebarPaneSessions) interrupts all active
+// sessions for the current work item.
+func TestInterruptInSessionsSidebarInterruptsAllActiveSessions(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-2", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-3", WorkItemID: "wi-2", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app, reg, taskRepo := newQuitTestAppWithRegistry(sessions)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}}
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusSidebar
+	app.sidebarMode = sidebarPaneSessions
+	app.setSelectedTaskSessionID("")
+
+	mock1 := &quitTestMockSession{id: "sess-1"}
+	mock2 := &quitTestMockSession{id: "sess-2"}
+	mock3 := &quitTestMockSession{id: "sess-3"}
+	reg.Register("sess-1", mock1)
+	reg.Register("sess-2", mock2)
+	reg.Register("sess-3", mock3)
+
+	ids := app.interruptibleFocusedSessionIDs()
+	idSet := map[string]bool{}
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	if len(ids) != 2 || !idSet["sess-1"] || !idSet["sess-2"] {
+		t.Fatalf("interruptibleFocusedSessionIDs = %#v, want [sess-1, sess-2]", ids)
+	}
+
+	if err := app.interruptAgentSessionsByID(context.Background(), ids, app.sessions); err != nil {
+		t.Fatalf("interruptAgentSessionsByID: %v", err)
+	}
+
+	if !mock1.aborted || !mock2.aborted {
+		t.Fatal("sess-1 and sess-2 should have been aborted")
+	}
+	if mock3.aborted {
+		t.Fatal("sess-3 (different work item) should not have been aborted")
+	}
+	if got := taskRepo.tasks["sess-1"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("sess-1 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["sess-2"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("sess-2 status = %q, want interrupted", got)
+	}
+	if got := taskRepo.tasks["sess-3"].Status; got != domain.AgentSessionRunning {
+		t.Fatalf("sess-3 status = %q, want running", got)
+	}
+}
+
+// TestRetryableFocusedSessionID_InSessionView verifies that retryableFocusedSessionID
+// returns the session ID when viewing a failed session in content.
+func TestRetryableFocusedSessionID_InSessionView(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app := newQuitTestApp(sessions)
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusContent
+	app.content.SetMode(ContentModeAgentSession)
+	app.content.sessionLog.SetLogPath("sess-failed", "/tmp/session.log")
+
+	id := app.retryableFocusedSessionID()
+	if id != "sess-failed" {
+		t.Fatalf("retryableFocusedSessionID = %q, want sess-failed", id)
+	}
+}
+
+// TestRetryableFocusedSessionID_InTaskSidebar verifies that retryableFocusedSessionID
+// returns the selected session ID when in task sidebar with a failed session selected.
+func TestRetryableFocusedSessionID_InTaskSidebar(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app := newQuitTestApp(sessions)
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusSidebar
+	app.sidebarMode = sidebarPaneTasks
+	app.setSelectedTaskSessionID("sess-failed")
+
+	id := app.retryableFocusedSessionID()
+	if id != "sess-failed" {
+		t.Fatalf("retryableFocusedSessionID = %q, want sess-failed", id)
+	}
+}
+
+// TestRetryableFocusedSessionID_NotFailed returns empty when session is not failed.
+func TestRetryableFocusedSessionID_NotFailed(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+	}
+	app := newQuitTestApp(sessions)
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusSidebar
+	app.sidebarMode = sidebarPaneTasks
+	app.setSelectedTaskSessionID("sess-running")
+
+	id := app.retryableFocusedSessionID()
+	if id != "" {
+		t.Fatalf("retryableFocusedSessionID = %q, want empty for non-failed session", id)
+	}
+}
+
+// TestRetryableFocusedSessionID_SessionsSidebar returns empty in sessions mode.
+func TestRetryableFocusedSessionID_SessionsSidebar(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
+	}
+	app := newQuitTestApp(sessions)
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusSidebar
+	app.sidebarMode = sidebarPaneSessions
+
+	id := app.retryableFocusedSessionID()
+	if id != "" {
+		t.Fatalf("retryableFocusedSessionID = %q, want empty in sessions sidebar mode", id)
+	}
+}
