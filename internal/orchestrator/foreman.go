@@ -91,9 +91,9 @@ func NewForeman(
 // feedback from the operator.
 func (f *Foreman) Start(ctx context.Context, planID string, followUpContext string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 
 	if f.session != nil {
+		f.mu.Unlock()
 		return nil // Already running
 	}
 
@@ -109,6 +109,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 	// Get plan with FAQ
 	plan, err := f.planSvc.GetPlan(ctx, planID)
 	if err != nil {
+		f.mu.Unlock()
 		return fmt.Errorf("get plan: %w", err)
 	}
 	f.workItemID = plan.WorkItemID
@@ -132,15 +133,19 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 
 	session, err := f.harness.StartSession(ctx, opts)
 	if err != nil {
+		f.mu.Unlock()
 		return fmt.Errorf("start foreman session: %w", err)
 	}
 
 	f.session = session
 
-	// Start the question processing loop
+	// Start the question processing loop.
+	// Defer unlock until after goroutine start to prevent the data race where
+	// run() reads f.session before acquiring the lock while Stop() writes it.
 	go f.run(ctx)
+	f.mu.Unlock()
 
-	// Publish EventForemanStarted
+	// Publish EventForemanStarted (after unlock; event publishing is thread-safe)
 	f.publishEvent(ctx, domain.EventForemanStarted, domain.ForemanEventPayload{
 		WorkItemID: plan.WorkItemID,
 		PlanID:     planID,
@@ -179,6 +184,17 @@ func (f *Foreman) Ask(ctx context.Context, q domain.Question) <-chan string {
 func (f *Foreman) run(ctx context.Context) {
 	f.wg.Add(1)
 	defer f.wg.Done()
+
+	// Acquire lock briefly to synchronize with Start/Stop.
+	// Start() holds the lock until after spawning this goroutine, and Stop()
+	// writes f.session under the lock. This ensures we observe f.session only
+	// after it is safely set, preventing the data race on f.session reads.
+	f.mu.Lock()
+	if f.session == nil {
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
 
 	for {
 		// Non-blocking priority check: drain questionFront before blocking.

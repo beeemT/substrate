@@ -23,6 +23,8 @@ var eventRetryBackoffs = []time.Duration{
 	100 * time.Millisecond,
 	time.Second,
 	5 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
 }
 
 // sqliteRetry retries transient transaction failures, including SQLite extended

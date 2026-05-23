@@ -56,10 +56,15 @@ func (r *ReviewFollowup) FollowUp(ctx context.Context, workItemID, feedback stri
 
 	// Get existing foreman to stop it
 	existingForeman := r.registry.GetForeman(workItemID)
-	if existingForeman != nil && existingForeman.IsRunning() {
-		if err := existingForeman.Stop(ctx); err != nil {
-			slog.Warn("failed to stop foreman before follow-up", "error", err)
+	if existingForeman != nil {
+		if existingForeman.IsRunning() {
+			if err := existingForeman.Stop(ctx); err != nil {
+				slog.Warn("failed to stop foreman before follow-up", "error", err)
+			}
 		}
+		// Deregister the old foreman to prevent goroutine leaks if Stop()
+		// failed or if Stop() returned before the goroutine fully exited.
+		r.registry.DeregisterForeman(workItemID)
 	}
 
 	// Create new foreman

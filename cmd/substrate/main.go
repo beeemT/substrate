@@ -22,13 +22,11 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
-	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/tui/views"
 	"github.com/beeemT/substrate/internal/tuilog"
-	"github.com/beeemT/substrate/internal/worktree"
 	"github.com/beeemT/substrate/migrations"
 )
 
@@ -85,17 +83,6 @@ type adapterSetup struct {
 	reviewComments *adapter.ReviewCommentDispatcher
 	warnings       []string
 	adapterErrors  chan views.AdapterErrorMsg
-}
-
-type orchestrationRuntime struct {
-	gitClient      *gitwork.Client
-	harnesses      app.AgentHarnesses
-	planning       *orchestrator.PlanningService
-	reviewPipeline *orchestrator.ReviewPipeline
-	foreman        *orchestrator.Foreman
-	implementation *orchestrator.ImplementationService
-	resumption     *orchestrator.Resumption
-	registry       orchestrator.SessionRegistry
 }
 
 func run() error {
@@ -608,79 +595,6 @@ func startRepoLifecycleRefresh(
 			refresher.StartMRRefresh(ctx, workspaceID)
 		}
 	}
-}
-
-func buildOrchestrationRuntime(
-	cfg *config.Config,
-	workspaceDir string,
-	services coreServices,
-	bus *event.Bus,
-) (orchestrationRuntime, error) {
-	gitClient := gitwork.NewClient("")
-	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
-	harnesses, err := app.BuildAgentHarnesses(cfg, workspaceDir)
-	if err != nil {
-		return orchestrationRuntime{}, fmt.Errorf("building agent harnesses: %w", err)
-	}
-
-	planningCfg := orchestrator.PlanningConfigFromConfig(cfg)
-	registry := orchestrator.NewSessionRegistry()
-	var planningSvc *orchestrator.PlanningService
-	if harnesses.Planning != nil {
-		planningSvc, err = orchestrator.NewPlanningService(
-			planningCfg, discoverer, gitClient, harnesses.Planning,
-			services.plan, services.workItem, services.session, bus, services.workspace, registry, services.question, cfg,
-		)
-		if err != nil {
-			slog.Warn("failed to build planning service; planning unavailable", "err", err)
-		}
-	}
-
-	var reviewPipeline *orchestrator.ReviewPipeline
-	if harnesses.Review != nil {
-		reviewPipeline = orchestrator.NewReviewPipeline(
-			cfg, harnesses.Review, services.review, services.session, services.plan, services.workItem,
-			bus, registry,
-		)
-	}
-
-	var foreman *orchestrator.Foreman
-	if harnesses.Foreman != nil {
-		foreman = orchestrator.NewForeman(
-			cfg, harnesses.Foreman, services.plan, services.question, services.session, bus,
-		)
-	}
-
-	var implementationSvc *orchestrator.ImplementationService
-	if harnesses.Implementation != nil {
-		hookRegistry := worktree.NewHookRegistry()
-		implementationSvc = orchestrator.NewImplementationService(
-			cfg, harnesses.Implementation, gitClient, bus,
-			services.plan, services.workItem, services.session, services.workspace, registry,
-			reviewPipeline,
-			harnesses.Foreman, services.question,
-			services.review,
-			hookRegistry,
-		)
-	}
-
-	var resumption *orchestrator.Resumption
-	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(
-			harnesses.Resume, services.session, services.plan, services.workItem, bus, registry, nil,
-		)
-	}
-
-	return orchestrationRuntime{
-		gitClient:      gitClient,
-		harnesses:      harnesses,
-		planning:       planningSvc,
-		reviewPipeline: reviewPipeline,
-		foreman:        foreman,
-		implementation: implementationSvc,
-		resumption:     resumption,
-		registry:       registry,
-	}, nil
 }
 
 // initializeGlobalConfig creates the default config.yaml file.
