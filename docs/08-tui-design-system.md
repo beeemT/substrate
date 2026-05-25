@@ -78,7 +78,7 @@ Tool cards use state-aware callout chrome — running state while in progress, t
 
 ### Overlays
 
-Session history search, the unified work browser, help, workspace initialization, log viewer, add repository, confirm dialogs, duplicate-session dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
+Session history search, the unified work browser, action menu, workspace initialization, log viewer, add repository, confirm dialogs, duplicate-session dialogs, and toasts share overlay framing, divider behavior, and focused/unfocused pane styling.
 
 Overlay and modal styling uses transparent backgrounds. See `internal/tui/AGENTS.md` for the full rule set covering ANSI-reset propagation and inter-pane separator constraints.
 

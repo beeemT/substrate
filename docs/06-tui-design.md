@@ -2,7 +2,7 @@
 
 <!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
 
-The Substrate terminal interface is built with Bubble Tea and lipgloss. The top-level app owns: left sidebar pane, right content pane, single footer/status row, centered overlays (work browser, session-history, workspace init, help), full-screen settings page, and a toast stack rendered over the shell.
+The Substrate terminal interface is built with Bubble Tea and lipgloss. The top-level app owns: left sidebar pane, right content pane, single footer/status row, centered overlays (work browser, session-history, workspace init, action menu), full-screen settings page, and a toast stack rendered over the shell.
 
 ---
 
@@ -34,7 +34,7 @@ Press `→` to drill into `{externalID} · Tasks`: work-item overview, optional 
 
 **Status icons:** `●` running/active (green), `◐` pending human action (amber — plan review, open question, or PR with changes requested), `✓` completed (dim green — also `merged` with label distinguishing), `⊘` interrupted (amber), `✗` failed (red — also when any PR has failing CI), `◌` inactive/default (muted).
 
-**Keys:** `↑`/`↓` navigate; `→` drill in / move to content; `←`/`Esc` go back; `d` delete work item; `/` session-history; `n` work browser; `a` add repository; `s` settings; `x` actions; `q` quit.
+**Keys:** `↑`/`↓` navigate; `→` drill in / move to content; `←`/`Esc` go back; `d` delete work item; `/` session-history; `n` work browser; `a` add repository; `s` settings; `x` action menu; `q` quit.
 
 **Filters/sort:** `Ctrl+F` cycles filter (All, Active, Needs Attention, Completed); `Ctrl+G` cycles grouping (flat, by status, by source); `Ctrl+D` toggles sort. Active filter/direction shown below title.
 
@@ -79,16 +79,16 @@ Full reconstructed plan in a scrollable viewport: YAML block, orchestrator secti
 │ ## Orchestration                                               │
 │ ## SubPlan: shared-lib  Goal: Ship rate limiter primitives.    │
 │ ─────────────────────────────────────────────────────────────  │
-│ [a] Approve  [c] Request changes  [e] Edit  [r] Reject  [↑↓]  │
+│ [a] Approve  [c] Copy  [e] Edit  [i] Request changes  [↑↓] │
 ```
 
 - `[a]` **Approve** — triggers implementation.
-- `[c]` **Request changes** — opens plan overlay with inline feedback. `Enter` spawns a new planning session with plan and feedback embedded.
+- `[c]` **Copy** — copies plan to clipboard.
 - `[e]` **Edit in $EDITOR** — opens plan markdown in `$EDITOR`. Re-parsed and re-validated on exit.
-- `[r]` **Reject** — inline rejection input. `Enter` returns work item to `Ingested`.
+- `[i]` **Request changes** — opens plan overlay with inline feedback. `Enter` spawns a new planning session with plan and feedback embedded.
 - `[i]` **Inspect** — read-only full plan overlay. Available from planning and completed work items.
 
-**Keys:** `↑`/`↓` scroll, `a` approve, `c` changes, `e` edit, `i` inspect, `r` reject.
+**Keys:** `↑`/`↓` scroll, `a` approve, `c` copy, `e` edit, `i` request changes / inspect.
 
 ### 2c. Session Interaction Mode
 
@@ -219,7 +219,63 @@ Footer hints are focus-sensitive. Tree view: navigation, expand/collapse, focus 
 
 **Add Repository (`a`):** Browse and clone remote repositories. Three focus areas: controls (search input, source cycling), repo list, details pane. Sources: GitHub, GitLab, Manual (URL input). Server-side search filtering. Cloning creates a git-work managed repository. `Tab`/`Shift-Tab` cycle focus; `↑`/`↓` navigate list; `Enter` clone; `Esc` close.
 
-### 3f. Review-Comment Follow-Up (`f`)
+### 3f. Action Menu (`x`)
+
+A unified action menu replaces the old help overlay. Triggered by `x` from any non-modal context, it displays all available actions for the current context sorted by priority with fuzzy search filtering.
+
+**Structure:**
+- Flat list sorted by priority (lower = higher priority)
+- Fuzzy search bar at top, filters on keystroke
+- Keyboard shortcuts right-aligned at end of each row
+- Unavailable actions are omitted entirely (no dimmed/disabled states)
+- Cursor starts at highest priority action
+
+**Priority ranges by category:**
+
+| Range | Category |
+|-------|----------|
+| 10-99 | Global actions |
+| 100-199 | Overview |
+| 200-299 | Plan Review |
+| 300-399 | Session Log |
+| 400-409 | Question |
+| 410-429 | Interrupted |
+| 430-479 | Reviewing |
+| 480-499 | Completed |
+| 500-599 | Review Followup |
+| 600-649 | Artifacts |
+| 650-679 | Repo Manager |
+| 680-739 | New Session |
+| 740-749 | New Session Autonomous |
+| 750-779 | Add Repo |
+| 780-839 | Settings |
+| 840-849 | Logs |
+| 850-869 | Session Search |
+| 870-889 | Source Items Overlay |
+| 890-909 | Overview Links Overlay |
+| 910-929 | Workspace Init |
+| 930-979 | Source Details |
+
+**Global actions (priority 10-99):**
+
+| Priority | Action | Shortcut | Condition |
+|----------|--------|----------|-----------|
+| 10 | New session | `n` | Always |
+| 11 | New autonomous session | `A` | Always |
+| 20 | Open repo manager | `R` | Always |
+| 30 | Open settings | `s` | Always |
+| 40 | Open logs | `L` | Always |
+| 50 | Search sessions | `/` | Always |
+| 60 | Delete session | `d` | Session selected |
+| 70 | Archive/Unarchive session | `a` | Context-dependent |
+| 80 | Interrupt sessions | `I` | Sessions selected |
+| 90 | Quit | `q` | Always |
+
+**Keys:** `↑`/`↓` navigate matches; `Enter` execute; `Esc` close and return to previous context; typing filters the list; `Backspace` deletes from query.
+
+**Text input preservation:** When a text input or `GrowingTextArea` is focused, `x` is typed literally rather than opening the action menu.
+
+### 3g. Review-Comment Follow-Up (`f`)
 
 Triggered from artifacts view when work item is `SessionCompleted` or `SessionReviewing`. Turns unresolved PR/MR review comments into agent follow-up work.
 
@@ -255,7 +311,7 @@ Shell geometry is shared across views: sidebar and content panes share pane chro
 
 | Key | Action | Scope |
 |-----|--------|-------|
-| `j`/`k` or `↑`/`↓` | Navigate / scroll | Sidebar, lists, viewport |
+| `↑`/`↓` | Navigate / scroll | Sidebar, lists, viewport |
 | `Tab` | Cycle repos / panels | Implementing mode |
 | `g`/`G` | Top / bottom | Lists |
 | Mouse scroll | Scroll | Viewports and lists |
@@ -264,7 +320,7 @@ Shell geometry is shared across views: sidebar and content panes share pane chro
 | `f` | Follow-up re-plan | Completed overview |
 | `a` | Add Repository | Main shell |
 | `i` | Inspect plan | Plan review, overview |
-| `x` | Actions | Global |
+| `x` | Action menu | Global |
 | `s` | Settings | Global |
 | `L` | Logs | Global |
 | `d` | Delete | Contextual |
