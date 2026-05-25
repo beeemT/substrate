@@ -37,9 +37,8 @@ stateDiagram-v2
     [*] --> Draft: PlanCreated
     Draft --> PendingReview: persisted and submitted for review
     PendingReview --> Approved: human approves
-    PendingReview --> Revising: human requests changes
+    PendingReview --> Draft: human requests changes (new planning session starts)
     PendingReview --> Rejected: human rejects
-    Revising --> PendingReview: revised plan parsed and persisted
     Rejected --> [*]: work item returns to ingested
     Approved --> [*]: PlanApproved
 ```
@@ -86,7 +85,7 @@ The Foreman handles unresolved questions during implementation. It is a persiste
 - High confidence → auto-answer and append to FAQ
 - Uncertain → persist proposed answer for UI pre-fill; human reviews and may iterate with the Foreman before approving; approved answer replies to the blocked agent and appends to FAQ
 
-**Answer timeout.** A configurable timeout governs answer delivery. If no answer arrives within the window, the answer treats as uncertain and escalates directly to the human.
+**Answer timeout.** A configurable timeout governs answer delivery. If no answer arrives within the window, the Foreman re-queues the question to the priority front and restarts the Foreman session with current plan and FAQ. If repeated immediate restarts imply the question no longer fits in the usable context window, escalate directly to the human.
 
 **Recovery.** If the Foreman dies while answering: re-queue the in-flight question at priority front, restart the Foreman with current plan and FAQ, deliver the re-queued question first. If repeated immediate restarts imply the question no longer fits in the usable context window, escalate directly to the human.
 

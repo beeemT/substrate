@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
@@ -72,6 +74,7 @@ func (tp *testProvider) ReviewComments() *adapter.ReviewCommentDispatcher {
 	return tp.svcs.ReviewComments
 }
 func (tp *testProvider) StartupWarnings() []string { return tp.svcs.StartupWarnings }
+func (tp *testProvider) Close(ctx context.Context) { tp.svcs.Close(ctx) }
 
 // newTestApp creates an App for testing with a testProvider wrapping svcs.
 func newTestApp(svcs Services) *App {

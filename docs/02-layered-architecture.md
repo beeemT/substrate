@@ -105,8 +105,8 @@ Services that emit events:
 | Service | Events |
 |---|---|
 | Session service | work-item state transitions |
-| Task service | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
-| Plan service | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
+| AgentSession service | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+| Plan service | `plan.submitted`, `plan.approved`, `plan.rejected`, `plan.revised`, `plan.superseded`, `subplan.started`, `subplan.completed`, `subplan.failed` |
 
 ## 4. Orchestration Layer
 

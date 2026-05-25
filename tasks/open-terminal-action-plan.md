@@ -16,7 +16,9 @@ Additionally, this plan introduces a **unified split-list picker component** tha
 
 ### 1.1 New Package: `internal/terminal/`
 
-Create `internal/terminal/detect.go` and `internal/terminal/open.go`.
+Create two files:
+- `internal/terminal/detect.go` — terminal type enum, detection, and remote-control helpers
+- `internal/terminal/open.go` — nonblocking terminal opening logic
 
 ### 1.2 Terminal Detection
 
@@ -160,9 +162,21 @@ func OpenTerminalWithCmd(dir string, termType terminal.TerminalType) tea.Cmd {
 }
 ```
 
-### 2.2 Delete Unsafe Shell Escaping for Terminal Launches
+### 2.2 Replace Unsafe Shell Escaping with Proper AppleScript Quoting
 
-Do not reuse the current `shellEscape` helper for terminal AppleScript. It only escapes double quotes and is not safe for shell `cd` commands. Terminal/iTerm AppleScript must use AppleScript/POSIX quoting (`quoted form of POSIX path ...`) or pass the working directory as a process argument where the terminal supports it. Delete `shellEscape` if no other code uses it after the terminal package cutover.
+The current `shellEscape` helper (cmds.go:1182-1185) only escapes double quotes and is not safe for shell `cd` commands. After the terminal package cutover, delete `shellEscape` since it has no other callers.
+
+Terminal/iTerm AppleScript must use AppleScript's `quoted form of POSIX path` instead:
+
+```applescript
+-- OLD (unsafe — loses spaces, special chars in path)
+do script "cd %s"
+
+-- NEW (safe — AppleScript handles all quoting)
+do script "cd " & quoted form of POSIX path "%s"
+```
+
+The `internal/terminal/open.go` implementation must use `quoted form of POSIX path` for all AppleScript-based terminal openers (Terminal.app, iTerm2).
 
 ## 3. Shared Split-List Picker Component
 
@@ -453,8 +467,11 @@ Initialization, resizing, key routing, message routing, closing, and rendering m
 
 2. ManagedReposLoadedMsg received
    └─ App updates workspace slug cache
-   └─ App routes the message to WorktreePickerOverlay when activeOverlay == overlayWorktreePicker
-   └─ Overlay populates repoList and fires LoadWorktreesCmd for the selected repo
+   └─ App routes the message based on activeOverlay:
+       - If activeOverlay == overlayWorktreePicker → forward to WorktreePickerOverlay
+       - If activeOverlay == overlayAddRepo → forward to AddRepoOverlay (via SetPresentSlugs)
+       - Otherwise → only update managedRepoSlugs; repoManager is idle
+   └─ WorktreePickerOverlay populates repoList and fires LoadWorktreesCmd for the selected repo
 
 3. User navigates repo list
    └─ On index change: LoadWorktreesCmd(..., WorktreeLoadTargetPicker)
@@ -466,6 +483,8 @@ Initialization, resizing, key routing, message routing, closing, and rendering m
    └─ Overlay returns OpenTerminalInWorktreeMsg
       └─ App closes the overlay and runs OpenTerminalCmd(path)
 ```
+
+**Note:** `ManagedReposLoadedMsg` does not need a `Target` field because its routing is determined by which overlay is currently active (`activeOverlay`), not by the message itself. This differs from `WorktreesLoadedMsg` which may arrive asynchronously after the originating overlay has closed.
 
 ### 5.6 Worktree Loading (Reuse Existing Pattern, Scoped)
 
@@ -593,7 +612,7 @@ if hasThinkingBlocks(m.entries) {
 }
 ```
 
-Also update `overlay_help.go`, `action_menu.go`, and `app_open_terminal_test.go` so displayed shortcuts and tests match the new keymap.
+Also update `action_menu.go` and `app_open_terminal_test.go` so displayed shortcuts and tests match the new keymap.
 
 ## 8. Worktree Picker Message Flow
 
@@ -618,6 +637,31 @@ case OpenTerminalInWorktreeMsg:
     a.activeOverlay = overlayNone
     a.worktreePicker.Close()
     return a, OpenTerminalCmd(msg.WorktreePath)
+
+case ManagedReposLoadedMsg:
+    // Update the workspace slug cache for clone dedup.
+    if msg.Err == nil {
+        slugs := make(map[string]bool, len(msg.Repos))
+        for _, r := range msg.Repos {
+            if r.RemoteURL != "" {
+                slugs[strings.ToLower(r.RemoteURL)] = true
+            }
+        }
+        a.managedRepoSlugs = slugs
+    }
+    // Route to the active overlay that cares about managed repos.
+    switch a.activeOverlay {
+    case overlayWorktreePicker:
+        var pickerCmd tea.Cmd
+        a.worktreePicker, pickerCmd = a.worktreePicker.Update(msg)
+        return a, pickerCmd
+    case overlayAddRepo:
+        a.addRepoOverlay.SetPresentSlugs(a.managedRepoSlugs)
+    // overlayRepoManager and overlayNone: repoManager.Update(msg) is called
+    // unconditionally at the top of App.Update before this switch, so no
+    // explicit forwarding is needed here.
+    }
+    return a, nil
 
 case WorktreesLoadedMsg:
     switch msg.Target {
@@ -666,12 +710,11 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 ## 10. Implementation Order
 
 ### Phase 1: Terminal Package (Foundation)
-1. Create `internal/terminal/types.go` — terminal type enum
-2. Create `internal/terminal/detect.go` — terminal detection
-3. Create `internal/terminal/open.go` — nonblocking/detached terminal opening logic
-4. Update `OpenTerminalCmd` in `cmds.go` to use new terminal package
-5. Delete unsafe terminal `shellEscape` usage
-6. Test command construction for each terminal type
+1. Create `internal/terminal/detect.go` — terminal type enum, `Detect()`, and `KittyRemoteControlTargetAvailable()`
+2. Create `internal/terminal/open.go` — nonblocking/detached terminal opening logic with proper AppleScript quoting
+3. Update `OpenTerminalCmd` in `cmds.go` to use new terminal package
+4. Delete `shellEscape` from `cmds.go` (has no other callers after cutover)
+5. Test command construction for each terminal type
 
 ### Phase 2: SplitListPicker Component
 1. Create `internal/tui/components/split_list_picker.go`
@@ -838,9 +881,8 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 
 | File | Change |
 |------|--------|
-| `internal/terminal/detect.go` | **NEW** — terminal detection |
-| `internal/terminal/open.go` | **NEW** — terminal opening |
-| `internal/terminal/types.go` | **NEW** — `TerminalType` enum |
+| `internal/terminal/detect.go` | **NEW** — terminal type enum, detection, and remote-control helpers |
+| `internal/terminal/open.go` | **NEW** — terminal opening with proper AppleScript quoting |
 | `internal/tui/components/split_list_picker.go` | **NEW** — shared focus/layout picker component |
 | `internal/tui/components/split_list_picker_test.go` | **NEW** — component tests |
 | `internal/tui/views/overlay_repo_manager.go` | **REFACTOR** — use `SplitListPicker` |
@@ -849,7 +891,7 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 | `internal/tui/views/app.go` | **MODIFY** — add `overlayWorktreePicker` enum, overlay field, size/key/message routing, render branch |
 | `internal/tui/views/cmds.go` | **MODIFY** — update `OpenTerminalCmd` to use terminal package |
 | `internal/tui/views/msgs.go` | **MODIFY** — add `OpenWorktreePickerMsg`, `OpenTerminalInWorktreeMsg`, scoped worktree load target |
-| `internal/tui/views/overlay_help.go` | **MODIFY** — add new keyboard shortcuts |
+
 
 ---
 

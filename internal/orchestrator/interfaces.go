@@ -39,6 +39,11 @@ type SessionRegistry interface {
 	RegisterForeman(workItemID string, foreman *Foreman)
 	GetForeman(workItemID string) *Foreman
 	DeregisterForeman(workItemID string)
+
+	// Close shuts down all registered sessions and foremen.
+	// Called during application shutdown. Uses durableCleanupContext internally
+	// to ensure graceful shutdown completes even if the provided context is cancelled.
+	Close(ctx context.Context)
 }
 
 // ============================================================================

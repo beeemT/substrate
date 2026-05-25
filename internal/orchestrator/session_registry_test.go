@@ -232,3 +232,61 @@ func TestSessionRegistry_AbortAndDeregister_Idempotent(t *testing.T) {
 	// Second call is a no-op (not registered anymore).
 	reg.AbortAndDeregister(context.Background(), "sess-1")
 }
+
+func TestSessionRegistry_Close_AbortsSessions(t *testing.T) {
+	reg := NewSessionRegistry()
+
+	// Register multiple sessions.
+	session1 := &registryMockSession{id: "sess-1"}
+	session2 := &registryMockSession{id: "sess-2"}
+	reg.Register("sess-1", session1)
+	reg.Register("sess-2", session2)
+
+	// Close should abort all sessions.
+	reg.Close(context.Background())
+
+	if !session1.wasAborted() {
+		t.Error("expected session1 to be aborted")
+	}
+	if !session2.wasAborted() {
+		t.Error("expected session2 to be aborted")
+	}
+
+	// After Close, registry should be empty.
+	if reg.IsRunning("sess-1") {
+		t.Error("expected session1 to be deregistered after Close")
+	}
+	if reg.IsRunning("sess-2") {
+		t.Error("expected session2 to be deregistered after Close")
+	}
+}
+
+func TestSessionRegistry_Close_Idempotent(t *testing.T) {
+	reg := NewSessionRegistry()
+
+	// Calling Close on empty registry should not panic.
+	reg.Close(context.Background())
+	reg.Close(context.Background())
+}
+
+func TestSessionRegistry_Close_AfterPartialAbort(t *testing.T) {
+	reg := NewSessionRegistry()
+
+	session1 := &registryMockSession{id: "sess-1"}
+	session2 := &registryMockSession{id: "sess-2"}
+	reg.Register("sess-1", session1)
+	reg.Register("sess-2", session2)
+
+	// Partially abort one session.
+	reg.AbortAndDeregister(context.Background(), "sess-1")
+
+	// Close should abort remaining session.
+	reg.Close(context.Background())
+
+	if !session1.wasAborted() {
+		t.Error("expected session1 to be aborted")
+	}
+	if !session2.wasAborted() {
+		t.Error("expected session2 to be aborted")
+	}
+}

@@ -1138,7 +1138,7 @@ func TestSettingsPage_KeyboardScrollPastEndDoesNotJumpToTop(t *testing.T) {
 	// Move down field by field to the bottom.
 	current := page
 	for range 200 {
-		next, _ := current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, Services{})
+		next, _ := current.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
 		if next.sectionCursor == current.sectionCursor && next.fieldCursor == current.fieldCursor {
 			current = next
 
@@ -1153,7 +1153,7 @@ func TestSettingsPage_KeyboardScrollPastEndDoesNotJumpToTop(t *testing.T) {
 	bottomField := current.fieldCursor
 
 	// One more down should not jump to top.
-	after, _ := current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, Services{})
+	after, _ := current.Update(tea.KeyMsg{Type: tea.KeyDown}, Services{})
 	if after.mainViewport.YOffset == 0 && bottomOffset > 0 {
 		t.Fatalf("keyboard scroll past end jumped to top: offset went from %d to 0", bottomOffset)
 	}

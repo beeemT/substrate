@@ -27,6 +27,7 @@ Events are organized by domain area. Constants follow a `category.action` naming
 
 - `worktree.creating` — gate event; pre-hook enforced before checkout
 - `worktree.created` — checkout completed
+- `worktree.status_changed` — worktree status changed (e.g., dirty, clean)
 - `worktree.reused` — branch already existed; worktree reused without recreation
 - `worktree.removed` — worktree deleted
 
@@ -46,9 +47,11 @@ Events are organized by domain area. Constants follow a `category.action` naming
 
 - `plan.generated` — orchestrator produced a draft plan
 - `plan.submitted` — plan submitted for review
+- `plan.status_changed` — plan status transitioned (e.g., pending→approved)
 - `plan.approved` — human approved the plan
 - `plan.rejected` — human rejected the plan
 - `plan.revised` — plan regenerated after rejection
+- `plan.superseded` — plan replaced by a new version
 - `plan.failed` — plan generation failed
 - `subplan.started` — sub-plan execution began
 - `subplan.completed` — sub-plan execution completed
@@ -73,6 +76,8 @@ Events are organized by domain area. Constants follow a `category.action` naming
 - `review.completed`
 - `review.critiques_found`
 - `review.artifact_recorded` — PR/MR link recorded by tracker adapter
+- `review_cycle.status_changed` — review cycle transitioned (e.g., reimplementation triggered)
+- `critique.status_changed` — individual critique status changed
 - `reimplementation.started`
 
 ### PR/MR
@@ -80,10 +85,13 @@ Events are organized by domain area. Constants follow a `category.action` naming
 - `pr.review_state_changed` — reviewer state transition detected by refresh loop
 - `pr.ci_failed` — CI check transitioned to failure
 - `pr.merged` — all linked PRs/MRs merged
+- `question.status_changed` — question state transitioned (e.g., pending→answered, pending→escalated)
 
 ### Adapter
 
 - `adapter.error` — adapter handler failed after retries
+- `foreman.started` — Foreman session started
+- `foreman.stopped` — Foreman session stopped
 
 ---
 

@@ -3631,15 +3631,18 @@ func (a *App) applyReviewAddressDispatchResult(msg ReviewAddressDispatchResultMs
 	return tea.Batch(cmds...)
 }
 
-// teardownAllPipelines cancels every active pipeline context, stops all
-// Foremen, and aborts all sessions tracked by the registry. This is the
-// shared teardown path for both quit and (potentially) batch-delete.
+// teardownAllPipelines cancels every active pipeline context and shuts
+// down all services. This is the shared teardown path for both quit and
+// (potentially) batch-delete.
 func (a *App) teardownAllPipelines() {
+	// Cancel all pipeline contexts first. This signals orchestrator goroutines
+	// to stop before we shut down the services they depend on.
 	for id, cancel := range a.pipelineCancels {
 		cancel()
 		delete(a.pipelineCancels, id)
 	}
 
+	// Stop autonomous mode runtime.
 	if runtime := a.newSessionAutonomous; runtime != nil {
 		if stopErr := runtime.Stop(); stopErr != nil {
 			slog.Warn("failed to stop new session autonomous runtime on teardown", "error", stopErr)
@@ -3649,32 +3652,9 @@ func (a *App) teardownAllPipelines() {
 	a.newSessionAutonomousChan = nil
 	a.syncNewSessionFilterOverlays()
 
-	// Stop all foremen registered in the registry.
-	if a.provider.SessionRegistry() != nil {
-		// Get all work item IDs with registered foremen
-		// We need to iterate over the work items that have foremen registered.
-		// Since we don't have a direct way to list all foremen, we'll stop
-		// foremen for all work items that have active sessions.
-		for _, agentSession := range a.sessions {
-			if foreman := a.provider.SessionRegistry().GetForeman(agentSession.WorkItemID); foreman != nil {
-				if foreman.IsRunning() {
-					if stopErr := foreman.Stop(context.Background()); stopErr != nil {
-						slog.Warn("failed to stop foreman on teardown", "error", stopErr, "work_item_id", agentSession.WorkItemID)
-					}
-				}
-				a.provider.SessionRegistry().DeregisterForeman(agentSession.WorkItemID)
-			}
-		}
-	}
-
-	if a.provider.SessionRegistry() != nil {
-		for _, agentSession := range a.sessions {
-			switch agentSession.Status {
-			case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
-				a.provider.SessionRegistry().AbortAndDeregister(context.Background(), agentSession.ID)
-			}
-		}
-	}
+	// Shut down all services: stops foremen, aborts sessions, closes refresh
+	// goroutines, and closes the event bus.
+	a.provider.Close(context.Background())
 }
 
 // handleQuitRequest checks for running agent sessions and shows a confirmation

@@ -63,7 +63,7 @@ Substrate is validated across three categories:
 - Event-bus partial delivery occurs when some subscribers have already received an event before a retry-after condition; idempotent consumers mitigate this but it cannot be eliminated.
 - SQLite under concurrent writes may exhibit contention; retry behavior must be tuned and monitored.
 - External tool output format drift in bridges or CLIs can break harness session parsing without immediate failure.
-- The foreman question timeout defaults to zero (documented as indefinite) but the runtime falls back to 60 seconds; this mismatch may surprise users.
+- The foreman question timeout defaults to zero (indefinite wait) when `QuestionTimeout` is "0" or empty. The configured value is used directly otherwise; there is no hardcoded fallback.
 
 ## Known Gaps
 

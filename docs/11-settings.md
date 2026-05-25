@@ -26,16 +26,16 @@ Full-screen configuration covering commit strategy, planning, review, Foreman, h
 ### Tree Focus
 | Key | Action |
 |-----|--------|
-| `↑↓` or `jk` | Navigate sections |
-| `→` / `l` | Expand / focus fields |
-| `←` / `h` | Collapse / parent |
+| `↑` / `↓` | Navigate sections |
+| `→` | Expand / focus fields |
+| `←` | Collapse / parent |
 | `Enter` | Focus fields |
 | `Esc` | Close (confirms if dirty) |
 
 ### Field Focus
 | Key | Action |
 |-----|--------|
-| `↑↓` or `jk` | Navigate fields |
+| `↑` / `↓` | Navigate fields |
 | `Enter` / `e` | Edit field |
 | `Space` | Toggle boolean |
 | `←` / `Esc` | Return to tree |

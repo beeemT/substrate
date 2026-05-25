@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/event"
@@ -15,6 +17,11 @@ import (
 type ServiceProvider interface {
 	// Internal: returns the underlying Services struct
 	GetServices() *Services
+
+	// Close shuts down the service graph: stops foremen, aborts sessions,
+	// stops refresh goroutines, and closes the event bus.
+	// Safe to call even if Init has not been called.
+	Close(ctx context.Context)
 
 	// Domain services
 	Session() *service.SessionService

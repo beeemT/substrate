@@ -4,7 +4,7 @@
 Current domain types, state machines, and relationship rules for Substrate.
 This document describes repository HEAD, not earlier naming.
 
-User-facing copy still says "work item" and "session history" in places. Internally, the persisted root aggregate is `domain.Session`, and a repo-scoped agent run is `domain.Task`.
+User-facing copy still says "work item" and "session history" in places. Internally, the persisted root aggregate is `domain.Session`, and a repo-scoped agent run is `domain.AgentSession`.
 
 ---
 

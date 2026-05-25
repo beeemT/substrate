@@ -59,7 +59,7 @@ On `plan.approved`, the adapter posts the approved plan as a comment on the sour
 
 **GitHub** — The only dual-role adapter (both `WorkItemAdapter` and `RepoLifecycleAdapter`). Supports browsing and watching issues and milestones. Watch polls assigned open issues. `plan.approved` posts plan comments and moves the primary issue to `in_progress`. Repository lifecycle handles worktree creation, reuse, and completion events.
 
-**Sentry** — A source-only adapter: it browses and watches Sentry issues during session creation but does not update state, post comments, or participate in repository lifecycle automation. It does not support projects, initiatives, mutations, or any worktree/PR/MR automation. Treat it as read-only.
+**Sentry** — A source-only adapter: it browses and watches Sentry issues during session creation but does not update state, post comments, or participate in repository lifecycle automation. It does not support projects, initiatives, mutations, or any worktree/PR/MR automation. Watch polls assigned issues with exponential backoff on rate limits. Treat it as read-only.
 
 ---
 

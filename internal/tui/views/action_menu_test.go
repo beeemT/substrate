@@ -24,6 +24,13 @@ func TestFuzzyMatch(t *testing.T) {
 		{"fuzzy characters partial", "n s", "New session", true},
 		{"non-matching", "xyz", "New session", false},
 		{"full label match", "New session", "New session", true},
+		// Unicode tests
+		{"unicode exact match", "añol", "añol", true},
+		{"unicode fuzzy match", "añol", "Español", true},
+		{"unicode partial fuzzy", "añol", "El español", true},
+		{"unicode non-match", "xyz", "añol", false},
+		{"emoji test", "start", "🚀 Start session", true},
+		{"unicode label case insensitive", "ano", "Español", false}, // ñ != n, so no match
 	}
 
 	for _, tt := range tests {

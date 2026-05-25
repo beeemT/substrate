@@ -248,8 +248,13 @@ func (m *QuestionModel) refreshViewportContent(reset bool) {
 
 func (m QuestionModel) renderHeader() string {
 	stageLabel := "Implementing"
-	if m.question.Stage == domain.AgentSessionPhasePlanning {
+	switch m.question.Stage {
+	case domain.AgentSessionPhasePlanning:
 		stageLabel = "Planning"
+	case domain.AgentSessionPhaseReview:
+		stageLabel = "Review"
+	case domain.AgentSessionPhaseManual:
+		stageLabel = "Manual"
 	}
 
 	return components.RenderHeaderBlock(m.styles, components.HeaderBlockSpec{

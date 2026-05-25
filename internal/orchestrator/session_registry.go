@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
 )
@@ -135,4 +136,47 @@ func (r *sessionRegistry) DeregisterForeman(workItemID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.foremen, workItemID)
+}
+
+const registryCloseTimeout = 30 * time.Second
+
+// Close stops all foremen and aborts all sessions.
+// It uses a durable context (ignores parent cancellation, has 30s timeout)
+// to ensure graceful shutdown completes even if the app is exiting.
+func (r *sessionRegistry) Close(ctx context.Context) {
+	// Create a durable context that survives parent cancellation.
+	stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), registryCloseTimeout)
+	defer stopCancel()
+
+	r.mu.Lock()
+	// Copy foremen map to avoid holding lock during Stop calls.
+	foremen := make(map[string]*Foreman, len(r.foremen))
+	for k, v := range r.foremen {
+		foremen[k] = v
+	}
+	// Copy sessions map for same reason.
+	sessions := make(map[string]adapter.AgentSession, len(r.sessions))
+	for k, v := range r.sessions {
+		sessions[k] = v
+	}
+	// Clear maps immediately so subsequent calls see empty state.
+	r.foremen = make(map[string]*Foreman)
+	r.sessions = make(map[string]adapter.AgentSession)
+	r.mu.Unlock()
+
+	// Stop all foremen.
+	for workItemID, foreman := range foremen {
+		if foreman.IsRunning() {
+			if err := foreman.Stop(stopCtx); err != nil {
+				slog.Warn("foreman stop during registry close", "work_item_id", workItemID, "err", err)
+			}
+		}
+	}
+
+	// Abort all sessions.
+	for sessionID, session := range sessions {
+		if err := session.Abort(stopCtx); err != nil {
+			slog.Warn("session abort during registry close", "agent_session_id", sessionID, "err", err)
+		}
+	}
 }

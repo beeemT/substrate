@@ -105,7 +105,7 @@ type ReviewRequest struct {
 }
 ```
 
-`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core and runs exactly one review cycle. It must not load `TaskPlan`/`Plan` itself, and it must not enforce `max_cycles` or `auto_feedback_loop`; those guards live in the implementation and planning outer loops. Keep a compatibility wrapper for implementation call sites if useful:
+`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core and runs exactly one review cycle. It must not load `TaskPlan`/`Plan` itself, and it must not enforce `max_cycles` or `auto_feedback_loop`; those guards live in the implementation and planning outer loops. **Note:** The existing `ReviewSession` implementation at `internal/orchestrator/review.go:79-93` currently enforces `max_cycles` — this enforcement must be actively removed from the extracted one-shot runner. Keep a compatibility wrapper for implementation call sites if useful:
 
 ```go
 func (p *ReviewPipeline) ReviewImplementationSession(ctx context.Context, agentSession domain.AgentSession) (*ReviewResult, error)

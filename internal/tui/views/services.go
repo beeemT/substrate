@@ -1,6 +1,8 @@
 package views
 
 import (
+	"context"
+
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
@@ -75,4 +77,26 @@ func (s Services) ForemanHarness() adapter.AgentHarness {
 	}
 
 	return nil
+}
+
+// Close shuts down all services and resources owned by the service graph.
+// It stops all foremen, aborts all sessions, calls refresh goroutine stoppers,
+// and closes the event bus.
+func (s Services) Close(ctx context.Context) {
+	// Close session registry: stops all foremen and aborts all sessions.
+	if s.SessionRegistry != nil {
+		s.SessionRegistry.Close(ctx)
+	}
+
+	// Stop all PR/MR refresh goroutines.
+	for _, stop := range s.RefreshStoppers {
+		if stop != nil {
+			stop()
+		}
+	}
+
+	// Close the event bus.
+	if s.Bus != nil {
+		s.Bus.Close()
+	}
 }

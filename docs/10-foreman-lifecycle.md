@@ -2,7 +2,7 @@
 
 <!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
 
-> **Status:** The orchestrator layer fully owns the Foreman lifecycle. The TUI never directly owns or controls Foreman instances.
+> **Status:** The orchestrator layer fully owns the Foreman lifecycle. The TUI never directly owns or controls Foreman instances. Service providers expose `Close(context.Context)` which stops all foremen, aborts sessions, and closes the event bus.
 
 ---
 
@@ -73,7 +73,7 @@ Every answered question is appended to the plan FAQ so later sessions and review
 
 ## 5. Answer Timeout
 
-If no proposed answer arrives within a configurable window (default 60 seconds), the answer is treated as uncertain and escalated to the human immediately. This prevents a blocked Foreman from stalling the work item.
+If no proposed answer arrives within a configurable window (default 0 = indefinite wait), the Foreman re-queues the question to the priority front and restarts the Foreman session with current plan and FAQ. If repeated immediate restarts suggest the question no longer fits in the usable context window, escalate directly to the human. This prevents a blocked Foreman from stalling the work item.
 
 ---
 

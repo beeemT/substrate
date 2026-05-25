@@ -121,12 +121,14 @@ func (sm *ServiceManager) GetServices() *Services {
 	return sm.services
 }
 
-// Close shuts down the service graph.
-func (sm *ServiceManager) Close() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.services != nil && sm.services.Bus != nil {
-		sm.services.Bus.Close()
+// Close shuts down the service graph: stops foremen, aborts sessions,
+// stops refresh goroutines, and closes the event bus.
+func (sm *ServiceManager) Close(ctx context.Context) {
+	sm.mu.RLock()
+	services := sm.services
+	sm.mu.RUnlock()
+	if services != nil {
+		services.Close(ctx)
 	}
 }
 

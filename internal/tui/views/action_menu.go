@@ -129,14 +129,15 @@ func FuzzyMatch(query, label string) bool {
 		return true
 	}
 
-	// Character-by-character match
+	// Character-by-character match using runes to handle Unicode correctly
+	queryRunes := []rune(query)
 	qi := 0
 	for _, c := range label {
-		if qi < len(query) && rune(query[qi]) == c {
+		if qi < len(queryRunes) && queryRunes[qi] == c {
 			qi++
 		}
 	}
-	return qi == len(query)
+	return qi == len(queryRunes)
 }
 
 // Update handles messages for the action menu.
@@ -195,17 +196,17 @@ func (m ActionMenuModel) handleKeyMsg(msg tea.KeyMsg) (ActionMenuModel, tea.Cmd)
 // isPrintableKey returns true if the key message represents a printable character
 // that should be added to the search query.
 func isPrintableKey(msg tea.KeyMsg) bool {
-	// Only handle single character keys
-	if len(msg.String()) != 1 {
-		return false
-	}
-
 	// Ignore control keys
 	if msg.Type != tea.KeyRunes {
 		return false
 	}
 
-	r := rune(msg.String()[0])
+	runes := []rune(msg.String())
+	if len(runes) != 1 {
+		return false
+	}
+
+	r := runes[0]
 
 	// Ignore special characters that shouldn't be in search
 	switch r {
@@ -303,10 +304,13 @@ func formatActionRow(action Action, width int, selected bool, st styles.Styles) 
 		labelWidth = 1
 	}
 
-	// Truncate label if needed
-	label := action.Label
-	if len(label) > labelWidth {
-		label = label[:labelWidth-1] + "…"
+	// Truncate label if needed (use rune count for proper Unicode handling)
+	labelRunes := []rune(action.Label)
+	var label string
+	if len(labelRunes) > labelWidth {
+		label = string(labelRunes[:labelWidth-1]) + "…"
+	} else {
+		label = action.Label
 	}
 
 	shortcut := fmt.Sprintf("[%s]", action.Shortcut)
@@ -315,7 +319,9 @@ func formatActionRow(action Action, width int, selected bool, st styles.Styles) 
 	row := fmt.Sprintf("  %-*s %s", labelWidth, label, shortcutStyled)
 
 	if selected {
-		row = st.Title.Render("▶ ") + st.Title.Render(row[2:])
+		// Avoid slicing styled strings - render selection indicator separately
+		selectedRow := st.Title.Render(row)
+		return st.Title.Render("▶") + selectedRow[2:]
 	}
 
 	return row
@@ -910,7 +916,7 @@ func reviewFollowupSelectorActions(a *App) []Action {
 		{ID: "deselect_all_selector", Label: "Deselect all", Shortcut: "n", Priority: 530, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.reviewFollowupOverlay.selectNone(); return nil }},
 		{ID: "focus_list_selector", Label: "Focus list", Shortcut: "←", Priority: 550, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.reviewFollowupOverlay.focus = reviewSelectorFocusList; return nil }},
 		{ID: "focus_preview_selector", Label: "Focus preview", Shortcut: "→", Priority: 560, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.reviewFollowupOverlay.focus = reviewSelectorFocusPreview; return nil }},
-		{ID: "address_critique", Label: "Address critique", Shortcut: "p", Priority: 570, Condition: func(a *App) bool { return a.reviewFollowupOverlay.HasAnySelection() }, Handler: func(a *App) tea.Cmd { return a.reviewFollowupOverlay.dispatchAddress() }},
+		{ID: "address_critique", Label: "Address critique", Shortcut: "A", Priority: 570, Condition: func(a *App) bool { return a.reviewFollowupOverlay.HasAnySelection() }, Handler: func(a *App) tea.Cmd { return a.reviewFollowupOverlay.dispatchAddress() }},
 	}
 }
 
