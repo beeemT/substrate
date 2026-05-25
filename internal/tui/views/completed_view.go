@@ -185,7 +185,7 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "up", "k", "pgup", "down", "j", "pgdown":
+		case "up", "pgup", keyDown, "pgdown":
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd

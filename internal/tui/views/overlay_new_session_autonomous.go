@@ -319,7 +319,7 @@ func (m NewSessionAutonomousOverlay) detailContent() string {
 }
 
 func (m NewSessionAutonomousOverlay) hintText() string {
-	parts := []string{"Space select", "Enter start", "X stop", "Esc close"}
+	parts := []string{"Space select", "Enter start", "S stop", "Esc close"}
 	if m.running {
 		parts = append(parts, "Autonomous mode is running")
 	}
@@ -353,7 +353,7 @@ func (m NewSessionAutonomousOverlay) Update(msg tea.Msg) (NewSessionAutonomousOv
 		switch key.String() {
 		case keyEsc:
 			return m, func() tea.Msg { return CloseOverlayMsg{} }
-		case "x", "X":
+		case "s", "S":
 			return m, m.openStopCmd()
 		case keyEnter:
 			return m, m.openStartCmd()

@@ -327,7 +327,7 @@ func DefaultHints() []KeybindHint {
 		{Key: "R", Label: "Repos"},
 		{Key: "/", Label: "Search sessions"},
 		{Key: "s", Label: "Settings"},
-		{Key: "?", Label: "Help"},
+		{Key: "x", Label: "Actions"},
 		{Key: "q", Label: "Quit"},
 	}
 }

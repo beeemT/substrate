@@ -989,11 +989,11 @@ func (m ReviewFollowupModel) handleKeyPicker(msg tea.KeyMsg) (ReviewFollowupMode
 	switch msg.String() {
 	case keyEsc:
 		return m, func() tea.Msg { return ReviewFollowupCancelMsg{} }
-	case "up", "k":
+	case "up":
 		if m.pickerCursor > 0 {
 			m.pickerCursor--
 		}
-	case "down", "j":
+	case "down":
 		if m.pickerCursor < len(m.pickerItems)-1 {
 			m.pickerCursor++
 		}
@@ -1032,13 +1032,13 @@ func (m ReviewFollowupModel) handleKeySelector(msg tea.KeyMsg) (ReviewFollowupMo
 	switch msg.String() {
 	case keyEsc:
 		return m, func() tea.Msg { return ReviewFollowupCancelMsg{} }
-	case "left", "h":
+	case "left":
 		m.focus = reviewSelectorFocusList
-	case "right", "l":
+	case "right":
 		m.focus = reviewSelectorFocusPreview
-	case "up", "k":
+	case "up":
 		m.moveCursor(-1)
-	case "down", "j":
+	case "down":
 		m.moveCursor(1)
 	case " ":
 		m.toggleAtCursor()

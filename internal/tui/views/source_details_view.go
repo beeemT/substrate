@@ -104,7 +104,7 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 	case tea.KeyMsg:
 		changed := false
 		switch msg.String() {
-		case "up", "k":
+		case "up":
 			if len(m.items) > 1 && m.cursor > 0 {
 				m.cursor--
 				changed = true
@@ -114,7 +114,7 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 				m.viewport, cmd = m.viewport.Update(msg)
 				return m, cmd
 			}
-		case "down", "j":
+		case "down":
 			if len(m.items) > 1 && m.cursor < len(m.items)-1 {
 				m.cursor++
 				changed = true
@@ -123,7 +123,7 @@ func (m SourceDetailsModel) Update(msg tea.Msg) (SourceDetailsModel, tea.Cmd) {
 				m.viewport, cmd = m.viewport.Update(msg)
 				return m, cmd
 			}
-		case "right", "l":
+		case "right":
 			if len(m.items) > 1 && m.cursor >= 0 && !m.expandedSet[m.cursor] {
 				m.expandedSet[m.cursor] = true
 				changed = true

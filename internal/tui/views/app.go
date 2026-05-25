@@ -42,7 +42,7 @@ const (
 	overlaySessionSearch
 	overlaySettings
 	overlayWorkspaceInit
-	overlayHelp
+	overlayActionMenu
 	overlaySourceItems
 	overlayLogs
 	overlayAddRepo
@@ -121,7 +121,8 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	sessionSearch               SessionSearchOverlay
 	settingsPage                SettingsPage
 	workspaceModal              WorkspaceInitModal
-	helpOverlay                 HelpOverlay
+	actionMenu                  ActionMenuModel
+	actionMenuReturnOverlay     overlayKind
 	sourceItemsOverlay          SourceItemsOverlay
 	overviewLinksOverlay        OverviewLinksOverlay
 	overviewLinksReturnOverlay  overlayKind
@@ -230,7 +231,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		newSessionAutonomousOverlay:    NewNewSessionAutonomousOverlay(st),
 		sessionSearch:                  NewSessionSearchOverlay(st),
 		settingsPage:                   NewSettingsPage(provider.Settings(), st),
-		helpOverlay:                    NewHelpOverlay(st),
+		actionMenu:                     NewActionMenuModel(st),
 		sourceItemsOverlay:             NewSourceItemsOverlay(st),
 		overviewLinksOverlay:           NewOverviewLinksOverlay(st),
 		reviewFollowupOverlay:          NewReviewFollowupModel(st),
@@ -675,6 +676,56 @@ func (a *App) openAddRepo() tea.Cmd {
 func (a *App) openRepoManager() tea.Cmd {
 	a.activeOverlay = overlayRepoManager
 	return a.repoManager.Open()
+}
+
+func (a *App) openActionMenu() tea.Cmd {
+	ctx := a.currentActionContext()
+	if ctx == ContextModalExclusive {
+		return nil
+	}
+	a.actionMenuReturnOverlay = a.activeOverlay
+	a.actionMenu.Open(a, ctx)
+	a.actionMenu.SetSize(a.windowWidth, a.windowHeight)
+	a.activeOverlay = overlayActionMenu
+	return nil
+}
+
+func (a *App) closeActionMenu() {
+	a.activeOverlay = a.actionMenuReturnOverlay
+	a.actionMenuReturnOverlay = overlayNone
+}
+
+// anyInputCaptured returns true if any text input is currently capturing keys.
+func (a *App) anyInputCaptured() bool {
+	// Check content-level inputs (session log steer, etc.)
+	if a.content.InputCaptured() {
+		return true
+	}
+	// Check plan review feedback
+	if a.content.overview.planReview.IsFeedbackActive() {
+		return true
+	}
+	// Check completed view feedback
+	if a.content.overview.completed.InputCaptured() {
+		return true
+	}
+	// Check new session overlays for manual/extra-context inputs
+	if a.newSession.showManual || a.newSession.showExtraContext {
+		return true
+	}
+	// Check add repo overlay for manual URL input
+	if a.addRepo.showManual {
+		return true
+	}
+	// Check session search overlay for search input
+	if a.sessionSearch.Active() && a.sessionSearch.focus == sessionSearchFocusInput {
+		return true
+	}
+	// Check settings overlay for field editor
+	if a.settingsPage.editing {
+		return true
+	}
+	return false
 }
 
 func (a App) currentHints() []KeybindHint {
@@ -2861,9 +2912,9 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.settingsPage, cmd = a.settingsPage.Update(msg, *a.provider.GetServices())
 		return a, cmd
 	}
-	if a.activeOverlay == overlayHelp {
-		a.activeOverlay = overlayNone
-		return a, nil
+	if a.activeOverlay == overlayActionMenu {
+		a.actionMenu, cmd = a.actionMenu.Update(msg)
+		return a, cmd
 	}
 	if a.activeOverlay == overlayLogs {
 		a.logsOverlay, cmd = a.logsOverlay.Update(msg)
@@ -2963,14 +3014,14 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.mainFocus = mainFocusContent
 		return a, nil
-	case "up", "k":
+	case "up":
 		if a.mainFocus == mainFocusContent {
 			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
 		a.sidebar.MoveUp()
 		cmd = a.onSidebarMove()
 		return a, cmd
-	case keyDown, "j":
+	case keyDown:
 		if a.mainFocus == mainFocusContent {
 			return a.updateContentForKey(msg, wasOverviewOverlayOpen, previousFocus)
 		}
@@ -3010,9 +3061,10 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSidebar()
 			return a, nil
 		}
-	case "?":
-		a.activeOverlay = overlayHelp
-		return a, nil
+	case "x":
+		if !a.anyInputCaptured() {
+			return a, a.openActionMenu()
+		}
 	case "L":
 		a.logsOverlay.SetSize(a.windowWidth, a.windowHeight)
 		a.logsOverlay.Open()
@@ -4142,8 +4194,8 @@ func (a App) View() string {
 		result = renderOverlay(a.sessionSearch.View(), a.windowWidth, a.windowHeight)
 	case overlaySettings:
 		result = a.settingsPage.View()
-	case overlayHelp:
-		result = renderOverlay(a.helpOverlay.View(), a.windowWidth, a.windowHeight)
+	case overlayActionMenu:
+		result = renderOverlay(a.actionMenu.View(), a.windowWidth, a.windowHeight)
 	case overlaySourceItems:
 		result = renderOverlay(a.sourceItemsOverlay.View(), a.windowWidth, a.windowHeight)
 	case overlayOverviewLinks:

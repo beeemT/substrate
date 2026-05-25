@@ -167,8 +167,8 @@ func TestOverviewLinksOverlayNavigateToMRAndOpen(t *testing.T) {
 	t.Parallel()
 	m := openedLinksOverlay(t)
 	// tickets = 2, so navigate down twice to land on the first MR
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Enter on MR item must return non-nil cmd")
@@ -321,7 +321,6 @@ func TestOverviewPageOKeyOnSourcesOnlyEmitsOpenLinksMsg(t *testing.T) {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // Open-all: 'a' key opens every URL in the overlay.
 // ---------------------------------------------------------------------------
@@ -340,10 +339,10 @@ func TestOverviewLinksOverlayOpenAllEmitsBatchCmd(t *testing.T) {
 	}
 
 	wantURLs := map[string]bool{
-		"https://linear.app/t/SUB-42":               false,
-		"https://linear.app/t/SUB-43":               false,
-		"https://github.com/acme/api/pull/7":         false,
-		"https://github.com/acme/frontend/pull/12":   false,
+		"https://linear.app/t/SUB-42":              false,
+		"https://linear.app/t/SUB-43":              false,
+		"https://github.com/acme/api/pull/7":       false,
+		"https://github.com/acme/frontend/pull/12": false,
 	}
 
 	for _, c := range batchCmds {
@@ -416,7 +415,7 @@ func TestOverviewLinksOverlayOpenFromArtifactsNavigateAndOpen(t *testing.T) {
 	})
 
 	// Navigate down once to second item
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Enter on second artifact must return non-nil cmd")

@@ -308,9 +308,9 @@ func (m OverviewLinksOverlay) Update(msg tea.Msg) (OverviewLinksOverlay, tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "up", "k":
+		case "up":
 			m.navigate(-1)
-		case "down", "j":
+		case "down":
 			m.navigate(1)
 		case keyEnter, "o":
 			if url := m.selectedURL(); url != "" {

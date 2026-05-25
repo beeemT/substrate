@@ -47,7 +47,7 @@ func (m *ReviewModel) SetRepos(repos []RepoReviewResult) {
 
 func (m ReviewModel) KeybindHints() []KeybindHint {
 	return []KeybindHint{
-		{Key: "j/k", Label: "Navigate critiques"},
+		{Key: "↑/↓", Label: "Navigate critiques"},
 		{Key: "Tab", Label: "Switch repo"},
 		{Key: "r", Label: "Re-implement"},
 		{Key: "o", Label: "Override accept"},
@@ -72,14 +72,14 @@ func critiqueSeverityStyle(sev domain.CritiqueSeverity, st styles.Styles) lipglo
 func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
-		case "j", keyDown:
+		case keyDown:
 			if len(m.repos) > m.activeRepo {
 				crits := m.repos[m.activeRepo].Critiques
 				if m.cursor < len(crits)-1 {
 					m.cursor++
 				}
 			}
-		case "k", "up":
+		case "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}

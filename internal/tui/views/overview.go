@@ -518,7 +518,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 					return m, func() tea.Msg { return RetryFailedMsg{WorkItemID: m.data.WorkItemID} }
 				}
 			}
-		case "up", keyDown, "j", "k", "pgup", "pgdown", "home", "end":
+		case "up", keyDown, "pgup", "pgdown", "home", "end":
 			m.viewport, cmd = m.viewport.Update(msg)
 
 			return m, cmd

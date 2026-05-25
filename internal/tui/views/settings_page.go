@@ -342,10 +342,10 @@ func (m *SettingsPage) cycleEditOption(delta int) {
 func (m *SettingsPage) updateFieldEditor(msg tea.KeyMsg) tea.Cmd {
 	if m.editMode == settingsEditModeSelect {
 		switch msg.String() {
-		case "up", "k", "shift+tab", "left", "h":
+		case "up", "shift+tab", "left":
 			m.cycleEditOption(-1)
 			return nil
-		case keyDown, "j", "tab", "right", "l":
+		case keyDown, "tab", "right":
 			m.cycleEditOption(1)
 			return nil
 		case keyEnter:
@@ -1000,19 +1000,19 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			return m.returnWithSyncedMainViewport(m.updateFieldEditor(msg))
 		}
 		switch msg.String() {
-		case "up", "k":
+		case "up":
 			if m.fieldsFocused() {
 				m.moveField(-1)
 			} else {
 				m.moveSection(-1)
 			}
-		case "down", "j":
+		case "down":
 			if m.fieldsFocused() {
 				m.moveField(1)
 			} else {
 				m.moveSection(1)
 			}
-		case "left", "h":
+		case "left":
 			if m.fieldsFocused() {
 				m.focusSections()
 				break
@@ -1021,7 +1021,7 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				break
 			}
 			m.focusParentSection()
-		case "right", "l":
+		case "right":
 			if m.focus == settingsFocusSections {
 				if m.expandCurrentSection() {
 					break

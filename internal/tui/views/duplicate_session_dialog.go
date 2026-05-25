@@ -78,11 +78,11 @@ func (a App) selectedDuplicateSessionAction() SessionDuplicateAction {
 
 func (a *App) handleDuplicateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "up", "k", keyShiftTab:
+	case "up", keyShiftTab:
 		a.cycleDuplicateSessionOption(-1)
 
 		return a, nil
-	case keyDown, "j", keyTab:
+	case keyDown, keyTab:
 		a.cycleDuplicateSessionOption(1)
 
 		return a, nil

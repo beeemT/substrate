@@ -133,7 +133,7 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 		case keyPgUp, keyPgDown:
 			m.viewport, cmd = m.viewport.Update(msg)
 
-		case "up", "k":
+		case "up":
 			if m.inputActive && m.input.AtTop() {
 				m.viewport.ScrollUp(1)
 
@@ -144,7 +144,7 @@ func (m QuestionModel) Update(msg tea.Msg) (QuestionModel, tea.Cmd) {
 				m.syncViewportSize(false)
 			}
 
-		case keyDown, "j":
+		case keyDown:
 			if m.inputActive && m.input.AtBottom() {
 				m.viewport.ScrollDown(1)
 

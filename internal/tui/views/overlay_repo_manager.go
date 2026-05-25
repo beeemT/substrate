@@ -364,7 +364,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		}
 		return *m, nil
 
-	case "up", "k":
+	case "up":
 		if m.focus == repoManagerFocusList {
 			prevIdx := m.repoList.Index()
 			var listCmd tea.Cmd
@@ -378,7 +378,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		m.detailViewport.ScrollUp(1)
 		return *m, nil
 
-	case "down", "j":
+	case "down":
 		if m.focus == repoManagerFocusList {
 			prevIdx := m.repoList.Index()
 			var listCmd tea.Cmd

@@ -37,7 +37,7 @@ This change adds an **agent planning review loop** between a valid planning draf
 - `internal/tui/views/settings_service.go:627-642` exposes `plan.max_parse_retries` and implementation `review.*` settings, but no planning-review settings.
 - `internal/service/session.go:236` currently requires `SubPlanID` for both implementation and review phases. Planning review sessions will need `Phase: review` with `PlanID` and no `SubPlanID`.
 - `migrations/007_plan_supersede.sql` and current SQLite session rows already include nullable `agent_sessions.plan_id`; no new column is needed for plan review sessions.
-- `internal/domain/event.go:95-100` already has generic review events (`review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started`, `review_cycle.status_changed`). They can be reused if payloads include enough identifiers for the TUI to distinguish plan-level and sub-plan-level review.
+- `internal/domain/event.go:95-100` already has review lifecycle events (`review.started`, `review.completed`, `review.critiques_found`, `reimplementation.started`, `review_cycle.status_changed`). The generic review events can be reused if payloads include enough identifiers for the TUI to distinguish plan-level and sub-plan-level review; `reimplementation.started` remains implementation-specific.
 
 ## Product Behavior
 
@@ -82,13 +82,6 @@ This avoids an abstraction that has to understand both `TaskPlan` lifecycle and 
 Recommended shape:
 
 ```go
-type ReviewLoopSettings struct {
-    PassThreshold    config.PassThreshold
-    MaxCycles        int
-    Timeout          time.Duration
-    AutoFeedbackLoop bool
-}
-
 type ReviewSubjectKind string
 
 const (
@@ -106,11 +99,13 @@ type ReviewRequest struct {
     WorktreePath    string
     SystemPrompt    string
     UserPrompt      string
-    Settings        ReviewLoopSettings
+    // ReviewSession is one-shot. It may read pass_threshold and timeout from Settings,
+    // but max_cycles and auto_feedback_loop belong to the domain-specific outer loops.
+    Settings        config.ReviewConfig
 }
 ```
 
-`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core. Keep a compatibility wrapper for implementation call sites if useful:
+`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core and runs exactly one review cycle. It must not load `TaskPlan`/`Plan` itself, and it must not enforce `max_cycles` or `auto_feedback_loop`; those guards live in the implementation and planning outer loops. Keep a compatibility wrapper for implementation call sites if useful:
 
 ```go
 func (p *ReviewPipeline) ReviewImplementationSession(ctx context.Context, agentSession domain.AgentSession) (*ReviewResult, error)
@@ -133,24 +128,15 @@ planning_review:
 Implementation detail:
 
 ```go
-type ReviewLoopConfig struct {
-    PassThreshold    PassThreshold `yaml:"pass_threshold"`
-    MaxCycles        *int          `yaml:"max_cycles"`
-    Timeout          *string       `yaml:"timeout"`
-    AutoFeedbackLoop *bool         `yaml:"auto_feedback_loop"`
-}
-
-type ReviewConfig = ReviewLoopConfig
-
 type Config struct {
-    Plan           PlanConfig       `yaml:"plan"`
-    Review         ReviewConfig     `yaml:"review"`
-    PlanningReview ReviewLoopConfig `yaml:"planning_review"`
+    Plan           PlanConfig   `yaml:"plan"`
+    Review         ReviewConfig `yaml:"review"`
+    PlanningReview ReviewConfig `yaml:"planning_review"`
     // ...
 }
 ```
 
-Keep existing `review.*` YAML compatible. Add a generic timeout helper, for example `ReviewLoopConfig.TimeoutDuration(defaultValue time.Duration) time.Duration`, and keep `ReviewConfig.ReviewTimeout()` only if the alias allows it without call-site churn.
+Use the existing `ReviewConfig` type for both `review.*` and `planning_review.*`; it already has the exact fields needed. Do not introduce a second config type unless implementation proves the two sections need to diverge. Keep existing `review.*` YAML and Go call sites compatible. Add a generic timeout helper on `ReviewConfig`, for example `TimeoutDuration(defaultValue time.Duration) time.Duration`, and keep `ReviewTimeout()` as a compatibility wrapper for implementation review call sites.
 
 Defaults for `planning_review.*` should match `review.*`: `minor_ok`, `3`, `1h`, `true`.
 
@@ -166,7 +152,7 @@ Differences from implementation review sessions:
 
 Update `AgentSessionService` validation so:
 
-- implementation sessions require `SubPlanID`, `RepositoryName`, and `WorktreePath` as they do today.
+- implementation sessions continue to require `SubPlanID`. Current service validation does **not** require `RepositoryName` or `WorktreePath`; add those requirements only as an intentional behavior change after auditing all implementation-session creators and updating tests.
 - review sessions require either:
   - `SubPlanID` for implementation review, or
   - a planning-reviewed session/work-item scope for pre-persistence planning review. `PlanID` should be set when reviewing an already-persisted plan, but must not be mandatory for raw candidate review.
@@ -187,7 +173,8 @@ Refactor `planRun` into:
    - returns raw valid plan text, parsed output, planning session, warnings, repos, workspace/work item context
    - does **not** persist plan rows
 2. `persistPlanningCandidate(ctx, candidate, replacePlanID) -> PlanningResult`
-   - wraps the existing `buildAndPersistPlan`, `SetPlanID`, `SubmitForReview`, `SubmitPlanForReview`, and `completeSessionDurably` sequence
+   - wraps the existing `buildAndPersistPlan`, `SetPlanID`, `SubmitForReview`, and `SubmitPlanForReview` sequence
+   - does not normally complete the planning session, because `runPlanningAttempt` completes it as soon as the candidate is parse-valid and resume info is durable
 
 Planning review then loops over candidates before final persistence. This avoids creating rejected/superseded plan rows for every automatic review revision.
 
@@ -264,12 +251,12 @@ Important details:
 
 - Each automatic revision should create a new planning `AgentSession`, matching `PlanWithFeedback` and implementation re-runs.
 - Preserve native resume when available, exactly like `PlanWithFeedback` and `runPlanningWithCorrectionLoop` already do.
-- Mark each planning attempt session completed after it produces a parse-valid candidate and the review loop has consumed that candidate. If the agent requests revision, the completed session remains audit history and the next automatic revision creates a fresh planning session. The final work-item state stays `planning` until escalation/pass submits a candidate for human review.
+- Mark each planning attempt session completed immediately after it produces a parse-valid candidate and native resume info has been durably stored, before starting that candidate's review session. If the agent review requests revision, the completed planning session remains audit history and the next automatic revision creates a fresh planning session. Final persistence must still call `SetPlanID` on the planning session that produced the selected plan, even if that session is already completed. The final work-item state stays `planning` until escalation/pass submits a candidate for human review.
 - On context cancellation, preserve current interruption behavior: mark the active planning session interrupted using durable cleanup and do not fake a plan-review state.
 
 ### 7. Event payloads and TUI correlation
 
-Reuse generic review events, but extend payloads to include scope:
+Reuse generic review events, but extend payloads to include scope. Emit `review.started`, `review.completed`, and `review.critiques_found` for both planning and implementation scopes. Emit `reimplementation.started` only for implementation scope; do not use that event name for planning replans.
 
 ```json
 {
@@ -284,7 +271,7 @@ Reuse generic review events, but extend payloads to include scope:
 }
 ```
 
-For implementation review, emit `review_scope: "implementation"` and preserve existing fields.
+For implementation review, emit `review_scope: "implementation"` and preserve existing fields. Preserve the current meaning of `agent_session_id`: it is the reviewed session ID used to load `ReviewCycle` rows. `review_agent_session_id` is additive metadata for the actual harness session and must not replace `agent_session_id` in existing reload paths.
 
 TUI behavior:
 
@@ -322,7 +309,7 @@ Files:
 
 Tasks:
 
-1. Add `ReviewLoopConfig` and `Config.PlanningReview` with YAML key `planning_review`.
+1. Add `Config.PlanningReview ReviewConfig` with YAML key `planning_review`; reuse the existing `ReviewConfig` type rather than adding a parallel config struct.
 2. Keep existing `Config.Review` YAML and Go call sites compatible.
 3. Apply defaults for `planning_review`: `pass_threshold=minor_ok`, `max_cycles=3`, `timeout=1h`, `auto_feedback_loop=true`.
 4. Validate `planning_review.pass_threshold` and `planning_review.max_cycles` with the same rules as `review.*`.
@@ -333,6 +320,7 @@ Acceptance:
 
 - Config load tests prove defaults and explicit false are preserved for both `review.auto_feedback_loop` and `planning_review.auto_feedback_loop`.
 - Invalid `planning_review.pass_threshold` and `planning_review.max_cycles < 1` fail validation.
+- If timeout validation is added, invalid `planning_review.timeout` and `review.timeout` fail consistently; otherwise tests document the current fallback-to-default behavior.
 - Settings save/load tests cover editing `planning_review.*` fields.
 
 ### Phase 2 — Review pipeline generalization
@@ -347,17 +335,20 @@ Files:
 
 Tasks:
 
-1. Introduce `ReviewRequest`, `ReviewSubjectKind`, and `ReviewLoopSettings`.
+1. Introduce `ReviewRequest` and `ReviewSubjectKind`; pass the existing `config.ReviewConfig` through the request when the one-shot runner needs pass-threshold or timeout settings.
 2. Move implementation-specific prompt loading (`GetSubPlan`, `GetPlan`, `buildReviewPrompt`) out of the core review-session runner.
-3. Keep `ReviewPipeline` responsible for persistence of `ReviewCycle`, review agent session lifecycle, event emission, timeout, parsing, and decision logic.
+3. Keep `ReviewPipeline` responsible for persistence of `ReviewCycle`, review agent session lifecycle, event emission, per-request timeout, parsing, and pass-threshold decision logic.
 4. Allow review-phase `AgentSession` rows that are plan-scoped rather than sub-plan-scoped.
 5. Add `review_scope`, `plan_id`, and `review_agent_session_id` to emitted review payloads while retaining existing `agent_session_id` meaning: the reviewed session.
+6. Remove `max_cycles` enforcement from the one-shot review runner; implementation and planning loops own total-cycle limits.
 
 Acceptance:
 
 - Existing implementation review tests pass unchanged or with minimal wrapper updates.
-- New unit tests prove a planning-scope review request can create a review session without `SubPlanID`.
+- New unit tests prove a planning-scope review request can create a review session without `SubPlanID` and without calling `GetSubPlan`.
 - Event payload tests prove old implementation fields remain present and new scope fields are present.
+- Tests prove `reimplementation.started` is not emitted for planning-scope critiques, while `review.critiques_found` still is.
+- Tests prove max-cycle escalation is handled by the outer loop, not by `ReviewSession`.
 
 ### Phase 3 — Planning candidate split
 
@@ -402,12 +393,13 @@ Tasks:
 
 Acceptance:
 
-- Test: no critiques -> one planning session, one review session, one pending-review plan, work item `plan_review`.
+- Test: no critiques -> one planning session, one review session, one pending-review plan, work item `plan_review` and not `approved`.
 - Test: major critique + auto loop true -> second planning session receives critique feedback; final plan comes from second candidate.
 - Test: major critique + auto loop false -> first candidate persists; review cycle/critiques are recorded; work item enters `plan_review`.
 - Test: max cycles -> best candidate persists and human plan review is required.
 - Test: review harness failure before any persisted candidate -> planning fails and work item rolls back according to existing planning failure behavior.
 - Test: context cancellation still interrupts the active planning session and does not submit a plan.
+- Test: the final work item remains in `planning` until the selected candidate is persisted and submitted to human `plan_review`.
 
 ### Phase 5 — TUI review visibility
 
@@ -422,7 +414,7 @@ Files:
 
 Tasks:
 
-1. Decode new review event fields while preserving existing implementation-review decoding.
+1. Decode new review event fields while preserving existing implementation-review decoding and preserving reviewed-session-ID reload behavior for `LoadReviewsCmd`.
 2. Update in-memory overview/action data so `review_scope=planning` critiques can be surfaced on the plan review card.
 3. Show planning-review escalation/caution copy only when critiques exist or the review loop escalated.
 4. Keep existing plan approve/edit/request-changes/reject actions unchanged.
@@ -430,7 +422,7 @@ Tasks:
 
 Acceptance:
 
-- TUI event consumer tests cover planning review events.
+- TUI event consumer tests cover planning review events and older implementation payloads without `review_scope`.
 - Overview render tests include normal plan review and plan review with planning-review critiques.
 - Width/height tests cover narrow terminal rendering for any new callout, per TUI rules.
 
@@ -490,7 +482,7 @@ Manual scenario to verify from the TUI:
 | Generic review abstraction becomes too broad | Generalize only the single review-session runner; keep implementation and planning outer loops separate. |
 | Planning review changes existing plan persistence semantics | Split candidate generation from persistence and keep existing persistence sequence covered by tests. |
 | Existing review TUI treats every review as repo/sub-plan review | Add `review_scope` to events and infer from session scope when absent. |
-| Agent review critiques block human review indefinitely | Never block on critiques after max cycles or when auto-loop is disabled; submit to human `plan_review` with critique context. |
+| Agent review critiques block human review indefinitely | Keep max-cycle ownership in the planning outer loop; never block on critiques after max cycles or when auto-loop is disabled; submit to human `plan_review` with critique context. |
 | Settings surprise operators | Use separate `planning_review.*` settings instead of reusing `review.*`. |
 | Review session validation rejects plan-scoped review sessions | Update `AgentSessionService` validation with explicit review-session scope rules and tests. |
 | Plan review loop accidentally auto-approves | Tests must assert final state is `plan_review`, not `approved`, after agent review passes. |

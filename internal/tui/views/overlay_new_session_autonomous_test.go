@@ -136,7 +136,7 @@ func TestNewSessionAutonomousOverlayStopAndCloseCommands(t *testing.T) {
 	t.Parallel()
 	overlay := newAutonomousOverlay()
 
-	_, stopCmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	_, stopCmd := overlay.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
 	if stopCmd == nil {
 		t.Fatal("expected stop command")
 	}

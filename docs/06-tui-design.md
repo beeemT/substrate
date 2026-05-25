@@ -34,7 +34,7 @@ Press `→` to drill into `{externalID} · Tasks`: work-item overview, optional 
 
 **Status icons:** `●` running/active (green), `◐` pending human action (amber — plan review, open question, or PR with changes requested), `✓` completed (dim green — also `merged` with label distinguishing), `⊘` interrupted (amber), `✗` failed (red — also when any PR has failing CI), `◌` inactive/default (muted).
 
-**Keys:** `↑`/`↓`/`j`/`k` navigate; `→` drill in / move to content; `←`/`Esc` go back; `d` delete work item; `/` session-history; `n` work browser; `a` add repository; `s` settings; `?` help; `q` quit.
+**Keys:** `↑`/`↓` navigate; `→` drill in / move to content; `←`/`Esc` go back; `d` delete work item; `/` session-history; `n` work browser; `a` add repository; `s` settings; `x` actions; `q` quit.
 
 **Filters/sort:** `Ctrl+F` cycles filter (All, Active, Needs Attention, Completed); `Ctrl+G` cycles grouping (flat, by status, by source); `Ctrl+D` toggles sort. Active filter/direction shown below title.
 
@@ -264,7 +264,7 @@ Shell geometry is shared across views: sidebar and content panes share pane chro
 | `f` | Follow-up re-plan | Completed overview |
 | `a` | Add Repository | Main shell |
 | `i` | Inspect plan | Plan review, overview |
-| `?` | Help | Global |
+| `x` | Actions | Global |
 | `s` | Settings | Global |
 | `L` | Logs | Global |
 | `d` | Delete | Contextual |

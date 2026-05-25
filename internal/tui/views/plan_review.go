@@ -438,7 +438,7 @@ func (m PlanReviewModel) Update(msg tea.Msg) (PlanReviewModel, tea.Cmd) {
 			return m, func() tea.Msg { return ActionDoneMsg{Message: "Plan copied to clipboard"} }
 		case "e":
 			return m, editPlanInEditorCmd(m.planID, m.workItemID, m.planContent)
-		case "up", "k", keyDown, "j", "pgup", "pgdown":
+		case "up", keyDown, "pgup", "pgdown":
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 	case tea.MouseMsg:

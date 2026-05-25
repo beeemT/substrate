@@ -153,17 +153,17 @@ func (m ArtifactsModel) Update(msg tea.Msg) (ArtifactsModel, tea.Cmd) {
 		}
 		changed := false
 		switch msg.String() {
-		case "up", "k":
+		case "up":
 			if m.cursor > 0 {
 				m.cursor--
 				changed = true
 			}
-		case "down", "j":
+		case "down":
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 				changed = true
 			}
-		case "right", "l":
+		case "right":
 			key := artifactExpansionKey(m.items[m.cursor])
 			if !m.expandedSet[key] {
 				m.expandedSet[key] = true

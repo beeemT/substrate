@@ -48,15 +48,16 @@ func Detect() TerminalType {
     case "Apple_Terminal":
         return TerminalTerminal
     }
-    // Check for kitty window ID
+    // Check for kitty window ID. This identifies Kitty, but does not prove
+    // remote-control authorization; launch code must still handle kitten errors.
     if _, ok := os.LookupEnv("KITTY_WINDOW_ID"); ok {
         return TerminalKitty
     }
-    // Kitty remote control requires allow_remote_control=yes in kitty.conf.
-    // If KITTY_WINDOW_ID is not set, we cannot use kitten @ for the initial
-    // tab open. Treat as unknown unless a socket is explicitly provided.
-    // callers should verify KittyRemoteControlEnabled() before using kitten @.
-    // Check for wezterm socket
+    // Check for WezTerm. WEZTERM_PANE is the documented pane selector used by
+    // `wezterm cli spawn`; keep WEZTERM_SOCK as an additional heuristic.
+    if _, ok := os.LookupEnv("WEZTERM_PANE"); ok {
+        return TerminalWezTerm
+    }
     if _, ok := os.LookupEnv("WEZTERM_SOCK"); ok {
         return TerminalWezTerm
     }
@@ -65,16 +66,14 @@ func Detect() TerminalType {
     return TerminalUnknown
 }
 
-// KittyRemoteControlEnabled checks whether Kitty's remote control is enabled.
-// It returns true if either the KITTY_WINDOW_ID env var is set (indicating an
-// active Kitty session that can be remote-controlled) or if the --listen-on
-// flag was used when launching Kitty (socket path in KITTY_LISTEN_ON).
-// Without this, kitten @ commands will fail.
-func KittyRemoteControlEnabled() bool {
+// KittyRemoteControlTargetAvailable reports whether `kitten @` has an addressing
+// target. Authorization still depends on kitty configuration
+// (allow_remote_control/remote_control_password) and must be handled as a
+// command error.
+func KittyRemoteControlTargetAvailable() bool {
     if _, ok := os.LookupEnv("KITTY_WINDOW_ID"); ok {
         return true
     }
-    // Also check for explicitly configured listen socket.
     if _, ok := os.LookupEnv("KITTY_LISTEN_ON"); ok {
         return true
     }
@@ -86,7 +85,7 @@ func KittyRemoteControlEnabled() bool {
 
 | Terminal | Support | Command |
 |----------|---------|---------|
-| **WezTerm** | ✅ Full | `wezterm start --new-tab --cwd /path` |
+| **WezTerm** | ✅ Full | `wezterm cli spawn --cwd /path` inside WezTerm; `wezterm start --new-tab --cwd /path` fallback |
 | **Kitty** | ✅ Full (requires remote control) | `kitten @ launch --type=tab --cwd /path` |
 | **iTerm2** | ✅ Full | `osascript` AppleScript (new tab with profile) |
 | **Terminal.app** | ✅ Full | `osascript` AppleScript (do script in front window) |
@@ -113,14 +112,14 @@ func KittyRemoteControlEnabled() bool {
 func Open(dir string) (TerminalType, error)
 
 // OpenWithTerminal opens in the specified terminal (ignoring detection).
-// Falls back to Terminal.app if the terminal is not available.
+// On macOS, falls back to Terminal.app if the requested terminal is unavailable.
 func OpenWithTerminal(dir string, term TerminalType) (TerminalType, error)
 ```
 
 ### 1.5 Error Handling & User Feedback
 
-- If no supported terminal detected → log warning, try `open` command as last resort
-- If AppleScript fails → log warning with specific error
+- If no supported terminal detected → log warning and fall back to `open -a Terminal.app` on macOS; otherwise return an actionable error
+- If AppleScript fails after startup → log warning with specific error; do not block the TUI waiting for completion
 - Warp: Show info message that Warp lacks tab support; open in new window via `open -a Warp.app`
 - Alacritty: Show info message about tmux recommendation; open new window
 
@@ -130,41 +129,40 @@ func OpenWithTerminal(dir string, term TerminalType) (TerminalType, error)
 
 ### 2.1 Extend `internal/tui/views/cmds.go`
 
-Replace the existing `OpenTerminalCmd` with a more sophisticated version:
+Replace the existing Terminal.app-only `OpenTerminalCmd` with a terminal-package-backed command. The terminal package must return quickly: it may validate the target directory and start/detach the terminal opener, but it must not run a long AppleScript/CLI command synchronously on the Bubble Tea update path.
 
 ```go
 // OpenTerminalCmd opens a new terminal tab/window in the specified directory.
 // The terminal is auto-detected based on the active terminal.
-// Returns nil (fire-and-forget).
 func OpenTerminalCmd(dir string) tea.Cmd {
     return func() tea.Msg {
-        termType, err := terminal.Open(dir)
+        termType, err := terminal.Open(dir) // starts detached opener; returns startup errors only
         if err != nil {
             slog.Warn("failed to open terminal", "path", dir, "error", err)
             return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
         }
         slog.Debug("opened terminal", "path", dir, "terminal", termType)
-        return nil
+        return ActionDoneMsg{Message: "Opened terminal"}
     }
 }
 
 // OpenTerminalWithCmd opens in a specific terminal type.
 func OpenTerminalWithCmd(dir string, termType terminal.TerminalType) tea.Cmd {
-    return func() tea.Cmd {
-        _, err := terminal.OpenWithTerminal(dir, termType)
+    return func() tea.Msg {
+        used, err := terminal.OpenWithTerminal(dir, termType)
         if err != nil {
             slog.Warn("failed to open terminal", "path", dir, "terminal", termType, "error", err)
+            return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
         }
-        return nil
+        slog.Debug("opened terminal", "path", dir, "terminal", used)
+        return ActionDoneMsg{Message: "Opened terminal"}
     }
 }
 ```
 
-### 2.2 Keep Existing Shell Escape Utility
+### 2.2 Delete Unsafe Shell Escaping for Terminal Launches
 
-The `shellEscape` function in `cmds.go:1135-1138` remains for other AppleScript uses.
-
----
+Do not reuse the current `shellEscape` helper for terminal AppleScript. It only escapes double quotes and is not safe for shell `cd` commands. Terminal/iTerm AppleScript must use AppleScript/POSIX quoting (`quoted form of POSIX path ...`) or pass the working directory as a process argument where the terminal supports it. Delete `shellEscape` if no other code uses it after the terminal package cutover.
 
 ## 3. Shared Split-List Picker Component
 
@@ -177,217 +175,84 @@ Both the new **WorktreePickerOverlay** and the existing **RepoManagerOverlay** u
 | RepoManagerOverlay | Repo list | Detail viewport (text, scrollable) | Manage repos with actions |
 | WorktreePickerOverlay | Repo list | Worktree list | Select worktree to open |
 
-The right pane differs in type (list vs. viewport), making full unification awkward. Instead, we create a **generic split-pane picker base** that handles:
+The shared component must not own `list.Model` or `viewport.Model` values. The overlays already own those models, and storing duplicate model copies or pointers inside a shared component will make selection state diverge. The shared component should own only:
 
-- Split-pane geometry and layout computation
-- Focus management (Tab/←/→)
-- Navigation key handling (↑/↓)
-- Size synchronization
+- split-pane geometry and layout computation
+- focus state (`left` vs `right`)
+- focus-switch key handling (`Tab`, `←`, `→`)
+- rendering of caller-provided pane bodies
 
-Each overlay then composes this base and provides pane-specific data and actions.
+Each overlay remains responsible for updating its own list/viewport models and for firing side effects such as worktree loads when selection changes.
 
 ### 3.2 New File: `internal/tui/components/split_list_picker.go`
 
 ```go
-// internal/tui/components/split_list_picker.go
-
 package components
 
-// PaneType identifies what's in a pane.
-type PaneType int
+type SplitPaneFocus int
 
 const (
-    PaneTypeList PaneType = iota
-    PaneTypeViewport
+    SplitPaneFocusLeft SplitPaneFocus = iota
+    SplitPaneFocusRight
 )
 
-// PaneConfig describes a pane in the split layout.
-type PaneConfig struct {
-    Type       PaneType
-    Title      string      // Optional header
-    List       *list.Model // Set if Type == PaneTypeList
-    Viewport   *viewport.Model // Set if Type == PaneTypeViewport
-    Width      int
-    Height     int
-}
-
-// SplitListPicker is a reusable split-pane picker component.
-// It manages two panes side-by-side with focus switching and shared key handling.
 type SplitListPicker struct {
-    Left  PaneConfig
-    Right PaneConfig
-
-    // Which pane has focus
-    FocusLeft bool
-
-    // Styling
-    Styles styles.Styles
-
-    // Computed layout
+    focus  SplitPaneFocus
     layout SplitOverlayLayout
-
-    // prevLeftIndex tracks the left pane index before the last Update call,
-    // enabling callers to detect selection changes that should trigger side
-    // effects (e.g. reloading worktrees when the repo selection changes).
-    prevLeftIndex int
+    spec   SplitOverlaySizingSpec
 }
 
-// NewSplitListPicker creates a new split-list picker with the given pane configs.
-func NewSplitListPicker(left, right PaneConfig, st styles.Styles) SplitListPicker {
-    return SplitListPicker{
-        Left:   left,
-        Right:  right,
-        FocusLeft: true,
-        Styles: st,
-    }
+type SplitListPaneSpec struct {
+    Title string
+    Body  string
 }
 
-// SetSize recalculates layout dimensions.
-func (m *SplitListPicker) SetSize(width, height int) {
-    // Use existing ComputeSplitOverlayLayout logic
-    m.layout = ComputeSplitOverlayLayout(width, height, chromeLines, browseSizingSpec)
+func NewSplitListPicker(spec SplitOverlaySizingSpec) SplitListPicker {
+    return SplitListPicker{focus: SplitPaneFocusLeft, spec: spec}
 }
 
-// FocusedPane returns the currently focused pane config.
-func (m *SplitListPicker) FocusedPane() *PaneConfig {
-    if m.FocusLeft {
-        return &m.Left
-    }
-    return &m.Right
+// SetSize recalculates layout dimensions. chromeLines is supplied by the overlay
+// because each overlay has different header/footer/hint wrapping.
+func (m *SplitListPicker) SetSize(width, height, chromeLines int) {
+    m.layout = ComputeSplitOverlayLayout(width, height, chromeLines, m.spec)
 }
 
-// SwitchFocus toggles focus between left and right panes.
+func (m SplitListPicker) Layout() SplitOverlayLayout { return m.layout }
+func (m SplitListPicker) Focus() SplitPaneFocus { return m.focus }
+func (m SplitListPicker) IsFocusLeft() bool { return m.focus == SplitPaneFocusLeft }
+func (m *SplitListPicker) FocusLeft() { m.focus = SplitPaneFocusLeft }
+func (m *SplitListPicker) FocusRight() { m.focus = SplitPaneFocusRight }
 func (m *SplitListPicker) SwitchFocus() {
-    m.FocusLeft = !m.FocusLeft
+    if m.focus == SplitPaneFocusLeft { m.focus = SplitPaneFocusRight; return }
+    m.focus = SplitPaneFocusLeft
 }
 
-// IsFocusLeft reports whether the left pane has focus.
-func (m *SplitListPicker) IsFocusLeft() bool {
-    return m.FocusLeft
-}
-
-// Update handles keyboard events and returns any commands.
-func (m *SplitListPicker) Update(msg tea.Msg) (SplitListPicker, tea.Cmd) {
-    var cmd tea.Cmd
-    
-    switch msg := msg.(type) {
-    case tea.KeyMsg:
-        switch msg.String() {
-        case "tab", "left", "right":
-            m.SwitchFocus()
-            return m, nil
-            
-        case "up", "k", "down", "j":
-            pane := m.FocusedPane()
-            if pane.Type == PaneTypeList && pane.List != nil {
-                *pane.List, cmd = pane.List.Update(msg)
-            } else if pane.Type == PaneTypeViewport && pane.Viewport != nil {
-                *pane.Viewport, cmd = pane.Viewport.Update(msg)
-            }
-            return m, cmd
-        }
+// HandleFocusKey handles only focus-switching keys and reports whether it consumed the key.
+func (m *SplitListPicker) HandleFocusKey(key string) bool {
+    switch key {
+    case "tab", "left", "right":
+        m.SwitchFocus()
+        return true
+    default:
+        return false
     }
-    
-    // Forward to focused pane
-    pane := m.FocusedPane()
-    if pane.Type == PaneTypeList && pane.List != nil {
-        *pane.List, cmd = pane.List.Update(msg)
-    } else if pane.Type == PaneTypeViewport && pane.Viewport != nil {
-        *pane.Viewport, cmd = pane.Viewport.Update(msg)
-    }
-    
-    return m, cmd
 }
 
-// View renders the split pane layout.
-func (m SplitListPicker) View() string {
-    return RenderSplitOverlayBody(m.Styles, m.layout, SplitOverlaySpec{
-        LeftPane:  m.paneSpec(m.Left, m.FocusLeft),
-        RightPane: m.paneSpec(m.Right, !m.FocusLeft),
+func (m SplitListPicker) View(st styles.Styles, left, right SplitListPaneSpec) string {
+    return RenderSplitOverlayBody(st, m.layout, SplitOverlaySpec{
+        LeftPane: OverlayPaneSpec{
+            Title:        left.Title,
+            DividerWidth: m.layout.LeftInnerWidth,
+            Body:         left.Body,
+            Focused:      m.focus == SplitPaneFocusLeft,
+        },
+        RightPane: OverlayPaneSpec{
+            Title:        right.Title,
+            DividerWidth: m.layout.RightInnerWidth,
+            Body:         right.Body,
+            Focused:      m.focus == SplitPaneFocusRight,
+        },
     })
-}
-
-// paneSpec returns the OverlayPaneSpec for the given pane, with the rendered body.
-func (m SplitListPicker) paneSpec(pane PaneConfig, focused bool) OverlayPaneSpec {
-    var body string
-    switch pane.Type {
-    case PaneTypeList:
-        if pane.List != nil {
-            body = pane.List.View()
-        }
-    case PaneTypeViewport:
-        if pane.Viewport != nil {
-            body = pane.Viewport.View()
-        }
-    }
-    return OverlayPaneSpec{
-        Title:       pane.Title,
-        DividerWidth: m.layout.LeftPaneWidth,
-        Body:         body,
-        Focused:      focused,
-    }
-}
-
-// SelectedIndex returns the selected item index in the focused list pane, or -1.
-func (m SplitListPicker) SelectedIndex() int {
-    pane := m.FocusedPane()
-    if pane.Type == PaneTypeList && pane.List != nil {
-        return pane.List.Index()
-    }
-    return -1
-}
-
-// SetSelectedIndex sets the selection in the focused list pane.
-func (m *SplitListPicker) SetSelectedIndex(idx int) {
-    pane := m.FocusedPane()
-    if pane.Type == PaneTypeList && pane.List != nil {
-        pane.List.Select(idx)
-    }
-}
-
-// FocusRight sets focus to the right pane.
-func (m *SplitListPicker) FocusRight() {
-    m.FocusLeft = false
-}
-
-// SetLeft replaces the left pane configuration.
-func (m *SplitListPicker) SetLeft(pane PaneConfig) {
-    m.Left = pane
-    // Reset prevLeftIndex since pane content changed.
-    m.prevLeftIndex = 0
-}
-
-// SetRight replaces the right pane configuration.
-func (m *SplitListPicker) SetRight(pane PaneConfig) {
-    m.Right = pane
-}
-
-// LeftIndex returns the selected index of the left pane's list, or -1.
-func (m SplitListPicker) LeftIndex() int {
-    if m.Left.Type == PaneTypeList && m.Left.List != nil {
-        return m.Left.List.Index()
-    }
-    return -1
-}
-
-// RightIndex returns the selected index of the right pane's list, or -1.
-func (m SplitListPicker) RightIndex() int {
-    if m.Right.Type == PaneTypeList && m.Right.List != nil {
-        return m.Right.List.Index()
-    }
-    return -1
-}
-
-// PrevLeftIndex returns the selected index before the last Update call,
-// useful for detecting selection changes to trigger side effects (e.g. loading
-// worktrees when the repo selection changes).
-func (m *SplitListPicker) PrevLeftIndex() int {
-    return m.prevLeftIndex
-}
-
-// TrackPrevLeft saves the current left pane index as the previous value.
-func (m *SplitListPicker) TrackPrevLeft() {
-    m.prevLeftIndex = m.LeftIndex()
 }
 ```
 
@@ -403,80 +268,80 @@ The existing `ComputeSplitOverlayLayout` and `RenderSplitOverlayBody` in `overla
 ### 3.4 Usage Pattern
 
 ```go
-// In an overlay's Update method
-func (m *MyOverlay) Update(msg tea.Msg) (MyOverlay, tea.Cmd) {
-    switch msg := msg.(type) {
-    case tea.WindowSizeMsg:
-        m.picker.SetSize(msg.Width, msg.Height)
-        
-    case tea.KeyMsg:
-        m.picker, cmd := m.picker.Update(msg)
-        // Handle pane-specific actions based on SelectedIndex()
-        
-    default:
-        m.picker, cmd = m.picker.Update(msg)
+// In an overlay's Update method.
+case tea.KeyMsg:
+    if m.picker.HandleFocusKey(msg.String()) {
+        return m, nil
     }
+    if m.picker.IsFocusLeft() {
+        prevIdx := m.repoList.Index()
+        m.repoList, cmd = m.repoList.Update(msg)
+        if m.repoList.Index() != prevIdx {
+            wtCmd = m.maybeLoadWorktrees()
+        }
+        return m, tea.Batch(cmd, wtCmd)
+    }
+    m.detailViewport, cmd = m.detailViewport.Update(msg)
     return m, cmd
-}
 ```
-
----
 
 ## 4. Refactor: RepoManagerOverlay to Use SplitListPicker
 
 ### 4.1 Current State
 
-`RepoManagerOverlay` (overlay_repo_manager.go:47-606) has inline split-pane logic:
+`RepoManagerOverlay` (`internal/tui/views/overlay_repo_manager.go`) has inline split-pane focus and rendering logic:
 
-- Custom `focusPane` enum and switching logic
-- Duplicate navigation handling
+- Custom `repoManagerFocusArea` enum and switching logic
+- Duplicate split-pane rendering setup
 - Manual size calculations
 
 ### 4.2 Target State
 
 ```go
-// overlay_repo_manager.go (refactored)
-
 type RepoManagerOverlay struct {
     workspaceDir string
     gitClient    *gitwork.Client
-    
-    repos []managedRepo
-    
-    // Shared picker component
+
+    repos    []managedRepo
+    repoList list.Model
+
+    worktrees       []gitwork.Worktree
+    worktreeErr     error
+    worktreeLoading bool
+    worktreeReqID   int
+    detailViewport  viewport.Model
+
     picker components.SplitListPicker
-    
-    // Pane-specific state (extracted from picker for clarity)
-    repoList   list.Model
-    worktrees  []gitwork.Worktree
-    worktreeReqID int
-    
-    // Overlay-specific state
+
     pendingDelete *managedRepo
     pendingInit   *managedRepo
     loading       bool
-    
-    styles  styles.Styles
-    width   int
-    height  int
-    active  bool
+
+    styles        styles.Styles
+    width, height int
+    active        bool
 }
 ```
 
+The overlay continues to own `repoList` and `detailViewport`. The picker owns only focus/layout/rendering.
+
 ### 4.3 Refactoring Steps
 
-1. **Extract pane configuration** — identify how each pane is configured
-2. **Wire picker to RepoManagerOverlay** — replace inline focus/panes with picker
-3. **Preserve action handlers** — `a`, `d`, `i` keys remain overlay-specific
-4. **Update detail rendering** — `syncDetailViewport` continues to use viewport pane
+1. Add `picker components.SplitListPicker` initialized with `repoManagerSizingSpec`.
+2. Replace `focus repoManagerFocusArea` with `picker.Focus()` / `picker.IsFocusLeft()`.
+3. Keep `syncSizes` responsible for applying `picker.Layout()` dimensions to `repoList` and `detailViewport`.
+4. Preserve action handlers (`a`, `d`, `i`, `Esc`) in `RepoManagerOverlay.handleKey`.
+5. Preserve worktree side effects by comparing `repoList.Index()` before/after list updates.
+6. Delete the now-redundant `repoManagerFocusArea` enum after tests pass.
 
 ### 4.4 Key Changes
 
 | Before | After |
 |--------|-------|
-| Custom `focusPane` tracking | `picker.FocusLeft` |
-| Manual `handleKey` focus switching | `picker.Update` handles Tab/←/→ |
-| Inline navigation → worktree loading | Navigation via picker, side effects in overlay |
+| Custom `focus repoManagerFocusArea` tracking | `picker.Focus()` |
+| Manual `Tab`/`←`/`→` handling | `picker.HandleFocusKey(...)` |
+| Inline split-pane render setup | `picker.View(...)` with caller-provided pane bodies |
+| Overlay/list state duplicated in picker | Overlay remains sole owner of models |
 
 ### 4.5 Verify Behavior Preserved
 
@@ -487,224 +352,220 @@ Test these interactions after refactoring:
 | Tab/←/→ | Focus switches between repo list and detail |
 | ↑/k, ↓/j (list focused) | Navigate repos, loads worktrees |
 | ↑/k, ↓/j (detail focused) | Scroll detail viewport |
+| Mouse wheel (list focused) | Scroll list and load worktrees if selection changes |
+| Mouse wheel (detail focused) | Scroll detail viewport |
 | `a` | Opens Add Repo overlay |
 | `d` | Shows delete confirmation |
 | `i` | Initiates repo initialization |
 | Esc | Closes overlay |
 
----
-
 ## 5. New Worktree Picker Overlay
 
 ### 5.1 Overview
 
-A split-pane picker overlay for selecting repo+worktree combinations to open in terminal.
+A global App-level split-pane picker overlay for selecting repo+worktree combinations to open in terminal.
 
 ```
 ┌─ Open Terminal ─────────────────────────────────────┐
 │                                                      │
-│  [Repo A]──────────────┬─ Worktrees ────────────────│
-│  [Repo B]              │  ├─ main (main)           │
-│  [Repo C]              │  ├─ feature-x (active)    │
-│                        │  └─ feature-y              │
-│                        │                            │
-│                        ├─ Keybind hints ────────────│
-│                        │  [t] Open terminal         │
-└────────────────────────┴─────────────────────────────┘
+│  Repositories────────┬─ Worktrees ─────────────────│
+│  repo-a              │  main                       │
+│  repo-b              │  feature-x                  │
+│  repo-c              │  feature-y                  │
+│                      │                              │
+│                      ├─ Keybind hints ─────────────│
+│                      │  [t/Enter] Open terminal    │
+└──────────────────────┴──────────────────────────────┘
 ```
 
 ### 5.2 New File: `internal/tui/views/overlay_worktree_picker.go`
 
 ```go
-// overlay_worktree_picker.go
-
 type WorktreePickerOverlay struct {
     workspaceDir string
     gitClient    *gitwork.Client
-    
-    repos    []managedRepo
-    worktrees []gitwork.Worktree
-    
-    // Shared picker component
+
+    repos        []managedRepo
+    repoList     list.Model
+    worktrees    []gitwork.Worktree
+    worktreeList list.Model
+
     picker components.SplitListPicker
-    
-    // Pane-specific models
-    repoList      list.Model
-    worktreeList  list.Model
-    
-    // Worktree loading state
-    worktreesLoad   bool
+
+    worktreesLoading bool
+    worktreeErr     error
     worktreeReqID   int
-    
-    // Overlay state
+
+    loading bool
     styles  styles.Styles
     width   int
     height  int
     active  bool
 }
+```
 
-// NewWorktreePickerOverlay creates the overlay.
-func NewWorktreePickerOverlay(
-    workspaceDir string,
-    gitClient *gitwork.Client,
-    st styles.Styles,
-) WorktreePickerOverlay {
-    // Create list models
-    repoDelegate := list.NewDefaultDelegate()
-    repoDelegate.ShowDescription = true
-    repoList := list.New([]list.Item{}, repoDelegate, 60, 10)
-    // ... configure
-    
-    worktreeDelegate := list.NewDefaultDelegate()
-    worktreeList := list.New([]list.Item{}, worktreeDelegate, 60, 10)
-    // ... configure
-    
-    // Build initial picker config
-    picker := components.SplitListPicker{
-        Left: components.PaneConfig{
-            Type:  components.PaneTypeList,
-            Title: "Repositories",
-            List:  &repoList,
-        },
-        Right: components.PaneConfig{
-            Type:  components.PaneTypeList,
-            Title: "Worktrees",
-            List:  &worktreeList,
-        },
-        Styles: st,
-    }
-    
-    return WorktreePickerOverlay{
-        workspaceDir: workspaceDir,
-        gitClient:    gitClient,
-        repoList:     repoList,
-        worktreeList: worktreeList,
-        picker:       picker,
-        styles:       st,
-    }
+`WorktreePickerOverlay` owns both list models. `SplitListPicker` owns no list state.
+
+### 5.3 App-Level Ownership
+
+Add the overlay to `App`, not `SessionOverviewModel`:
+
+```go
+type overlayKind int
+
+const (
+    // ... existing overlays
+    overlayWorktreePicker
+)
+
+type App struct {
+    // ... existing fields
+    worktreePicker WorktreePickerOverlay
 }
 ```
 
-### 5.3 Key Bindings
+Initialization, resizing, key routing, message routing, closing, and rendering must mirror `repoManager`:
+
+- construct in `NewApp`
+- update in `applyServicesReload`
+- resize in `WindowSizeMsg`
+- route keys while `activeOverlay == overlayWorktreePicker`
+- render in `App.View()` via `renderOverlay(a.worktreePicker.View(), ...)`
+- close in the global `CloseOverlayMsg` path
+
+### 5.4 Key Bindings
 
 | Key | Action |
 |-----|--------|
 | `Tab` / `←` / `→` | Switch focus between repo list and worktree list |
 | `↑/k` `↓/j` | Navigate current pane |
 | `t` | Open terminal in selected worktree |
-| `Enter` | Open terminal in selected worktree (alternative) |
+| `Enter` | Open terminal in selected worktree |
 | `Esc` | Close overlay |
 
-### 5.4 Data Flow
+### 5.5 Data Flow
 
 ```
-1. User opens picker (from overview action)
-   └─ WorktreePickerOverlay.Open() called
-      └─ Load repos via workspace scan
-         └─ Populate repoList with managedRepo items
+1. User presses `t` in Overview
+   └─ SessionOverviewModel returns OpenWorktreePickerMsg
+      └─ App opens overlayWorktreePicker
+         └─ WorktreePickerOverlay.Open() returns LoadManagedReposCmd
 
-2. User navigates repo list
-   └─ On index change: LoadWorktreesCmd for selected repo
+2. ManagedReposLoadedMsg received
+   └─ App updates workspace slug cache
+   └─ App routes the message to WorktreePickerOverlay when activeOverlay == overlayWorktreePicker
+   └─ Overlay populates repoList and fires LoadWorktreesCmd for the selected repo
+
+3. User navigates repo list
+   └─ On index change: LoadWorktreesCmd(..., WorktreeLoadTargetPicker)
       └─ WorktreesLoadedMsg received
-         └─ Populate worktreeList
+         └─ App routes by msg.Target to the owning overlay
+         └─ Overlay populates worktreeList
 
-3. User presses t/Enter on selected worktree
-   └─ Get selected worktree path
-   └─ Return OpenTerminalInWorktreeMsg
-      └─ App handler: OpenTerminalCmd(path)
+4. User presses t/Enter on selected worktree
+   └─ Overlay returns OpenTerminalInWorktreeMsg
+      └─ App closes the overlay and runs OpenTerminalCmd(path)
 ```
 
-### 5.5 Worktree Loading (Reuse Existing Pattern)
+### 5.6 Worktree Loading (Reuse Existing Pattern, Scoped)
 
-The `SplitListPicker` does not automatically trigger side effects on selection change.
-`WorktreePickerOverlay` must detect left-pane selection changes and fire `LoadWorktreesCmd`:
+Extend `WorktreesLoadedMsg` and `LoadWorktreesCmd` so repo-manager and picker responses cannot be misrouted after an overlay closes or a stale request returns:
 
 ```go
-// maybeLoadWorktrees fires LoadWorktreesCmd for the currently selected repo.
+type WorktreeLoadTarget string
+
+const (
+    WorktreeLoadTargetRepoManager WorktreeLoadTarget = "repo_manager"
+    WorktreeLoadTargetPicker      WorktreeLoadTarget = "worktree_picker"
+)
+
+type WorktreesLoadedMsg struct {
+    Target    WorktreeLoadTarget
+    RequestID int
+    RepoPath  string
+    Worktrees []gitwork.Worktree
+    Err       error
+}
+
+func LoadWorktreesCmd(client *gitwork.Client, repo managedRepo, requestID int, target WorktreeLoadTarget) tea.Cmd
+```
+
+Update existing RepoManager call sites to pass `WorktreeLoadTargetRepoManager`. WorktreePicker passes `WorktreeLoadTargetPicker`.
+
+```go
 func (m *WorktreePickerOverlay) maybeLoadWorktrees() tea.Cmd {
-    selected := m.repoList.Index()
-    if selected < 0 || selected >= len(m.repos) {
+    idx := m.repoList.Index()
+    if idx < 0 || idx >= len(m.repos) {
         return nil
     }
 
-    // Clear stale worktrees
     m.worktrees = nil
-    m.worktreeList.SetItems([]list.Item{})
-    m.worktreesLoad = true
+    m.worktreeList.SetItems(nil)
+    m.worktreesLoading = true
+    m.worktreeErr = nil
     m.worktreeReqID++
 
     return LoadWorktreesCmd(
         m.gitClient,
-        m.repos[selected].Path,
+        m.repos[idx],
         m.worktreeReqID,
+        WorktreeLoadTargetPicker,
     )
 }
-
-// In WorktreePickerOverlay.Update:
-case tea.KeyMsg:
-    // Track selection before processing so we can compare after.
-    m.picker.TrackPrevLeft()
-    m.picker, cmd := m.picker.Update(msg)
-    // Detect left-pane selection change → reload worktrees.
-    if m.picker.PrevLeftIndex() != m.picker.LeftIndex() {
-        cmds = append(cmds, m.maybeLoadWorktrees())
-    }
-    return m, tea.Batch(cmds...)
-
-// On receiving WorktreesLoadedMsg:
-if msg.RequestID == m.worktreeReqID {
-    m.worktrees = msg.Worktrees
-    m.worktreesLoad = false
-    // Populate worktreeList items...
-}
 ```
-
----
 
 ## 6. Overview View Integration
 
-### 6.1 Remove Existing `t` Viewport Navigation
+### 6.1 Add `t` Key Handler for Terminal Picker
 
-The current overview has a `t` keybinding for viewport navigation (lines ~521). **Remove this binding** as part of the vim bindings removal plan. The `t` key will now be used exclusively for opening the terminal picker.
-
-Find and remove from `overview.go`:
-```go
-case "up", keyDown, "j", "k", "pgup", "pgdown", "home", "end":
-    m.viewport, cmd = m.viewport.Update(msg)
-    return m, cmd
-```
-
-### 6.2 Add `t` Key Handler for Terminal Picker
-
-Add `t` key handling directly in the overview's Update handler (near line 473, alongside the existing `o` handler):
+The current overview does not bind `t` for viewport navigation. Add `t` key handling directly in `SessionOverviewModel.Update()` alongside the existing overview shortcuts:
 
 ```go
-// overview.go - in SessionOverviewModel.Update() key handling
 case "t":
-    // Open the worktree picker overlay
-    m.overlay = overviewOverlayWorktreePicker
-    cmd := m.openWorktreePicker()
-    return m, cmd
+    return m, func() tea.Msg { return OpenWorktreePickerMsg{} }
 ```
+
+Only handle this when no overview-local overlay is open; existing overlay routing at the top of `Update` should continue to capture keys first.
+
+### 6.2 Add Status Bar Hint
+
+In `SessionOverviewModel.KeybindHints()`, append:
+
+```go
+hints = append(hints, KeybindHint{Key: "t", Label: "Open terminal"})
+```
+
+Keep source/review link hints on `o` unchanged.
 
 ### 6.3 App Message and Overlay Routing
 
-The picker overlay uses `OpenWorktreePickerMsg` to trigger opening:
+Add the message and route it in `App.Update`:
 
 ```go
-// msgs.go
 type OpenWorktreePickerMsg struct{}
+
+case OpenWorktreePickerMsg:
+    a.activeOverlay = overlayWorktreePicker
+    a.worktreePicker.SetSize(a.windowWidth, a.windowHeight)
+    return a, a.worktreePicker.Open()
 ```
-
-Route the message in the app-level Update handler to open the overlay.
-
----
 
 ## 7. Agent Session View Enhancement
 
 ### 7.1 Key Change: `o` → `t`
 
-Change the terminal shortcut from `o` to `t` to align with the unified keybinding:
+Change the terminal shortcut from `o` to `t` to align with the overview and picker terminal action.
+
+Because the session log currently uses `t` for “toggle thinking,” move that behavior to `ctrl+t` first:
+
+```go
+// planning_view.go / SessionLogModel.Update
+case "ctrl+t":
+    m.collapseThinking = !m.collapseThinking
+    m.doRebuildTranscript()
+```
+
+Then change the App-level terminal shortcut:
 
 ```go
 case "t":
@@ -715,24 +576,28 @@ case "t":
                 return a, OpenTerminalCmd(session.WorktreePath)
             }
         }
-        break
+        break // let content handle non-terminal `t` cases if any remain
     }
 ```
 
+Keep `o` available for session/sidebar sort behavior outside agent-session content.
+
 ### 7.2 Status Bar Hints
 
-In `sessionLog.KeybindHints()` or wherever session view hints are defined:
+Update `SessionLogModel.KeybindHints()`:
 
 ```go
-// Add to existing hints
 hints = append(hints, KeybindHint{Key: "t", Label: "Open Terminal"})
+if hasThinkingBlocks(m.entries) {
+    hints = append(hints, KeybindHint{Key: "Ctrl+T", Label: "Toggle thinking"})
+}
 ```
 
----
+Also update `overlay_help.go`, `action_menu.go`, and `app_open_terminal_test.go` so displayed shortcuts and tests match the new keymap.
 
 ## 8. Worktree Picker Message Flow
 
-### 8.1 Messages (msgs.go)
+### 8.1 Messages (`msgs.go`)
 
 ```go
 // OpenWorktreePickerMsg signals opening the worktree picker overlay.
@@ -743,41 +608,46 @@ type OpenTerminalInWorktreeMsg struct {
     WorktreePath string
 }
 
-// WorktreesLoadedMsg (already exists in cmds.go:1622-1635)
+// WorktreesLoadedMsg is extended with Target; see §5.6.
 ```
 
 ### 8.2 App Handler
 
 ```go
-// app.go - in App.Update
 case OpenTerminalInWorktreeMsg:
+    a.activeOverlay = overlayNone
+    a.worktreePicker.Close()
     return a, OpenTerminalCmd(msg.WorktreePath)
+
+case WorktreesLoadedMsg:
+    switch msg.Target {
+    case WorktreeLoadTargetPicker:
+        a.worktreePicker, cmd = a.worktreePicker.Update(msg)
+    default:
+        a.repoManager, cmd = a.repoManager.Update(msg)
+    }
+    return a, cmd
 ```
 
-### 8.3 Worktree Picker Commands
+### 8.3 Worktree Picker Command
 
 ```go
-// overlay_worktree_picker.go
-
-// openTerminalCmd returns the command to open terminal in selected worktree.
 func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
-    if m.worktreesLoad || len(m.worktrees) == 0 {
+    if m.worktreesLoading || len(m.worktrees) == 0 {
         return nil
     }
-    
+
     selectedIdx := m.worktreeList.Index()
     if selectedIdx < 0 || selectedIdx >= len(m.worktrees) {
         return nil
     }
-    
+
     path := m.worktrees[selectedIdx].Path
     return func() tea.Msg {
         return OpenTerminalInWorktreeMsg{WorktreePath: path}
     }
 }
 ```
-
----
 
 ## 9. Keyboard Shortcut Summary
 
@@ -789,28 +659,31 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 | Worktree picker | `Tab` / `←/→` | Switch focus between panes |
 | Repo manager | `Tab` / `←/→` | Switch focus between panes (existing) |
 | Agent session view | `t` | Open terminal in session's worktree |
+| Agent session view | `Ctrl+T` | Toggle thinking blocks |
 
 ---
 
 ## 10. Implementation Order
 
 ### Phase 1: Terminal Package (Foundation)
-1. Create `internal/terminal/detect.go` — terminal detection
-2. Create `internal/terminal/open.go` — terminal opening logic
-3. Update `OpenTerminalCmd` in `cmds.go` to use new terminal package
-4. Test with each terminal type
+1. Create `internal/terminal/types.go` — terminal type enum
+2. Create `internal/terminal/detect.go` — terminal detection
+3. Create `internal/terminal/open.go` — nonblocking/detached terminal opening logic
+4. Update `OpenTerminalCmd` in `cmds.go` to use new terminal package
+5. Delete unsafe terminal `shellEscape` usage
+6. Test command construction for each terminal type
 
 ### Phase 2: SplitListPicker Component
 1. Create `internal/tui/components/split_list_picker.go`
-2. Define `PaneConfig`, `SplitListPicker` types
-3. Implement `SetSize`, `Update`, `View`, `SwitchFocus`, `FocusedPane`
-4. Write unit tests for component behavior
+2. Define focus/layout-only `SplitListPicker` types
+3. Implement `SetSize`, `HandleFocusKey`, `View`, `SwitchFocus`, `Focus`
+4. Write unit tests for focus and layout behavior
 5. Verify compatible with existing `ComputeSplitOverlayLayout`
 
 ### Phase 3: Refactor RepoManagerOverlay
 1. Add `SplitListPicker` to `RepoManagerOverlay`
 2. Extract pane configurations
-3. Wire picker `Update` call in overlay's `Update`
+3. Wire picker focus/layout helpers in overlay's `Update`
 4. Preserve action handlers (`a`, `d`, `i`)
 5. Verify all interactions work (see test matrix in §4.5)
 6. Delete now-redundant inline split-pane logic
@@ -818,21 +691,22 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 ### Phase 4: WorktreePickerOverlay
 1. Create `overlay_worktree_picker.go`
 2. Compose `SplitListPicker` with two list panes
-3. Wire `LoadWorktreesCmd` on repo selection change
+3. Wire scoped `LoadWorktreesCmd(..., WorktreeLoadTargetPicker)` on repo selection change
 4. Add `t`/`Enter` key handler for terminal opening
 5. Test picker navigation and terminal opening
 
 ### Phase 5: Overview Integration
-1. Remove existing `t` viewport navigation binding from overview.go
-2. Add `t` key handler to open worktree picker overlay
-3. Add `OpenWorktreePickerMsg` to msgs.go
-4. Route `OpenWorktreePickerMsg` in app-level Update to show picker overlay
+1. Add `t` key handler to open worktree picker overlay
+2. Add `OpenWorktreePickerMsg` to msgs.go
+3. Add App-level `overlayWorktreePicker` field/routing/rendering
+4. Route `ManagedReposLoadedMsg` and scoped `WorktreesLoadedMsg` to the picker when appropriate
 
 ### Phase 6: Polish
-1. Add status bar hints for session view
-2. Update help overlay with new shortcuts
-3. Error handling improvements
-4. Edge case handling (no repos, no worktrees, etc.)
+1. Move session-log thinking toggle from `t` to `ctrl+t`
+2. Add status bar hints for overview/session/picker
+3. Update action menu and help overlay with new shortcuts
+4. Error handling improvements
+5. Edge case handling (no repos, no worktrees, invalid paths, missing terminal)
 
 ---
 
@@ -844,8 +718,8 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 ```go
 // internal/tui/components/split_list_picker_test.go
 func TestSplitListPicker_FocusSwitch(t *testing.T) { /* ... */ }
-func TestSplitListPicker_NavigationLeft(t *testing.T) { /* ... */ }
-func TestSplitListPicker_NavigationRight(t *testing.T) { /* ... */ }
+func TestSplitListPicker_HandleFocusKeyConsumesSwitchKeys(t *testing.T) { /* ... */ }
+func TestSplitListPicker_DoesNotConsumeNavigationKeys(t *testing.T) { /* ... */ }
 func TestSplitListPicker_SetSize(t *testing.T) { /* ... */ }
 func TestSplitListPicker_View(t *testing.T) { /* ... */ }
 ```
@@ -862,12 +736,13 @@ func TestDetect(t *testing.T) {
 **Terminal Opening:**
 ```go
 // internal/terminal/open_test.go
-func TestOpen_TerminalApp(t *testing.T) { /* ... */ }
-func TestOpen_ITerm2(t *testing.T) { /* ... */ }
-func TestOpen_Kitty(t *testing.T) { /* ... */ }
-func TestOpen_WezTerm(t *testing.T) { /* ... */ }
-func TestOpen_Warp(t *testing.T) { /* ... */ }
-func TestOpen_Alacritty(t *testing.T) { /* ... */ }
+func TestCommand_TerminalAppUsesQuotedPOSIXPath(t *testing.T) { /* ... */ }
+func TestCommand_ITerm2UsesQuotedPOSIXPath(t *testing.T) { /* ... */ }
+func TestCommand_KittyUsesCwdArg(t *testing.T) { /* ... */ }
+func TestCommand_WezTermUsesCwdArg(t *testing.T) { /* ... */ }
+func TestCommand_WarpUsesOpenAppWithPathArg(t *testing.T) { /* ... */ }
+func TestCommand_AlacrittyUsesWorkingDirectoryArg(t *testing.T) { /* ... */ }
+func TestOpenRejectsMissingDirectory(t *testing.T) { /* ... */ }
 ```
 
 ### 11.2 Integration Tests
@@ -882,6 +757,7 @@ func TestOpen_Alacritty(t *testing.T) { /* ... */ }
 - Full flow: overview action → picker → terminal opened
 - Repo selection triggers worktree loading
 - `t`/`Enter` opens terminal in selected worktree
+- Scoped worktree responses do not update the wrong overlay
 - Error cases: terminal not found, path invalid
 
 ### 11.3 Manual Testing Matrix
@@ -922,18 +798,18 @@ func TestOpen_Alacritty(t *testing.T) { /* ... */ }
 - Show toast/notification to user
 
 ### 12.3 Terminal Not Detected
-- Fall back to `open /path` (opens Finder on macOS if path is a directory)
-- Or: use `open -a Terminal.app /path`
+- On macOS, fall back to `open -a Terminal.app /path`, not bare `open /path` (Finder).
+- On Linux, try a known installed terminal command only when executable discovery succeeds; otherwise return an error toast.
 
 ### 12.4 Permission Denied (AppleScript)
 - macOS may require user permission for AppleScript
 - Log detailed error for debugging
 
 ### 12.5 Kitty Remote Control Not Enabled
-- Kitty requires `allow_remote_control=yes` in `~/.config/kitty/kitty.conf`
-- Verify with `KittyRemoteControlEnabled()` before attempting `kitten @` (checks `KITTY_WINDOW_ID` or `KITTY_LISTEN_ON`)
-- If not enabled: show user a one-time info message with instructions
-- Fall back to `open /path` (opens file manager) if user declines
+- Kitty requires `allow_remote_control=yes` or `remote_control_password` in `kitty.conf`.
+- Verify an addressing target with `KittyRemoteControlTargetAvailable()` before attempting `kitten @` (checks `KITTY_WINDOW_ID` or `KITTY_LISTEN_ON`).
+- Treat `kitten @` authorization failures as normal command errors and show a concise instruction toast.
+- Fall back to Terminal.app on macOS or return an actionable error; do not use bare `open /path` because that opens Finder
 
 ### 12.6 Empty Repo List
 - Show "No repositories found" in left pane
@@ -965,15 +841,15 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 | `internal/terminal/detect.go` | **NEW** — terminal detection |
 | `internal/terminal/open.go` | **NEW** — terminal opening |
 | `internal/terminal/types.go` | **NEW** — `TerminalType` enum |
-| `internal/tui/components/split_list_picker.go` | **NEW** — shared picker component |
+| `internal/tui/components/split_list_picker.go` | **NEW** — shared focus/layout picker component |
 | `internal/tui/components/split_list_picker_test.go` | **NEW** — component tests |
 | `internal/tui/views/overlay_repo_manager.go` | **REFACTOR** — use `SplitListPicker` |
 | `internal/tui/views/overlay_worktree_picker.go` | **NEW** — picker overlay |
-| `internal/tui/views/overview.go` | **MODIFY** — remove `t` viewport nav, add `t` handler for picker |
-| `internal/tui/views/app.go` | **MODIFY** — add `overlayWorktreePicker` enum, message handlers |
+| `internal/tui/views/overview.go` | **MODIFY** — add `t` handler for picker |
+| `internal/tui/views/app.go` | **MODIFY** — add `overlayWorktreePicker` enum, overlay field, size/key/message routing, render branch |
 | `internal/tui/views/cmds.go` | **MODIFY** — update `OpenTerminalCmd` to use terminal package |
-| `internal/tui/views/msgs.go` | **MODIFY** — add `OpenWorktreePickerMsg`, `OpenTerminalInWorktreeMsg` |
-| `internal/tui/views/help.go` | **MODIFY** — add new keyboard shortcuts |
+| `internal/tui/views/msgs.go` | **MODIFY** — add `OpenWorktreePickerMsg`, `OpenTerminalInWorktreeMsg`, scoped worktree load target |
+| `internal/tui/views/overlay_help.go` | **MODIFY** — add new keyboard shortcuts |
 
 ---
 
@@ -984,11 +860,11 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 | RepoManagerOverlay refactor breaks behavior | Medium | Extensive test matrix; incremental changes |
 | SplitListPicker too generic | Low | Start simple, add complexity only when needed |
 | Warp API never added | High | Document limitation; use `open -a Warp.app` as fallback |
-| Kitty remote control not enabled | Medium | Check for `KITTY_WINDOW_ID`, warn user if not available |
+| Kitty remote control not enabled | Medium | Require a target (`KITTY_WINDOW_ID` or `KITTY_LISTEN_ON`) and surface `kitten @` authorization failures as actionable errors |
 | AppleScript permissions | Low | Guide user through System Preferences |
-| Terminal detection wrong | Low | Provide manual override via settings |
+| Terminal detection wrong | Low | Prefer explicit env vars and executable discovery; future manual override via settings |
 | Worktrees stale after picker open | Low | Re-load on repo selection (already implemented) |
-| **Vim bindings removal blocks `t` key** | High | This plan assumes vim bindings (including `t` viewport nav) are removed first. Coordinate with the vim bindings removal plan before implementing Phase 5. |
+| `t` conflicts with thinking toggle | Medium | Move thinking toggle to `Ctrl+T` before changing terminal shortcut; update hints/tests/help in the same commit. |
 
 ---
 
@@ -1008,7 +884,10 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 
 ### WezTerm
 ```bash
-# New tab in existing window, with CWD
+# Preferred from inside WezTerm; uses WEZTERM_PANE to target the current window
+wezterm cli spawn --cwd /path/to/worktree
+
+# Fallback: ask an existing GUI instance for a new tab
 wezterm start --new-tab --cwd /path/to/worktree
 
 # New window
@@ -1032,11 +911,13 @@ kitten @ --to unix:/tmp/mykitty launch --type=tab --cwd /path
 
 ### iTerm2
 ```applescript
+set worktreePath to "/path/to/worktree"
+set cdCommand to "cd " & quoted form of worktreePath
 tell application "iTerm2"
     tell current window
         create tab with default profile
         tell current session
-            write text "cd /path/to/worktree"
+            write text cdCommand
         end tell
     end tell
 end tell
@@ -1044,8 +925,10 @@ end tell
 
 ### Terminal.app
 ```applescript
+set worktreePath to "/path/to/worktree"
+set cdCommand to "cd " & quoted form of worktreePath
 tell application "Terminal"
-    do script "cd /path/to/worktree" in front window
+    do script cdCommand in front window
 end tell
 ```
 
@@ -1071,7 +954,7 @@ alacritty --working-directory /path/to/worktree
 | iTerm2 | `iTerm.app` |
 | Terminal.app | `Apple_Terminal` |
 | Kitty | Not set (use `KITTY_WINDOW_ID`) |
-| WezTerm | Not set (use `WEZTERM_SOCK`) |
+| WezTerm | Not set (use `WEZTERM_PANE`; `WEZTERM_SOCK` as fallback heuristic) |
 | Alacritty | Not set |
 
 ---
@@ -1080,41 +963,29 @@ alacritty --working-directory /path/to/worktree
 
 ```go
 // Constructors
-func NewSplitListPicker(left, right PaneConfig, st styles.Styles) SplitListPicker
+func NewSplitListPicker(spec SplitOverlaySizingSpec) SplitListPicker
 
 // Configuration
-func (m *SplitListPicker) SetSize(width, height int)
-func (m *SplitListPicker) SetLeft(pane PaneConfig)
-func (m *SplitListPicker) SetRight(pane PaneConfig)
+func (m *SplitListPicker) SetSize(width, height, chromeLines int)
+func (m SplitListPicker) Layout() SplitOverlayLayout
 
 // Focus
-func (m *SplitListPicker) FocusedPane() *PaneConfig
-func (m *SplitListPicker) IsFocusLeft() bool       // Returns true if left pane is focused
-func (m *SplitListPicker) SwitchFocus()            // Toggle focus between panes
-func (m *SplitListPicker) FocusRight()             // Set focus to right pane
+func (m SplitListPicker) Focus() SplitPaneFocus
+func (m SplitListPicker) IsFocusLeft() bool
+func (m *SplitListPicker) SwitchFocus()
+func (m *SplitListPicker) FocusLeft()
+func (m *SplitListPicker) FocusRight()
+func (m *SplitListPicker) HandleFocusKey(key string) bool
 
-// Selection — operate on the currently focused pane
-func (m *SplitListPicker) SelectedIndex() int      // Focused pane list index, or -1
-func (m *SplitListPicker) SetSelectedIndex(idx int)
-
-// Selection — operate on a specific pane (useful for detecting changes)
-func (m *SplitListPicker) LeftIndex() int         // Left pane list index, or -1
-func (m *SplitListPicker) RightIndex() int        // Right pane list index, or -1
-
-// Change tracking — call TrackPrevLeft before Update to detect selection changes
-func (m *SplitListPicker) PrevLeftIndex() int     // Left index before last Update
-func (m *SplitListPicker) TrackPrevLeft()         // Save current left index as previous
-
-// Lifecycle
-func (m *SplitListPicker) Update(msg tea.Msg) (SplitListPicker, tea.Cmd)
-func (m *SplitListPicker) View() string
+// Rendering
+func (m SplitListPicker) View(st styles.Styles, left, right SplitListPaneSpec) string
 ```
 
 ---
 
 *Plan generated: 2026-05-18*
 *Updated: 2026-05-18 — Added SplitListPicker component and RepoManagerOverlay refactor*
-*Updated: 2026-05-19 — Fixed SplitListPicker View() to use correct OverlayPaneSpec fields; added FocusRight/SetLeft/SetRight/LeftIndex/RightIndex/PrevLeftIndex/TrackPrevLeft methods; fixed OverviewWorktreeRow.Worktrees to use gitwork.Worktree type; added KittyRemoteControlEnabled() detection helper; clarified worktree reload hook pattern*
-*Updated: 2026-05-22 — Fixed KITTY_PUBLIC_HOST → KITTY_LISTEN_ON (correct env var for --listen-on socket); fixed worktree reload comparison to use picker state consistently; reset prevLeftIndex in SetLeft/SetRight*
-*Updated: 2026-05-25 — Changed overview integration from action-card approach to direct key binding; use `t` universally for terminal actions; remove existing `t` viewport nav binding from overview (vim bindings removal); changed agent session `o` key to `t`; added IsFocusLeft() to SplitListPicker*
+*Updated: 2026-05-19 — Fixed SplitListPicker View() to use correct OverlayPaneSpec fields; added focus helpers; fixed OverviewWorktreeRow.Worktrees to use gitwork.Worktree type; added Kitty remote-control target detection helper; clarified worktree reload hook pattern*
+*Updated: 2026-05-22 — Fixed KITTY_PUBLIC_HOST → KITTY_LISTEN_ON (correct env var for --listen-on socket); fixed worktree reload comparison guidance*
+*Updated: 2026-05-25 — Changed overview integration from action-card approach to direct key binding; use `t` for terminal actions; move session-log thinking toggle to `Ctrl+T`; changed agent session `o` key to `t`; changed SplitListPicker to focus/layout-only ownership; made worktree load responses scoped; corrected App-level overlay routing, terminal command safety, Kitty/WezTerm detection guidance.*
 *Research sources: Warp GitHub Discussion #612, Issue #3959; iTerm2 AppleScript docs; Kitty remote control docs; WezTerm CLI docs; Alacritty Issue #6340*
