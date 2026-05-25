@@ -99,6 +99,8 @@ type SettingsPage struct { //nolint:recvcheck // Bubble Tea convention
 	editOptionCursor   int
 	revealSecrets      bool
 	dirty              bool
+	confirmModalOpen   bool // Modal state for exit confirmation
+	closeAfterSave     bool // true = close overlay after save completes
 	editInput          components.GrowingTextInput
 	styles             styles.Styles
 	errorText          string
@@ -137,6 +139,8 @@ func (m *SettingsPage) Open() {
 
 func (m *SettingsPage) Close() {
 	m.active = false
+	m.confirmModalOpen = false
+	m.closeAfterSave = false
 	m.focusSections()
 	m.closeFieldEditor()
 	m.errorText = ""
@@ -989,6 +993,9 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.confirmModalOpen {
+			return m.confirmModalKeyHandler(msg, svcs)
+		}
 		if m.editing {
 			return m.returnWithSyncedMainViewport(m.updateFieldEditor(msg))
 		}
@@ -1055,8 +1062,6 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 			}
 		case "r":
 			m.revealSecrets = !m.revealSecrets
-		case "s":
-			return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
 		case "t":
 			return m.returnWithSyncedMainViewport(m.testProviderCmd())
 		case "g":
@@ -1066,12 +1071,21 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 				m.focusSections()
 				return m.returnWithSyncedMainViewport(nil)
 			}
+			if m.dirty {
+				m.confirmModalOpen = true
+				return m.returnWithSyncedMainViewport(nil)
+			}
 			return m.returnWithSyncedMainViewport(func() tea.Msg { return CloseOverlayMsg{} })
 		}
 	case SettingsAppliedMsg:
 		m.statusText = msg.Message
 		m.errorText = ""
 		m.RefreshFromService()
+		if m.closeAfterSave {
+			m.closeAfterSave = false
+			m.dirty = false
+			return m.returnWithSyncedMainViewport(func() tea.Msg { return CloseOverlayMsg{} })
+		}
 	case SettingsProviderTestedMsg:
 		m.providerStatus[msg.Provider] = msg.Status
 		m.invalidateMainDocument()
@@ -1100,6 +1114,8 @@ func (m SettingsPage) Update(msg tea.Msg, svcs Services) (SettingsPage, tea.Cmd)
 		m.errorText = ""
 	case ErrMsg:
 		m.errorText = msg.Err.Error()
+		m.closeAfterSave = false
+		m.confirmModalOpen = false
 	}
 	return m.returnWithSyncedMainViewport(nil)
 }
@@ -1112,6 +1128,45 @@ func (m SettingsPage) applyCmd(svcs Services) tea.Cmd {
 		}
 		return SettingsAppliedMsg{Reload: result.Services, Message: result.Message}
 	}
+}
+
+func (m SettingsPage) confirmModalFooterText() string {
+	return "[" + keyEnter + "/y] Save  [n/esc] Discard"
+}
+
+func (m SettingsPage) renderConfirmExitModal() string {
+	frameWidth := min(96, max(24, m.width-4))
+	if m.width > 0 {
+		frameWidth = min(frameWidth, m.width)
+	}
+	contentWidth := m.styles.Chrome.OverlayFrame.InnerWidth(max(1, frameWidth))
+
+	header := []string{
+		m.styles.Title.Render("Unsaved Changes"),
+	}
+	body := "You have unsaved changes. Do you want to save before closing?"
+	footer := m.styles.Hint.Render(ansi.Truncate(m.confirmModalFooterText(), contentWidth, ""))
+
+	return components.RenderOverlayFrame(m.styles, frameWidth, components.OverlayFrameSpec{
+		HeaderLines: header,
+		Body:        body,
+		Footer:      footer,
+		Focused:     true,
+	})
+}
+
+func (m *SettingsPage) confirmModalKeyHandler(msg tea.KeyMsg, svcs Services) (SettingsPage, tea.Cmd) {
+	switch msg.String() {
+	case "y", keyEnter:
+		m.confirmModalOpen = false
+		m.closeAfterSave = true
+		return m.returnWithSyncedMainViewport(m.applyCmd(svcs))
+	case "n", keyEsc:
+		m.confirmModalOpen = false
+		m.dirty = false
+		return m.returnWithSyncedMainViewport(func() tea.Msg { return CloseOverlayMsg{} })
+	}
+	return *m, nil
 }
 
 func (m SettingsPage) testProviderCmd() tea.Cmd {
@@ -1245,6 +1300,11 @@ func (m SettingsPage) View() string {
 		Padding(0, 1).
 		Render(m.styles.Hint.Render(footerText))
 	base := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	if m.confirmModalOpen {
+		if modal := m.renderConfirmExitModal(); modal != "" {
+			return renderCenteredOverlay(base, modal, m.width, m.height)
+		}
+	}
 	if m.editing {
 		if modal := m.renderEditModal(); modal != "" {
 			return renderCenteredOverlay(base, modal, m.width, m.height)
@@ -1617,16 +1677,16 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 }
 
 func (m SettingsPage) footerText() string {
-	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [t] test  [r] reveal"
+	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [t] test  [r] reveal"
 	if providerSupportsLogin(providerForSection(m.currentSection())) {
-		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [s] save  [t] test  [g] login  [r] reveal"
+		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [t] test  [g] login  [r] reveal"
 	}
 	if m.editing {
 		hint = "[enter] save edit  [esc] cancel edit"
 	} else if m.fieldsFocused() {
-		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [t] test  [r] reveal"
+		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [r] reveal"
 		if providerSupportsLogin(providerForSection(m.currentSection())) {
-			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [s] save  [t] test  [g] login  [r] reveal"
+			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [g] login  [r] reveal"
 		}
 	}
 	extras := make([]string, 0, 2)

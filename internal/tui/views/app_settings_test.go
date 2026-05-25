@@ -50,6 +50,40 @@ func TestApp_EscClosesSettingsOverlay(t *testing.T) {
 	}
 }
 
+func TestApp_EscWithDirtyOpensConfirmModal(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Settings:      newTestSettingsService(),
+	})
+	app.activeOverlay = overlaySettings
+	app.settingsPage.Open()
+	app.settingsPage.SetDirty(true)
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// With dirty state, Esc should NOT emit CloseOverlayMsg
+	// Instead, it should open the confirm modal
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(CloseOverlayMsg); ok {
+			t.Fatal("expected Esc with dirty state NOT to emit CloseOverlayMsg; should open confirm modal instead")
+		}
+	}
+
+	updated, ok := model.(*App)
+	if !ok {
+		t.Fatalf("model = %T, want *App", model)
+	}
+
+	// The confirm modal should be open
+	if !updated.settingsPage.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+}
+
 func TestApp_SOpensSettingsOverlay(t *testing.T) {
 	t.Parallel()
 

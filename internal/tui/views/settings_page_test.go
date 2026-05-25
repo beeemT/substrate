@@ -1479,3 +1479,348 @@ func TestSettingsPage_DoesNotClobberDirtyEditsOnAsyncDiagnostics(t *testing.T) {
 		t.Fatal("dirty field edit was clobbered by RefreshFromService")
 	}
 }
+
+// fakeSettingsServiceWithSaveSuccess is a test fake that returns a controlled snapshot
+// and succeeds on Save for testing the confirm modal save flow.
+type fakeSettingsServiceWithSaveSuccess struct {
+	snapshot SettingsSnapshot
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) Snapshot() SettingsSnapshot {
+	sections := make([]SettingsSection, len(f.snapshot.Sections))
+	for i := range f.snapshot.Sections {
+		sections[i] = f.snapshot.Sections[i]
+		fields := make([]SettingsField, len(f.snapshot.Sections[i].Fields))
+		copy(fields, f.snapshot.Sections[i].Fields)
+		sections[i].Fields = fields
+	}
+	providers := make(map[string]ProviderStatus, len(f.snapshot.Providers))
+	for k, v := range f.snapshot.Providers {
+		providers[k] = v
+	}
+	return SettingsSnapshot{
+		Sections:         sections,
+		Providers:        providers,
+		RawYAML:          f.snapshot.RawYAML,
+		HarnessWarning:   f.snapshot.HarnessWarning,
+		DiagnosticsState: f.snapshot.DiagnosticsState,
+	}
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) RefreshConfigOnly(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) RefreshWithDiagnostics(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) Save(_ context.Context, _ []SettingsSection, _ Services) (SettingsApplyResult, error) {
+	return SettingsApplyResult{Message: "Settings saved successfully"}, nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) TestProvider(_ context.Context, _ string, _ []SettingsSection) (ProviderStatus, error) {
+	return ProviderStatus{}, nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) LoginProvider(_ context.Context, _, _ string, _ []SettingsSection, _ Services) (SettingsLoginResult, error) {
+	return SettingsLoginResult{}, nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) RefreshLoginSnapshot(_ context.Context, _ []SettingsSection) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) RefreshLoginSnapshotFromConfig(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveSuccess) SetDiagnosticsState(state SettingsDiagnosticsState) {
+	f.snapshot.DiagnosticsState = state
+}
+
+// fakeSettingsServiceWithSaveFailure is a test fake that fails on Save
+// for testing error handling from the confirm modal.
+type fakeSettingsServiceWithSaveFailure struct {
+	snapshot SettingsSnapshot
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) Snapshot() SettingsSnapshot {
+	sections := make([]SettingsSection, len(f.snapshot.Sections))
+	for i := range f.snapshot.Sections {
+		sections[i] = f.snapshot.Sections[i]
+		fields := make([]SettingsField, len(f.snapshot.Sections[i].Fields))
+		copy(fields, f.snapshot.Sections[i].Fields)
+		sections[i].Fields = fields
+	}
+	providers := make(map[string]ProviderStatus, len(f.snapshot.Providers))
+	for k, v := range f.snapshot.Providers {
+		providers[k] = v
+	}
+	return SettingsSnapshot{
+		Sections:         sections,
+		Providers:        providers,
+		RawYAML:          f.snapshot.RawYAML,
+		HarnessWarning:   f.snapshot.HarnessWarning,
+		DiagnosticsState: f.snapshot.DiagnosticsState,
+	}
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) RefreshConfigOnly(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) RefreshWithDiagnostics(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) Save(_ context.Context, _ []SettingsSection, _ Services) (SettingsApplyResult, error) {
+	return SettingsApplyResult{}, errors.New("save failed")
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) TestProvider(_ context.Context, _ string, _ []SettingsSection) (ProviderStatus, error) {
+	return ProviderStatus{}, nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) LoginProvider(_ context.Context, _, _ string, _ []SettingsSection, _ Services) (SettingsLoginResult, error) {
+	return SettingsLoginResult{}, nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) RefreshLoginSnapshot(_ context.Context, _ []SettingsSection) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) RefreshLoginSnapshotFromConfig(_ context.Context, _ *config.Config) error {
+	return nil
+}
+
+func (f *fakeSettingsServiceWithSaveFailure) SetDiagnosticsState(state SettingsDiagnosticsState) {
+	f.snapshot.DiagnosticsState = state
+}
+
+func TestSettingsPage_EscWithDirtyOpensConfirmModal(t *testing.T) {
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.Open()
+	page.SetDirty(true)
+
+	if page.confirmModalOpen {
+		t.Fatal("confirmModalOpen should be false initially")
+	}
+
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+}
+
+func TestSettingsPage_EscWithoutDirtyClosesOverlay(t *testing.T) {
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.Open()
+
+	if page.dirty {
+		t.Fatal("dirty should be false initially")
+	}
+
+	_, cmd := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if cmd == nil {
+		t.Fatal("expected Esc without dirty state to emit close-overlay command")
+	}
+	msg := cmd()
+	if _, ok := msg.(CloseOverlayMsg); !ok {
+		t.Fatalf("msg = %T, want CloseOverlayMsg", msg)
+	}
+}
+
+func TestSettingsPage_EnterWithConfirmModalSavesAndCloses(t *testing.T) {
+	t.Parallel()
+	// Use the service that returns success on Save
+	svc := &fakeSettingsServiceWithSaveSuccess{
+		snapshot: SettingsSnapshot{
+			Sections:         buildSettingsSections(&config.Config{}),
+			Providers:        buildProviderStatuses(&config.Config{}),
+			DiagnosticsState: SettingsDiagnosticsReady,
+		},
+	}
+	page := NewSettingsPage(svc, styles.NewStyles(styles.DefaultTheme))
+	page.SetSize(120, 40)
+	page.Open()
+	page.SetDirty(true)
+
+	// Open the confirm modal first
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+
+	// Press Enter to confirm save
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if cmd == nil {
+		t.Fatal("expected Enter with modal open to trigger save command")
+	}
+
+	// Execute the save command
+	msg := cmd()
+	if _, ok := msg.(SettingsAppliedMsg); !ok {
+		t.Fatalf("msg = %T, want SettingsAppliedMsg", msg)
+	}
+
+	// Apply the message to the page - this should close the overlay
+	updated, cmd = updated.Update(msg, Services{})
+	if cmd == nil {
+		t.Fatal("expected CloseOverlayMsg command after successful save with closeAfterSave")
+	}
+
+	closeMsg := cmd()
+	if _, ok := closeMsg.(CloseOverlayMsg); !ok {
+		t.Fatalf("msg = %T, want CloseOverlayMsg after successful save", closeMsg)
+	}
+}
+
+func TestSettingsPage_YKeyWithConfirmModalSavesAndCloses(t *testing.T) {
+	t.Parallel()
+	svc := &fakeSettingsServiceWithSaveSuccess{
+		snapshot: SettingsSnapshot{
+			Sections:         buildSettingsSections(&config.Config{}),
+			Providers:        buildProviderStatuses(&config.Config{}),
+			DiagnosticsState: SettingsDiagnosticsReady,
+		},
+	}
+	page := NewSettingsPage(svc, styles.NewStyles(styles.DefaultTheme))
+	page.SetSize(120, 40)
+	page.Open()
+	page.SetDirty(true)
+
+	// Open the confirm modal first
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+
+	// Press y to confirm save
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}, Services{})
+	if cmd == nil {
+		t.Fatal("expected y key with modal open to trigger save command")
+	}
+
+	// Execute the save command
+	msg := cmd()
+	if _, ok := msg.(SettingsAppliedMsg); !ok {
+		t.Fatalf("msg = %T, want SettingsAppliedMsg", msg)
+	}
+
+	// Apply the message to the page - this should close the overlay
+	updated, cmd = updated.Update(msg, Services{})
+	if cmd == nil {
+		t.Fatal("expected CloseOverlayMsg command after successful save with closeAfterSave")
+	}
+
+	closeMsg := cmd()
+	if _, ok := closeMsg.(CloseOverlayMsg); !ok {
+		t.Fatalf("msg = %T, want CloseOverlayMsg after successful save", closeMsg)
+	}
+}
+
+func TestSettingsPage_NKeyWithConfirmModalDiscardsAndCloses(t *testing.T) {
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.Open()
+	page.SetDirty(true)
+
+	// Open the confirm modal first
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+
+	// Press n to discard
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}, Services{})
+	if cmd == nil {
+		t.Fatal("expected n key with modal open to emit close-overlay command")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(CloseOverlayMsg); !ok {
+		t.Fatalf("msg = %T, want CloseOverlayMsg after discarding", msg)
+	}
+}
+
+func TestSettingsPage_EscWithConfirmModalDiscardsAndCloses(t *testing.T) {
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.Open()
+	page.SetDirty(true)
+
+	// Open the confirm modal first
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+
+	// Press Esc again to discard
+	_, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if cmd == nil {
+		t.Fatal("expected Esc with modal open to emit close-overlay command")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(CloseOverlayMsg); !ok {
+		t.Fatalf("msg = %T, want CloseOverlayMsg after discarding with Esc", msg)
+	}
+}
+
+func TestSettingsPage_FooterTextDoesNotShowSaveHint(t *testing.T) {
+	t.Parallel()
+	page := newTestSettingsPage(&config.Config{})
+	page.Open()
+	page.SetSize(120, 40)
+
+	output := page.View()
+	if strings.Contains(output, "[s] save") {
+		t.Fatal("footer should not contain '[s] save' hint")
+	}
+	if strings.Contains(output, "[s]Save") {
+		t.Fatal("footer should not contain '[s]Save' hint")
+	}
+}
+
+func TestSettingsPage_SaveFailureFromConfirmModalClosesModal(t *testing.T) {
+	t.Parallel()
+	svc := &fakeSettingsServiceWithSaveFailure{
+		snapshot: SettingsSnapshot{
+			Sections:         buildSettingsSections(&config.Config{}),
+			Providers:        buildProviderStatuses(&config.Config{}),
+			DiagnosticsState: SettingsDiagnosticsReady,
+		},
+	}
+	page := NewSettingsPage(svc, styles.NewStyles(styles.DefaultTheme))
+	page.SetSize(120, 40)
+	page.Open()
+	page.SetDirty(true)
+
+	// Open the confirm modal first
+	updated, _ := page.Update(tea.KeyMsg{Type: tea.KeyEsc}, Services{})
+	if !updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be true after Esc with dirty state")
+	}
+
+	// Press Enter to confirm save
+	updated, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter}, Services{})
+	if cmd == nil {
+		t.Fatal("expected Enter with modal open to trigger save command")
+	}
+
+	// Execute the save command - it will fail
+	msg := cmd()
+	if _, ok := msg.(ErrMsg); !ok {
+		t.Fatalf("msg = %T, want ErrMsg from failed save", msg)
+	}
+
+	// Apply the error message - confirmModalOpen should be false so user isn't trapped
+	updated, _ = updated.Update(msg, Services{})
+	if updated.confirmModalOpen {
+		t.Fatal("expected confirmModalOpen to be false after save failure")
+	}
+}
