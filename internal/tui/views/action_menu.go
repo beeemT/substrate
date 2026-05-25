@@ -313,18 +313,16 @@ func formatActionRow(action Action, width int, selected bool, st styles.Styles) 
 		label = action.Label
 	}
 
-	shortcut := fmt.Sprintf("[%s]", action.Shortcut)
-	shortcutStyled := st.Hint.Render(shortcut)
-
-	row := fmt.Sprintf("  %-*s %s", labelWidth, label, shortcutStyled)
+	// Build row from plain components to avoid slicing lipgloss-styled strings.
+	plainRow := fmt.Sprintf("  %-*s [%s]", labelWidth, label, action.Shortcut)
 
 	if selected {
-		// Avoid slicing styled strings - render selection indicator separately
-		selectedRow := st.Title.Render(row)
-		return st.Title.Render("▶") + selectedRow[2:]
+		// Prefix with styled indicator, skip the first two padding spaces.
+		return st.Title.Render("▶ ") + plainRow[2:]
 	}
 
-	return row
+	// Apply hint style to the shortcut portion only.
+	return fmt.Sprintf("  %-*s %s", labelWidth, label, st.Hint.Render(action.Shortcut))
 }
 
 // centerText centers text within a given width.
