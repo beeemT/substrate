@@ -345,20 +345,23 @@ func (e SidebarEntry) Subtitle() string {
 	return strings.Join(parts, " · ")
 }
 
+const sidebarHeaderLines = 2 // title + divider
+
 // SidebarModel manages the session list sidebar.
 type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
-	entries    []SidebarEntry
-	cursor     int
-	title      string
-	styles     styles.Styles
-	width      int
-	height     int
-	cachedView *string // render cache; pointer survives value-receiver copies
-	viewDirty  *bool   // true when state changed since last View()
-	paneMode   sidebarPaneMode
-	filter     SidebarFilter
-	dimension  SidebarDimension
-	direction  SidebarDirection
+	entries      []SidebarEntry
+	cursor       int
+	scrollOffset int // first visible entry index (tracks viewport position)
+	title        string
+	styles       styles.Styles
+	width        int
+	height       int
+	cachedView   *string // render cache; pointer survives value-receiver copies
+	viewDirty    *bool   // true when state changed since last View()
+	paneMode     sidebarPaneMode
+	filter       SidebarFilter
+	dimension    SidebarDimension
+	direction    SidebarDirection
 }
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
@@ -433,12 +436,14 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 	for i, entry := range m.entries {
 		if entry.WorkItemID == selectedWorkItemID && entry.SessionID == selectedSessionID {
 			m.cursor = i
+			m.ensureCursorVisible()
 
 			return
 		}
 	}
 	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
+		m.ensureCursorVisible()
 	}
 }
 
@@ -542,6 +547,7 @@ func (m *SidebarModel) MoveUp() {
 	if m.cursor < 0 {
 		m.cursor = lastSelectableIndex(m.entries)
 		*m.viewDirty = true
+		m.ensureCursorVisible()
 
 		return
 	}
@@ -549,6 +555,7 @@ func (m *SidebarModel) MoveUp() {
 		if m.entries[i].Kind != SidebarEntryGroupHeader {
 			m.cursor = i
 			*m.viewDirty = true
+			m.ensureCursorVisible()
 
 			return
 		}
@@ -566,6 +573,7 @@ func (m *SidebarModel) MoveDown() {
 	if m.cursor < 0 {
 		m.cursor = firstSelectableIndex(m.entries)
 		*m.viewDirty = true
+		m.ensureCursorVisible()
 
 		return
 	}
@@ -573,6 +581,7 @@ func (m *SidebarModel) MoveDown() {
 		if m.entries[i].Kind != SidebarEntryGroupHeader {
 			m.cursor = i
 			*m.viewDirty = true
+			m.ensureCursorVisible()
 
 			return
 		}
@@ -582,6 +591,7 @@ func (m *SidebarModel) MoveDown() {
 // GotoTop moves the cursor to the first selectable entry.
 func (m *SidebarModel) GotoTop() {
 	m.cursor = firstSelectableIndex(m.entries)
+	m.scrollOffset = 0
 	*m.viewDirty = true
 }
 
@@ -589,12 +599,87 @@ func (m *SidebarModel) GotoTop() {
 func (m *SidebarModel) GotoBottom() {
 	m.cursor = lastSelectableIndex(m.entries)
 	*m.viewDirty = true
+	m.ensureCursorVisible()
 }
 
 // ClearSelection clears the current sidebar selection.
 func (m *SidebarModel) ClearSelection() {
 	m.cursor = -1
+	m.scrollOffset = 0
 	*m.viewDirty = true
+}
+
+// ensureCursorVisible adjusts scrollOffset so that the current cursor is visible
+// in the viewport, preferring to keep the cursor at the bottom of the viewport
+// when scrolling down. Call after any cursor mutation.
+func (m *SidebarModel) ensureCursorVisible() {
+	if m.cursor < 0 || len(m.entries) == 0 {
+		return
+	}
+	availableRows := max(0, m.height-sidebarHeaderLines)
+	if availableRows <= 0 {
+		return
+	}
+	// Find the index after the last fully-visible entry starting from scrollOffset.
+	endIdx := m.scrollOffset
+	visibleRows := 0
+	for i := m.scrollOffset; i < len(m.entries); i++ {
+		r := entryRowHeight(m.entries[i])
+		if visibleRows+r > availableRows {
+			break
+		}
+		visibleRows += r
+		endIdx = i + 1
+	}
+	// Case 1: cursor is below or at the bottom edge of the current viewport.
+	// Compute how many rows the viewport must span to show entries from
+	// some start up to (and including) the cursor. Shift the viewport up
+	// until that span fits in availableRows, landing the cursor at the bottom.
+	if m.cursor >= endIdx {
+		cursorHeight := entryRowHeight(m.entries[m.cursor])
+		newOffset := m.cursor
+		// Accumulate rows from newOffset up to cursor; stop when we've filled
+		// availableRows or hit the top of the list.
+		rowsNeeded := cursorHeight
+		for newOffset > 0 {
+			prevHeight := entryRowHeight(m.entries[newOffset-1])
+			if rowsNeeded+prevHeight > availableRows {
+				break
+			}
+			rowsNeeded += prevHeight
+			newOffset--
+		}
+		// If the cursor itself is taller than the full viewport, pin it to the top
+		// (same as the existing GotoBottom behaviour for oversized entries).
+		if newOffset == m.cursor && cursorHeight > availableRows {
+			newOffset = 0
+		}
+		if newOffset != m.scrollOffset {
+			m.scrollOffset = newOffset
+			*m.viewDirty = true
+		}
+		return
+	}
+	// Case 2: cursor is above the current viewport. Back up scrollOffset,
+	// keeping endIdx fixed, until entries [scrollOffset..endIdx-1] all fit.
+	if m.cursor < m.scrollOffset {
+		for m.scrollOffset > m.cursor {
+			testOffset := m.scrollOffset - 1
+			rowUsed := 0
+			for i := testOffset; i < endIdx; i++ {
+				if rowUsed+entryRowHeight(m.entries[i]) > availableRows {
+					break
+				}
+				rowUsed += entryRowHeight(m.entries[i])
+			}
+			if rowUsed <= availableRows {
+				m.scrollOffset = testOffset
+			} else {
+				break
+			}
+		}
+		*m.viewDirty = true
+	}
 }
 
 // SelectEntry moves the cursor to the matching work-item/session pair when present.
@@ -603,6 +688,7 @@ func (m *SidebarModel) SelectEntry(workItemID, sessionID string) bool {
 		if entry.WorkItemID == workItemID && entry.SessionID == sessionID {
 			m.cursor = i
 			*m.viewDirty = true
+			m.ensureCursorVisible()
 
 			return true
 		}
@@ -644,8 +730,7 @@ func (m SidebarModel) View() string {
 	if width <= 0 {
 		width = SidebarWidth
 	}
-	const headerLines = 2 // title + divider
-	availableRows := max(0, m.height-headerLines)
+	availableRows := max(0, m.height-sidebarHeaderLines)
 	// Determine visible entries and whether scrolling is needed.
 	var start, end int
 	var needsScroll bool
@@ -663,17 +748,8 @@ func (m SidebarModel) View() string {
 		}
 		if visibleEntryCount < len(m.entries) {
 			needsScroll = true
-			// Need scrolling. Start from cursor (clamped to 0 if unselected).
-			start = max(0, m.cursor)
-			cursorRows := entryRowHeight(m.entries[start])
-			for start > 0 {
-				prevRows := entryRowHeight(m.entries[start-1])
-				if cursorRows+prevRows > availableRows {
-					break
-				}
-				start--
-				cursorRows += prevRows
-			}
+			// Use the persisted scroll offset to determine first visible entry.
+			start = min(max(m.scrollOffset, 0), max(0, len(m.entries)-1))
 			end = 0
 			rowUsed := 0
 			for i := start; i < len(m.entries); i++ {
