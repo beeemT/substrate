@@ -89,24 +89,16 @@ func (sm *ServiceManager) Rebuild(ctx context.Context, cfg *config.Config, curre
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Stop old PR/MR refresh goroutines before building new services.
-	// This prevents orphaned goroutines when adapters change or workspace updates.
-	if sm.services != nil {
-		for _, stop := range sm.services.RefreshStoppers {
-			if stop != nil {
-				stop()
-			}
-		}
-	}
-
 	svcs, err := sm.buildServices(ctx, cfg, current)
 	if err != nil {
 		return nil, err
 	}
 
-	// Tear down old services only after new ones are built successfully.
-	if sm.services != nil && sm.services.Bus != nil {
-		sm.services.Bus.Close()
+	// Tear down old services before replacing.
+	// Close() stops all foremen, aborts all sessions, stops refresh goroutines,
+	// and closes the event bus.
+	if sm.services != nil {
+		sm.services.Close(context.WithoutCancel(ctx))
 	}
 
 	sm.services = svcs
