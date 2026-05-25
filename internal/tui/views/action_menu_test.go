@@ -29,36 +29,12 @@ func TestFuzzyMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// Access the fuzzyMatch function via the package
-			result := fuzzyMatch(tt.query, tt.label)
+			result := views.FuzzyMatch(tt.query, tt.label)
 			if result != tt.expected {
-				t.Errorf("fuzzyMatch(%q, %q) = %v, want %v", tt.query, tt.label, result, tt.expected)
+				t.Errorf("FuzzyMatch(%q, %q) = %v, want %v", tt.query, tt.label, result, tt.expected)
 			}
 		})
 	}
-}
-
-// fuzzyMatch is exported from the views package for testing.
-func fuzzyMatch(query, label string) bool {
-	if query == "" {
-		return true
-	}
-	query = strings.ToLower(query)
-	label = strings.ToLower(label)
-
-	// Substring match (fast path)
-	if strings.Contains(label, query) {
-		return true
-	}
-
-	// Character-by-character match
-	qi := 0
-	for _, c := range label {
-		if qi < len(query) && rune(query[qi]) == c {
-			qi++
-		}
-	}
-	return qi == len(query)
 }
 
 // TestActionMenuModelView tests that the action menu View renders correctly.

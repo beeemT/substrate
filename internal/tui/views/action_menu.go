@@ -12,6 +12,8 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+const keyBackspace = "backspace"
+
 // ActionContext identifies the context in which the action menu was opened.
 type ActionContext int
 
@@ -104,7 +106,7 @@ func (m *ActionMenuModel) refresh() {
 func (m *ActionMenuModel) updateMatches() {
 	m.matches = nil
 	for i := range m.actions {
-		if fuzzyMatch(m.query, m.actions[i].Label) {
+		if FuzzyMatch(m.query, m.actions[i].Label) {
 			m.matches = append(m.matches, i)
 		}
 	}
@@ -114,8 +116,8 @@ func (m *ActionMenuModel) updateMatches() {
 	}
 }
 
-// fuzzyMatch returns true if query matches label using fuzzy matching.
-func fuzzyMatch(query, label string) bool {
+// FuzzyMatch returns true if query matches label using fuzzy matching.
+func FuzzyMatch(query, label string) bool {
 	if query == "" {
 		return true
 	}
@@ -170,6 +172,13 @@ func (m ActionMenuModel) handleKeyMsg(msg tea.KeyMsg) (ActionMenuModel, tea.Cmd)
 	case keyDown:
 		if m.cursor < len(m.matches)-1 {
 			m.cursor++
+		}
+		return m, nil
+
+	case keyBackspace:
+		if len(m.query) > 0 {
+			m.query = m.query[:len(m.query)-1]
+			m.updateMatches()
 		}
 		return m, nil
 
@@ -290,8 +299,8 @@ func formatActionRow(action Action, width int, selected bool, st styles.Styles) 
 	shortcutWidth := len(action.Shortcut) + 4 // "[shortcut] "
 	labelWidth := width - shortcutWidth - 2   // -2 for padding
 
-	if labelWidth < 0 {
-		labelWidth = 0
+	if labelWidth < 1 {
+		labelWidth = 1
 	}
 
 	// Truncate label if needed
@@ -803,7 +812,6 @@ func overviewLinksActions(a *App) []Action {
 
 func workspaceInitActions(a *App) []Action {
 	return []Action{
-		{ID: "init_workspace", Label: "Initialize workspace/repositories", Shortcut: "Enter", Priority: 910, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return nil }},
 		{ID: "cancel_workspace", Label: "Cancel workspace init", Shortcut: "Esc", Priority: 925, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return WorkspaceCancelMsg{} } }},
 	}
 }
@@ -846,7 +854,7 @@ func settingsActions(a *App) []Action {
 
 func logsActions(a *App) []Action {
 	return []Action{
-		{ID: "copy_all_logs", Label: "Copy all", Shortcut: "y", Priority: 840, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return nil }},
+		{ID: "close_logs", Label: "Close logs", Shortcut: "Esc", Priority: 900, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return CloseOverlayMsg{} } }},
 	}
 }
 

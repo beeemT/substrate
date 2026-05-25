@@ -1288,6 +1288,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.addRepo.SetSize(msg.Width, msg.Height)
 		a.repoManager.SetSize(msg.Width, msg.Height)
 		a.newSessionAutonomousOverlay.SetSize(msg.Width, msg.Height)
+		a.actionMenu.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case WorkspaceHealthCheckMsg:
