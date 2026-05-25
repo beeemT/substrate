@@ -1,9 +1,10 @@
 # 01 - Domain Model
-<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
+
+<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
 Current domain types, state machines, and relationship rules for Substrate.
 This document describes repository HEAD, not earlier naming.
 
-User-facing copy still says “work item” and “session history” in places. Internally, the persisted root aggregate is `domain.Session`, and a repo-scoped agent run is `domain.Task`.
+User-facing copy still says "work item" and "session history" in places. Internally, the persisted root aggregate is `domain.Session`, and a repo-scoped agent run is `domain.Task`.
 
 ---
 
@@ -13,504 +14,204 @@ User-facing copy still says “work item” and “session history” in places.
 
 `Session` is the root aggregate for a unit of tracked work. It represents the external issue / project / initiative / manual request that Substrate is moving through planning, implementation, and review.
 
-```go
-type Session struct {
-	ID            string
-	WorkspaceID   string
-	ExternalID    string
-	Source        string
-	Title         string
-	Description   string
-	Labels        []string
-	AssigneeID    string
-	State         SessionState
-	Metadata      map[string]any
-	ExtraContext  string
-	SourceScope   SelectionScope
-	SourceItemIDs []string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	PreviousState SessionState
-}
+**State enum:**
 
-type SessionState string
-
-const (
-	SessionIngested     SessionState = "ingested"
-	SessionPlanning     SessionState = "planning"
-	SessionPlanReview   SessionState = "plan_review"
-	SessionApproved     SessionState = "approved"
-	SessionImplementing SessionState = "implementing"
-	SessionReviewing    SessionState = "reviewing"
-	SessionCompleted    SessionState = "completed"
-	SessionMerged       SessionState = "merged"
-	SessionFailed       SessionState = "failed"
-	SessionArchived     SessionState = "archived"
-)
-```
+| Value | Meaning |
+|---|---|
+| `ingested` | Received from an adapter; not yet started |
+| `planning` | Planner is running |
+| `plan_review` | Plan is ready for human approval |
+| `approved` | Plan approved; waiting to begin |
+| `implementing` | Implementation runs are active |
+| `reviewing` | Human attention required — at least one repo escalated after automated review |
+| `completed` | Work accepted; no further automated action |
+| `merged` | All linked PRs/MRs are merged (terminal success) |
+| `failed` | Work item encountered a terminal failure |
+| `archived` | Removed from active views |
 
 Important invariants owned by `SessionService`:
 
 - `WorkspaceID` is required.
 - Initial state must be `ingested`.
-- `external_id` uniqueness is enforced per workspace when applicable.
+- External ID uniqueness is enforced per workspace when applicable.
 - `SourceItemIDs` are used to prevent duplicate ingestion of the same scoped tracker item set.
-- `SessionMerged` is a terminal success state distinct from `SessionCompleted`. The transition `SessionCompleted -> SessionMerged` is set by the GitHub/GitLab refresh loop once every PR/MR linked to the work item reaches `merged`. Follow-up re-planning is hidden for merged sessions; inspection remains available.
+- `merged` is a terminal success state distinct from `completed`. The transition `completed → merged` is driven by the GitHub/GitLab refresh loop once every linked PR/MR reaches the merged state. Follow-up re-planning is hidden for merged sessions; inspection remains available.
 
 ### Selection Model
 
 Selection scope records how a root `Session` was created from an adapter.
 
-```go
-type SelectionScope string
-
-const (
-	ScopeIssues      SelectionScope = "issues"
-	ScopeProjects    SelectionScope = "projects"
-	ScopeInitiatives SelectionScope = "initiatives"
-	ScopeManual      SelectionScope = "manual"
-)
-```
+| Value | Meaning |
+|---|---|
+| `issues` | Created from one or more tracker issues |
+| `projects` | Created from a project board |
+| `initiatives` | Created from an initiative/epic |
+| `manual` | Created directly by the operator |
 
 ### Plan and TaskPlan
 
-A `Plan` is the cross-repo orchestration record for one root `Session`. `TaskPlan` is the per-repository slice of that plan.
+A `Plan` is the cross-repository orchestration record for one root `Session`. `TaskPlan` is the per-repository slice of that plan.
 
-```go
-type Plan struct {
-	ID               string
-	WorkItemID       string
-	Status           PlanStatus
-	OrchestratorPlan string
-	Version          int
-	FAQ              []FAQEntry
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-}
+**Plan status:**
 
-type FAQEntry struct {
-	ID             string
-	PlanID         string
-	AgentSessionID string
-	RepoName       string
-	Question       string
-	Answer         string
-	AnsweredBy     string
-	CreatedAt      time.Time
-}
+| Value | Meaning |
+|---|---|
+| `draft` | Being drafted by the planner |
+| `pending_review` | Awaiting human approval |
+| `approved` | Approved and ready to execute |
+| `rejected` | Rejected; planner should revise |
+| `superseded` | Replaced by a newer plan; retained for audit |
 
-type PlanStatus string
+**TaskPlan status:**
 
-const (
-	PlanDraft         PlanStatus = "draft"
-	PlanPendingReview PlanStatus = "pending_review"
-	PlanApproved      PlanStatus = "approved"
-	PlanRejected      PlanStatus = "rejected"
-	PlanSuperseded    PlanStatus = "superseded"
-)
-
-type TaskPlan struct {
-	ID             string
-	PlanID         string
-	RepositoryName string
-	Content        string
-	Order          int
-	Status         TaskPlanStatus
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-}
-
-type TaskPlanStatus string
-
-const (
-	SubPlanPending     TaskPlanStatus = "pending"
-	SubPlanInProgress  TaskPlanStatus = "in_progress"
-	SubPlanCompleted   TaskPlanStatus = "completed"
-	SubPlanFailed      TaskPlanStatus = "failed"
-)
-```
+| Value | Meaning |
+|---|---|
+| `pending` | Queued for execution |
+| `in_progress` | Execution started |
+| `completed` | Execution finished |
+| `failed` | Execution failed |
 
 Notes:
 
-- `Plan.WorkItemID` is the foreign key back to the root `Session`; storage still uses the legacy column name `work_item_id`.
-- `FAQ` is persisted on the `plans` row as JSON and is appended by the Foreman flow.
-- `TaskPlan.Order` is the execution-group index parsed from the planning YAML block.
-- The SQLite migration constrains `sub_plans.status` to `pending|in_progress|completed|failed`.
 - `Plan.Version` is a monotonically increasing generation counter. It starts at 1 and increments each time a new plan supersedes the current active plan.
-- Plan uniqueness is enforced by a partial unique index on non-superseded plans (`WHERE status != 'superseded'`), allowing historical plan rows to be retained when superseded.
+- Plan uniqueness is enforced so that historical plan rows are retained when superseded; only one non-superseded plan is active per session at any time.
+- `TaskPlan.Order` is the execution-group index parsed from the planning YAML block.
+- `FAQ` entries are appended by the Foreman flow and record human clarifications captured during planning.
 
 ### TaskPhase
 
 `TaskPhase` discriminates the kind of child agent session.
 
-```go
-type TaskPhase string
-
-const (
-	TaskPhasePlanning       TaskPhase = "planning"
-	TaskPhaseImplementation TaskPhase = "implementation"
-	TaskPhaseReview         TaskPhase = "review"
-	TaskPhaseManual         TaskPhase = "manual"
-)
-```
-
+| Value | Meaning |
+|---|---|
+| `planning` | Session produces or revises a plan |
+| `implementation` | Session applies changes to a repository |
+| `review` | Session runs automated code review |
+| `manual` | Operator-driven session with no sub-plan, auto-commit, or Foreman involvement |
 
 ### ReviewArtifact and Provider Types
 
-Review artifacts track PR/MR state across GitHub and GitLab. They are recorded as system events and backfilled into provider-specific tables.
+Review artifacts track PR/MR state across GitHub and GitLab. They are recorded as system events and projected into provider-normalized rows.
 
-```go
-type ReviewArtifact struct {
-	Provider     string    `json:"provider"`
-	Kind         string    `json:"kind"`
-	RepoName     string    `json:"repo_name"`
-	Ref          string    `json:"ref"`
-	URL          string    `json:"url,omitempty"`
-	State        string    `json:"state,omitempty"`
-	Branch       string    `json:"branch,omitempty"`
-	WorktreePath string    `json:"worktree_path,omitempty"`
-	Draft        bool      `json:"draft,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitzero"`
-}
+**Key concepts:**
 
-type ReviewArtifactEventPayload struct {
-	WorkItemID string         `json:"work_item_id"`
-	Artifact   ReviewArtifact `json:"artifact"`
-}
+- `ReviewArtifact` is the canonical normalized shape for a PR or MR, used in event payloads.
+- `GithubPullRequest` and `GitlabMergeRequest` are the provider-specific records projected from those events.
+- `SessionReviewArtifact` is the link table connecting a work item to its PR/MR records.
 
-type GithubPullRequest struct {
-	ID         string
-	Owner      string
-	Repo       string
-	Number     int
-	State      string
-	Draft      bool
-	HeadBranch string
-	HTMLURL    string
-	MergedAt   *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
+**GitHub behavior:**
 
-type GitlabMergeRequest struct {
-	ID           string
-	ProjectPath  string
-	IID          int
-	State        string
-	Draft        bool
-	SourceBranch string
-	WebURL       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
+- Review states are normalized to lowercase on storage; pending reviews are dropped.
+- When the same reviewer submits multiple reviews, only the latest non-pending entry is retained.
+- Check rows are uniqued by PR ID and check name so re-runs replace prior state.
+- When a PR transitions to a terminal state, stale check rows are cleaned up.
 
-type SessionReviewArtifact struct {
-	ID                 string
-	WorkspaceID        string
-	WorkItemID         string
-	Provider           string
-	ProviderArtifactID string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-}
-```
+**GitLab behavior:**
 
-`ReviewArtifactEventPayload` is the payload shape stored in `system_events` rows with event type `review.artifact_recorded`. `GithubPullRequest` and `GitlabMergeRequest` are the provider-normalized rows backfilled from those events. `SessionReviewArtifact` is the link table connecting a work item to its PR/MR records.
+- GitLab has no native `changes_requested` signal. When the discussions endpoint reports any unresolved thread, a synthetic review entry with `reviewer_login = "__unresolved_threads__"` and `state = "changes_requested"` is derived.
+- Per-user approval state is sourced from the approval-state endpoint.
+- Check rows are uniqued by MR ID and check name; terminal MR transitions trigger cleanup.
 
-### PR Review and CI Check Types
-
-Per-reviewer review state and per-check CI status are stored alongside the provider PR/MR rows. The 120-second refresh loop maintains them; the TUI artifacts view consumes them.
-
-```go
-type GithubPRReview struct {
-	ID            string
-	PRID          string
-	ReviewerLogin string
-	State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
-	SubmittedAt   time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-}
-
-type GitlabMRReview struct {
-	ID            string
-	MRID          string
-	ReviewerLogin string
-	State         string    // "approved" | "changes_requested" | "unapproved"
-	SubmittedAt   time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-}
-
-type GithubPRCheck struct {
-	ID         string
-	PRID       string
-	Name       string
-	Status     string // "queued" | "in_progress" | "completed"
-	Conclusion string // "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | ...
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
-type GitlabMRCheck struct {
-	ID         string
-	MRID       string
-	Name       string
-	Status     string
-	Conclusion string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-```
-
-GitHub review states normalize to lowercase on storage; `PENDING` reviews are dropped. When the same reviewer submits multiple reviews, only the latest non-pending entry is kept (uniqueness enforced by `(pr_id, reviewer_login)`).
-
-GitLab has no native `changes_requested` signal. The adapter derives one synthetically: when the merge-request discussions endpoint reports any unresolved thread, a row with `reviewer_login = "__unresolved_threads__"` and `state = "changes_requested"` is upserted. Per-user approval state is sourced from the approval-state endpoint.
-
-Check rows are uniqued by `(pr_id, name)` / `(mr_id, name)` so re-runs replace the prior state. When a PR/MR transitions to a terminal state, the adapter calls `DeleteByPRID` / `DeleteByMRID` to clean up stale rows.
-
-Review-comment **bodies** are not stored. They are fetched live at follow-up time only (see `04-adapters.md` and `06-tui-design.md`).
+Review-comment bodies are not stored. They are fetched live at follow-up time only (see `04-adapters.md` and `06-tui-design.md`).
 
 ### SourceSummary
 
-`SourceSummary` is a durable per-source-item snapshot for sessions sourced from issue trackers.
-
-```go
-type SourceMetadataField struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
-}
-
-type SourceSummary struct {
-	Provider    string                `json:"provider"`
-	Kind        string                `json:"kind,omitempty"`
-	Ref         string                `json:"ref"`
-	Title       string                `json:"title,omitempty"`
-	Description string                `json:"description,omitempty"`
-	Excerpt     string                `json:"excerpt,omitempty"`
-	State       string                `json:"state,omitempty"`
-	Labels      []string              `json:"labels,omitempty"`
-	Container   string                `json:"container,omitempty"`
-	URL         string                `json:"url,omitempty"`
-	CreatedAt   *time.Time            `json:"created_at,omitempty"`
-	UpdatedAt   *time.Time            `json:"updated_at,omitempty"`
-	Metadata    []SourceMetadataField `json:"metadata,omitempty"`
-}
-```
+`SourceSummary` is a durable per-source-item snapshot for sessions sourced from issue trackers. It captures the title, description excerpt, labels, state, and metadata fields of the source item at ingestion time, giving planning and review contexts a stable reference even if the source item changes.
 
 ### Task
 
-`Task` replaces the old "agent session" model in the domain narrative. It is one harness invocation against one `TaskPlan` in one repository worktree.
+`Task` is one harness invocation against one `TaskPlan` in one repository worktree. It replaces the historical "agent session" model.
 
-```go
-type Task struct {
-	ID              string
-	WorkItemID      string
-	WorkspaceID     string
-	Phase           TaskPhase
-	PlanID          string
-	SubPlanID       string
-	RepositoryName  string
-	WorktreePath    string
-	HarnessName     string
-	Status          TaskStatus
-	PID             *int
-	StartedAt       *time.Time
-	CompletedAt     *time.Time
-	ShutdownAt      *time.Time
-	ExitCode        *int
-	OwnerInstanceID *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	ResumeInfo map[string]string
+**Status:**
 
-}
+| Value | Meaning |
+|---|---|
+| `pending` | Row exists before harness launch |
+| `running` | Harness is executing |
+| `waiting_for_answer` | Foreman or human question path is unresolved |
+| `completed` | Harness finished normally |
+| `interrupted` | Stopped by instance reconciliation or graceful shutdown |
+| `failed` | Harness exited with a non-zero status |
 
-type TaskStatus string
+Notes:
 
-const (
-	AgentSessionPending          TaskStatus = "pending"
-	AgentSessionRunning          TaskStatus = "running"
-	AgentSessionWaitingForAnswer TaskStatus = "waiting_for_answer"
-	AgentSessionCompleted        TaskStatus = "completed"
-	AgentSessionInterrupted      TaskStatus = "interrupted"
-	AgentSessionFailed           TaskStatus = "failed"
-)
-```
-
-Nuance: the constants still use the historical `AgentSession...` prefix. That is legacy naming on the status enum, not evidence that the persisted aggregate is still named `AgentSession`.
-
-`WorkItemID` is the foreign key to the root `Session`. `SubPlanID` is nullable; planning sessions have no associated sub-plan. `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar. `Phase` discriminates the session kind: `planning`, `implementation`, `review`, or `manual`. Manual sessions are harness invocations the operator drives directly without sub-plan context, automatic commit/push, or Foreman involvement.
-
-`ResumeInfo` carries harness-specific resume metadata as a generic string map instead of dedicated harness file/id fields.
+- `Task.ResumeInfo` carries harness-specific resume metadata as a generic string map instead of dedicated harness file/id fields.
+- `Phase` discriminates the session kind: `planning`, `implementation`, `review`, or `manual`.
+- A `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar.
+- Follow-up restarts (manual retry or review-driven reimplementation) create new `Task` rows; the prior row is retained for audit.
 
 ### Question
 
-Questions are attached to a `Task` through the historical `AgentSessionID` field name.
+Questions are raised by a `Task` during execution and are answered by the Foreman or escalated to a human.
 
-```go
-type Question struct {
-	ID             string
-	AgentSessionID string
-	Stage          TaskPhase
-	Source         QuestionSource
-	Content        string
-	Context        string
-	Structured     *StructuredQuestionSet
-	Answer         string
-	AnswerData     *AgentQuestionAnswer
-	ProposedAnswer string
-	AnsweredBy     string
-	Status         QuestionStatus
-	CreatedAt      time.Time
-	AnsweredAt     *time.Time
-}
+**Status:**
 
-type QuestionStatus string
+| Value | Meaning |
+|---|---|
+| `pending` | Awaiting an answer |
+| `answered` | Answer provided |
+| `escalated` | Escalated to human for review |
 
-const (
-	QuestionPending   QuestionStatus = "pending"
-	QuestionAnswered  QuestionStatus = "answered"
-	QuestionEscalated QuestionStatus = "escalated"
-)
-```
+Notes:
 
-`Stage` records which phase the question was raised in (`planning`, `implementation`, `review`). `Source` identifies the harness mechanism that produced the question (`ask_foreman`, `claude_ask`, `omp_ask`, `opencode_question`, `future_harness_question`). `Structured` carries the native ask-question payload when the harness uses a structured question format. `AnswerData` carries the normalized answer delivered back to the live harness.
-
-Current behavior:
-
-- Foreman can answer directly (`answered`).
-- Foreman can escalate with a `ProposedAnswer` for human review (`escalated`).
+- `Stage` records which phase the question was raised in (`planning`, `implementation`, `review`).
+- `Source` identifies the harness mechanism that produced the question (`ask_foreman`, `claude_ask`, `omp_ask`, `opencode_question`, `future_harness_question`).
+- `Structured` carries the native ask-question payload when the harness uses a structured question format.
+- Foreman can answer directly (`answered`) or escalate with a `ProposedAnswer` for human review (`escalated`).
 - Humans resolve escalated questions by transitioning them to `answered`.
 
 ### ReviewCycle and Critique
 
-Review is modeled separately from implementation runs. A `ReviewCycle` points back to the reviewed `Task` through `AgentSessionID`.
+Review is modeled separately from implementation runs.
 
-```go
-type ReviewCycle struct {
-	ID              string
-	CycleNumber     int
-	AgentSessionID  string
-	ReviewerHarness string
-	Summary         string
-	Status          ReviewCycleStatus
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
+**ReviewCycle status:**
 
-type ReviewCycleStatus string
+| Value | Meaning |
+|---|---|
+| `reviewing` | Automated review is running |
+| `critiques_found` | Automated review found issues requiring attention |
+| `reimplementing` | Implementation is being revised based on critiques |
+| `passed` | Automated review passed |
+| `failed` | Automated review itself failed |
 
-const (
-	ReviewCycleReviewing      ReviewCycleStatus = "reviewing"
-	ReviewCycleCritiquesFound ReviewCycleStatus = "critiques_found"
-	ReviewCycleReimplementing ReviewCycleStatus = "reimplementing"
-	ReviewCyclePassed         ReviewCycleStatus = "passed"
-	ReviewCycleFailed         ReviewCycleStatus = "failed"
-)
+**Critique severity:**
 
-type Critique struct {
-	ID            string
-	ReviewCycleID string
-	FilePath      string
-	LineNumber    *int
-	Description   string
-	Suggestion    string
-	Severity      CritiqueSeverity
-	Status        CritiqueStatus
-	CreatedAt     time.Time
-}
+| Value | Meaning |
+|---|---|
+| `critical` | Must fix before approval |
+| `major` | Should fix |
+| `minor` | Nice to have |
+| `nit` | Style or convention |
 
-type CritiqueSeverity string
+**Critique status:**
 
-const (
-	CritiqueCritical CritiqueSeverity = "critical"
-	CritiqueMajor    CritiqueSeverity = "major"
-	CritiqueMinor    CritiqueSeverity = "minor"
-	CritiqueNit      CritiqueSeverity = "nit"
-)
-
-type CritiqueStatus string
-
-const (
-	CritiqueOpen     CritiqueStatus = "open"
-	CritiqueResolved CritiqueStatus = "resolved"
-)
-```
+| Value | Meaning |
+|---|---|
+| `open` | Not yet addressed |
+| `resolved` | Addressed or accepted |
 
 ### Workspace
 
 A `Workspace` is a substrate-managed root directory containing git-work repositories.
 
-```go
-type Workspace struct {
-	ID        string
-	Name      string
-	RootPath  string
-	Status    WorkspaceStatus
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
+**Status:**
 
-type WorkspaceStatus string
-
-const (
-	WorkspaceCreating WorkspaceStatus = "creating"
-	WorkspaceReady    WorkspaceStatus = "ready"
-	WorkspaceArchived WorkspaceStatus = "archived"
-	WorkspaceError    WorkspaceStatus = "error"
-)
-```
+| Value | Meaning |
+|---|---|
+| `creating` | Being provisioned |
+| `ready` | Active and usable |
+| `archived` | Retired |
+| `error` | Provisioning failed |
 
 ### SubstrateInstance
 
-A `SubstrateInstance` is a running process registered against a workspace for liveness and ownership.
-
-```go
-type SubstrateInstance struct {
-	ID            string
-	WorkspaceID   string
-	PID           int
-	Hostname      string
-	LastHeartbeat time.Time
-	StartedAt     time.Time
-}
-```
-
-The current runtime treats an instance as stale when `LastHeartbeat` is older than 15 seconds.
-
-### SessionHistoryEntry
-
-Session history is a projection, not a root entity. It keeps the root `Session` identity visible while also surfacing the latest contributing `Task` metadata.
-
-```go
-type SessionHistoryEntry struct {
-	SessionID          string
-	WorkspaceID        string
-	WorkspaceName      string
-	WorkItemID         string
-	WorkItemExternalID string
-	WorkItemTitle      string
-	WorkItemState      SessionState
-	RepositoryName     string
-	HarnessName        string
-	Status             TaskStatus
-	AgentSessionCount  int
-	HasOpenQuestion    bool
-	HasInterrupted     bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	CompletedAt        *time.Time
-}
-```
+A `SubstrateInstance` is a running process registered against a workspace for liveness and ownership. The current runtime treats an instance as stale when its last heartbeat is older than 15 seconds.
 
 ---
 
 ## State Machines
 
 ### Session lifecycle
-
-This is the authoritative service-layer state machine for the root aggregate.
 
 ```mermaid
 stateDiagram-v2
@@ -573,8 +274,8 @@ stateDiagram-v2
 
 Current interpretation:
 
-- `Pending` means the DB row exists before the harness is launched.
-- `Running` means the durable row has been transitioned before the external harness session is started.
+- `Pending` means the row exists before the harness is launched.
+- `Running` means the row has been transitioned before the external harness session starts.
 - `WaitingForAnswer` is used while the Foreman / human question path is unresolved.
 - `Interrupted` is used by instance reconciliation and graceful shutdown flows.
 - `Resume` creates a new `Task`; the interrupted task remains interrupted for audit purposes.
@@ -625,44 +326,11 @@ erDiagram
 
 Relationship rules that matter in practice:
 
-- One root `Session` has at most one active (non-superseded) `Plan` row. Historical plans are retained with `PlanSuperseded` status.
+- One root `Session` has at most one active plan at any time. Historical plans are retained with `superseded` status.
 - One `Plan` fan-outs into one or more repository-scoped `TaskPlan` records.
 - A `TaskPlan` can accumulate multiple `Task` attempts over time because review-driven reimplementation and resume create additional runs.
 - `Question` and `ReviewCycle` remain attached to the specific `Task` that produced them, not to the root `Session`.
-- `SessionHistoryEntry` is a read model that joins root-session identity with latest-task signals.
-- `SessionReviewArtifact` links a `Session` to provider-specific PR/MR records via `github_pull_requests` or `gitlab_merge_requests`.
-
-
----
-
-## Schema
-
-Migrations are applied sequentially from `migrations/`. The initial schema is in `001_initial.sql`.
-
-| Migration | Purpose |
-|-----------|---------|
-| 001 | Initial schema: all core tables |
-| 002 | `agent_sessions` rewritten with `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path` (canonical columns) |
-| 003 | `agent_sessions` adds OMP-specific session metadata columns (`omp_session_file`, `omp_session_id`) |
-| 004 | `sub_plans` adds `planning_round` column |
-| 005 | Review artifacts: `github_pull_requests`, `gitlab_merge_requests`, `session_review_artifacts` tables with backfill from `system_events` |
-| 006 | `agent_sessions` migrates OMP-specific session metadata to generic `resume_info` map column |
-| 007 | Plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with partial unique index on non-superseded plans, adds `plan_id` to `agent_sessions` |
-| 008 | Drops obsolete `sub_plans.planning_round` column |
-| 009 | New session filters and locks |
-| 010 | `work_items` adds extra context column for follow-up planning |
-| 011 | `github_pr_reviews`, `gitlab_mr_reviews` tables for per-reviewer review state |
-| 012 | `github_pr_checks`, `gitlab_mr_checks` tables for per-check CI status |
-
-New tables introduced since initial schema:
-
-- `github_pull_requests` — durable rows for GitHub PRs with unique index on `(owner, repo, number)`.
-- `gitlab_merge_requests` — durable rows for GitLab MRs with unique index on `(project_path, iid)`.
-- `session_review_artifacts` — link table connecting work items to provider PR/MR records with unique dedup index on `(workspace_id, work_item_id, provider, provider_artifact_id)`.
-- `github_pr_reviews`, `gitlab_mr_reviews` — per-reviewer review state with `UNIQUE(pr_id, reviewer_login)` / `UNIQUE(mr_id, reviewer_login)` enabling upsert-on-latest.
-- `github_pr_checks`, `gitlab_mr_checks` — per-check CI status with `UNIQUE(pr_id, name)` / `UNIQUE(mr_id, name)`.
-
-Migration 002 rewrote `agent_sessions` to add canonical columns (`work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`) and migration 003 added generic resume metadata storage so harnesses can persist `ResumeInfo` without separate harness file/id columns.
+- `SessionReviewArtifact` links a `Session` to provider-specific PR/MR records.
 
 ---
 

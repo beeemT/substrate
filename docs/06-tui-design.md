@@ -1,722 +1,294 @@
 # 06 - TUI Design
-<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
-bubbletea (Elm Architecture) with lipgloss styling and bubbles widgets. See `02-layered-architecture.md` for service integration and `03-event-system.md` for event bus architecture. The TUI subscribes to the event bus in `App.Init()` and bridges events to its update loop via `DomainEventMsg`, with targeted load commands replacing the former `PollTickMsg`-driven workspace polls.
+
+<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+
+The Substrate terminal interface is built with Bubble Tea and lipgloss. The top-level app owns: left sidebar pane, right content pane, single footer/status row, centered overlays (work browser, session-history, workspace init, help), full-screen settings page, and a toast stack rendered over the shell.
 
 ---
 
-## 1. Framework
+## 1. Layout
 
-bubbletea still enforces `Msg -> Update(model, msg) -> (model', Cmd) -> View(model') -> terminal`, but the shipped TUI is organized around a small set of explicit shell models rather than a stacked navigation tree. The top-level app owns:
-
-- a left sidebar pane
-- a right content pane
-- a single footer/status row
-- centered overlays for the unified work browser, session-history search, workspace init, and help
-- a full-screen settings page
-- a toast stack rendered over the shell
-
-`internal/tui/views/` owns Bubble Tea state, routing, and sizing decisions. Shared visual semantics, reusable chrome, and design-system ownership boundaries are summarized here where they affect runtime behavior, with `docs/08-tui-design-system.md` as the canonical design-system contract.
-
-**Widgets**: viewport (plan review, agent output, historical session interaction, diffs), list (sidebar, search results, browser results), spinner (active ops), textinput (feedback, answers, filter), and table-like structured rows in settings and review surfaces.
-
----
-
-## 2. Layout
-
-### 2a. Persistent Two-Pane Layout
-
-The main shell is always a pair of rounded panes plus a single footer row. There is no persistent header bar; workspace metadata and the count of truly active agent sessions live in the footer, and each pane renders its own centered title.
-
-The default sidebar shows work-item overviews. The content pane renders the selected work item, selected task session, or selected historical result in place. Centered overlays sit above the shell without changing the underlying layout, while the settings page temporarily takes over the full screen.
+### 1a. Two-Pane Shell
 
 ```
 ┌────── Sessions ──────┐┌────────────── Content ───────────────────────────────────────┐
 │ SUB-123              ││ SUB-123 · Design system                                       │
 │ Semantic cleanup     ││ <mode-specific work item, task log, or history summary>       │
 │ Waiting for answer   ││                                                                │
-│                      ││                                                                │
 │ SUB-118              ││                                                                │
 │ Refresh docs         ││                                                                │
 │ Completed            ││                                                                │
 ╰──────────────────────╯╰────────────────────────────────────────────────────────────────╯
-[↑/↓] Sessions  [→] Tasks  [/] Search sessions  [n] New session  [s] Settings      workspace · 2 active sessions
+[↑/↓] Sessions  [→] Tasks  [/] Search  [n] New  [s] Settings  [a] Add repo           workspace · 2 active
 ```
 
-### 2b. Sessions Sidebar
+No header bar; workspace context and active session count live in the footer. Centered overlays sit above the shell; settings takes over the full screen.
 
-Fixed 34 characters wide. The default title is `Sessions`. Entries are **work-item overviews**, not a flat list of individual agent sessions. Each row summarizes the work item state plus the latest child-task metadata that should be visible at a glance: current status, repo progress, and whether the work item currently has an open question or interruption.
+### 1b. Sessions Sidebar
 
-Press `→` on a selected work item to drill into a second sidebar pane titled `{externalID} · Tasks`. That pane contains the work-item overview row, an optional `Source details` row when the work item has non-manual source metadata, an optional `Artifacts` row when the work item has at least one PR/MR, and the child agent-task sessions for that work item in sub-plan order. Selecting a task row opens that task's log in the content pane. Selecting `Source details` opens the source-details content mode; selecting `Artifacts` opens the artifacts content mode (see §3f). Press `←`/`Esc` from the task pane to return to the top-level sessions list; press `→` from the task pane to move focus into the content pane.
+Fixed 34 characters wide. Entries are work-item overviews: status icon, external ID/repo prefix, title, and a subtitle (repo progress for implementing items; `Plan review needed`, `Waiting for answer`, or task-session status otherwise).
 
-Historical search is separate from the live sidebar list: `/` opens the session-history overlay, which can search within the current workspace or across all workspaces and then open either the live work item or a historical interaction transcript/summary.
+Press `→` to drill into `{externalID} · Tasks`: work-item overview, optional `Source details` and `Artifacts` rows, and child sessions in sub-plan order. Selecting a task opens its log in the content pane. `←`/`Esc` returns to sessions; `→` from the task pane moves focus to content.
 
-**Status icons:**
-- `●` running/active (green)
-- `◐` pending human action (amber) — plan review needed, open question, similar attention state, or any PR with `changes_requested`
-- `✓` completed (dim green) — also used for `merged` work items (label distinguishes them)
-- `⊘` interrupted (amber)
-- `✗` failed (red) — also used when any PR has failing CI
-- `◌` inactive/default (muted)
+`/` opens session-history search (separate from the live list), searching workspace or global scope.
 
-**Entry layout** (three rendered lines plus a blank separator row):
-- Line 1: `{icon} {external ID / repo / source prefix}`
-- Line 2: `  {title}`
-- Line 3: implementing work items show repo progress; other rows show a concise subtitle such as `Plan review needed`, `Waiting for answer`, `Source details`, or the task-session status
+**Status icons:** `●` running/active (green), `◐` pending human action (amber — plan review, open question, or PR with changes requested), `✓` completed (dim green — also `merged` with label distinguishing), `⊘` interrupted (amber), `✗` failed (red — also when any PR has failing CI), `◌` inactive/default (muted).
 
-**Keys:**
-- `↑`/`↓` or `j`/`k` — navigate sessions, task rows, or source details
-- `→` — drill into tasks from the sessions pane, or move focus from the task pane to content
-- `←`/`Esc` — return from content to tasks, or from tasks to sessions
-- `d` — when a work item, task row, or historical result is selected, confirm deletion of the full work item and its related task/session artifacts
-- `/` — open session-history search
-- `n` — open the Unified Work Browser
-- `a` — open the Add Repository overlay for browsing and cloning remote repositories
-- `s` — open Settings page
-- `?` — open Help
-- `q` — quit
+**Keys:** `↑`/`↓`/`j`/`k` navigate; `→` drill in / move to content; `←`/`Esc` go back; `d` delete work item; `/` session-history; `n` work browser; `a` add repository; `s` settings; `?` help; `q` quit.
 
-```go
-type SidebarModel struct {
-    entries []SidebarEntry
-    cursor  int
-    title   string
-    styles  styles.Styles
-    width   int
-    height  int
-}
-```
+**Filters/sort:** `Ctrl+F` cycles filter (All, Active, Needs Attention, Completed); `Ctrl+G` cycles grouping (flat, by status, by source); `Ctrl+D` toggles sort. Active filter/direction shown below title.
 
-**Filters, grouping, and sort.** The sidebar supports filter modes (All, Active, Needs Attention, Completed), grouping dimensions (flat, by status, by source), and sort direction (ascending/descending). `Ctrl+F` cycles filter mode, `Ctrl+G` cycles grouping dimension, `Ctrl+D` toggles sort direction. A status line below the title shows active filter/dimension/direction when non-default. A custom scrollbar renders on the right edge of the sidebar.
+### 1c. Content Panel
 
-The footer, not a header, carries workspace context such as `workspace · 2 active sessions`.
-
-### 2c. Content Panel
-
-The content panel re-renders in place based on the current selection. There is no navigation stack.
-
-| Selection / state | Content panel mode |
-|-------------------|--------------------|
+| Selection / state | Mode |
+|-------------------|------|
 | nothing selected | Empty |
-| work item selected (any state) | Overview |
-| selected `Source details` task row | Source details |
-| work item `planning` (planning child session selected) | Planning |
-| selected task-session row or historical search result | Session interaction |
-
-The content panel has five modes:
-
-```go
-type ContentMode int
-
-const (
-    ContentModeEmpty              ContentMode = iota // no session selected
-    ContentModeOverview                              // canonical root-session overview/control surface
-    ContentModeSourceDetails                         // task-pane source metadata for the selected work item
-    ContentModeArtifacts                             // PR/MR artifacts for the selected work item
-    ContentModeAgentSession                           // live agent session log tailing (planning, implementation, review)
-    ContentModeSessionInteraction                    // historical or task session interaction view
-)
-```
-
-`ContentModeOverview` is the default when a work item is selected — it handles all root states (ingested, planning, plan_review, approved, implementing, reviewing, completed, failed). When the session is blocked on a human action, the overview surfaces that action inline or through an overlay. The operator never has to navigate to a state-specific page to unblock progress.
-
-`ContentModeSourceDetails` renders source metadata for the selected work item. `ContentModeArtifacts` renders the artifacts accordion for the work item's PRs/MRs (see §3f). `ContentModeSessionInteraction` is used for both live task drilldown and historical transcripts/summaries. `ContentModeAgentSession` renders live agent session output — planning, implementation, and review — while a child session is active. It replaces the former `ContentModePlanning` name.
+| work item selected | Overview |
+| `Source details` row | Source Details |
+| planning child session selected | Planning |
+| task-session row or historical result | Session Interaction |
 
 ---
 
-## 3. Content Panel Modes
+## 2. Content Panel Modes
 
-### 3a. Planning Mode
+### 2a. Planning Mode
 
-Reads incremental output from `~/.substrate/sessions/<session-id>.log` (JSONL) as the planning agent runs. New lines are appended into the viewport while the session is active.
-
-```
-│ LIN-FOO-789 · Update docs · Planning                                              │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ > Reading repository: backend-api...                                              │
-│ > Reading repository: frontend-app...                                             │
-│ > Analyzing cross-repo dependencies...                                            │
-│ > Drafting sub-plan for backend-api...                                            │
-│ ▌                                                                                 │
-│                                                                                   │
-│ [↑↓] Scroll  [p] Pause/unpause display                                            │
-```
-
-### 3b. Plan Review Mode
-
-Full reconstructed plan document rendered in a scrollable viewport. The review surface shows the derived `substrate-plan` YAML block, the orchestrator section, and every repo sub-plan in order so the human can review and edit the entire implementation contract in one place.
+Live session log tailing as the planning agent runs.
 
 ```
-│ LIN-FOO-456 · Rate limiting · Plan Review                                        │
-│──────────────────────────────────────────────────────────────────────────────── │
-│ ```substrate-plan                                                                │
-│ execution_groups:                                                                │
-│   - [shared-lib]                                                                 │
-│   - [backend-api, frontend]                                                      │
-│ ```                                                                               │
-│                                                                                   │
-│ ## Orchestration                                                                  │
-│ Coordinate the shared contract and execution order.                               │
-│                                                                                   │
-│ ## SubPlan: shared-lib                                                            │
-│ ### Goal                                                                          │
-│ Ship rate limiter primitives.                                                     │
-│ ### Scope                                                                         │
-│ - pkg/ratelimit/...                                                               │
-│                                                                                   │
-│ ─────────────────────────────────────────────────────────────────────────────── │
-│ [a] Approve  [c] Request changes  [e] Edit in $EDITOR  [r] Reject  [↑↓] Scroll  │
+│ LIN-FOO-789 · Update docs · Planning                          │
+│ > Reading repository: backend-api...                           │
+│ > Analyzing cross-repo dependencies...                         │
+│ > Drafting sub-plan for backend-api...                         │
+│ ▌                                                             │
+│ [↑↓] Scroll  [p] Pause/unpause                                │
 ```
 
-**Model**: `viewport.Model` for scrollable content, `textinput.Model` for feedback input — used for both `c` (request changes) and `r` (reject); appears at bottom on activation, `Enter` submits, `Esc` cancels.
+**Keys:** `↑`/`↓` scroll, `p` pause/unpause.
 
-- `[a]` **Approve** — status → Approved; emits `PlanApproved`; triggers implementation pipeline.
-- `[c]` **Changes** — opens the plan overlay with the current full plan document and an inline feedback input. On `Enter`, spawns a new planning agent session with the current full plan document and feedback embedded in the prompt. The plan version is incremented on the revision.
-- `[e]` **Edit in $EDITOR** — opens the full reconstructed plan markdown in `$EDITOR` via `tea.ExecProcess`. On editor exit, the modified file is re-parsed, re-validated, and both orchestrator/sub-plan sections are updated in the DB before presenting the revised plan for re-review.
-- `[r]` **Reject** — opens inline rejection input. On `Enter`, work item returns to `Ingested` state; emits `PlanRejected`.
-- `[i]` **Inspect** — opens the full reconstructed plan document in an overlay for read-only inspection without changing plan state. Also available from planning sessions and completed work items to inspect the current plan.
-**Keys**: `↑`/`↓` scroll, `a` approve, `c` changes, `e` open in `$EDITOR` via `tea.ExecProcess`, `i` inspect plan, `r` reject.
+### 2b. Plan Review Mode
 
-### 3c. Session Interaction Mode
-
-Used in two cases: (1) when the human selects a task-session row from the `{externalID} · Tasks` sidebar, and (2) when the human opens a historical result from session-history search.
-
-For a selected task row, this mode tails `~/.substrate/sessions/<task-id>.log` live. The mode label becomes `Task`, and the header metadata includes the task status, harness name when known, and the task session ID. For a historical or remote result, the same surface loads the stored interaction transcript; when no session log exists, it falls back to a static summary instead of showing an empty viewport.
-
-#### Steering & Follow-Up
-
-The `p` key activates a text input at the bottom of the session interaction view. Its behavior depends on the state of the viewed session:
-
-| Session state | Hint text | Enter action | Effect |
-|---------------|-----------|--------------|--------|
-| Running | `Prompt agent` | Sends a steer message routed through `SessionRegistry.Steer()` | Interrupts the agent's active streaming turn with the operator's guidance |
-| Completed | `Changes` | Sends a follow-up message for the completed task | Opens the plan overlay with request-changes input for follow-up re-planning |
-| Failed | `Changes` | Sends a follow-up message for the failed task | Same as completed follow-up — creates a new Task row and attempts OMP session resume |
-| No session | Disabled | — | `p` is a no-op when no session is active |
-
-The steer/follow-up input is mutually exclusive: only one of the three session-state targets (live, completed, or failed) can be active at a time. `Esc` cancels and returns to normal mode.
-
-**Keys**: `↑`/`↓` scroll, `p` steer or follow up (context-dependent). Global back-navigation still applies from the footer (`←`/`Esc` back to tasks or sessions).
-
-### 3d. Overview Mode
-
-The overview is the canonical root-session control surface. It is rendered when the operator selects a work item in the main `Sessions` sidebar or selects the `Overview` row in the `{externalID} · Tasks` sidebar. Both entry points render the same overview.
-
-**Page structure** (in order):
-
-1. **Summary** — external ID, title, state label, last updated, repo progress, blocker badges
-2. **Action required** — only when the session is blocked on the operator (plan approval, open question, interrupted session, review)
-3. **Source** — provider, ref, title, excerpt for source items
-4. **Plan** — bounded plan snapshot (state, version, repo count, excerpt), never the full plan inline
-5. **Tasks** — repo/sub-plan rows with status, harness, last activity, notes
-6. **External lifecycle** — tracker refs and PR/MR rows from `ReviewArtifact` events
-7. **Recent activity** — compact recent-event summary
-
-**Actionability contract**: if the session needs a human decision to proceed, the overview provides the blocking reason, enough context, and the action itself. Detail views remain useful but are never mandatory to unblock work.
-
-**Overview vs overlay split**: the overview shows decision summary; overlays show decision evidence. Actions are invokable from either place.
-
-**View model**:
-
-```go
-type SessionOverviewData struct {
-    WorkItemID string
-    State      domain.SessionState
-    Header     OverviewHeader
-    Actions    []OverviewActionCard
-    Sources    []OverviewSourceItem
-    Plan       OverviewPlan
-    Tasks      []OverviewTaskRow
-    External   OverviewExternalLifecycle
-    Activity   []OverviewActivityItem
-}
-```
-
-`SessionOverviewModel` embeds `PlanReviewModel`, `QuestionModel`, `InterruptedModel`, `CompletedModel`, and `ReviewModel` as overlay sub-models. The overview opens these overlays for deeper inspection and action without forcing a content mode switch.
-
-**Action-required examples**:
-
-- **Plan review**: bounded plan excerpt plus `Approve` / `Changes` / `Inspect` / `Reject` actions. A `Review plan` overlay shows the full plan document.
-- **Open question**: question text, affected repo/task, Foreman's proposed answer and uncertainty. The human can approve, iterate with the Foreman, or skip — all from the overview.
-- **Interrupted session**: affected repo/task, failure/interruption reason, `Resume` / `Retry` actions.
-- **Under review**: review summary, critique list per repo, `Override accept` action for human escalation, `Re-implement` action for manual re-trigger when `AutoFeedbackLoop` is disabled. See `05-orchestration.md` for the orchestrator-owned review loop.
-- **Completed**: the `CompletedModel` overlay provides a `f` keybind that opens a feedback input for requesting changes. `Enter` submits the feedback and opens the plan overlay with the changes input, where the existing plan review flow takes over. Success and error feedback display as toasts.
-
-**Source section rules**: for single-source sessions, the root work item title/description is sufficient. For multi-source sessions, the overview shows provider + ref only rather than reverse-parsing merged descriptions. Durable per-source-item summaries are a follow-up (see `future-work.md`).
-
-**Plan section behavior by state**:
-
-| Root state | Plan display |
-|------------|-------------|
-| `ingested` | `No plan yet` |
-| `planning` | `Plan in progress` with bounded draft preview |
-| `plan_review` | Excerpt + version + review actions |
-| `approved` through `completed` | Approved/final plan snapshot |
-| `failed` | Last known plan snapshot if any |
-
-**Keys**: `↑`/`↓` scroll, action-specific keys from action cards, `Enter` to open overlays, `f` follow-up re-planning (completed work items), `o` open review artifacts / override accept (under review).
-
-### 3e. Transcript Rendering
-
-Planning mode, session interaction mode, and overview overlays all share one canonical transcript renderer (`RenderTranscript` in `session_transcript.go`). The renderer consumes structured `sessionlog.Entry` values end-to-end — there is no string pre-flattening step in the TUI pipeline. Non-event JSON lines (e.g. `session_meta` harness bookkeeping) are dropped during log parsing and never reach the transcript.
-
-The renderer groups raw session-log entries into higher-level blocks:
-
-- **Assistant prose** — rendered as markdown body text
-- **Thinking** — muted text; collapsed to a single-line preview by default, expandable to full indented markdown
-- **Prompt / feedback / answer** — labeled callout cards
-- **Tool execution** — grouped cards with state-aware chrome
-- **Lifecycle events** — concise muted status lines
-- **Question / Foreman** — warning-styled callout cards
-
-**Tool cards** group adjacent `tool_start`, `tool_output`, and `tool_result` entries into a single block using per-tool-name FIFO queues. Each card shows:
-
-- Title/status row: tool name + primary argument label (file path for read/write/edit, pattern for grep, command for bash) + running/success/error icon
-- Smart args summary: semantically important arguments for known tools (file paths, grep patterns, bash commands, LSP actions)
-- Output preview: multi-line tool results are split into separate rendered lines; first 4 lines in collapsed mode, 12 in verbose mode
-- Overflow marker: `… N more lines` when truncated
-- Write tool content preview: shows content line count and first-line preview in the args summary
-- Result line: shown in verbose mode or when no output exists
-
-**Tool card states**: running (active accent border), success (neutral border), error (error border/tint).
-
-**Interaction model**: `[o] Verbose logs` toggles between collapsed and verbose mode across all blocks. All lines are hard-wrapped or truncated to the available inner width.
-
-**Keys**: `↑`/`↓` scroll, `o` toggle verbose mode.
-
----
-
-### 3f. Artifacts Mode
-
-Renders the work item's PRs/MRs as an accordion list. Reached from the `Artifacts` row in the `{externalID} · Tasks` sidebar (only emitted when the work item has at least one linked PR/MR). When exactly one artifact exists, the accordion chrome is skipped and the detail card is rendered directly.
-
-**Per-row collapsed display:**
+Full reconstructed plan in a scrollable viewport: YAML block, orchestrator section, and all repo sub-plans.
 
 ```
-  #42  acme/auth-svc    feat: distribute config    [open]     ✗ CI  ◐ review
-  #43  acme/billing     feat: distribute config    [open]     ✓ CI  ✓ review
-  #44  acme/gateway     feat: distribute config    [draft]    ○ CI  —
+│ LIN-FOO-456 · Rate limiting · Plan Review                     │
+│ ```substrate-plan                                              │
+│ execution_groups: [shared-lib], [backend-api, frontend]       │
+│ ```                                                            │
+│ ## Orchestration                                               │
+│ ## SubPlan: shared-lib  Goal: Ship rate limiter primitives.    │
+│ ─────────────────────────────────────────────────────────────  │
+│ [a] Approve  [c] Request changes  [e] Edit  [r] Reject  [↑↓]  │
 ```
 
-**Expanded card:**
+- `[a]` **Approve** — triggers implementation.
+- `[c]` **Request changes** — opens plan overlay with inline feedback. `Enter` spawns a new planning session with plan and feedback embedded.
+- `[e]` **Edit in $EDITOR** — opens plan markdown in `$EDITOR`. Re-parsed and re-validated on exit.
+- `[r]` **Reject** — inline rejection input. `Enter` returns work item to `Ingested`.
+- `[i]` **Inspect** — read-only full plan overlay. Available from planning and completed work items.
+
+**Keys:** `↑`/`↓` scroll, `a` approve, `c` changes, `e` edit, `i` inspect, `r` reject.
+
+### 2c. Session Interaction Mode
+
+Live task log tailing (from tasks sidebar) or historical transcript/summary (from session-history search). Header shows task status, harness, and session ID.
+
+`p` activates a text input. Behavior depends on session state:
+
+| Session state | Hint | Enter action | Effect |
+|---------------|------|--------------|--------|
+| Running | `Prompt agent` | Sends steer message | Interrupts agent's streaming turn |
+| Completed | `Changes` | Sends follow-up | Opens plan overlay with request-changes input |
+| Failed | `Changes` | Sends follow-up | Same as completed; creates new Task row and resumes |
+| No session | — | `p` is no-op | — |
+
+`Esc` cancels.
+
+**Keys:** `↑`/`↓` scroll, `p` steer/follow up (context-dependent), `Esc` cancel/navigate back.
+
+### 2d. Overview Mode
+
+Canonical root-session control surface. Shown when a work item is selected in sessions sidebar or `Overview` row in tasks sidebar.
+
+**Sections:** (1) Summary — ID, title, state, last updated, repo progress, blocker badges; (2) Action required — only when blocked on human; (3) Source — provider, ref, title, excerpt; (4) Plan — bounded snapshot, never full plan inline; (5) Tasks — repo/sub-plan rows with status, harness, last activity; (6) External lifecycle — tracker refs and PR/MR rows; (7) Recent activity.
+
+**Actionability contract:** if a decision is needed, the overview provides blocking reason, context, and the action. Detail views are never mandatory to unblock.
+
+**Action-required examples:**
+- **Plan review**: bounded excerpt + `Approve`/`Changes`/`Inspect`/`Reject`. Full plan in `Review plan` overlay.
+- **Open question**: question text, affected repo/task, Foreman's proposed answer and uncertainty. Approve, iterate, or skip from overview.
+- **Interrupted session**: repo/task, reason, `Resume`/`Retry` actions.
+- **Under review**: summary, critique list, `Override accept` for human escalation, `Re-implement` when auto-feedback disabled.
+- **Completed**: `f` opens feedback input. `Enter` submits and opens plan overlay with changes.
+
+**Plan display by state:** `ingested` → `No plan yet`; `planning` → `Plan in progress` + draft preview; `plan_review` → excerpt + version + review actions; `approved`–`completed` → approved/final snapshot; `failed` → last known snapshot if any.
+
+**Keys:** `↑`/`↓` scroll, action card keys, `Enter` open overlays, `f` follow-up re-plan (completed), `o` review artifacts / override accept (under review).
+
+### 2e. Transcript Rendering
+
+Groups session log entries into: assistant prose (markdown), thinking (muted, collapsed to single-line preview), prompt/feedback/answer (labeled callout), tool execution (grouped cards with state chrome), lifecycle events (muted status), question/Foreman (warning callout).
+
+**Tool cards** group adjacent tool-start/output/result entries per tool-name FIFO. Each shows: tool name + primary arg label (file path, pattern, command) + running/success/error icon; smart args summary; output preview (4 lines collapsed, 12 verbose); overflow marker `… N more lines` when truncated; result line in verbose mode or when no output.
+
+**Card states:** running (accent border), success (neutral), error (error border/tint). `[o] Verbose logs` toggles collapsed/verbose.
+
+**Keys:** `↑`/`↓` scroll, `o` toggle verbose.
+
+### 2f. Artifacts Mode
+
+PR/MR accordion from the `Artifacts` row in tasks sidebar. Single artifact renders directly.
 
 ```
-  ┌─ #42  acme/auth-svc ────────────────────────────────── [open] ──┐
-  │  feat: distribute config                                       │
+  #42  acme/auth-svc  feat: distribute config  [open]  ✗ CI  ◐ review
+  #43  acme/billing   feat: distribute config  [open]  ✓ CI  ✓ review
+  #44  acme/gateway   feat: distribute config  [draft] ○ CI  —
+```
+
+Expanded:
+```
+  ┌─ #42  acme/auth-svc ──────────────────────────────── [open] ──┐
   │  feature/distribute-config → main                             │
-  │  opened 2d ago · updated 3h ago                               │
-  │                                                                │
-  │  Review                                                        │
-  │    ✓ alice    approved          2d ago                         │
-  │    ✗ bob      changes requested  1h ago                        │
-  │                                                                │
-  │  CI                                                            │
-  │    ✗ test     3 failures                                       │
-  │    ✓ build                                                     │
-  │    ✓ lint                                                      │
-  └────────────────────────────────────────────────────────────────┘
+  │  opened 2d ago · updated 3h ago                              │
+  │  Review: ✓ alice approved, ✗ bob changes requested 1h ago     │
+  │  CI: ✗ test 3 failures, ✓ build, ✓ lint                      │
+  └───────────────────────────────────────────────────────────────┘
 ```
 
-Multiple items can be expanded simultaneously; the content area becomes scrollable when expanded cards overflow.
+**Sidebar icon** (worst case across PRs): `◐` if any changes requested, `✗` if any failing CI, `✓` if all merged, `◌` otherwise.
 
-**View model:**
+**Keys:** `↑`/`↓` move; `→`/`Space` expand; `Space` collapse; `←` return to sidebar; `o` open PR in browser; `O` open links dialog; `f` review-comment follow-up (completed or under review).
 
-```go
-type ArtifactItem struct {
-    Provider   string     // "github" | "gitlab"
-    Kind       string     // "pr" | "mr"
-    ProviderID string     // FK into github_pull_requests / gitlab_merge_requests
-    RepoName   string
-    Number     int
-    Title      string
-    Ref        string     // "#42" or "!7"
-    URL        string
-    State      string     // "draft" | "open" | "merged" | "closed"
-    HeadBranch string
-    BaseBranch string
-    Draft      bool
-    MergedAt   *time.Time
-    CreatedAt  time.Time
-    UpdatedAt  time.Time
-    Reviews    []ArtifactReview
-    Checks     []ArtifactCheck
-}
+### 2g. SessionMerged Handling
 
-type ArtifactReview struct {
-    ReviewerLogin string
-    State         string    // "approved" | "changes_requested" | "commented" | "dismissed"
-    SubmittedAt   time.Time
-}
+Sidebar shows `✓` with `merged` badge. Follow-up re-plan keybind is hidden. `i` (inspect) remains available.
 
-type ArtifactCheck struct {
-    Name       string
-    Status     string    // "queued" | "in_progress" | "completed"
-    Conclusion string    // "success" | "failure" | ...
-}
-```
+---
 
-`buildArtifactItems(wi)` queries the provider tables plus the review and check repos and returns `[]ArtifactItem`. It listens for `pr.review_state_changed` and `pr.ci_failed` events to refresh without waiting for the next UI tick.
+## 3. Overlays
 
-**Sidebar Artifacts node icon** reflects the worst-case state across the work item's PRs:
+### 3a. Session History Search (`/`)
 
-| Condition | Icon |
-|---|---|
-| Any PR has `changes_requested` | `◐` (warning) |
-| Any PR has failing CI | `✗` (error) |
-| All PRs merged | `✓` (success) |
-| Otherwise | `◌` (muted) |
+Scope (workspace/default), query input, results list, preview. Typing requests a fresh search. Results are work-item-centric, ordered by recent activity, enriched with session count and state flags. Preview shows identity, workspace, latest repo/harness/status, timestamps.
 
-**Keybinds:**
+`Enter` opens: restores live work-item context if current workspace, switches to session-interaction view otherwise. `d` deletes the full work item. `Ctrl+S` toggles workspace/global.
 
-| Key | Behaviour |
-|---|---|
-| `↑` / `↓` | Move cursor |
-| `→` / `Space` | Expand focused collapsed item |
-| `Space` | Collapse focused expanded item |
-| `←` | Return focus to sidebar |
-| `o` | Open focused PR/MR URL in browser |
-| `O` | Open links dialog (open all with `a`, single PR/MR opens directly) |
-| `f` | Open review-comment follow-up overlay (§4h) when work item state is `SessionCompleted` or `SessionReviewing` |
+**Keys:** `Tab`/`Shift-Tab` cycle scope/input/results/preview; `↑`/`↓` move; `←`/`→` move focus or change scope; `Esc` close.
 
-### 3g. SessionMerged Handling
+### 3b. Unified Work Browser (`n`)
 
-When a work item reaches `SessionMerged` (set by the post-merge handler in `04-adapters.md`):
+Keyboard-first, capability-driven. Header includes `Source` and `Scope`; adds `View`, `State`, or provider-specific status when supported. Sources: `All`, `Linear`, `GitHub`, `GitLab`, `Sentry` (limited to active browse adapters). `All` scope is issues-only. Advanced filters appear only when supported.
 
-- Sidebar shows the `✓` icon with a `merged` badge instead of `completed`.
-- The overview's `c` (follow-up re-plan) keybind is hidden — you do not re-plan on a merged PR.
-- The `i` (inspect) keybind remains available.
+Details pane shows metadata and rendered description for the highlighted item. `Space` multi-selects (all items must share one provider). `Enter` starts from selection (or selects highlighted row first). `Ctrl+O` opens externally. `Ctrl+N` switches to `Title`/`Description` form.
 
-## 4. Overlays
+**Keys:** `Tab`/`Shift-Tab` cycle sources; `Ctrl+S` cycles scope; `Ctrl+V` cycles view; `Ctrl+T` cycles state; `Ctrl+R` clears filters; `Esc` closes.
 
-### 4a. Session History Search Overlay
+### 3c. Settings Page (`s`)
 
-Triggered by `/` from the main shell. This is a centered split overlay with four focusable regions: scope, query input, results list, and preview.
+Full-screen with left navigation tree and right detail/editor pane. Covers commit, planning, review, Foreman, harness, provider, and repo-lifecycle configuration. Provider secrets stored in OS keychain; config file stores stable references.
 
-When Substrate is inside a workspace, the default search scope is `workspace`; otherwise the overlay falls back to `global`. Typing in the search box requests a fresh history search immediately. Results are work-item-centric `SessionHistoryEntry` records ordered by most recent activity and enriched with latest task-session metadata, `AgentSessionCount`, `HasOpenQuestion`, and `HasInterrupted`. The preview pane shows work-item identity, workspace, latest repo/harness/status, timestamps, and delete/open hints for the current selection.
+Footer hints are focus-sensitive. Tree view: navigation, expand/collapse, focus transfer, close, save, test, login, reveal. Field view: field navigation, edit, toggle, return-to-groups, save, test, login, reveal. Editing collapses footer to save/cancel.
 
-`Enter` opens the selected result. If the result belongs to the current workspace, the TUI restores the live work-item context. If it is historical or remote, the content pane switches to the session-interaction view and loads the stored transcript or static summary.
+**Keys:** Tree: `↑`/`↓` navigate, `→` expand, `←` collapse, `Enter` focus, `Esc` close (confirms if dirty). Field: `↑`/`↓` navigate, `Enter` edit, `Space` toggle, `Esc` back, `t` test, `g` login, `r` reveal. Edit: `Enter` save, `Esc` cancel. Settings auto-save when navigating away with dirty state.
 
-`d` from the results list opens a confirmation dialog to delete the full work item and related records. `Tab` / `Shift-Tab` cycle scope, input, results, and preview; `↑` / `↓` move between regions or results; `←` / `→` move focus or change scope; `Ctrl+S` toggles workspace/global; `Esc` closes.
-
-### 4b. Unified Work Browser
-
-Triggered by `n` from anywhere. This is the shipped replacement for the older provider-specific new-session modal. The browser is keyboard-first and capability-driven: the header always includes `Source` and `Scope`, and may add `View`, `State`, or a provider-specific status message when the active adapter combination supports them.
-
-- **Sources**: `All`, `Linear`, `GitHub`, `GitLab`, `Sentry`, limited to providers with active browse adapters
-- **Scope**: capability-driven; `All` is issue-only and never advertises shared project/initiative scopes it cannot support honestly
-- **Search**: always shown as a text field; advanced filters (`Labels`, `Owner`, `Repo`, `Group`, `Team`) appear only when the active source/scope supports them
-- **Details pane**: shows metadata plus rendered description for the currently highlighted work item
-- **Selection model**: `Space` toggles multi-select, but every selected item must come from exactly one provider
-- **Start action**: `Enter` starts a work item from the current selection; if nothing is selected yet, `Enter` first selects the highlighted row and then starts
-- **Open in browser**: `Ctrl+O` opens the currently highlighted work item externally
-- **Manual work item creation**: `Ctrl+N` switches to a two-field form (`Title`, `Description`). `Tab` moves title → description → back to the browser, and `Enter` submits through the `manual` adapter once the title is non-empty.
-
-Container-scoped providers can intentionally hide inbox-style view controls. For example, Linear issue browsing may show a warning that view filters are hidden because browsing is team/container-scoped. Sentry stays issues-only and source-only; provider-specific Sentry browse and auth constraints are documented in `04-adapters.md` under `### Sentry`, while this document owns the shared UI behavior.
-
-Common browser shortcuts: `Tab` / `Shift-Tab` cycle sources, `Ctrl+S` cycles scope, `Ctrl+V` cycles view when present, `Ctrl+T` cycles state when present, `Ctrl+R` clears filters, `Esc` closes.
-
-### 4c. Settings Page
-
-Accessed via `s` from anywhere. The settings UI is a full-screen page with a left navigation tree and a right detail/editor pane. It covers commit, planning, review, Foreman, harness, provider, and repo-lifecycle configuration, with provider status and field descriptions visible alongside editable values.
-
-Provider secrets owned by Substrate are stored in the OS keychain, while the config file stores stable secret references such as `api_key_ref` and `token_ref`. Harness-owned credentials are handled through harness actions instead of being written directly by the TUI. oh-my-pi remains the default verified interactive harness; Claude Code and Codex are selectable but are not documented as having full interaction parity for every corrective workflow. Provider-specific Sentry auth, login, and connectivity-test behavior is documented in `04-adapters.md` under `### Sentry`, while this section owns the shared Settings interaction model.
-
-The footer hints are focus-sensitive. In the tree view they expose navigation, expand/collapse, focus transfer, close, save, test, login, and reveal actions. In the field view they expose field navigation, edit, boolean toggle, return-to-groups, save, test, login, and reveal actions. While editing a field, the footer collapses to save/cancel hints only.
-
-**Keys:**
-- Tree focus: `↑`/`↓` navigate, `→` expand/open, `←` collapse/up, `Enter` focus settings, `Esc` close
-- Field focus: `↑`/`↓` settings, `Enter` edit, `Space` toggle bool, `←`/`Esc` back to groups, `s` save and apply, `t` test, `g` login, `r` reveal
-- Edit mode: `Enter` save edit, `Esc` cancel edit
-
-### 4d. First-Start Initialization Modal
-
-Global initialization (creating `~/.substrate/`, `config.yaml`, `state.db`, `sessions/`) happens automatically on first CLI launch (see `07-implementation-plan.md` Phase 0). The TUI modal handles **workspace initialization** only.
-
-When Substrate launches and the current directory is not a registered workspace, the Workspace Initialization Modal is shown:
+### 3d. Workspace Initialization Modal
 
 ```
 ┌─ Initialize Workspace ──────────────────────────────────────────────────────┐
-│                                                                             │
-│  No workspace found at:                                                     │
-│    ~/myproject/                                                             │
-│                                                                             │
-│  Initialize this directory as a Substrate workspace?                        │
-│                                                                             │
+│  No workspace found at: ~/myproject/                                       │
+│  Initialize this directory as a Substrate workspace?                       │
 │  This will:                                                                 │
 │    • Create .substrate-workspace  (workspace identity file)                 │
 │    • Detect git-work repos        (directories with .bare/)                 │
 │    • Convert plain git repos      (child dirs with .git/)                   │
 │    • Register workspace in        ~/.substrate/state.db                     │
-│                                                                             │
 │  git-work repos detected: backend-api/, frontend-app/                       │
 │  Plain git repos to initialize: legacy-service/                             │
-│                                                                             │
 │  [y] Initialize  [n] Cancel                                                 │
-│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Model:**
-```go
-type WorkspaceInitModal struct {
-    cwd      string
-    detected []RepoPointer      // discovered git-work repos
-    warnings []string           // plain git clones
-}
-```
+`y`/`Enter` confirms and initializes; `n`/`Esc` cancels and exits Substrate.
 
-Note: Global init is handled automatically by CLI bootstrap before TUI starts. The modal only handles workspace initialization.
+### 3e. Source Items (`o`), Logs (`L`), Add Repository (`a`)
 
-**Workspace init on `[y]`:** calls `substrate.InitWorkspace(cwd)` which:
-1. Creates `.substrate-workspace` (YAML: ULID, name from dir basename, created_at).
-2. Inserts workspace record into DB.
-3. Returns discovered repos and warnings.
+**Source Items (`o`):** Split-pane listing source items for the selected work item. Single-item sessions open directly; multi-item sessions show this overlay. Items without URLs are disabled. `Space` multi-selects; `Enter`/`o` opens selected. `↑`/`↓` navigate; `←`/`→`/`Tab` cycle focus; `Esc` close.
 
-If `[n]` is pressed, Substrate exits cleanly.
+**Logs (`L`):** Captured log entries in a scrollable viewport (75% terminal width, min 60 chars). Each entry: right-aligned line number, timestamp, level (error red, warning amber, info themed, debug muted), message, optional attributes. ANSI-aware word-wrap. `↑`/`↓` or mouse scroll navigate; `c` copy all as raw plain text; `Esc` close.
 
-**Keys:** `y` / `Enter` confirm, `n` / `Esc` cancel.
-### 4e. Source Items Overlay
+**Add Repository (`a`):** Browse and clone remote repositories. Three focus areas: controls (search input, source cycling), repo list, details pane. Sources: GitHub, GitLab, Manual (URL input). Server-side search filtering. Cloning creates a git-work managed repository. `Tab`/`Shift-Tab` cycle focus; `↑`/`↓` navigate list; `Enter` clone; `Esc` close.
 
-Opened from the source details view via `o` (single-item sessions open directly in the browser; multi-item sessions open this overlay for selection). Displays a split-pane overlay listing all source items for the selected work item. Items without URLs are shown in a disabled state and cannot be selected or opened.
+### 3f. Review-Comment Follow-Up (`f`)
 
-The left pane is a list of source items with provider, ref, state, and selection status. The right pane is a scrollable preview showing heading, metadata, description, and an action hint. Multi-select is supported via `Space` — toggling multiple items allows opening them all at once.
+Triggered from artifacts view when work item is `SessionCompleted` or `SessionReviewing`. Turns unresolved PR/MR review comments into agent follow-up work.
 
-**Keys:** `↑`/`↓` navigate list, `←`/`→` or `Tab` cycle focus between list and preview, `Space` toggle multi-select, `Enter`/`o` open selected item(s) in browser, `Esc` close.
+**Dispatch modes:**
+- **Address (Enter)** — implementation-only; plan stays intact. One follow-up session per affected repo.
+- **Re-plan (`p`)** — replaces the plan; PR/MR descriptions resync via plan approval.
 
-### 4f. Logs Overlay
+**Stages:**
+1. `Loading` — spinner fetching unresolved comments in parallel. Resolved filtered at fetch boundary.
+2. Routing: 0 unresolved → toast + close; 1 → skip picker; >1 → PR picker (all checked by default).
+3. `Selector` — checklist by repo → file (with `General` section); right pane shows comment preview. Toggling a header cascades. All selected by default.
+4. `Confirm` — only for re-plan; warns plan will be replaced and PR descriptions will resync.
 
-Triggered by `L` from the main shell. Displays captured slog entries in a scrollable viewport. The overlay is sized to 75% of terminal width (minimum 60 chars) and fills available height.
+**Staleness:** if >5 min since fetch, silently re-fetches, reapplies prior selection by comment ID, toasts `N comment(s) selected were no longer available` if any disappeared. New comments default deselected.
 
-Each log entry shows a right-aligned line number, timestamp, level (color-coded: error red, warning amber, info themed, debug muted), message, and optional attributes. Content is ANSI-aware word-wrapped to fit the overlay width.
+**Partial dispatch:** if a repo has selected comments but no completed task, skipped with toast: `Addressed N of M repos (K skipped: no active task)`.
 
-**Keys:** `↑`/`↓` or mouse scroll to navigate, `c` copy all log entries to clipboard as raw unwrapped plain text (one entry per line, no ANSI codes), `Esc` close.
-
-
-### 4g. Add Repository Overlay
-
-Triggered by `a` from the main shell. This is a centered split overlay for browsing and cloning remote repositories into the workspace.
-
-The overlay has three focus areas: controls (search input, source cycling), repo list, and details pane. Sources include GitHub, GitLab, and Manual (clone by URL). `Tab` / `Shift-Tab` cycle focus areas; `↑` / `↓` navigate the repo list; `Enter` starts cloning the selected repository; `Esc` closes.
-
-When a source is selected, the adapter fetches repositories via the `RepoSource.ListRepos(...)` API. Search filters results server-side. The manual source shows a URL input field instead of a list.
-
-Cloning delegates to `gitwork.Client.Clone()` and creates a git-work managed repository in the workspace.
-
-**Keys:** `Tab` / `Shift-Tab` cycle focus, `↑` / `↓` navigate, `Enter` clone, `Esc` close.
-
-### 4h. Review-Comment Follow-Up Overlay
-
-Triggered by `f` from the artifacts view (§3f) when the work item is in `SessionCompleted` or `SessionReviewing`. Lets the operator turn outstanding (unresolved) PR/MR review comments into agent follow-up work without leaving the TUI. Two dispatch modes:
-
-- **Address (Enter, default)** — implementation-only follow-up; the existing plan stays intact. One `FollowUpSession` per affected repo.
-- **Re-plan (`p`)** — escape hatch when feedback is architectural; replaces the plan via `FollowUpPlan`. PR/MR descriptions then sync to the new plan via the existing `plan.approved` path.
-
-**Stages** (one model with internal sub-states):
-
-1. `stageLoading` — spinner while `Services.ReviewComments` fans out `FetchReviewComments` calls in parallel for every PR/MR on the work item. Records `fetchedAt`. Resolved comments are filtered at the fetch boundary.
-2. Aggregate routing:
-   - 0 PRs with unresolved comments → toast `No outstanding review comments`, close.
-   - exactly 1 PR with unresolved comments → skip picker, jump to `stageSelector`.
-   - >1 PRs → `stagePicker` (PR checklist, all checked by default).
-3. `stageSelector` — split view: left pane is a hierarchical checklist grouped by repo → file (with a `General` section per repo for top-level review comments); right pane previews the focused comment (body, author, timestamp, URL). Toggling a header cascades to its children. All comments selected by default.
-4. `stageConfirm` — only when re-plan is chosen; modal warning that the plan will be replaced and PR descriptions will resync.
-
-**Comment formatting** (canonical template, both modes):
-
-```
-## Review comments to address
-
-### acme/rocket
-
-#### General
-
-- alice: Please add tests for the error cases in the retry loop.
-
-#### internal/handler/process.go
-
-- Line 42: This retry loop doesn't respect the context deadline.
-- Line 78: Consider using a switch here.
-
-### acme/engine
-
-#### cmd/server/main.go
-
-- Line 15: Missing graceful shutdown.
-```
-
-Address-mode sends one slice per repo (only that repo's `### repoName` block) into per-repo `FollowUpSessionMsg`. Re-plan mode concatenates everything into a single `FollowUpPlanMsg`. Reviewer identity is surfaced only in the `General` section, where file+line cannot disambiguate.
-
-Note: GitHub's `General` section is typically empty because top-level review summary bodies (`/pulls/:n/reviews`) are not fetched; only inline thread comments populate the per-file sections. GitLab MR top-level discussions populate the `General` section as expected.
-
-**Dispatch correctness:**
-
-- **Staleness re-fetch** — if `time.Since(fetchedAt) > 5min` at dispatch time, the overlay silently re-fetches with a spinner, re-applies the prior selection by comment ID, and toasts `N comment(s) selected were no longer available` if any disappeared. New comments default to deselected.
-- **Partial dispatch on missing tasks** — if a repo has selected comments but no completed task to attach to, that repo is skipped and the result is surfaced in a toast: `Addressed N of M repos (K skipped: no active task)`.
-
-**Keys:** `↑`/`↓` move, `Space` toggle, `a` all, `n` none, `Enter` Address, `p` Re-plan, `Esc` cancel.
----
-
-## 5. Layout System
-
-The shipped shell geometry is shared rather than redefined per view. The sidebar and content panes use the same pane chrome, centered overlays reuse a common overlay frame, and the settings page intentionally keeps its own full-screen split layout while speaking the same visual language.
-
-Implementation-facing ownership for shared geometry, chrome primitives, and layout guardrails lives in `docs/08-tui-design-system.md`.
-
-The sidebar supports a custom scrollbar rendered on the right edge. Render caching is used for the sidebar and status bar to avoid redundant recomputation — cached output is invalidated on content or dimension changes.
-
-**Footer / status bar**
-
-The main shell footer is a single borderless row. Its left side shows focus-sensitive key hints from the sidebar or content pane plus the global commands. Its right side shows workspace context and the count of truly active sessions. That count includes only agent sessions in `pending`, `running`, or `waiting_for_answer`; completed, failed, and interrupted sessions do not inflate the number.
-
-**Toasts**
-
-Toasts render as stacked top-right overlays anchored below the top inset and above the footer. They do not add rows to the main layout. Toast width is capped at 30% of terminal width. Long messages word-wrap up to 4 lines with ellipsis truncation. Toasts expire after 20 seconds and are pruned on a 1-second tick. Toasts render over all overlays (including modal dialogs) and stack vertically when multiple are active.
+**Keys:** `↑`/`↓` move; `Space` toggle; `a` all; `n` none; `Enter` Address; `p` Re-plan; `Esc` cancel.
 
 ---
 
-## 6. Visual Language
+## 4. Layout System
 
-The TUI uses a muted, professional visual language built around semantic roles instead of per-view palette code. Status icons and badges use shared status semantics, selected rows use one selection language across panes and lists, question and interruption states use warning and interrupted treatment, and diffs use shared add/delete styling.
+Shell geometry is shared across views: sidebar and content panes share pane chrome; overlays reuse a common frame; settings keeps its own full-screen split but uses the same visual language. Sidebar renders a custom scrollbar. Render caching avoids redundant recomputation; invalidated on content or dimension changes.
 
-For token ownership, reusable primitives, and package boundaries, see `docs/08-tui-design-system.md`.
+**Footer:** single borderless row. Left: focus-sensitive key hints. Right: workspace context + active session count (only `pending`, `running`, `waiting_for_answer` sessions count).
 
-## 7. Multi-Instance Support
+**Toasts:** stacked top-right overlays above footer. Width capped at 30% terminal. Word-wrap to 4 lines with ellipsis. Expire after 20 seconds, pruned on 1-second tick. Render over all overlays. Stack vertically.
 
-Multiple substrate instances can open the same workspace simultaneously. The global DB (`~/.substrate/state.db`) is the shared state source.
-
-**Instance registration:** On startup each instance registers a row in `substrate_instances` (ULID, PID, hostname, last_heartbeat). A background goroutine updates `last_heartbeat` every 5 seconds. On clean shutdown the row is deleted. An instance is live if its `last_heartbeat` is within 15 seconds of the current time.
-
-**Session ownership:** When an instance starts an agent session it writes its own `id` into `agent_sessions.owner_instance_id`. Only the owning instance can:
-- Send messages / answers to the running subprocess
-- Resume an interrupted session
-- Trigger `[a]bandon`
-
-If the owning instance is dead (row missing or heartbeat stale >15s), any other instance may take over: it updates `owner_instance_id` to its own ID and proceeds as if it were the original owner.
-
-**Keybind gating:** `[a]nswer`, `[r]esume`, `[a]bandon` are active only when `currentInstanceOwnsSession || ownerIsDead`.
-
-**Agent output:** All output is persisted to `~/.substrate/sessions/<session-id>.log` (JSONL). Any instance can tail this file from disk. The tailing logic handles log rotation: on detecting a size regression or inode change at the watched path, the offset is reset to 0 to follow the new segment.
-
-**State visibility:** Session state changes are visible to all instances immediately via the event bus. The TUI subscribes to `event.Bus` and reacts to `DomainEventMsg` for targeted state reloads without polling.
 ---
 
-## 8. Interaction Model
-
-### Navigation
-
-Vim-style primary, arrow keys as aliases.
+## 5. Interaction Model
 
 | Key | Action | Scope |
 |-----|--------|-------|
 | `j`/`k` or `↑`/`↓` | Navigate / scroll | Sidebar, lists, viewport |
 | `Tab` | Cycle repos / panels | Implementing mode |
-| `g`/`G` | Top/bottom | Lists |
-| Mouse scroll | Scroll viewports and lists | Overview, overlays, logs |
+| `g`/`G` | Top / bottom | Lists |
+| Mouse scroll | Scroll | Viewports and lists |
 | `Enter` | Select / confirm | Lists, overlays |
-| `p` | Steer running agent / follow up on completed or failed session | Session interaction view (context-dependent on session state) |
-| `f` | Open follow-up re-planning feedback | Completed work item overlay |
-| `a` | Add Repository overlay | Main shell |
+| `p` | Steer or follow up | Session interaction |
+| `f` | Follow-up re-plan | Completed overview |
+| `a` | Add Repository | Main shell |
 | `i` | Inspect plan | Plan review, overview |
+| `?` | Help | Global |
+| `s` | Settings | Global |
+| `L` | Logs | Global |
+| `d` | Delete | Contextual |
+| `Ctrl+c` | Force quit | Global |
+| `Esc` | Close / cancel | Global |
 
-### Global Keybinds (handled before delegation)
+**Input modes:** Normal (keypresses = commands) and Input (keypresses go to text widget). Entered explicitly (feedback, answer, filter, steer/follow-up). Exited via `Enter` (submit) or `Esc` (cancel).
 
-`?` help overlay, `a` Add Repository overlay, `q` quit, `Esc` close overlay / cancel input, `n` unified work browser, `s` settings page, `L` logs overlay, contextual `d` delete-session shortcut when a work item, task row, or history result is active, `Ctrl+c` force quit.
+**Confirmation dialogs:** Destructive actions (delete, abandon, reject, override) show a modal. `y` confirms, `n`/`Esc` cancels. Quitting with active sessions shows a confirmation listing the count. `y` quits, `n`/`Esc` cancels. No active sessions: `q` quits immediately. SIGTERM routes through the same confirmation path.
 
-### Input Modes
-
-Two modes: **Normal** (keypresses = commands) and **Input** (keypresses go to textinput widget). Input mode entered by explicit action (feedback, answer, filter, steer/follow-up). Exited via `Enter` (submit) or `Esc` (cancel).
-
-```go
-// In any model with input mode:
-if v.inputActive {
-    switch key.Type {
-    case tea.KeyEnter:
-        v.inputActive = false
-        return v, submitCmd(v.feedback.Value())
-    case tea.KeyEsc:
-        v.inputActive = false
-        return v, nil
-    }
-    v.feedback, cmd = v.feedback.Update(msg)
-    return v, cmd
-}
-// ...normal keybind handling
-```
-
-### Confirmation Dialogs
-
-Destructive actions (delete session/work item, abandon, reject, override) show a modal overlay. Generic `ConfirmDialog` wraps a `tea.Cmd` as `onYes`. `y` confirms, `n`/`Esc` cancels.
-
-Quitting while agent sessions are running shows a confirmation dialog listing the count of active sessions that will be killed. `y` confirms quit, `n`/`Esc` cancels. When no sessions are running, `q` quits immediately. SIGTERM is intercepted to route through the same confirmation path.
-
-fz|The orchestrator owns the full per-repo review lifecycle (implement → review → reimpl → re-review → pass/escalate/fail; see `05-orchestration.md`). `EventWorkItemCompleted` signals that the entire lifecycle — implementation and review — is finished. The TUI does not dispatch review commands.
-The TUI intervenes only when human input is required:
-
-- **`Override accept`** — accepts a repo that review escalated (max review cycles reached without passing). Handled via `OverrideAcceptCmd`.
-- **`Re-implement`** — manually triggers reimplementation for a repo when `AutoFeedbackLoop` is disabled and review found issues. Handled via `ReimplementMsg`.
-
-Both actions are available from the overview's "Under review" action card.
+**Human escalation:** `Override accept` (accepts a repo escalated by review — max cycles reached) and `Re-implement` (manually triggers reimplementation when auto-feedback disabled) are available from the overview's "Under review" action card.
 
 ---
 
-## 9. Async State Management
+## 6. Multi-Instance Support
 
-bubbletea is single-threaded. All async work flows through `tea.Cmd` -> `tea.Msg`.
+Multiple substrate instances can open the same workspace simultaneously. The global state database is the shared state source.
 
-### Patterns
+**Instance registration:** Each instance registers (ULID, PID, hostname, heartbeat) on startup. Background goroutine updates heartbeat every 5 seconds. Clean shutdown deletes the row. An instance is live if its heartbeat is within 15 seconds.
 
-**One-shot** (DB queries, subprocess calls):
-```go
-func fetchSessionsCmd(svc *service.SessionService) tea.Cmd {
-    return func() tea.Msg {
-        sessions, err := svc.List(context.Background())
-        if err != nil { return ErrMsg{Err: err} }
-        return SessionsLoadedMsg{Sessions: sessions}
-    }
-}
-```
+**Session ownership:** Starting an agent session writes the instance's ID into the session record. Only the owning instance can send messages/answers, resume, or abandon. If the owner is dead (row missing or heartbeat stale >15s), any other instance may take over: updates the owner ID and proceeds as the original owner.
 
-**Streaming** (agent session log tailing): The TUI reads one batch of new lines per Cmd, then re-subscribes for the next:
-```go
-func (v *ContentModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-    switch msg := msg.(type) {
-    case SessionLogLinesMsg:
-        v.appendLines(msg.Lines)
-        if !v.paused {
-            v.viewport.GotoBottom()
-        }
-        return v, tailSessionLogCmd(v.logPath, msg.NextOffset)
-    case AgentSessionEndedMsg:
-        v.markComplete(msg.SessionID)
-        return v, nil
-    }
-}
-```
+**Keybind gating:** answer, resume, and abandon are active only when current instance owns the session or the owner is dead.
 
-```go
-// tailSessionLogCmd tracks inode changes to handle log rotation.
-// If the file at logPath is smaller than `since` (rotation occurred),
-// the offset resets to 0 and reading resumes from the new segment start.
-func tailSessionLogCmd(logPath string, since int64) tea.Cmd {
-    return func() tea.Msg {
-        stat, err := os.Stat(logPath)
-        if err != nil {
-            return SessionLogLinesMsg{Lines: nil, NextOffset: since}
-        }
-        if stat.Size() < since {
-            since = 0 // file rotated; restart from beginning of new segment
-        }
-        lines, nextOffset := readNewLines(logPath, since)
-        return SessionLogLinesMsg{Lines: lines, NextOffset: nextOffset}
-    }
-}
-```
+**Agent output:** All output is persisted to the session log file. Any instance can tail from disk. Tailing handles log rotation: on size regression or inode change, offset resets to 0.
 
-**Ticks**: Spinners use `tea.Tick(100ms, ...)`. Toast pruning still uses `PollTickMsg` for periodic cleanup. Work item and task state reloads are event-driven via `DomainEventMsg` — no periodic DB polling for state visibility.
-
-### Optimistic Updates
-
-For near-certain outcomes (plan approval, session abandon):
-1. `Update` sets new state in model immediately, saves previous for rollback.
-2. Returns `tea.Batch(actionCmd, toastCmd("Plan approved", Success))`.
-3. View renders immediately.
-4. On `ErrMsg`, revert model state, show error toast.
+**State visibility:** Session state changes are visible to all instances immediately via the event bus. The TUI subscribes to domain events for targeted state reloads without polling.

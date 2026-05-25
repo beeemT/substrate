@@ -1,438 +1,74 @@
 # 07 - Implementation Plan
-<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
-Phased build-out of Substrate. This file remains a roadmap, but implemented phases are rewritten to match repository HEAD instead of earlier pre-rename drafts.
-
-## Directory Structure
-
-```text
-cmd/substrate/main.go
-internal/
-    domain/                # Session / Plan / Task / Review domain types
-    repository/
-        interfaces.go      # repository interfaces
-        sqlite/            # SQLite implementations
-    service/               # state machines, domain rules, transacter-wrapped repos
-    orchestrator/          # planning, implementation, review, foreman, resume, session registry
-    adapter/
-        linear/
-        manual/
-        gitlab/
-        github/
-        glab/
-        sentry/
-        ohmypi/
-        claudeagent/
-        codex/
-    app/                   # adapter + harness wiring, remote detection
-    event/                 # persisted channel bus
-    gitwork/               # git-work integration and workspace helpers
-    config/                # YAML config + secret hydration
-    tui/                   # Bubble Tea UI
-        views/             # 60+ view and overlay files (incl. overlay_add_repo.go)
-        components/        # bunny, input, confirm, overlay frame, toast, etc.
-bridge/omp-bridge.ts
-migrations/
-    001_initial.sql
-    002_agent_sessions_canonical.sql
-    003_omp_session_meta.sql
-    004_sub_plan_planning_round.sql
-    005_review_artifacts.sql
-    006_session_resume_info.sql
-    007_plan_supersede.sql
-    008_drop_planning_round.sql
-    009_new_session_filters_and_locks.sql
-    010_work_item_extra_context.sql
-    011_pr_review_state.sql
-    012_pr_check_status.sql
-    013_question_routing_metadata.sql
-    014_gitlab_mr_worktree_path.sql
-    015_session_archive.sql
-~/.substrate/state.db
-```
-
-## Phase 0: Project Bootstrap (Week 1)
-
-**Shipped.**
-
-What exists today:
-
-- typed config loading in `internal/config/`
-- global path helpers (`GlobalDir`, `GlobalDBPath`, `ConfigPath`, `SessionsDir`)
-- defaulting + validation for `commit`, `plan`, `review`, `harness`, `adapters`, `foreman`, and `repos`
-- migration runner and `migrations/001_initial.sql`
-- `cmd/substrate/main.go` startup that loads config, runs migrations, wires repos/services/bus/adapters/harnesses, and starts the TUI
-- secret hydration via `config.LoadSecrets`
-
-Current config model is richer than the original plan:
-
-- `harness.default` plus per-phase overrides for `planning`, `implementation`, `review`, and `foreman`
-- adapter config blocks for `ohmypi`, `claude_code`, `codex`, `linear`, `glab`, `gitlab`, `github`, and `sentry`
-- `foreman.question_timeout`
-- per-repo `repos.<name>.doc_paths`
-
-## Phase 1: Core Domain + Persistence (Week 2)
-
-**Shipped, with naming updated from older drafts.**
-
-Current domain/storage split:
-
-- root aggregate is `domain.Session`
-- orchestration record is `domain.Plan`
-- per-repo plan slice is `domain.TaskPlan`
-- repo-scoped harness run is `domain.Task`
-- review is `domain.ReviewCycle` + `domain.Critique`
-- questions are `domain.Question`
-- liveness is `domain.SubstrateInstance`
-
-Storage still uses legacy table names:
-
-- `work_items` stores `domain.Session`
-- `agent_sessions` stores `domain.Task`
-
-Current schema details worth preserving:
-
-- `plans.faq` JSON column exists and backs the Foreman FAQ flow
-- `questions.proposed_answer` exists for escalated-question UX
-- `critiques.suggestion` exists
-- `agent_sessions.owner_instance_id` points at `substrate_instances`
-- `system_events` persists raw `domain.SystemEvent` rows
-- `github_pull_requests` and `gitlab_merge_requests` store provider-native PR/MR records (migration 005)
-- `session_review_artifacts` links work items to provider artifacts with dedup on `(workspace_id, work_item_id, provider, provider_artifact_id)`
-- `sub_plans.planning_round` tracked which planning round last modified each sub-plan (migration 004; dropped in migration 008)- migration 006 migrates OMP-specific session metadata to generic `resume_info`
-- migration 007 adds plan supersede model (partial unique index on non-superseded plans) and `plan_id` to `agent_sessions` pointing at `plans(id)`
-- migration 008 drops `sub_plans.planning_round`
-- migration 009 adds `new_session_filters` and `new_session_filter_locks` for saved new-session filters with per-instance lease locks
-- migration 010 adds `work_items.extra_context` for follow-up planning addenda
-- migration 011 adds `github_pr_reviews` and `gitlab_mr_reviews` for per-reviewer triage state, populated by the 120-second refresh loop
-- migration 012 adds `github_pr_checks` and `gitlab_mr_checks` for per-check CI status, populated by the 120-second refresh loop
-- `agent_sessions.resume_info` tracks native harness session state as generic resume metadata
 
-SQLite implementations live in `internal/repository/sqlite/` and accept `generic.SQLXRemote`. `resources.go` still groups transaction-bound repos into a `Resources` bundle for tests / transactional construction.
+<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
 
-## Phase 2: Service Layer (Week 2-3)
+Phased build-out of Substrate. Each phase builds on the last, delivering incrementally testable slices of the full system.
 
-**Shipped.**
+## Phase 0: Bootstrap
 
-Current services and names:
+Establish the project foundation: typed configuration with validation, the migration runner, global path conventions, and the startup wiring that connects config → migrations → repositories → services → event bus → adapters and harnesses → TUI.
 
-- `SessionService`
-- `PlanService`
-- `TaskService`
-- `ReviewService`
-- `QuestionService`
-- `WorkspaceService`
-- `InstanceService`
-- `EventService`
-- `GithubPRService`
-- `GitlabMRService`
-- `SessionReviewArtifactService`
-- `GithubPRReviewService`, `GitlabMRReviewService`
-- `GithubPRCheckService`, `GitlabMRCheckService`
-Important current behavior:
+## Phase 1: Domain + Persistence
 
-- `SessionService` enforces root-session uniqueness and lifecycle transitions
-- `TaskService` owns task lifecycle plus `SearchHistory` / interrupted-owner queries
-- `QuestionService` supports `EscalateWithProposal` and `UpdateProposal`
-- `PlanService` owns sub-plan transitions and `AppendFAQ` through the repo boundary
-- all services use the `atomic.Transacter[repository.Resources]` pattern: every call runs inside `Transact(ctx, func(ctx, res) error { ... })` closures, giving services consistent transaction boundaries and read-after-write consistency
+Define core domain types (Session, Plan, TaskPlan, Task, ReviewCycle, Critique, Question, Instance) and build the transactional service layer. All service operations run inside consistent transaction boundaries, ensuring read-after-write coherence across the persistence layer.
 
-This layer is already using the renamed `Session` / `Task` model; older `WorkItemService` / `AgentSessionService` wording is obsolete.
+## Phase 2: Event Bus + Adapter Interfaces
 
-## Phase 3: Event Bus + Adapter Interfaces (Week 3)
+Introduce the channel-based pub/sub event bus with topic filtering. Define adapter contracts so work-item trackers, repository lifecycle handlers, and external services can subscribe to events and react, with retry semantics and error escalation built into the bus contract.
 
-**Shipped, but in its current mixed form.**
+## Phase 3: git-work Integration
 
-Current reality:
+Wire workspace discovery and worktree management. Substrate detects workspaces by convention, discovers repositories by layout, and runs preflight checks. Planning drafts and implementation worktrees are created under workspace-local paths.
 
-- `domain.SystemEvent` is the persisted event shape
-- `event.Bus` is a channel-based pub/sub bus with topic filtering
-- `worktree.creating` is the default pre-hook event type
-- pre-hooks and post-hooks are supported, with default 30s hook timeouts
-- dispatch is non-blocking; full subscriber buffers yield `ErrRetryLater` unless a drop handler is installed
-- adapter `OnEvent` retries up to 3 times before publishing `adapter.error` system events and surfacing best-effort TUI warnings
-- work item adapters subscribe to all events and self-filter in `OnEvent`
-- repo lifecycle adapters subscribe only to `worktree.created` and `work_item.completed`
+## Phase 4: Agent Harnesses
 
-Also important: not all events currently flow through the bus. Planning persists lifecycle events directly through `EventService.Create` (not through the bus). Adapters persist review artifact events the same way.
+Build the multi-harness architecture that resolves a harness per phase (planning, implementation, review, foreman) from configuration. Each harness is pluggable with binary-presence checks that make unavailable phases explicit rather than silently degraded.
 
-## Phase 4: git-work Integration (Week 3-4)
+## Phase 5: Planning Pipeline
 
-**Shipped.**
+Execute the full planning flow: ingest a session, run preflight, discover workspace and repos, render the planning prompt, launch the harness planning session, wait for the draft, parse and validate, run the correction loop, and persist the approved plan with its per-repo task slices.
 
-Current behavior:
+## Phase 6: Implementation Orchestrator
 
-- workspace identity uses `.substrate-workspace`
-- workspace discovery walks upward from cwd
-- repo discovery looks for direct child directories containing `.bare/`
-- planning preflight warns on plain git clones and failed pulls
-- discoverer pull cooldown (5 minutes) avoids redundant pulls within the same window
-- pull failures are recorded but do not stop discovery
-- planning creates `<workspace>/.substrate/sessions/<planning-session-id>/plan-draft.md`
-- implementation creates feature worktrees through `git-work checkout`
+Drive execution of an approved plan as ordered waves of tasks. Each wave runs concurrently; each task creates a durable record before the harness session starts, publishes lifecycle events to the bus, and transitions the root session to reviewing or failed when the wave completes.
 
-## Phase 6: Multi-Harness Agent Integration (Week 4-5)
+## Phase 7: Foreman + Review
 
-**Partially shipped.**
+Implement persistent foreman sessions that resolve developer questions during planning and review. High-confidence answers are persisted immediately; uncertain answers are escalated to the developer. Review runs as a structured critique loop with correction retries, and major critiques trigger reimplementation decisions.
 
-Current production-quality path:
+## Phase 8: Resume & Recovery
 
-- `ohmypi` is the default harness and the only path with verified interactive continuation behavior across planning, implementation, review, and foreman flows.
+Handle interruption gracefully: detect stale or orphaned tasks on startup, let developers resume interrupted work in place, and support abandoning or superseded sessions. Graceful quit (q / ctrl+c / SIGTERM) triggers confirmation when agents are running.
 
-Currently wired but still parity-limited:
+## Phase 9: TUI
 
-- `claudeagent`
-- `codex`
+Build the Bubble Tea interface: sidebar with session list and filtering, plan approval, implementation and review views, session transcript rendering, log overlay with clipboard, source item browser, settings pages with live rewire, workspace init, repository add, and confirmation dialogs with quit guard.
 
-Current router behavior in `internal/app/harness.go`:
+## Phase 10: End-to-End Integration
 
-- each phase resolves a single harness from config
-- missing binaries cause that phase to be unavailable rather than silently pretending parity
-- `Resume` currently reuses the implementation harness choice
-- diagnostics are surfaced for settings/TUI consumption
-
-The important naming update here is that the implementation talks about harness phases and `AgentHarness` instances, not the old single-harness assumption.
-
-### 6a. oh-my-pi bridge (default, production path)
-
-What is true today:
-
-- runtime path is `internal/adapter/ohmypi/`
-- package name is still `omp`
-- readiness checks validate bridge availability and Bun requirements for source-bridge mode
-- the bridge emits structured events consumed by the Go harness session wrapper
-
-### 6b. Claude Code adapter (implemented, parity still limited)
-
-- startup and selection are wired
-- binary presence is checked
-- do not treat it as equal to oh-my-pi for interactive continuation semantics unless verified by tests/runtime evidence
-- supports compact and native resume via a TypeScript bridge (`@anthropic-ai/claude-agent-sdk`, same architecture as OMP bridge)
-
-### 6c. Codex adapter (implemented, parity still limited)
-
-- same current status as Claude Code: selectable and wired, supports messaging via thread resume and native resume, but steering returns `ErrSteerNotSupported` and compact is not supported
-
-### 6d. Harness routing, packaging, and validation
-
-Current config shape is YAML, not TOML:
-
-```yaml
-harness:
-  default: ohmypi
-  phase:
-    planning: ohmypi
-    implementation: ohmypi
-    review: ohmypi
-    foreman: ohmypi
-```
-
-## Phase 7: Planning Pipeline (Week 5-6)
-
-**Shipped.**
-
-Current planning flow in `internal/orchestrator/planning.go`:
-
-1. transition root `Session` from `ingested` to `planning`
-2. load `Workspace`
-3. run preflight (`Discoverer.PreflightCheck`)
-4. pull `main/` worktrees best-effort
-5. discover repos and metadata
-6. read workspace-root `AGENTS.md`
-7. create workspace-local planning session dir and draft path
-8. render planning prompt
-9. start harness planning session
-10. wait for draft file or completion
-11. parse/validate the draft
-12. run correction loop up to `plan.max_parse_retries`
-13. persist `Plan` and `TaskPlan`s
-14. transition root `Session` to `plan_review`
-15. persist planning events
-
-Current naming details:
-
-- planning is launched for a root `Session`, not a `WorkItem` type
-- parsed repo slices are `TaskPlan`, not `SubPlan` in the domain model
-- `PlanningContext` uses `WorkItemSnapshot` as a projection name, but it snapshots the `Session` aggregate
-
-## Phase 8: Implementation Orchestrator (Week 6-7)
-
-**Shipped.**
-
-Current implementation flow in `ImplementationService`:
-
-- requires `PlanApproved`
-- loads the root `Session` and its `Workspace`
-- discovers repository paths before mutating root-session state
-- transitions root `Session` to `implementing`
-- pre-creates unique worktrees sequentially to avoid same-wave races
-- builds waves from `TaskPlan.Order`
-- executes tasks in a wave concurrently via `errgroup`
-- creates a durable `Task` row before launching each harness session
-- forwards harness events to the bus while the task runs
-- transitions the root `Session` to `reviewing` or `failed` at the end
-
-Current event nuance:
-
-- `worktree.creating` and `worktree.created` go through `event.Bus`
-- `work_item.implementation_started` and task start/complete/fail events go through `event.Bus` via `ImplementationService.publishEvent`
-
-## Phase 9: Foreman + Review Pipeline (Week 7-8)
-
-**Shipped in current form.**
-
-### Foreman
-
-What exists now:
-
-- `Foreman` manages a persistent foreman-phase harness session per plan
-- `StartForemanCmd` is triggered from the TUI after plan approval and during review-driven reimplementation loops
-- questions are serialized through the foreman worker queue
-- high-confidence answers are persisted immediately and appended to `Plan.FAQ`
-- uncertain answers are escalated with `Question.ProposedAnswer`
-- the TUI can keep iterating with the foreman before calling `ResolveEscalated`
-- `question_timeout` is configurable through `foreman.question_timeout`; config default is `"0"` (documented as indefinite, but runtime falls back to 60 s)
-- the Foreman is stopped on implementation completion and restarted for follow-up feedback
-- it counts as a live session in the TUI status bar
-- the Foreman receives the full composed plan document as its system prompt context
-
-### Review
-
-What exists now:
-
-- review is modeled as `ReviewPipeline.ReviewSession(session domain.Task)`
-- a review harness session is started in foreman mode
-- output is parsed for `CRITIQUE` / `END_CRITIQUE` blocks or `NO_CRITIQUES`
-- correction-loop retries reuse the same live review session
-- major/critical critiques trigger reimplementation decisions via the review result path
-- review outcome events are published through the bus
-- review sessions run in `SessionModeAgent` with a review-only role instruction
-- parse failures are treated as no critiques (no correction loop in agent mode)
-
-### Orchestrator-owned review pipeline
-
-The implementation orchestrator now owns the per-repo review loop:
-
-- `AutoFeedbackLoop` config flag (default `true`) gates automatic reimplementation after critique
-- review critiques are reused as feedback when re-triggering implementation
-- native harness sessions are resumed via `ResumeFromSessionID` and `ResumeInfo` for review reimplementation
-- escalated sub-plans are persisted as failed before the work item is routed to reviewing
-- bridge answer timeout is handled through `ohMyPiSession.SendAnswer`
-
-## Phase 9b: Resume & Recovery (Week 8)
-
-**Shipped.**
-
-Current behavior:
-
-- `InstanceService` owns instance CRUD, heartbeat updates, liveness checks, and stale cleanup
-- orphan reconciliation runs on TUI startup via `ReconcileOrphanedTasksCmd` — tasks whose owner instance is absent or stale are transitioned to `interrupted`
-- `Resumption.ResumeSession` creates a new `Task` against the same `TaskPlan` and worktree
-- the interrupted task remains interrupted for audit purposes
-- resume context includes the last 50 log lines from `~/.substrate/sessions/<old-task-id>.log`
-- `AgentSessionResumed` is published through the bus
-- `AbandonSession` terminalizes an interrupted task as failed
-- superseded interrupted sessions are failed once the replacement task is durable
-- `deleteOrFailPendingSession` is the shared cleanup path for failed starts
-- `SessionRegistry.AbortAndDeregister` is the idempotent live-session teardown path
-- `DeleteSessionMsg` cancels pipelines, aborts registry sessions, stops Foreman when needed, then deletes task/work-item rows and artifacts
-- graceful agent abort on quit: `q` / `ctrl+c` / `SIGTERM` trigger a confirmation dialog when agents are running
-
-The old `InstanceManager` has been deleted. Instance reconciliation is now split between `InstanceService` (row ownership and heartbeat liveness) and the TUI startup orphan-reconciliation command.
-
-## Phase 10: Work Item Browsing and Selection (Week 8)
-
-Still roadmap-oriented, but the terminology should be read as follows:
-
-- browsing creates root `Session` records
-- adapters resolve selections into `domain.Session`
-- manual creation remains a separate explicit path
-
-The capability-driven browse contract already exists in `internal/adapter/types.go` and `interfaces.go`; remaining work is mostly UI semantics and provider-scope parity.
-
-## Phase 11: GitLab / GitHub Adapters and Unified Browse Semantics (Week 8-9)
-
-Mixed state:
-
-- GitLab, GitHub, Linear, Manual, Glab, and Sentry adapters exist
-- work-item tracker mutation and repo-lifecycle automation are already split into different adapter contracts
-- `internal/app/remotedetect` routes lifecycle adapters by detected provider
-- browse/filter parity across all providers remains a roadmap item rather than a finished uniform contract
-
-For Sentry specifically, the roadmap here should now be read alongside `04-adapters.md`: `07` owns the broader rollout picture, while `04` owns the shipped Sentry source-adapter contract, auth/config model, browse semantics, and settings integration details.
-
-## Phase 12: TUI (Week 9-11)
-
-Substantial portions are shipped.
-
-Current TUI reality to keep in mind:
-
-- the default sidebar is root-session / work-item centric
-- history search uses `SessionHistoryEntry`
-- plan approval publishes `plan.approved` from `PlanService`; work-item completion publishes `work_item.completed` from `ImplementationService`
-- settings pages rebuild services and rewire adapters/harnesses dynamically
-- workspace init is a TUI flow, not just a CLI-only concern
-- overview view with action cards, confirm triggers, and superseded-interrupted filtering
-- session transcript view with structured rendering for assistant, prompt, tool, lifecycle, question, thinking, and foreman output
-- log overlay with line numbers, wrapping, scroll, and clipboard copy (`c` key)
-- source items overlay with split list/preview pane
-- empty state with animated ASCII bunny component
-- mouse scroll support (`tea.WithMouseCellMotion`) in overview, log overlay, source items overlay, and settings
-- quit confirmation dialog when agents are running (`q`, `ctrl+c`, `SIGTERM`)
-- duplicate session dialog for choosing between duplicate work items
-- centralized text input/textarea component with macOS-compatible word-movement bindings
-- raw key debug logger (`SUBSTRATE_KEY_DEBUG`)
-- Add Repository overlay for browsing and cloning remote repositories via GitHub, GitLab, and manual URL
-- Sidebar filters (All/Active/Needs Attention/Completed), grouping dimensions, and sort direction controls with custom scrollbar
-- Render caching for sidebar and status bar
-- Grouped task sidebar entries under section headers
-- Completed-session action card with Changes keybind
-- Plan inspect key (`i`) from planning sessions and plan review
-- Commit strategy injection into agent system prompts and residual-change commit/push after review pass
-- Compact-before-critique for review reimplementation when harness supports it
-
-## Phase 13: End-to-End Integration (Week 11-12)
-
-Still the umbrella outcome: provider work item -> planning -> approval -> implementation -> review -> completion, with lifecycle automation routed by repository host.
-
-The current codebase already has e2e coverage scaffolding under `test/e2e/`, but this phase remains the overall integration target rather than a finished “nothing left to do” claim.
+The full provider work-item → planning → approval → implementation → review → completion pipeline. Lifecycle automation routes events by repository host, and all phases compose into a single cohesive developer experience.
 
 ## Autonomous Validation Strategy
 
-Keep the validation split, but interpret it against current repo structure:
+Substrate is validated across three categories:
 
-```bash
-# Unit
- go test ./...
- go test -race ./...
- go vet ./...
-
-# Focused integration / e2e surfaces
- go test -tags=integration ./internal/gitwork/...
- go test -tags=integration ./internal/adapter/ohmypi/...
- go test -tags=integration ./internal/adapter/linear/...
- go test -tags=integration ./internal/adapter/gitlab/...
- go test -tags=integration ./internal/adapter/github/...
- go test -tags=integration ./internal/adapter/glab/...
- go test -tags=integration,e2e -timeout=30m ./test/e2e/...
-```
+- **Unit tests** verify individual service logic, state machine transitions, and domain rules in isolation.
+- **Integration tests** verify adapter behavior, event bus delivery, persistence transactions, and harness wiring against real dependencies.
+- **End-to-end tests** verify the full pipeline from session ingestion through implementation and review, exercising all adapters and harnesses in a realistic environment.
 
 ## Risk Register
 
-The main live risks that still match current architecture are:
-
-- harness parity drift between oh-my-pi and the alternative harnesses
-- provider browse/filter semantics diverging across adapters
-- event-bus partial delivery when `ErrRetryLater` happens after some subscribers already received an event (mitigated by drop handler; idempotent consumers)
-- SQLite contention and retry behavior under concurrent writes
-- bridge / CLI output format drift in external tools
-- foreman `question_timeout` config default `"0"` is documented as indefinite but runtime falls back to 60 s
+- Harness parity drift between the default bridge and alternative harnesses may cause silent degradation in non-default paths.
+- Provider browse and filter semantics may diverge across adapters, creating inconsistent UX depending on which tracker is in use.
+- Event-bus partial delivery occurs when some subscribers have already received an event before a retry-after condition; idempotent consumers mitigate this but it cannot be eliminated.
+- SQLite under concurrent writes may exhibit contention; retry behavior must be tuned and monitored.
+- External tool output format drift in bridges or CLIs can break harness session parsing without immediate failure.
+- The foreman question timeout defaults to zero (documented as indefinite) but the runtime falls back to 60 seconds; this mismatch may surprise users.
 
 ## Known Gaps
 
-Current gaps that remain accurate to call out:
-
-- event-bus partial-delivery semantics are accepted and require idempotent consumers
-- no dead-letter store for adapter errors; `adapter.error` events are persisted but best-effort TUI warnings can be dropped when the message channel is full
-- pre-hook timeouts cannot kill a misbehaving goroutine that ignores context cancellation
-- Linux sandboxing for the oh-my-pi bridge remains less mature than the macOS path
-- some adapter / harness parity claims are intentionally held back until real-binary verification exists
+- Event-bus partial-delivery semantics are accepted; consumers must be idempotent.
+- There is no dead-letter store for adapter errors; best-effort TUI warnings can be dropped when the message channel is full.
+- Pre-hook timeouts cannot kill a misbehaving goroutine that ignores context cancellation.
+- Linux sandboxing for the oh-my-pi bridge is less mature than the macOS path.
+- Some adapter and harness parity claims are intentionally held back pending real-binary runtime verification.

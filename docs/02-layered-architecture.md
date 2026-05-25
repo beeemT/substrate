@@ -1,7 +1,6 @@
 # 02 - Layered Architecture
-<!-- docs:last-integrated-commit 5f40bd72111dbaec6c4ea02625679580f6d96c0a -->
-This document describes the current layering and wiring in repository HEAD.
-The important update versus older drafts is that the codebase now uses `Session`/`Task` domain names internally, while some storage tables and UI copy still use legacy `work_item` / `agent_session` terminology.
+
+This document describes the layered structure of the application and the patterns that connect layers.
 
 ## 1. Layer Diagram
 
@@ -37,598 +36,90 @@ graph TD
     SQLITE --> DB
 ```
 
-Current top-level split:
+**Top-level split:**
 
-- `cmd/substrate/main.go` does the production wiring.
-- `internal/app/` builds adapters and harnesses from config.
-- `internal/orchestrator/` owns multi-service workflows.
-- `internal/service/` owns state transitions and domain rules.
-- `internal/repository/interfaces.go` defines interfaces.
-- `internal/repository/transacter.go` defines `Resources` and `NoopTransacter`.
-- `internal/repository/sqlite/` provides the concrete SQLite implementations.
-- `internal/event/bus.go` is an in-process pub/sub bus backed by `repository.EventRepository`.
+- `cmd/substrate/` boots the app: loads config, runs migrations, wires everything together.
+- `internal/app/` assembles adapters and harnesses from config.
+- `internal/orchestrator/` owns multi-service workflows (planning, implementation, review, foreman).
+- `internal/service/` owns state transitions, validation, and event emission.
+- `internal/repository/interfaces.go` defines the repository abstraction boundary.
+- `internal/repository/sqlite/` provides the concrete implementations backed by SQLite.
+- `internal/event/bus.go` is an in-process pub/sub bus backed by event persistence.
 
 ## 2. Repository Layer
 
-`internal/repository/interfaces.go` is the abstraction boundary that services depend on.
+The repository layer is the persistence abstraction. Services depend only on interfaces; they never import the sqlite package directly.
 
-### Interface inventory
+### What repositories own
 
-| Interface | Purpose | Main domain type |
-|---|---|---|
-| `SessionRepository` | CRUD for root work items | `domain.Session` |
-| `PlanRepository` | CRUD for plans + FAQ append | `domain.Plan` |
-| `TaskPlanRepository` | CRUD for per-repo plan slices | `domain.TaskPlan` |
-| `WorkspaceRepository` | CRUD for workspaces | `domain.Workspace` |
-| `TaskRepository` | CRUD for repo-scoped runs + history projection | `domain.Task` |
-| `ReviewRepository` | CRUD for review cycles and critiques | `domain.ReviewCycle`, `domain.Critique` |
-| `QuestionRepository` | CRUD for questions and proposal updates | `domain.Question` |
-| `EventRepository` | Persistence for system events | `domain.SystemEvent` |
-| `InstanceRepository` | CRUD for running substrate processes | `domain.SubstrateInstance` |
-| `GithubPullRequestRepository` | CRUD for GitHub pull requests | `domain.GithubPullRequest` |
-| `GitlabMergeRequestRepository` | CRUD for GitLab merge requests | `domain.GitlabMergeRequest` |
-| `SessionReviewArtifactRepository` | CRUD for session-artifact links | `domain.SessionReviewArtifact` |
-| `GithubPRReviewRepository` | Per-reviewer review state for GitHub PRs | `domain.GithubPRReview` |
-| `GitlabMRReviewRepository` | Per-reviewer review state for GitLab MRs | `domain.GitlabMRReview` |
-| `GithubPRCheckRepository` | Per-check CI status for GitHub PRs | `domain.GithubPRCheck` |
-| `GitlabMRCheckRepository` | Per-check CI status for GitLab MRs | `domain.GitlabMRCheck` |
+Each repository is responsible for one domain aggregate:
 
-Representative interface shapes:
+- **Session repository** — root work-item lifecycle and state transitions.
+- **Plan repository** — plan drafts, review outcomes, and FAQ append.
+- **Task plan repository** — per-repository plan slices and their execution status.
+- **Task repository** — agent session lifecycle (pending, running, interrupted, completed) and history projection.
+- **Review repository** — review cycles and individual critiques.
+- **Question repository** — question/answer/escalation/proposal workflows tied to agent sessions.
+- **Workspace repository** — workspace lifecycle, including archive and recovery.
+- **Event repository** — system event persistence, used by the event bus.
+- **Instance repository** — running substrate process heartbeat and stale detection.
+- **PR/MR repositories** — pull request and merge request state, CI checks, and per-reviewer triage state.
+- **Session review artifact repository** — links between sessions and external review artifacts.
 
-```go
-type SessionRepository interface {
-	Get(ctx context.Context, id string) (domain.Session, error)
-	List(ctx context.Context, filter SessionFilter) ([]domain.Session, error)
-	Create(ctx context.Context, item domain.Session) error
-	Update(ctx context.Context, item domain.Session) error
-	Delete(ctx context.Context, id string) error
-}
-
-type TaskRepository interface {
-	Get(ctx context.Context, id string) (domain.Task, error)
-	ListBySubPlanID(ctx context.Context, subPlanID string) ([]domain.Task, error)
-	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.Task, error)
-	ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.Task, error)
-	SearchHistory(ctx context.Context, filter domain.SessionHistoryFilter) ([]domain.SessionHistoryEntry, error)
-	Create(ctx context.Context, s domain.Task) error
-	Update(ctx context.Context, s domain.Task) error
-	Delete(ctx context.Context, id string) error
-}
-
-type GithubPullRequestRepository interface {
-	Upsert(ctx context.Context, pr domain.GithubPullRequest) error
-	Get(ctx context.Context, id string) (domain.GithubPullRequest, error)
-	GetByNumber(ctx context.Context, owner, repo string, number int) (domain.GithubPullRequest, error)
-	ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
-	ListNonTerminal(ctx context.Context, workspaceID string) ([]domain.GithubPullRequest, error)
-}
-```
-
-### SQLite implementations
-
-Concrete implementations live under `internal/repository/sqlite/`:
-
-- `SessionRepo`
-- `PlanRepo`
-- `SubPlanRepo`
-- `WorkspaceRepo`
-- `TaskRepo`
-- `ReviewRepo`
-- `QuestionRepo`
-- `EventRepo`
-- `InstanceRepo`
-- `GithubPRRepo`
-- `GitlabMRRepo`
-- `SessionReviewArtifactRepo`
-- `GithubPRReviewRepo`
-- `GitlabMRReviewRepo`
-- `GithubPRCheckRepo`
-- `GitlabMRCheckRepo`
-
-All of them accept `generic.SQLXRemote`, which lets the same repo code work with either:
-
-- production `dbRemote{*sqlx.DB}` in `cmd/substrate/main.go`, or
-- transaction-bound handles created by the transacter.
-
-Representative constructor pattern:
-
-```go
-type EventRepo struct{ remote generic.SQLXRemote }
-
-func NewEventRepo(remote generic.SQLXRemote) EventRepo {
-	return EventRepo{remote: remote}
-}
-```
-
-### Resources struct
-
-`internal/repository/transacter.go` defines the `Resources` struct that groups all transaction-bound repositories:
-
-```go
-type Resources struct {
-	Sessions               SessionRepository
-	Plans                  PlanRepository
-	SubPlans               TaskPlanRepository
-	Workspaces             WorkspaceRepository
-	Tasks                  TaskRepository
-	Reviews                ReviewRepository
-	Questions              QuestionRepository
-	Events                 EventRepository
-	Instances              InstanceRepository
-	GithubPRs              GithubPullRequestRepository
-	GitlabMRs              GitlabMergeRequestRepository
-	SessionReviewArtifacts SessionReviewArtifactRepository
-	GithubPRReviews        GithubPRReviewRepository
-	GitlabMRReviews        GitlabMRReviewRepository
-	GithubPRChecks         GithubPRCheckRepository
-	GitlabMRChecks         GitlabMRCheckRepository
-}
-```
-
-`sqlite.ResourcesFactory` (in `internal/repository/sqlite/resources.go`) constructs a fully-populated `Resources` from a transaction handle. Production wiring creates a single `sqlite.NewTransacter(db)` which uses `ResourcesFactory` internally. Tests use `repository.NoopTransacter{Res: ...}` to inject mocks directly.
+All repositories accept a shared database handle. Transaction-bound handles are derived from that same handle so that changes within a transaction are isolated from concurrent readers.
 
 ## 3. Service Layer
 
-The service layer is the state-machine, validation, and event-emission layer. Services own domain state transitions and emit events on every state change. All services use the **transacter pattern** for repository access.
+The service layer is where domain rules, state machines, and validation live. Services own all state transitions and emit events on every change.
 
-### Transacter pattern
+### The transactional pattern
 
-Every service holds `atomic.Transacter[repository.Resources]` (from `go-atomic`) and accesses repos through the `Resources` struct inside a `Transact` callback:
+Every service holds a transacter — a handle that can open a transaction around repository operations. All repository access is gated through a `Transact` callback:
 
 ```go
-type PlanService struct {
-	transacter atomic.Transacter[repository.Resources]
-	bus        *event.Bus  // nil for services that don't emit events
-}
-
-func (s *PlanService) CreatePlan(ctx context.Context, plan domain.Plan) error {
-	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		return res.Plans.Create(ctx, plan)
-	})
-}
+// Pseudo-signature; actual type lives in the repository package.
+Transact(ctx, func(res Resources) error)
 ```
 
-Rules:
+This pattern exists for two reasons:
 
-- Services MUST hold `atomic.Transacter[repository.Resources]` directly. No wrapper interfaces, function types, or shims.
-- All repository access goes through `Transact`, even single-repo reads.
-- Inside a callback, access repos via the `res` parameter (`res.Plans`, `res.Sessions`, etc.). Do NOT close over repo fields from the service struct.
-- For tests, use `repository.NoopTransacter{Res: repository.Resources{Plans: mock, SubPlans: mock}}`.
-- Services that emit events hold `*event.Bus` and use `service.Emit()` to publish after transactions commit. Pass `nil` for the bus in tests.
+1. **SQLite consistency.** SQLite transactions are required for any write that must survive a crash or be visible to the next read in the same process. Without a transaction, concurrent reads can observe partial writes.
+
+2. **Read-after-write correctness.** Planning and review workflows read what they just wrote before returning to the caller. Without a transaction, those reads can miss the uncommitted row.
+
+Single-read operations also go through `Transact` to keep the pattern uniform and to allow future writes without refactoring callers.
+
+### Design rules
+
+- Services MUST NOT hold bare repository interfaces as struct fields. All access goes through the transacter.
+- Services MUST NOT import or depend on other services. Cross-service coordination belongs in the orchestration layer.
+- Services return domain-oriented errors (`ErrNotFound`, `ErrInvalidTransition`, `ErrInvalidInput`).
+- Services emit events **after** the transaction commits, never before persisting state. The bus is passed as a pointer; services that don't emit events receive nil.
 
 ### Event emission
 
-Services emit events via `service.Emit(bus, evt)`, a shared helper in `internal/service/event_emit.go` that:
-- Publishes asynchronously via `bus.Publish()`
-- Uses a 5-second timeout to prevent goroutine leaks
-- Gracefully no-ops when the bus is nil (for tests)
+A shared helper publishes events asynchronously with a timeout. If the bus is nil (in tests), it no-ops gracefully.
 
 Services that emit events:
 
-|| Service | Constructor | Events emitted |
-||---|---|---|
-|| `SessionService` | `NewSessionService(transacter, bus)` | work item state transitions via `Transition()` |
-|| `TaskService` | `NewTaskService(transacter, bus)` | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
-|| `PlanService` | `NewPlanService(transacter, bus)` | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
-
-Constructor signatures follow `NewXxxService(transacter, bus *event.Bus)` for emitting services, and `NewXxxService(transacter)` for non-emitting services.
-
-Current services:
-
-|| Service | Owns | Key responsibilities |
-||---|---|---|
-|| `SessionService` | root `Session` lifecycle | validation, uniqueness checks, state transitions, event emission |
-|| `PlanService` | `Plan` + `TaskPlan` | plan/sub-plan transitions, FAQ append, lookup helpers, event emission |
-|| `TaskService` | repo-scoped `Task` lifecycle | pending/running/interrupted transitions, history lookups, event emission |
-|| `ReviewService` | `ReviewCycle` + `Critique` | cycle transitions, critique persistence and resolution |
-|| `QuestionService` | `Question` | answer/escalation/proposal workflows |
-|| `WorkspaceService` | `Workspace` | create / transition / archive / recover |
-|| `InstanceService` | `SubstrateInstance` | heartbeat, stale detection, cleanup |
-|| `EventService` | `SystemEvent` | event persistence (wraps `EventRepository`) |
-|| `GithubPRService` | `GithubPullRequest` | upsert, lookup by number, list non-terminal |
-|| `GitlabMRService` | `GitlabMergeRequest` | upsert, lookup by IID, list non-terminal |
-|| `SessionReviewArtifactService` | `SessionReviewArtifact` | upsert, list by work item / workspace |
-|| `GithubPRReviewService` | `GithubPRReview` | upsert by `(pr_id, reviewer_login)`, list by PR, delete on PR terminal transition |
-|| `GitlabMRReviewService` | `GitlabMRReview` | upsert by `(mr_id, reviewer_login)`, list by MR, delete on MR terminal transition |
-|| `GithubPRCheckService` | `GithubPRCheck` | upsert by `(pr_id, name)`, list by PR, delete on PR terminal transition |
-|| `GitlabMRCheckService` | `GitlabMRCheck` | upsert by `(mr_id, name)`, list by MR, delete on MR terminal transition |
-
-Design rules:
-
-- Services MUST NOT hold bare repository interfaces as struct fields. All repository access goes through the transacter.
-- Services MUST NOT import or depend on other services. Cross-service orchestration belongs in `internal/orchestrator`.
-- Services return domain-oriented errors (`ErrNotFound`, `ErrInvalidTransition`, `ErrInvalidInput`).
-- Services own transition tables.
-- Services emit events after transactions commit — never emit before persisting state.
+| Service | Events |
+|---|---|
+| Session service | work-item state transitions |
+| Task service | `agent_session.started`, `agent_session.completed`, `agent_session.failed`, `agent_session.interrupted` |
+| Plan service | `plan.submitted_for_review`, `plan.approved`, `plan.rejected`, `plan.revised`, `subplan.status_changed` |
 
 ## 4. Orchestration Layer
 
-The current business-logic layer is not a single monolithic `Orchestrator` type. It is a set of focused workflow structs in `internal/orchestrator/`.
+The orchestration layer owns multi-step workflows that coordinate across services. It is not a single monolith — focused structs own each workflow.
 
-| Type | Responsibility |
+| Orchestrator | Responsibility |
 |---|---|
 | `Discoverer` | workspace preflight, git-work discovery, repo metadata extraction |
 | `PlanningService` | planning session startup, correction loop, plan persistence |
-|| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding |
-| `ReviewPipeline` | review-session startup, critique parsing, review outcome transitions |
+| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding |
+| `ReviewPipeline` | review session startup, critique parsing, review outcome transitions |
 | `Foreman` | persistent question-answering session, FAQ append, escalation handling |
-| `Resumption` | resume / abandon interrupted tasks |
-| `SessionRegistry` | maps live agent session IDs to `adapter.AgentSession` handles for steering |
-| `PlanParser` / wave helpers | orchestration support code used by planning / implementation |
+| `Resumption` | resume or abandon interrupted tasks |
+| `SessionRegistry` | maps live agent session IDs to adapter handles for steering |
 
-Note: `InstanceManager` was deleted. Instance reconciliation is now handled by `InstanceService` directly.
-
-Representative wiring via `ServiceManager.buildServices()` (see `internal/tui/views/service_manager.go`):
-
-```go
-// Bus is shared singleton — passed to services, orchestrators, adapters.
-bus := event.NewBus(event.BusConfig{EventRepo: sm.eventRepo})
-
-// Services receive the shared bus.
-workItemSvc := service.NewSessionService(sm.transacter, bus)
-sessionSvc := service.NewTaskService(sm.transacter, bus)
-planSvc := service.NewPlanService(sm.transacter, bus)
-
-// Orchestrators receive the bus and services.
-planningSvc, _ := orchestrator.NewPlanningService(
-	planningCfg, discoverer, gitClient, harnesses.Planning,
-	planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, questionSvc, cfg,
-)
-
-reviewPipeline := orchestrator.NewReviewPipeline(
-	cfg, harnesses.Review, reviewSvc, sessionSvc, planSvc, workItemSvc,
-	bus, registry,
-)
-
-Cross-cutting reality today:
-
-- `ServiceManager` (in `internal/tui/views/service_manager.go`) owns the complete service graph lifecycle. It creates the shared bus, constructs all services and orchestrators, and wires adapters to the bus.
-- Services own state transitions and emit events via `service.Emit()`. Orchestrators own workflow events and emit via `service.Emit()`. Orchestrators do not emit state-transition events that services already emit.
-- Orchestration structs receive service pointers, the `SessionRegistry`, and the shared bus.
-- Adapters react to events; services do not depend on adapters.
-
-## 5. SQLite Schema
-
-The canonical base schema is `migrations/001_initial.sql`. Subsequent migrations extend it:
-
-- `002_agent_sessions_canonical.sql` — rewrites `agent_sessions` to add `work_item_id`, `phase`, nullable `sub_plan_id`, `worktree_path`, and indexes
-- `003_omp_session_meta.sql` — adds OMP-specific session metadata columns (`omp_session_file`, `omp_session_id`) to `agent_sessions`
-- `004_sub_plan_planning_round.sql` — adds `planning_round` column to `sub_plans`
-- `005_review_artifacts.sql` — adds `github_pull_requests`, `gitlab_merge_requests`, and `session_review_artifacts` tables with backfill from `system_events`
-- `006_session_resume_info.sql` — migrates OMP-specific session metadata to a generic `resume_info` map column and drops the old columns
-- `007_plan_supersede.sql` — plan supersede model: replaces inline UNIQUE on `plans.work_item_id` with a partial unique index on non-superseded plans, adds `superseded` to the plan status CHECK constraint, and adds `plan_id` to `agent_sessions`
-- `008_drop_planning_round.sql` — drops obsolete `sub_plans.planning_round` column
-- `009_new_session_filters_and_locks.sql` — saved new-session filters with per-instance lease locks (`new_session_filters`, `new_session_filter_locks`)
-- `010_work_item_extra_context.sql` — adds `work_items.extra_context` for follow-up planning addenda
-- `011_pr_review_state.sql` — adds `github_pr_reviews` and `gitlab_mr_reviews` for per-reviewer triage state, uniqueness on `(pr_id|mr_id, reviewer_login)`
-- `012_pr_check_status.sql` — adds `github_pr_checks` and `gitlab_mr_checks` for per-check CI status, uniqueness on `(pr_id|mr_id, name)`
-
-### Naming note
-
-Storage still uses legacy table names:
-
-- `work_items` stores `domain.Session`
-- `agent_sessions` stores `domain.Task`
-
-That naming mismatch is historical; repository conversions hide it from the service layer.
-
-### Representative schema snippet
-
-```sql
-CREATE TABLE work_items (
-    id              TEXT PRIMARY KEY,
-    workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
-    external_id     TEXT,
-    source          TEXT NOT NULL,
-    source_scope    TEXT,
-    title           TEXT NOT NULL,
-    description     TEXT,
-    assignee_id     TEXT,
-    state           TEXT NOT NULL CHECK (state IN (
-                        'ingested','planning','plan_review','approved',
-                        'implementing','reviewing','completed','merged','failed')),
-    labels          TEXT,
-    source_item_ids TEXT,
-    metadata        TEXT,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
-);
-
-CREATE TABLE plans (
-    id                TEXT PRIMARY KEY,
-    work_item_id      TEXT NOT NULL REFERENCES work_items(id),
-    orchestrator_plan TEXT NOT NULL,
-    status            TEXT NOT NULL CHECK (status IN ('draft','pending_review','approved','rejected','superseded')),
-    version           INTEGER NOT NULL DEFAULT 1,
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
-    faq               TEXT NOT NULL DEFAULT '[]'
-);
-
-CREATE TABLE sub_plans (
-    id              TEXT PRIMARY KEY,
-    plan_id         TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
-    repo_name       TEXT NOT NULL,
-    content         TEXT NOT NULL,
-    exec_order      INTEGER NOT NULL DEFAULT 0,
-    status          TEXT NOT NULL CHECK (status IN ('pending','in_progress','completed','failed')),
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    UNIQUE(plan_id, repo_name)
-);
-
-CREATE TABLE agent_sessions (
-    id                TEXT PRIMARY KEY,
-    work_item_id      TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
-    sub_plan_id       TEXT REFERENCES sub_plans(id) ON DELETE SET NULL,
-    plan_id           TEXT REFERENCES plans(id) ON DELETE SET NULL,
-    workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
-    phase             TEXT NOT NULL CHECK (phase IN ('planning','implementation','review')),
-    repository_name   TEXT,
-    harness_name      TEXT NOT NULL,
-    worktree_path     TEXT,
-    pid               INTEGER,
-    status            TEXT NOT NULL CHECK (status IN (
-                          'pending','running','waiting_for_answer','completed','failed','interrupted')),
-    exit_code         INTEGER,
-    started_at        TEXT,
-    shutdown_at       TEXT,
-    completed_at      TEXT,
-    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    owner_instance_id TEXT REFERENCES substrate_instances(id) ON DELETE SET NULL,
-    resume_info       TEXT,
-
-    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-The `plans` table uses a partial unique index instead of an inline UNIQUE constraint to enforce at most one active plan per work item:
-
-```sql
-CREATE UNIQUE INDEX idx_plans_active_work_item ON plans(work_item_id) WHERE status != 'superseded';
-```
-
-CREATE TABLE questions (
-    id               TEXT PRIMARY KEY,
-    agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id),
-    content          TEXT NOT NULL,
-    context          TEXT,
-    answer           TEXT,
-    answered_by      TEXT CHECK (answered_by IN ('foreman','human')),
-    status           TEXT NOT NULL CHECK (status IN ('pending','answered','escalated')) DEFAULT 'pending',
-    created_at       TEXT NOT NULL,
-    answered_at      TEXT,
-    proposed_answer  TEXT
-);
-
-CREATE TABLE system_events (
-    id           TEXT PRIMARY KEY,
-    event_type   TEXT NOT NULL,
-    workspace_id TEXT REFERENCES workspaces(id),
-    payload      TEXT NOT NULL,
-    created_at   TEXT NOT NULL
-);
-
-CREATE TABLE github_pull_requests (
-    id          TEXT PRIMARY KEY,
-    owner       TEXT NOT NULL,
-    repo        TEXT NOT NULL,
-    number      INTEGER NOT NULL,
-    state       TEXT NOT NULL DEFAULT '',
-    draft       INTEGER NOT NULL DEFAULT 0,
-    head_branch TEXT NOT NULL DEFAULT '',
-    html_url    TEXT NOT NULL DEFAULT '',
-    merged_at   TEXT,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE gitlab_merge_requests (
-    id            TEXT PRIMARY KEY,
-    project_path  TEXT NOT NULL,
-    iid           INTEGER NOT NULL,
-    state         TEXT NOT NULL DEFAULT '',
-    draft         INTEGER NOT NULL DEFAULT 0,
-    source_branch TEXT NOT NULL DEFAULT '',
-    web_url       TEXT NOT NULL DEFAULT '',
-    worktree_path TEXT NOT NULL DEFAULT '',
-    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE session_review_artifacts (
-    id                   TEXT PRIMARY KEY,
-    workspace_id         TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    work_item_id         TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
-    provider             TEXT NOT NULL CHECK (provider IN ('github', 'gitlab')),
-    provider_artifact_id TEXT NOT NULL,
-    created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE github_pr_reviews (
-    id              TEXT PRIMARY KEY,
-    pr_id           TEXT NOT NULL REFERENCES github_pull_requests(id) ON DELETE CASCADE,
-    reviewer_login  TEXT NOT NULL,
-    state           TEXT NOT NULL,  -- approved | changes_requested | commented | dismissed
-    submitted_at    TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(pr_id, reviewer_login)
-);
-
-CREATE TABLE gitlab_mr_reviews (
-    id              TEXT PRIMARY KEY,
-    mr_id           TEXT NOT NULL REFERENCES gitlab_merge_requests(id) ON DELETE CASCADE,
-    reviewer_login  TEXT NOT NULL,
-    state           TEXT NOT NULL,  -- approved | changes_requested | unapproved
-    submitted_at    TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(mr_id, reviewer_login)
-);
-
-CREATE TABLE github_pr_checks (
-    id          TEXT PRIMARY KEY,
-    pr_id       TEXT NOT NULL REFERENCES github_pull_requests(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL,
-    status      TEXT NOT NULL,  -- queued | in_progress | completed
-    conclusion  TEXT NOT NULL DEFAULT '',  -- success | failure | neutral | ...
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(pr_id, name)
-);
-
-CREATE TABLE gitlab_mr_checks (
-    id          TEXT PRIMARY KEY,
-    mr_id       TEXT NOT NULL REFERENCES gitlab_merge_requests(id) ON DELETE CASCADE,
-    name        TEXT NOT NULL,
-    status      TEXT NOT NULL,
-    conclusion  TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(mr_id, name)
-);
-```
-
-Other notable tables:
-
-- `workspaces`
-- `review_cycles`
-- `critiques`
-- `substrate_instances`
-- `schema_migrations`
-
-## 6. Dependency Injection and Wiring
-
-The current app uses plain constructor wiring.
-
-### Startup sequence
-
-`cmd/substrate/main.go` currently does this, in order:
-
-1. load config
-2. run migrations
-3. build SQLite `transacter` via `sqlite.NewTransacter(db)`
-4. build domain services from the transacter
-5. build `eventRepo` directly (needed for bus) and `event.NewBus(event.BusConfig{EventRepo: eventRepo})`
-6. detect workspace from cwd
-7. load secrets into config
-8. build work item adapters and repo lifecycle adapters
-9. subscribe adapters to the bus
-10. build harnesses per phase
-11. build `SessionRegistry`
-12. build orchestration structs (passing service pointers + registry)
-13. hand everything to the TUI service bundle
-
-### Current bus wiring
-
-Production wiring subscribes adapters like this:
-
-```go
-for _, workItemAdapter := range adapters {
-	sub, _ := bus.Subscribe("work-item-adapter:" + workItemAdapter.Name())
-	go func(a adapter.WorkItemAdapter, events <-chan domain.SystemEvent) {
-		for evt := range events {
-			_ = a.OnEvent(context.Background(), evt)
-		}
-	}(workItemAdapter, sub.C)
-}
-
-for _, lifecycleAdapter := range repoLifecycleAdapters {
-	sub, _ := bus.Subscribe(
-		"repo-lifecycle-adapter:"+lifecycleAdapter.Name(),
-		string(domain.EventWorktreeCreated),
-		string(domain.EventWorkItemCompleted),
-	)
-	go func(a adapter.RepoLifecycleAdapter, events <-chan domain.SystemEvent) {
-		for evt := range events {
-			_ = a.OnEvent(context.Background(), evt)
-		}
-	}(lifecycleAdapter, sub.C)
-}
-```
-
-### Current config blocks
-
-`internal/config/config.go` defines these top-level blocks:
-
-```yaml
-commit:
-  strategy: semi-regular
-  message_format: ai-generated
-  message_template: ""
-
-plan:
-  max_parse_retries: 2
-
-review:
-  pass_threshold: minor_ok
-  max_cycles: 3
-  timeout: ""
-  auto_feedback_loop: false
-
-harness:
-  default: ohmypi
-
-adapters:
-  ohmypi:
-    bun_path: ""
-    bridge_path: ""
-    model: ""
-    thinking_level: ""
-  claude_code:
-    bun_path: ""
-    bridge_path: ""
-    model: ""
-    thinking: ""
-    effort: ""
-  codex:
-    binary_path: ""
-    model: ""
-    reasoning_effort: ""
-  opencode:
-    binary_path: ""
-    hostname: ""
-    port: 0
-    model: ""
-    agent: ""
-    variant: ""
-  linear:
-    api_key_ref: ""
-    team_id: ""
-    assignee_filter: ""
-    poll_interval: "30s"
-    state_mappings: {}
-  glab:
-    reviewers: []
-    labels: []
-  gitlab:
-    token_ref: ""
-    base_url: "https://gitlab.com"
-    assignee: ""
-    poll_interval: "60s"
-    in_progress_status: "In progress"
-    state_mappings: {}
-  github:
-    token_ref: ""
-    base_url: "https://api.github.com"
-    assignee: ""
-    poll_interval: "60s"
-    reviewers: []
-    labels: []
-    state_mappings: {}
-  sentry:
-    token_ref: ""
-    base_url: "https://sentry.io/api/0"
-    organization: ""
-    projects: []
-
-foreman:
-  question_timeout: "0"
-
-repos:
-  <repo-name>:
-    doc_paths: []
-```
-
-Secrets are loaded after config parse via `config.LoadSecrets`, so token refs can be hydrated from the OS keychain before adapters and harnesses are constructed.
+**Wiring.** A service manager creates the shared event bus, constructs all services and orchestrators, and wires adapters to the bus. Adapters react to events; services do not depend on adapters. Orchestrators receive service pointers and the shared bus.
