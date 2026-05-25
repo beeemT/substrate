@@ -309,22 +309,22 @@ func TestRepoManagerOverlayArrowsToggleFocus(t *testing.T) {
 			_ = m.Open()
 			m = loadTestRepos(m, repos)
 
-			if m.focus != repoManagerFocusList {
-				t.Fatalf("initial focus = %v, want repoManagerFocusList", m.focus)
+			if !m.picker.IsFocusLeft() {
+				t.Fatalf("initial focus = right, want left")
 			}
 			prevIdx := m.repoList.Index()
 
 			m, _ = m.Update(tc.key)
-			if m.focus != repoManagerFocusDetails {
-				t.Fatalf("after %s focus = %v, want repoManagerFocusDetails", tc.name, m.focus)
+			if m.picker.IsFocusLeft() {
+				t.Fatalf("after %s focus = left, want right", tc.name)
 			}
 			if m.repoList.Index() != prevIdx {
 				t.Fatalf("after %s list selection moved from %d to %d, want unchanged", tc.name, prevIdx, m.repoList.Index())
 			}
 
 			m, _ = m.Update(tc.key)
-			if m.focus != repoManagerFocusList {
-				t.Fatalf("after second %s focus = %v, want repoManagerFocusList", tc.name, m.focus)
+			if !m.picker.IsFocusLeft() {
+				t.Fatalf("after second %s focus = right, want left", tc.name)
 			}
 		})
 	}

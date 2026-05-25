@@ -6,10 +6,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// TestAppOKeyOpensTerminalInWorktree asserts that pressing 'o' in a session view
+// TestAppTKeyOpensTerminalInWorktree asserts that pressing 't' in a session view
 // (ContentModeAgentSession with an active session that has a worktree) returns an
 // OpenTerminalCmd for the session's worktree.
-func TestAppOKeyOpensTerminalInWorktree(t *testing.T) {
+func TestAppTKeyOpensTerminalInWorktree(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
@@ -30,17 +30,17 @@ func TestAppOKeyOpensTerminalInWorktree(t *testing.T) {
 	updated.content.sessionLog.SetLogPath("sess-1", "/tmp/session.log")
 	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
 
-	// Press 'o' — should return OpenTerminalCmd.
-	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	// Press 't' — should return OpenTerminalCmd.
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	if cmd == nil {
-		t.Fatal("expected non-nil cmd from 'o' key in session view with worktree")
+		t.Fatal("expected non-nil cmd from 't' key in session view with worktree")
 	}
 	_ = model // cmd is verified by presence
 }
 
-// TestAppOKeyNoOpWithoutWorktree asserts that pressing 'o' in a session view
+// TestAppTKeyNoOpWithoutWorktree asserts that pressing 't' in a session view
 // with no worktree on the session does NOT return a command.
-func TestAppOKeyNoOpWithoutWorktree(t *testing.T) {
+func TestAppTKeyNoOpWithoutWorktree(t *testing.T) {
 	t.Parallel()
 
 	app := newSidebarDrilldownTestApp()
@@ -55,8 +55,8 @@ func TestAppOKeyNoOpWithoutWorktree(t *testing.T) {
 	updated.content.sessionLog.SetLogPath("sess-1", "/tmp/session.log")
 	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
 
-	// Press 'o' — should return nil (no worktree).
-	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	// Press 't' — should return nil (no worktree).
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	if cmd != nil {
 		t.Fatal("expected nil cmd when session has no worktree")
 	}

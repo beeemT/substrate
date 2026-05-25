@@ -728,7 +728,7 @@ func sessionLogActions(a *App, ctx ActionContext) []Action {
 
 	// Open terminal
 	actions = append(actions, Action{
-		ID: "open_terminal", Label: "Open terminal", Shortcut: "o", Priority: 355,
+		ID: "open_terminal", Label: "Open terminal", Shortcut: "t", Priority: 355,
 		Condition: func(a *App) bool {
 			if a.content.Mode() != ContentModeAgentSession {
 				return false

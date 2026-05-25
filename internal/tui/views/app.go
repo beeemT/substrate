@@ -49,6 +49,7 @@ const (
 	overlayRepoManager
 	overlayOverviewLinks
 	overlayReviewFollowup
+	overlayWorktreePicker
 )
 
 type sessionHistoryScope int
@@ -130,6 +131,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
 	repoManager                 RepoManagerOverlay
+	worktreePicker              WorktreePickerOverlay
 	hasWorkspace                bool
 	styles                      styles.Styles
 
@@ -238,6 +240,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		logsOverlay:                    NewLogsOverlay(runtimeCtx.LogStore, st),
 		addRepo:                        NewAddRepoOverlay(provider.RepoSources(), runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		repoManager:                    NewRepoManagerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
+		worktreePicker:                 NewWorktreePickerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		toasts:                         components.NewToastModel(st),
 		startupIntegrationsInProgress:  runtimeCtx.StartupIntegrationsInProgress,
 		subPlans:                       make(map[string][]domain.TaskPlan),
@@ -359,6 +362,8 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
 	a.repoManager = NewRepoManagerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
 	a.repoManager.SetSize(a.windowWidth, a.windowHeight)
+	a.worktreePicker = NewWorktreePickerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
+	a.worktreePicker.SetSize(a.windowWidth, a.windowHeight)
 	a.settingsPage.RefreshFromService()
 	a.sessionsDir = reload.SessionsDir
 	a.hasWorkspace = a.runtimeCtx.WorkspaceID != ""
@@ -1287,6 +1292,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.logsOverlay.SetSize(msg.Width, msg.Height)
 		a.addRepo.SetSize(msg.Width, msg.Height)
 		a.repoManager.SetSize(msg.Width, msg.Height)
+		a.worktreePicker.SetSize(msg.Width, msg.Height)
 		a.newSessionAutonomousOverlay.SetSize(msg.Width, msg.Height)
 		a.actionMenu.SetSize(msg.Width, msg.Height)
 		return a, nil
@@ -1419,6 +1425,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.Close()
 		a.addRepo.Close()
 		a.repoManager.Close()
+		a.worktreePicker.Close()
 		a.overviewLinksOverlay.Close()
 		a.overviewLinksReturnOverlay = overlayNone
 		a.reviewFollowupOverlay.Close()
@@ -2530,6 +2537,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.addRepoOpenedFromRepoManager = true
 		return a, a.openAddRepo()
 
+	case OpenWorktreePickerMsg:
+		a.activeOverlay = overlayWorktreePicker
+		a.worktreePicker.SetSize(a.windowWidth, a.windowHeight)
+		return a, a.worktreePicker.Open()
+
+	case OpenTerminalInWorktreeMsg:
+		a.worktreePicker.Close()
+		a.activeOverlay = overlayNone
+		return a, OpenTerminalCmd(msg.WorktreePath)
+
 	case ManagedReposLoadedMsg:
 		// Rebuild the workspace slug set from the fresh scan result.
 		if msg.Err == nil {
@@ -2545,12 +2562,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
 			}
 		}
-		a.repoManager, cmd = a.repoManager.Update(msg)
-		cmds = append(cmds, cmd)
+		// Route to the active overlay that cares about managed repos.
+		switch a.activeOverlay {
+		case overlayWorktreePicker:
+			a.worktreePicker, cmd = a.worktreePicker.Update(msg)
+			cmds = append(cmds, cmd)
+		default:
+			a.repoManager, cmd = a.repoManager.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 		return a, tea.Batch(cmds...)
 
 	case WorktreesLoadedMsg:
-		a.repoManager, cmd = a.repoManager.Update(msg)
+		switch msg.Target {
+		case WorktreeLoadTargetPicker:
+			a.worktreePicker, cmd = a.worktreePicker.Update(msg)
+		default:
+			a.repoManager, cmd = a.repoManager.Update(msg)
+		}
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
 
@@ -2836,6 +2865,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayRepoManager {
 		a.repoManager, cmd = a.repoManager.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayWorktreePicker {
+		a.worktreePicker, cmd = a.worktreePicker.Update(msg)
+		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlaySessionSearch {
 		a.sessionSearch, cmd = a.sessionSearch.Update(msg)
 		cmds = append(cmds, cmd)
@@ -2923,6 +2955,10 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if a.activeOverlay == overlayRepoManager {
 		a.repoManager, cmd = a.repoManager.Update(msg)
+		return a, cmd
+	}
+	if a.activeOverlay == overlayWorktreePicker {
+		a.worktreePicker, cmd = a.worktreePicker.Update(msg)
 		return a, cmd
 	}
 	if a.activeOverlay == overlayAddRepo {
@@ -3047,7 +3083,7 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.rebuildSidebar()
 			return a, nil
 		}
-	case "o":
+	case "t":
 		// Open terminal in worktree when in session view.
 		if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
 			if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
@@ -3057,6 +3093,7 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+	case "o":
 		if a.sidebarMode == sidebarPaneSessions {
 			a.sidebar.ToggleDirection()
 			a.rebuildSidebar()
@@ -4189,6 +4226,8 @@ func (a App) View() string {
 		result = renderOverlay(a.addRepo.View(), a.windowWidth, a.windowHeight)
 	case overlayRepoManager:
 		result = renderOverlay(a.repoManager.View(), a.windowWidth, a.windowHeight)
+	case overlayWorktreePicker:
+		result = renderOverlay(a.worktreePicker.View(), a.windowWidth, a.windowHeight)
 	default:
 		result = base
 	}

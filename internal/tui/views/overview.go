@@ -305,6 +305,7 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 	} else if m.data.Plan.Exists {
 		hints = append(hints, KeybindHint{Key: "i", Label: "View full plan"})
 	}
+	hints = append(hints, KeybindHint{Key: "t", Label: "Open terminal"})
 
 	return hints
 }
@@ -479,6 +480,8 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				reviews := m.data.External.Reviews
 				return m, func() tea.Msg { return OpenOverviewLinksMsg{Sources: srcs, Reviews: reviews} }
 			}
+		case "t":
+			return m, func() tea.Msg { return OpenWorktreePickerMsg{} }
 		case "a":
 			if action := m.selectedActionCard(); action != nil {
 				switch action.Kind {

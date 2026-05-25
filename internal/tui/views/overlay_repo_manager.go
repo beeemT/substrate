@@ -20,14 +20,6 @@ import (
 // repoManagerSizingSpec uses the shared browse sizing so all overlays align identically.
 var repoManagerSizingSpec = browseSizingSpec
 
-// repoManagerFocusArea tracks which pane is focused inside the overlay.
-type repoManagerFocusArea int
-
-const (
-	repoManagerFocusList    repoManagerFocusArea = iota
-	repoManagerFocusDetails                      // right-pane viewport is focused
-)
-
 // repoManagerItem adapts managedRepo for the bubbles list widget.
 type repoManagerItem struct{ repo managedRepo }
 
@@ -76,7 +68,7 @@ type RepoManagerOverlay struct { //nolint:recvcheck
 	// pendingInit is non-nil while InitRepoCmd is in flight.
 	pendingInit *managedRepo
 
-	focus   repoManagerFocusArea
+	picker  components.SplitListPicker
 	loading bool
 
 	styles        styles.Styles
@@ -101,6 +93,7 @@ func NewRepoManagerOverlay(workspaceDir string, gitClient *gitwork.Client, st st
 		gitClient:      gitClient,
 		repoList:       rl,
 		detailViewport: viewport.New(0, 0),
+		picker:         components.NewSplitListPicker(repoManagerSizingSpec),
 		styles:         st,
 	}
 }
@@ -117,7 +110,7 @@ func (m *RepoManagerOverlay) Open() tea.Cmd {
 	m.pendingDelete = nil
 	m.pendingInit = nil
 	m.loading = true
-	m.focus = repoManagerFocusList
+	m.picker.FocusLeft()
 	return LoadManagedReposCmd(m.workspaceDir)
 }
 
@@ -147,6 +140,8 @@ func (m *RepoManagerOverlay) SetSize(w, h int) {
 
 func (m *RepoManagerOverlay) syncSizes() {
 	layout := m.repoManagerLayout()
+	m.picker.SetSize(m.width, m.height, m.repoManagerChromeLines(layout.ContentWidth-4))
+	layout = m.picker.Layout()
 	m.repoList.SetWidth(layout.LeftInnerWidth)
 	m.repoList.SetHeight(layout.ListHeight)
 	m.detailViewport.Width = layout.ViewportWidth
@@ -214,7 +209,7 @@ func (m *RepoManagerOverlay) maybeLoadWorktrees() tea.Cmd {
 	m.worktreeLoading = true
 	m.worktrees = nil
 	m.worktreeErr = nil
-	return LoadWorktreesCmd(m.gitClient, repo, m.nextWorktreeRequestID())
+	return LoadWorktreesCmd(m.gitClient, repo, m.nextWorktreeRequestID(), WorktreeLoadTargetRepoManager)
 }
 
 // Update handles messages and key events for the overlay.
@@ -292,7 +287,7 @@ func (m *RepoManagerOverlay) Update(msg tea.Msg) (RepoManagerOverlay, tea.Cmd) {
 		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
-			if m.focus == repoManagerFocusList {
+			if m.picker.IsFocusLeft() {
 				prevIdx := m.repoList.Index()
 				var listCmd tea.Cmd
 				m.repoList, listCmd = m.repoList.Update(msg)
@@ -335,11 +330,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		return *m, func() tea.Msg { return CloseOverlayMsg{} }
 
 	case "tab", "left", "right":
-		if m.focus == repoManagerFocusList {
-			m.focus = repoManagerFocusDetails
-		} else {
-			m.focus = repoManagerFocusList
-		}
+		m.picker.SwitchFocus()
 		return *m, nil
 
 	case "a":
@@ -365,7 +356,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		return *m, nil
 
 	case "up":
-		if m.focus == repoManagerFocusList {
+		if m.picker.IsFocusLeft() {
 			prevIdx := m.repoList.Index()
 			var listCmd tea.Cmd
 			m.repoList, listCmd = m.repoList.Update(msg)
@@ -379,7 +370,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		return *m, nil
 
 	case "down":
-		if m.focus == repoManagerFocusList {
+		if m.picker.IsFocusLeft() {
 			prevIdx := m.repoList.Index()
 			var listCmd tea.Cmd
 			m.repoList, listCmd = m.repoList.Update(msg)
@@ -394,7 +385,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 	}
 
 	// Forward remaining keys to the focused component.
-	if m.focus == repoManagerFocusList {
+	if m.picker.IsFocusLeft() {
 		prevIdx := m.repoList.Index()
 		var listCmd tea.Cmd
 		m.repoList, listCmd = m.repoList.Update(msg)
@@ -580,19 +571,12 @@ func (m *RepoManagerOverlay) View() string {
 		}
 	}
 
-	body := components.RenderSplitOverlayBody(m.styles, layout, components.SplitOverlaySpec{
-		LeftPane: components.OverlayPaneSpec{
-			Title:        "Repositories",
-			Body:         leftContent,
-			DividerWidth: layout.LeftInnerWidth,
-			Focused:      m.focus == repoManagerFocusList,
-		},
-		RightPane: components.OverlayPaneSpec{
-			Title:        rightTitle,
-			Body:         m.detailViewport.View(),
-			DividerWidth: layout.RightInnerWidth,
-			Focused:      m.focus == repoManagerFocusDetails,
-		},
+	body := m.picker.View(m.styles, components.SplitListPaneSpec{
+		Title: "Repositories",
+		Body:  leftContent,
+	}, components.SplitListPaneSpec{
+		Title: rightTitle,
+		Body:  m.detailViewport.View(),
 	})
 
 	footer := m.styles.Hint.Render(m.hintText(renderWidth))

@@ -789,11 +789,29 @@ type ManagedReposLoadedMsg struct {
 
 // WorktreesLoadedMsg delivers worktrees for a git-work repository.
 // RequestID guards against stale responses when list selection changes quickly.
+// Target identifies which overlay should handle the response.
 type WorktreesLoadedMsg struct {
+	Target    WorktreeLoadTarget
 	RequestID int
 	RepoPath  string
 	Worktrees []gitwork.Worktree
 	Err       error
+}
+
+// WorktreeLoadTarget identifies which overlay should handle a WorktreesLoadedMsg response.
+type WorktreeLoadTarget string
+
+const (
+	WorktreeLoadTargetRepoManager WorktreeLoadTarget = "repo_manager"
+	WorktreeLoadTargetPicker      WorktreeLoadTarget = "worktree_picker"
+)
+
+// OpenWorktreePickerMsg signals opening the worktree picker overlay.
+type OpenWorktreePickerMsg struct{}
+
+// OpenTerminalInWorktreeMsg is sent when user selects a worktree to open in terminal.
+type OpenTerminalInWorktreeMsg struct {
+	WorktreePath string
 }
 
 // RepoRemovedMsg is sent after RemoveRepoCmd completes (success or failure).

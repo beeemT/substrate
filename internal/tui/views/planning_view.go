@@ -292,8 +292,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		{Key: "v", Label: "Verbose logs"},
 	}
 	if hasThinkingBlocks(m.entries) {
-		hints = append(hints, KeybindHint{Key: "t", Label: "Toggle thinking"})
+		hints = append(hints, KeybindHint{Key: "Ctrl+T", Label: "Toggle thinking"})
 	}
+	hints = append(hints, KeybindHint{Key: "t", Label: "Open Terminal"})
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
@@ -427,7 +428,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		case "v":
 			m.verbose = !m.verbose
 			m.doRebuildTranscript()
-		case "t":
+		case "ctrl+t":
 			m.collapseThinking = !m.collapseThinking
 			m.doRebuildTranscript()
 		case "i":

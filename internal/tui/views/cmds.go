@@ -30,6 +30,7 @@ import (
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
+	"github.com/beeemT/substrate/internal/terminal"
 	"github.com/beeemT/substrate/internal/tuilog"
 )
 
@@ -1179,23 +1180,31 @@ func browserOpenExecCmd(url string) *exec.Cmd {
 	}
 }
 
-// shellEscape escapes a string for safe use in osascript strings.
-func shellEscape(s string) string {
-	return strings.ReplaceAll(s, "\"", "\\\"")
-}
-
-// OpenTerminalCmd opens a new Terminal.app window in the specified directory.
+// OpenTerminalCmd opens a new terminal tab/window in the specified directory.
+// The terminal is auto-detected based on the active terminal.
 func OpenTerminalCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
-		script := fmt.Sprintf(`tell application "Terminal"
-		do script "cd %s"
-		activate
-	end tell`, shellEscape(dir))
-		cmd := exec.CommandContext(context.TODO(), "osascript", "-e", script)
-		if err := cmd.Run(); err != nil {
+		termType, err := terminal.Open(dir)
+		if err != nil {
 			slog.Warn("failed to open terminal", "path", dir, "error", err)
+			return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
 		}
-		return nil
+		slog.Debug("opened terminal", "path", dir, "terminal", termType)
+		return ActionDoneMsg{Message: "Opened terminal"}
+	}
+}
+
+// OpenTerminalWithCmd opens in the specified terminal type (ignoring detection).
+// On macOS, falls back to Terminal.app if the requested terminal is unavailable.
+func OpenTerminalWithCmd(dir string, termType terminal.TerminalType) tea.Cmd {
+	return func() tea.Msg {
+		used, err := terminal.OpenWithTerminal(dir, termType)
+		if err != nil {
+			slog.Warn("failed to open terminal", "path", dir, "terminal", termType, "error", err)
+			return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
+		}
+		slog.Debug("opened terminal", "path", dir, "terminal", used)
+		return ActionDoneMsg{Message: "Opened terminal"}
 	}
 }
 
@@ -1800,17 +1809,18 @@ func LoadManagedReposCmd(workspaceDir string) tea.Cmd {
 
 // LoadWorktreesCmd lists worktrees for a git-work repository.
 // requestID guards against stale responses when selection changes quickly.
+// target identifies which overlay should handle the response.
 // For plain git repos, returns an empty WorktreesLoadedMsg immediately (no worktrees to show).
-func LoadWorktreesCmd(client *gitwork.Client, repo managedRepo, requestID int) tea.Cmd {
+func LoadWorktreesCmd(client *gitwork.Client, repo managedRepo, requestID int, target WorktreeLoadTarget) tea.Cmd {
 	return func() tea.Msg {
 		if client == nil {
-			return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path, Err: errors.New("git-work client is unavailable")}
+			return WorktreesLoadedMsg{Target: target, RequestID: requestID, RepoPath: repo.Path, Err: errors.New("git-work client is unavailable")}
 		}
 		if repo.Kind != repoKindGitWork {
-			return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path}
+			return WorktreesLoadedMsg{Target: target, RequestID: requestID, RepoPath: repo.Path}
 		}
 		wts, err := client.List(context.Background(), repo.Path)
-		return WorktreesLoadedMsg{RequestID: requestID, RepoPath: repo.Path, Worktrees: wts, Err: err}
+		return WorktreesLoadedMsg{Target: target, RequestID: requestID, RepoPath: repo.Path, Worktrees: wts, Err: err}
 	}
 }
 
