@@ -261,6 +261,11 @@ func (m *SplitListPicker) SwitchFocus() {
     m.FocusLeft = !m.FocusLeft
 }
 
+// IsFocusLeft reports whether the left pane has focus.
+func (m *SplitListPicker) IsFocusLeft() bool {
+    return m.FocusLeft
+}
+
 // Update handles keyboard events and returns any commands.
 func (m *SplitListPicker) Update(msg tea.Msg) (SplitListPicker, tea.Cmd) {
     var cmd tea.Cmd
@@ -658,129 +663,51 @@ if msg.RequestID == m.worktreeReqID {
 
 ## 6. Overview View Integration
 
-### 6.1 Extend `SessionOverviewData`
+### 6.1 Remove Existing `t` Viewport Navigation
 
-Add worktree information to enable the terminal action:
+The current overview has a `t` keybinding for viewport navigation (lines ~521). **Remove this binding** as part of the vim bindings removal plan. The `t` key will now be used exclusively for opening the terminal picker.
 
+Find and remove from `overview.go`:
 ```go
-// In SessionOverviewData (overview.go)
-type SessionOverviewData struct {
-    // ... existing fields ...
-    
-    // Worktrees contains repo+worktree combinations for this session's repos.
-    // Used for the "Open Terminal" action in overview.
-    Worktrees []OverviewWorktreeRow
-}
-
-// OverviewWorktreeRow represents one repo with its worktrees for the picker.
-type OverviewWorktreeRow struct {
-    RepoName  string
-    RepoPath  string // .bare path for git-work repos
-    Worktrees []gitwork.Worktree
-}
+case "up", keyDown, "j", "k", "pgup", "pgdown", "home", "end":
+    m.viewport, cmd = m.viewport.Update(msg)
+    return m, cmd
 ```
 
-### 6.2 Populate Worktrees in Overview Data
+### 6.2 Add `t` Key Handler for Terminal Picker
 
-In `buildOverviewData()` (or wherever `SessionOverviewData` is constructed):
-
-```go
-import "internal/gitwork"
-
-// For each repo in the plan, load its worktrees
-for _, task := range plan.Tasks {
-    // Get repo path from TaskPlan
-    repo, err := getManagedRepo(task.RepositoryName)
-    if err != nil {
-        continue
-    }
-    
-    // Load worktrees via gitwork.Client.List()
-    worktrees, err := gitClient.List(ctx, repo.Path)
-    if err != nil {
-        slog.Warn("failed to load worktrees for overview", "repo", task.RepositoryName, "error", err)
-        continue
-    }
-    
-    overviewData.Worktrees = append(overviewData.Worktrees, OverviewWorktreeRow{
-        RepoName:  task.RepositoryName,
-        RepoPath:  repo.Path,
-        Worktrees: worktrees,
-    })
-}
-```
-
-### 6.3 New Overlay Kind
+Add `t` key handling directly in the overview's Update handler (near line 473, alongside the existing `o` handler):
 
 ```go
-// app.go - extend overlayKind constants
-const (
-    // ... existing ...
-    overlayWorktreePicker overlayKind = iota
-)
-```
-
-### 6.4 New Action Kind
-
-```go
-// overview.go - extend OverviewActionKind
-const (
-    // ... existing ...
-    overviewActionOpenTerminal OverviewActionKind = "open_terminal"
-)
-```
-
-### 6.5 Action Card Rendering
-
-When `Action.Kind == overviewActionOpenTerminal`:
-
-```go
-// In overview.go renderOverviewActionCard
-case overviewActionOpenTerminal:
-    lines = append(lines, st.Title.Render("Open Terminal in Worktree"))
-    lines = append(lines, renderKeyValueLine(st, innerWidth, "Repos", 
-        fmt.Sprintf("%d repos with worktrees", len(action.WorktreeRows))))
-    // Show first few repos as preview
-    for i, row := range action.WorktreeRows {
-        if i >= 3 {
-            lines = append(lines, fmt.Sprintf("  +%d more...", len(action.WorktreeRows)-3))
-            break
-        }
-        lines = append(lines, fmt.Sprintf("  %s: %d worktrees", row.RepoName, len(row.Worktrees)))
-    }
-```
-
-### 6.6 Keybind Hints
-
-```go
-// In overview.go actionKeybindHints()
-case overviewActionOpenTerminal:
-    return []KeybindHint{{Key: "t", Label: "Open Terminal"}}
-```
-
-### 6.7 Action Handling in Overview Update
-
-```go
-// overview.go - in SessionOverviewModel.handleKey()
+// overview.go - in SessionOverviewModel.Update() key handling
 case "t":
-    if m.selectedAction == actionIndex && m.data.Actions[actionIndex].Kind == overviewActionOpenTerminal {
-        // Open the worktree picker overlay
-        m.overlay = overviewOverlayWorktreePicker
-        cmd := m.openWorktreePicker()
-        return m, cmd
-    }
+    // Open the worktree picker overlay
+    m.overlay = overviewOverlayWorktreePicker
+    cmd := m.openWorktreePicker()
+    return m, cmd
 ```
+
+### 6.3 App Message and Overlay Routing
+
+The picker overlay uses `OpenWorktreePickerMsg` to trigger opening:
+
+```go
+// msgs.go
+type OpenWorktreePickerMsg struct{}
+```
+
+Route the message in the app-level Update handler to open the overlay.
 
 ---
 
 ## 7. Agent Session View Enhancement
 
-### 7.1 Existing Implementation (app.go:2752-2760)
+### 7.1 Key Change: `o` → `t`
 
-The current implementation uses `o` key in agent session content mode:
+Change the terminal shortcut from `o` to `t` to align with the unified keybinding:
 
 ```go
-case "o":
+case "t":
     // Open terminal in worktree when in session view.
     if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
         if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
@@ -792,15 +719,13 @@ case "o":
     }
 ```
 
-**No changes needed** — this already works and uses the new `OpenTerminalCmd` implementation.
-
-### 7.2 Consider Adding to Status Bar Hints
+### 7.2 Status Bar Hints
 
 In `sessionLog.KeybindHints()` or wherever session view hints are defined:
 
 ```go
 // Add to existing hints
-hints = append(hints, KeybindHint{Key: "o", Label: "Open Terminal"})
+hints = append(hints, KeybindHint{Key: "t", Label: "Open Terminal"})
 ```
 
 ---
@@ -858,12 +783,12 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 
 | Location | Key | Action |
 |----------|-----|--------|
-| Overview (action selected) | `t` | Open worktree picker overlay |
-| Worktree picker (focused) | `t` | Open terminal in selected worktree |
-| Worktree picker (focused) | `Enter` | Open terminal in selected worktree |
+| Overview | `t` | Open worktree picker overlay |
+| Worktree picker | `t` | Open terminal in selected worktree |
+| Worktree picker | `Enter` | Open terminal in selected worktree |
 | Worktree picker | `Tab` / `←/→` | Switch focus between panes |
 | Repo manager | `Tab` / `←/→` | Switch focus between panes (existing) |
-| Agent session view | `o` | Open terminal in session's worktree (existing) |
+| Agent session view | `t` | Open terminal in session's worktree |
 
 ---
 
@@ -898,12 +823,10 @@ func (m *WorktreePickerOverlay) openTerminalCmd() tea.Cmd {
 5. Test picker navigation and terminal opening
 
 ### Phase 5: Overview Integration
-1. Add `overviewActionOpenTerminal` to action kinds
-2. Add `Worktrees` field to `SessionOverviewData`
-3. Populate worktrees in `buildOverviewData()`
-4. Add action card rendering
-5. Add keybind hints
-6. Wire action to open picker
+1. Remove existing `t` viewport navigation binding from overview.go
+2. Add `t` key handler to open worktree picker overlay
+3. Add `OpenWorktreePickerMsg` to msgs.go
+4. Route `OpenWorktreePickerMsg` in app-level Update to show picker overlay
 
 ### Phase 6: Polish
 1. Add status bar hints for session view
@@ -1046,10 +969,10 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 | `internal/tui/components/split_list_picker_test.go` | **NEW** — component tests |
 | `internal/tui/views/overlay_repo_manager.go` | **REFACTOR** — use `SplitListPicker` |
 | `internal/tui/views/overlay_worktree_picker.go` | **NEW** — picker overlay |
-| `internal/tui/views/overview.go` | **MODIFY** — add `overviewActionOpenTerminal`, action card rendering |
+| `internal/tui/views/overview.go` | **MODIFY** — remove `t` viewport nav, add `t` handler for picker |
 | `internal/tui/views/app.go` | **MODIFY** — add `overlayWorktreePicker` enum, message handlers |
 | `internal/tui/views/cmds.go` | **MODIFY** — update `OpenTerminalCmd` to use terminal package |
-| `internal/tui/views/msgs.go` | **MODIFY** — add `OpenTerminalInWorktreeMsg` |
+| `internal/tui/views/msgs.go` | **MODIFY** — add `OpenWorktreePickerMsg`, `OpenTerminalInWorktreeMsg` |
 | `internal/tui/views/help.go` | **MODIFY** — add new keyboard shortcuts |
 
 ---
@@ -1065,6 +988,7 @@ None — all terminal APIs are via standard library (`os/exec`, `osascript`) or 
 | AppleScript permissions | Low | Guide user through System Preferences |
 | Terminal detection wrong | Low | Provide manual override via settings |
 | Worktrees stale after picker open | Low | Re-load on repo selection (already implemented) |
+| **Vim bindings removal blocks `t` key** | High | This plan assumes vim bindings (including `t` viewport nav) are removed first. Coordinate with the vim bindings removal plan before implementing Phase 5. |
 
 ---
 
@@ -1192,4 +1116,5 @@ func (m *SplitListPicker) View() string
 *Updated: 2026-05-18 — Added SplitListPicker component and RepoManagerOverlay refactor*
 *Updated: 2026-05-19 — Fixed SplitListPicker View() to use correct OverlayPaneSpec fields; added FocusRight/SetLeft/SetRight/LeftIndex/RightIndex/PrevLeftIndex/TrackPrevLeft methods; fixed OverviewWorktreeRow.Worktrees to use gitwork.Worktree type; added KittyRemoteControlEnabled() detection helper; clarified worktree reload hook pattern*
 *Updated: 2026-05-22 — Fixed KITTY_PUBLIC_HOST → KITTY_LISTEN_ON (correct env var for --listen-on socket); fixed worktree reload comparison to use picker state consistently; reset prevLeftIndex in SetLeft/SetRight*
+*Updated: 2026-05-25 — Changed overview integration from action-card approach to direct key binding; use `t` universally for terminal actions; remove existing `t` viewport nav binding from overview (vim bindings removal); changed agent session `o` key to `t`; added IsFocusLeft() to SplitListPicker*
 *Research sources: Warp GitHub Discussion #612, Issue #3959; iTerm2 AppleScript docs; Kitty remote control docs; WezTerm CLI docs; Alacritty Issue #6340*
