@@ -46,3 +46,49 @@ func TestTerminalTypeStringValues(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeAppleScriptPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"normal path unchanged", "/Users/test/project", "/Users/test/project"},
+		{"double quotes escaped", `path/with"quote`, `path/with\"quote`},
+		{"backslash escaped", `path\with`, `path\\with`},
+		{"both escaped", `path"\test`, `path\"\\test`},
+		{"empty path", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeAppleScriptPath(tt.path)
+			if got != tt.want {
+				t.Errorf("sanitizeAppleScriptPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeArgPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"normal path unchanged", "/Users/test/project", "/Users/test/project"},
+		{"empty path becomes dot", "", "."},
+		{"flag-like path prepended", "-l", "./-l"},
+		{"double dash prepended", "--help", "./--help"},
+		{"relative path unchanged", "./my-project", "./my-project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeArgPath(tt.path)
+			if got != tt.want {
+				t.Errorf("sanitizeArgPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}

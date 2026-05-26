@@ -7,7 +7,31 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 )
+
+// sanitizeAppleScriptPath escapes characters that would break AppleScript string literals.
+// This prevents injection attacks where a malicious path could execute arbitrary AppleScript.
+func sanitizeAppleScriptPath(path string) string {
+	// Escape backslashes first, then double quotes.
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"\"", "\\\"",
+	).Replace(path)
+}
+
+// sanitizeArgPath ensures a path is not interpreted as a flag by prepending ./ if needed.
+func sanitizeArgPath(path string) string {
+	if path == "" {
+		return "."
+	}
+	// If path starts with -, it would be interpreted as a flag.
+	// Prepend ./ to force interpretation as a path.
+	if path[0] == '-' {
+		return "./" + path
+	}
+	return path
+}
 
 // ErrNoSupportedTerminal is returned when no supported terminal is detected.
 var ErrNoSupportedTerminal = errors.New("no supported terminal detected")
@@ -103,6 +127,7 @@ func openKitty(dir string) (TerminalType, error) {
 
 // openITerm2 opens a new tab in iTerm2 using AppleScript.
 func openITerm2(dir string) (TerminalType, error) {
+	safeDir := sanitizeAppleScriptPath(sanitizeArgPath(dir))
 	script := fmt.Sprintf(`tell application "iTerm2"
 	activate
 	tell current window
@@ -111,7 +136,7 @@ func openITerm2(dir string) (TerminalType, error) {
 			write text "cd " & quoted form of POSIX path "%s"
 		end tell
 	end tell
-end tell`, dir)
+end tell`, safeDir)
 	cmd := exec.CommandContext(context.TODO(), "osascript", "-e", script)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -129,10 +154,11 @@ end tell`, dir)
 // openTerminalApp opens a new tab in Terminal.app using AppleScript.
 // Uses quoted form of POSIX path for safe AppleScript quoting.
 func openTerminalApp(dir string) (TerminalType, error) {
+	safeDir := sanitizeAppleScriptPath(sanitizeArgPath(dir))
 	script := fmt.Sprintf(`tell application "Terminal"
 	activate
 	do script "cd " & quoted form of POSIX path "%s" in front window
-end tell`, dir)
+end tell`, safeDir)
 	cmd := exec.CommandContext(context.TODO(), "osascript", "-e", script)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -144,7 +170,7 @@ end tell`, dir)
 
 // openWarp opens Warp (limited: new window only, no tab support).
 func openWarp(dir string) (TerminalType, error) {
-	cmd := exec.Command("open", "-a", "Warp.app", dir)
+	cmd := exec.Command("open", "-a", "Warp.app", sanitizeArgPath(dir))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -155,7 +181,7 @@ func openWarp(dir string) (TerminalType, error) {
 
 // openAlacritty opens a new window in Alacritty (no tab support).
 func openAlacritty(dir string) (TerminalType, error) {
-	cmd := exec.Command("alacritty", "--working-directory", dir)
+	cmd := exec.Command("alacritty", "--working-directory", sanitizeArgPath(dir))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
