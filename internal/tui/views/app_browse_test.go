@@ -350,6 +350,61 @@ func TestNewSessionOverlayCachedReopenRestoresResultsAndCursor(t *testing.T) {
 	}
 }
 
+func TestNewSessionOverlayCachedReopenClearsSelection(t *testing.T) {
+	t.Parallel()
+
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.now = func() time.Time { return baseTime }
+	overlay.SetSize(100, 30)
+	_ = overlay.Open()
+	overlay, _ = overlay.Update(loadedMsg(
+		adapter.ListItem{ID: "sen-1", Provider: "github", Title: "First"},
+		adapter.ListItem{ID: "sen-2", Provider: "github", Title: "Second"},
+	))
+	overlay.setBrowseListFocus()
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	if !overlay.selectedIDs["sen-1"] {
+		t.Fatalf("selectedIDs = %#v, want first item selected before close", overlay.selectedIDs)
+	}
+
+	overlay.Close()
+	baseTime = baseTime.Add(4 * time.Minute)
+	cmd := overlay.Open()
+	if cmd != nil {
+		t.Fatal("expected cached reopen within TTL not to reload")
+	}
+	if len(overlay.selectedIDs) != 0 {
+		t.Fatalf("selectedIDs = %#v, want cached reopen to clear stale selection", overlay.selectedIDs)
+	}
+
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyDown})
+	overlay, _ = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !overlay.showExtraContext {
+		t.Fatal("expected extra context step after selecting current row")
+	}
+	_, cmd = overlay.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected session command")
+	}
+	var sessionMsg NewSessionBrowseMsg
+	found := false
+	for _, msg := range runOverlayCmd(t, cmd) {
+		if got, ok := msg.(NewSessionBrowseMsg); ok {
+			sessionMsg = got
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cmd did not include NewSessionBrowseMsg")
+	}
+	if len(sessionMsg.Selection.ItemIDs) != 1 || sessionMsg.Selection.ItemIDs[0] != "sen-2" {
+		t.Fatalf("ItemIDs = %#v, want [sen-2] from row selected after reopen", sessionMsg.Selection.ItemIDs)
+	}
+}
+
 func TestNewSessionOverlayCacheExpiresAfterFiveMinutes(t *testing.T) {
 	t.Parallel()
 

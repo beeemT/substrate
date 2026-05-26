@@ -167,7 +167,6 @@ type (
 		browseControl browseControl
 		detailYOffset int
 		detailItemID  string
-		selectedIDs   map[string]bool
 	}
 )
 
@@ -472,17 +471,6 @@ func (m NewSessionOverlay) browseQueryKey() browseQueryKey {
 	}
 }
 
-func cloneSelectedIDs(src map[string]bool) map[string]bool {
-	if len(src) == 0 {
-		return make(map[string]bool)
-	}
-	dst := make(map[string]bool, len(src))
-	for id, selected := range src {
-		dst[id] = selected
-	}
-	return dst
-}
-
 func (m *NewSessionOverlay) storeBrowseResultCache() {
 	if !m.browseResultValid || m.browseResultKey != m.browseQueryKey() {
 		m.browseResultCache.valid = false
@@ -502,7 +490,6 @@ func (m *NewSessionOverlay) storeBrowseResultCache() {
 		browseControl: m.browseControl,
 		detailYOffset: m.detailViewport.YOffset,
 		detailItemID:  m.detailItemID,
-		selectedIDs:   cloneSelectedIDs(m.selectedIDs),
 	}
 }
 
@@ -528,7 +515,7 @@ func (m *NewSessionOverlay) restoreBrowseResultCache() bool {
 	m.browseResultValid = true
 	m.allItems = flattenBrowsePages(m.browsePages)
 	m.hasMore = m.browseResultCache.hasMore
-	m.selectedIDs = cloneSelectedIDs(m.browseResultCache.selectedIDs)
+	m.selectedIDs = make(map[string]bool)
 	m.refreshBrowseListItems()
 	if len(m.allItems) == 0 {
 		m.issueList.ResetSelected()
