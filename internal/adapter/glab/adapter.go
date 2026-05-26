@@ -643,7 +643,20 @@ func (a *GlabAdapter) trackedMRForSubPlanPRReady(ctx context.Context, p subPlanP
 
 // handleExistingMR undrafts an MR that already exists and records it in the artifact store.
 // This is the canonical path for both the initial mrView check and the 409-conflict recovery path.
+//
+// Recording is skipped if a link already exists for this work item. This avoids duplicate
+// session_review_artifacts links when the MR was already recorded as a draft during
+// onWorktreeCreated — the link from that initial recording is preserved and updated
+// via the MR row upsert in PersistGitlabMR.
 func (a *GlabAdapter) handleExistingMR(ctx context.Context, mr glabMRView, p subPlanPRReadyPayload, projectPath, worktreePath string) {
+	// Check if a link already exists for this work item. If so, skip re-recording
+	// to avoid duplicate links. The MR row itself is already upserted (ON CONFLICT updates
+	// the state/draft/URL), so the existing link will reflect the updated state.
+	if a.linkExistsForWorkItem(ctx, p.WorkItemID) {
+		slog.Debug("glab: MR link already exists for work item, skipping re-record",
+			"workItemID", p.WorkItemID, "iid", mr.IID)
+	}
+
 	// Mark the MR ready (undraft it) so it's ready for review.
 	if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
 		slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
@@ -653,17 +666,40 @@ func (a *GlabAdapter) handleExistingMR(ctx context.Context, mr glabMRView, p sub
 	if refreshed, refreshOk := a.mrView(ctx, worktreePath, p.Branch); refreshOk {
 		mr = refreshed
 	}
-	a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
-		Provider:     "gitlab",
-		Kind:         "MR",
-		RepoName:     projectPath,
-		Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
-		URL:          strings.TrimSpace(mr.WebURL),
-		State:        glabArtifactState(mr),
-		Branch:       p.Branch,
-		WorktreePath: worktreePath,
-		UpdatedAt:    time.Now(),
-	}, projectPath, mr.IID)
+
+	// Only record if no link exists for this work item.
+	if !a.linkExistsForWorkItem(ctx, p.WorkItemID) {
+		a.recordGitlabMR(ctx, p.WorkspaceID, p.WorkItemID, domain.ReviewArtifact{
+			Provider:     "gitlab",
+			Kind:         "MR",
+			RepoName:     projectPath,
+			Ref:          glabArtifactRef(strings.TrimSpace(mr.WebURL), mr.IID),
+			URL:          strings.TrimSpace(mr.WebURL),
+			State:        glabArtifactState(mr),
+			Branch:       p.Branch,
+			WorktreePath: worktreePath,
+			UpdatedAt:    time.Now(),
+		}, projectPath, mr.IID)
+	}
+}
+
+// linkExistsForWorkItem returns true if a session_review_artifacts link already exists
+// for the given work item with provider "gitlab".
+func (a *GlabAdapter) linkExistsForWorkItem(ctx context.Context, workItemID string) bool {
+	if a.repos.SessionArtifacts == nil || strings.TrimSpace(workItemID) == "" {
+		return false
+	}
+	links, err := a.repos.SessionArtifacts.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		slog.Warn("glab: check link exists failed", "workItemID", workItemID, "error", err)
+		return false
+	}
+	for _, link := range links {
+		if link.Provider == "gitlab" {
+			return true
+		}
+	}
+	return false
 }
 
 // markMRReady runs `glab mr update <branch> --ready --yes`.
