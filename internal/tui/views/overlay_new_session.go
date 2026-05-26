@@ -136,7 +136,7 @@ const browseSpinnerInterval = 100 * time.Millisecond
 // fires a network reload; earlier ticks are silently dropped.
 type (
 	browseDebounceMsg    struct{ seq int }
-	browseSpinnerTickMsg struct{}
+	browseSpinnerTickMsg struct{ seq int }
 	browsePageState      struct {
 		Items      []adapter.ListItem
 		Offset     int
@@ -287,6 +287,7 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	loading                        bool
 	browseSpinnerFrame             int
 	browseSpinnerVisible           bool
+	browseSpinnerSeq               int
 	hasMore                        bool
 	manualTitle                    components.GrowingTextInput
 	manualDesc                     components.GrowingTextArea
@@ -1106,16 +1107,28 @@ func (m *NewSessionOverlay) nextRequestID() int {
 	return m.requestSeq
 }
 
-func browseSpinnerTickCmd() tea.Cmd {
-	return func() tea.Msg { return browseSpinnerTickMsg{} }
+func browseSpinnerTickCmd(seq int) tea.Cmd {
+	return func() tea.Msg { return browseSpinnerTickMsg{seq: seq} }
 }
 
-func (m *NewSessionOverlay) reloadItems() tea.Cmd {
+func browseSpinnerIntervalTickCmd(seq int) tea.Cmd {
+	return tea.Tick(browseSpinnerInterval, func(time.Time) tea.Msg {
+		return browseSpinnerTickMsg{seq: seq}
+	})
+}
+
+func (m *NewSessionOverlay) startBrowseLoading() int {
 	m.loading = true
 	m.browseSpinnerFrame = 0
 	m.browseSpinnerVisible = false
+	m.browseSpinnerSeq++
+	return m.browseSpinnerSeq
+}
 
-	return tea.Batch(m.loadItemsCmd(browseLoadReset, m.nextRequestID()), browseSpinnerTickCmd())
+func (m *NewSessionOverlay) reloadItems() tea.Cmd {
+	spinnerSeq := m.startBrowseLoading()
+
+	return tea.Batch(m.loadItemsCmd(browseLoadReset, m.nextRequestID()), browseSpinnerTickCmd(spinnerSeq))
 }
 
 func (m *NewSessionOverlay) SetSavedNewSessionFilters(filters []domain.NewSessionFilter) {
@@ -1313,10 +1326,8 @@ func (m *NewSessionOverlay) loadMoreItems() tea.Cmd {
 	if m.loading || !m.hasMore {
 		return nil
 	}
-	m.loading = true
-	m.browseSpinnerFrame = 0
-	m.browseSpinnerVisible = false
-	return tea.Batch(m.loadItemsCmd(browseLoadAppend, m.nextRequestID()), browseSpinnerTickCmd())
+	spinnerSeq := m.startBrowseLoading()
+	return tea.Batch(m.loadItemsCmd(browseLoadAppend, m.nextRequestID()), browseSpinnerTickCmd(spinnerSeq))
 }
 
 func (m *NewSessionOverlay) cycleProvider(delta int) tea.Cmd {
@@ -2044,11 +2055,12 @@ func (m NewSessionOverlay) Update(msg tea.Msg) (NewSessionOverlay, tea.Cmd) {
 			m.browseSpinnerVisible = false
 			return m, nil
 		}
+		if msg.seq != m.browseSpinnerSeq {
+			return m, nil
+		}
 		m.browseSpinnerVisible = true
 		m.browseSpinnerFrame = (m.browseSpinnerFrame + 1) % len(browseSpinnerFrames)
-		return m, tea.Tick(browseSpinnerInterval, func(time.Time) tea.Msg {
-			return browseSpinnerTickMsg{}
-		})
+		return m, browseSpinnerIntervalTickCmd(msg.seq)
 
 	case issueListLoadedMsg:
 		if msg.requestID != 0 && msg.requestID != m.requestSeq {

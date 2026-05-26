@@ -43,8 +43,8 @@ const (
 // serverURLPattern matches the "Server running on http://..." line from stdout.
 var serverURLPattern = regexp.MustCompile(`Server running on (http://[^\s]+)`)
 
-// foremanMCPBridgeName is the filename stem used to locate the foreman MCP bridge.
-const foremanMCPBridgeName = "opencode-foreman-mcp"
+// foremanMCPBridgeName is the filename stem used to locate the generic foreman MCP bridge.
+const foremanMCPBridgeName = "foreman-mcp"
 
 // resolveMCPBridgePath locates the foreman MCP bridge script relative to
 // the substrate executable, using the same candidate resolution as other bridges.

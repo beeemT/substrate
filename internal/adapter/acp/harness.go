@@ -46,7 +46,18 @@ func (h *Harness) SupportsCompact() bool {
 }
 
 func (h *Harness) Capabilities() adapter.HarnessCapabilities {
-	return adapter.HarnessCapabilities{SupportsStreaming: true, SupportsMessaging: true, SupportsNativeResume: h.lastSupportsResume(), SupportedTools: []string{"read", "write", "bash", "ask_foreman", "acp_fs", "acp_terminal"}}
+	return adapter.HarnessCapabilities{SupportsStreaming: true, SupportsMessaging: true, SupportsNativeResume: h.lastSupportsResume(), SupportedTools: acpSupportedTools(h.cfg)}
+}
+
+func acpSupportedTools(cfg config.ACPConfig) []string {
+	tools := []string{"mcp__substrate-foreman__ask_foreman"}
+	if boolPtrValue(cfg.ClientFS, true) {
+		tools = append(tools, "acp/fs.read_text_file", "acp/fs.write_text_file")
+	}
+	if boolPtrValue(cfg.ClientTerminal, true) {
+		tools = append(tools, "acp/terminal.create", "acp/terminal.output", "acp/terminal.wait_for_exit", "acp/terminal.kill", "acp/terminal.release")
+	}
+	return tools
 }
 
 func (h *Harness) lastSupportsResume() bool {
@@ -306,7 +317,7 @@ func resolveForemanMCPBridge() (string, []string) {
 	if err != nil {
 		return "", nil
 	}
-	for _, c := range bridge.BridgeCandidates("", execPath, "opencode-foreman-mcp") {
+	for _, c := range bridge.BridgeCandidates("", execPath, "foreman-mcp") {
 		if c == "" {
 			continue
 		}
@@ -315,8 +326,8 @@ func resolveForemanMCPBridge() (string, []string) {
 		}
 	}
 	rootCandidates := []string{
-		filepath.Join(filepath.Dir(execPath), "bridge", "opencode-foreman-mcp", "index.ts"),
-		filepath.Join("bridge", "opencode-foreman-mcp", "index.ts"),
+		filepath.Join(filepath.Dir(execPath), "bridge", "foreman-mcp", "index.ts"),
+		filepath.Join("bridge", "foreman-mcp", "index.ts"),
 	}
 	bun, err := exec.LookPath("bun")
 	if err != nil {

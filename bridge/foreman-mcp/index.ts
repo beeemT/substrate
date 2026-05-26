@@ -1,5 +1,5 @@
 /**
- * opencode-foreman-mcp - MCP server that exposes an `ask_foreman` tool.
+ * foreman-mcp - MCP server that exposes an `ask_foreman` tool.
  *
  * Communicates with the substrate foreman via a Unix domain socket
  * (path from SUBSTRATE_FOREMAN_SOCKET env var).

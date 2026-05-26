@@ -292,7 +292,7 @@ func TestNewSessionOverlaySpinnerOnlyLoadingState(t *testing.T) {
 		t.Fatal("expected overlay to enter loading state")
 	}
 
-	overlay, _ = overlay.Update(browseSpinnerTickMsg{})
+	overlay, _ = overlay.Update(browseSpinnerTickMsg{seq: overlay.browseSpinnerSeq})
 	if !overlay.browseSpinnerVisible {
 		t.Fatal("expected spinner to become visible while loading")
 	}
@@ -310,6 +310,55 @@ func TestNewSessionOverlaySpinnerOnlyLoadingState(t *testing.T) {
 	}
 	if !foundFrame {
 		t.Fatalf("view = %q, want spinner frame rendered", view)
+	}
+}
+
+func TestNewSessionOverlayIgnoresStaleSpinnerTickAfterReloadRestart(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &browseTestAdapter{name: "github", browseScopes: []domain.SelectionScope{domain.ScopeIssues}, browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}}}}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{githubAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	overlay.SetSize(100, 30)
+	firstCmd := overlay.Open()
+	if firstCmd == nil {
+		t.Fatal("expected initial open to start browse loading")
+	}
+	firstSeq := overlay.browseSpinnerSeq
+	if firstSeq == 0 {
+		t.Fatal("expected first loading cycle to set spinner seq")
+	}
+
+	secondCmd := overlay.reloadItems()
+	if secondCmd == nil {
+		t.Fatal("expected reload restart to return command")
+	}
+	secondSeq := overlay.browseSpinnerSeq
+	if secondSeq == firstSeq {
+		t.Fatalf("spinner seq did not advance on reload restart: %d", secondSeq)
+	}
+
+	updated, cmd := overlay.Update(browseSpinnerTickMsg{seq: firstSeq})
+	if cmd != nil {
+		t.Fatal("stale spinner tick must not schedule a follow-up tick")
+	}
+	if updated.browseSpinnerVisible || updated.browseSpinnerFrame != 0 {
+		t.Fatalf("stale tick changed spinner visible=%v frame=%d", updated.browseSpinnerVisible, updated.browseSpinnerFrame)
+	}
+
+	updated, cmd = updated.Update(browseSpinnerTickMsg{seq: secondSeq})
+	if cmd == nil {
+		t.Fatal("current spinner tick must schedule a follow-up tick")
+	}
+	if !updated.browseSpinnerVisible || updated.browseSpinnerFrame != 1 {
+		t.Fatalf("current tick visible=%v frame=%d, want visible frame 1", updated.browseSpinnerVisible, updated.browseSpinnerFrame)
+	}
+
+	restarted, cmd := updated.Update(browseSpinnerTickMsg{seq: firstSeq})
+	if cmd != nil {
+		t.Fatal("stale spinner tick after current tick must not schedule a follow-up tick")
+	}
+	if restarted.browseSpinnerFrame != updated.browseSpinnerFrame {
+		t.Fatalf("stale tick advanced frame from %d to %d", updated.browseSpinnerFrame, restarted.browseSpinnerFrame)
 	}
 }
 

@@ -179,7 +179,7 @@ func (s *Session) ResumeInfo() map[string]string {
 }
 
 func (s *Session) setupACPSession(ctx context.Context, opts adapter.SessionOpts, mcpServers []mcpServer) (sessionResponse, string, error) {
-	params := sessionCreateParams{CWD: s.root, MCPServers: mcpServers}
+	params := sessionCreateParams{CWD: s.root, MCPServers: mcpServers, Agent: s.acpCfg.Agent, RegistryID: s.acpCfg.RegistryID}
 	if existing := opts.ResumeInfo["acp_agent_session_id"]; existing != "" {
 		params.SessionID = existing
 		if s.init.AgentCapabilities.SessionCapabilities.supportsResume() {

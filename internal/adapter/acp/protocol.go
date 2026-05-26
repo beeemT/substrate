@@ -121,6 +121,8 @@ type sessionCreateParams struct {
 	SessionID  string      `json:"sessionId,omitempty"`
 	CWD        string      `json:"cwd"`
 	MCPServers []mcpServer `json:"mcpServers,omitempty"`
+	Agent      string      `json:"agent,omitempty"`
+	RegistryID string      `json:"registryId,omitempty"`
 }
 
 type sessionIDParams struct {

@@ -78,7 +78,9 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Install Bun dependencies
-        run: bun install --cwd bridge --frozen-lockfile
+        run: |
+          bun install --cwd bridge --frozen-lockfile
+          bun install --cwd bridge/foreman-mcp --frozen-lockfile
 
       - name: Build
         env:
@@ -103,6 +105,11 @@ jobs:
             --compile \
             --target "${{ matrix.bridge_target }}" \
             --outfile "dist/bridge/claude-agent-bridge"
+
+          bun build bridge/foreman-mcp/index.ts \
+            --compile \
+            --target "${{ matrix.bridge_target }}" \
+            --outfile "dist/bridge/foreman-mcp"
 
           cp "bridge/node_modules/@oh-my-pi/pi-natives/native/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
 
