@@ -32,6 +32,47 @@ func TestRemoteHost(t *testing.T) {
 	}
 }
 
+func TestRemoteHost_SSHAliasResolution(t *testing.T) {
+	// Create a temp SSH config directory and config file
+	sshDir := t.TempDir()
+	sshConfigDir := filepath.Join(sshDir, ".ssh")
+	if err := os.MkdirAll(sshConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	configPath := filepath.Join(sshConfigDir, "config")
+	cfg := `Host github-justtrack
+    Hostname github.com
+    User git
+Host gitlab-internal
+    Hostname gitlab.internal.example.com
+    User git
+`
+	if err := os.WriteFile(configPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Override HOME for the test
+	t.Setenv("HOME", sshDir)
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "ssh alias to github", url: "git@github-justtrack:org/repo.git", want: "github.com"},
+		{name: "ssh alias to gitlab internal", url: "git@gitlab-internal:org/repo.git", want: "gitlab.internal.example.com"},
+		{name: "unknown alias", url: "git@unknown-alias:org/repo.git", want: "unknown-alias"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := remoteHost(tt.url); got != tt.want {
+				t.Fatalf("remoteHost(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadGlabKnownHosts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -77,6 +118,7 @@ func TestDetectPlatform_ConfiguredGitHubEnterpriseHost(t *testing.T) {
 		t.Fatalf("DetectPlatform() platform = %v, want github", platform)
 	}
 }
+
 func TestDetectPlatform_SelfHostedGitLabViaGlabCLI(t *testing.T) {
 	repoDir := createRepoWithRemote(t, "git@gitlab.internal.example:org/repo.git")
 

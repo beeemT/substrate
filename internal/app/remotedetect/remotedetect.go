@@ -106,16 +106,14 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 }
 
 func remoteHost(remoteURL string) string {
+	var host string
 	if strings.Contains(remoteURL, "://") {
 		parsed, err := url.Parse(remoteURL)
 		if err != nil {
 			return ""
 		}
-
-		return normalizeHost(parsed.Hostname())
-	}
-
-	if strings.HasPrefix(remoteURL, "git@") || strings.HasPrefix(remoteURL, "ssh://") {
+		host = parsed.Hostname()
+	} else if strings.HasPrefix(remoteURL, "git@") || strings.HasPrefix(remoteURL, "ssh://") {
 		trimmed := strings.TrimPrefix(remoteURL, "ssh://")
 		if at := strings.Index(trimmed, "@"); at >= 0 {
 			trimmed = trimmed[at+1:]
@@ -126,8 +124,45 @@ func remoteHost(remoteURL string) string {
 		if colon := strings.Index(trimmed, ":"); colon >= 0 {
 			trimmed = trimmed[:colon]
 		}
+		host = trimmed
+	} else {
+		return ""
+	}
 
-		return normalizeHost(trimmed)
+	// Resolve SSH aliases (e.g., "github-justtrack" → "github.com")
+	if resolved := resolveSSHAlias(host); resolved != "" {
+		host = resolved
+	}
+
+	return normalizeHost(host)
+}
+
+// resolveSSHAlias looks up a hostname in ~/.ssh/config and returns
+// the resolved Hostname if found. Returns empty string if not found.
+func resolveSSHAlias(host string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	configPath := filepath.Join(home, ".ssh", "config")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+
+	currentHost := ""
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Host ") {
+			currentHost = strings.TrimPrefix(line, "Host ")
+			// Support multiple hosts on one line
+			currentHost = strings.Fields(currentHost)[0]
+		} else if strings.EqualFold(currentHost, host) && strings.HasPrefix(line, "Hostname ") {
+			hostname := strings.TrimPrefix(line, "Hostname ")
+			return strings.TrimSpace(hostname)
+		}
 	}
 
 	return ""
