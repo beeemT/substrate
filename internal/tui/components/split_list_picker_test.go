@@ -43,48 +43,9 @@ func TestSplitListPicker_FocusSwitch(t *testing.T) {
 	}
 }
 
-func TestSplitListPicker_HandleFocusKeyConsumesSwitchKeys(t *testing.T) {
-	spec := testSplitOverlaySpec
-	picker := NewSplitListPicker(spec)
-
-	tests := []struct {
-		key           string
-		wantConsumed  bool
-		wantFocusLeft bool
-	}{
-		{"tab", true, false},   // tab → switch from left to right
-		{"left", true, false},  // left → switch from left to right
-		{"right", true, false}, // right → switch from left to right
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			picker.FocusLeft() // reset to left for each test
-			consumed := picker.HandleFocusKey(tt.key)
-			if consumed != tt.wantConsumed {
-				t.Errorf("HandleFocusKey(%q) consumed = %v, want %v", tt.key, consumed, tt.wantConsumed)
-			}
-			if tt.wantFocusLeft {
-				if !picker.IsFocusLeft() {
-					t.Errorf("HandleFocusKey(%q) focus = right, want left", tt.key)
-				}
-			}
-		})
-	}
-}
-
-func TestSplitListPicker_DoesNotConsumeNavigationKeys(t *testing.T) {
-	spec := testSplitOverlaySpec
-	picker := NewSplitListPicker(spec)
-
-	navigationKeys := []string{"up", "down", "k", "j", "enter", "esc", "a", "d", "i", " "}
-	for _, key := range navigationKeys {
-		consumed := picker.HandleFocusKey(key)
-		if consumed {
-			t.Errorf("HandleFocusKey(%q) should not consume navigation keys", key)
-		}
-	}
-}
+// Note: HandleFocusKey was removed as dead code.
+// Consumers call picker.SwitchFocus() directly in their key handlers.
+// The test coverage for SwitchFocus is in TestSplitListPicker_FocusSwitch.
 
 func TestSplitListPicker_SetSize(t *testing.T) {
 	spec := testSplitOverlaySpec
@@ -106,6 +67,8 @@ func TestSplitListPicker_SetSize(t *testing.T) {
 		t.Error("expected SetSize to update BodyHeight")
 	}
 }
+
+// assertFits is declared in overlay_frame_test.go and reused here.
 
 func TestSplitListPicker_View(t *testing.T) {
 	st := testOverlayStyles()
@@ -134,6 +97,9 @@ func TestSplitListPicker_View(t *testing.T) {
 	if len(lines) != picker.Layout().BodyHeight {
 		t.Errorf("View line count = %d, want %d", len(lines), picker.Layout().BodyHeight)
 	}
+
+	// Assert layout fit: all lines must fit within declared dimensions
+	assertFits(t, view, 72, picker.Layout().BodyHeight)
 }
 
 func TestSplitListPicker_NewSplitListPickerDefaults(t *testing.T) {
