@@ -383,3 +383,137 @@ func TestSessionService_UpdateResumeInfo(t *testing.T) {
 		t.Errorf("ResumeInfo[omp_session_id] = %q, want %q", got.ResumeInfo["omp_session_id"], wantInfo["omp_session_id"])
 	}
 }
+
+func TestSessionService_Create_Foreman(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	t.Run("creates foreman session with pending status", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "foreman-1",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Kind:        domain.AgentSessionKindForeman,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		got, err := svc.Get(ctx, "foreman-1")
+		if err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+		if got.Status != domain.AgentSessionPending {
+			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionPending)
+		}
+	})
+
+	t.Run("Start transitions to running", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "foreman-start",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Kind:        domain.AgentSessionKindForeman,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		if err := svc.Start(ctx, "foreman-start"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "foreman-start")
+		if got.Status != domain.AgentSessionRunning {
+			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionRunning)
+		}
+		if got.StartedAt == nil {
+			t.Error("StartedAt should be set")
+		}
+	})
+
+	t.Run("Complete transitions to completed", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "foreman-complete",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Kind:        domain.AgentSessionKindForeman,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		if err := svc.Start(ctx, "foreman-complete"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		if err := svc.Complete(ctx, "foreman-complete"); err != nil {
+			t.Fatalf("Complete failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "foreman-complete")
+		if got.Status != domain.AgentSessionCompleted {
+			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionCompleted)
+		}
+		if got.CompletedAt == nil {
+			t.Error("CompletedAt should be set")
+		}
+	})
+
+	t.Run("Interrupt transitions to interrupted", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "foreman-interrupt",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Kind:        domain.AgentSessionKindForeman,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		if err := svc.Start(ctx, "foreman-interrupt"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		if err := svc.Interrupt(ctx, "foreman-interrupt"); err != nil {
+			t.Fatalf("Interrupt failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "foreman-interrupt")
+		if got.Status != domain.AgentSessionInterrupted {
+			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionInterrupted)
+		}
+		if got.ShutdownAt == nil {
+			t.Error("ShutdownAt should be set")
+		}
+	})
+
+	t.Run("Fail transitions to failed", func(t *testing.T) {
+		session := domain.AgentSession{
+			ID:          "foreman-fail",
+			WorkItemID:  "wi-1",
+			WorkspaceID: "ws-1",
+			Kind:        domain.AgentSessionKindForeman,
+			HarnessName: "omp",
+		}
+		if err := svc.Create(ctx, session); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		exitCode := 42
+		if err := svc.Fail(ctx, "foreman-fail", &exitCode); err != nil {
+			t.Fatalf("Fail failed: %v", err)
+		}
+
+		got, _ := svc.Get(ctx, "foreman-fail")
+		if got.Status != domain.AgentSessionFailed {
+			t.Errorf("Status = %q, want %q", got.Status, domain.AgentSessionFailed)
+		}
+		if got.ExitCode == nil || *got.ExitCode != 42 {
+			t.Errorf("ExitCode = %v, want 42", got.ExitCode)
+		}
+	})
+}

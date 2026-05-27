@@ -75,7 +75,6 @@ const (
 
 const (
 	taskSidebarSourceDetailsID = "__source_details__"
-	taskSidebarForemanID       = "__foreman__"
 	taskSidebarArtifactsID     = "__artifacts__"
 )
 
@@ -148,9 +147,6 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	plans     map[string]*domain.Plan               // keyed by workItemID
 	questions map[string]map[string]domain.Question // sessionID → questionID → Question
 	reviews   map[string]ReviewsLoadedMsg           // keyed by sessionID
-
-	// foremanSessions tracks foreman session state per work item, sourced from events.
-	foremanSessions map[string]foremanSessionState // keyed by workItemID
 
 	savedNewSessionFilters   []domain.NewSessionFilter
 	newSessionAutonomous     *NewSessionAutonomousRuntime
@@ -247,7 +243,6 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		plans:                          make(map[string]*domain.Plan),
 		questions:                      make(map[string]map[string]domain.Question),
 		reviews:                        make(map[string]ReviewsLoadedMsg),
-		foremanSessions:                make(map[string]foremanSessionState),
 		tailingSessionIDs:              make(map[string]bool),
 		liveInstanceIDs:                make(map[string]bool),
 		reviewSessionLogs:              make(map[string]string),
@@ -1793,29 +1788,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TaskUpdatedMsg:
 		a.upsertSession(msg.AgentSession)
 		a.rebuildSidebar()
-		a.refreshSessionSearchEntriesFromLocalState()
-		if a.currentWorkItemID == msg.WorkItemID {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		return a, tea.Batch(cmds...)
-
-	case ForemanStartedMsg:
-		a.foremanSessions[msg.WorkItemID] = foremanSessionState{
-			sessionID: msg.SessionID,
-			running:   true,
-		}
-		a.rebuildSidebar()
-		if a.currentWorkItemID == msg.WorkItemID {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		return a, tea.Batch(cmds...)
-
-	case ForemanStoppedMsg:
-		a.foremanSessions[msg.WorkItemID] = foremanSessionState{
-			lastPlanID:    msg.LastPlanID,
-			lastSessionID: msg.LastSessionID,
-			running:       false,
-		}
 		a.rebuildSidebar()
 		if a.currentWorkItemID == msg.WorkItemID {
 			cmds = append(cmds, a.updateContentFromState())
@@ -3178,18 +3150,10 @@ func (a *App) updateContentFromState() tea.Cmd {
 				}
 				return nil
 			}
-			if taskSessionID == taskSidebarForemanID {
-				// Look up the foreman agent session from the sessions list.
-				// The foreman session ID in the sidebar matches the actual session ID.
-				for _, s := range a.sessionsForWorkItem(a.currentWorkItemID) {
-					if s.ID == taskSessionID && s.Kind == domain.AgentSessionKindForeman {
-						return a.showForemanContent(wi, &s)
-					}
-				}
-				// Foreman session not found (may have been deleted); fall to overview.
-				a.setSelectedTaskSessionID("")
-			}
 			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
+				if session.Kind == domain.AgentSessionKindForeman {
+					return a.showForemanContent(wi, session)
+				}
 				return a.showTaskContent(wi, session)
 			}
 			a.setSelectedTaskSessionID("")
@@ -3429,10 +3393,11 @@ func (a App) interruptibleFocusedSessionIDs() []string {
 	}
 
 	// When focused on an agent session in the task sidebar, interrupt only that session.
+	// Foreman sessions are not interruptible.
 	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
 		selectedID := a.selectedTaskSessionID()
-		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
-			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && isInterruptibleAgentSession(*session) {
+		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID {
+			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.Kind != domain.AgentSessionKindForeman && isInterruptibleAgentSession(*session) {
 				return []string{session.ID}
 			}
 			return nil
@@ -3471,10 +3436,11 @@ func (a App) retryableFocusedSessionID() string {
 	}
 
 	// When focused on a session in the task sidebar, retry only that session if it's failed.
+	// Foreman sessions do not support retry.
 	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
 		selectedID := a.selectedTaskSessionID()
-		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID && selectedID != taskSidebarForemanID {
-			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.Status == domain.AgentSessionFailed {
+		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID {
+			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.Kind != domain.AgentSessionKindForeman && session.Status == domain.AgentSessionFailed {
 				return session.ID
 			}
 		}

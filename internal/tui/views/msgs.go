@@ -129,15 +129,6 @@ type ForemanStoppedMsg struct {
 	LastSessionID string
 }
 
-// foremanSessionState tracks the foreman session for a work item.
-// Sourced entirely from foreman.started / foreman.stopped events.
-type foremanSessionState struct {
-	sessionID     string // current (live) session ID while running
-	lastPlanID    string
-	lastSessionID string
-	running       bool
-}
-
 // QuestionRaisedMsg is sent when a question is raised by an agent.
 type QuestionRaisedMsg struct {
 	WorkItemID string

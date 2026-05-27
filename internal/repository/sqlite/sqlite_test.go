@@ -4,6 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1362,6 +1367,165 @@ func TestEmptyLists(t *testing.T) {
 	}
 	if instances == nil {
 		t.Error("instances should be non-nil empty slice")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Migration 018: agent_sessions phase→kind rename + foreman CHECK
+// ---------------------------------------------------------------------------
+
+func TestMigration018_AgentSessionKind(t *testing.T) {
+	// Start with migration 017 applied (source table already has 'kind' column).
+	db, err := sqlx.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	ctx := context.Background()
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			t.Fatalf("pragma %s: %v", pragma, err)
+		}
+	}
+
+	// Parse and apply migrations 001–017 in version order.
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var migrationFiles []struct {
+		version  int
+		filename string
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".sql" {
+			continue
+		}
+		parts := strings.SplitN(e.Name(), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		ver, err := strconv.Atoi(parts[0])
+		if err != nil || ver < 1 || ver > 17 {
+			continue
+		}
+		migrationFiles = append(migrationFiles, struct {
+			version  int
+			filename string
+		}{ver, e.Name()})
+	}
+	sort.Slice(migrationFiles, func(i, j int) bool {
+		return migrationFiles[i].version < migrationFiles[j].version
+	})
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+	`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	for _, m := range migrationFiles {
+		data, err := fs.ReadFile(migrations.FS, m.filename)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", m.filename, err)
+		}
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			t.Fatalf("apply migration %s: %v", m.filename, err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
+			t.Fatalf("record migration %d: %v", m.version, err)
+		}
+	}
+
+	// Shared timestamp for deterministic inserts.
+	nowStr := now().Format(time.RFC3339Nano)
+
+	// Create the minimal row structure needed by agent_sessions FKs.
+	wsID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO workspaces (id, name, root_path, status) VALUES (?, 'test', '/tmp', 'ready')
+	`, wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	wiID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO work_items (id, workspace_id, source, title, state, created_at, updated_at) VALUES (?, ?, 'github', 'test', 'ingested', ?, ?)
+	`, wiID, wsID, nowStr, nowStr); err != nil {
+		t.Fatalf("create work_item: %v", err)
+	}
+
+	// Insert an agent_sessions row with kind='implementation' directly into the
+	// 017 schema (which already uses 'kind' instead of 'phase').
+	sessionID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO agent_sessions (
+			id, work_item_id, workspace_id, sub_plan_id, plan_id,
+			repository_name, harness_name, worktree_path, status, kind,
+			created_at, updated_at
+		) VALUES (?, ?, ?, NULL, NULL, 'test-repo', 'claude', '/tmp/wt', 'completed', 'implementation', ?, ?)
+	`, sessionID, wiID, wsID, nowStr, nowStr); err != nil {
+		t.Fatalf("insert agent_session with kind='implementation': %v", err)
+	}
+
+	// Read and apply migration 018 directly to avoid re-running 001–017.
+	migration018, err := fs.ReadFile(migrations.FS, "018_agent_session_kind.sql")
+	if err != nil {
+		t.Fatalf("read migration 018: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(migration018)); err != nil {
+		t.Fatalf("apply migration 018: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (18)`); err != nil {
+		t.Fatalf("record migration 018: %v", err)
+	}
+
+	// Verify the pre-existing row survived migration and still has kind='implementation'.
+	var gotKind string
+	if err := db.GetContext(ctx, &gotKind, `SELECT kind FROM agent_sessions WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("get kind after migration: %v", err)
+	}
+	if gotKind != "implementation" {
+		t.Errorf("kind = %q, want %q", gotKind, "implementation")
+	}
+
+	// Verify the CHECK constraint now accepts 'foreman'.
+	foremanID := domain.NewID()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO agent_sessions (
+			id, work_item_id, workspace_id, sub_plan_id, plan_id,
+			repository_name, harness_name, worktree_path, status, kind,
+			created_at, updated_at
+		) VALUES (?, ?, ?, NULL, NULL, 'test-repo', 'claude', '/tmp/wt', 'running', 'foreman', ?, ?)
+	`, foremanID, wiID, wsID, nowStr, nowStr)
+	if err != nil {
+		t.Errorf("insert with kind='foreman' should succeed after 018: %v", err)
+	}
+
+	var foremanKind string
+	if err := db.GetContext(ctx, &foremanKind, `SELECT kind FROM agent_sessions WHERE id = ?`, foremanID); err != nil {
+		t.Fatalf("get foreman kind after insert: %v", err)
+	}
+	if foremanKind != "foreman" {
+		t.Errorf("foreman kind = %q, want %q", foremanKind, "foreman")
+	}
+
+	// Verify the CHECK constraint rejects invalid kind values.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO agent_sessions (
+			id, work_item_id, workspace_id, sub_plan_id, plan_id,
+			repository_name, harness_name, worktree_path, status, kind,
+			created_at, updated_at
+		) VALUES (?, ?, ?, NULL, NULL, 'test-repo', 'claude', '/tmp/wt', 'completed', 'invalid-kind', ?, ?)
+	`, domain.NewID(), wiID, wsID, nowStr, nowStr)
+	if err == nil {
+		t.Error("insert with kind='invalid-kind' should be rejected by CHECK constraint")
 	}
 }
 

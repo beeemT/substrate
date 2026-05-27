@@ -20,6 +20,7 @@ func TestActionMenuViewRendersActionRowsWithSharedChrome(t *testing.T) {
 		{ID: "close", Label: "Close", Shortcut: "Esc"},
 	}
 	model.matches = []int{0, 1}
+	model.query = " " // non-empty to trigger label truncation, not search placeholder ellipsis
 
 	view := model.View()
 	lines := strings.Split(view, "\n")
@@ -39,6 +40,6 @@ func TestActionMenuViewRendersActionRowsWithSharedChrome(t *testing.T) {
 		}
 	}
 	if !strings.Contains(plain, "…") {
-		t.Fatalf("view should truncate long action labels with an ellipsis\n%s", plain)
+		t.Fatalf("view should truncate the long action label with an ellipsis\n%s", plain)
 	}
 }

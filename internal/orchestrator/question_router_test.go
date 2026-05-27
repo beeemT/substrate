@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -247,4 +248,32 @@ func (r *inMemQuestionRepo) Delete(_ context.Context, _ string) error {
 
 func (r *inMemQuestionRepo) UpdateProposedAnswer(_ context.Context, _, _ string) error {
 	return nil
+}
+
+// TestRoute_ForemanKindRejected verifies that Route() rejects foreman kind questions.
+func TestRoute_ForemanKindRejected(t *testing.T) {
+	t.Parallel()
+
+	sessionSvc, _ := newMockSessionSvcWrapper()
+	questionSvc, _ := newServiceAndRepoForQuestions()
+	registry := NewSessionRegistry()
+	bus := &mockPublisher{}
+	router := NewQuestionRouter(questionSvc, sessionSvc, registry, bus)
+
+	evt := adapter.AgentEvent{
+		Type:    "question",
+		Payload: "Should I proceed?",
+		Metadata: map[string]any{
+			"id":     "q-foreman",
+			"source": string(adapter.AgentQuestionSourceAskForeman),
+		},
+	}
+
+	err := router.Route(context.Background(), domain.AgentSessionKindForeman, evt, "foreman-session")
+	if err == nil {
+		t.Fatal("Route returned nil error for foreman kind, want non-nil error")
+	}
+	if !strings.Contains(err.Error(), "foreman") {
+		t.Errorf("error = %q, want message containing \"foreman\"", err.Error())
+	}
 }
