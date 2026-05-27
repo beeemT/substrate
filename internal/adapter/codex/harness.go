@@ -82,6 +82,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		events:        make(chan adapter.AgentEvent, 256),
 		logPath:       sessionLogPath(opts),
 		completed:     make(chan error, 1),
+		done:          make(chan struct{}),
 		state:         sessionRunning,
 		lastText:      make(map[string]string),
 	}
@@ -227,10 +228,17 @@ type session struct {
 	events    chan adapter.AgentEvent
 	logPath   string
 	completed chan error // receives exactly once: when the session is aborted or fails fatally
+	done      chan struct{}
 }
 
 func (s *session) ID() string                        { return s.id }
 func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
+
+// Done returns a channel that is closed when the session terminates.
+func (s *session) Done() <-chan struct{} {
+	// created synchronously with completed; safe to return directly.
+	return s.done
+}
 
 func (s *session) Steer(_ context.Context, _ string) error {
 	return adapter.ErrSteerNotSupported
@@ -441,6 +449,7 @@ func (s *session) terminateSession(err error) {
 		}
 		s.mu.Unlock()
 		close(s.events)
+		close(s.done)
 		s.completed <- err
 	})
 }

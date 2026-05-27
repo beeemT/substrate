@@ -31,21 +31,23 @@ func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service
 	}
 }
 
-func (r *QuestionRouter) Route(ctx context.Context, stage domain.AgentSessionPhase, evt adapter.AgentEvent, sessionID string) error {
-	switch stage {
-	case domain.AgentSessionPhasePlanning:
+func (r *QuestionRouter) Route(ctx context.Context, kind domain.AgentSessionKind, evt adapter.AgentEvent, sessionID string) error {
+	switch kind {
+	case domain.AgentSessionKindPlanning:
 		return r.routePlanning(ctx, evt, sessionID)
-	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
 		return r.routeImplementation(ctx, evt, sessionID)
-	case domain.AgentSessionPhaseManual:
+	case domain.AgentSessionKindManual:
 		return r.routeManual(ctx, evt, sessionID)
+	case domain.AgentSessionKindForeman:
+		return fmt.Errorf("route question: foreman sessions cannot route questions (session %s)", sessionID)
 	default:
-		return fmt.Errorf("route question: unsupported stage %q", stage)
+		return fmt.Errorf("route question: unsupported kind %q", kind)
 	}
 }
 
 func (r *QuestionRouter) routeManual(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhaseManual)
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindManual)
 	if err := r.persistAndPublish(ctx, q, "manual question raised"); err != nil {
 		return err
 	}
@@ -56,7 +58,7 @@ func (r *QuestionRouter) routeManual(ctx context.Context, evt adapter.AgentEvent
 }
 
 func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhasePlanning)
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindPlanning)
 	if err := r.persistAndPublish(ctx, q, "planning question raised"); err != nil {
 		return err
 	}
@@ -67,7 +69,7 @@ func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEve
 }
 
 func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionPhaseImplementation)
+	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindImplementation)
 	if err := r.persistAndPublish(ctx, q, "implementation question raised"); err != nil {
 		return err
 	}
@@ -165,7 +167,7 @@ func (r *QuestionRouter) publishAnswered(ctx context.Context, questionID, sessio
 	return PublishQuestionAnswered(ctx, r.eventBus, questionID, sessionID)
 }
 
-func questionFromEvent(evt adapter.AgentEvent, sessionID string, stage domain.AgentSessionPhase) domain.Question {
+func questionFromEvent(evt adapter.AgentEvent, sessionID string, kind domain.AgentSessionKind) domain.Question {
 	content := evt.Payload
 	contextText := ""
 	source := domain.QuestionSourceAskForeman
@@ -196,7 +198,7 @@ func questionFromEvent(evt adapter.AgentEvent, sessionID string, stage domain.Ag
 	return domain.Question{
 		ID:             domain.NewID(),
 		AgentSessionID: sessionID,
-		Stage:          stage,
+		Stage:          kind,
 		Source:         source,
 		Content:        content,
 		Context:        contextText,

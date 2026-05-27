@@ -24,7 +24,7 @@ func TestTransacterRetriesSQLiteBusySnapshot(t *testing.T) {
 		ID:          domain.NewID(),
 		WorkItemID:  wi.ID,
 		WorkspaceID: ws.ID,
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "claude",
 		Status:      domain.AgentSessionInterrupted,
 		CreatedAt:   now(),

@@ -6,7 +6,7 @@ import "time"
 type Question struct {
 	ID             string
 	AgentSessionID string
-	Stage          AgentSessionPhase
+	Stage          AgentSessionKind
 	Source         QuestionSource
 	Content        string
 	Context        string

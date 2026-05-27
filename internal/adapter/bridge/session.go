@@ -108,6 +108,13 @@ func (s *BridgeSession) startProcessReaper() <-chan struct{} {
 	return s.waitDone
 }
 
+// Done returns a channel that is closed when the session terminates.
+// The channel is set by startProcessReaper() on first call and must not be nil
+// by the time callers receive the session (StartReaders starts the reaper).
+func (s *BridgeSession) Done() <-chan struct{} {
+	return s.waitDone
+}
+
 // Wait blocks until the session completes (done or error).
 func (s *BridgeSession) Wait(ctx context.Context) error {
 	select {

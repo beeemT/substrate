@@ -208,7 +208,7 @@ func (p *ReviewPipeline) startReviewAgent(
 		ID:             reviewSessionID,
 		WorkItemID:     agentSession.WorkItemID,
 		WorkspaceID:    agentSession.WorkspaceID,
-		Phase:          domain.AgentSessionPhaseReview,
+		Kind:           domain.AgentSessionKindReview,
 		SubPlanID:      agentSession.SubPlanID,
 		RepositoryName: agentSession.RepositoryName,
 		WorktreePath:   agentSession.WorktreePath,

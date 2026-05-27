@@ -36,8 +36,8 @@ func TestAnswerQuestionCmd_PlanningFallbackPersistsResumesAndPublishesAnswered(t
 	registry := orchestrator.NewSessionRegistry()
 	router := orchestrator.NewAnswerRouter(registry, questionSvc, taskSvc, bus)
 
-	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
-	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+	questionRepo.questions["q-plan"] = domain.Question{ID: "q-plan", AgentSessionID: "plan-session", Stage: domain.AgentSessionKindPlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionWaitingForAnswer}
 
 	msg := views.AnswerQuestionCmd(router, "q-plan", "use full cutover", "human")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Answer submitted" {
@@ -85,8 +85,8 @@ func TestSkipQuestionCmd_PlanningFallbackPersistsAndResumes(t *testing.T) {
 	registry := orchestrator.NewSessionRegistry()
 	router := orchestrator.NewAnswerRouter(registry, questionSvc, taskSvc, bus)
 
-	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.AgentSessionPhasePlanning, Status: domain.QuestionPending}
-	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}
+	questionRepo.questions["q-skip"] = domain.Question{ID: "q-skip", AgentSessionID: "plan-session", Stage: domain.AgentSessionKindPlanning, Status: domain.QuestionPending}
+	taskRepo.tasks["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionWaitingForAnswer}
 
 	msg := views.SkipQuestionCmd(router, "q-skip")()
 	if done, ok := msg.(views.ActionDoneMsg); !ok || done.Message != "Question skipped" {

@@ -270,7 +270,7 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 		ID:              sessionID,
 		WorkItemID:      "wi-1",
 		WorkspaceID:     f.workspaceID,
-		Phase:           domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:       "sub-plan-1",
 		RepositoryName:  "repo-a",
 		WorktreePath:    "/tmp/worktrees/repo-a",
@@ -286,7 +286,7 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -301,7 +301,7 @@ func (f *phase9bFixture) seedInterruptedSessionWithResumeInfo(sessionID string, 
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -800,7 +800,7 @@ func (f *phase9bFixture) seedCompletedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -865,7 +865,7 @@ func (f *phase9bFixture) seedFailedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -1001,6 +1001,11 @@ func (s *immediatelyCompletingSession) Steer(_ context.Context, _ string) error 
 func (s *immediatelyCompletingSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *immediatelyCompletingSession) Compact(_ context.Context) error               { return nil }
 func (s *immediatelyCompletingSession) ResumeInfo() map[string]string                 { return nil }
+func (s *immediatelyCompletingSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 // TestFollowUpSession_SetsOwnerInstance verifies reused follow-up rows are owned
 // by the current process so startup reconciliation does not treat them as orphaned.
@@ -1100,3 +1105,8 @@ func (s *waitBlockedByTerminalEventSession) Steer(_ context.Context, _ string) e
 func (s *waitBlockedByTerminalEventSession) SendAnswer(_ context.Context, _ string) error { return nil }
 func (s *waitBlockedByTerminalEventSession) Compact(_ context.Context) error              { return nil }
 func (s *waitBlockedByTerminalEventSession) ResumeInfo() map[string]string                { return nil }
+func (s *waitBlockedByTerminalEventSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}

@@ -43,7 +43,8 @@ type Foreman struct {
 
 	mu            sync.Mutex
 	sessionMu     sync.Mutex           // serializes SendMessage+waitForAnswer; prevents concurrent Events() readers
-	session       adapter.AgentSession // Current persistent foreman session
+	session       adapter.AgentSession // Current harness session
+	sessionID     string               // Persisted agent session row ID (stable across restarts)
 	workItemID    string
 	planID        string
 	questionCh    chan pendingQuestion
@@ -89,6 +90,10 @@ func NewForeman(
 // Start begins the foreman session for a plan. If followUpContext is non-empty,
 // it is included in the initial user prompt so the foreman is aware of follow-up
 // feedback from the operator.
+//
+// Start persists an AgentSessionKindForeman row if one does not already exist for
+// this work item. Follow-up and restart reuse the same row so the sidebar always
+// shows a single continuous Foreman entry.
 func (f *Foreman) Start(ctx context.Context, planID string, followUpContext string) error {
 	f.mu.Lock()
 
@@ -114,6 +119,25 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 	}
 	f.workItemID = plan.WorkItemID
 
+	// Look up existing foreman session row for this work item.
+	// Reuse the same row across restarts so the sidebar shows one continuous Foreman.
+	sessions, err := f.sessionSvc.ListByWorkItemID(ctx, f.workItemID)
+	if err != nil {
+		f.mu.Unlock()
+		return fmt.Errorf("list sessions for foreman row lookup: %w", err)
+	}
+	var foremanSessionID string
+	for _, s := range sessions {
+		if s.Kind == domain.AgentSessionKindForeman {
+			foremanSessionID = s.ID
+			break
+		}
+	}
+	if foremanSessionID == "" {
+		// No existing foreman row: allocate a new ID. The harness will receive this ID.
+		foremanSessionID = domain.NewID()
+	}
+
 	// Build system prompt with plan and FAQ
 	systemPrompt := f.buildSystemPrompt(ctx, plan)
 
@@ -122,9 +146,9 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 		userPrompt += "\n\nThe operator has requested a follow-up with this context:\n" + followUpContext
 	}
 
-	// Start foreman session
+	// Start harness with the persisted session ID (reused or newly allocated above).
 	opts := adapter.SessionOpts{
-		SessionID:    domain.NewID(),
+		SessionID:    foremanSessionID,
 		Mode:         adapter.SessionModeForeman,
 		WorkspaceID:  "", // Foreman doesn't need workspace
 		SystemPrompt: systemPrompt,
@@ -138,21 +162,108 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 	}
 
 	f.session = session
+	f.sessionID = foremanSessionID
+
+	// Persist the foreman agent session row if it doesn't already exist.
+	// WorkspaceID requires loading the work item.
+	workItem, err := f.sessionSvc.Get(ctx, f.workItemID)
+	if err != nil {
+		slog.Warn("failed to load work item for foreman session WorkspaceID", "error", err, "work_item_id", f.workItemID)
+	}
+	workspaceID := ""
+	if workItem.ID != "" {
+		workspaceID = workItem.WorkspaceID
+	}
+
+	// Determine whether the row already exists by checking the sessions list.
+	rowExists := false
+	for _, s := range sessions {
+		if s.ID == foremanSessionID {
+			rowExists = true
+			break
+		}
+	}
+
+	if !rowExists {
+		// No existing foreman row — create one in pending status.
+		now := time.Now()
+		foremanSession := domain.AgentSession{
+			ID:          foremanSessionID,
+			WorkItemID:  f.workItemID,
+			WorkspaceID: workspaceID,
+			Kind:        domain.AgentSessionKindForeman,
+			PlanID:      planID,
+			HarnessName: f.harness.Name(),
+			Status:      domain.AgentSessionPending,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := f.sessionSvc.Create(ctx, foremanSession); err != nil {
+			f.mu.Unlock()
+			return fmt.Errorf("create foreman session row: %w", err)
+		}
+	}
+
+	// Transition the row to running. If the row was already running (restart case),
+	// this returns an error which is acceptable — the harness session is live.
+	if err := f.sessionSvc.Start(ctx, foremanSessionID); err != nil {
+		slog.Warn("foreman session row transition to running", "error", err, "session_id", foremanSessionID)
+	}
 
 	// Start the question processing loop.
 	// Defer unlock until after goroutine start to prevent the data race where
 	// run() reads f.session before acquiring the lock while Stop() writes it.
 	go f.run(ctx)
+	// Watch for harness exit and transition the persisted row to failed if the process
+	// dies unexpectedly. This prevents the row from being stuck in 'running' state.
+	go f.watchHarnessExit(ctx)
 	f.mu.Unlock()
 
 	// Publish EventForemanStarted (after unlock; event publishing is thread-safe)
 	f.publishEvent(ctx, domain.EventForemanStarted, domain.ForemanEventPayload{
-		WorkItemID: plan.WorkItemID,
+		WorkItemID: f.workItemID,
 		PlanID:     planID,
-		SessionID:  session.ID(),
+		SessionID:  f.sessionID,
 	})
 
 	return nil
+}
+
+// watchHarnessExit monitors the harness session and transitions the persisted row
+// to failed if the process exits unexpectedly (not via Stop()).
+func (f *Foreman) watchHarnessExit(ctx context.Context) {
+	// Wait for the harness session to exit.
+	// Guard against nil session (already stopped).
+	f.mu.Lock()
+	if f.session == nil {
+		f.mu.Unlock()
+		return
+	}
+	sessionID := f.sessionID
+	f.mu.Unlock()
+
+	<-f.session.Done()
+
+	// The harness exited. If sessionID is still non-empty, Stop() has not yet run
+	// (or is running concurrently). Stop() transitions the row itself; if it clears
+	// sessionID, we skip the failed transition.
+	f.mu.Lock()
+	// Re-check: if Stop() already handled the transition, sessionID may be stale or
+	// the session field may have been cleared. We rely on f.session being non-nil
+	// to indicate this watcher won the race.
+	if f.session == nil {
+		// Stop() ran after our initial nil check but before Done() fired.
+		// It already transitioned the row; nothing to do.
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
+
+	// Harness exited unexpectedly; transition the persisted row to failed.
+	if err := f.sessionSvc.Fail(context.WithoutCancel(ctx), sessionID, nil); err != nil {
+		slog.Warn("failed to transition foreman session to failed after harness exit",
+			"error", err, "session_id", sessionID)
+	}
 }
 
 // Ask sends a question to the foreman and returns a channel for the answer.
@@ -391,9 +502,18 @@ func (f *Foreman) restartSession(ctx context.Context) error {
 	// Build system prompt with updated plan
 	systemPrompt := f.buildSystemPrompt(ctx, plan)
 
-	// Start new session
+	// Restart with the same persisted session ID so the sidebar and log path are unchanged.
+	// f.sessionID is set by Start() and is stable across restarts.
+	sessionID := f.sessionID
+	if sessionID == "" {
+		// sessionID should always be set if the foreman was started via Start().
+		// If somehow restartSession is called without a prior Start(), fall back to new ID.
+		sessionID = domain.NewID()
+	}
+
+	// Start new session with the same session ID
 	opts := adapter.SessionOpts{
-		SessionID:    domain.NewID(),
+		SessionID:    sessionID,
 		Mode:         adapter.SessionModeForeman,
 		WorkspaceID:  "",
 		SystemPrompt: systemPrompt,
@@ -467,6 +587,10 @@ func (f *Foreman) buildSystemPrompt(ctx context.Context, plan domain.Plan) strin
 func (f *Foreman) SessionID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Prefer the stored session ID (set by Start(), stable across restarts).
+	if f.sessionID != "" {
+		return f.sessionID
+	}
 	if f.session == nil {
 		return ""
 	}
@@ -581,6 +705,7 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	f.lastSessionID = lastSessionID
 	f.lastPlanID = lastPlanID
 	f.session = nil
+	f.sessionID = "" // Prevent watchHarnessExit from also transitioning
 	f.mu.Unlock()
 
 	close(stopCh)
@@ -588,6 +713,19 @@ func (f *Foreman) Stop(ctx context.Context) error {
 
 	if err := session.Abort(ctx); err != nil {
 		slog.Warn("abort foreman session on stop", "error", err, "session_id", lastSessionID)
+	}
+
+	// Transition the persisted row to the appropriate terminal state.
+	// Interrupted if context was cancelled (e.g., app shutdown, pipeline interrupt);
+	// completed otherwise (normal stop after implementation finishes).
+	if ctx.Err() != nil {
+		if err := f.sessionSvc.Interrupt(ctx, lastSessionID); err != nil {
+			slog.Warn("failed to transition foreman session to interrupted", "error", err, "session_id", lastSessionID)
+		}
+	} else {
+		if err := f.sessionSvc.Complete(ctx, lastSessionID); err != nil {
+			slog.Warn("failed to transition foreman session to completed", "error", err, "session_id", lastSessionID)
+		}
 	}
 
 	// Drain and close any open entries in escalatedChs.

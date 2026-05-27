@@ -37,6 +37,11 @@ func (s *doneSession) SendAnswer(_ context.Context, _ string) error  { return ni
 func (s *doneSession) Abort(_ context.Context) error                 { return nil }
 func (s *doneSession) Compact(_ context.Context) error               { return nil }
 func (s *doneSession) ResumeInfo() map[string]string                 { return nil }
+func (s *doneSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 type doneHarness struct{}
 

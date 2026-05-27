@@ -31,6 +31,11 @@ func (s *simpleMockSession) SendAnswer(_ context.Context, _ string) error  { ret
 func (s *simpleMockSession) Abort(_ context.Context) error                 { return nil }
 func (s *simpleMockSession) Compact(_ context.Context) error               { return nil }
 func (s *simpleMockSession) ResumeInfo() map[string]string                 { return nil }
+func (s *simpleMockSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 // trackingHarness tracks StartSession calls for assertions.
 type trackingHarness struct {

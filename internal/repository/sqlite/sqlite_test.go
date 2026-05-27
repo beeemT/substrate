@@ -160,7 +160,7 @@ func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.
 		WorkItemID:     workItemID,
 		SubPlanID:      spID,
 		WorkspaceID:    wsID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		RepositoryName: "test-repo",
 		HarnessName:    "claude",
 		WorktreePath:   "/tmp/worktree",
@@ -881,7 +881,7 @@ func TestSessionSearchHistory(t *testing.T) {
 		ID:          domain.NewID(),
 		WorkItemID:  planningOnlyItem.ID,
 		WorkspaceID: remoteWS.ID,
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   planningUpdatedAt,
@@ -1364,3 +1364,4 @@ func TestEmptyLists(t *testing.T) {
 		t.Error("instances should be non-nil empty slice")
 	}
 }
+

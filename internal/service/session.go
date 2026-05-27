@@ -49,7 +49,7 @@ func (s *AgentSessionService) Resume(ctx context.Context, interrupted domain.Age
 		ID:              domain.NewID(),
 		WorkItemID:      interrupted.WorkItemID,
 		WorkspaceID:     interrupted.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseImplementation,
+		Kind:            domain.AgentSessionKindImplementation,
 		SubPlanID:       interrupted.SubPlanID,
 		RepositoryName:  interrupted.RepositoryName,
 		WorktreePath:    interrupted.WorktreePath,
@@ -228,25 +228,27 @@ func (s *AgentSessionService) Create(ctx context.Context, agentSession domain.Ag
 	if agentSession.HarnessName == "" {
 		return newInvalidInputError("harness name is required", "harness_name")
 	}
-	if agentSession.Phase == "" {
-		return newInvalidInputError("phase is required", "phase")
+	if agentSession.Kind == "" {
+		return newInvalidInputError("kind is required", "kind")
 	}
-	switch agentSession.Phase {
-	case domain.AgentSessionPhasePlanning:
+	switch agentSession.Kind {
+	case domain.AgentSessionKindPlanning:
 		// Planning sessions run at the workspace/work-item level and may omit repo-specific fields.
-	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
 		if agentSession.SubPlanID == "" {
-			return newInvalidInputError("sub-plan is required for this phase", "sub_plan_id")
+			return newInvalidInputError("sub-plan is required for this kind", "sub_plan_id")
 		}
-	case domain.AgentSessionPhaseManual:
+	case domain.AgentSessionKindManual:
 		if agentSession.RepositoryName == "" {
 			return newInvalidInputError("repository is required for manual session", "repository_name")
 		}
 		if agentSession.WorktreePath == "" {
 			return newInvalidInputError("worktree path is required for manual session", "worktree_path")
 		}
+	case domain.AgentSessionKindForeman:
+		// Foreman sessions have no additional requirements.
 	default:
-		return newInvalidInputError("unknown session phase", "phase")
+		return newInvalidInputError("unknown session kind", "kind")
 	}
 	if agentSession.Status == "" {
 		agentSession.Status = domain.AgentSessionPending
@@ -548,7 +550,7 @@ func (s *AgentSessionService) FollowUpFailed(ctx context.Context, failed domain.
 		ID:              domain.NewID(),
 		WorkItemID:      failed.WorkItemID,
 		WorkspaceID:     failed.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseImplementation,
+		Kind:            domain.AgentSessionKindImplementation,
 		SubPlanID:       failed.SubPlanID,
 		RepositoryName:  failed.RepositoryName,
 		WorktreePath:    failed.WorktreePath,

@@ -81,6 +81,7 @@ func newSession(id string, mode adapter.SessionMode, root string, cmd *exec.Cmd,
 }
 
 func (s *Session) ID() string                        { return s.id }
+func (s *Session) Done() <-chan struct{}             { return s.done }
 func (s *Session) Events() <-chan adapter.AgentEvent { return s.events }
 
 func (s *Session) Wait(ctx context.Context) error {

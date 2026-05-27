@@ -32,10 +32,12 @@ func (s *claudeAgentSession) ResumeInfo() map[string]string {
 	}
 }
 func (s *claudeAgentSession) Wait(ctx context.Context) error    { return s.bs.Wait(ctx) }
+func (s *claudeAgentSession) Done() <-chan struct{}             { return s.bs.Done() }
 func (s *claudeAgentSession) Events() <-chan adapter.AgentEvent { return s.bs.EventsChan() }
 func (s *claudeAgentSession) SendMessage(ctx context.Context, msg string) error {
 	return s.bs.SendMessage(ctx, msg)
 }
+
 func (s *claudeAgentSession) Steer(ctx context.Context, msg string) error {
 	return s.bs.Steer(ctx, msg)
 }

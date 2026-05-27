@@ -464,7 +464,7 @@ func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.Ag
 
 			if evt.Type == "question" {
 				if r.questionRouter != nil {
-					if err := r.questionRouter.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
+					if err := r.questionRouter.Route(ctx, domain.AgentSessionKindImplementation, evt, sessionID); err != nil {
 						slog.Error("failed to route follow-up question", "error", err, "agent_session_id", sessionID)
 					}
 				}

@@ -495,7 +495,7 @@ func (s *ImplementationService) executeSubPlan(
 	// Crash recovery: if the most recent session for this sub-plan is a review session,
 	// the review agent crashed — skip re-implementation and retry the review directly.
 	if s.reviewPipeline != nil {
-		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Phase == domain.AgentSessionPhaseReview {
+		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Kind == domain.AgentSessionKindReview {
 			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",
@@ -665,7 +665,7 @@ func (s *ImplementationService) runImplementation(
 		ID:             sessionID,
 		WorkItemID:     workItem.ID,
 		WorkspaceID:    workspace.ID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		WorktreePath:   worktreePath,
@@ -1173,7 +1173,7 @@ func (s *ImplementationService) forwardEvents(ctx context.Context, events <-chan
 			}
 
 			if evt.Type == "question" {
-				if err := router.Route(ctx, domain.AgentSessionPhaseImplementation, evt, sessionID); err != nil {
+				if err := router.Route(ctx, domain.AgentSessionKindImplementation, evt, sessionID); err != nil {
 					slog.Error("failed to route implementation question", "error", err, "agent_session_id", sessionID)
 				}
 				continue
@@ -1262,19 +1262,19 @@ func (s *ImplementationService) publishEvent(ctx context.Context, eventType doma
 }
 
 type sessionEventPayload struct {
-	SessionID    string                   `json:"agent_session_id"`
-	WorkItemID   string                   `json:"work_item_id"`
-	Phase        domain.AgentSessionPhase `json:"phase"`
-	SubPlanID    string                   `json:"sub_plan_id"`
-	Repository   string                   `json:"repository"`
-	WorktreePath string                   `json:"worktree_path"`
+	SessionID    string                  `json:"agent_session_id"`
+	WorkItemID   string                  `json:"work_item_id"`
+	Phase        domain.AgentSessionKind `json:"phase"`
+	SubPlanID    string                  `json:"sub_plan_id"`
+	Repository   string                  `json:"repository"`
+	WorktreePath string                  `json:"worktree_path"`
 }
 
 func newSessionEventPayload(agentSession *domain.AgentSession) sessionEventPayload {
 	return sessionEventPayload{
 		SessionID:    agentSession.ID,
 		WorkItemID:   agentSession.WorkItemID,
-		Phase:        agentSession.Phase,
+		Phase:        agentSession.Kind,
 		SubPlanID:    agentSession.SubPlanID,
 		Repository:   agentSession.RepositoryName,
 		WorktreePath: agentSession.WorktreePath,
@@ -1413,7 +1413,7 @@ func (s *ImplementationService) finalizeCompletedWorkItem(ctx context.Context, w
 func completedSessionResultsForSubPlans(subPlans []domain.TaskPlan, sessions []domain.AgentSession, branch string) ([]SessionResult, error) {
 	latestBySubPlan := make(map[string]domain.AgentSession, len(subPlans))
 	for _, agentSession := range sessions {
-		if agentSession.Phase != domain.AgentSessionPhaseImplementation || agentSession.Status != domain.AgentSessionCompleted || agentSession.SubPlanID == "" {
+		if agentSession.Kind != domain.AgentSessionKindImplementation || agentSession.Status != domain.AgentSessionCompleted || agentSession.SubPlanID == "" {
 			continue
 		}
 		previous, ok := latestBySubPlan[agentSession.SubPlanID]
@@ -1796,7 +1796,7 @@ func (s *ImplementationService) latestCompletedImplSession(ctx context.Context, 
 	var latest *domain.AgentSession
 	for i := range sessions {
 		t := sessions[i]
-		if t.Phase == domain.AgentSessionPhaseImplementation && t.Status == domain.AgentSessionCompleted {
+		if t.Kind == domain.AgentSessionKindImplementation && t.Status == domain.AgentSessionCompleted {
 			if latest == nil || t.CreatedAt.After(latest.CreatedAt) {
 				latest = &t
 			}

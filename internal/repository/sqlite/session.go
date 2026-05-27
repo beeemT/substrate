@@ -17,7 +17,7 @@ type sessionRow struct {
 	SubPlanID       *string `db:"sub_plan_id"`
 	PlanID          *string `db:"plan_id"`
 	WorkspaceID     string  `db:"workspace_id"`
-	Phase           string  `db:"phase"`
+	Kind            string  `db:"kind"`
 	RepositoryName  *string `db:"repository_name"`
 	HarnessName     string  `db:"harness_name"`
 	WorktreePath    *string `db:"worktree_path"`
@@ -116,7 +116,7 @@ func (r *sessionRow) toDomain() (domain.AgentSession, error) {
 		SubPlanID:       derefStr(r.SubPlanID),
 		PlanID:          derefStr(r.PlanID),
 		WorkspaceID:     r.WorkspaceID,
-		Phase:           domain.AgentSessionPhase(r.Phase),
+		Kind:            domain.AgentSessionKind(r.Kind),
 		RepositoryName:  derefStr(r.RepositoryName),
 		HarnessName:     r.HarnessName,
 		WorktreePath:    derefStr(r.WorktreePath),
@@ -140,7 +140,7 @@ func rowFromAgentSession(s domain.AgentSession) sessionRow {
 		SubPlanID:       strPtr(s.SubPlanID),
 		PlanID:          strPtr(s.PlanID),
 		WorkspaceID:     s.WorkspaceID,
-		Phase:           string(s.Phase),
+		Kind:            string(s.Kind),
 		RepositoryName:  strPtr(s.RepositoryName),
 		HarnessName:     s.HarnessName,
 		WorktreePath:    strPtr(s.WorktreePath),
@@ -316,11 +316,11 @@ func (r AgentSessionRepo) Create(ctx context.Context, s domain.AgentSession) err
 	row := rowFromAgentSession(s)
 	_, err := r.remote.NamedExecContext(ctx,
 		`INSERT INTO agent_sessions
-		 (id, work_item_id, sub_plan_id, plan_id, workspace_id, phase, repository_name, harness_name, worktree_path,
+		 (id, work_item_id, sub_plan_id, plan_id, workspace_id, kind, repository_name, harness_name, worktree_path,
 		  pid, status, exit_code, started_at, shutdown_at, completed_at, created_at,
 		  owner_instance_id, updated_at, resume_info)
 		 VALUES
-		 (:id, :work_item_id, :sub_plan_id, :plan_id, :workspace_id, :phase, :repository_name, :harness_name, :worktree_path,
+		 (:id, :work_item_id, :sub_plan_id, :plan_id, :workspace_id, :kind, :repository_name, :harness_name, :worktree_path,
 		  :pid, :status, :exit_code, :started_at, :shutdown_at, :completed_at, :created_at,
 		  :owner_instance_id, :updated_at, :resume_info)`, row)
 	if err != nil {
@@ -335,7 +335,7 @@ func (r AgentSessionRepo) Update(ctx context.Context, s domain.AgentSession) err
 	res, err := r.remote.NamedExecContext(ctx,
 		`UPDATE agent_sessions SET work_item_id = :work_item_id, sub_plan_id = :sub_plan_id, plan_id = :plan_id,
 		 workspace_id = :workspace_id,
-		 phase = :phase, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
+		 kind = :kind, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
 		 pid = :pid, status = :status, exit_code = :exit_code, started_at = :started_at,
 		 shutdown_at = :shutdown_at, completed_at = :completed_at, owner_instance_id = :owner_instance_id,
 		 updated_at = :updated_at, resume_info = :resume_info WHERE id = :id`, row)

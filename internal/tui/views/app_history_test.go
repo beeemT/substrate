@@ -355,7 +355,7 @@ func TestApp_SessionSearchDeleteRemovesSessionAndLogs(t *testing.T) {
 	now := time.Now()
 	repo := &sessionSearchDeleteRepo{
 		sessions: map[string]domain.AgentSession{
-			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 		entry: domain.SessionHistoryEntry{
 			SessionID:          "sess-1",
@@ -503,7 +503,7 @@ func TestDeleteSessionCmd_ReturnsSuccessWithCleanupWarning(t *testing.T) {
 	now := time.Now()
 	taskRepo := &sessionSearchDeleteRepo{
 		sessions: map[string]domain.AgentSession{
-			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", WorktreePath: "/tmp/worktrees/repo-a/sub-branch", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+			"sess-1": {ID: "sess-1", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", WorktreePath: "/tmp/worktrees/repo-a/sub-branch", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
 		},
 	}
 	workItemRepo := &duplicateCreateWorkItemRepo{items: []domain.Session{{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "SUB-1", Title: "Work item", State: domain.SessionImplementing}}}
@@ -1231,7 +1231,7 @@ func newSidebarDrilldownTestApp() *App {
 		ID:             "sess-1",
 		WorkItemID:     workItem.ID,
 		WorkspaceID:    "ws-local",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: subPlan.RepositoryName,
 		HarnessName:    "omp",
@@ -1293,7 +1293,7 @@ func newPlanningDrilldownTestApp() *App {
 		ID:          "plan-sess-1",
 		WorkItemID:  workItem.ID,
 		WorkspaceID: workItem.WorkspaceID,
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		UpdatedAt:   now,
@@ -1618,7 +1618,7 @@ func TestReviewingContentUsesImplementationSessionReviewData(t *testing.T) {
 		ID:             "review-sess-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-local",
-		Phase:          domain.AgentSessionPhaseReview,
+		Kind: domain.AgentSessionKindReview,
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
 		HarnessName:    "omp-review",
@@ -1671,7 +1671,7 @@ func TestHistoricalPlanningSessionRemainsSelectable(t *testing.T) {
 		ID:          "plan-hist-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-local",
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionCompleted,
 		UpdatedAt:   time.Now().Add(time.Minute),
@@ -2200,7 +2200,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	planEarly := domain.AgentSession{
 		ID:         "plan-1",
 		WorkItemID: "wi-group",
-		Phase:      domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		Status:     domain.AgentSessionCompleted,
 		CreatedAt:  now.Add(-3 * time.Hour),
 		UpdatedAt:  now.Add(-2 * time.Hour),
@@ -2208,7 +2208,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	planLate := domain.AgentSession{
 		ID:         "plan-2",
 		WorkItemID: "wi-group",
-		Phase:      domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		Status:     domain.AgentSessionCompleted,
 		CreatedAt:  now.Add(-1 * time.Hour),
 		UpdatedAt:  now.Add(-30 * time.Minute),
@@ -2216,7 +2216,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	implA := domain.AgentSession{
 		ID:             "impl-a",
 		WorkItemID:     "wi-group",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 		RepositoryName: "repo-alpha",
 		CreatedAt:      now.Add(-90 * time.Minute),
@@ -2225,7 +2225,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	implB := domain.AgentSession{
 		ID:             "impl-b",
 		WorkItemID:     "wi-group",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 		RepositoryName: "repo-beta",
 		CreatedAt:      now.Add(-60 * time.Minute),
@@ -2234,7 +2234,7 @@ func TestTaskSidebarGroupsByPhaseAndRepo(t *testing.T) {
 	implA2 := domain.AgentSession{
 		ID:             "impl-a2",
 		WorkItemID:     "wi-group",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionRunning,
 		RepositoryName: "repo-alpha",
 		CreatedAt:      now.Add(-10 * time.Minute),

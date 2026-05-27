@@ -1068,7 +1068,7 @@ func (a App) defaultTaskSessionID(workItemID string) string {
 
 func (a App) latestPlanningSession(workItemID string) *domain.AgentSession {
 	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
-		if agentSession.Phase == domain.AgentSessionPhasePlanning {
+		if agentSession.Kind == domain.AgentSessionKindPlanning {
 			s := agentSession
 			return &s
 		}
@@ -1078,7 +1078,7 @@ func (a App) latestPlanningSession(workItemID string) *domain.AgentSession {
 
 func (a App) latestImplementationSession(workItemID, subPlanID string) *domain.AgentSession {
 	for _, agentSession := range a.sessionsForWorkItem(workItemID) {
-		if agentSession.Phase == domain.AgentSessionPhaseImplementation && agentSession.SubPlanID == subPlanID {
+		if agentSession.Kind == domain.AgentSessionKindImplementation && agentSession.SubPlanID == subPlanID {
 			s := agentSession
 			return &s
 		}
@@ -1086,13 +1086,13 @@ func (a App) latestImplementationSession(workItemID, subPlanID string) *domain.A
 	return nil
 }
 
-func taskSessionPhaseRank(phase domain.AgentSessionPhase) int {
-	switch phase {
-	case domain.AgentSessionPhasePlanning:
+func taskSessionPhaseRank(kind domain.AgentSessionKind) int {
+	switch kind {
+	case domain.AgentSessionKindPlanning:
 		return 0
-	case domain.AgentSessionPhaseImplementation:
+	case domain.AgentSessionKindImplementation:
 		return 1
-	case domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindReview:
 		return 2
 	default:
 		return 3
@@ -1100,10 +1100,10 @@ func taskSessionPhaseRank(phase domain.AgentSessionPhase) int {
 }
 
 func taskSessionModeLabel(agentSession *domain.AgentSession) string {
-	switch agentSession.Phase {
-	case domain.AgentSessionPhasePlanning:
+	switch agentSession.Kind {
+	case domain.AgentSessionKindPlanning:
 		return "Planning"
-	case domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindReview:
 		return "Review"
 	default:
 		return "Task"
@@ -1111,11 +1111,11 @@ func taskSessionModeLabel(agentSession *domain.AgentSession) string {
 }
 
 func taskSidebarSessionTitle(agentSession *domain.AgentSession) string {
-	switch agentSession.Phase {
-	case domain.AgentSessionPhasePlanning:
+	switch agentSession.Kind {
+	case domain.AgentSessionKindPlanning:
 		// Don't prefix with "Planning" - we're already in the Planning group
 		return "Session " + shortSessionID(agentSession.ID)
-	case domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindReview:
 		return "Review " + shortSessionID(agentSession.ID)
 	default:
 		return "Implementation " + shortSessionID(agentSession.ID)
@@ -1123,10 +1123,10 @@ func taskSidebarSessionTitle(agentSession *domain.AgentSession) string {
 }
 
 func taskSessionDisplayName(agentSession *domain.AgentSession) string {
-	switch agentSession.Phase {
-	case domain.AgentSessionPhasePlanning:
+	switch agentSession.Kind {
+	case domain.AgentSessionKindPlanning:
 		return "Planning"
-	case domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindReview:
 		return firstNonEmptyString(agentSession.RepositoryName, "Review")
 	default:
 		return firstNonEmptyString(agentSession.RepositoryName, "Task")
@@ -1860,7 +1860,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rebuildSidebar()
 
 		stageLabel := "Question"
-		if msg.Question.Stage == domain.AgentSessionPhasePlanning {
+		if msg.Question.Stage == domain.AgentSessionKindPlanning {
 			stageLabel = "Planning question"
 		}
 		a.toasts.AddToast(
@@ -3179,16 +3179,14 @@ func (a *App) updateContentFromState() tea.Cmd {
 				return nil
 			}
 			if taskSessionID == taskSidebarForemanID {
-				if state, ok := a.foremanSessions[a.currentWorkItemID]; ok {
-					// Prefer the live session ID; fall back to the last stopped session.
-					if state.sessionID != "" {
-						return a.showForemanContent(wi, state.sessionID, true)
-					}
-					if state.lastSessionID != "" {
-						return a.showForemanContent(wi, state.lastSessionID, false)
+				// Look up the foreman agent session from the sessions list.
+				// The foreman session ID in the sidebar matches the actual session ID.
+				for _, s := range a.sessionsForWorkItem(a.currentWorkItemID) {
+					if s.ID == taskSessionID && s.Kind == domain.AgentSessionKindForeman {
+						return a.showForemanContent(wi, &s)
 					}
 				}
-				// No foreman session ever ran; fall to overview.
+				// Foreman session not found (may have been deleted); fall to overview.
 				a.setSelectedTaskSessionID("")
 			}
 			if session := a.workItemTaskSession(a.currentWorkItemID, taskSessionID); session != nil {
@@ -3322,7 +3320,7 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 	}
 	metaParts = append(metaParts, taskSessionDisplayName(agentSession))
 	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
-	if agentSession.Phase == domain.AgentSessionPhasePlanning {
+	if agentSession.Kind == domain.AgentSessionKindPlanning {
 		a.content.SetMode(ContentModeAgentSession)
 	} else {
 		a.content.SetMode(ContentModeSessionInteraction)
@@ -3360,18 +3358,15 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 }
 
 // showForemanContent sets up the content panel to display the Foreman's session log.
-// When running is true, the spinner is active and meta shows "Running"; when false
-// (stopped foreman), the log is displayed as completed.
-func (a *App) showForemanContent(wi *domain.Session, sessionID string, running bool) tea.Cmd {
+// Status, spinner, and completed state are derived from the persisted AgentSession.
+func (a *App) showForemanContent(wi *domain.Session, foremanSession *domain.AgentSession) tea.Cmd {
 	var titlePrefix string
 	if wi != nil {
 		titlePrefix = firstNonEmptyString(wi.ExternalID, wi.ID) + " · "
 	}
-	title := titlePrefix + "Foreman session"
-	statusLabel := "Running"
-	if !running {
-		statusLabel = "Stopped"
-	}
+	title := titlePrefix + "Foreman session " + shortSessionID(foremanSession.ID)
+	running := foremanSession.Status == domain.AgentSessionRunning
+	statusLabel := sessionStatusLabel(foremanSession.Status)
 	meta := strings.Join([]string{statusLabel, "Foreman"}, " · ")
 	a.content.sessionLog.SetNotice(nil)
 	a.content.SetMode(ContentModeSessionInteraction)
@@ -3379,21 +3374,23 @@ func (a *App) showForemanContent(wi *domain.Session, sessionID string, running b
 	a.content.sessionLog.SetModeLabel("Foreman")
 	a.content.sessionLog.SetMeta(meta)
 	a.content.sessionLog.ClearFailedSession()
-	if !running {
-		a.content.sessionLog.SetCompletedSession(sessionID)
+	if foremanSession.Status == domain.AgentSessionCompleted {
+		a.content.sessionLog.SetCompletedSession(foremanSession.ID)
+	} else if foremanSession.Status == domain.AgentSessionFailed {
+		a.content.sessionLog.SetFailedSession(foremanSession.ID)
 	} else {
 		a.content.sessionLog.ClearCompletedSession()
 	}
-	logPath := filepath.Join(a.sessionsDir, sessionID+".log")
+	logPath := filepath.Join(a.sessionsDir, foremanSession.ID+".log")
 	resumeOffset := int64(0)
-	if a.content.sessionLog.live && a.content.sessionLog.sessionID == sessionID && a.content.sessionLog.logPath == logPath {
+	if a.content.sessionLog.live && a.content.sessionLog.sessionID == foremanSession.ID && a.content.sessionLog.logPath == logPath {
 		resumeOffset = a.content.sessionLog.offset
 	}
-	a.content.sessionLog.SetLogPath(sessionID, logPath)
+	a.content.sessionLog.SetLogPath(foremanSession.ID, logPath)
 	spinnerCmd := a.content.sessionLog.SetAgentActive(running)
-	if !a.tailingSessionIDs[sessionID] {
-		a.tailingSessionIDs[sessionID] = true
-		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, sessionID, resumeOffset))
+	if !a.tailingSessionIDs[foremanSession.ID] {
+		a.tailingSessionIDs[foremanSession.ID] = true
+		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, foremanSession.ID, resumeOffset))
 	}
 	return spinnerCmd
 }
@@ -3811,12 +3808,12 @@ func (a App) sessionsForWorkItem(workItemID string) []domain.AgentSession {
 		}
 	}
 	sort.SliceStable(sessions, func(i, j int) bool {
-		rankI := taskSessionPhaseRank(sessions[i].Phase)
-		rankJ := taskSessionPhaseRank(sessions[j].Phase)
+		rankI := taskSessionPhaseRank(sessions[i].Kind)
+		rankJ := taskSessionPhaseRank(sessions[j].Kind)
 		if rankI != rankJ {
 			return rankI < rankJ
 		}
-		if rankI != taskSessionPhaseRank(domain.AgentSessionPhasePlanning) {
+		if rankI != taskSessionPhaseRank(domain.AgentSessionKindPlanning) {
 			orderI, okI := subPlanOrder[sessions[i].SubPlanID]
 			orderJ, okJ := subPlanOrder[sessions[j].SubPlanID]
 			if okI && okJ && orderI != orderJ {
@@ -3877,7 +3874,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	// Planning block: all planning sessions in temporal order (oldest first).
 	var planningSessions []domain.AgentSession
 	for _, s := range sessions {
-		if s.Phase == domain.AgentSessionPhasePlanning {
+		if s.Kind == domain.AgentSessionKindPlanning {
 			planningSessions = append(planningSessions, s)
 		}
 	}
@@ -3905,32 +3902,31 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		}
 	}
 
-	// Foreman block.
+	// Foreman block: build from persisted AgentSessionKindForeman rows.
+	var foremanSessions []domain.AgentSession
+	for _, s := range sessions {
+		if s.Kind == domain.AgentSessionKindForeman {
+			foremanSessions = append(foremanSessions, s)
+		}
+	}
+	// There should be at most one foreman session per work item.
+	// Use the most recently updated one if multiple exist.
+	if len(foremanSessions) > 1 {
+		sort.SliceStable(foremanSessions, func(i, j int) bool {
+			return foremanSessions[i].UpdatedAt.After(foremanSessions[j].UpdatedAt)
+		})
+	}
 	var foremanEntry *SidebarEntry
-	if state, ok := a.foremanSessions[workItemID]; ok {
-		plan := a.plans[workItemID]
-		runningForPlan := state.running && plan != nil && plan.ID == state.lastPlanID
-		stoppedForPlan := !state.running && plan != nil && state.lastPlanID == plan.ID && state.lastSessionID != ""
-		if runningForPlan {
-			foremanEntry = &SidebarEntry{
-				Kind:           SidebarEntryTaskSession,
-				WorkItemID:     workItemID,
-				SessionID:      taskSidebarForemanID,
-				Title:          "Foreman session",
-				RepositoryName: "Foreman",
-				SessionStatus:  domain.AgentSessionRunning,
-				LastActivity:   wi.UpdatedAt,
-			}
-		} else if stoppedForPlan {
-			foremanEntry = &SidebarEntry{
-				Kind:           SidebarEntryTaskSession,
-				WorkItemID:     workItemID,
-				SessionID:      taskSidebarForemanID,
-				Title:          "Foreman session",
-				RepositoryName: "Foreman",
-				SessionStatus:  domain.AgentSessionCompleted,
-				LastActivity:   wi.UpdatedAt,
-			}
+	if len(foremanSessions) > 0 {
+		foreman := foremanSessions[0]
+		foremanEntry = &SidebarEntry{
+			Kind:           SidebarEntryTaskSession,
+			WorkItemID:     workItemID,
+			SessionID:      foreman.ID,
+			Title:          "Foreman session " + shortSessionID(foreman.ID),
+			RepositoryName: "Foreman",
+			SessionStatus:  foreman.Status,
+			LastActivity:   foreman.UpdatedAt,
 		}
 	}
 	if foremanEntry != nil {
@@ -3945,7 +3941,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 	// Repository blocks: one group per repo, implementation/review sessions in temporal order (oldest first).
 	repoSessions := make(map[string][]domain.AgentSession)
 	for _, s := range sessions {
-		if s.Phase == domain.AgentSessionPhaseImplementation || s.Phase == domain.AgentSessionPhaseReview {
+		if s.Kind == domain.AgentSessionKindImplementation || s.Kind == domain.AgentSessionKindReview {
 			repo := firstNonEmptyString(s.RepositoryName, "Repository")
 			repoSessions[repo] = append(repoSessions[repo], s)
 		}
@@ -3967,7 +3963,7 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		})
 		for _, agentSession := range repoItems {
 			entryRepo := agentSession.RepositoryName
-			if agentSession.Phase == domain.AgentSessionPhaseReview {
+			if agentSession.Kind == domain.AgentSessionKindReview {
 				entryRepo = firstNonEmptyString(entryRepo, "Review")
 			}
 			entries = append(entries, SidebarEntry{
@@ -4262,19 +4258,6 @@ func (a App) activeSessionCount() int {
 		switch agentSession.Status {
 		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
 			count++
-		}
-	}
-	// The foreman is a live subprocess, not a persisted AgentSession, so it must
-	// be counted separately. This ensures the quit-confirmation dialog fires
-	// and the status bar reflects reality when only the foreman is active.
-	seenForemen := make(map[string]bool)
-	for _, agentSession := range a.sessions {
-		if seenForemen[agentSession.WorkItemID] {
-			continue
-		}
-		if state, ok := a.foremanSessions[agentSession.WorkItemID]; ok && state.running {
-			count++
-			seenForemen[agentSession.WorkItemID] = true
 		}
 	}
 	return count

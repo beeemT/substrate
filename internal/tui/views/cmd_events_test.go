@@ -257,6 +257,11 @@ func (s resumeAllAgentSession) SendAnswer(context.Context, string) error {
 func (s resumeAllAgentSession) Abort(context.Context) error   { return nil }
 func (s resumeAllAgentSession) ResumeInfo() map[string]string { return nil }
 func (s resumeAllAgentSession) Compact(context.Context) error { return adapter.ErrCompactNotSupported }
+func (s resumeAllAgentSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 type resumeAllWorkspaceRepo struct{}
 
@@ -313,7 +318,7 @@ func newResumeAllCmdFixture(t *testing.T, sessions []domain.AgentSession) resume
 }
 
 func resumeAllSession(id, subPlanID string, status domain.AgentSessionStatus) domain.AgentSession {
-	return domain.AgentSession{ID: id, WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: subPlanID, RepositoryName: subPlanID + "-repo", WorktreePath: "/tmp/" + subPlanID, Status: status}
+	return domain.AgentSession{ID: id, WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: subPlanID, RepositoryName: subPlanID + "-repo", WorktreePath: "/tmp/" + subPlanID, Status: status}
 }
 
 func TestResumeAllSessionsForWorkItemCmd_ResumesAll(t *testing.T) {
@@ -355,7 +360,7 @@ func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
 }
 
 func TestResumeAllSessionsForWorkItemCmd_PlanningTriggersRestart(t *testing.T) {
-	planning := domain.AgentSession{ID: "sess-plan", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionInterrupted}
+	planning := domain.AgentSession{ID: "sess-plan", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionInterrupted}
 	implementation := resumeAllSession("sess-impl", "sp-1", domain.AgentSessionInterrupted)
 	fix := newResumeAllCmdFixture(t, []domain.AgentSession{planning, implementation})
 	item := fix.workItemRepo.items["wi-1"]

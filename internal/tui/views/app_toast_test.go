@@ -85,7 +85,7 @@ func TestQuestionRaisedMsgShowsInfoToastAcrossSessions(t *testing.T) {
 	app := newToastTestApp(t)
 	app.currentWorkItemID = "wi-current"
 	app.workItems = []domain.Session{{ID: "wi-current", WorkspaceID: "ws-1", State: domain.SessionPlanning}}
-	app.sessions = []domain.AgentSession{{ID: "plan-session", WorkItemID: "wi-question", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, Status: domain.AgentSessionWaitingForAnswer}}
+	app.sessions = []domain.AgentSession{{ID: "plan-session", WorkItemID: "wi-question", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionWaitingForAnswer}}
 
 	longQuestion := "  Should we cut over all services now?\nPlease include the legacy path and deployment order before answering.  "
 	updated := updateToastTestApp(t, app, QuestionRaisedMsg{
@@ -94,7 +94,7 @@ func TestQuestionRaisedMsgShowsInfoToastAcrossSessions(t *testing.T) {
 		Question: domain.Question{
 			ID:      "q-1",
 			Content: longQuestion,
-			Stage:   domain.AgentSessionPhasePlanning,
+			Stage: domain.AgentSessionKindPlanning,
 		},
 	})
 

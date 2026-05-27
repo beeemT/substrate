@@ -2,14 +2,15 @@ package domain
 
 import "time"
 
-// AgentSessionPhase identifies the kind of child agent session being tracked.
-type AgentSessionPhase string
+// AgentSessionKind identifies the kind of child agent session being tracked.
+type AgentSessionKind string
 
 const (
-	AgentSessionPhasePlanning       AgentSessionPhase = "planning"
-	AgentSessionPhaseImplementation AgentSessionPhase = "implementation"
-	AgentSessionPhaseReview         AgentSessionPhase = "review"
-	AgentSessionPhaseManual         AgentSessionPhase = "manual"
+	AgentSessionKindPlanning       AgentSessionKind = "planning"
+	AgentSessionKindImplementation AgentSessionKind = "implementation"
+	AgentSessionKindReview         AgentSessionKind = "review"
+	AgentSessionKindManual         AgentSessionKind = "manual"
+	AgentSessionKindForeman        AgentSessionKind = "foreman"
 )
 
 // AgentSession is a single child agent session for a work item.
@@ -17,7 +18,7 @@ type AgentSession struct {
 	ID              string
 	WorkItemID      string
 	WorkspaceID     string
-	Phase           AgentSessionPhase
+	Kind            AgentSessionKind
 	SubPlanID       string
 	PlanID          string // Plan produced by this planning session (empty for non-planning sessions).
 	RepositoryName  string

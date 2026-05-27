@@ -21,7 +21,7 @@ CREATE TABLE agent_sessions_new (
     work_item_id      TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
     sub_plan_id       TEXT REFERENCES sub_plans(id) ON DELETE SET NULL,
     workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
-    phase             TEXT NOT NULL CHECK (phase IN ('planning','implementation','review')),
+    kind              TEXT NOT NULL CHECK (kind IN ('planning','implementation','review')),
     repository_name   TEXT,
     harness_name      TEXT NOT NULL,
     worktree_path     TEXT,
@@ -41,13 +41,13 @@ CREATE TABLE agent_sessions_new (
 
 -- Copy all data from the current agent_sessions table.
 INSERT INTO agent_sessions_new (
-    id, work_item_id, sub_plan_id, workspace_id, phase, repository_name,
+    id, work_item_id, sub_plan_id, workspace_id, kind, repository_name,
     harness_name, worktree_path, pid, status, exit_code, started_at,
     shutdown_at, completed_at, created_at, owner_instance_id, updated_at,
     resume_info, plan_id
 )
 SELECT
-    id, work_item_id, sub_plan_id, workspace_id, phase, repository_name,
+    id, work_item_id, sub_plan_id, workspace_id, kind, repository_name,
     harness_name, worktree_path, pid, status, exit_code, started_at,
     shutdown_at, completed_at, created_at, owner_instance_id, updated_at,
     resume_info, plan_id
@@ -63,5 +63,5 @@ CREATE INDEX idx_sessions_sub_plan ON agent_sessions(sub_plan_id);
 CREATE INDEX idx_sessions_workspace ON agent_sessions(workspace_id);
 CREATE INDEX idx_sessions_owner_instance ON agent_sessions(owner_instance_id);
 CREATE INDEX idx_sessions_status ON agent_sessions(status);
-CREATE INDEX idx_sessions_phase ON agent_sessions(phase);
+CREATE INDEX idx_sessions_kind ON agent_sessions(kind);
 CREATE INDEX idx_sessions_plan ON agent_sessions(plan_id);

@@ -69,6 +69,11 @@ func (s *mockAgentSession) Steer(_ context.Context, _ string) error      { retur
 func (s *mockAgentSession) SendAnswer(_ context.Context, _ string) error { return nil }
 func (s *mockAgentSession) Compact(_ context.Context) error              { return nil }
 func (s *mockAgentSession) ResumeInfo() map[string]string                { return nil }
+func (s *mockAgentSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 // ============================================================
 // Mock: adapter.AgentHarness
@@ -648,7 +653,7 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSes
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo-a",
 		HarnessName:    "mock",

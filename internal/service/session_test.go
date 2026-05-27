@@ -14,7 +14,7 @@ func implSession(id, workItemID, workspaceID, subPlanID string, status domain.Ag
 		ID:             id,
 		WorkItemID:     workItemID,
 		WorkspaceID:    workspaceID,
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
@@ -65,7 +65,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:          "plan-1",
 			WorkItemID:  "wi-1",
 			WorkspaceID: "ws-1",
-			Phase:       domain.AgentSessionPhasePlanning,
+			Kind: domain.AgentSessionKindPlanning,
 			HarnessName: "omp",
 		}
 		if err := svc.Create(ctx, session); err != nil {
@@ -78,7 +78,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:             "manual-1",
 			WorkItemID:     "wi-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.AgentSessionPhaseManual,
+			Kind: domain.AgentSessionKindManual,
 			RepositoryName: "repo1",
 			WorktreePath:   "/path/to/worktree",
 			HarnessName:    "omp",
@@ -93,7 +93,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:           "manual-2",
 			WorkItemID:   "wi-1",
 			WorkspaceID:  "ws-1",
-			Phase:        domain.AgentSessionPhaseManual,
+			Kind: domain.AgentSessionKindManual,
 			WorktreePath: "/path/to/worktree",
 			HarnessName:  "omp",
 		}
@@ -111,7 +111,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:             "manual-3",
 			WorkItemID:     "wi-1",
 			WorkspaceID:    "ws-1",
-			Phase:          domain.AgentSessionPhaseManual,
+			Kind: domain.AgentSessionKindManual,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 		}
@@ -129,7 +129,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:          "manual-4",
 			WorkItemID:  "wi-1",
 			WorkspaceID: "ws-1",
-			Phase:       domain.AgentSessionPhaseManual,
+			Kind: domain.AgentSessionKindManual,
 			HarnessName: "omp",
 		}
 		err := svc.Create(ctx, session)

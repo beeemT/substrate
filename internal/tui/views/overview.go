@@ -507,7 +507,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				switch action.Kind {
 				case overviewActionInterrupted:
 					if action.Session != nil && action.CanAct {
-						if action.Session.Phase == domain.AgentSessionPhasePlanning {
+						if action.Session.Kind == domain.AgentSessionKindPlanning {
 							wID := action.Session.WorkItemID
 							return m, func() tea.Msg { return RestartPlanMsg{WorkItemID: wID} }
 						}
@@ -613,7 +613,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 		}
 	case overviewActionInterrupted:
 		if action.Session != nil && len(action.InterruptedSessions) <= 1 {
-			isPlanningPhase := action.Session.Phase == domain.AgentSessionPhasePlanning
+			isPlanningPhase := action.Session.Kind == domain.AgentSessionKindPlanning
 			m.interrupted.SetSession(action.Session.ID, action.Session.SubPlanID, action.Session.RepositoryName, action.Session.WorktreePath, action.Session.WorkItemID, isPlanningPhase, action.CanAct)
 		}
 	case overviewActionReviewing:
@@ -838,7 +838,7 @@ func actionKeybindHints(action OverviewActionCard, actions []OverviewActionCard)
 		}
 		if action.CanAct {
 			resumeLabel := "Resume all"
-			if action.Session != nil && action.Session.Phase == domain.AgentSessionPhasePlanning {
+			if action.Session != nil && action.Session.Kind == domain.AgentSessionKindPlanning {
 				resumeLabel = "Restart planning"
 			} else if count := len(action.InterruptedSessions); count > 1 {
 				resumeLabel = fmt.Sprintf("Resume all (%d)", count)
@@ -846,7 +846,7 @@ func actionKeybindHints(action OverviewActionCard, actions []OverviewActionCard)
 				resumableCount := 0
 				for _, card := range actions {
 					if card.Kind == overviewActionInterrupted && card.Session != nil &&
-						card.Session.Phase != domain.AgentSessionPhasePlanning {
+						card.Session.Kind != domain.AgentSessionKindPlanning {
 						resumableCount++
 					}
 				}
@@ -1553,7 +1553,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				s.Status == domain.AgentSessionPending ||
 				s.Status == domain.AgentSessionCompleted ||
 				s.Status == domain.AgentSessionWaitingForAnswer {
-				if s.Phase == domain.AgentSessionPhasePlanning {
+				if s.Kind == domain.AgentSessionKindPlanning {
 					hasPlanningActive = true
 				} else if s.SubPlanID != "" {
 					activeSubPlans[s.SubPlanID] = true
@@ -1564,7 +1564,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			if s.Status != domain.AgentSessionInterrupted {
 				continue
 			}
-			if s.Phase == domain.AgentSessionPhasePlanning && hasPlanningActive {
+			if s.Kind == domain.AgentSessionKindPlanning && hasPlanningActive {
 				superseded[s.ID] = true
 			} else if s.SubPlanID != "" && activeSubPlans[s.SubPlanID] {
 				superseded[s.ID] = true
@@ -1587,7 +1587,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 				}
 				title := "Question waiting for answer"
 				why := "This repo task is paused until a human answers the escalated question."
-				if agentSession.Phase == domain.AgentSessionPhasePlanning {
+				if agentSession.Kind == domain.AgentSessionKindPlanning {
 					title = "Planning question"
 					why = "The planner is paused until you answer this question."
 				}
@@ -1612,7 +1612,7 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			if superseded[agentSession.ID] {
 				continue
 			}
-			if agentSession.Phase == domain.AgentSessionPhasePlanning {
+			if agentSession.Kind == domain.AgentSessionKindPlanning {
 				session := agentSession
 				actions = append(actions, OverviewActionCard{
 					Kind:    overviewActionInterrupted,
@@ -2176,6 +2176,13 @@ func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 		item := artifactItemFromReviewArtifact(artifact)
 		key := reviewArtifactKey(item.RepoName, item.Branch, item.Ref)
 		if idx, ok := itemIndexByKey[key]; ok {
+			// Merge enrichment: prefer non-empty branch and worktree path from the newer record.
+			if items[idx].Branch == "" && item.Branch != "" {
+				items[idx].Branch = item.Branch
+				// Update the key to use the enriched branch for subsequent lookups.
+				newKey := reviewArtifactKey(items[idx].RepoName, items[idx].Branch, items[idx].Ref)
+				itemIndexByKey[newKey] = idx
+			}
 			if items[idx].WorktreePath == "" {
 				items[idx].WorktreePath = item.WorktreePath
 			}

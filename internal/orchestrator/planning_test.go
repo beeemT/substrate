@@ -95,6 +95,11 @@ func (s *planningHarnessSession) SendAnswer(context.Context, string) error {
 }
 func (s *planningHarnessSession) Compact(context.Context) error { return nil }
 func (s *planningHarnessSession) ResumeInfo() map[string]string { return nil }
+func (s *planningHarnessSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 func TestRunPlanningWithCorrectionLoopIncludesSessionDraftPathInUserPrompt(t *testing.T) {
 	templates, err := NewPlanningTemplates()
@@ -200,6 +205,11 @@ func (s *scriptedPlanningSession) SendAnswer(ctx context.Context, answer string)
 }
 func (s *scriptedPlanningSession) Compact(context.Context) error { return nil }
 func (s *scriptedPlanningSession) ResumeInfo() map[string]string { return s.resumeInfo }
+func (s *scriptedPlanningSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 func TestPlanningServicePreservesParentContextDeadline(t *testing.T) {
 	t.Parallel()
@@ -432,7 +442,7 @@ func TestNewPlanningServiceWiresQuestionRouterEventBus(t *testing.T) {
 
 	questionRepo := newMockQuestionRepo()
 	sessionRepo := newMockSessionRepo()
-	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
 
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{})
 	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
@@ -444,7 +454,7 @@ func TestNewPlanningServiceWiresQuestionRouterEventBus(t *testing.T) {
 	}
 
 	evt := adapter.AgentEvent{Type: "question", Payload: "Full cutover?", Metadata: map[string]any{"source": string(adapter.AgentQuestionSourceAskForeman)}}
-	if err := svc.questionRouter.Route(context.Background(), domain.AgentSessionPhasePlanning, evt, "plan-session"); err != nil {
+	if err := svc.questionRouter.Route(context.Background(), domain.AgentSessionKindPlanning, evt, "plan-session"); err != nil {
 		t.Fatalf("Route: %v", err)
 	}
 
@@ -463,7 +473,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 
 	questionRepo := newMockQuestionRepo()
 	sessionRepo := newMockSessionRepo()
-	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
+	sessionRepo.sessions["plan-session"] = domain.AgentSession{ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, HarnessName: "mock", Status: domain.AgentSessionRunning}
 
 	registry := NewSessionRegistry()
 	svc := &PlanningService{
@@ -506,7 +516,7 @@ func TestWaitForPlanningTurnRoutesQuestionDirectlyToHuman(t *testing.T) {
 	if len(questions) != 1 {
 		t.Fatalf("questions len = %d, want 1", len(questions))
 	}
-	if questions[0].Stage != domain.AgentSessionPhasePlanning || questions[0].Source != domain.QuestionSourceAskForeman {
+	if questions[0].Stage != domain.AgentSessionKindPlanning || questions[0].Source != domain.QuestionSourceAskForeman {
 		t.Fatalf("question stage/source = %s/%s", questions[0].Stage, questions[0].Source)
 	}
 	gotTask, err := svc.sessionSvc.Get(context.Background(), "plan-session")
@@ -547,7 +557,7 @@ func TestWaitForPlanningTurn_StaysAliveWhileWaitingForAnswer(t *testing.T) {
 	sessionRepo := newMockSessionRepo()
 	sessionRepo.sessions["plan-session"] = domain.AgentSession{
 		ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1",
-		Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock",
+		Kind: domain.AgentSessionKindPlanning, HarnessName: "mock",
 		Status: domain.AgentSessionRunning,
 	}
 
@@ -629,7 +639,7 @@ func TestRunPlanningWithCorrectionLoop_DoesNotRetryWhileWaitingForAnswer(t *test
 	sessionRepo := newMockSessionRepo()
 	sessionRepo.sessions["plan-session"] = domain.AgentSession{
 		ID: "plan-session", WorkItemID: "wi-1", WorkspaceID: "ws-1",
-		Phase: domain.AgentSessionPhasePlanning, HarnessName: "mock",
+		Kind: domain.AgentSessionKindPlanning, HarnessName: "mock",
 		Status: domain.AgentSessionRunning,
 	}
 
@@ -936,7 +946,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		ID:          "plan-omp-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "mock",
 		Status:      domain.AgentSessionRunning,
 	}

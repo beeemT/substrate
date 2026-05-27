@@ -35,7 +35,7 @@ func TestRouteManual_RoutesQuestionToHuman(t *testing.T) {
 		ID:             "manual-session",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.AgentSessionPhaseManual,
+		Kind: domain.AgentSessionKindManual,
 		HarnessName:    "mock",
 		Status:         domain.AgentSessionRunning,
 		RepositoryName: "repo1",
@@ -56,7 +56,7 @@ func TestRouteManual_RoutesQuestionToHuman(t *testing.T) {
 		},
 	}
 
-	err := router.Route(context.Background(), domain.AgentSessionPhaseManual, evt, "manual-session")
+	err := router.Route(context.Background(), domain.AgentSessionKindManual, evt, "manual-session")
 	if err != nil {
 		t.Fatalf("Route returned error: %v", err)
 	}
@@ -71,8 +71,8 @@ func TestRouteManual_RoutesQuestionToHuman(t *testing.T) {
 	}
 
 	q := questions[0]
-	if q.Stage != domain.AgentSessionPhaseManual {
-		t.Errorf("question stage = %s, want %s", q.Stage, domain.AgentSessionPhaseManual)
+	if q.Stage != domain.AgentSessionKindManual {
+		t.Errorf("question stage = %s, want %s", q.Stage, domain.AgentSessionKindManual)
 	}
 	if q.Source != domain.QuestionSourceAskForeman {
 		t.Errorf("question source = %s, want %s", q.Source, domain.QuestionSourceAskForeman)
@@ -122,7 +122,7 @@ func TestQuestionRouter_Route_UnsupportedStage(t *testing.T) {
 		},
 	}
 
-	err := router.Route(context.Background(), domain.AgentSessionPhase("unsupported"), evt, "session")
+	err := router.Route(context.Background(), domain.AgentSessionKind("unsupported"), evt, "session")
 	if err == nil {
 		t.Fatal("Route returned nil error for unsupported stage")
 	}
@@ -137,7 +137,7 @@ func TestRouteManual_WaitForAnswer(t *testing.T) {
 		ID:             "manual-session",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.AgentSessionPhaseManual,
+		Kind: domain.AgentSessionKindManual,
 		HarnessName:    "mock",
 		Status:         domain.AgentSessionRunning,
 		RepositoryName: "repo1",
@@ -158,7 +158,7 @@ func TestRouteManual_WaitForAnswer(t *testing.T) {
 		},
 	}
 
-	err := router.Route(context.Background(), domain.AgentSessionPhaseManual, evt, "manual-session")
+	err := router.Route(context.Background(), domain.AgentSessionKindManual, evt, "manual-session")
 	if err != nil {
 		t.Fatalf("Route returned error: %v", err)
 	}

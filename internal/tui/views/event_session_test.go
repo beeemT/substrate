@@ -63,7 +63,7 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 		ID:          "session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -158,7 +158,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 		ID:          "impl-session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Phase:       domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -190,7 +190,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 	if len(app.sessions) != 1 {
 		t.Fatalf("sessions length = %d, want 1", len(app.sessions))
 	}
-	if got := app.sessions[0]; got.ID != task.ID || got.Phase != domain.AgentSessionPhaseImplementation || got.Status != domain.AgentSessionRunning {
+	if got := app.sessions[0]; got.ID != task.ID || got.Kind != domain.AgentSessionKindImplementation || got.Status != domain.AgentSessionRunning {
 		t.Fatalf("session = %+v, want implementation running task %+v", got, task)
 	}
 }
@@ -198,7 +198,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 func TestDomainEventMsg_ImplementationStartedReloadsWorkItemAndTasks(t *testing.T) {
 	now := time.Now()
 	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-integration", Title: "Implement me", State: domain.SessionImplementing, CreatedAt: now, UpdatedAt: now}
-	task := domain.AgentSession{ID: "impl-session-1", WorkItemID: "wi-1", WorkspaceID: "ws-integration", Phase: domain.AgentSessionPhaseImplementation, Status: domain.AgentSessionRunning, CreatedAt: now, UpdatedAt: now}
+	task := domain.AgentSession{ID: "impl-session-1", WorkItemID: "wi-1", WorkspaceID: "ws-integration", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionRunning, CreatedAt: now, UpdatedAt: now}
 	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{task.ID: task}}
 	sessionRepo := &mockSessionRepoForSession{workItems: map[string]domain.Session{workItem.ID: workItem}}
 	bus := event.NewBus(event.BusConfig{})

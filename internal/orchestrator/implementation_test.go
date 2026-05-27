@@ -1177,6 +1177,12 @@ func (s *completingMockSession) Events() <-chan adapter.AgentEvent {
 	return s.events
 }
 
+func (s *completingMockSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 func (s *completingMockSession) SendMessage(_ context.Context, msg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1227,7 +1233,12 @@ func (s *failingMockSession) Steer(_ context.Context, _ string) error       { re
 func (s *failingMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (s *failingMockSession) Abort(_ context.Context) error                 { return nil }
 func (s *failingMockSession) ResumeInfo() map[string]string                 { return nil }
-func (s *failingMockSession) Compact(_ context.Context) error               { return nil }
+func (s *failingMockSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (s *failingMockSession) Compact(_ context.Context) error { return nil }
 
 // failingHarness returns sessions whose Wait returns a fixed error.
 type failingHarness struct{ err error }
@@ -1562,7 +1573,7 @@ func TestReviewLoop_ReviewError(t *testing.T) {
 		WorkItemID:     "wi-1",
 		SubPlanID:      "no-such-sub-plan",
 		RepositoryName: "repo-a",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 	}
 
@@ -1754,11 +1765,11 @@ func TestLastSessionForSubPlan(t *testing.T) {
 	t.Run("returns most recent session regardless of phase or status", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["old-impl"] = domain.AgentSession{
-			ID: "old-impl", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "old-impl", SubPlanID: "sp-1", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-2 * time.Hour),
 		}
 		repo.sessions["review"] = domain.AgentSession{
-			ID: "review", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseReview,
+			ID: "review", SubPlanID: "sp-1", Kind: domain.AgentSessionKindReview,
 			Status: domain.AgentSessionFailed, CreatedAt: time.Now().Add(-time.Hour),
 		}
 		repo.mu.Unlock()
@@ -1792,7 +1803,7 @@ func TestLatestCompletedImplSession(t *testing.T) {
 	t.Run("failed impl session is ignored", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["task-1"] = domain.AgentSession{
-			ID: "task-1", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "task-1", SubPlanID: "sp-1", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionFailed,
 		}
 		repo.mu.Unlock()
@@ -1805,7 +1816,7 @@ func TestLatestCompletedImplSession(t *testing.T) {
 		repo.mu.Lock()
 		delete(repo.sessions, "task-1")
 		repo.sessions["task-review"] = domain.AgentSession{
-			ID: "task-review", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseReview,
+			ID: "task-review", SubPlanID: "sp-1", Kind: domain.AgentSessionKindReview,
 			Status: domain.AgentSessionCompleted,
 		}
 		repo.mu.Unlock()
@@ -1817,11 +1828,11 @@ func TestLatestCompletedImplSession(t *testing.T) {
 	t.Run("returns most recent completed impl session", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["task-impl-1"] = domain.AgentSession{
-			ID: "task-impl-1", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "task-impl-1", SubPlanID: "sp-1", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-time.Hour),
 		}
 		repo.sessions["task-impl-2"] = domain.AgentSession{
-			ID: "task-impl-2", SubPlanID: "sp-1", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "task-impl-2", SubPlanID: "sp-1", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now(),
 		}
 		repo.mu.Unlock()
@@ -1860,13 +1871,13 @@ func TestTwoStageRetryModel(t *testing.T) {
 	t.Run("failed impl → implementation stage", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["impl"] = domain.AgentSession{
-			ID: "impl", SubPlanID: "sp-2", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "impl", SubPlanID: "sp-2", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionFailed, CreatedAt: time.Now(),
 		}
 		repo.mu.Unlock()
 		last := svc.lastSessionForSubPlan(ctx, "sp-2")
-		if last.Phase != domain.AgentSessionPhaseImplementation {
-			t.Errorf("expected implementation phase, got %s", last.Phase)
+		if last.Kind != domain.AgentSessionKindImplementation {
+			t.Errorf("expected implementation phase, got %s", last.Kind)
 		}
 		// Last session is impl → should fall through to full implementation.
 	})
@@ -1874,17 +1885,17 @@ func TestTwoStageRetryModel(t *testing.T) {
 	t.Run("failed review → review stage", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["impl-ok"] = domain.AgentSession{
-			ID: "impl-ok", SubPlanID: "sp-3", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "impl-ok", SubPlanID: "sp-3", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-time.Hour),
 		}
 		repo.sessions["review-fail"] = domain.AgentSession{
-			ID: "review-fail", SubPlanID: "sp-3", Phase: domain.AgentSessionPhaseReview,
+			ID: "review-fail", SubPlanID: "sp-3", Kind: domain.AgentSessionKindReview,
 			Status: domain.AgentSessionFailed, CreatedAt: time.Now(),
 		}
 		repo.mu.Unlock()
 		last := svc.lastSessionForSubPlan(ctx, "sp-3")
-		if last.Phase != domain.AgentSessionPhaseReview {
-			t.Errorf("expected review phase, got %s", last.Phase)
+		if last.Kind != domain.AgentSessionKindReview {
+			t.Errorf("expected review phase, got %s", last.Kind)
 		}
 		// Last session is review → should skip implementation, retry review.
 	})
@@ -1892,21 +1903,21 @@ func TestTwoStageRetryModel(t *testing.T) {
 	t.Run("failed reimplementation → implementation stage", func(t *testing.T) {
 		repo.mu.Lock()
 		repo.sessions["impl-ok"] = domain.AgentSession{
-			ID: "impl-ok", SubPlanID: "sp-4", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "impl-ok", SubPlanID: "sp-4", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-3 * time.Hour),
 		}
 		repo.sessions["review"] = domain.AgentSession{
-			ID: "review", SubPlanID: "sp-4", Phase: domain.AgentSessionPhaseReview,
+			ID: "review", SubPlanID: "sp-4", Kind: domain.AgentSessionKindReview,
 			Status: domain.AgentSessionCompleted, CreatedAt: time.Now().Add(-2 * time.Hour),
 		}
 		repo.sessions["reimpl-fail"] = domain.AgentSession{
-			ID: "reimpl-fail", SubPlanID: "sp-4", Phase: domain.AgentSessionPhaseImplementation,
+			ID: "reimpl-fail", SubPlanID: "sp-4", Kind: domain.AgentSessionKindImplementation,
 			Status: domain.AgentSessionFailed, CreatedAt: time.Now().Add(-time.Hour),
 		}
 		repo.mu.Unlock()
 		last := svc.lastSessionForSubPlan(ctx, "sp-4")
-		if last.Phase != domain.AgentSessionPhaseImplementation {
-			t.Errorf("expected implementation phase, got %s", last.Phase)
+		if last.Kind != domain.AgentSessionKindImplementation {
+			t.Errorf("expected implementation phase, got %s", last.Kind)
 		}
 		if last.ID != "reimpl-fail" {
 			t.Errorf("expected reimpl-fail, got %s", last.ID)
@@ -1948,7 +1959,7 @@ func TestRunImplementation_ContextCanceled_MarksInterrupted(t *testing.T) {
 	// Find the task — it's the one created during runImplementation.
 	var found *domain.AgentSession
 	for _, agentSession := range sessionRepo.sessions {
-		if agentSession.Phase == domain.AgentSessionPhaseImplementation {
+		if agentSession.Kind == domain.AgentSessionKindImplementation {
 			t := agentSession
 			found = &t
 		}
@@ -1988,7 +1999,7 @@ func TestRunImplementation_NonCanceledError_MarksFailed(t *testing.T) {
 
 	var found *domain.AgentSession
 	for _, agentSession := range sessionRepo.sessions {
-		if agentSession.Phase == domain.AgentSessionPhaseImplementation {
+		if agentSession.Kind == domain.AgentSessionKindImplementation {
 			t := agentSession
 			found = &t
 		}
@@ -2456,7 +2467,7 @@ func TestFinalizeWorkItem_CompletesImplementingWorkItemWithCompletedSubPlans(t *
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 		WorktreePath:   worktreeDir,
 		CreatedAt:      now,
@@ -2547,7 +2558,7 @@ func TestFinalizeWorkItemKeepsImplementingWhenFinalizationFails(t *testing.T) {
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 		WorktreePath:   worktreeDir,
 		CreatedAt:      now,
@@ -2594,7 +2605,7 @@ func TestFinalizeWorkItemRejectsIncompleteSubPlan(t *testing.T) {
 		WorkspaceID:    "ws-1",
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionRunning,
 	}
 

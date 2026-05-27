@@ -51,6 +51,11 @@ func (m *registryMockSession) SendAnswer(_ context.Context, answer string) error
 }
 
 func (m *registryMockSession) ResumeInfo() map[string]string { return nil }
+func (m *registryMockSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 func (m *registryMockSession) Compact(_ context.Context) error { return nil }
 

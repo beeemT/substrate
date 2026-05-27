@@ -233,7 +233,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Phase:          domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
@@ -274,7 +274,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("WaitForAnswer", func(t *testing.T) {
-		repo.sessions["s-wait"] = domain.AgentSession{ID: "s-wait", WorkItemID: "wi-wait", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
+		repo.sessions["s-wait"] = domain.AgentSession{ID: "s-wait", WorkItemID: "wi-wait", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionRunning}
 		if err := svc.WaitForAnswer(ctx, "s-wait"); err != nil {
 			t.Fatalf("WaitForAnswer failed: %v", err)
 		}
@@ -285,7 +285,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("ResumeFromAnswer", func(t *testing.T) {
-		repo.sessions["s-resume"] = domain.AgentSession{ID: "s-resume", WorkItemID: "wi-resume", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
+		repo.sessions["s-resume"] = domain.AgentSession{ID: "s-resume", WorkItemID: "wi-resume", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", Status: domain.AgentSessionWaitingForAnswer}
 		if err := svc.ResumeFromAnswer(ctx, "s-resume"); err != nil {
 			t.Fatalf("ResumeFromAnswer failed: %v", err)
 		}
@@ -316,7 +316,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		repo.sessions["s-del"] = domain.AgentSession{ID: "s-del", WorkItemID: "wi-del", WorkspaceID: "ws-1", Phase: domain.AgentSessionPhaseImplementation, SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
+		repo.sessions["s-del"] = domain.AgentSession{ID: "s-del", WorkItemID: "wi-del", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-del", Status: domain.AgentSessionCompleted}
 		repo.byWorkItem["wi-del"] = []string{"s-del"}
 		repo.bySubPlan["sp-del"] = []string{"s-del"}
 		repo.byWorkspace["ws-1"] = append(repo.byWorkspace["ws-1"], "s-del")

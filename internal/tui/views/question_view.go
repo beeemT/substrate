@@ -249,11 +249,11 @@ func (m *QuestionModel) refreshViewportContent(reset bool) {
 func (m QuestionModel) renderHeader() string {
 	stageLabel := "Implementing"
 	switch m.question.Stage {
-	case domain.AgentSessionPhasePlanning:
+	case domain.AgentSessionKindPlanning:
 		stageLabel = "Planning"
-	case domain.AgentSessionPhaseReview:
+	case domain.AgentSessionKindReview:
 		stageLabel = "Review"
-	case domain.AgentSessionPhaseManual:
+	case domain.AgentSessionKindManual:
 		stageLabel = "Manual"
 	}
 
@@ -265,7 +265,7 @@ func (m QuestionModel) renderHeader() string {
 }
 
 func (m QuestionModel) replyLabel() string {
-	if m.question.Stage == domain.AgentSessionPhasePlanning {
+	if m.question.Stage == domain.AgentSessionKindPlanning {
 		return m.styles.Subtitle.Render("Reply to planner:")
 	}
 
@@ -275,8 +275,8 @@ func (m QuestionModel) replyLabel() string {
 func (m QuestionModel) renderScrollableContent(width int) string {
 	stageLabel := "Agent question:"
 	intro := ""
-	showForeman := m.question.Stage != domain.AgentSessionPhasePlanning
-	if m.question.Stage == domain.AgentSessionPhasePlanning {
+	showForeman := m.question.Stage != domain.AgentSessionKindPlanning
+	if m.question.Stage == domain.AgentSessionKindPlanning {
 		stageLabel = "Planning question"
 		intro = m.styles.Subtitle.Render("The planner needs your input before it can continue.")
 	}

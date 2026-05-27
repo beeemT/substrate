@@ -86,6 +86,10 @@ type AgentSession interface {
 	// Returns nil on successful completion, or the error that caused failure.
 	Wait(ctx context.Context) error
 
+	// Done returns a channel that is closed when the session terminates.
+	// Intended for watching harness exit in goroutines without blocking.
+	Done() <-chan struct{}
+
 	// Events returns a channel emitting agent events.
 	// The channel closes when the session ends.
 	Events() <-chan AgentEvent

@@ -58,6 +58,8 @@ type session struct {
 
 func (s *session) ID() string { return s.id }
 
+func (s *session) Done() <-chan struct{} { return s.waitDone }
+
 func (s *session) Events() <-chan adapter.AgentEvent { return s.events }
 
 // Wait blocks until the session ends (done, error, abort) or context cancel.

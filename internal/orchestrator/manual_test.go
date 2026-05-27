@@ -42,9 +42,14 @@ func (m *mockManualSession) Steer(ctx context.Context, msg string) error        
 func (m *mockManualSession) SendAnswer(ctx context.Context, answer string) error { return nil }
 func (m *mockManualSession) Abort(ctx context.Context) error                     { return nil }
 func (m *mockManualSession) Events() <-chan adapter.AgentEvent                   { return m.events }
-func (m *mockManualSession) Wait(ctx context.Context) error                      { return m.waitErr }
-func (m *mockManualSession) ResumeInfo() map[string]string                       { return m.resumeInfo }
-func (m *mockManualSession) Compact(ctx context.Context) error                   { return nil }
+func (m *mockManualSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (m *mockManualSession) Wait(ctx context.Context) error    { return m.waitErr }
+func (m *mockManualSession) ResumeInfo() map[string]string     { return m.resumeInfo }
+func (m *mockManualSession) Compact(ctx context.Context) error { return nil }
 
 // Verify mock types implement the required interfaces.
 var (
@@ -77,7 +82,7 @@ func TestIsActiveStatus(t *testing.T) {
 func TestManualSessionService_ResumePreservesPhase(t *testing.T) {
 	// Verify that manual sessions preserve the manual phase.
 	// ResumeSession and FollowUpManualSession must not use implementation phase.
-	manualPhase := domain.AgentSessionPhaseManual
+	manualPhase := domain.AgentSessionKindManual
 	if manualPhase != "manual" {
 		t.Errorf("manual phase constant = %q, want %q", manualPhase, "manual")
 	}
@@ -134,7 +139,7 @@ func TestManualSessionEventPayloadWithOld(t *testing.T) {
 	payload := manualSessionEventPayload{
 		Session: domain.AgentSession{
 			ID:     "new-session",
-			Phase:  domain.AgentSessionPhaseManual,
+			Kind:   domain.AgentSessionKindManual,
 			Status: domain.AgentSessionRunning,
 		},
 		WorkItemID:   "wi-1",

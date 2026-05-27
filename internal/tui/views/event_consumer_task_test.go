@@ -21,7 +21,7 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 		ID:          "01KR0WZPRFCRY356KBNH45ANKT",
 		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
 		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		StartedAt:   &startedAt,
@@ -56,8 +56,8 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 	if typed.AgentSession.ID != task.ID {
 		t.Errorf("AgentSession.ID = %q, want %q", typed.AgentSession.ID, task.ID)
 	}
-	if typed.AgentSession.Phase != domain.AgentSessionPhasePlanning {
-		t.Errorf("AgentSession.Phase = %q, want %q", typed.AgentSession.Phase, domain.AgentSessionPhasePlanning)
+	if typed.AgentSession.Kind != domain.AgentSessionKindPlanning {
+		t.Errorf("AgentSession.Kind = %q, want %q", typed.AgentSession.Kind, domain.AgentSessionKindPlanning)
 	}
 	if typed.AgentSession.Status != domain.AgentSessionRunning {
 		t.Errorf("AgentSession.Status = %q, want %q", typed.AgentSession.Status, domain.AgentSessionRunning)
@@ -76,7 +76,7 @@ func TestEventConsumer_toMsg_AgentSessionUpdated(t *testing.T) {
 		ID:          "01KR0NBYZVA3NNQNT6AEKFMDBV",
 		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
 		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind: domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionFailed,
 		StartedAt:   &startedAt,
@@ -129,7 +129,7 @@ func TestEventConsumer_toMsg_AgentSessionFollowUp(t *testing.T) {
 		ID:              "01KS2YJY",
 		WorkItemID:      "wi-follow-up",
 		WorkspaceID:     "ws-follow-up",
-		Phase:           domain.AgentSessionPhaseImplementation,
+		Kind: domain.AgentSessionKindImplementation,
 		HarnessName:     "omp",
 		Status:          domain.AgentSessionRunning,
 		StartedAt:       &startedAt,

@@ -252,6 +252,11 @@ func (m *quitTestMockSession) Steer(_ context.Context, _ string) error       { r
 func (m *quitTestMockSession) SendAnswer(_ context.Context, _ string) error  { return nil }
 func (m *quitTestMockSession) ResumeInfo() map[string]string                 { return m.resumeInfo }
 func (m *quitTestMockSession) Compact(_ context.Context) error               { return nil }
+func (m *quitTestMockSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
 
 // TestQuitConfirmedMsgAbortsRegistrySessions verifies that dispatching
 // QuitConfirmedMsg calls AbortAndDeregister on running sessions and cancels

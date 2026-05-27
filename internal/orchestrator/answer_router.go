@@ -60,7 +60,7 @@ func (r *answerRouter) getForeman(ctx context.Context, questionID string) (*Fore
 	return foreman, nil
 }
 
-// Answer routes an answer based on the question's phase.
+// Answer routes an answer based on the question's stage (AgentSessionKind).
 // Internal helper that does the actual routing; publishes event on success.
 func (r *answerRouter) Answer(ctx context.Context, questionID, answer, answeredBy string) error {
 	q, err := r.questionSvc.Get(ctx, questionID)
@@ -69,12 +69,14 @@ func (r *answerRouter) Answer(ctx context.Context, questionID, answer, answeredB
 	}
 
 	switch q.Stage {
-	case domain.AgentSessionPhasePlanning:
+	case domain.AgentSessionKindPlanning:
 		return r.answerPlanningQuestion(ctx, q, answer, answeredBy)
-	case domain.AgentSessionPhaseImplementation, domain.AgentSessionPhaseReview, "":
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview, "":
 		return r.answerImplementationQuestion(ctx, q, answer, answeredBy)
-	case domain.AgentSessionPhaseManual:
+	case domain.AgentSessionKindManual:
 		return r.answerManualQuestion(ctx, q, answer, answeredBy)
+	case domain.AgentSessionKindForeman:
+		return fmt.Errorf("route answer: foreman sessions cannot receive answers (question %s)", questionID)
 	default:
 		return fmt.Errorf("unsupported stage: %q", q.Stage)
 	}
@@ -137,7 +139,7 @@ func (r *answerRouter) answerManualQuestion(ctx context.Context, q domain.Questi
 	return r.publishAnswered(ctx, q.ID, q.AgentSessionID)
 }
 
-// Skip routes a skip based on the question's phase.
+// Skip routes a skip based on the question's stage (AgentSessionKind).
 func (r *answerRouter) Skip(ctx context.Context, questionID string) error {
 	return r.Answer(ctx, questionID, "", "human")
 }

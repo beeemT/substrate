@@ -210,8 +210,8 @@ func (s *PlanningService) ResumeInterruptedPlanning(ctx context.Context, interru
 	if interrupted.Status != domain.AgentSessionInterrupted {
 		return nil, fmt.Errorf("planning session %s is not interrupted (status: %s)", interrupted.ID, interrupted.Status)
 	}
-	if interrupted.Phase != domain.AgentSessionPhasePlanning {
-		return nil, fmt.Errorf("agent session %s is %s, not planning", interrupted.ID, interrupted.Phase)
+	if interrupted.Kind != domain.AgentSessionKindPlanning {
+		return nil, fmt.Errorf("agent session %s is %s, not planning", interrupted.ID, interrupted.Kind)
 	}
 	workItem, err := s.workItemSvc.Get(ctx, interrupted.WorkItemID)
 	if err != nil {
@@ -367,7 +367,7 @@ func (s *PlanningService) findPriorPlanningSessionResumeInfo(ctx context.Context
 	// Scan in reverse: tasks are returned in creation order, most-recent last.
 	for i := len(tasks) - 1; i >= 0; i-- {
 		t := tasks[i]
-		if t.Phase == domain.AgentSessionPhasePlanning && t.Status == domain.AgentSessionCompleted && len(t.ResumeInfo) > 0 {
+		if t.Kind == domain.AgentSessionKindPlanning && t.Status == domain.AgentSessionCompleted && len(t.ResumeInfo) > 0 {
 			return t.ID, t.ResumeInfo
 		}
 	}
@@ -463,7 +463,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		ID:          sessionID,
 		WorkItemID:  workItem.ID,
 		WorkspaceID: workspace.ID,
-		Phase:       domain.AgentSessionPhasePlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		HarnessName: s.harness.Name(),
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
@@ -826,7 +826,7 @@ func waitForClosedPlanningSession(session adapter.AgentSession) error {
 func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, agentSession adapter.AgentSession, evt adapter.AgentEvent) (bool, error) {
 	switch evt.Type {
 	case "question":
-		if err := s.questionRouter.Route(ctx, domain.AgentSessionPhasePlanning, evt, agentSession.ID()); err != nil {
+		if err := s.questionRouter.Route(ctx, domain.AgentSessionKindPlanning, evt, agentSession.ID()); err != nil {
 			return false, fmt.Errorf("route planning question: %w", err)
 		}
 	case "done":

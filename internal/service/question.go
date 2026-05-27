@@ -81,7 +81,7 @@ func (s *QuestionService) ListBySessionID(ctx context.Context, sessionID string)
 // Create creates a new question in pending status.
 func (s *QuestionService) Create(ctx context.Context, q domain.Question) error {
 	if q.Stage == "" {
-		q.Stage = domain.AgentSessionPhaseImplementation
+		q.Stage = domain.AgentSessionKindImplementation
 	}
 	if q.Source == "" {
 		q.Source = domain.QuestionSourceAskForeman

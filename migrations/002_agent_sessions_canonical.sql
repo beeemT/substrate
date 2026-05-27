@@ -5,7 +5,7 @@ CREATE TABLE agent_sessions_v2 (
     work_item_id      TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
     sub_plan_id       TEXT REFERENCES sub_plans(id) ON DELETE SET NULL,
     workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
-    phase             TEXT NOT NULL CHECK (phase IN ('planning','implementation','review')),
+    kind              TEXT NOT NULL CHECK (kind IN ('planning','implementation','review')),
     repository_name   TEXT,
     harness_name      TEXT NOT NULL,
     worktree_path     TEXT,
@@ -26,7 +26,7 @@ INSERT INTO agent_sessions_v2 (
     work_item_id,
     sub_plan_id,
     workspace_id,
-    phase,
+    kind,
     repository_name,
     harness_name,
     worktree_path,
@@ -45,7 +45,7 @@ SELECT
     p.work_item_id,
     s.sub_plan_id,
     s.workspace_id,
-    'implementation',
+    'implementation' AS kind,
     s.repository_name,
     s.harness_name,
     s.worktree_dir,
@@ -70,6 +70,6 @@ CREATE INDEX idx_sessions_sub_plan ON agent_sessions(sub_plan_id);
 CREATE INDEX idx_sessions_workspace ON agent_sessions(workspace_id);
 CREATE INDEX idx_sessions_owner_instance ON agent_sessions(owner_instance_id);
 CREATE INDEX idx_sessions_status ON agent_sessions(status);
-CREATE INDEX idx_sessions_phase ON agent_sessions(phase);
+CREATE INDEX idx_sessions_kind ON agent_sessions(kind);
 
 PRAGMA foreign_keys = ON;

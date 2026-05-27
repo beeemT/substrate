@@ -126,13 +126,13 @@ func (s *ManualSessionService) StartManualSession(ctx context.Context, req Start
 		}
 	}
 
-	// 7. Create domain.AgentSession with manual phase.
+	// 7. Create domain.AgentSession with manual kind.
 	now := time.Now()
 	agentSession := domain.AgentSession{
 		ID:              domain.NewID(),
 		WorkItemID:      req.WorkItemID,
 		WorkspaceID:     req.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseManual,
+		Kind:            domain.AgentSessionKindManual,
 		SubPlanID:       req.SubPlanID, // optional; may be empty
 		RepositoryName:  req.RepositoryName,
 		WorktreePath:    worktreePath,
@@ -223,8 +223,8 @@ func (s *ManualSessionService) Abort(ctx context.Context, sessionID string) erro
 // It creates a new DB row in pending/running state and links to the interrupted session's
 // resume info for native conversation resumption.
 func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrupted domain.AgentSession, initialMessage string, ownerInstanceID *string) (domain.AgentSession, error) {
-	if interrupted.Phase != domain.AgentSessionPhaseManual {
-		return domain.AgentSession{}, fmt.Errorf("can only resume manual sessions, got phase %q", interrupted.Phase)
+	if interrupted.Kind != domain.AgentSessionKindManual {
+		return domain.AgentSession{}, fmt.Errorf("can only resume manual sessions, got kind %q", interrupted.Kind)
 	}
 
 	// Create new manual session row preserving manual phase and worktree.
@@ -233,7 +233,7 @@ func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrup
 		ID:              domain.NewID(),
 		WorkItemID:      interrupted.WorkItemID,
 		WorkspaceID:     interrupted.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseManual,
+		Kind:            domain.AgentSessionKindManual,
 		SubPlanID:       interrupted.SubPlanID,
 		RepositoryName:  interrupted.RepositoryName,
 		WorktreePath:    interrupted.WorktreePath,
@@ -289,8 +289,8 @@ func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrup
 // It reuses the same session row (completed → running) when native resume is available,
 // otherwise starts a new session and links old→new via EventAgentSessionResumed.
 func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, completed domain.AgentSession, message string) (domain.AgentSession, error) {
-	if completed.Phase != domain.AgentSessionPhaseManual {
-		return domain.AgentSession{}, fmt.Errorf("can only follow up manual sessions, got phase %q", completed.Phase)
+	if completed.Kind != domain.AgentSessionKindManual {
+		return domain.AgentSession{}, fmt.Errorf("can only follow up manual sessions, got kind %q", completed.Kind)
 	}
 
 	// If the harness supports native resume, reuse the existing row.
@@ -346,7 +346,7 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 		ID:              domain.NewID(),
 		WorkItemID:      completed.WorkItemID,
 		WorkspaceID:     completed.WorkspaceID,
-		Phase:           domain.AgentSessionPhaseManual,
+		Kind:            domain.AgentSessionKindManual,
 		SubPlanID:       completed.SubPlanID,
 		RepositoryName:  completed.RepositoryName,
 		WorktreePath:    completed.WorktreePath,
@@ -428,7 +428,7 @@ func (s *ManualSessionService) forwardEvents(ctx context.Context, events <-chan 
 			}
 
 			if evt.Type == "question" {
-				if err := s.questionRouter.Route(ctx, domain.AgentSessionPhaseManual, evt, sessionID); err != nil {
+				if err := s.questionRouter.Route(ctx, domain.AgentSessionKindManual, evt, sessionID); err != nil {
 					slog.Error("failed to route manual question", "error", err, "agent_session_id", sessionID)
 				}
 				continue

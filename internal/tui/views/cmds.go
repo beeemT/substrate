@@ -800,7 +800,7 @@ func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService
 		var interrupted *domain.AgentSession
 		for i := range sessions {
 			if sessions[i].Status == domain.AgentSessionInterrupted &&
-				sessions[i].Phase == domain.AgentSessionPhasePlanning {
+				sessions[i].Kind == domain.AgentSessionKindPlanning {
 				interrupted = &sessions[i]
 				break
 			}
@@ -895,7 +895,7 @@ func ResumeAllSessionsForWorkItemCmd(
 		for _, s := range sessions {
 			if s.Status == domain.AgentSessionRunning || s.Status == domain.AgentSessionPending ||
 				s.Status == domain.AgentSessionCompleted || s.Status == domain.AgentSessionWaitingForAnswer {
-				if s.Phase == domain.AgentSessionPhasePlanning {
+				if s.Kind == domain.AgentSessionKindPlanning {
 					hasPlanningActive = true
 				} else if s.SubPlanID != "" {
 					activeSubPlans[s.SubPlanID] = true
@@ -909,7 +909,7 @@ func ResumeAllSessionsForWorkItemCmd(
 			if s.Status != domain.AgentSessionInterrupted {
 				continue
 			}
-			if s.Phase == domain.AgentSessionPhasePlanning {
+			if s.Kind == domain.AgentSessionKindPlanning {
 				if !hasPlanningActive {
 					planningInterrupted = &s
 				}
