@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     id                TEXT PRIMARY KEY,
     sub_plan_id       TEXT NOT NULL REFERENCES sub_plans(id),
     workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
-    kind              TEXT NOT NULL CHECK (kind IN ('planning','implementation','review')),
     repository_name   TEXT NOT NULL,
     harness_name      TEXT NOT NULL,
     worktree_dir      TEXT NOT NULL,

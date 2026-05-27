@@ -165,7 +165,7 @@ func makeSession(t *testing.T, tx generic.SQLXRemote, spID, wsID string) domain.
 		WorkItemID:     workItemID,
 		SubPlanID:      spID,
 		WorkspaceID:    wsID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		RepositoryName: "test-repo",
 		HarnessName:    "claude",
 		WorktreePath:   "/tmp/worktree",
@@ -886,7 +886,7 @@ func TestSessionSearchHistory(t *testing.T) {
 		ID:          domain.NewID(),
 		WorkItemID:  planningOnlyItem.ID,
 		WorkspaceID: remoteWS.ID,
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   planningUpdatedAt,
@@ -1371,11 +1371,11 @@ func TestEmptyLists(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Migration 018: agent_sessions phase→kind rename + foreman CHECK
+// Migration 019: agent_sessions phase→kind rename + foreman CHECK
 // ---------------------------------------------------------------------------
 
-func TestMigration018_AgentSessionKind(t *testing.T) {
-	// Start with migration 017 applied (source table already has 'kind' column).
+func TestMigration019_AgentSessionKind(t *testing.T) {
+	// Start with migration 018 applied. Existing databases at that point still have a phase column.
 	db, err := sqlx.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1393,7 +1393,7 @@ func TestMigration018_AgentSessionKind(t *testing.T) {
 		}
 	}
 
-	// Parse and apply migrations 001–017 in version order.
+	// Parse and apply migrations 001–018 in version order.
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
@@ -1411,7 +1411,7 @@ func TestMigration018_AgentSessionKind(t *testing.T) {
 			continue
 		}
 		ver, err := strconv.Atoi(parts[0])
-		if err != nil || ver < 1 || ver > 17 {
+		if err != nil || ver < 1 || ver > 18 {
 			continue
 		}
 		migrationFiles = append(migrationFiles, struct {
@@ -1461,29 +1461,28 @@ func TestMigration018_AgentSessionKind(t *testing.T) {
 		t.Fatalf("create work_item: %v", err)
 	}
 
-	// Insert an agent_sessions row with kind='implementation' directly into the
-	// 017 schema (which already uses 'kind' instead of 'phase').
+	// Insert an agent_sessions row with phase='implementation' directly into the 018 schema.
 	sessionID := domain.NewID()
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO agent_sessions (
 			id, work_item_id, workspace_id, sub_plan_id, plan_id,
-			repository_name, harness_name, worktree_path, status, kind,
+			repository_name, harness_name, worktree_path, status, phase,
 			created_at, updated_at
 		) VALUES (?, ?, ?, NULL, NULL, 'test-repo', 'claude', '/tmp/wt', 'completed', 'implementation', ?, ?)
 	`, sessionID, wiID, wsID, nowStr, nowStr); err != nil {
-		t.Fatalf("insert agent_session with kind='implementation': %v", err)
+		t.Fatalf("insert agent_session with phase='implementation': %v", err)
 	}
 
-	// Read and apply migration 018 directly to avoid re-running 001–017.
-	migration018, err := fs.ReadFile(migrations.FS, "018_agent_session_kind.sql")
+	// Read and apply migration 019 directly to avoid re-running 001–018.
+	migration019, err := fs.ReadFile(migrations.FS, "019_agent_session_kind.sql")
 	if err != nil {
-		t.Fatalf("read migration 018: %v", err)
+		t.Fatalf("read migration 019: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, string(migration018)); err != nil {
-		t.Fatalf("apply migration 018: %v", err)
+	if _, err := db.ExecContext(ctx, string(migration019)); err != nil {
+		t.Fatalf("apply migration 019: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (18)`); err != nil {
-		t.Fatalf("record migration 018: %v", err)
+	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (19)`); err != nil {
+		t.Fatalf("record migration 019: %v", err)
 	}
 
 	// Verify the pre-existing row survived migration and still has kind='implementation'.
@@ -1505,7 +1504,7 @@ func TestMigration018_AgentSessionKind(t *testing.T) {
 		) VALUES (?, ?, ?, NULL, NULL, 'test-repo', 'claude', '/tmp/wt', 'running', 'foreman', ?, ?)
 	`, foremanID, wiID, wsID, nowStr, nowStr)
 	if err != nil {
-		t.Errorf("insert with kind='foreman' should succeed after 018: %v", err)
+		t.Errorf("insert with kind='foreman' should succeed after 019: %v", err)
 	}
 
 	var foremanKind string
@@ -1528,4 +1527,3 @@ func TestMigration018_AgentSessionKind(t *testing.T) {
 		t.Error("insert with kind='invalid-kind' should be rejected by CHECK constraint")
 	}
 }
-
