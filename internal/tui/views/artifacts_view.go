@@ -261,7 +261,7 @@ func (m ArtifactsModel) KeybindHints() []KeybindHint {
 	if len(m.items) == 0 {
 		return nil
 	}
-	hints := []KeybindHint{{Key: "↑↓", Label: "Navigate"}}
+	var hints []KeybindHint
 	if len(m.items) > 1 {
 		hints = append(hints, KeybindHint{Key: "Space", Label: "Expand/collapse"})
 	}

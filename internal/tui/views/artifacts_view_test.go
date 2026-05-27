@@ -433,9 +433,6 @@ func TestArtifactsViewKeybindHints(t *testing.T) {
 		keys[i] = h.Key
 	}
 	joined := strings.Join(keys, " ")
-	if !strings.Contains(joined, "↑↓") {
-		t.Error("hints missing navigate")
-	}
 	if !strings.Contains(joined, "Space") {
 		t.Error("hints missing expand/collapse")
 	}

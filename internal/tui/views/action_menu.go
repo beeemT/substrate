@@ -1,6 +1,7 @@
 package views
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -239,7 +240,6 @@ func (m ActionMenuModel) View() string {
 	}
 	body := m.actionsBody(contentWidth, visibleRows)
 	footer := ansi.Truncate(components.RenderKeyHints(m.st, []components.KeyHint{
-		{Key: "↑↓", Label: "Navigate"},
 		{Key: "Enter", Label: "Select"},
 		{Key: "Esc", Label: "Close"},
 	}, "  "), contentWidth, "")
@@ -379,6 +379,17 @@ func (a *App) BuildActionRegistry(ctx ActionContext) []Action {
 	}
 
 	actions = filterAvailableActions(a, actions)
+
+	// Remove actions that are pure navigation, overlay-close, or Enter-confirm operations.
+	// These are intuitive enough that showing them clutters the menu.
+	actions = slices.DeleteFunc(actions, func(a Action) bool {
+		switch a.Shortcut {
+		case "↑", "↓", "←", "→", "←/Esc", "Enter", "Enter/o", "Esc":
+			return true
+		}
+		return false
+	})
+
 	sort.Slice(actions, func(i, j int) bool {
 		if actions[i].Priority == actions[j].Priority {
 			return actions[i].Label < actions[j].Label

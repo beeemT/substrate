@@ -294,13 +294,12 @@ func (m SourceItemsOverlay) detailContent() string {
 }
 
 func (m SourceItemsOverlay) hintText() string {
-	parts := []string{"[↑↓] Select", "[←→] Focus", "[Space] Toggle select"}
+	parts := []string{"[←→] Focus", "[Space] Toggle select"}
 	if m.hasMultiSelection() {
 		parts = append(parts, "[Enter/o] Open selected")
 	} else {
 		parts = append(parts, "[Enter/o] Open")
 	}
-	parts = append(parts, "[Esc] Close")
 	return strings.Join(parts, "  ")
 }
 

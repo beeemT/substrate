@@ -68,9 +68,9 @@ func TestActionMenuModelView(t *testing.T) {
 		t.Error("View() should contain 'Search:' label")
 	}
 
-	// Check for navigation hints
-	if !strings.Contains(view, "Navigate") || !strings.Contains(view, "Enter") {
-		t.Error("View() should contain navigation hints")
+	// Check for remaining hints
+	if !strings.Contains(view, "Enter") || !strings.Contains(view, "Esc") {
+		t.Error("View() should contain Enter and Esc hints")
 	}
 }
 

@@ -157,8 +157,19 @@ func TestPlanReviewModel_WrapsAndNumbersPlanLines(t *testing.T) {
 	for _, hint := range hints {
 		labels = append(labels, hint.Label)
 	}
-	if !strings.Contains(strings.Join(labels, " | "), "Close") {
-		t.Fatalf("keybind hints = %#v, want close hint", hints)
+	// Verify expected hints are present (no close hint since Esc is intuitive)
+	expected := []string{"Approve", "Copy", "Edit in $EDITOR"}
+	for _, exp := range expected {
+		found := false
+		for _, l := range labels {
+			if l == exp {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("keybind hints = %#v, want %q hint", hints, exp)
+		}
 	}
 	for i, line := range strings.Split(rendered, "\n") {
 		if got := ansi.StringWidth(line); got > 28 {

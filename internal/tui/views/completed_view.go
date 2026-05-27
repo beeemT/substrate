@@ -129,13 +129,11 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 	}
 	var hints []KeybindHint
 	if strings.TrimSpace(m.planContent) != "" {
-		hints = append(hints, KeybindHint{Key: "↑↓", Label: "Scroll"})
 		hints = append(hints, KeybindHint{Key: "c", Label: "Copy"})
 	}
 	if m.workItemID != "" {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Request changes"})
 	}
-	hints = append(hints, KeybindHint{Key: "Esc", Label: "Close"})
 	return hints
 }
 

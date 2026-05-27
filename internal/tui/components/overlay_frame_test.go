@@ -101,7 +101,7 @@ func TestRenderOverlayFrameFitsComputedLayout(t *testing.T) {
 			st.Muted.Render("Searching…"),
 		},
 		Body:   body,
-		Footer: "[Tab] Focus  [Ctrl+S] Toggle scope  [Enter] Open  [Esc] Close",
+		Footer: "[Tab] Focus  [Ctrl+S] Toggle scope  [Enter] Open",
 	})
 
 	assertFits(t, view, 72, 18)

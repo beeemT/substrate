@@ -55,7 +55,7 @@ func (m InterruptedModel) KeybindHints() []KeybindHint {
 		}
 	}
 
-	return []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+	return nil
 }
 
 func (m InterruptedModel) Update(msg tea.Msg) (InterruptedModel, tea.Cmd) {

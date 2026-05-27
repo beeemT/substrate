@@ -522,7 +522,7 @@ func (m ReviewFollowupModel) viewPicker() string {
 	}
 	body := strings.Join(rows, "\n")
 	footer := m.styles.Hint.Render(ansi.Truncate(
-		"[↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Continue  [Esc] Cancel",
+		"[Space] Toggle  [a] All  [n] None  [Enter] Continue",
 		iw, ""))
 	return components.RenderOverlayFrame(m.styles, fw, components.OverlayFrameSpec{
 		HeaderLines: header,
@@ -573,7 +573,7 @@ func (m ReviewFollowupModel) viewSelector() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, sep, rightPane)
 
 	footer := m.styles.Hint.Render(ansi.Truncate(
-		" [↑↓] Move  [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [←→] Focus  [Esc] Cancel",
+		" [Space] Toggle  [a] All  [n] None  [Enter] Address  [p] Re-plan  [←→] Focus",
 		iw, ""))
 	return components.RenderOverlayFrame(m.styles, fw, components.OverlayFrameSpec{
 		HeaderLines: header,

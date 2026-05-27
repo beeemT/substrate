@@ -2582,7 +2582,7 @@ func (m *NewSessionOverlay) filterModalView() string {
 		m.loadFilterList.SetHeight(pickerHeight)
 		spec.HeaderLines = []string{m.styles.Title.Render("Load New Session Filter")}
 		spec.Body = m.loadFilterList.View()
-		spec.Footer = m.styles.Hint.Render(truncate("[↑↓] Select  [Enter] Apply + Reload  [d] Delete  [Esc] Cancel", contentWidth))
+		spec.Footer = m.styles.Hint.Render(truncate("[Enter] Apply + Reload  [d] Delete", contentWidth))
 	default:
 		return ""
 	}

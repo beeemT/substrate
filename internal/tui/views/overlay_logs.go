@@ -95,7 +95,7 @@ func (l *LogsOverlay) View() string {
 	var sb strings.Builder
 	sb.WriteString(l.st.Title.Render("Logs") + "\n\n")
 	sb.WriteString(l.vp.View())
-	sb.WriteString("\n" + l.st.Muted.Render("↑↓ scroll  c copy  Esc close"))
+	sb.WriteString("\n" + l.st.Muted.Render("c copy"))
 
 	return l.st.OverlayFrame.Padding(1, 3).Render(sb.String())
 }

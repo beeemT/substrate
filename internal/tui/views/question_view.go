@@ -84,7 +84,6 @@ func (m QuestionModel) KeybindHints() []KeybindHint {
 	return []KeybindHint{
 		{Key: "Enter", Label: "Send answer"},
 		{Key: "PgUp/PgDn", Label: "Scroll"},
-		{Key: "Esc", Label: "Close"},
 	}
 }
 

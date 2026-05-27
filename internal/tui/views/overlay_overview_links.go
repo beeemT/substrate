@@ -267,11 +267,11 @@ func (m OverviewLinksOverlay) hintText() string {
 	hasMultiple := len(all) > 1
 	switch {
 	case hasURL && hasMultiple:
-		return "[↑↓] Select  [Enter/o] Open  [a] Open all  [Esc] Close"
+		return "[Enter/o] Open  [a] Open all  [Esc] Close"
 	case hasURL:
-		return "[↑↓] Select  [Enter/o] Open  [Esc] Close"
+		return "[Enter/o] Open  [Esc] Close"
 	default:
-		return "[↑↓] Select  [Esc] Close"
+		return "[Esc] Close"
 	}
 }
 

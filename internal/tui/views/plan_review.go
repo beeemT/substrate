@@ -381,8 +381,6 @@ func (m *PlanReviewModel) KeybindHints() []KeybindHint {
 		{Key: "a", Label: "Approve"},
 		{Key: "c", Label: "Copy"},
 		{Key: "e", Label: "Edit in $EDITOR"},
-		{Key: "↑↓", Label: "Scroll"},
-		{Key: "Esc", Label: "Close"},
 	}
 }
 

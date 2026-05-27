@@ -16,8 +16,8 @@ func TestActionMenuViewRendersActionRowsWithSharedChrome(t *testing.T) {
 	model := NewActionMenuModel(st)
 	model.SetSize(48, 14)
 	model.actions = []Action{
-		{ID: "open", Label: "Open selected session with a very long label", Shortcut: "Enter"},
-		{ID: "close", Label: "Close", Shortcut: "Esc"},
+		{ID: "open", Label: "Open selected session with a very long label", Shortcut: "o"},
+		{ID: "close", Label: "Close", Shortcut: "c"},
 	}
 	model.matches = []int{0, 1}
 	model.query = " " // non-empty to trigger label truncation, not search placeholder ellipsis
@@ -34,7 +34,7 @@ func TestActionMenuViewRendersActionRowsWithSharedChrome(t *testing.T) {
 	}
 
 	plain := ansi.Strip(view)
-	for _, want := range []string{"╭", "Actions", "Search:", "›", "[Enter]", "[Esc]"} {
+	for _, want := range []string{"╭", "Actions", "Search:", "›", "[o]", "[c]"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view missing %q\n%s", want, plain)
 		}

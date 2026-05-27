@@ -289,9 +289,7 @@ func (m ContentModel) emptyStateView() string {
 	} else {
 		// Sessions exist but none selected
 		title := m.styles.Title.Render("Select a session")
-		prompt := m.styles.Subtitle.Render("Use ") +
-			m.styles.KeybindAccent.Render("[↑/↓]") +
-			m.styles.Subtitle.Render(" to browse the sidebar, or press ") +
+		prompt := m.styles.Subtitle.Render("Press ") +
 			m.styles.KeybindAccent.Render("[n]") +
 			m.styles.Subtitle.Render(" for a new session.")
 
