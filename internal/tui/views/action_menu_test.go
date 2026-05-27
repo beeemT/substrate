@@ -58,9 +58,9 @@ func TestActionMenuModelView(t *testing.T) {
 		t.Error("View() returned empty string")
 	}
 
-	// Check that title is rendered
-	if !strings.Contains(view, "Actions") {
-		t.Error("View() should contain 'Actions' title")
+	// Check that shared overlay chrome and title are rendered
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "Actions") {
+		t.Error("View() should contain overlay frame and 'Actions' title")
 	}
 
 	// Check that search bar is present
@@ -99,16 +99,9 @@ func TestActionMenuModelViewFitsRequestedSize(t *testing.T) {
 			model.SetSize(tc.width, tc.height)
 
 			view := model.View()
+			assertViewFitsSize(t, view, tc.width, tc.height)
+
 			lines := strings.Split(view, "\n")
-
-			// Check line count
-			if len(lines) > tc.height {
-				t.Errorf("View() has %d lines, exceeds height %d", len(lines), tc.height)
-			}
-
-			// Note: Lipgloss-styled text may render wider than the raw string length.
-			// The View() output uses fmt.Sprintf padding which may not truncate lipgloss styles.
-			// We just verify that the view is non-empty and has reasonable structure.
 			if len(lines) < 3 {
 				t.Errorf("View() has too few lines: %d", len(lines))
 			}

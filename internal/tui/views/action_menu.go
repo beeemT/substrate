@@ -1,18 +1,23 @@
 package views
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
-const keyBackspace = "backspace"
+const (
+	keyBackspace                = "backspace"
+	actionMenuMaxOverlayWidth   = 72
+	actionMenuMaxVisibleActions = 12
+)
 
 // ActionContext identifies the context in which the action menu was opened.
 type ActionContext int
@@ -223,114 +228,97 @@ func (m ActionMenuModel) View() string {
 		return ""
 	}
 
-	const (
-		minWidth    = 40
-		frameTop    = 1
-		frameBottom = 1
-	)
+	frameWidth := actionMenuFrameWidth(m.width)
+	contentWidth := max(1, m.st.Chrome.OverlayFrame.InnerWidth(frameWidth))
+	visibleRows := m.visibleActionRows()
 
-	// Calculate layout bounds
-	actionWidth := m.width - 4 // padding
-
-	// Ensure minimum width
-	if m.width < minWidth {
-		actionWidth = minWidth - 4
+	header := []string{
+		m.st.Title.Render("Actions"),
+		m.searchLine(contentWidth),
+		components.RenderOverlayDivider(m.st, contentWidth),
 	}
+	body := m.actionsBody(contentWidth, visibleRows)
+	footer := ansi.Truncate(components.RenderKeyHints(m.st, []components.KeyHint{
+		{Key: "↑↓", Label: "Navigate"},
+		{Key: "Enter", Label: "Select"},
+		{Key: "Esc", Label: "Close"},
+	}, "  "), contentWidth, "")
 
-	maxVisible := m.height - frameTop - frameBottom - 2 - 1 // search bar + divider + hint
-	if maxVisible <= 0 {
-		maxVisible = 1
+	return components.RenderOverlayFrame(m.st, frameWidth, components.OverlayFrameSpec{
+		HeaderLines: header,
+		Body:        body,
+		Footer:      footer,
+		Focused:     true,
+	})
+}
+
+func actionMenuFrameWidth(termWidth int) int {
+	if termWidth <= 2 {
+		return 1
 	}
+	return min(termWidth-2, actionMenuMaxOverlayWidth-2)
+}
 
-	var b strings.Builder
+func (m ActionMenuModel) visibleActionRows() int {
+	const fixedRows = 7 // frame borders + title + search + divider + body gap + footer
+	availableRows := max(1, m.height-fixedRows)
+	return min(actionMenuMaxVisibleActions, availableRows)
+}
 
-	// Title
-	b.WriteString(m.st.Title.Render("Actions"))
-
-	// Search bar
-	searchText := m.query
-	if searchText == "" {
-		searchText = "Type to search..."
+func (m ActionMenuModel) searchLine(width int) string {
+	if m.query == "" {
+		return ansi.Truncate(m.st.Label.Render("Search: ")+m.st.Muted.Render(" Type to search…"), width, "")
 	}
-	searchBar := fmt.Sprintf("  %s%s", m.st.Muted.Render("Search: "), searchText)
-	// Pad to width
-	searchBar = fmt.Sprintf("%-*s", m.width-2, searchBar)
-	b.WriteString("\n" + searchBar)
+	return ansi.Truncate(m.st.Label.Render("Search: ")+m.st.Subtitle.Render(" "+m.query), width, "")
+}
 
-	// Divider - use a simple string since Chrome doesn't have Render
-	divider := strings.Repeat("─", m.width-2)
-	b.WriteString("\n" + m.st.Muted.Render(divider))
-
-	// Actions
+func (m ActionMenuModel) actionsBody(width, visibleRows int) string {
+	visibleRows = max(1, visibleRows)
 	if len(m.matches) == 0 {
-		noMatch := fmt.Sprintf("  %s", centerText("No matching actions", actionWidth))
-		b.WriteString("\n" + m.st.Muted.Render(noMatch))
-	} else {
-		startIdx := 0
-		endIdx := len(m.matches)
-		if len(m.matches) > maxVisible {
-			// Scroll if cursor is outside visible range
-			if m.cursor >= maxVisible {
-				startIdx = m.cursor - maxVisible/2
-			}
-			endIdx = min(startIdx+maxVisible, len(m.matches))
-		}
-
-		for i := startIdx; i < endIdx; i++ {
-			idx := m.matches[i]
-			action := m.actions[idx]
-			isSelected := i == m.cursor
-
-			row := formatActionRow(action, actionWidth, isSelected, m.st)
-			b.WriteString("\n" + row)
-		}
+		return m.st.Muted.Render(centerText("No matching actions", width))
 	}
 
-	// Bottom hint
-	hint := " ↑↓ Navigate  Enter Select  Esc Close"
-	hint = fmt.Sprintf("%-*s", m.width-2, hint)
-	b.WriteString("\n" + m.st.Muted.Render(hint))
+	startIdx := 0
+	if len(m.matches) > visibleRows && m.cursor >= visibleRows {
+		startIdx = m.cursor - visibleRows/2
+	}
+	startIdx = min(startIdx, max(0, len(m.matches)-visibleRows))
+	endIdx := min(startIdx+visibleRows, len(m.matches))
 
-	return b.String()
+	rows := make([]string, 0, endIdx-startIdx)
+	for i := startIdx; i < endIdx; i++ {
+		idx := m.matches[i]
+		rows = append(rows, formatActionRow(m.actions[idx], width, i == m.cursor, m.st))
+	}
+	return strings.Join(rows, "\n")
 }
 
 // formatActionRow formats a single action row with shortcut right-aligned.
 func formatActionRow(action Action, width int, selected bool, st styles.Styles) string {
-	// Shortcut takes ~8 chars, space separator ~2, remaining for label
-	shortcutWidth := len(action.Shortcut) + 4 // "[shortcut] "
-	labelWidth := width - shortcutWidth - 2   // -2 for padding
+	width = max(1, width)
+	markerRaw := "› "
+	keyRaw := "[" + action.Shortcut + "]"
+	labelWidth := max(1, width-ansi.StringWidth(markerRaw)-ansi.StringWidth(keyRaw)-1)
+	label := ansi.Truncate(action.Label, labelWidth, "…")
+	labelPad := max(0, labelWidth-ansi.StringWidth(label))
 
-	if labelWidth < 1 {
-		labelWidth = 1
-	}
-
-	// Truncate label if needed (use rune count for proper Unicode handling)
-	labelRunes := []rune(action.Label)
-	var label string
-	if len(labelRunes) > labelWidth {
-		label = string(labelRunes[:labelWidth-1]) + "…"
-	} else {
-		label = action.Label
-	}
-
-	// Build row from plain components to avoid slicing lipgloss-styled strings.
-	plainRow := fmt.Sprintf("  %-*s [%s]", labelWidth, label, action.Shortcut)
-
+	marker := strings.Repeat(" ", ansi.StringWidth(markerRaw))
+	labelStyle := st.Subtitle
 	if selected {
-		// Prefix with styled indicator, skip the first two padding spaces.
-		return st.Title.Render("▶ ") + plainRow[2:]
+		marker = st.Accent.Render(markerRaw)
+		labelStyle = st.Title
 	}
 
-	// Apply hint style to the shortcut portion only.
-	return fmt.Sprintf("  %-*s %s", labelWidth, label, st.Hint.Render(action.Shortcut))
+	return marker + labelStyle.Render(label) + strings.Repeat(" ", labelPad+1) + st.KeybindAccent.Render(keyRaw)
 }
 
 // centerText centers text within a given width.
 func centerText(text string, width int) string {
-	if len(text) >= width {
-		return text[:width]
+	textWidth := ansi.StringWidth(text)
+	if textWidth >= width {
+		return ansi.Truncate(text, max(1, width), "")
 	}
-	padding := (width - len(text)) / 2
+	padding := (width - textWidth) / 2
 	return strings.Repeat(" ", padding) + text
 }
 
