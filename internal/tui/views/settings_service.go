@@ -726,7 +726,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.acp", Key: "agent", Label: "Agent", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Agent},
 				{Section: "adapters.acp", Key: "command", Label: "Command", Type: SettingsFieldPath, Value: cfg.Adapters.ACP.Command},
 				{Section: "adapters.acp", Key: "args", Label: "Args", Type: SettingsFieldString, Value: strings.Join(cfg.Adapters.ACP.Args, ","), Description: "Comma-separated arguments passed to the ACP agent command"},
-				{Section: "adapters.acp", Key: "env", Label: "Environment", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.ACP.Env), Description: "Environment variables as KEY=VALUE pairs, comma-separated"},
+				{Section: "adapters.acp", Key: "env", Label: "Environment", Type: SettingsFieldKeyValue, Value: formatMap(cfg.Adapters.ACP.Env), Description: "Environment variables injected into the ACP agent subprocess (KEY=VALUE, comma-separated). Use for API keys, endpoints, and feature flags the agent binary reads from its environment."},
 				{Section: "adapters.acp", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Model},
 				{Section: "adapters.acp", Key: "mode", Label: "Mode", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Mode},
 				{Section: "adapters.acp", Key: "thought_level", Label: "Thought Level", Type: SettingsFieldString, Value: cfg.Adapters.ACP.ThoughtLevel},
@@ -1246,7 +1246,7 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 	case "adapters.acp.model":
 		return "Provider/model identifier for new sessions, e.g. anthropic/claude-sonnet-4-20250514. Empty uses the agent's default.", statusEmpty
 	case "adapters.acp.mode":
-		return "ACP agent mode (agent-specific; consult your agent's documentation).", statusEmpty
+		return "ACP agent behavior mode, e.g. research, plan, implement, review, or agent. Agent-specific — check your agent's documentation for valid values.", statusEmpty
 	case "adapters.acp.thought_level":
 		return "Thought level hint forwarded to the ACP agent.", statusEmpty
 	case "adapters.linear.api_key_ref":
