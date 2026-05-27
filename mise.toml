@@ -2,4 +2,11 @@
 biome = "2.4.10"
 
 [hooks]
-enter='codegraph sync'
+# mise enter hook: keep codegraph index fresh
+enter = """
+  command -v codegraph >/dev/null 2>&1 || exit 0
+  if [ ! -f .codegraph/codegraph.db ]; then
+    codegraph init -i
+  fi
+  codegraph sync
+"""
