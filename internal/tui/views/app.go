@@ -752,11 +752,11 @@ func (a App) currentHints() []KeybindHint {
 		return append([]KeybindHint{{Key: "I", Label: "Interrupt"}}, hints...)
 	}
 	if a.mainFocus == mainFocusContent {
-		hints := append([]KeybindHint{{Key: "←/Esc", Label: "Back"}}, a.content.KeybindHints()...)
+		hints := a.content.KeybindHints()
 		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
-		hints := []KeybindHint{{Key: "↑/↓", Label: "Tasks"}, {Key: "→", Label: "Content"}, {Key: "←/Esc", Label: "Sessions"}}
+		hints := []KeybindHint{}
 		if a.selectedTaskSessionID() != "" && a.sourceDetailsNoticeForWorkItem(a.workItemByID(a.currentWorkItemID)) != nil {
 			hints = append([]KeybindHint{{Key: "Enter", Label: "Open overview"}}, hints...)
 		}
@@ -766,7 +766,7 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
 	}
-	return append(prependDelete(prependInterrupt(prependArchive([]KeybindHint{{Key: "↑/↓", Label: "Sessions"}, {Key: "→", Label: "Tasks"}, {Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}))), global...)
+	return append(prependDelete(prependInterrupt(prependArchive([]KeybindHint{{Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}))), global...)
 }
 
 func (a App) overviewOverlayOpen() bool {

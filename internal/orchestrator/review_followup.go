@@ -21,6 +21,7 @@ type ReviewFollowup struct {
 	planSvc     *service.PlanService
 	questionSvc *service.QuestionService
 	sessionSvc  *service.AgentSessionService
+	workItemSvc *service.SessionService
 	eventBus    event.Publisher
 }
 
@@ -32,6 +33,7 @@ func NewReviewFollowup(
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
 	sessionSvc *service.AgentSessionService,
+	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
 ) *ReviewFollowup {
 	return &ReviewFollowup{
@@ -41,6 +43,7 @@ func NewReviewFollowup(
 		planSvc:     planSvc,
 		questionSvc: questionSvc,
 		sessionSvc:  sessionSvc,
+		workItemSvc: workItemSvc,
 		eventBus:    eventBus,
 	}
 }
@@ -68,7 +71,7 @@ func (r *ReviewFollowup) FollowUp(ctx context.Context, workItemID, feedback stri
 	}
 
 	// Create new foreman
-	newForeman := NewForeman(r.cfg, r.harness, r.planSvc, r.questionSvc, r.sessionSvc, r.eventBus)
+	newForeman := NewForeman(r.cfg, r.harness, r.planSvc, r.questionSvc, r.sessionSvc, r.workItemSvc, r.eventBus)
 
 	// Start with follow-up context
 	if err := newForeman.Start(ctx, plan.ID, feedback); err != nil {

@@ -116,7 +116,7 @@ func TestContentOverviewKeybindHintsExposeOverviewActions(t *testing.T) {
 	for _, hint := range hints {
 		labels = append(labels, hint.Label)
 	}
-	for _, want := range []string{"Scroll", "Approve", "Inspect / Request changes"} {
+	for _, want := range []string{"Approve", "Inspect / Request changes"} {
 		if !slices.Contains(labels, want) {
 			t.Fatalf("overview keybind hints = %#v, want label %q", hints, want)
 		}

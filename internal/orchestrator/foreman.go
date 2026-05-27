@@ -34,12 +34,13 @@ type pendingQuestion struct {
 
 // Foreman manages a persistent oh-my-pi session for answering sub-agent questions.
 type Foreman struct {
-	cfg         *config.Config
-	harness     adapter.AgentHarness
-	planSvc     *service.PlanService
-	questionSvc *service.QuestionService
-	sessionSvc  *service.AgentSessionService
-	eventBus    event.Publisher
+	cfg             *config.Config
+	harness         adapter.AgentHarness
+	planSvc         *service.PlanService
+	questionSvc     *service.QuestionService
+	agentSessionSvc *service.AgentSessionService
+	workItemSvc     *service.SessionService
+	eventBus        event.Publisher
 
 	mu            sync.Mutex
 	sessionMu     sync.Mutex           // serializes SendMessage+waitForAnswer; prevents concurrent Events() readers
@@ -70,20 +71,22 @@ func NewForeman(
 	harness adapter.AgentHarness,
 	planSvc *service.PlanService,
 	questionSvc *service.QuestionService,
-	sessionSvc *service.AgentSessionService,
+	agentSessionSvc *service.AgentSessionService,
+	workItemSvc *service.SessionService,
 	eventBus event.Publisher,
 ) *Foreman {
 	return &Foreman{
-		cfg:           cfg,
-		harness:       harness,
-		planSvc:       planSvc,
-		questionSvc:   questionSvc,
-		sessionSvc:    sessionSvc,
-		eventBus:      eventBus,
-		questionCh:    make(chan pendingQuestion, 100),
-		questionFront: make(chan pendingQuestion, 100),
-		stopCh:        make(chan struct{}),
-		escalatedChs:  make(map[string]escalatedEntry),
+		cfg:             cfg,
+		harness:         harness,
+		planSvc:         planSvc,
+		questionSvc:     questionSvc,
+		agentSessionSvc: agentSessionSvc,
+		workItemSvc:     workItemSvc,
+		eventBus:        eventBus,
+		questionCh:      make(chan pendingQuestion, 100),
+		questionFront:   make(chan pendingQuestion, 100),
+		stopCh:          make(chan struct{}),
+		escalatedChs:    make(map[string]escalatedEntry),
 	}
 }
 
@@ -121,7 +124,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 
 	// Look up existing foreman session row for this work item.
 	// Reuse the same row across restarts so the sidebar shows one continuous Foreman.
-	sessions, err := f.sessionSvc.ListByWorkItemID(ctx, f.workItemID)
+	sessions, err := f.agentSessionSvc.ListByWorkItemID(ctx, f.workItemID)
 	if err != nil {
 		f.mu.Unlock()
 		return fmt.Errorf("list sessions for foreman row lookup: %w", err)
@@ -166,7 +169,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 
 	// Persist the foreman agent session row if it doesn't already exist.
 	// WorkspaceID requires loading the work item.
-	workItem, err := f.sessionSvc.Get(ctx, f.workItemID)
+	workItem, err := f.workItemSvc.Get(ctx, f.workItemID)
 	if err != nil {
 		slog.Warn("failed to load work item for foreman session WorkspaceID", "error", err, "work_item_id", f.workItemID)
 	}
@@ -198,7 +201,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		if err := f.sessionSvc.Create(ctx, foremanSession); err != nil {
+		if err := f.agentSessionSvc.Create(ctx, foremanSession); err != nil {
 			f.mu.Unlock()
 			return fmt.Errorf("create foreman session row: %w", err)
 		}
@@ -206,7 +209,7 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 
 	// Transition the row to running. If the row was already running (restart case),
 	// this returns an error which is acceptable — the harness session is live.
-	if err := f.sessionSvc.Start(ctx, foremanSessionID); err != nil {
+	if err := f.agentSessionSvc.Start(ctx, foremanSessionID); err != nil {
 		slog.Warn("foreman session row transition to running", "error", err, "session_id", foremanSessionID)
 	}
 
@@ -260,7 +263,7 @@ func (f *Foreman) watchHarnessExit(ctx context.Context) {
 	f.mu.Unlock()
 
 	// Harness exited unexpectedly; transition the persisted row to failed.
-	if err := f.sessionSvc.Fail(context.WithoutCancel(ctx), sessionID, nil); err != nil {
+	if err := f.agentSessionSvc.Fail(context.WithoutCancel(ctx), sessionID, nil); err != nil {
 		slog.Warn("failed to transition foreman session to failed after harness exit",
 			"error", err, "session_id", sessionID)
 	}
@@ -354,7 +357,7 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 	}
 
 	// Get session to retrieve repository name.
-	agentSession, err := f.sessionSvc.Get(ctx, pq.question.AgentSessionID)
+	agentSession, err := f.agentSessionSvc.Get(ctx, pq.question.AgentSessionID)
 	if err != nil {
 		return fmt.Errorf("get agent session: %w", err)
 	}
@@ -382,7 +385,7 @@ func (f *Foreman) answerOne(ctx context.Context, pq pendingQuestion) error {
 		}
 		// Register the answer channel so ResolveEscalated can unblock the sub-agent later.
 		// Also transition the session to waiting_for_answer so the TUI surfaces the overlay.
-		if err := f.sessionSvc.WaitForAnswer(ctx, pq.question.AgentSessionID); err != nil {
+		if err := f.agentSessionSvc.WaitForAnswer(ctx, pq.question.AgentSessionID); err != nil {
 			// Log but do not abort: the escalation is persisted; the TUI will still show the
 			// question via DB poll even if the state transition fails.
 			slog.Warn("failed to transition agent session to waiting_for_answer",
@@ -653,7 +656,7 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 	if err != nil {
 		slog.Warn("failed to fetch question for FAQ append", "error", err, "question_id", questionID)
 	} else {
-		agentSession, err := f.sessionSvc.Get(ctx, entry.agentSessionID)
+		agentSession, err := f.agentSessionSvc.Get(ctx, entry.agentSessionID)
 		if err != nil {
 			slog.Warn("failed to fetch agent session for FAQ append", "error", err, "agent_session_id", entry.agentSessionID)
 		} else {
@@ -675,7 +678,7 @@ func (f *Foreman) ResolveEscalated(ctx context.Context, questionID, answer strin
 
 	// Transition the session back to running before unblocking the sub-agent so the
 	// TUI clears the action-required state before the agent receives the answer.
-	if err := f.sessionSvc.ResumeFromAnswer(ctx, entry.agentSessionID); err != nil {
+	if err := f.agentSessionSvc.ResumeFromAnswer(ctx, entry.agentSessionID); err != nil {
 		slog.Warn("failed to resume agent session from waiting_for_answer",
 			"error", err, "agent_session_id", entry.agentSessionID)
 	}
@@ -719,11 +722,11 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	// Interrupted if context was cancelled (e.g., app shutdown, pipeline interrupt);
 	// completed otherwise (normal stop after implementation finishes).
 	if ctx.Err() != nil {
-		if err := f.sessionSvc.Interrupt(ctx, lastSessionID); err != nil {
+		if err := f.agentSessionSvc.Interrupt(ctx, lastSessionID); err != nil {
 			slog.Warn("failed to transition foreman session to interrupted", "error", err, "session_id", lastSessionID)
 		}
 	} else {
-		if err := f.sessionSvc.Complete(ctx, lastSessionID); err != nil {
+		if err := f.agentSessionSvc.Complete(ctx, lastSessionID); err != nil {
 			slog.Warn("failed to transition foreman session to completed", "error", err, "session_id", lastSessionID)
 		}
 	}

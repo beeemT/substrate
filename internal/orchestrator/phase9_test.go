@@ -653,7 +653,7 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSes
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo-a",
 		HarnessName:    "mock",
@@ -919,10 +919,10 @@ func TestResolveEscalated_AppendsFAQ(t *testing.T) {
 
 	answerCh := make(chan string, 1)
 	f := &Foreman{
-		cfg:         testReviewConfig(3),
-		planSvc:     planSvc,
-		questionSvc: questionSvc,
-		sessionSvc:  sessionSvc,
+		cfg:             testReviewConfig(3),
+		planSvc:         planSvc,
+		questionSvc:     questionSvc,
+		agentSessionSvc: sessionSvc,
 		escalatedChs: map[string]escalatedEntry{
 			"q-1": {answerCh: answerCh, agentSessionID: "sess-1"},
 		},

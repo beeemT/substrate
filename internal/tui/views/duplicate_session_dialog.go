@@ -158,7 +158,7 @@ func (a App) duplicateSessionDialogView() string {
 	if compact {
 		rows = append(rows, content.Render(hintStyle.Render("Enter confirm • Esc cancel")))
 	} else {
-		rows = append(rows, content.Render(hintStyle.Render("↑/↓ choose • Enter confirm • Esc cancel")))
+		rows = append(rows, content.Render(hintStyle.Render("Enter confirm • Esc cancel")))
 	}
 
 	return frame.Render(strings.Join(rows, "\n"))

@@ -1677,16 +1677,16 @@ func (m SettingsPage) renderStickyFieldDetails(width int, height int) string {
 }
 
 func (m SettingsPage) footerText() string {
-	hint := "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [t] test  [r] reveal"
+	hint := "[enter] focus settings  [t] test  [r] reveal"
 	if providerSupportsLogin(providerForSection(m.currentSection())) {
-		hint = "[↑↓] navigate tree  [→] expand/open  [←] collapse/up  [enter] focus settings  [esc] close  [t] test  [g] login  [r] reveal"
+		hint = "[enter] focus settings  [t] test  [g] login  [r] reveal"
 	}
 	if m.editing {
 		hint = "[enter] save edit  [esc] cancel edit"
 	} else if m.fieldsFocused() {
-		hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [r] reveal"
+		hint = "[enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [r] reveal"
 		if providerSupportsLogin(providerForSection(m.currentSection())) {
-			hint = "[↑↓] settings  [enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [g] login  [r] reveal"
+			hint = "[enter/e] edit  [space] toggle bool  [left/esc] groups  [t] test  [g] login  [r] reveal"
 		}
 	}
 	extras := make([]string, 0, 2)

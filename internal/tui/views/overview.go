@@ -292,7 +292,7 @@ func (m SessionOverviewModel) KeybindHints() []KeybindHint {
 			return m.completed.KeybindHints()
 		}
 	}
-	hints := []KeybindHint{{Key: "↑↓", Label: "Scroll"}}
+	var hints []KeybindHint
 	if len(m.data.Actions) > 1 {
 		hints = append(hints, KeybindHint{Key: "Tab", Label: "Next action"})
 	}

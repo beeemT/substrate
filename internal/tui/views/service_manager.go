@@ -317,7 +317,7 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 	// Build ReviewFollowup for foreman lifecycle during follow-up sessions
 	var reviewFollowup *orchestrator.ReviewFollowup
 	if harnesses.Foreman != nil {
-		reviewFollowup = orchestrator.NewReviewFollowup(cfg, harnesses.Foreman, registry, planSvc, questionSvc, sessionSvc, bus)
+		reviewFollowup = orchestrator.NewReviewFollowup(cfg, harnesses.Foreman, registry, planSvc, questionSvc, sessionSvc, workItemSvc, bus)
 	}
 
 	var resumption *orchestrator.Resumption

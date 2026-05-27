@@ -479,7 +479,7 @@ func (m *SessionSearchOverlay) syncDetailViewportWithLayout(layout components.Sp
 }
 
 func (m SessionSearchOverlay) hintText() string {
-	return "[↑] Scope  [↓] Results  [←/→] Focus or toggle  [Ctrl+S] Toggle scope  [Enter] Open  [d] Delete session"
+	return "[Ctrl+S] Toggle scope  [Enter] Open  [d] Delete session"
 }
 
 func (m SessionSearchOverlay) View() string {

@@ -110,7 +110,7 @@ func (s *ImplementationService) BeginForeman(ctx context.Context, workItemID, pl
 	}
 
 	// Create new foreman instance
-	foreman := NewForeman(s.cfg, s.foremanHarness, s.planSvc, s.questionSvc, s.sessionSvc, s.eventBus)
+	foreman := NewForeman(s.cfg, s.foremanHarness, s.planSvc, s.questionSvc, s.sessionSvc, s.workItemSvc, s.eventBus)
 
 	// Start the foreman
 	if err := foreman.Start(ctx, planID, ""); err != nil {

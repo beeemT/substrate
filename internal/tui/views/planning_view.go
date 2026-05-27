@@ -282,11 +282,9 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 		return []KeybindHint{
 			{Key: "c", Label: "Copy"},
 			{Key: keyEsc, Label: "Close"},
-			{Key: "↑↓", Label: "Scroll"},
 		}
 	}
 	hints := []KeybindHint{
-		{Key: "↑↓", Label: "Scroll"},
 		{Key: "f", Label: "Follow tail"},
 		{Key: "g", Label: "Go to start"},
 		{Key: "v", Label: "Verbose logs"},
@@ -546,7 +544,7 @@ func (m SessionLogModel) View() string {
 
 	if m.planOverlay && m.planDocument != "" {
 		headerLine := m.styles.Muted.Render("Plan (read-only)")
-		footerLine := m.styles.Muted.Render("c copy  esc close  ↑↓ scroll")
+		footerLine := m.styles.Muted.Render("c copy  esc close")
 		body := m.planViewport.View()
 		frameWidth := m.width
 		innerHeight := max(1, m.height-m.styles.Chrome.OverlayFrame.VerticalFrame()-2) // header + footer

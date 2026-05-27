@@ -55,11 +55,11 @@ func (h *trackingHarness) StartSession(_ context.Context, opts adapter.SessionOp
 // newReviewFollowupForTest creates a ReviewFollowup with real services backed by mock repos.
 func newReviewFollowupForTest(t *testing.T) (*ReviewFollowup, *trackingHarness, *mockPlanRepo) {
 	t.Helper()
-
 	planRepo := newMockPlanRepo()
 	subPlanRepo := newMockSubPlanRepo()
 	questionRepo := newMockQuestionRepo()
 	sessionRepo := newMockSessionRepo()
+	workItemRepo := &mockWorkItemRepo{}
 	bus := event.NewBus(event.BusConfig{})
 	_ = questionRepo
 	_ = sessionRepo
@@ -67,12 +67,13 @@ func newReviewFollowupForTest(t *testing.T) (*ReviewFollowup, *trackingHarness, 
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
 	questionSvc := service.NewQuestionService(repository.NoopTransacter{Res: repository.Resources{Questions: questionRepo}}, &mockPublisher{})
 	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 
 	harness := &trackingHarness{}
 	cfg := &config.Config{}
 	registry := NewSessionRegistry()
 
-	rf := NewReviewFollowup(cfg, harness, registry, planSvc, questionSvc, sessionSvc, bus)
+	rf := NewReviewFollowup(cfg, harness, registry, planSvc, questionSvc, sessionSvc, workItemSvc, bus)
 	return rf, harness, planRepo
 }
 
@@ -115,7 +116,7 @@ func TestReviewFollowup_FollowUp_StopsExistingForeman(t *testing.T) {
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
 	// Register an existing foreman (not started, so IsRunning() is false)
-	existingForeman := NewForeman(&config.Config{}, nil, rf.planSvc, rf.questionSvc, rf.sessionSvc, rf.eventBus)
+	existingForeman := NewForeman(&config.Config{}, nil, rf.planSvc, rf.questionSvc, rf.sessionSvc, rf.workItemSvc, rf.eventBus)
 	rf.registry.RegisterForeman("wi-1", existingForeman)
 
 	if err := rf.FollowUp(context.Background(), "wi-1", "improve the implementation"); err != nil {
@@ -148,7 +149,7 @@ func TestReviewFollowup_FollowUp_DeregistersOldForeman(t *testing.T) {
 	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
 
 	// Register an existing foreman (can't be started since harness is nil)
-	existingForeman := NewForeman(&config.Config{}, nil, rf.planSvc, rf.questionSvc, rf.sessionSvc, rf.eventBus)
+	existingForeman := NewForeman(&config.Config{}, nil, rf.planSvc, rf.questionSvc, rf.sessionSvc, rf.workItemSvc, rf.eventBus)
 	rf.registry.RegisterForeman("wi-1", existingForeman)
 
 	// FollowUp with a working harness; it should replace the old entry
