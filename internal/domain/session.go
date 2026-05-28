@@ -34,6 +34,11 @@ type AgentSession struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	ResumeInfo      map[string]string
+	// ParentAgentSessionID links this session to its parent in the agent-session
+	// graph (parent -> child). Populated for retries, resumes, follow-ups, reviews
+	// of implementations, and reimplementations after review critique. Empty for
+	// the first session in a chain. A leaf session is one with no children.
+	ParentAgentSessionID string
 }
 
 // SessionHistoryEntry is one searchable root-session result.

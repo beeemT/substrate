@@ -205,14 +205,15 @@ func (p *ReviewPipeline) startReviewAgent(
 	// Persist the review session before launching the harness.
 	reviewSessionID := domain.NewID()
 	reviewTask := domain.AgentSession{
-		ID:             reviewSessionID,
-		WorkItemID:     agentSession.WorkItemID,
-		WorkspaceID:    agentSession.WorkspaceID,
-		Kind:           domain.AgentSessionKindReview,
-		SubPlanID:      agentSession.SubPlanID,
-		RepositoryName: agentSession.RepositoryName,
-		WorktreePath:   agentSession.WorktreePath,
-		HarnessName:    p.harness.Name(),
+		ID:                   reviewSessionID,
+		WorkItemID:           agentSession.WorkItemID,
+		WorkspaceID:          agentSession.WorkspaceID,
+		Kind:                 domain.AgentSessionKindReview,
+		SubPlanID:            agentSession.SubPlanID,
+		RepositoryName:       agentSession.RepositoryName,
+		WorktreePath:         agentSession.WorktreePath,
+		HarnessName:          p.harness.Name(),
+		ParentAgentSessionID: agentSession.ID,
 	}
 	if err := p.sessionSvc.Create(ctx, reviewTask); err != nil {
 		return nil, "", "", fmt.Errorf("create review session: %w", err)

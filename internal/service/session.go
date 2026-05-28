@@ -46,18 +46,19 @@ func marshalAgentSessionPayload(agentSession domain.AgentSession) string {
 func (s *AgentSessionService) Resume(ctx context.Context, interrupted domain.AgentSession, harnessName string, ownerInstanceID *string) (domain.AgentSession, error) {
 	now := time.Now()
 	newSession := domain.AgentSession{
-		ID:              domain.NewID(),
-		WorkItemID:      interrupted.WorkItemID,
-		WorkspaceID:     interrupted.WorkspaceID,
-		Kind:            domain.AgentSessionKindImplementation,
-		SubPlanID:       interrupted.SubPlanID,
-		RepositoryName:  interrupted.RepositoryName,
-		WorktreePath:    interrupted.WorktreePath,
-		HarnessName:     harnessName,
-		OwnerInstanceID: ownerInstanceID,
-		Status:          domain.AgentSessionPending,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                   domain.NewID(),
+		WorkItemID:           interrupted.WorkItemID,
+		WorkspaceID:          interrupted.WorkspaceID,
+		Kind:                 domain.AgentSessionKindImplementation,
+		SubPlanID:            interrupted.SubPlanID,
+		RepositoryName:       interrupted.RepositoryName,
+		WorktreePath:         interrupted.WorktreePath,
+		HarnessName:          harnessName,
+		OwnerInstanceID:      ownerInstanceID,
+		Status:               domain.AgentSessionPending,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		ParentAgentSessionID: interrupted.ID,
 	}
 
 	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
@@ -547,18 +548,19 @@ func (s *AgentSessionService) SetPlanID(ctx context.Context, id string, planID s
 func (s *AgentSessionService) FollowUpFailed(ctx context.Context, failed domain.AgentSession, harnessName string, ownerInstanceID *string) (domain.AgentSession, error) {
 	now := time.Now()
 	newSession := domain.AgentSession{
-		ID:              domain.NewID(),
-		WorkItemID:      failed.WorkItemID,
-		WorkspaceID:     failed.WorkspaceID,
-		Kind:            domain.AgentSessionKindImplementation,
-		SubPlanID:       failed.SubPlanID,
-		RepositoryName:  failed.RepositoryName,
-		WorktreePath:    failed.WorktreePath,
-		HarnessName:     harnessName,
-		OwnerInstanceID: ownerInstanceID,
-		Status:          domain.AgentSessionPending,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                   domain.NewID(),
+		WorkItemID:           failed.WorkItemID,
+		WorkspaceID:          failed.WorkspaceID,
+		Kind:                 domain.AgentSessionKindImplementation,
+		SubPlanID:            failed.SubPlanID,
+		RepositoryName:       failed.RepositoryName,
+		WorktreePath:         failed.WorktreePath,
+		HarnessName:          harnessName,
+		OwnerInstanceID:      ownerInstanceID,
+		Status:               domain.AgentSessionPending,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		ParentAgentSessionID: failed.ID,
 	}
 
 	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {

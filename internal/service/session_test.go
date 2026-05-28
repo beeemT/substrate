@@ -359,6 +359,72 @@ func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
 	}
 }
 
+// TestSessionService_Resume_SetsParentAgentSessionID verifies that Resume
+// links the new session row to the interrupted session via the agent-session
+// graph edge so leaf-derivation in the TUI treats the interrupted session as
+// superseded by the new one.
+func TestSessionService_Resume_SetsParentAgentSessionID(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	interrupted := implSession("session-old", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	repo.sessions[interrupted.ID] = interrupted
+
+	owner := "inst-1"
+	created, err := svc.Resume(ctx, interrupted, "omp", &owner)
+	if err != nil {
+		t.Fatalf("Resume failed: %v", err)
+	}
+
+	if created.ParentAgentSessionID != interrupted.ID {
+		t.Errorf("created.ParentAgentSessionID = %q, want %q", created.ParentAgentSessionID, interrupted.ID)
+	}
+	stored, err := svc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get new session: %v", err)
+	}
+	if stored.ParentAgentSessionID != interrupted.ID {
+		t.Errorf("stored.ParentAgentSessionID = %q, want %q", stored.ParentAgentSessionID, interrupted.ID)
+	}
+	if stored.ID == interrupted.ID {
+		t.Error("Resume must create a new row; got same ID")
+	}
+}
+
+// TestSessionService_FollowUpFailed_SetsParentAgentSessionID verifies that the
+// new agent session created from a failed source has its ParentAgentSessionID
+// set to the failed session's ID. This is the audit trail that tells the leaf
+// algorithm the failed row has been replaced.
+func TestSessionService_FollowUpFailed_SetsParentAgentSessionID(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	failed := implSession("session-failed", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	repo.sessions[failed.ID] = failed
+
+	owner := "inst-1"
+	created, err := svc.FollowUpFailed(ctx, failed, "omp", &owner)
+	if err != nil {
+		t.Fatalf("FollowUpFailed failed: %v", err)
+	}
+
+	if created.ParentAgentSessionID != failed.ID {
+		t.Errorf("created.ParentAgentSessionID = %q, want %q", created.ParentAgentSessionID, failed.ID)
+	}
+	stored, err := svc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get new session: %v", err)
+	}
+	if stored.ParentAgentSessionID != failed.ID {
+		t.Errorf("stored.ParentAgentSessionID = %q, want %q", stored.ParentAgentSessionID, failed.ID)
+	}
+	if stored.ID == failed.ID {
+		t.Error("FollowUpFailed must create a new row; got same ID")
+	}
+}
+
 func TestSessionService_UpdateResumeInfo(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()

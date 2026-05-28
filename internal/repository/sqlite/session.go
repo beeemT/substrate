@@ -12,25 +12,26 @@ import (
 )
 
 type sessionRow struct {
-	ID              string  `db:"id"`
-	WorkItemID      string  `db:"work_item_id"`
-	SubPlanID       *string `db:"sub_plan_id"`
-	PlanID          *string `db:"plan_id"`
-	WorkspaceID     string  `db:"workspace_id"`
-	Kind            string  `db:"kind"`
-	RepositoryName  *string `db:"repository_name"`
-	HarnessName     string  `db:"harness_name"`
-	WorktreePath    *string `db:"worktree_path"`
-	PID             *int    `db:"pid"`
-	Status          string  `db:"status"`
-	ExitCode        *int    `db:"exit_code"`
-	StartedAt       *string `db:"started_at"`
-	ShutdownAt      *string `db:"shutdown_at"`
-	CompletedAt     *string `db:"completed_at"`
-	CreatedAt       string  `db:"created_at"`
-	OwnerInstanceID *string `db:"owner_instance_id"`
-	UpdatedAt       string  `db:"updated_at"`
-	ResumeInfo      *string `db:"resume_info"` // JSON-encoded map[string]string
+	ID                   string  `db:"id"`
+	WorkItemID           string  `db:"work_item_id"`
+	SubPlanID            *string `db:"sub_plan_id"`
+	PlanID               *string `db:"plan_id"`
+	WorkspaceID          string  `db:"workspace_id"`
+	Kind                 string  `db:"kind"`
+	RepositoryName       *string `db:"repository_name"`
+	HarnessName          string  `db:"harness_name"`
+	WorktreePath         *string `db:"worktree_path"`
+	PID                  *int    `db:"pid"`
+	Status               string  `db:"status"`
+	ExitCode             *int    `db:"exit_code"`
+	StartedAt            *string `db:"started_at"`
+	ShutdownAt           *string `db:"shutdown_at"`
+	CompletedAt          *string `db:"completed_at"`
+	CreatedAt            string  `db:"created_at"`
+	OwnerInstanceID      *string `db:"owner_instance_id"`
+	UpdatedAt            string  `db:"updated_at"`
+	ResumeInfo           *string `db:"resume_info"` // JSON-encoded map[string]string
+	ParentAgentSessionID *string `db:"parent_agent_session_id"`
 }
 
 type sessionHistoryRow struct {
@@ -111,49 +112,51 @@ func (r *sessionRow) toDomain() (domain.AgentSession, error) {
 	}
 
 	return domain.AgentSession{
-		ID:              r.ID,
-		WorkItemID:      r.WorkItemID,
-		SubPlanID:       derefStr(r.SubPlanID),
-		PlanID:          derefStr(r.PlanID),
-		WorkspaceID:     r.WorkspaceID,
-		Kind:            domain.AgentSessionKind(r.Kind),
-		RepositoryName:  derefStr(r.RepositoryName),
-		HarnessName:     r.HarnessName,
-		WorktreePath:    derefStr(r.WorktreePath),
-		PID:             r.PID,
-		Status:          domain.AgentSessionStatus(r.Status),
-		ExitCode:        r.ExitCode,
-		StartedAt:       startedAt,
-		ShutdownAt:      shutdownAt,
-		CompletedAt:     completedAt,
-		OwnerInstanceID: r.OwnerInstanceID,
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
-		ResumeInfo:      parseResumeInfo(r.ResumeInfo),
+		ID:                   r.ID,
+		WorkItemID:           r.WorkItemID,
+		SubPlanID:            derefStr(r.SubPlanID),
+		PlanID:               derefStr(r.PlanID),
+		WorkspaceID:          r.WorkspaceID,
+		Kind:                 domain.AgentSessionKind(r.Kind),
+		RepositoryName:       derefStr(r.RepositoryName),
+		HarnessName:          r.HarnessName,
+		WorktreePath:         derefStr(r.WorktreePath),
+		PID:                  r.PID,
+		Status:               domain.AgentSessionStatus(r.Status),
+		ExitCode:             r.ExitCode,
+		StartedAt:            startedAt,
+		ShutdownAt:           shutdownAt,
+		CompletedAt:          completedAt,
+		OwnerInstanceID:      r.OwnerInstanceID,
+		CreatedAt:            createdAt,
+		UpdatedAt:            updatedAt,
+		ResumeInfo:           parseResumeInfo(r.ResumeInfo),
+		ParentAgentSessionID: derefStr(r.ParentAgentSessionID),
 	}, nil
 }
 
 func rowFromAgentSession(s domain.AgentSession) sessionRow {
 	return sessionRow{
-		ID:              s.ID,
-		WorkItemID:      s.WorkItemID,
-		SubPlanID:       strPtr(s.SubPlanID),
-		PlanID:          strPtr(s.PlanID),
-		WorkspaceID:     s.WorkspaceID,
-		Kind:            string(s.Kind),
-		RepositoryName:  strPtr(s.RepositoryName),
-		HarnessName:     s.HarnessName,
-		WorktreePath:    strPtr(s.WorktreePath),
-		PID:             s.PID,
-		Status:          string(s.Status),
-		ExitCode:        s.ExitCode,
-		StartedAt:       formatTimePtr(s.StartedAt),
-		ShutdownAt:      formatTimePtr(s.ShutdownAt),
-		CompletedAt:     formatTimePtr(s.CompletedAt),
-		OwnerInstanceID: s.OwnerInstanceID,
-		CreatedAt:       formatTime(s.CreatedAt),
-		UpdatedAt:       formatTime(s.UpdatedAt),
-		ResumeInfo:      marshalResumeInfo(s.ResumeInfo),
+		ID:                   s.ID,
+		WorkItemID:           s.WorkItemID,
+		SubPlanID:            strPtr(s.SubPlanID),
+		PlanID:               strPtr(s.PlanID),
+		WorkspaceID:          s.WorkspaceID,
+		Kind:                 string(s.Kind),
+		RepositoryName:       strPtr(s.RepositoryName),
+		HarnessName:          s.HarnessName,
+		WorktreePath:         strPtr(s.WorktreePath),
+		PID:                  s.PID,
+		Status:               string(s.Status),
+		ExitCode:             s.ExitCode,
+		StartedAt:            formatTimePtr(s.StartedAt),
+		ShutdownAt:           formatTimePtr(s.ShutdownAt),
+		CompletedAt:          formatTimePtr(s.CompletedAt),
+		OwnerInstanceID:      s.OwnerInstanceID,
+		CreatedAt:            formatTime(s.CreatedAt),
+		UpdatedAt:            formatTime(s.UpdatedAt),
+		ResumeInfo:           marshalResumeInfo(s.ResumeInfo),
+		ParentAgentSessionID: strPtr(s.ParentAgentSessionID),
 	}
 }
 
@@ -318,11 +321,11 @@ func (r AgentSessionRepo) Create(ctx context.Context, s domain.AgentSession) err
 		`INSERT INTO agent_sessions
 		 (id, work_item_id, sub_plan_id, plan_id, workspace_id, kind, repository_name, harness_name, worktree_path,
 		  pid, status, exit_code, started_at, shutdown_at, completed_at, created_at,
-		  owner_instance_id, updated_at, resume_info)
+		  owner_instance_id, updated_at, resume_info, parent_agent_session_id)
 		 VALUES
 		 (:id, :work_item_id, :sub_plan_id, :plan_id, :workspace_id, :kind, :repository_name, :harness_name, :worktree_path,
 		  :pid, :status, :exit_code, :started_at, :shutdown_at, :completed_at, :created_at,
-		  :owner_instance_id, :updated_at, :resume_info)`, row)
+		  :owner_instance_id, :updated_at, :resume_info, :parent_agent_session_id)`, row)
 	if err != nil {
 		return fmt.Errorf("create session %s: %w", s.ID, err)
 	}
@@ -338,7 +341,8 @@ func (r AgentSessionRepo) Update(ctx context.Context, s domain.AgentSession) err
 		 kind = :kind, repository_name = :repository_name, harness_name = :harness_name, worktree_path = :worktree_path,
 		 pid = :pid, status = :status, exit_code = :exit_code, started_at = :started_at,
 		 shutdown_at = :shutdown_at, completed_at = :completed_at, owner_instance_id = :owner_instance_id,
-		 updated_at = :updated_at, resume_info = :resume_info WHERE id = :id`, row)
+		 updated_at = :updated_at, resume_info = :resume_info,
+		 parent_agent_session_id = :parent_agent_session_id WHERE id = :id`, row)
 	if err != nil {
 		return fmt.Errorf("update session %s: %w", s.ID, err)
 	}

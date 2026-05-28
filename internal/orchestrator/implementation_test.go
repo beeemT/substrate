@@ -1371,7 +1371,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", &prevSession)
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", &prevSession, prevSession.ID)
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1461,7 +1461,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", nil)
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", nil, "")
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1946,7 +1946,7 @@ func TestRunImplementation_ContextCanceled_MarksInterrupted(t *testing.T) {
 	_, err := svc.runImplementation(
 		context.Background(),
 		subPlan, workspace, plan, workItem,
-		t.TempDir(), "", nil,
+		t.TempDir(), "", nil, "",
 	)
 	if err == nil {
 		t.Fatal("expected error from runImplementation, got nil")
@@ -1991,7 +1991,7 @@ func TestRunImplementation_NonCanceledError_MarksFailed(t *testing.T) {
 	_, err := svc.runImplementation(
 		context.Background(),
 		subPlan, workspace, plan, workItem,
-		t.TempDir(), "", nil,
+		t.TempDir(), "", nil, "",
 	)
 	if err == nil {
 		t.Fatal("expected error from runImplementation, got nil")

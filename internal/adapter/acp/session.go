@@ -137,7 +137,7 @@ func (s *Session) Compact(ctx context.Context) error {
 	if cmd == "" {
 		return adapter.ErrCompactNotSupported
 	}
-	return s.runPrompt(ctx, "/"+cmd, true)
+	return s.runPrompt(ctx, "/"+cmd, false)
 }
 
 func (s *Session) Abort(ctx context.Context) error {

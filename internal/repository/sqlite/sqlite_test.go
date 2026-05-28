@@ -691,6 +691,105 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionParentAgentSessionIDRoundTrip(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	repo := reposqlite.NewAgentSessionRepo(tx)
+
+	parent := makeSession(t, tx, sp.ID, ws.ID)
+
+	// Create a child session with ParentAgentSessionID set on insert.
+	child := domain.AgentSession{
+		ID:                   domain.NewID(),
+		WorkItemID:           wi.ID,
+		SubPlanID:            sp.ID,
+		WorkspaceID:          ws.ID,
+		Kind:                 domain.AgentSessionKindReview,
+		RepositoryName:       "test-repo",
+		HarnessName:          "claude",
+		WorktreePath:         "/tmp/worktree",
+		Status:               domain.AgentSessionPending,
+		CreatedAt:            now(),
+		UpdatedAt:            now(),
+		ParentAgentSessionID: parent.ID,
+	}
+	if err := repo.Create(ctx, child); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	// Round-trip via Get.
+	got, err := repo.Get(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("get child: %v", err)
+	}
+	if got.ParentAgentSessionID != parent.ID {
+		t.Errorf("ParentAgentSessionID = %q, want %q", got.ParentAgentSessionID, parent.ID)
+	}
+
+	// Round-trip via List.
+	list, err := repo.ListBySubPlanID(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var listChild *domain.AgentSession
+	for i := range list {
+		if list[i].ID == child.ID {
+			listChild = &list[i]
+			break
+		}
+	}
+	if listChild == nil {
+		t.Fatalf("child %s not in list", child.ID)
+	}
+	if listChild.ParentAgentSessionID != parent.ID {
+		t.Errorf("list ParentAgentSessionID = %q, want %q", listChild.ParentAgentSessionID, parent.ID)
+	}
+
+	// The parent session should still have an empty ParentAgentSessionID.
+	gotParent, err := repo.Get(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("get parent: %v", err)
+	}
+	if gotParent.ParentAgentSessionID != "" {
+		t.Errorf("parent ParentAgentSessionID = %q, want empty", gotParent.ParentAgentSessionID)
+	}
+
+	// Update should preserve ParentAgentSessionID and allow changing it.
+	other := makeSession(t, tx, sp.ID, ws.ID)
+	got.ParentAgentSessionID = other.ID
+	got.UpdatedAt = now()
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update child: %v", err)
+	}
+	got2, err := repo.Get(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("get child after update: %v", err)
+	}
+	if got2.ParentAgentSessionID != other.ID {
+		t.Errorf("updated ParentAgentSessionID = %q, want %q", got2.ParentAgentSessionID, other.ID)
+	}
+
+	// Update can clear the parent back to empty.
+	got2.ParentAgentSessionID = ""
+	got2.UpdatedAt = now()
+	if err := repo.Update(ctx, got2); err != nil {
+		t.Fatalf("update child clear parent: %v", err)
+	}
+	got3, err := repo.Get(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("get child after clear: %v", err)
+	}
+	if got3.ParentAgentSessionID != "" {
+		t.Errorf("cleared ParentAgentSessionID = %q, want empty", got3.ParentAgentSessionID)
+	}
+}
+
 func TestSessionDeleteCascadesDependents(t *testing.T) {
 	db := setupDB(t)
 	tx := beginTx(t, db)
@@ -1525,5 +1624,229 @@ func TestMigration019_AgentSessionKind(t *testing.T) {
 	`, domain.NewID(), wiID, wsID, nowStr, nowStr)
 	if err == nil {
 		t.Error("insert with kind='invalid-kind' should be rejected by CHECK constraint")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Migration 020: parent_agent_session_id column + backfill
+// ---------------------------------------------------------------------------
+
+func TestMigration020_AgentSessionParent(t *testing.T) {
+	// Apply migrations 001-019, then seed rows that mimic the pre-graph world
+	// (no parent_agent_session_id), then apply 020 and verify the schema and
+	// backfill match expectations.
+	db, err := sqlx.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	ctx := context.Background()
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			t.Fatalf("pragma %s: %v", pragma, err)
+		}
+	}
+
+	// Apply migrations 001-019 in order.
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	type migFile struct {
+		version  int
+		filename string
+	}
+	var migrationFiles []migFile
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".sql" {
+			continue
+		}
+		parts := strings.SplitN(e.Name(), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		ver, err := strconv.Atoi(parts[0])
+		if err != nil || ver < 1 || ver > 19 {
+			continue
+		}
+		migrationFiles = append(migrationFiles, migFile{ver, e.Name()})
+	}
+	sort.Slice(migrationFiles, func(i, j int) bool {
+		return migrationFiles[i].version < migrationFiles[j].version
+	})
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+	`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	for _, m := range migrationFiles {
+		data, err := fs.ReadFile(migrations.FS, m.filename)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", m.filename, err)
+		}
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			t.Fatalf("apply migration %s: %v", m.filename, err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
+			t.Fatalf("record migration %d: %v", m.version, err)
+		}
+	}
+
+	// Seed parent rows.
+	wsID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO workspaces (id, name, root_path, status) VALUES (?, 'test', '/tmp', 'ready')
+	`, wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	wiID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO work_items (id, workspace_id, source, title, state, created_at, updated_at)
+		VALUES (?, ?, 'github', 'test', 'ingested', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	`, wiID, wsID); err != nil {
+		t.Fatalf("create work_item: %v", err)
+	}
+
+	planID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO plans (id, work_item_id, version, status, orchestrator_plan, created_at, updated_at)
+		VALUES (?, ?, 1, 'approved', '{}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	`, planID, wiID); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+
+	subPlanA := domain.NewID()
+	subPlanB := domain.NewID()
+	subPlanRepoNames := map[string]string{
+		subPlanA: "repo-a",
+		subPlanB: "repo-b",
+	}
+	for _, sp := range []string{subPlanA, subPlanB} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO sub_plans (id, plan_id, repo_name, content, status, created_at, updated_at)
+			VALUES (?, ?, ?, '{}', 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		`, sp, planID, subPlanRepoNames[sp]); err != nil {
+			t.Fatalf("create sub_plan: %v", err)
+		}
+	}
+
+	// Three sessions in sub_plan A, with strictly ordered created_at, all
+	// implementation/review (so they should be chained by the backfill).
+	type seedSession struct {
+		id        string
+		subPlan   string
+		kind      string
+		createdAt string
+	}
+	tBase := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	a1 := seedSession{id: domain.NewID(), subPlan: subPlanA, kind: "implementation", createdAt: tBase.Format(time.RFC3339Nano)}
+	a2 := seedSession{id: domain.NewID(), subPlan: subPlanA, kind: "review", createdAt: tBase.Add(time.Minute).Format(time.RFC3339Nano)}
+	a3 := seedSession{id: domain.NewID(), subPlan: subPlanA, kind: "implementation", createdAt: tBase.Add(2 * time.Minute).Format(time.RFC3339Nano)}
+	// One session in sub_plan B — it must NOT be linked to anything in A.
+	b1 := seedSession{id: domain.NewID(), subPlan: subPlanB, kind: "implementation", createdAt: tBase.Add(30 * time.Second).Format(time.RFC3339Nano)}
+	// A foreman session that is NOT implementation/review and must be skipped
+	// by the backfill (excluded from the chain).
+	foreman := seedSession{id: domain.NewID(), subPlan: subPlanA, kind: "foreman", createdAt: tBase.Add(15 * time.Second).Format(time.RFC3339Nano)}
+
+	for _, s := range []seedSession{a1, a2, a3, b1, foreman} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO agent_sessions (
+				id, work_item_id, workspace_id, sub_plan_id, plan_id,
+				repository_name, harness_name, worktree_path, status, kind,
+				created_at, updated_at
+			) VALUES (?, ?, ?, ?, NULL, 'repo', 'claude', '/tmp/wt', 'completed', ?, ?, ?)
+		`, s.id, wiID, wsID, s.subPlan, s.kind, s.createdAt, s.createdAt); err != nil {
+			t.Fatalf("insert seed session %s: %v", s.id, err)
+		}
+	}
+
+	// Apply migration 020.
+	migration020, err := fs.ReadFile(migrations.FS, "020_agent_session_parent.sql")
+	if err != nil {
+		t.Fatalf("read migration 020: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(migration020)); err != nil {
+		t.Fatalf("apply migration 020: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (20)`); err != nil {
+		t.Fatalf("record migration 020: %v", err)
+	}
+
+	// 1. The column must exist.
+	type pragmaCol struct {
+		Cid       int     `db:"cid"`
+		Name      string  `db:"name"`
+		Type      string  `db:"type"`
+		NotNull   int     `db:"notnull"`
+		DfltValue *string `db:"dflt_value"`
+		Pk        int     `db:"pk"`
+	}
+	var cols []pragmaCol
+	if err := db.SelectContext(ctx, &cols, `SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info('agent_sessions')`); err != nil {
+		t.Fatalf("pragma_table_info: %v", err)
+	}
+	hasParentCol := false
+	for _, c := range cols {
+		if c.Name == "parent_agent_session_id" {
+			hasParentCol = true
+			if c.Type != "TEXT" {
+				t.Errorf("parent_agent_session_id type = %q, want TEXT", c.Type)
+			}
+		}
+	}
+	if !hasParentCol {
+		t.Fatal("parent_agent_session_id column missing after migration 020")
+	}
+
+	// 2. The index must exist.
+	var indexCount int
+	if err := db.GetContext(ctx, &indexCount, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_parent_agent_session'
+	`); err != nil {
+		t.Fatalf("count index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Errorf("idx_sessions_parent_agent_session count = %d, want 1", indexCount)
+	}
+
+	// 3. Backfill links sub_plan A's implementation/review sessions in created order.
+	getParent := func(id string) *string {
+		var v *string
+		if err := db.GetContext(ctx, &v, `SELECT parent_agent_session_id FROM agent_sessions WHERE id = ?`, id); err != nil {
+			t.Fatalf("get parent of %s: %v", id, err)
+		}
+		return v
+	}
+	if p := getParent(a1.id); p != nil {
+		t.Errorf("a1.parent = %v, want nil (first in chain)", *p)
+	}
+	if p := getParent(a2.id); p == nil || *p != a1.id {
+		t.Errorf("a2.parent = %v, want %s", p, a1.id)
+	}
+	if p := getParent(a3.id); p == nil || *p != a2.id {
+		t.Errorf("a3.parent = %v, want %s", p, a2.id)
+	}
+
+	// 4. Sub-plan B's session must be untouched (it's the only one in its
+	//    subplan and must not link to anything in A).
+	if p := getParent(b1.id); p != nil {
+		t.Errorf("b1.parent = %v, want nil (different subplan, alone)", *p)
+	}
+
+	// 5. The foreman session is excluded from the implementation/review chain
+	//    by the WHERE filter and must remain unparented even though it shares
+	//    a sub_plan with the impl/review chain.
+	if p := getParent(foreman.id); p != nil {
+		t.Errorf("foreman.parent = %v, want nil (excluded by kind filter)", *p)
 	}
 }

@@ -528,8 +528,21 @@ func (s *ImplementationService) executeSubPlan(
 	critiqueFeedback := s.loadCritiqueFeedback(ctx, subPlan.ID)
 	prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 
+	// Determine the parent session ID for the agent-session graph:
+	//   - First implementation: empty (no parent).
+	//   - Retry after a failed/interrupted impl OR reimplementation that follows
+	//     a review (e.g. after orchestrator restart that loaded saved critique
+	//     feedback): the latest existing session for this sub-plan is the
+	//     parent. lastSessionForSubPlan returns the most recent session
+	//     regardless of kind/status, which captures both the "retry failed
+	//     impl" and "reimpl after review" cases.
+	parentSessionID := ""
+	if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil {
+		parentSessionID = last.ID
+	}
+
 	// Run implementation (fresh or with critique context from prior review).
-	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, critiqueFeedback, prevImpl)
+	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, critiqueFeedback, prevImpl, parentSessionID)
 	if err != nil {
 		result.Status = domain.AgentSessionFailed
 		result.Summary = err.Error()
@@ -633,7 +646,10 @@ func (s *ImplementationService) reviewLoop(
 			outcome.Failed = true
 			return outcome
 		}
-		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, feedback, &currentSession)
+		// The reimplementation is created from the review's critique, so the
+		// new impl's parent in the agent-session graph is the review session
+		// that produced the critique (not the impl that was reviewed).
+		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, feedback, &currentSession, reviewResult.SessionID)
 		if err != nil {
 			slog.Warn("reimplementation failed", "error", err,
 				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
@@ -650,6 +666,12 @@ func (s *ImplementationService) reviewLoop(
 // is asked to resume the previous conversation; critique feedback is then sent
 // as a follow-up message to preserve conversation context. When prevSession is
 // nil or has no ResumeInfo, critique feedback is appended to the system prompt.
+//
+// parentSessionID, when non-empty, is recorded on the new session as
+// ParentAgentSessionID so the agent-session graph captures the lifecycle edge
+// from the prior session to this new one (failed-impl retry, reimplementation
+// after review critique, ...). The first implementation in a sub-plan passes
+// an empty parentSessionID.
 func (s *ImplementationService) runImplementation(
 	ctx context.Context,
 	subPlan domain.TaskPlan,
@@ -659,17 +681,19 @@ func (s *ImplementationService) runImplementation(
 	worktreePath string,
 	critiqueFeedback string,
 	prevSession *domain.AgentSession,
+	parentSessionID string,
 ) (domain.AgentSession, error) {
 	sessionID := domain.NewID()
 	agentSession := domain.AgentSession{
-		ID:             sessionID,
-		WorkItemID:     workItem.ID,
-		WorkspaceID:    workspace.ID,
-		Kind:           domain.AgentSessionKindImplementation,
-		SubPlanID:      subPlan.ID,
-		RepositoryName: subPlan.RepositoryName,
-		WorktreePath:   worktreePath,
-		HarnessName:    s.harness.Name(),
+		ID:                   sessionID,
+		WorkItemID:           workItem.ID,
+		WorkspaceID:          workspace.ID,
+		Kind:                 domain.AgentSessionKindImplementation,
+		SubPlanID:            subPlan.ID,
+		RepositoryName:       subPlan.RepositoryName,
+		WorktreePath:         worktreePath,
+		HarnessName:          s.harness.Name(),
+		ParentAgentSessionID: parentSessionID,
 	}
 	if err := s.sessionSvc.Create(ctx, agentSession); err != nil {
 		return domain.AgentSession{}, fmt.Errorf("create agent session: %w", err)
