@@ -65,8 +65,11 @@ type ReviewResult struct {
 	SessionID   string // review agent session ID — log at config.SessionsDir()/<SessionID>.log
 }
 
-// ReviewSession reviews an agent session's output.
-func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.AgentSession) (*ReviewResult, error) {
+// ReviewSession reviews an agent session's output. If an error is returned
+// after the new review cycle has been created, the cycle is durably
+// transitioned to `failed` so it does not linger in `reviewing` and mask
+// outstanding critiques on prior cycles for the same impl session.
+func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.AgentSession) (result *ReviewResult, err error) {
 	// Get existing review cycles
 	cycles, err := p.reviewSvc.ListCyclesBySessionID(ctx, agentSession.ID)
 	if err != nil {
@@ -106,6 +109,29 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 	if err := p.reviewSvc.CreateCycle(ctx, cycle); err != nil {
 		return nil, fmt.Errorf("create review cycle: %w", err)
 	}
+
+	// From here on, any error must transition the cycle to a terminal state.
+	// Otherwise it stays in `reviewing` forever — `loadCritiqueFeedback` then
+	// silently treats it as "no outstanding critiques", and the next retry can
+	// resume the prior impl session with no work to do (see investigation in
+	// internal/orchestrator/review.go around 2026-05-28). makeDecision moves
+	// the cycle to passed/critiques_found on the happy path, in which case
+	// the FailReviewCycle call below is a no-op (terminal → terminal is
+	// rejected by the transition table; we just log the rejection).
+	defer func() {
+		if err == nil {
+			return
+		}
+		cleanupCtx, cancel := durableCleanupContext(ctx)
+		defer cancel()
+		if failErr := p.reviewSvc.FailReviewCycle(cleanupCtx, cycle.ID); failErr != nil {
+			slog.Warn("failed to transition review cycle to failed after review error",
+				"error", failErr,
+				"cycle_id", cycle.ID,
+				"agent_session_id", agentSession.ID,
+				"review_error", err)
+		}
+	}()
 
 	// Emit ReviewStarted event with the full cycle so TUI can upsert without a reload
 	service.Emit(p.eventBus, domain.SystemEvent{
@@ -148,7 +174,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 	}
 
 	// Decision logic
-	result := p.makeDecision(ctx, cycle, critiques)
+	result = p.makeDecision(ctx, cycle, critiques)
 	result.SessionID = reviewSessionID
 
 	// Emit review outcome events (async)

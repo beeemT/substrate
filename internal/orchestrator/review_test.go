@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -111,5 +112,165 @@ func TestStartReviewAgent_CompletesOnDone(t *testing.T) {
 		// is the call did not block.
 	case <-time.After(2 * time.Second):
 		t.Fatal("startReviewAgent blocked for 2s: \"done\" event not handled as completion signal")
+	}
+}
+
+// ============================================================
+// Cycle-state-on-failure tests (regression: review crashes used to leave
+// the cycle in `reviewing`, which made loadCritiqueFeedback silently miss
+// outstanding critiques on prior cycles for the same impl session).
+// ============================================================
+
+// erroringSession is a mockAgentSession variant used to drive ReviewSession
+// failure paths. Its events channel can be pre-closed or carry an "error"
+// event, both of which startReviewAgent's loop treats as failures.
+func erroringSession(id string, events ...adapter.AgentEvent) *mockAgentSession {
+	ch := make(chan adapter.AgentEvent, len(events)+1)
+	for _, e := range events {
+		ch <- e
+	}
+	return &mockAgentSession{id: id, eventsCh: ch}
+}
+
+// closedChannelSession returns a session whose events channel is already
+// closed — this triggers startReviewAgent's "events channel closed
+// unexpectedly" path.
+func closedChannelSession(id string) *mockAgentSession {
+	ch := make(chan adapter.AgentEvent)
+	close(ch)
+	return &mockAgentSession{id: id, eventsCh: ch}
+}
+
+// assertCycleFailed reads back the only cycle for the impl session and
+// verifies it is in `failed` state, not lingering in `reviewing`.
+func assertCycleFailed(t *testing.T, fix *reviewPipelineFixture, implSessionID string) {
+	t.Helper()
+	cycles, err := fix.pipeline.reviewSvc.ListCyclesBySessionID(context.Background(), implSessionID)
+	if err != nil {
+		t.Fatalf("list cycles: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Fatalf("expected 1 cycle, got %d", len(cycles))
+	}
+	if cycles[0].Status != domain.ReviewCycleFailed {
+		t.Fatalf("expected cycle status=%q, got %q", domain.ReviewCycleFailed, cycles[0].Status)
+	}
+}
+
+// TestReviewSession_HarnessStartFailure_FailsCycle verifies that when the
+// review harness fails to start, the cycle is transitioned to `failed`.
+func TestReviewSession_HarnessStartFailure_FailsCycle(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	// First StartSession call (review session creation) succeeds; the actual
+	// review-agent StartSession (the second call) fails.
+	calls := 0
+	fix.harness.onStartSession = func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+		calls++
+		return nil, fmt.Errorf("simulated harness start failure (call %d)", calls)
+	}
+
+	_, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err == nil {
+		t.Fatal("expected ReviewSession to return an error")
+	}
+	assertCycleFailed(t, fix, agentSession.ID)
+}
+
+// TestReviewSession_EventsChannelClosed_FailsCycle verifies that when the
+// review session's event channel closes before emitting "done", the cycle is
+// transitioned to `failed`.
+func TestReviewSession_EventsChannelClosed_FailsCycle(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	fix.harness.onStartSession = func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+		return closedChannelSession(opts.SessionID), nil
+	}
+
+	_, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err == nil {
+		t.Fatal("expected ReviewSession to return an error")
+	}
+	assertCycleFailed(t, fix, agentSession.ID)
+}
+
+// TestReviewSession_ErrorEvent_FailsCycle verifies that an "error" event from
+// the review session causes the cycle to be transitioned to `failed`.
+func TestReviewSession_ErrorEvent_FailsCycle(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	fix.harness.onStartSession = func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+		return erroringSession(opts.SessionID, adapter.AgentEvent{
+			Type:    "error",
+			Payload: "simulated agent error",
+		}), nil
+	}
+
+	_, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err == nil {
+		t.Fatal("expected ReviewSession to return an error")
+	}
+	assertCycleFailed(t, fix, agentSession.ID)
+}
+
+// TestReviewSession_Timeout_FailsCycle verifies that a review session that
+// never produces "done" within the configured reviewTimeout leaves the cycle
+// in `failed` status.
+func TestReviewSession_Timeout_FailsCycle(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	// Tighten the review timeout so the test runs quickly.
+	fix.pipeline.reviewTimeout = 50 * time.Millisecond
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	fix.harness.onStartSession = func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+		// Empty channel that never receives "done".
+		return erroringSession(opts.SessionID), nil
+	}
+
+	_, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err == nil {
+		t.Fatal("expected ReviewSession to return an error")
+	}
+	assertCycleFailed(t, fix, agentSession.ID)
+}
+
+// TestReviewSession_HappyPath_CycleStaysTerminal verifies that the
+// fail-cycle-on-error defer does not disturb the happy path: a passed cycle
+// remains `passed` and a critiques-found cycle remains `critiques_found`.
+func TestReviewSession_HappyPath_CycleStaysTerminal(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	fix.harness.outputs = []string{"NO_CRITIQUES"}
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	result, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err != nil {
+		t.Fatalf("ReviewSession: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected Passed=true")
+	}
+	cycles, err := fix.pipeline.reviewSvc.ListCyclesBySessionID(context.Background(), agentSession.ID)
+	if err != nil {
+		t.Fatalf("list cycles: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Fatalf("expected 1 cycle, got %d", len(cycles))
+	}
+	if cycles[0].Status != domain.ReviewCyclePassed {
+		t.Fatalf("expected cycle status=%q, got %q", domain.ReviewCyclePassed, cycles[0].Status)
 	}
 }
