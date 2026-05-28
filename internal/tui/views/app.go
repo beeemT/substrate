@@ -300,7 +300,7 @@ func (a *App) Init() tea.Cmd {
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
 	if a.runtimeCtx.StartupIntegrationsInProgress {
 		a.inputBlocked = true
-		cmds = append(cmds, StartupIntegrationsStartCmd())
+		cmds = append(cmds, StartupIntegrationsStartCmd(), StartupIntegrationsSpinnerTickCmd())
 	} else {
 		// Non-workspace startup: schedule diagnostics if still pending.
 		snapshot := a.provider.Settings().Snapshot()
@@ -1204,13 +1204,8 @@ func (a App) startupIntegrationsToast() (components.Toast, bool) {
 	if !a.startupIntegrationsInProgress {
 		return components.Toast{}, false
 	}
-	spinner := startupIntegrationSpinner(a.startupIntegrationSpinner)
+	spinner := components.SpinnerFrame(a.startupIntegrationSpinner)
 	return components.Toast{Message: spinner + " Starting integrations…", Level: components.ToastInfo}, true
-}
-
-func startupIntegrationSpinner(frame int) string {
-	const frames = "|/-\\"
-	return string(frames[frame%len(frames)])
 }
 
 func (a App) pinnedToasts() []components.Toast {
@@ -1546,11 +1541,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ToastTickMsg:
 		a.toasts.Prune()
-		if a.startupIntegrationsInProgress {
-			a.startupIntegrationSpinner++
-		}
 		cmds = append(cmds, components.ToastTickCmd())
 		return a, tea.Batch(cmds...)
+
+	case StartupIntegrationsSpinnerTickMsg:
+		if !a.startupIntegrationsInProgress {
+			return a, nil
+		}
+		a.startupIntegrationSpinner++
+		return a, StartupIntegrationsSpinnerTickCmd()
 
 	case SessionsLoadedMsg:
 		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {

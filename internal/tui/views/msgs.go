@@ -597,6 +597,9 @@ type WorkspaceServicesReloadedMsg struct {
 // StartupIntegrationsStartMsg starts deferred startup integration loading after the first frame.
 type StartupIntegrationsStartMsg struct{}
 
+// StartupIntegrationsSpinnerTickMsg advances the startup integrations activity spinner.
+type StartupIntegrationsSpinnerTickMsg struct{}
+
 // StartupIntegrationsReadyMsg is sent after deferred startup integrations finish loading.
 type StartupIntegrationsReadyMsg struct {
 	Reload viewsServicesReload

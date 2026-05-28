@@ -288,3 +288,78 @@ func TestLatestTaskForSubPlan_LeafInterruptedSurfaces(t *testing.T) {
 		t.Errorf("interrupted = %v, want id=review", interrupted)
 	}
 }
+
+func TestSidebarEntryFromWorkItem_ReviewRetrySupersedesStaleInterruptedLeaf(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour)
+	t1 := t0.Add(10 * time.Minute)
+	t2 := t1.Add(10 * time.Minute)
+	t3 := t2.Add(10 * time.Minute)
+
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-1",
+		WorkspaceName: "workspace",
+		Settings:      newTestSettingsService(),
+	})
+
+	wi := domain.Session{ID: "wi-1", Title: "Review retry", State: domain.SessionImplementing, CreatedAt: t0, UpdatedAt: t3}
+	app.workItems = []domain.Session{wi}
+	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved, UpdatedAt: t0}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress, UpdatedAt: t3}}
+	app.sessions = []domain.AgentSession{
+		{
+			ID:             "impl",
+			WorkItemID:     "wi-1",
+			WorkspaceID:    "ws-1",
+			SubPlanID:      "sp-1",
+			RepositoryName: "repo-a",
+			Kind:           domain.AgentSessionKindImplementation,
+			Status:         domain.AgentSessionCompleted,
+			CreatedAt:      t0,
+			UpdatedAt:      t0,
+		},
+		{
+			ID:                   "old-review",
+			WorkItemID:           "wi-1",
+			WorkspaceID:          "ws-1",
+			SubPlanID:            "sp-1",
+			RepositoryName:       "repo-a",
+			Kind:                 domain.AgentSessionKindReview,
+			Status:               domain.AgentSessionFailed,
+			CreatedAt:            t1,
+			UpdatedAt:            t1,
+			ParentAgentSessionID: "impl",
+		},
+		{
+			ID:                   "stale-impl",
+			WorkItemID:           "wi-1",
+			WorkspaceID:          "ws-1",
+			SubPlanID:            "sp-1",
+			RepositoryName:       "repo-a",
+			Kind:                 domain.AgentSessionKindImplementation,
+			Status:               domain.AgentSessionInterrupted,
+			CreatedAt:            t2,
+			UpdatedAt:            t2,
+			ParentAgentSessionID: "old-review",
+		},
+		{
+			ID:                   "new-review",
+			WorkItemID:           "wi-1",
+			WorkspaceID:          "ws-1",
+			SubPlanID:            "sp-1",
+			RepositoryName:       "repo-a",
+			Kind:                 domain.AgentSessionKindReview,
+			Status:               domain.AgentSessionRunning,
+			CreatedAt:            t3,
+			UpdatedAt:            t3,
+			ParentAgentSessionID: "stale-impl",
+		},
+	}
+
+	entry := app.sidebarEntryFromWorkItem(wi)
+	if entry.HasInterrupted {
+		t.Errorf("HasInterrupted = true, want false (retry review supersedes stale interrupted leaf)")
+	}
+	if got := entry.Subtitle(); got != "Implementing" {
+		t.Errorf("Subtitle = %q, want %q", got, "Implementing")
+	}
+}

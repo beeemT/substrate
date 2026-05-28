@@ -31,6 +31,7 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/terminal"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tuilog"
 )
 
@@ -1602,6 +1603,13 @@ func gitLabProjectPathFromMRURL(rawURL string) string {
 func StartupIntegrationsStartCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return StartupIntegrationsStartMsg{}
+	})
+}
+
+// StartupIntegrationsSpinnerTickCmd advances the startup integrations toast spinner.
+func StartupIntegrationsSpinnerTickCmd() tea.Cmd {
+	return tea.Tick(components.SpinnerFrameInterval(), func(time.Time) tea.Msg {
+		return StartupIntegrationsSpinnerTickMsg{}
 	})
 }
 

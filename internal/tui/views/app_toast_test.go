@@ -94,7 +94,7 @@ func TestQuestionRaisedMsgShowsInfoToastAcrossSessions(t *testing.T) {
 		Question: domain.Question{
 			ID:      "q-1",
 			Content: longQuestion,
-			Stage: domain.AgentSessionKindPlanning,
+			Stage:   domain.AgentSessionKindPlanning,
 		},
 	})
 
@@ -133,13 +133,20 @@ func TestAppView_RendersStartupIntegrationToastUntilReady(t *testing.T) {
 	app := newToastTestApp(t)
 	app.startupIntegrationsInProgress = true
 	view := stripToastANSI(app.toasts.StackView(app.pinnedToasts()...))
-	if !strings.Contains(view, "Starting") || !strings.Contains(view, "integrations") {
-		t.Fatalf("toast stack missing startup integrations toast: %q", view)
+	if !strings.Contains(view, components.SpinnerFrame(0)) || !strings.Contains(view, "Starting") || !strings.Contains(view, "integrations") {
+		t.Fatalf("toast stack missing startup integrations spinner/message: %q", view)
+	}
+	if strings.Contains(view, "| Starting integrations") {
+		t.Fatalf("startup integrations toast rendered legacy ASCII spinner: %q", view)
 	}
 
-	updated := updateToastTestApp(t, app, components.ToastTickMsg{})
-	if updated.startupIntegrationSpinner == 0 {
-		t.Fatal("startup spinner did not advance on toast tick")
+	updated := updateToastTestApp(t, app, StartupIntegrationsSpinnerTickMsg{})
+	if updated.startupIntegrationSpinner != 1 {
+		t.Fatalf("startup spinner frame = %d, want 1", updated.startupIntegrationSpinner)
+	}
+	view = stripToastANSI(updated.toasts.StackView(updated.pinnedToasts()...))
+	if !strings.Contains(view, components.SpinnerFrame(1)) || !strings.Contains(view, "Starting") || !strings.Contains(view, "integrations") {
+		t.Fatalf("toast stack did not advance shared spinner frame: %q", view)
 	}
 
 	updated = updateToastTestApp(t, updated, StartupIntegrationsReadyMsg{Reload: viewsServicesReload{

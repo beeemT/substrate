@@ -34,8 +34,8 @@ const (
 	sessionLogSteerCharLimit = 20000
 )
 
-// sessionLogSpinnerFrames are braille animation frames for the activity spinner.
-var sessionLogSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// sessionLogSpinnerFrames are braille animation frames for the shared activity spinner.
+var sessionLogSpinnerFrames = components.SpinnerFrames()
 
 // sessionLogSpinnerTickMsg drives the activity spinner in SessionLogModel.
 type sessionLogSpinnerTickMsg struct{}

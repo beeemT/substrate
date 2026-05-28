@@ -30,8 +30,8 @@ const (
 	statusUnderReview = "Under review"
 )
 
-// sessionSearchSpinnerFrames are the braille animation frames for the search spinner.
-var sessionSearchSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// sessionSearchSpinnerFrames are the shared activity spinner frames for search.
+var sessionSearchSpinnerFrames = components.SpinnerFrames()
 
 // sessionSearchDebounceMsg fires after the debounce window expires; stale messages
 // (seq mismatch) are discarded so only the final keystroke triggers a search.

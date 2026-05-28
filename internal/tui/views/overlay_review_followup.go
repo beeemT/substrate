@@ -110,12 +110,9 @@ type ReviewFollowupModel struct {
 
 // NewReviewFollowupModel constructs the overlay in inactive state.
 func NewReviewFollowupModel(st styles.Styles) ReviewFollowupModel {
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-
 	return ReviewFollowupModel{
 		styles:  st,
-		spinner: sp,
+		spinner: components.NewSpinner(st),
 		focus:   reviewSelectorFocusList,
 	}
 }

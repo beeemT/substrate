@@ -1261,7 +1261,7 @@ func TestOverviewInterruptedPlanningDispatchesRestartPlanMsg(t *testing.T) {
 		ID:          "sess-planning",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		Status:      domain.AgentSessionInterrupted,
 	}
 	m.SetData(SessionOverviewData{
@@ -1301,7 +1301,7 @@ func TestOverviewInterruptedActionCard_FiresResumeSessionMsgWithWorkItemID(t *te
 		ID:          "sess-impl",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:        domain.AgentSessionKindImplementation,
 		SubPlanID:   "sp-1",
 		Status:      domain.AgentSessionInterrupted,
 	}
@@ -1510,7 +1510,7 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 		WorkspaceID:    "ws-local",
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo-a",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		Status:         domain.AgentSessionCompleted,
 		UpdatedAt:      now,
 	}}
@@ -1545,6 +1545,7 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 		t.Fatalf("FinalizeWorkItemMsg.WorkItemID = %q, want wi-stuck", finalizeMsg.WorkItemID)
 	}
 }
+
 // TestOverviewBuildActions_SkipsManualSession_WaitingForAnswer verifies that
 // a manual session in waiting_for_answer status does NOT surface a question
 // action card on the work-item overview. Manual sessions are user-driven side
@@ -1661,6 +1662,50 @@ func TestOverviewBuildActions_SupersededWaitingNotShown(t *testing.T) {
 	}
 }
 
+// TestOverviewBuildActions_SupersededInterruptedNotShown verifies that a real
+// review-loop session in interrupted status that has been replaced by a child
+// session does NOT surface a stale interrupted action card.
+func TestOverviewBuildActions_SupersededInterruptedNotShown(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", State: domain.SessionCompleted, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
+	app.sessions = []domain.AgentSession{
+		{
+			ID:             "old",
+			WorkItemID:     "wi-1",
+			WorkspaceID:    "ws-local",
+			Kind:           domain.AgentSessionKindImplementation,
+			SubPlanID:      "sp-1",
+			RepositoryName: "repo-a",
+			Status:         domain.AgentSessionInterrupted,
+			CreatedAt:      now.Add(-time.Hour),
+			UpdatedAt:      now.Add(-time.Hour),
+		},
+		{
+			ID:                   "new",
+			WorkItemID:           "wi-1",
+			WorkspaceID:          "ws-local",
+			Kind:                 domain.AgentSessionKindReview,
+			SubPlanID:            "sp-1",
+			RepositoryName:       "repo-a",
+			Status:               domain.AgentSessionRunning,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+			ParentAgentSessionID: "old",
+		},
+	}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	for _, action := range actions {
+		if action.Kind == overviewActionInterrupted {
+			t.Fatalf("superseded interrupted session must not surface interrupted card: %#v", action)
+		}
+	}
+}
 
 func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 	t.Parallel()
@@ -1675,7 +1720,7 @@ func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 		WorkItemID:  "wi-active",
 		WorkspaceID: "ws-local",
 		SubPlanID:   "sp-1",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:        domain.AgentSessionKindImplementation,
 		Status:      domain.AgentSessionRunning,
 		UpdatedAt:   now,
 	}}
