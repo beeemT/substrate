@@ -19,6 +19,13 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
+import {
+  type AgentEndWatchdogState,
+  newAgentEndWatchdogState,
+  resetAgentEndWatchdog,
+  shouldFireAgentEndWatchdog,
+  updateAgentEndWatchdog,
+} from "./agent-end-watchdog";
 import { isBenignCompactSkip, isCompactionRedundant } from "./compact-helpers";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
@@ -43,6 +50,16 @@ let activePromptRun: Promise<void> | null = null;
 // success: false). prompt() resolves without throwing in this case, so the
 // bridge must check this flag before declaring the session successful.
 let retryExhausted = false;
+
+// ── agent_end watchdog state ──
+//
+// See agent-end-watchdog.ts for the full rationale. Briefly: `agent_end`
+// is the canonical "agent loop ended" signal; we use it as a defensive
+// secondary completion trigger so the bridge can exit cleanly even when
+// `await session.prompt()` never resolves (the post-turn SDK hang we
+// observed on resumed sessions with the "Already compacted — skipping"
+// path).
+const watchdogState: AgentEndWatchdogState = newAgentEndWatchdogState();
 
 function emit(event: object): void {
   process.stdout.write(`${JSON.stringify({ type: "event", event })}\n`);
@@ -263,29 +280,61 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
     return;
   }
 
+  // Reset per-turn state: the watchdog timestamp from a previous prompt must
+  // not survive into the next one (foreman mode reuses the bridge across
+  // multiple prompts).
+  resetAgentEndWatchdog(watchdogState);
   lastAssistantText = "";
   emitInput(inputKind, text);
 
-  try {
-    await session.prompt(text, { expandPromptTemplates: false });
-    if (mode === "foreman") {
-      const { text: answer, uncertain } = extractConfidence(lastAssistantText);
-      emit({ type: "foreman_proposed", text: answer, uncertain });
-    } else if (retryExhausted) {
-      emitLifecycle("failed", {
-        message: "Rate limit retries exhausted — session produced no work",
-      });
-      await flushStdout();
-      process.exit(1);
-    } else {
-      emitLifecycle("completed", { summary: "Session complete" });
-      // Agent sessions are single-use: exit so BridgeSession.Wait() can return.
-      // Without this the process waits for more stdin and Wait() hangs until
-      // sessTimeout fires, leaving the sub-plan stranded in_progress.
-      await flushStdout();
-      process.exit(0);
+  const promptPromise = session.prompt(text, { expandPromptTemplates: false });
+  // Defensive: if the watchdog wins the race below and `session.prompt()`
+  // later rejects (e.g. SDK aborts mid-stream after the watchdog already
+  // fired), Bun would log an unhandled rejection on the now-detached promise.
+  // Attach a no-op catch to mark it as handled. Promise.race below uses a
+  // separate `.then(...)` chain that still propagates the rejection to the
+  // main catch block when the prompt-resolved branch wins.
+  promptPromise.catch(() => {});
+
+  // The agent_end watchdog is a defensive measure for the post-turn SDK hang
+  // observed on resumed agent sessions (SessionManager.open + "Already
+  // compacted — skipping"). Foreman runs in-memory (SessionManager.inMemory)
+  // and does not hit that code path. Skipping the watchdog in foreman mode
+  // also avoids a false-positive failure mode: if the watchdog fired during
+  // foreman, runPrompt would return while session.prompt() is still pending,
+  // leaving the SDK in `isStreaming=true`. The next prompt would then throw
+  // AgentBusyError and the foreman would be permanently broken.
+  const watchdogEnabled = mode === "agent";
+
+  // Watchdog: poll every 100 ms for a fired-but-not-resolved post-turn state.
+  // The poll loop self-terminates when the prompt resolves (controller.abort)
+  // or when shouldFireAgentEndWatchdog() returns true.
+  const watchdogController = new AbortController();
+  const watchdogPromise = (async (): Promise<"watchdog"> => {
+    if (!watchdogEnabled) {
+      // Foreman path: never fire. Pend forever so Promise.race ignores us.
+      return new Promise<"watchdog">(() => {});
     }
+    while (!watchdogController.signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (watchdogController.signal.aborted) break;
+      if (shouldFireAgentEndWatchdog(watchdogState)) {
+        return "watchdog";
+      }
+    }
+    // Aborted by the prompt-resolved branch: pend forever so Promise.race
+    // doesn't pick the abort path. The losing branch is discarded.
+    return new Promise<"watchdog">(() => {});
+  })();
+
+  let outcome: "prompt-resolved" | "watchdog" = "prompt-resolved";
+  try {
+    outcome = await Promise.race([
+      promptPromise.then(() => "prompt-resolved" as const),
+      watchdogPromise,
+    ]);
   } catch (err) {
+    watchdogController.abort();
     const errorMessage = err instanceof Error ? err.message : String(err);
     emitLifecycle("failed", { message: errorMessage });
     if (mode !== "foreman") {
@@ -295,7 +344,43 @@ async function runPrompt(text: string, inputKind: "prompt" | "message"): Promise
       await flushStdout();
       process.exit(1);
     }
+    return;
+  } finally {
+    watchdogController.abort();
   }
+
+  if (mode === "foreman") {
+    const { text: answer, uncertain } = extractConfidence(lastAssistantText);
+    emit({ type: "foreman_proposed", text: answer, uncertain });
+    return;
+  }
+
+  if (retryExhausted) {
+    emitLifecycle("failed", {
+      message: "Rate limit retries exhausted — session produced no work",
+    });
+    await flushStdout();
+    process.exit(1);
+    return;
+  }
+
+  if (outcome === "watchdog") {
+    // session.prompt() never resolved despite agent_end firing with a
+    // terminal stop reason and no post-turn work scheduled. Treat as a
+    // post-turn SDK hang and exit cleanly so substrate's Wait() returns.
+    emitLifecycle("completed", {
+      summary: "Session complete (forced exit after agent_end watchdog)",
+      forced: true,
+      stop_reason: watchdogState.lastAgentStopReason ?? "unknown",
+    });
+  } else {
+    emitLifecycle("completed", { summary: "Session complete" });
+  }
+  // Agent sessions are single-use: exit so BridgeSession.Wait() can return.
+  // Without this the process waits for more stdin and Wait() hangs until
+  // sessTimeout fires, leaving the sub-plan stranded in_progress.
+  await flushStdout();
+  process.exit(0);
 }
 
 function schedulePrompt(text: string, inputKind: "prompt" | "message"): void {
@@ -495,6 +580,7 @@ async function initSession(): Promise<void> {
         lastAssistantText += assistantEvent.delta;
       }
     }
+    updateAgentEndWatchdog(watchdogState, event);
   });
 
   emitLifecycle("started", { message: "Session started" });

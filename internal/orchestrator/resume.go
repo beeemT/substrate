@@ -128,9 +128,9 @@ func (r *Resumption) ResumeSessionWithPrompt(ctx context.Context, interrupted do
 		// Harness resumes the native conversation; optional operator guidance is the first resumed user turn.
 		opts.UserPrompt = trimmedPrompt
 	} else if trimmedPrompt != "" {
-		opts.UserPrompt = "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items.\n\nOperator guidance:\n" + trimmedPrompt
+		opts.UserPrompt = resumeContinuationMessage + "\n\nOperator guidance:\n" + trimmedPrompt
 	} else {
-		opts.UserPrompt = "You are continuing work on this sub-plan. The worktree may contain partial changes from a previous session. Run `git status` and `git diff` to understand current state, then continue implementing remaining items."
+		opts.UserPrompt = resumeContinuationMessage
 	}
 	harnessSession, err := r.harness.StartSession(ctx, opts)
 	if err != nil {

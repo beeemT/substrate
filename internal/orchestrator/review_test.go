@@ -274,3 +274,109 @@ func TestReviewSession_HappyPath_CycleStaysTerminal(t *testing.T) {
 		t.Fatalf("expected cycle status=%q, got %q", domain.ReviewCyclePassed, cycles[0].Status)
 	}
 }
+
+
+// TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget verifies the M6
+// cherry-pick: cycle counting filters to terminal statuses only. Stale
+// `Reviewing` cycles left behind by harness crashes (e.g. SIGKILL between
+// CreateCycle and makeDecision) must not consume the per-impl budget.
+//
+// Scenario: maxCycles=3. Seed two stale `Reviewing` cycles + one
+// `CritiquesFound` cycle for the same impl session. The next ReviewSession
+// call should create cycle number 2 (not 4) and run a normal review pass —
+// not escalate via the max-cycles guard.
+func TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	// Seed two stale Reviewing cycles + one CritiquesFound cycle.
+	now := time.Now()
+	staleCycles := []domain.ReviewCycle{
+		{
+			ID:              "stale-cycle-1",
+			AgentSessionID:  agentSession.ID,
+			CycleNumber:     1,
+			ReviewerHarness: "mock",
+			Status:          domain.ReviewCycleReviewing,
+			CreatedAt:       now.Add(-2 * time.Hour),
+			UpdatedAt:       now.Add(-2 * time.Hour),
+		},
+		{
+			ID:              "stale-cycle-2",
+			AgentSessionID:  agentSession.ID,
+			CycleNumber:     2,
+			ReviewerHarness: "mock",
+			Status:          domain.ReviewCycleReviewing,
+			CreatedAt:       now.Add(-1 * time.Hour),
+			UpdatedAt:       now.Add(-1 * time.Hour),
+		},
+		{
+			ID:              "terminal-cycle-1",
+			AgentSessionID:  agentSession.ID,
+			CycleNumber:     1, // shadowed by the first stale cycle's number
+			ReviewerHarness: "mock",
+			Status:          domain.ReviewCycleCritiquesFound,
+			CreatedAt:       now.Add(-30 * time.Minute),
+			UpdatedAt:       now.Add(-30 * time.Minute),
+		},
+	}
+	for _, c := range staleCycles {
+		if err := fix.reviewRepo.CreateCycle(context.Background(), c); err != nil {
+			t.Fatalf("seed cycle %s: %v", c.ID, err)
+		}
+	}
+
+	// Drive the review pass with a clean output (no critiques) so it passes.
+	fix.harness.outputs = []string{"NO_CRITIQUES"}
+
+	result, err := fix.pipeline.ReviewSession(context.Background(), agentSession)
+	if err != nil {
+		t.Fatalf("ReviewSession: %v", err)
+	}
+
+	// Without the terminal-status filter, terminalCount would be 3 (counting
+	// all cycles), cycleNumber=4 > maxCycles=3 → escalated. With the filter,
+	// terminalCount=1 (only the CritiquesFound cycle) → cycleNumber=2 → not
+	// escalated → normal review pass.
+	if result.Escalated {
+		t.Fatal("expected ReviewSession NOT to escalate; stale Reviewing cycles must not consume the budget")
+	}
+	if result.CycleNumber != 2 {
+		t.Errorf("CycleNumber = %d, want 2 (1 terminal cycle + 1 new)", result.CycleNumber)
+	}
+
+	// Verify a fresh cycle was created with the right number, and the stale
+	// cycles are still there (untouched by this call — they remain orphaned
+	// until manually cleaned up or transitioned via durable cleanup elsewhere).
+	allCycles, err := fix.reviewRepo.ListCyclesBySessionID(context.Background(), agentSession.ID)
+	if err != nil {
+		t.Fatalf("list cycles: %v", err)
+	}
+	if len(allCycles) != 4 {
+		t.Fatalf("expected 4 cycles total (3 seeded + 1 new), got %d", len(allCycles))
+	}
+
+	// The newly created cycle is the one whose ID is not in the seeded set.
+	seededIDs := map[string]bool{
+		"stale-cycle-1": true, "stale-cycle-2": true, "terminal-cycle-1": true,
+	}
+	var newCycle *domain.ReviewCycle
+	for i := range allCycles {
+		if !seededIDs[allCycles[i].ID] {
+			newCycle = &allCycles[i]
+			break
+		}
+	}
+	if newCycle == nil {
+		t.Fatal("could not locate newly created cycle in repo")
+	}
+	if newCycle.CycleNumber != 2 {
+		t.Errorf("new cycle CycleNumber = %d, want 2", newCycle.CycleNumber)
+	}
+	if newCycle.Status != domain.ReviewCyclePassed {
+		t.Errorf("new cycle Status = %q, want %q (NO_CRITIQUES output)",
+			newCycle.Status, domain.ReviewCyclePassed)
+	}
+}

@@ -507,27 +507,53 @@ func (s *ImplementationService) executeSubPlan(
 			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",
 					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
-				result.Status = domain.AgentSessionCompleted
-				result.SessionID = prevImpl.ID
-				result.WorktreePath = prevImpl.WorktreePath
-				result.Summary = "Retrying review with existing implementation"
-				result.CompletedAt = ptrTime(time.Now())
-				outcome := s.reviewLoop(ctx, *prevImpl, subPlan, workspace, plan, workItem, worktreePaths)
-				result.Outcome = outcome
-				if outcome.Passed {
-					state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
-					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
-				} else if outcome.Failed {
-					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
-					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
-				} else if outcome.Escalated {
-					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
-					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
-				}
-				return result, nil
+				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state,
+					"Retrying review with existing implementation")
 			}
 			slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
 				"sub_plan_id", subPlan.ID, "last_session_id", last.ID)
+		}
+	}
+
+	// Tier 3: extend the crash-recovery rule. Even when the most recent session
+	// is NOT a review (e.g. a failed/interrupted impl from yesterday's bulk
+	// retry, or a fresh InProgress retry of a previously-completed work item),
+	// if there is already a completed impl session for this sub-plan and:
+	//   - it has no successful review yet, AND
+	//   - there is no outstanding critique to feed back into a re-impl,
+	// then the right next step is to review that existing impl, not run a
+	// fresh one. This closes the architectural gap that caused the bulk-retry
+	// hang on 2026-05-28: Implement() entering runImplementation with prevImpl
+	// + ResumeInfo + empty critique → bridge resumed but had nothing to do.
+	//
+	// This is a strict subset of the focused-retry plan's M5
+	// (`ContinueAfterImplSession`); when M5 lands, this branch is replaced by
+	// a call to the unified entry point with no behavioural change.
+	if s.reviewPipeline != nil {
+		if prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID); prevImpl != nil {
+			outstandingCritique := s.implHasOutstandingCritique(ctx, prevImpl.ID)
+			passedReview := s.implHasPassedReview(ctx, prevImpl.ID)
+			switch {
+			case passedReview:
+				// Defensive: the sub-plan should not be entering executeSubPlan
+				// when its latest impl already has a passed review. Log and
+				// fall through to a fresh implementation so the system at
+				// least makes progress; this matches the existing "no review
+				// retry possible" fallback.
+				slog.Warn("sub-plan re-entered executeSubPlan despite latest impl having a passed review; running fresh implementation",
+					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
+			case outstandingCritique:
+				// Auto-reimpl path: critique feedback exists; runImplementation
+				// will resume the impl session and feed the critique back in.
+				// Nothing to short-circuit here — fall through.
+			default:
+				// Completed impl with no successful review and no outstanding
+				// critique. Skip the re-impl and review the existing impl.
+				slog.Info("skipping implementation, reviewing existing completed impl with no outstanding review",
+					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
+				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state,
+					"Reviewing existing completed implementation")
+			}
 		}
 	}
 
@@ -880,14 +906,31 @@ func (s *ImplementationService) runImplementation(
 		}
 	}
 
-	// Send critique feedback as a follow-up message when resuming a prior session.
-	// This preserves the model's conversation history — it knows what it implemented
-	// and can see the critique in context.
-	if canCompact && critiqueFeedback != "" {
+	// Deliver guidance to the resumed session. Without an explicit user-turn
+	// after resume + compact-skip, the bridge sits idle until sessTimeout —
+	// the SDK does not auto-prompt on its own. Send either the critique
+	// feedback (auto-reimpl path) or a generic continuation orientation
+	// (bulk retry / escalation reset / any other path that lands here with
+	// no critique).
+	switch {
+	case canCompact && critiqueFeedback != "":
+		// Auto-reimpl after critique: the critique is the user's turn.
 		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
 			slog.Warn("failed to send critique feedback to resumed session", "error", err,
 				"agent_session_id", sessionID)
 			// Non-fatal: session continues without the explicit critique prompt.
+		}
+	case canCompact:
+		// Resumed with no critique to deliver — bulk retry of a failed work
+		// item, escalation reset, or any other path that reaches us here.
+		// Mirrors Resumption.ResumeSessionWithPrompt orientation wording.
+		if err := harnessSession.SendMessage(ctx, resumeContinuationMessage); err != nil {
+			slog.Warn("failed to send orientation to resumed session", "error", err,
+				"agent_session_id", sessionID)
+			// Non-fatal: session continues without the orientation message.
+			// The bridge will most likely sit idle until sessTimeout, but we
+			// don't want to fail the session pre-emptively over a transient
+			// stdin write error.
 		}
 	}
 
@@ -962,6 +1005,86 @@ func buildCritiqueFeedback(critiques []domain.Critique) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// implHasOutstandingCritique reports whether any review cycle for the given
+// implementation session is in `critiques_found` or `reimplementing`. This is
+// the same condition `loadCritiqueFeedback` uses to decide whether there is
+// critique to feed back into a re-impl. Used by Tier 3 (executeSubPlan
+// review-existing-impl branch) to decide between reviewing the existing impl
+// versus running a re-impl.
+func (s *ImplementationService) implHasOutstandingCritique(ctx context.Context, implSessionID string) bool {
+	cycles, err := s.reviewSvc.ListCyclesBySessionID(ctx, implSessionID)
+	if err != nil {
+		slog.Warn("failed to list review cycles checking for outstanding critique",
+			"error", err, "impl_session_id", implSessionID)
+		return false
+	}
+	for _, c := range cycles {
+		if c.Status == domain.ReviewCycleCritiquesFound || c.Status == domain.ReviewCycleReimplementing {
+			return true
+		}
+	}
+	return false
+}
+
+// implHasPassedReview reports whether any review cycle for the given
+// implementation session has reached the `passed` terminal status.
+func (s *ImplementationService) implHasPassedReview(ctx context.Context, implSessionID string) bool {
+	cycles, err := s.reviewSvc.ListCyclesBySessionID(ctx, implSessionID)
+	if err != nil {
+		slog.Warn("failed to list review cycles checking for passed review",
+			"error", err, "impl_session_id", implSessionID)
+		return false
+	}
+	for _, c := range cycles {
+		if c.Status == domain.ReviewCyclePassed {
+			return true
+		}
+	}
+	return false
+}
+
+// runReviewOnExistingImpl runs the review pipeline against an existing completed
+// implementation session and translates the outcome into SessionResult /
+// ExecutionState transitions. Shared between the original crash-recovery branch
+// (latest session is a review) and the Tier 3 branch (latest session is anything
+// but the impl is already complete with no outstanding work).
+//
+// `summary` becomes the SessionResult.Summary so the caller can describe why
+// the re-impl was skipped.
+func (s *ImplementationService) runReviewOnExistingImpl(
+	ctx context.Context,
+	subPlan domain.TaskPlan,
+	workspace *domain.Workspace,
+	plan *domain.Plan,
+	workItem *domain.Session,
+	worktreePaths map[string]string,
+	prevImpl domain.AgentSession,
+	result SessionResult,
+	state *ExecutionState,
+	summary string,
+) (SessionResult, *ImplementationWarning) {
+	result.Status = domain.AgentSessionCompleted
+	result.SessionID = prevImpl.ID
+	result.WorktreePath = prevImpl.WorktreePath
+	result.Summary = summary
+	result.CompletedAt = ptrTime(time.Now())
+
+	outcome := s.reviewLoop(ctx, prevImpl, subPlan, workspace, plan, workItem, worktreePaths)
+	result.Outcome = outcome
+	switch {
+	case outcome.Passed:
+		state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+	case outcome.Failed:
+		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review failed for %s", subPlan.RepositoryName))
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+	case outcome.Escalated:
+		state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
+	}
+	return result, nil
 }
 
 // loadCritiqueFeedback looks up outstanding review critiques for a sub-plan
@@ -1993,6 +2116,20 @@ const (
 	preReceiveFixAgentTimeout  = 15 * time.Minute
 	durableFinalizationTimeout = commitAgentTimeout + preReceiveFixAgentTimeout + time.Minute
 )
+
+// resumeContinuationMessage is sent to a resumed harness session when there is
+// no critique feedback to deliver and no explicit operator prompt. Without an
+// initial user-turn after resume + compact-skip, the SDK sits idle: there is
+// nothing for it to respond to, and the bridge process therefore never reaches
+// its post-prompt exit path.
+//
+// Mirrors the orientation copy in Resumption.ResumeSessionWithPrompt so the
+// agent sees the same prompt regardless of whether bulk retry or focused
+// resume put it back on the work item.
+const resumeContinuationMessage = "You are continuing work on this sub-plan. " +
+	"The worktree may contain partial changes from a previous session. " +
+	"Run `git status` and `git diff` to understand current state, then " +
+	"continue implementing remaining items."
 
 // durablePRReadyContext returns a context derived from parent but insulated from
 // cancellation, with a generous timeout for PR-ready marking and DB persistence.

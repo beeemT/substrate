@@ -550,8 +550,10 @@ func (r *mockQuestionRepo) UpdateProposedAnswer(_ context.Context, id, proposedA
 
 type mockWorkItemRepo struct{}
 
-func (r *mockWorkItemRepo) Get(_ context.Context, _ string) (domain.Session, error) {
-	return domain.Session{}, repository.ErrNotFound
+func (r *mockWorkItemRepo) Get(_ context.Context, id string) (domain.Session, error) {
+	// Return a minimal seeded session so PlanService.TransitionSubPlan can
+	// emit sub-plan lifecycle events without failing on a missing work item.
+	return domain.Session{ID: id, WorkspaceID: "ws-1", State: domain.SessionImplementing}, nil
 }
 
 func (r *mockWorkItemRepo) List(_ context.Context, _ repository.SessionFilter) ([]domain.Session, error) {
@@ -580,8 +582,14 @@ func testReviewConfig(maxCycles int) *config.Config {
 type reviewPipelineFixture struct {
 	pipeline    *ReviewPipeline
 	reviewRepo  *mockReviewRepo
+	reviewSvc   *service.ReviewService
 	planRepo    *mockPlanRepo
+	planSvc     *service.PlanService
 	subPlanRepo *mockSubPlanRepo
+	sessionRepo *mockSessionRepo
+	sessionSvc  *service.AgentSessionService
+	workItemSvc *service.SessionService
+	bus         event.Publisher
 	harness     *mockAgentHarness
 	sessionsDir string // temp sessions dir (SUBSTRATE_HOME/sessions)
 	cleanup     func()
@@ -612,7 +620,7 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 
 	cfg := testReviewConfig(maxCycles)
 	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}}, &mockPublisher{})
-	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{})
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, &mockPublisher{})
 	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, &mockPublisher{})
 	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{})
 	bus := event.NewBus(event.BusConfig{}) // nil EventRepo → no persistence, OK for tests
@@ -623,8 +631,14 @@ func newReviewPipelineFixture(t *testing.T, maxCycles int) *reviewPipelineFixtur
 	return &reviewPipelineFixture{
 		pipeline:    pipeline,
 		reviewRepo:  reviewRepo,
+		reviewSvc:   reviewSvc,
 		planRepo:    planRepo,
+		planSvc:     planSvc,
 		subPlanRepo: subPlanRepo,
+		sessionRepo: sessionRepo,
+		sessionSvc:  sessionSvc,
+		workItemSvc: workItemSvc,
+		bus:         bus,
 		harness:     harness,
 		sessionsDir: sessionsDir,
 		cleanup:     cleanup,
@@ -644,7 +658,7 @@ func (f *reviewPipelineFixture) seedPlanAndSubPlan(t *testing.T) domain.AgentSes
 		t.Fatalf("create plan: %v", err)
 	}
 
-	subPlan := domain.TaskPlan{ID: subPlanID, PlanID: planID, Content: "test sub-plan", Order: 0}
+	subPlan := domain.TaskPlan{ID: subPlanID, PlanID: planID, Content: "test sub-plan", Order: 0, Status: domain.SubPlanInProgress}
 	if err := f.subPlanRepo.Create(context.Background(), subPlan); err != nil {
 		t.Fatalf("create sub-plan: %v", err)
 	}

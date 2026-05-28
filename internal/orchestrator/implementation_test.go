@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1415,6 +1417,111 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 	}
 }
 
+// TestRunImplementation_WithResumeInfo_NoCritique_SendsOrientation verifies that
+// when prevSession has ResumeInfo and there is NO critique feedback to deliver
+// (bulk retry, escalation reset, etc.), runImplementation sends a generic
+// continuation orientation message to the resumed harness session. Without it
+// the bridge sits idle until sessTimeout because the SDK has no user-turn to
+// drive the agent loop.
+func TestRunImplementation_WithResumeInfo_NoCritique_SendsOrientation(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+
+	sessionRepo := newMockSessionRepo()
+	harness := &completingHarness{}
+
+	cfg := &config.Config{}
+	subPlanRepo := newMockSubPlanRepo()
+	planRepo := newMockPlanRepo()
+	workItemRepo := &implementationWorkItemRepo{items: make(map[string]domain.Session)}
+	eventRepo := &implementationEventRepo{}
+	workspaceRepo := &implementationWorkspaceRepo{
+		workspaces: map[string]domain.Workspace{
+			"ws-1": {ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady},
+		},
+	}
+	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+	registry := NewSessionRegistry()
+
+	svc := NewImplementationService(
+		cfg,
+		harness,
+		nil, bus,
+		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
+		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
+		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
+		registry, nil,
+		nil, nil, // foreman, questionSvc
+		nil, // reviewSvc
+		worktree.NewHookRegistry(),
+	)
+
+	// Seed a previous completed session with ResumeInfo (the bulk-retry shape:
+	// the previous impl finished, but its review crashed, so there is no
+	// outstanding critique).
+	prevSession := domain.AgentSession{
+		ID:             "prev-session",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   workspaceRoot,
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+		ResumeInfo: map[string]string{
+			"omp_session_file": "/tmp/session.jsonl",
+			"omp_session_id":   "omp-123",
+		},
+	}
+	sessionRepo.sessions[prevSession.ID] = prevSession
+
+	subPlan := domain.TaskPlan{
+		ID:             "sp-1",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
+	plan := &domain.Plan{ID: "plan-1"}
+
+	// critiqueFeedback is empty — this is the bulk-retry / escalation-reset shape.
+	if _, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "", &prevSession, prevSession.ID); err != nil {
+		t.Fatalf("runImplementation: %v", err)
+	}
+
+	harness.mu.Lock()
+	lastSess := harness.lastSess
+	harness.mu.Unlock()
+	if lastSess == nil {
+		t.Fatal("harness did not create a session")
+	}
+
+	// UserPrompt is still cleared (harness owns the resume turn).
+	if lastSess.opts.UserPrompt != "" {
+		t.Errorf("UserPrompt = %q, want empty", lastSess.opts.UserPrompt)
+	}
+
+	// Orientation message is sent via SendMessage.
+	lastSess.mu.Lock()
+	msgs := append([]string(nil), lastSess.msgs...)
+	lastSess.mu.Unlock()
+
+	if len(msgs) != 1 {
+		t.Fatalf("SendMessage call count = %d, want 1; msgs = %v", len(msgs), msgs)
+	}
+	if msgs[0] != resumeContinuationMessage {
+		t.Errorf("SendMessage payload = %q, want %q", msgs[0], resumeContinuationMessage)
+	}
+
+	// Sanity: the orientation message must NOT be baked into the system prompt
+	// (it's a conversation turn, not part of system context).
+	if strings.Contains(lastSess.opts.SystemPrompt, "continuing work on this sub-plan") {
+		t.Error("orientation message should NOT be in SystemPrompt — it is delivered via SendMessage")
+	}
+}
+
 // TestRunImplementation_WithoutResumeInfo verifies fallback behavior when prevSession
 // is nil: critique goes into the system prompt.
 func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
@@ -1742,6 +1849,266 @@ func TestExecuteSubPlan_CompletesTaskOnSuccess(t *testing.T) {
 	}
 	if len(events) == 0 {
 		t.Error("expected EventAgentSessionCompleted event, none emitted")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tier 3 tests — review existing impl when no critique outstanding
+// ---------------------------------------------------------------------------
+
+// tier3Fixture wires up an ImplementationService that shares the same repos
+// as a reviewPipelineFixture, so executeSubPlan can read sessions/cycles
+// produced by the review pipeline and vice versa.
+type tier3Fixture struct {
+	svc       *ImplementationService
+	rpFix     *reviewPipelineFixture
+	implCalls *atomic.Int32 // incremented every time the impl harness's StartSession runs
+}
+
+func newTier3Fixture(t *testing.T) *tier3Fixture {
+	t.Helper()
+
+	rpFix := newReviewPipelineFixture(t, 3)
+
+	implCalls := &atomic.Int32{}
+	implHarness := &mockAgentHarness{
+		sessionsDir: rpFix.sessionsDir,
+		onStartSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			implCalls.Add(1)
+			return nil, fmt.Errorf("unexpected impl StartSession (sub-plan %s, session %s) — Tier 3 should have skipped re-impl",
+				opts.SubPlanID, opts.SessionID)
+		},
+	}
+
+	workspaceRepo := &implementationWorkspaceRepo{
+		workspaces: map[string]domain.Workspace{
+			"ws-1": {ID: "ws-1", RootPath: rpFix.sessionsDir, Status: domain.WorkspaceReady},
+		},
+	}
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{})
+
+	cfg := testReviewConfig(3)
+	autoLoop := true
+	cfg.Review.AutoFeedbackLoop = &autoLoop
+
+	svc := &ImplementationService{
+		cfg:            cfg,
+		harness:        implHarness,
+		eventBus:       rpFix.bus,
+		planSvc:        rpFix.planSvc,
+		workItemSvc:    rpFix.workItemSvc,
+		sessionSvc:     rpFix.sessionSvc,
+		workspaceSvc:   workspaceSvc,
+		registry:       NewSessionRegistry(),
+		reviewPipeline: rpFix.pipeline,
+		reviewSvc:      rpFix.reviewSvc,
+		hookRegistry:   worktree.NewHookRegistry(),
+		sessTimeout:    1 * time.Minute,
+	}
+
+	return &tier3Fixture{svc: svc, rpFix: rpFix, implCalls: implCalls}
+}
+
+// TestExecuteSubPlan_Tier3_NoOutstandingCritique_ReviewsExistingImpl verifies
+// the new Tier 3 branch: when a sub-plan re-enters executeSubPlan with a
+// completed prior impl session, no outstanding critique, and no passed
+// review, executeSubPlan must short-circuit re-implementation and route to
+// reviewLoop on the existing impl. This closes the bulk-retry hang at the
+// architectural layer.
+func TestExecuteSubPlan_Tier3_NoOutstandingCritique_ReviewsExistingImpl(t *testing.T) {
+	fix := newTier3Fixture(t)
+	defer fix.rpFix.cleanup()
+
+	// Seed plan + sub-plan.
+	implSession := fix.rpFix.seedPlanAndSubPlan(t)
+	subPlan := domain.TaskPlan{
+		ID:             implSession.SubPlanID,
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+
+	// Seed the completed prior impl session (the one whose review crashed
+	// or never ran). No review cycles seeded → no outstanding critique, no
+	// passed review.
+	implSession.WorktreePath = t.TempDir()
+	implSession.CreatedAt = time.Now().Add(-1 * time.Hour)
+	if err := fix.rpFix.sessionRepo.Create(context.Background(), implSession); err != nil {
+		t.Fatalf("seed impl session: %v", err)
+	}
+
+	// Drive the review pipeline with a clean output so review passes.
+	fix.rpFix.harness.outputs = []string{"NO_CRITIQUES"}
+
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: fix.rpFix.sessionsDir, Status: domain.WorkspaceReady}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+	state.StartSubPlan(subPlan.ID, time.Now().UnixNano())
+
+	worktreePaths := map[string]string{"repo-a": implSession.WorktreePath}
+
+	result, warning := fix.svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		workspace,
+		plan,
+		workItem,
+		"sub-MAN-1-implement-the-change",
+		worktreePaths,
+		state,
+	)
+
+	if warning != nil {
+		t.Fatalf("unexpected warning: %+v", warning)
+	}
+
+	// Tier 3 must have skipped runImplementation.
+	if calls := fix.implCalls.Load(); calls != 0 {
+		t.Errorf("Tier 3 branch did not skip runImplementation; impl harness called %d time(s)", calls)
+	}
+
+	// SessionResult must reference the existing impl session, not a new one.
+	if result.SessionID != implSession.ID {
+		t.Errorf("SessionID = %q, want existing impl %q", result.SessionID, implSession.ID)
+	}
+	if result.Status != domain.AgentSessionCompleted {
+		t.Errorf("Status = %q, want %q", result.Status, domain.AgentSessionCompleted)
+	}
+	if !strings.Contains(result.Summary, "Reviewing existing completed implementation") {
+		t.Errorf("Summary = %q, want it to mention reviewing existing impl", result.Summary)
+	}
+
+	// Review pipeline must have produced a passing outcome.
+	if !result.Outcome.Passed {
+		t.Errorf("Outcome = %+v, want Passed=true", result.Outcome)
+	}
+
+	// Sub-plan must be completed in execution state.
+	got, ok := state.Executions[subPlan.ID]
+	if !ok {
+		t.Fatalf("sub-plan %s not in execution state", subPlan.ID)
+	}
+	if got.Status != domain.SubPlanCompleted {
+		t.Errorf("sub-plan status = %q, want %q", got.Status, domain.SubPlanCompleted)
+	}
+
+	// A review cycle must exist for the prev impl session.
+	cycles, err := fix.rpFix.reviewSvc.ListCyclesBySessionID(context.Background(), implSession.ID)
+	if err != nil {
+		t.Fatalf("list cycles: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Fatalf("expected 1 review cycle, got %d", len(cycles))
+	}
+	if cycles[0].Status != domain.ReviewCyclePassed {
+		t.Errorf("cycle status = %q, want %q", cycles[0].Status, domain.ReviewCyclePassed)
+	}
+}
+
+// TestExecuteSubPlan_Tier3_OutstandingCritique_DoesNotShortCircuit verifies
+// that when there IS an outstanding critique (cycle in `critiques_found`),
+// Tier 3 falls through to runImplementation (the auto-reimpl path) instead
+// of skipping straight to review.
+func TestExecuteSubPlan_Tier3_OutstandingCritique_DoesNotShortCircuit(t *testing.T) {
+	fix := newTier3Fixture(t)
+	defer fix.rpFix.cleanup()
+
+	implSession := fix.rpFix.seedPlanAndSubPlan(t)
+	subPlan := domain.TaskPlan{
+		ID:             implSession.SubPlanID,
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	implSession.WorktreePath = t.TempDir()
+	implSession.CreatedAt = time.Now().Add(-1 * time.Hour)
+	if err := fix.rpFix.sessionRepo.Create(context.Background(), implSession); err != nil {
+		t.Fatalf("seed impl session: %v", err)
+	}
+
+	// Seed an outstanding critique cycle. Tier 3 must NOT short-circuit.
+	if err := fix.rpFix.reviewRepo.CreateCycle(context.Background(), domain.ReviewCycle{
+		ID:              "cycle-1",
+		AgentSessionID:  implSession.ID,
+		CycleNumber:     1,
+		ReviewerHarness: "mock",
+		Status:          domain.ReviewCycleCritiquesFound,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}); err != nil {
+		t.Fatalf("seed cycle: %v", err)
+	}
+
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: fix.rpFix.sessionsDir, Status: domain.WorkspaceReady}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+	state.StartSubPlan(subPlan.ID, time.Now().UnixNano())
+
+	worktreePaths := map[string]string{"repo-a": implSession.WorktreePath}
+
+	// Run executeSubPlan. The impl harness fails (onStartSession returns an
+	// error) — that's the SIGNAL that Tier 3 fell through to runImplementation
+	// instead of short-circuiting. We assert on `impl harness was called`.
+	result, _ := fix.svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		workspace,
+		plan,
+		workItem,
+		"sub-MAN-1-implement-the-change",
+		worktreePaths,
+		state,
+	)
+
+	if calls := fix.implCalls.Load(); calls == 0 {
+		t.Errorf("Tier 3 branch unexpectedly short-circuited despite outstanding critique; impl harness was never called")
+	}
+
+	// The impl harness intentionally fails, so the result reflects that.
+	if result.Status != domain.AgentSessionFailed {
+		t.Errorf("Status = %q, want %q (impl harness fakes a failure)", result.Status, domain.AgentSessionFailed)
+	}
+}
+
+// TestExecuteSubPlan_Tier3_NoPriorImpl_RunsFreshImplementation verifies the
+// no-prior-impl base case: when latestCompletedImplSession returns nil, Tier
+// 3 must NOT trigger and a fresh implementation must run.
+func TestExecuteSubPlan_Tier3_NoPriorImpl_RunsFreshImplementation(t *testing.T) {
+	fix := newTier3Fixture(t)
+	defer fix.rpFix.cleanup()
+
+	// Seed plan+sub-plan but NO prior impl session.
+	implSessionTemplate := fix.rpFix.seedPlanAndSubPlan(t)
+	subPlan := domain.TaskPlan{
+		ID:             implSessionTemplate.SubPlanID,
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: fix.rpFix.sessionsDir, Status: domain.WorkspaceReady}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+	state.StartSubPlan(subPlan.ID, time.Now().UnixNano())
+
+	worktreePaths := map[string]string{"repo-a": t.TempDir()}
+
+	_, _ = fix.svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		workspace,
+		plan,
+		workItem,
+		"sub-MAN-1-implement-the-change",
+		worktreePaths,
+		state,
+	)
+
+	if calls := fix.implCalls.Load(); calls == 0 {
+		t.Errorf("expected fresh implementation to run; impl harness was never called")
 	}
 }
 
