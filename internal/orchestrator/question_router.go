@@ -36,7 +36,7 @@ func (r *QuestionRouter) Route(ctx context.Context, kind domain.AgentSessionKind
 	case domain.AgentSessionKindPlanning:
 		return r.routePlanning(ctx, evt, sessionID)
 	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
-		return r.routeImplementation(ctx, evt, sessionID)
+		return r.routeImplementation(ctx, kind, evt, sessionID)
 	case domain.AgentSessionKindManual:
 		return r.routeManual(ctx, evt, sessionID)
 	case domain.AgentSessionKindForeman:
@@ -68,8 +68,8 @@ func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEve
 	return nil
 }
 
-func (r *QuestionRouter) routeImplementation(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindImplementation)
+func (r *QuestionRouter) routeImplementation(ctx context.Context, kind domain.AgentSessionKind, evt adapter.AgentEvent, sessionID string) error {
+	q := questionFromEvent(evt, sessionID, kind)
 	if err := r.persistAndPublish(ctx, q, "implementation question raised"); err != nil {
 		return err
 	}

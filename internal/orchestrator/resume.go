@@ -452,7 +452,7 @@ func readLastNLines(sessionID string, n int) (string, error) {
 // forwardEvents drains follow-up harness events so terminal bridge events cannot block
 // BridgeSession.Wait. Detailed transcript events stay in session logs; questions are
 // routed with implementation semantics because follow-up sessions continue implementation work.
-func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string) {
+func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.AgentEvent, sessionID string, kind domain.AgentSessionKind) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -464,7 +464,7 @@ func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.Ag
 
 			if evt.Type == "question" {
 				if r.questionRouter != nil {
-					if err := r.questionRouter.Route(ctx, domain.AgentSessionKindImplementation, evt, sessionID); err != nil {
+					if err := r.questionRouter.Route(ctx, kind, evt, sessionID); err != nil {
 						slog.Error("failed to route follow-up question", "error", err, "agent_session_id", sessionID)
 					}
 				}
@@ -483,9 +483,15 @@ func (r *Resumption) forwardEvents(ctx context.Context, events <-chan adapter.Ag
 func (r *Resumption) WaitAndComplete(ctx context.Context, sessionID string, harnessSession adapter.AgentSession) {
 	defer r.registry.Deregister(sessionID)
 
+	// Look up session kind for correct question routing.
+	kind := domain.AgentSessionKindImplementation // fallback
+	if sess, err := r.sessionSvc.Get(ctx, sessionID); err == nil {
+		kind = sess.Kind
+	}
+
 	drainCtx, drainCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer drainCancel()
-	go r.forwardEvents(drainCtx, harnessSession.Events(), sessionID)
+	go r.forwardEvents(drainCtx, harnessSession.Events(), sessionID, kind)
 
 	waitErr := harnessSession.Wait(ctx)
 	if waitErr != nil {

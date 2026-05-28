@@ -1724,6 +1724,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toasts.AddToast("Work item completed", components.ToastSuccess)
 			cmds = append(cmds, EndForemanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID))
 		}
+		if msg.Session.State == domain.SessionFailed || msg.Session.State == domain.SessionArchived {
+			cmds = append(cmds, EndForemanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID))
+		}
 
 		// Only issue DB loads if the payload lacks data
 		if msg.Session.ID == "" && msg.WorkItemID != "" {
@@ -2098,8 +2101,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FollowUpSessionCompleteMsg:
 		a.cancelPipeline(msg.WorkItemID)
 		a.toasts.AddToast("Follow-up session complete", components.ToastSuccess)
-		// Stop the Foreman — follow-up work is done.
-		cmds = append(cmds, EndForemanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID))
 		// Reload tasks for the specific work item
 		cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
@@ -3006,10 +3007,8 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		if sessionID := a.retryableFocusedSessionID(); sessionID != "" {
-			if a.provider.Resumption() != nil && a.provider.Task() != nil {
-				ctx := a.pipelineCtxForSession(sessionID)
-				return a, RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), sessionID, a.runtimeCtx.InstanceID)
-			}
+			ctx := a.pipelineCtxForSession(sessionID)
+			return a, RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), a.provider.Implementation(), sessionID, a.runtimeCtx.InstanceID)
 		}
 	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {

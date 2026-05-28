@@ -140,10 +140,10 @@ func canTransitionPlan(from, to domain.PlanStatus) bool {
 // SubPlan state transitions
 var validSubPlanTransitions = map[domain.TaskPlanStatus][]domain.TaskPlanStatus{
 	domain.SubPlanPending:    {domain.SubPlanInProgress},
-	domain.SubPlanInProgress: {domain.SubPlanCompleted, domain.SubPlanFailed, domain.SubPlanPending},
-	// Allow crash recovery: pending resets a stranded in_progress
-	domain.SubPlanCompleted: {},                      // Terminal state
-	domain.SubPlanFailed:    {domain.SubPlanPending}, // Allow retry
+	domain.SubPlanInProgress: {domain.SubPlanCompleted, domain.SubPlanFailed, domain.SubPlanEscalated, domain.SubPlanPending},
+	domain.SubPlanCompleted:  {},                                                  // Terminal state
+	domain.SubPlanFailed:     {domain.SubPlanInProgress, domain.SubPlanPending},    // Direct retry + wave reset
+	domain.SubPlanEscalated:  {domain.SubPlanInProgress, domain.SubPlanPending},    // Human-resumed retry
 }
 
 func canTransitionSubPlan(from, to domain.TaskPlanStatus) bool {
@@ -815,6 +815,8 @@ func subPlanEventType(status domain.TaskPlanStatus) domain.EventType {
 		return domain.EventSubPlanCompleted
 	case domain.SubPlanFailed:
 		return domain.EventSubPlanFailed
+	case domain.SubPlanEscalated:
+		return domain.EventSubPlanEscalated
 	default:
 		return ""
 	}

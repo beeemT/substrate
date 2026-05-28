@@ -310,7 +310,12 @@ func TestSubPlanService_ValidTransitions(t *testing.T) {
 		{domain.SubPlanPending, domain.SubPlanInProgress, "pending -> in_progress"},
 		{domain.SubPlanInProgress, domain.SubPlanCompleted, "in_progress -> completed"},
 		{domain.SubPlanInProgress, domain.SubPlanFailed, "in_progress -> failed"},
+		{domain.SubPlanInProgress, domain.SubPlanEscalated, "in_progress -> escalated"},
+		{domain.SubPlanInProgress, domain.SubPlanPending, "in_progress -> pending"},
 		{domain.SubPlanFailed, domain.SubPlanPending, "failed -> pending"},
+		{domain.SubPlanFailed, domain.SubPlanInProgress, "failed -> in_progress"},
+		{domain.SubPlanEscalated, domain.SubPlanPending, "escalated -> pending"},
+		{domain.SubPlanEscalated, domain.SubPlanInProgress, "escalated -> in_progress"},
 	}
 
 	for _, tc := range validTransitions {
@@ -366,11 +371,15 @@ func TestSubPlanService_InvalidTransitions(t *testing.T) {
 	}{
 		{domain.SubPlanPending, domain.SubPlanCompleted, "pending -> completed"},
 		{domain.SubPlanPending, domain.SubPlanFailed, "pending -> failed"},
+		{domain.SubPlanPending, domain.SubPlanEscalated, "pending -> escalated"},
 		// Note: in_progress -> pending is now valid (crash recovery); see validSubPlanTransitions.
 		{domain.SubPlanCompleted, domain.SubPlanInProgress, "completed -> in_progress"},
 		{domain.SubPlanCompleted, domain.SubPlanFailed, "completed -> failed"},
+		{domain.SubPlanCompleted, domain.SubPlanEscalated, "completed -> escalated"},
 		{domain.SubPlanFailed, domain.SubPlanCompleted, "failed -> completed"},
-		{domain.SubPlanFailed, domain.SubPlanInProgress, "failed -> in_progress"},
+		{domain.SubPlanFailed, domain.SubPlanEscalated, "failed -> escalated"},
+		{domain.SubPlanEscalated, domain.SubPlanCompleted, "escalated -> completed"},
+		{domain.SubPlanEscalated, domain.SubPlanFailed, "escalated -> failed"},
 	}
 	for _, tc := range invalidTransitions {
 		t.Run(tc.name, func(t *testing.T) {

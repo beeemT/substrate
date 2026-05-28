@@ -76,8 +76,16 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 		return nil, fmt.Errorf("list review cycles: %w", err)
 	}
 
-	// Determine next cycle number
-	cycleNumber := len(cycles) + 1
+	// Count only terminal-decision cycles toward the budget. Stale cycles
+	// left in reviewing/reimplementing by harness crashes do not consume it.
+	terminalCount := 0
+	for _, c := range cycles {
+		switch c.Status {
+		case domain.ReviewCyclePassed, domain.ReviewCycleCritiquesFound, domain.ReviewCycleFailed:
+			terminalCount++
+		}
+	}
+	cycleNumber := terminalCount + 1
 
 	// Check max cycles
 	maxCycles := *p.cfg.Review.MaxCycles

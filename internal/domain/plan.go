@@ -57,4 +57,5 @@ const (
 	SubPlanInProgress TaskPlanStatus = "in_progress"
 	SubPlanCompleted  TaskPlanStatus = "completed"
 	SubPlanFailed     TaskPlanStatus = "failed"
+	SubPlanEscalated  TaskPlanStatus = "escalated"
 )

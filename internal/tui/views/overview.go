@@ -1434,6 +1434,8 @@ func humanTaskPlanStatus(status domain.TaskPlanStatus) string {
 		return statusCompleted
 	case domain.SubPlanFailed:
 		return statusFailed
+	case domain.SubPlanEscalated:
+		return "Needs review"
 	default:
 		return string(status)
 	}

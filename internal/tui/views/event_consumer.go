@@ -64,6 +64,7 @@ var eventHandlerRegistry = map[domain.EventType]eventDecoder{
 	domain.EventSubPlanStarted:   decodeSubPlanEvent,
 	domain.EventSubPlanCompleted: decodeSubPlanEvent,
 	domain.EventSubPlanFailed:    decodeSubPlanEvent,
+	domain.EventSubPlanEscalated: decodeSubPlanEvent,
 	domain.EventSubPlanPRReady:   decodeSubPlanPRReady,
 	// Agent session events
 	domain.EventAgentSessionStarted:          decodeAgentSessionStarted,

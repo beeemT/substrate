@@ -315,8 +315,9 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	// Reset failed and in_progress sub-plans to pending so they are picked up by BuildWaves.
 	// Completed sub-plans are left alone. In_progress ones were left stranded by a process crash
 	// — treat them as needing a fresh execution just like failed ones.
+	// Escalated sub-plans are also reset so bulk retry re-executes them.
 	for i := range subPlans {
-		if subPlans[i].Status == domain.SubPlanFailed || subPlans[i].Status == domain.SubPlanInProgress {
+		if subPlans[i].Status == domain.SubPlanFailed || subPlans[i].Status == domain.SubPlanInProgress || subPlans[i].Status == domain.SubPlanEscalated {
 			s.persistSubPlanStatus(ctx, &subPlans[i], domain.SubPlanPending)
 		}
 	}
@@ -365,17 +366,23 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 
 	result.CompletedAt = time.Now()
 
-	// Determine final work item state based on review outcomes.
-
+	// Determine final work item state based on persisted sub-plan statuses.
+	// Reading from DB ensures correctness even if the in-memory ReviewResults
+	// map is incomplete (e.g. after crash recovery or focused retry).
 	hasEscalated := false
 	hasFailed := false
-	for _, outcome := range result.ReviewResults {
-		if outcome.Failed {
-			hasFailed = true
+	if freshSubPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID); err == nil {
+		for _, sp := range freshSubPlans {
+			switch sp.Status {
+			case domain.SubPlanFailed:
+				hasFailed = true
+			case domain.SubPlanEscalated:
+				hasEscalated = true
+			}
 		}
-		if outcome.Escalated {
-			hasEscalated = true
-		}
+	} else {
+		// Fallback: if DB read fails, use wave completion state as proxy.
+		hasFailed = !state.AllWavesCompleted()
 	}
 
 	switch {
@@ -515,7 +522,7 @@ func (s *ImplementationService) executeSubPlan(
 					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 				} else if outcome.Escalated {
 					state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s — requires human intervention", subPlan.RepositoryName))
-					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+					s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
 				}
 				return result, nil
 			}
@@ -569,7 +576,7 @@ func (s *ImplementationService) executeSubPlan(
 			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
 		} else if outcome.Escalated {
 			state.FailSubPlan(subPlan.ID, time.Now().UnixNano(), fmt.Errorf("review escalated for %s \u2014 requires human intervention", subPlan.RepositoryName))
-			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
 		}
 		return result, nil
 	}
@@ -658,6 +665,140 @@ func (s *ImplementationService) reviewLoop(
 		}
 		currentSession = newSession
 	}
+}
+
+// ContinueAfterImplSession resumes the per-sub-plan pipeline starting from a
+// completed implementation session. Used by focused retry to run the review
+// loop and derive work-item state from the aggregate sub-plan outcomes.
+func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, completedSessionID string) error {
+	// 1. Load session
+	session, err := s.sessionSvc.Get(ctx, completedSessionID)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+	if session.Status != domain.AgentSessionCompleted {
+		return fmt.Errorf("session %s is not completed (status: %s)", completedSessionID, session.Status)
+	}
+	if session.Kind != domain.AgentSessionKindImplementation {
+		return fmt.Errorf("session %s is not an implementation session (kind: %s)", completedSessionID, session.Kind)
+	}
+	if session.SubPlanID == "" {
+		return fmt.Errorf("session %s has no sub-plan assigned", completedSessionID)
+	}
+
+	// 2. Load sub-plan, plan, work item, workspace
+	subPlan, err := s.planSvc.GetSubPlan(ctx, session.SubPlanID)
+	if err != nil {
+		return fmt.Errorf("get sub-plan: %w", err)
+	}
+	plan, err := s.planSvc.GetPlan(ctx, subPlan.PlanID)
+	if err != nil {
+		return fmt.Errorf("get plan: %w", err)
+	}
+	workItem, err := s.workItemSvc.Get(ctx, plan.WorkItemID)
+	if err != nil {
+		return fmt.Errorf("get work item: %w", err)
+	}
+	workspace, err := s.workspaceSvc.Get(ctx, workItem.WorkspaceID)
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+
+	// 3. Ensure work item is Implementing
+	switch workItem.State {
+	case domain.SessionFailed:
+		if err := s.workItemSvc.RetryFailedWorkItem(ctx, workItem.ID); err != nil {
+			return fmt.Errorf("retry failed work item: %w", err)
+		}
+	case domain.SessionReviewing:
+		if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
+			return fmt.Errorf("transition reviewing work item to implementing: %w", err)
+		}
+	case domain.SessionImplementing:
+		// Already in the right state
+	default:
+		return fmt.Errorf("work item %s is in state %s, cannot continue retry", workItem.ID, workItem.State)
+	}
+
+	// 4. Ensure sub-plan is InProgress
+	if subPlan.Status == domain.SubPlanFailed || subPlan.Status == domain.SubPlanEscalated {
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanInProgress)
+	}
+
+	// 5. Build worktreePaths from the session's worktree path
+	worktreePaths := map[string]string{
+		subPlan.RepositoryName: session.WorktreePath,
+	}
+
+	// 6. Run review loop (if configured)
+	if s.reviewPipeline != nil {
+		outcome := s.reviewLoop(ctx, session, subPlan, &workspace, &plan, &workItem, worktreePaths)
+
+		switch {
+		case outcome.Passed:
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+		case outcome.Failed:
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+		case outcome.Escalated:
+			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
+		}
+	} else {
+		// No review pipeline — mark completed immediately
+		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+	}
+
+	// 7. Re-derive work-item state from all sub-plans
+	allSubPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
+	if err != nil {
+		return fmt.Errorf("list sub-plans for state derivation: %w", err)
+	}
+
+	hasFailed := false
+	hasEscalated := false
+	allCompleted := true
+	for _, sp := range allSubPlans {
+		switch sp.Status {
+		case domain.SubPlanFailed:
+			hasFailed = true
+			allCompleted = false
+		case domain.SubPlanEscalated:
+			hasEscalated = true
+			allCompleted = false
+		case domain.SubPlanCompleted:
+			// ok
+		default:
+			allCompleted = false
+		}
+	}
+
+	switch {
+	case hasFailed:
+		if err := s.workItemSvc.FailWorkItem(ctx, workItem.ID); err != nil {
+			slog.Warn("failed to transition work item to failed", "error", err)
+		}
+	case hasEscalated:
+		if err := s.workItemSvc.SubmitForReview(ctx, workItem.ID); err != nil {
+			slog.Warn("failed to transition work item to reviewing", "error", err)
+		}
+	case allCompleted:
+		repoPaths, discoverErr := s.discoverRepoPaths(ctx, workspace.RootPath)
+		if discoverErr != nil {
+			slog.Warn("failed to discover repo paths for finalization", "error", discoverErr)
+			break
+		}
+		branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
+		tasks, _ := s.sessionSvc.ListByWorkItemID(ctx, workItem.ID)
+		sessions, sessErr := completedSessionResultsForSubPlans(allSubPlans, tasks, branch)
+		if sessErr != nil {
+			slog.Warn("failed to build session results for finalization", "error", sessErr)
+			break
+		}
+		if err := s.finalizeCompletedWorkItem(ctx, &workItem, workspace.ID, sessions, repoPaths, branch, allSubPlans); err != nil {
+			slog.Warn("failed to finalize completed work item", "error", err)
+		}
+	}
+
+	return nil
 }
 
 // runImplementation creates and runs a new agent session for a sub-plan.

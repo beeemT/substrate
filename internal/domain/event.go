@@ -74,6 +74,7 @@ const (
 	EventSubPlanStarted   EventType = "subplan.started"
 	EventSubPlanCompleted EventType = "subplan.completed"
 	EventSubPlanFailed    EventType = "subplan.failed"
+	EventSubPlanEscalated EventType = "subplan.escalated"
 
 	// Repo lifecycle event consumed by GitHub/glab lifecycle adapters.
 	EventSubPlanPRReady EventType = "subplan.pr_ready"

@@ -1337,18 +1337,45 @@ func FollowUpFailedSessionCmd(ctx context.Context, resumption *orchestrator.Resu
 }
 
 // RetrySessionCmd directly retries a failed session without user feedback.
+// For implementation sessions: resumes the conversation, then runs the review loop.
+// For review sessions: re-runs review on the parent impl session.
 // Returns FollowUpSessionCompleteMsg when done.
-func RetrySessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.AgentSessionService, sessionID, instanceID string) tea.Cmd {
+func RetrySessionCmd(ctx context.Context, resumption *orchestrator.Resumption, svc *service.AgentSessionService, implSvc *orchestrator.ImplementationService, sessionID, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, sessionID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get session for retry: %w", err)}
 		}
-		result, err := resumption.FollowUpFailedSession(ctx, task, "", instanceID)
-		if err != nil {
-			return ErrMsg{Err: fmt.Errorf("retry failed session: %w", err)}
+
+		var continueFromID string
+		switch task.Kind {
+		case domain.AgentSessionKindImplementation:
+			result, err := resumption.FollowUpFailedSession(ctx, task, "", instanceID)
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("retry failed session: %w", err)}
+			}
+			resumption.WaitAndComplete(ctx, result.Session.ID, result.HarnessSession)
+			continueFromID = result.Session.ID
+		case domain.AgentSessionKindReview:
+			if task.ParentAgentSessionID == "" {
+				return ErrMsg{Err: fmt.Errorf("review session %s has no parent impl session", task.ID)}
+			}
+			// Verify parent impl session is completed before attempting review retry.
+			parent, err := svc.Get(ctx, task.ParentAgentSessionID)
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("get parent impl session: %w", err)}
+			}
+			if parent.Status != domain.AgentSessionCompleted {
+				return ErrMsg{Err: fmt.Errorf("parent impl session %s is %s, not completed — retry the impl session instead", parent.ID, parent.Status)}
+			}
+			continueFromID = task.ParentAgentSessionID
+		default:
+			return ErrMsg{Err: fmt.Errorf("retry not supported for kind %s", task.Kind)}
 		}
-		resumption.WaitAndComplete(ctx, result.Session.ID, result.HarnessSession)
+
+		if err := implSvc.ContinueAfterImplSession(ctx, continueFromID); err != nil {
+			slog.Warn("continue after retry failed", "error", err, "agent_session_id", continueFromID)
+		}
 		return FollowUpSessionCompleteMsg{WorkItemID: task.WorkItemID}
 	}
 }

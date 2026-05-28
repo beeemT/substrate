@@ -18,12 +18,12 @@ func BuildWaves(subPlans []domain.TaskPlan) [][]domain.TaskPlan {
 		return nil
 	}
 
-	// Filter out completed sub-plans — they don't need re-execution.
+	// Filter out completed and escalated sub-plans — they don't need re-execution.
 	// This supports differential re-implementation where only changed
 	// sub-plans (reset to pending) are executed.
 	var pending []domain.TaskPlan
 	for _, sp := range subPlans {
-		if sp.Status != domain.SubPlanCompleted {
+		if sp.Status != domain.SubPlanCompleted && sp.Status != domain.SubPlanEscalated {
 			pending = append(pending, sp)
 		}
 	}
