@@ -89,14 +89,26 @@ func (sm *ServiceManager) Rebuild(ctx context.Context, cfg *config.Config, curre
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	// Stop old refresh goroutines BEFORE building new ones.
+	// The old goroutines hold a reference to the old bus — if we build new services
+	// first and then close the old ones, we would close the NEW bus instead of the old
+	// one (because Close() closes the bus owned by Services). Stopping first ensures
+	// the old goroutines exit cleanly before we touch anything new.
+	if sm.services != nil {
+		for _, stop := range sm.services.RefreshStoppers {
+			if stop != nil {
+				stop()
+			}
+		}
+	}
+
 	svcs, err := sm.buildServices(ctx, cfg, current)
 	if err != nil {
 		return nil, err
 	}
 
-	// Tear down old services before replacing.
-	// Close() stops all foremen, aborts all sessions, stops refresh goroutines,
-	// and closes the event bus.
+	// Tear down old services (foremen, sessions) and close the old bus.
+	// Refresh stoppers were already called above so they are no-ops here.
 	if sm.services != nil {
 		sm.services.Close(context.WithoutCancel(ctx))
 	}

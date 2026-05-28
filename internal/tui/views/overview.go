@@ -1322,10 +1322,24 @@ func (a *App) latestTaskForSubPlan(workItemID, subPlanID string) (latest, waitin
 
 		return tasks[i].CreatedAt.After(tasks[j].CreatedAt)
 	})
+
+	// `latest` reflects the most recent activity for the sub-plan and may be
+	// any session — including a non-leaf — so that the row's session ID and
+	// timestamps follow the row the user just interacted with. Waiting and
+	// interrupted projections, however, must come from the graph leaves so
+	// that historical interrupted/waiting rows whose work has been replaced
+	// (retry, follow-up, reimplementation) do not surface stale notes.
+	leafSet := make(map[string]bool)
+	for _, leaf := range leafAgentSessions(tasks) {
+		leafSet[leaf.ID] = true
+	}
 	for i := range tasks {
 		task := tasks[i]
 		if latest == nil {
 			latest = &task
+		}
+		if !leafSet[task.ID] {
+			continue
 		}
 		if waiting == nil && task.Status == domain.AgentSessionWaitingForAnswer && hasOpenQuestion(a.questions[task.ID]) {
 			waiting = &task
@@ -1540,35 +1554,23 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			Why:     "All linked pull requests have been merged. No further action is needed.",
 		})
 	}
-	// Build a set of sub-plan IDs (or work-item-scoped planning markers)
-	// that have an active (non-interrupted, non-terminal) session, so we
-	// can skip stale interrupted sessions that have been replaced.
+	// An interrupted session that has a child in the agent-session graph
+	// has been replaced by that child (retry, follow-up, reimplementation)
+	// and must not appear in the action list. Use the graph leaves as the
+	// authoritative "this session is the live state" set; any session not
+	// in that set is considered superseded by its descendants.
 	superseded := make(map[string]bool)
 	wiSessions := a.sessionsForWorkItem(wi.ID)
 	{
-		activeSubPlans := make(map[string]bool)
-		hasPlanningActive := false
-		for _, s := range wiSessions {
-			if s.Status == domain.AgentSessionRunning ||
-				s.Status == domain.AgentSessionPending ||
-				s.Status == domain.AgentSessionCompleted ||
-				s.Status == domain.AgentSessionWaitingForAnswer {
-				if s.Kind == domain.AgentSessionKindPlanning {
-					hasPlanningActive = true
-				} else if s.SubPlanID != "" {
-					activeSubPlans[s.SubPlanID] = true
-				}
-			}
+		leafSet := make(map[string]bool, len(wiSessions))
+		for _, leaf := range leafAgentSessions(wiSessions) {
+			leafSet[leaf.ID] = true
 		}
 		for _, s := range wiSessions {
-			if s.Status != domain.AgentSessionInterrupted {
+			if leafSet[s.ID] {
 				continue
 			}
-			if s.Kind == domain.AgentSessionKindPlanning && hasPlanningActive {
-				superseded[s.ID] = true
-			} else if s.SubPlanID != "" && activeSubPlans[s.SubPlanID] {
-				superseded[s.ID] = true
-			}
+			superseded[s.ID] = true
 		}
 	}
 	interruptedSessions := make([]domain.AgentSession, 0)

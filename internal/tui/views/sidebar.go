@@ -298,7 +298,14 @@ func (e SidebarEntry) Subtitle() string {
 	if e.SubtitleText != "" {
 		return e.SubtitleText
 	}
+	// Graph-leaf rules take precedence over the work-item state label so that
+	// a waiting question or interrupted leaf is always surfaced, regardless of
+	// whether the work item is implementing, reviewing, or somewhere else in
+	// its lifecycle. Terminal states (Completed, Failed, Merged, Archived)
+	// should keep their state label even if a stray non-terminal leaf exists,
+	// because the work-item status is the authoritative final outcome.
 	status := ""
+	terminal := false
 	switch e.State {
 	case domain.SessionIngested:
 		status = "Ready to plan"
@@ -309,23 +316,29 @@ func (e SidebarEntry) Subtitle() string {
 	case domain.SessionApproved:
 		status = "Awaiting implementation"
 	case domain.SessionImplementing:
-		if e.HasOpenQuestion {
-			status = "Waiting for answer"
-		} else if e.HasInterrupted {
-			status = "Interrupted"
-		} else {
-			status = "Implementing"
-		}
+		status = "Implementing"
 	case domain.SessionReviewing:
 		status = "Under review"
 	case domain.SessionCompleted:
 		status = "Completed"
+		terminal = true
 	case domain.SessionFailed:
 		status = "Failed"
+		terminal = true
 	case domain.SessionMerged:
 		status = "Merged"
+		terminal = true
 	case domain.SessionArchived:
 		status = "Archived"
+		terminal = true
+	}
+	if !terminal {
+		switch {
+		case e.HasOpenQuestion:
+			status = "Waiting for answer"
+		case e.HasInterrupted:
+			status = "Interrupted"
+		}
 	}
 	if e.Kind != SidebarEntrySessionHistory {
 		// Append Work Item status (e.g., "Implementing  ·  in_progress")

@@ -554,16 +554,21 @@ func (a App) localSessionSearchEntry(wi domain.Session) (domain.SessionHistoryEn
 	}
 
 	latest := sessions[0]
-	hasOpenQuestion := false
-	hasInterrupted := false
 	for _, agentSession := range sessions {
 		if agentSession.UpdatedAt.After(latest.UpdatedAt) || (agentSession.UpdatedAt.Equal(latest.UpdatedAt) && (agentSession.CreatedAt.After(latest.CreatedAt) || (agentSession.CreatedAt.Equal(latest.CreatedAt) && agentSession.ID > latest.ID))) {
 			latest = agentSession
 		}
-		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
+	}
+	// Interrupted/open-question projections come from the graph leaves so
+	// that an old interrupted/waiting session whose work has already moved
+	// on (retry, follow-up) is not surfaced to search results.
+	hasOpenQuestion := false
+	hasInterrupted := false
+	for _, leaf := range leafAgentSessions(sessions) {
+		if leaf.Status == domain.AgentSessionWaitingForAnswer {
 			hasOpenQuestion = true
 		}
-		if agentSession.Status == domain.AgentSessionInterrupted {
+		if leaf.Status == domain.AgentSessionInterrupted {
 			hasInterrupted = true
 		}
 	}
@@ -3716,29 +3721,40 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 	if plan := a.plans[wi.ID]; plan != nil {
 		sps := a.subPlans[plan.ID]
 		entry.TotalSubPlans = len(sps)
+		// Activity timestamps and counts come from the full sub-plan/session
+		// set, but interrupted/open-question flags must reflect only the
+		// graph leaves so historical interrupted/waiting rows do not light
+		// up labels after a retry/follow-up has replaced them.
+		subPlanIDs := make(map[string]bool, len(sps))
 		for _, sp := range sps {
+			subPlanIDs[sp.ID] = true
 			if sp.UpdatedAt.After(entry.LastActivity) {
 				entry.LastActivity = sp.UpdatedAt
 			}
 			if sp.Status == domain.SubPlanCompleted {
 				entry.DoneSubPlans++
 			}
-			for _, s := range a.sessions {
-				if s.SubPlanID == sp.ID {
-					if s.UpdatedAt.After(entry.LastActivity) {
-						entry.LastActivity = s.UpdatedAt
-					}
-					if s.Status == domain.AgentSessionWaitingForAnswer {
-						for _, q := range a.questions[s.ID] {
-							if q.Status == domain.QuestionPending || q.Status == domain.QuestionEscalated {
-								entry.HasOpenQuestion = true
-							}
-						}
-					}
-					if s.Status == domain.AgentSessionInterrupted {
-						entry.HasInterrupted = true
+		}
+		subPlanSessions := make([]domain.AgentSession, 0, len(a.sessions))
+		for _, s := range a.sessions {
+			if !subPlanIDs[s.SubPlanID] {
+				continue
+			}
+			if s.UpdatedAt.After(entry.LastActivity) {
+				entry.LastActivity = s.UpdatedAt
+			}
+			subPlanSessions = append(subPlanSessions, s)
+		}
+		for _, leaf := range leafAgentSessions(subPlanSessions) {
+			if leaf.Status == domain.AgentSessionWaitingForAnswer {
+				for _, q := range a.questions[leaf.ID] {
+					if q.Status == domain.QuestionPending || q.Status == domain.QuestionEscalated {
+						entry.HasOpenQuestion = true
 					}
 				}
+			}
+			if leaf.Status == domain.AgentSessionInterrupted {
+				entry.HasInterrupted = true
 			}
 		}
 	}
