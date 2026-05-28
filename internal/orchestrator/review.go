@@ -70,6 +70,17 @@ type ReviewResult struct {
 // transitioned to `failed` so it does not linger in `reviewing` and mask
 // outstanding critiques on prior cycles for the same impl session.
 func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.AgentSession) (result *ReviewResult, err error) {
+	return p.ReviewSessionWithParent(ctx, agentSession, agentSession.ID)
+}
+
+// ReviewSessionWithParent reviews an implementation session's output while
+// allowing retry/recovery callers to link the new review agent session to the
+// graph leaf it supersedes. The reviewed implementation remains agentSession;
+// reviewParentSessionID controls only the agent-session graph edge.
+func (p *ReviewPipeline) ReviewSessionWithParent(ctx context.Context, agentSession domain.AgentSession, reviewParentSessionID string) (result *ReviewResult, err error) {
+	if reviewParentSessionID == "" {
+		reviewParentSessionID = agentSession.ID
+	}
 	// Get existing review cycles
 	cycles, err := p.reviewSvc.ListCyclesBySessionID(ctx, agentSession.ID)
 	if err != nil {
@@ -172,7 +183,7 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 	}
 
 	// Start review agent session - now returns (session, output, sessionID, error)
-	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan)
+	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan, reviewParentSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
@@ -238,6 +249,7 @@ func (p *ReviewPipeline) startReviewAgent(
 	agentSession domain.AgentSession,
 	subPlan domain.TaskPlan,
 	plan domain.Plan,
+	reviewParentSessionID string,
 ) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
 	prompt := p.buildReviewPrompt(subPlan, plan)
@@ -253,7 +265,7 @@ func (p *ReviewPipeline) startReviewAgent(
 		RepositoryName:       agentSession.RepositoryName,
 		WorktreePath:         agentSession.WorktreePath,
 		HarnessName:          p.harness.Name(),
-		ParentAgentSessionID: agentSession.ID,
+		ParentAgentSessionID: reviewParentSessionID,
 	}
 	if err := p.sessionSvc.Create(ctx, reviewTask); err != nil {
 		return nil, "", "", fmt.Errorf("create review session: %w", err)

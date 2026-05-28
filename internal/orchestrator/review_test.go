@@ -99,7 +99,7 @@ func TestStartReviewAgent_CompletesOnDone(t *testing.T) {
 	type result struct{ err error }
 	done := make(chan result, 1)
 	go func() {
-		_, _, _, err := pipeline.startReviewAgent(ctx, session, subPlan, plan)
+		_, _, _, err := pipeline.startReviewAgent(ctx, session, subPlan, plan, session.ID)
 		done <- result{err: err}
 	}()
 
@@ -272,6 +272,39 @@ func TestReviewSession_HappyPath_CycleStaysTerminal(t *testing.T) {
 	}
 	if cycles[0].Status != domain.ReviewCyclePassed {
 		t.Fatalf("expected cycle status=%q, got %q", domain.ReviewCyclePassed, cycles[0].Status)
+	}
+}
+
+func TestReviewSessionWithParent_LinksReviewSessionToExplicitParent(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	fix.harness.outputs = []string{"NO_CRITIQUES"}
+	agentSession := fix.seedPlanAndSubPlan(t)
+
+	const staleLeafSessionID = "stale-leaf"
+	result, err := fix.pipeline.ReviewSessionWithParent(context.Background(), agentSession, staleLeafSessionID)
+	if err != nil {
+		t.Fatalf("ReviewSessionWithParent: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected Passed=true")
+	}
+
+	var reviewSession *domain.AgentSession
+	for _, s := range fix.sessionRepo.sessions {
+		if s.Kind != domain.AgentSessionKindReview {
+			continue
+		}
+		t := s
+		reviewSession = &t
+		break
+	}
+	if reviewSession == nil {
+		t.Fatal("expected review agent session to be created")
+	}
+	if reviewSession.ParentAgentSessionID != staleLeafSessionID {
+		t.Fatalf("review ParentAgentSessionID = %q, want %q", reviewSession.ParentAgentSessionID, staleLeafSessionID)
 	}
 }
 

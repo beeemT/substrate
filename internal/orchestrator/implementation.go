@@ -507,7 +507,7 @@ func (s *ImplementationService) executeSubPlan(
 			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",
 					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
-				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state,
+				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state, last.ID,
 					"Retrying review with existing implementation")
 			}
 			slog.Warn("review retry needed but no completed impl session found, falling back to full implementation",
@@ -530,6 +530,7 @@ func (s *ImplementationService) executeSubPlan(
 	// (`ContinueAfterImplSession`); when M5 lands, this branch is replaced by
 	// a call to the unified entry point with no behavioural change.
 	if s.reviewPipeline != nil {
+		last := s.lastSessionForSubPlan(ctx, subPlan.ID)
 		if prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID); prevImpl != nil {
 			outstandingCritique := s.implHasOutstandingCritique(ctx, prevImpl.ID)
 			passedReview := s.implHasPassedReview(ctx, prevImpl.ID)
@@ -548,10 +549,16 @@ func (s *ImplementationService) executeSubPlan(
 				// Nothing to short-circuit here — fall through.
 			default:
 				// Completed impl with no successful review and no outstanding
-				// critique. Skip the re-impl and review the existing impl.
+				// critique. Skip the re-impl and review the existing impl. If this
+				// is replacing a stale failed/interrupted leaf, link the review to
+				// that leaf so graph-derived labels stop surfacing it.
+				reviewParentSessionID := prevImpl.ID
+				if last != nil {
+					reviewParentSessionID = last.ID
+				}
 				slog.Info("skipping implementation, reviewing existing completed impl with no outstanding review",
 					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
-				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state,
+				return s.runReviewOnExistingImpl(ctx, subPlan, workspace, plan, workItem, worktreePaths, *prevImpl, result, state, reviewParentSessionID,
 					"Reviewing existing completed implementation")
 			}
 		}
@@ -626,6 +633,19 @@ func (s *ImplementationService) reviewLoop(
 	workItem *domain.Session,
 	worktreePaths map[string]string,
 ) *SubPlanOutcome {
+	return s.reviewLoopWithFirstReviewParent(ctx, implSession, subPlan, workspace, plan, workItem, worktreePaths, "")
+}
+
+func (s *ImplementationService) reviewLoopWithFirstReviewParent(
+	ctx context.Context,
+	implSession domain.AgentSession,
+	subPlan domain.TaskPlan,
+	workspace *domain.Workspace,
+	plan *domain.Plan,
+	workItem *domain.Session,
+	worktreePaths map[string]string,
+	firstReviewParentSessionID string,
+) *SubPlanOutcome {
 	outcome := &SubPlanOutcome{
 		SubPlanID:  subPlan.ID,
 		Repository: subPlan.RepositoryName,
@@ -645,7 +665,13 @@ func (s *ImplementationService) reviewLoop(
 			return outcome
 		}
 
-		reviewResult, err := s.reviewPipeline.ReviewSession(ctx, currentSession)
+		var reviewResult *ReviewResult
+		var err error
+		if outcome.Cycles == 1 && firstReviewParentSessionID != "" {
+			reviewResult, err = s.reviewPipeline.ReviewSessionWithParent(ctx, currentSession, firstReviewParentSessionID)
+		} else {
+			reviewResult, err = s.reviewPipeline.ReviewSession(ctx, currentSession)
+		}
 		if err != nil {
 			slog.Warn("review agent session failed", "error", err,
 				"agent_session_id", currentSession.ID, "sub_plan", subPlan.ID)
@@ -1063,6 +1089,7 @@ func (s *ImplementationService) runReviewOnExistingImpl(
 	prevImpl domain.AgentSession,
 	result SessionResult,
 	state *ExecutionState,
+	reviewParentSessionID string,
 	summary string,
 ) (SessionResult, *ImplementationWarning) {
 	result.Status = domain.AgentSessionCompleted
@@ -1071,7 +1098,7 @@ func (s *ImplementationService) runReviewOnExistingImpl(
 	result.Summary = summary
 	result.CompletedAt = ptrTime(time.Now())
 
-	outcome := s.reviewLoop(ctx, prevImpl, subPlan, workspace, plan, workItem, worktreePaths)
+	outcome := s.reviewLoopWithFirstReviewParent(ctx, prevImpl, subPlan, workspace, plan, workItem, worktreePaths, reviewParentSessionID)
 	result.Outcome = outcome
 	switch {
 	case outcome.Passed:

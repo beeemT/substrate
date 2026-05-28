@@ -1850,3 +1850,108 @@ func TestMigration020_AgentSessionParent(t *testing.T) {
 		t.Errorf("foreman.parent = %v, want nil (excluded by kind filter)", *p)
 	}
 }
+
+func TestMigration022_RepairsReviewRetryParent(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+
+	wsID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO workspaces (id, name, root_path, status) VALUES (?, 'test', '/tmp', 'ready')
+	`, wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	wiID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO work_items (id, workspace_id, source, title, state, created_at, updated_at)
+		VALUES (?, ?, 'github', 'test', 'implementing', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	`, wiID, wsID); err != nil {
+		t.Fatalf("create work_item: %v", err)
+	}
+
+	planID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO plans (id, work_item_id, version, status, orchestrator_plan, created_at, updated_at)
+		VALUES (?, ?, 1, 'approved', '{}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	`, planID, wiID); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+
+	subPlanID := domain.NewID()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO sub_plans (id, plan_id, repo_name, content, status, created_at, updated_at)
+		VALUES (?, ?, 'repo-a', '{}', 'in_progress', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	`, subPlanID, planID); err != nil {
+		t.Fatalf("create sub_plan: %v", err)
+	}
+
+	tBase := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	implID := domain.NewID()
+	oldReviewID := domain.NewID()
+	staleLeafID := domain.NewID()
+	newReviewID := domain.NewID()
+	runningChildID := domain.NewID()
+	nullReviewID := domain.NewID()
+	seed := []struct {
+		id        string
+		kind      string
+		status    string
+		parentID  *string
+		createdAt time.Time
+	}{
+		{id: implID, kind: "implementation", status: "completed", createdAt: tBase},
+		{id: oldReviewID, kind: "review", status: "failed", parentID: &implID, createdAt: tBase.Add(time.Minute)},
+		{id: staleLeafID, kind: "implementation", status: "interrupted", parentID: &oldReviewID, createdAt: tBase.Add(2 * time.Minute)},
+		// This is the bad edge produced by the shipped retry path: the new review
+		// reviews implID but should supersede staleLeafID in the graph.
+		{id: newReviewID, kind: "review", status: "completed", parentID: &implID, createdAt: tBase.Add(3 * time.Minute)},
+		{id: runningChildID, kind: "implementation", status: "completed", parentID: &newReviewID, createdAt: tBase.Add(4 * time.Minute)},
+		{id: nullReviewID, kind: "review", status: "running", createdAt: tBase.Add(5 * time.Minute)},
+	}
+	for _, s := range seed {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO agent_sessions (
+				id, work_item_id, workspace_id, sub_plan_id, plan_id,
+				repository_name, harness_name, worktree_path, status, kind,
+				created_at, updated_at, parent_agent_session_id
+			) VALUES (?, ?, ?, ?, NULL, 'repo-a', 'claude', '/tmp/wt', ?, ?, ?, ?, ?)
+		`, s.id, wiID, wsID, subPlanID, s.status, s.kind, s.createdAt.Format(time.RFC3339Nano), s.createdAt.Format(time.RFC3339Nano), s.parentID); err != nil {
+			t.Fatalf("insert seed session %s: %v", s.id, err)
+		}
+	}
+
+	migration022, err := fs.ReadFile(migrations.FS, "022_repair_review_retry_parent.sql")
+	if err != nil {
+		t.Fatalf("read migration 022: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := db.ExecContext(ctx, string(migration022)); err != nil {
+			t.Fatalf("apply migration 022 run %d: %v", i+1, err)
+		}
+	}
+
+	var newReviewParent string
+	if err := db.GetContext(ctx, &newReviewParent, `SELECT parent_agent_session_id FROM agent_sessions WHERE id = ?`, newReviewID); err != nil {
+		t.Fatalf("get new review parent: %v", err)
+	}
+	if newReviewParent != staleLeafID {
+		t.Fatalf("new review parent = %q, want stale leaf %q", newReviewParent, staleLeafID)
+	}
+
+	var childParent string
+	if err := db.GetContext(ctx, &childParent, `SELECT parent_agent_session_id FROM agent_sessions WHERE id = ?`, runningChildID); err != nil {
+		t.Fatalf("get running child parent: %v", err)
+	}
+	if childParent != newReviewID {
+		t.Fatalf("running child parent = %q, want %q", childParent, newReviewID)
+	}
+
+	var nullReviewParent string
+	if err := db.GetContext(ctx, &nullReviewParent, `SELECT parent_agent_session_id FROM agent_sessions WHERE id = ?`, nullReviewID); err != nil {
+		t.Fatalf("get null review parent: %v", err)
+	}
+	if nullReviewParent != runningChildID {
+		t.Fatalf("null review parent = %q, want latest completed impl %q", nullReviewParent, runningChildID)
+	}
+}
