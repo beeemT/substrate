@@ -1575,6 +1575,13 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	}
 	interruptedSessions := make([]domain.AgentSession, 0)
 	for _, agentSession := range wiSessions {
+		// Sessions that are not in the leaf set have been replaced by a child
+		// (retry / follow-up / reimplementation) or are out-of-scope for the
+		// review-loop graph (manual sessions). Either way they must not
+		// surface as work-item-level actions.
+		if superseded[agentSession.ID] {
+			continue
+		}
 		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
 			for _, question := range a.questions[agentSession.ID] {
 				if !isOpenQuestion(question) {
@@ -1611,9 +1618,6 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			}
 		}
 		if agentSession.Status == domain.AgentSessionInterrupted {
-			if superseded[agentSession.ID] {
-				continue
-			}
 			if agentSession.Kind == domain.AgentSessionKindPlanning {
 				session := agentSession
 				actions = append(actions, OverviewActionCard{

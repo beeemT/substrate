@@ -1545,6 +1545,122 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 		t.Fatalf("FinalizeWorkItemMsg.WorkItemID = %q, want wi-stuck", finalizeMsg.WorkItemID)
 	}
 }
+// TestOverviewBuildActions_SkipsManualSession_WaitingForAnswer verifies that
+// a manual session in waiting_for_answer status does NOT surface a question
+// action card on the work-item overview. Manual sessions are user-driven side
+// conversations and must not influence work-item-level actions.
+func TestOverviewBuildActions_SkipsManualSession_WaitingForAnswer(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", State: domain.SessionImplementing, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}}
+	app.sessions = []domain.AgentSession{{
+		ID:             "manual-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionWaitingForAnswer,
+		UpdatedAt:      now,
+	}}
+	app.questions = map[string]map[string]domain.Question{
+		"manual-1": {
+			"q-1": {ID: "q-1", AgentSessionID: "manual-1", Content: "?", Status: domain.QuestionPending, CreatedAt: now},
+		},
+	}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	for _, action := range actions {
+		if action.Kind == overviewActionQuestion {
+			t.Fatalf("manual session must not surface question action card: %#v", action)
+		}
+	}
+}
+
+// TestOverviewBuildActions_SkipsManualSession_Interrupted verifies that an
+// interrupted manual session does NOT surface in the interrupted-tasks
+// recovery card.
+func TestOverviewBuildActions_SkipsManualSession_Interrupted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", State: domain.SessionCompleted, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
+	app.sessions = []domain.AgentSession{{
+		ID:             "manual-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionInterrupted,
+		UpdatedAt:      now,
+	}}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	for _, action := range actions {
+		if action.Kind == overviewActionInterrupted {
+			t.Fatalf("manual session must not surface interrupted action card: %#v", action)
+		}
+	}
+}
+
+// TestOverviewBuildActions_SupersededWaitingNotShown verifies that a real
+// review-loop session in waiting_for_answer status that has been replaced by
+// a child session does NOT surface a stale question card.
+func TestOverviewBuildActions_SupersededWaitingNotShown(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", State: domain.SessionImplementing, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}}
+	app.sessions = []domain.AgentSession{
+		{
+			ID:             "old",
+			WorkItemID:     "wi-1",
+			WorkspaceID:    "ws-local",
+			Kind:           domain.AgentSessionKindImplementation,
+			SubPlanID:      "sp-1",
+			RepositoryName: "repo-a",
+			Status:         domain.AgentSessionWaitingForAnswer,
+			CreatedAt:      now.Add(-time.Hour),
+			UpdatedAt:      now.Add(-time.Hour),
+		},
+		{
+			ID:                   "new",
+			WorkItemID:           "wi-1",
+			WorkspaceID:          "ws-local",
+			Kind:                 domain.AgentSessionKindImplementation,
+			SubPlanID:            "sp-1",
+			RepositoryName:       "repo-a",
+			Status:               domain.AgentSessionRunning,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+			ParentAgentSessionID: "old",
+		},
+	}
+	app.questions = map[string]map[string]domain.Question{
+		"old": {
+			"q-1": {ID: "q-1", AgentSessionID: "old", Content: "stale?", Status: domain.QuestionPending, CreatedAt: now.Add(-time.Hour)},
+		},
+	}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	for _, action := range actions {
+		if action.Kind == overviewActionQuestion {
+			t.Fatalf("superseded waiting session must not surface question card: %#v", action)
+		}
+	}
+}
+
 
 func TestOverviewSuppressesFinalizeActionWhenAgentStillActive(t *testing.T) {
 	t.Parallel()

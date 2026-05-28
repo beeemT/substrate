@@ -893,6 +893,12 @@ func ResumeAllSessionsForWorkItemCmd(
 		activeSubPlans := make(map[string]bool)
 		hasPlanningActive := false
 		for _, s := range sessions {
+			// Manual sessions are out-of-band; they must not influence the
+			// review-loop bulk-resume decisions about which impl/review sub-plans
+			// are "active".
+			if s.Kind == domain.AgentSessionKindManual {
+				continue
+			}
 			if s.Status == domain.AgentSessionRunning || s.Status == domain.AgentSessionPending ||
 				s.Status == domain.AgentSessionCompleted || s.Status == domain.AgentSessionWaitingForAnswer {
 				if s.Kind == domain.AgentSessionKindPlanning {
@@ -907,6 +913,13 @@ func ResumeAllSessionsForWorkItemCmd(
 		var planningInterrupted *domain.AgentSession
 		for _, s := range sessions {
 			if s.Status != domain.AgentSessionInterrupted {
+				continue
+			}
+			// Manual sessions are user-driven side conversations and are not
+			// part of the orchestrator's review-loop graph. Bulk retry/resume
+			// must skip them; the user resumes manual sessions explicitly via
+			// the manual session UI.
+			if s.Kind == domain.AgentSessionKindManual {
 				continue
 			}
 			if s.Kind == domain.AgentSessionKindPlanning {

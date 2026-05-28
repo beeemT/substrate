@@ -8,17 +8,28 @@ import (
 // by domain.AgentSession.ParentAgentSessionID. A leaf is a session that no
 // other session in the input slice points to as its parent.
 //
+// Manual sessions (domain.AgentSessionKindManual) are excluded from the graph
+// entirely. They are user-driven side conversations that have nothing to do
+// with the orchestrator's implementation/review chain, do not get parent IDs,
+// and must not influence work-item-level status (HasInterrupted, HasOpenQuestion,
+// the superseded set, etc.).
+//
 // Algorithm:
-//  1. Build hasChild[parentID] = true for every non-empty ParentAgentSessionID.
-//  2. A session is a tentative leaf when its ID is not in hasChild.
-//  3. For legacy rows with no graph edges at all, fall back to today's
+//  1. Drop manual sessions from the input.
+//  2. Build hasChild[parentID] = true for every non-empty ParentAgentSessionID.
+//  3. A session is a tentative leaf when its ID is not in hasChild.
+//  4. For legacy rows with no graph edges at all, fall back to today's
 //     transitive approximation: group tentative leaves by
-//     (sub_plan_id, repository_name) and keep only the newest one per group,
-//     ordered by CreatedAt, then UpdatedAt, then ID. A group is treated as
-//     "legacy" only when none of its members participate in any graph edge —
-//     no member has a parent and no member is anyone's parent. As soon as
-//     any member of the group has a parent or child link, all leaves in the
-//     group are kept verbatim because the graph is the authoritative source.
+//     (kind, sub_plan_id, repository_name) and keep only the newest one per
+//     group, ordered by CreatedAt, then UpdatedAt, then ID. Including Kind in
+//     the group key keeps planning, implementation/review, and foreman
+//     sessions in separate groups so a newer session of one kind cannot hide
+//     an older session of another kind (e.g. a running foreman must not hide
+//     an interrupted planning session). A group is treated as "legacy" only
+//     when none of its members participate in any graph edge — no member has
+//     a parent and no member is anyone's parent. As soon as any member of
+//     the group has a parent or child link, all leaves in the group are kept
+//     verbatim because the graph is the authoritative source.
 //
 // Order of returned leaves is not specified beyond "stable enough for the
 // callers" — they all re-sort or re-project as needed.
@@ -27,14 +38,30 @@ func leafAgentSessions(sessions []domain.AgentSession) []domain.AgentSession {
 		return nil
 	}
 
-	hasChild := make(map[string]bool, len(sessions))
+	// Drop manual sessions before doing any graph analysis. They are user-
+	// driven and live outside the review-loop graph, so leaf-derivation must
+	// pretend they do not exist. The original slice is left untouched; only
+	// the local copy used for leaf logic is filtered.
+	filtered := make([]domain.AgentSession, 0, len(sessions))
 	for i := range sessions {
-		if pid := sessions[i].ParentAgentSessionID; pid != "" {
+		if sessions[i].Kind == domain.AgentSessionKindManual {
+			continue
+		}
+		filtered = append(filtered, sessions[i])
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	hasChild := make(map[string]bool, len(filtered))
+	for i := range filtered {
+		if pid := filtered[i].ParentAgentSessionID; pid != "" {
 			hasChild[pid] = true
 		}
 	}
 
 	type groupKey struct {
+		kind           domain.AgentSessionKind
 		subPlanID      string
 		repositoryName string
 	}
@@ -53,9 +80,9 @@ func leafAgentSessions(sessions []domain.AgentSession) []domain.AgentSession {
 		return g
 	}
 
-	for i := range sessions {
-		s := sessions[i]
-		k := groupKey{subPlanID: s.SubPlanID, repositoryName: s.RepositoryName}
+	for i := range filtered {
+		s := filtered[i]
+		k := groupKey{kind: s.Kind, subPlanID: s.SubPlanID, repositoryName: s.RepositoryName}
 		g := getGroup(k)
 		// Any session that has a parent or has at least one child contributes
 		// a graph edge to its group. Non-leaves still contribute their edge,
@@ -69,7 +96,7 @@ func leafAgentSessions(sessions []domain.AgentSession) []domain.AgentSession {
 		g.leaves = append(g.leaves, s)
 	}
 
-	leaves := make([]domain.AgentSession, 0, len(sessions))
+	leaves := make([]domain.AgentSession, 0, len(filtered))
 	for _, g := range groups {
 		if len(g.leaves) == 0 {
 			continue

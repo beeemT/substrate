@@ -261,6 +261,101 @@ func TestLeafAgentSessions_Empty(t *testing.T) {
 	}
 }
 
+// TestLeafAgentSessions_PlanningAndForemanKeptSeparate verifies that planning
+// and foreman sessions — both of which typically have empty SubPlanID and
+// RepositoryName — are NOT collapsed into one group by the legacy fallback.
+// Including Kind in the group key keeps an interrupted planning session
+// visible even when a newer running foreman exists.
+func TestLeafAgentSessions_PlanningAndForemanKeptSeparate(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour)
+	t1 := t0.Add(10 * time.Minute)
+
+	planning := domain.AgentSession{
+		ID:        "planning",
+		Kind:      domain.AgentSessionKindPlanning,
+		Status:    domain.AgentSessionInterrupted,
+		CreatedAt: t0,
+		UpdatedAt: t0,
+	}
+	foreman := domain.AgentSession{
+		ID:        "foreman",
+		Kind:      domain.AgentSessionKindForeman,
+		Status:    domain.AgentSessionRunning,
+		CreatedAt: t1,
+		UpdatedAt: t1,
+	}
+
+	got := leafAgentSessions([]domain.AgentSession{planning, foreman})
+	if want := []string{"foreman", "planning"}; !sliceEqual(leafIDs(got), want) {
+		t.Errorf("leaves = %v, want both planning and foreman: %v", leafIDs(got), want)
+	}
+}
+
+// TestLeafAgentSessions_ManualSessionsExcluded verifies that manual sessions
+// are dropped from the graph entirely — they are user-driven side
+// conversations independent of the review-loop graph and must not influence
+// leaf-derivation, the superseded set, or any work-item-level status flag.
+func TestLeafAgentSessions_ManualSessionsExcluded(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour)
+	t1 := t0.Add(10 * time.Minute)
+
+	impl := domain.AgentSession{
+		ID:             "impl",
+		Kind:           domain.AgentSessionKindImplementation,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionCompleted,
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+	}
+	manualOlder := domain.AgentSession{
+		ID:             "manual-old",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionInterrupted,
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+	}
+	manualNewer := domain.AgentSession{
+		ID:             "manual-new",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionRunning,
+		CreatedAt:      t1,
+		UpdatedAt:      t1,
+	}
+
+	// Only the impl session should be in the leaf set; both manuals are dropped.
+	got := leafAgentSessions([]domain.AgentSession{impl, manualOlder, manualNewer})
+	if want := []string{"impl"}; !sliceEqual(leafIDs(got), want) {
+		t.Errorf("leaves = %v, want only impl (manuals must be excluded): %v", leafIDs(got), want)
+	}
+}
+
+// TestLeafAgentSessions_OnlyManualReturnsEmpty verifies that a session list
+// containing only manual sessions yields no leaves at all — manual sessions
+// are completely outside the review-loop graph.
+func TestLeafAgentSessions_OnlyManualReturnsEmpty(t *testing.T) {
+	t0 := time.Now()
+
+	manual := domain.AgentSession{
+		ID:             "manual",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionInterrupted,
+		CreatedAt:      t0,
+		UpdatedAt:      t0,
+	}
+
+	got := leafAgentSessions([]domain.AgentSession{manual})
+	if len(got) != 0 {
+		t.Errorf("manual-only input should yield no leaves, got %v", leafIDs(got))
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -431,6 +431,54 @@ func TestResumeAllSessionsForWorkItemCmd_PartialFailure(t *testing.T) {
 	}
 }
 
+// TestResumeAllSessionsForWorkItemCmd_SkipsManualSessions verifies that the
+// bulk-retry/resume path ignores manual sessions: an interrupted manual
+// session must NOT be resumed, and a running manual session must NOT prevent
+// an interrupted impl session in the same sub-plan from being resumed.
+func TestResumeAllSessionsForWorkItemCmd_SkipsManualSessions(t *testing.T) {
+	manualInterrupted := domain.AgentSession{
+		ID:             "manual-interrupted",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-2",
+		RepositoryName: "sp-2-repo",
+		WorktreePath:   "/tmp/sp-2",
+		Status:         domain.AgentSessionInterrupted,
+	}
+	manualRunning := domain.AgentSession{
+		ID:             "manual-running",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "sp-1-repo",
+		WorktreePath:   "/tmp/sp-1",
+		Status:         domain.AgentSessionRunning,
+	}
+	implInterrupted := resumeAllSession("impl-interrupted", "sp-1", domain.AgentSessionInterrupted)
+
+	fix := newResumeAllCmdFixture(t, []domain.AgentSession{manualInterrupted, manualRunning, implInterrupted})
+
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
+	resumed, ok := msg.(SessionResumedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
+	}
+	// Only the impl session should be resumed; manual sessions are out of scope.
+	if resumed.Message != "Resumed 1 task" {
+		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 1 task")
+	}
+	if len(fix.harness.starts) != 1 {
+		t.Fatalf("starts = %d, want 1 (manual sessions must not be resumed)", len(fix.harness.starts))
+	}
+	for _, opts := range fix.harness.starts {
+		if opts.SubPlanID != "sp-1" {
+			t.Errorf("resumed sub-plan = %q, want sp-1 (impl) only", opts.SubPlanID)
+		}
+	}
+}
+
 func TestApprovePlanCmd_PublishesPlanApprovedEvent(t *testing.T) {
 	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.Session{
 		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42", "acme/rocket#43"}, State: domain.SessionPlanReview},

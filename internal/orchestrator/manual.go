@@ -355,10 +355,10 @@ func (s *ManualSessionService) startNewFollowUpSession(ctx context.Context, comp
 		Status:          domain.AgentSessionPending,
 		CreatedAt:       now,
 		UpdatedAt:       now,
-		// Link the new follow-up row to the completed source session in the
-		// agent-session graph so leaf-derivation and label logic treat the
-		// completed session as superseded by this new one.
-		ParentAgentSessionID: completed.ID,
+		// Manual sessions are intentionally NOT linked into the agent-session
+		// graph (ParentAgentSessionID stays empty). They are user-driven side
+		// conversations independent of the orchestrator's implementation/review
+		// chain and must not influence work-item-level status.
 	}
 
 	if err := s.sessionSvc.Create(ctx, newSession); err != nil {
