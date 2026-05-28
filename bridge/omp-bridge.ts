@@ -19,6 +19,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
+import { isBenignCompactSkip, isCompactionRedundant } from "./compact-helpers";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
 const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_LEVEL as
@@ -243,6 +244,11 @@ function mapEvent(e: unknown): object[] {
     if ((event as any).skipped || (event as any).aborted) return [];
     const errorMessage = (event as any).errorMessage;
     if (errorMessage) {
+      // "Already compacted" / "Nothing to compact" surface here as errors but are
+      // semantically successful no-ops — same treatment as the manual-compact path.
+      if (isBenignCompactSkip(String(errorMessage))) {
+        return [{ type: "lifecycle", stage: "compaction_end", message: String(errorMessage) }];
+      }
       return [{ type: "lifecycle", stage: "compaction_failed", message: String(errorMessage) }];
     }
     return [{ type: "lifecycle", stage: "compaction_end" }];
@@ -582,13 +588,30 @@ async function handleLine(line: string): Promise<void> {
       break;
     case "compact":
       if (!session) break;
+      // Pre-check: skip the SDK call entirely when it would be a redundant no-op.
+      // session.compact() preemptively disconnects the agent and aborts any in-flight
+      // work BEFORE checking if compaction is possible, so even a "harmless" throw
+      // there leaves the session unable to drive a follow-up prompt. See compact-helpers.ts.
+      if (isCompactionRedundant(session.sessionManager.getBranch())) {
+        emit({
+          type: "lifecycle",
+          stage: "compaction_end",
+          message: "Already compacted — skipping",
+        });
+        break;
+      }
       emit({ type: "lifecycle", stage: "compaction_start", message: "Compacting context…" });
       try {
         await session.compact();
         emit({ type: "lifecycle", stage: "compaction_end" });
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        emit({ type: "lifecycle", stage: "compaction_failed", message: errorMessage });
+        if (isBenignCompactSkip(errorMessage)) {
+          // Session is already in (or close enough to) a compacted state — equivalent to success.
+          emit({ type: "lifecycle", stage: "compaction_end", message: errorMessage });
+        } else {
+          emit({ type: "lifecycle", stage: "compaction_failed", message: errorMessage });
+        }
       }
       break;
     case "prompt":
