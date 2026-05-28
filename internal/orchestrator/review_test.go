@@ -275,7 +275,6 @@ func TestReviewSession_HappyPath_CycleStaysTerminal(t *testing.T) {
 	}
 }
 
-
 // TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget verifies the M6
 // cherry-pick: cycle counting filters to terminal statuses only. Stale
 // `Reviewing` cycles left behind by harness crashes (e.g. SIGKILL between
@@ -283,8 +282,9 @@ func TestReviewSession_HappyPath_CycleStaysTerminal(t *testing.T) {
 //
 // Scenario: maxCycles=3. Seed two stale `Reviewing` cycles + one
 // `CritiquesFound` cycle for the same impl session. The next ReviewSession
-// call should create cycle number 2 (not 4) and run a normal review pass —
-// not escalate via the max-cycles guard.
+// call should create the next unused database cycle number and run a normal
+// review pass — not escalate via the max-cycles guard and not reuse a cycle
+// number reserved by a stale row.
 func TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget(t *testing.T) {
 	fix := newReviewPipelineFixture(t, 3)
 	defer fix.cleanup()
@@ -315,7 +315,7 @@ func TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget(t *testing.T) {
 		{
 			ID:              "terminal-cycle-1",
 			AgentSessionID:  agentSession.ID,
-			CycleNumber:     1, // shadowed by the first stale cycle's number
+			CycleNumber:     3,
 			ReviewerHarness: "mock",
 			Status:          domain.ReviewCycleCritiquesFound,
 			CreatedAt:       now.Add(-30 * time.Minute),
@@ -337,14 +337,15 @@ func TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget(t *testing.T) {
 	}
 
 	// Without the terminal-status filter, terminalCount would be 3 (counting
-	// all cycles), cycleNumber=4 > maxCycles=3 → escalated. With the filter,
-	// terminalCount=1 (only the CritiquesFound cycle) → cycleNumber=2 → not
-	// escalated → normal review pass.
+	// all cycles), budgetCycleNumber=4 > maxCycles=3 → escalated. With the
+	// filter, terminalCount=1 (only the CritiquesFound cycle) →
+	// budgetCycleNumber=2 → not escalated → normal review pass. The persisted
+	// cycle_number is still 4 so the insert cannot collide with stale rows.
 	if result.Escalated {
 		t.Fatal("expected ReviewSession NOT to escalate; stale Reviewing cycles must not consume the budget")
 	}
-	if result.CycleNumber != 2 {
-		t.Errorf("CycleNumber = %d, want 2 (1 terminal cycle + 1 new)", result.CycleNumber)
+	if result.CycleNumber != 4 {
+		t.Errorf("CycleNumber = %d, want 4 (next unused database cycle number)", result.CycleNumber)
 	}
 
 	// Verify a fresh cycle was created with the right number, and the stale
@@ -372,8 +373,8 @@ func TestReviewSession_StaleReviewingCyclesDoNotConsumeBudget(t *testing.T) {
 	if newCycle == nil {
 		t.Fatal("could not locate newly created cycle in repo")
 	}
-	if newCycle.CycleNumber != 2 {
-		t.Errorf("new cycle CycleNumber = %d, want 2", newCycle.CycleNumber)
+	if newCycle.CycleNumber != 4 {
+		t.Errorf("new cycle CycleNumber = %d, want 4", newCycle.CycleNumber)
 	}
 	if newCycle.Status != domain.ReviewCyclePassed {
 		t.Errorf("new cycle Status = %q, want %q (NO_CRITIQUES output)",

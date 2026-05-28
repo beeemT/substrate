@@ -430,6 +430,11 @@ func (r *mockReviewRepo) ListCyclesBySessionID(_ context.Context, sessionID stri
 func (r *mockReviewRepo) CreateCycle(_ context.Context, rc domain.ReviewCycle) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, id := range r.bySessID[rc.AgentSessionID] {
+		if existing, ok := r.cycles[id]; ok && existing.CycleNumber == rc.CycleNumber {
+			return fmt.Errorf("duplicate review cycle number %d for session %s", rc.CycleNumber, rc.AgentSessionID)
+		}
+	}
 	r.cycles[rc.ID] = rc
 	r.bySessID[rc.AgentSessionID] = append(r.bySessID[rc.AgentSessionID], rc.ID)
 

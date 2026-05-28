@@ -77,19 +77,25 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 	}
 
 	// Count only terminal-decision cycles toward the budget. Stale cycles
-	// left in reviewing/reimplementing by harness crashes do not consume it.
+	// left in reviewing/reimplementing by harness crashes do not consume it,
+	// but still reserve their cycle_number in the database.
 	terminalCount := 0
+	maxCycleNumber := 0
 	for _, c := range cycles {
+		if c.CycleNumber > maxCycleNumber {
+			maxCycleNumber = c.CycleNumber
+		}
 		switch c.Status {
 		case domain.ReviewCyclePassed, domain.ReviewCycleCritiquesFound, domain.ReviewCycleFailed:
 			terminalCount++
 		}
 	}
-	cycleNumber := terminalCount + 1
+	budgetCycleNumber := terminalCount + 1
+	cycleNumber := maxCycleNumber + 1
 
 	// Check max cycles
 	maxCycles := *p.cfg.Review.MaxCycles
-	if cycleNumber > maxCycles {
+	if budgetCycleNumber > maxCycles {
 		// Exceeded max cycles - escalate
 		if len(cycles) > 0 {
 			if err := p.reviewSvc.FailReviewCycle(ctx, cycles[len(cycles)-1].ID); err != nil {
