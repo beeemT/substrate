@@ -843,16 +843,89 @@ func (s *PlanningService) handlePlanningTurnEvent(ctx context.Context, agentSess
 // buildCorrectionMessage builds a correction message for the agent.
 func (s *PlanningService) buildCorrectionMessage(errors domain.ParseErrors, discoveredRepos []string, draftPath string) string {
 	var buf bytes.Buffer
+	detailedErrors := formatPlanCorrectionErrors(errors, discoveredRepos)
 	data := CorrectionTemplateData{
-		Errors:           errors.Error(),
+		Errors:           detailedErrors,
 		DiscoveredRepos:  discoveredRepos,
 		SessionDraftPath: draftPath,
 	}
 	if err := s.templates.correction.Execute(&buf, data); err != nil {
 		slog.Warn("failed to render correction template", "error", err)
-		return fmt.Sprintf("Your plan had errors: %s. Valid repos: %v. Rewrite %s.", errors.Error(), discoveredRepos, draftPath)
+		return fmt.Sprintf("Your plan had errors: %s. Valid repos: %v. Rewrite %s.", detailedErrors, discoveredRepos, draftPath)
 	}
 	return buf.String()
+}
+
+func formatPlanCorrectionErrors(parseErrors domain.ParseErrors, discoveredRepos []string) string {
+	if !parseErrors.HasErrors() {
+		return parseErrors.Error()
+	}
+
+	exampleRepo := "<repo-name>"
+	if len(discoveredRepos) > 0 {
+		exampleRepo = discoveredRepos[0]
+	}
+
+	var b strings.Builder
+	b.WriteString(parseErrors.Error())
+	b.WriteString("\n\nSpecific fixes:\n")
+
+	if parseErrors.MissingBlock {
+		b.WriteString("- Missing `substrate-plan` block: start the file with this fenced YAML block before any prose:\n\n")
+		writePlanYAMLExample(&b, exampleRepo)
+	}
+	if parseErrors.InvalidYAML {
+		b.WriteString("- Invalid YAML: replace the fenced block contents with valid YAML shaped like this:\n\n")
+		writePlanYAMLExample(&b, exampleRepo)
+	}
+	if parseErrors.EmptyExecutionGroups {
+		b.WriteString("- `execution_groups` is empty or missing: list each repo that needs changes in dependency order. Example:\n\n")
+		writePlanYAMLExample(&b, exampleRepo)
+	}
+	if parseErrors.MissingOrchestration {
+		b.WriteString("- Missing `## Orchestration`: add this section after the YAML block and before any sub-plan:\n\n")
+		b.WriteString("## Orchestration\n")
+		b.WriteString("Coordinate the repo changes, call out execution order, and describe shared risks.\n\n")
+	}
+	if len(parseErrors.UnknownRepos) > 0 {
+		b.WriteString("- Unknown repo name(s): replace them with exact repo names from the valid repo list below; do not invent aliases.\n\n")
+	}
+	if len(parseErrors.MissingSubPlans) > 0 {
+		for _, repo := range parseErrors.MissingSubPlans {
+			fmt.Fprintf(&b, "- Missing `## SubPlan: %s`: add a complete sub-plan section for that repo. Example:\n\n", repo)
+			writeSubPlanExample(&b, repo)
+		}
+	}
+	if len(parseErrors.UndeclaredSubPlans) > 0 {
+		b.WriteString("- Undeclared sub-plan section(s): either add each repo to `execution_groups` if it needs changes, or remove that `## SubPlan` section.\n\n")
+	}
+	if len(parseErrors.IncompleteSubPlans) > 0 {
+		b.WriteString("- Incomplete sub-plan section(s): every repo sub-plan must include this complete shape with non-empty content:\n\n")
+		writeSubPlanExample(&b, exampleRepo)
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func writePlanYAMLExample(b *strings.Builder, repo string) {
+	b.WriteString("```substrate-plan\n")
+	b.WriteString("execution_groups:\n")
+	fmt.Fprintf(b, "  - [%s]\n", repo)
+	b.WriteString("```\n\n")
+}
+
+func writeSubPlanExample(b *strings.Builder, repo string) {
+	fmt.Fprintf(b, "## SubPlan: %s\n", repo)
+	b.WriteString("### Goal\n")
+	b.WriteString("Describe the repo-specific end state.\n\n")
+	b.WriteString("### Scope\n")
+	b.WriteString("- List concrete files, modules, interfaces, migrations, or commands expected to change.\n\n")
+	b.WriteString("### Changes\n")
+	b.WriteString("- Describe one concrete implementation step.\n\n")
+	b.WriteString("### Validation\n")
+	b.WriteString("- List exact tests, checks, or commands to run.\n\n")
+	b.WriteString("### Risks\n")
+	b.WriteString("- List edge cases, sequencing constraints, invariants, or failure modes.\n\n")
 }
 
 func (s *PlanningService) renderPlanRunFeedback(req planRunRequest, draftPath string) string {

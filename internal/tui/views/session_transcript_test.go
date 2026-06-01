@@ -855,6 +855,50 @@ func TestRenderTranscriptSmartArgsShownInToolCard(t *testing.T) {
 	}
 }
 
+func TestRenderTranscriptACPReadOperationsArgsShownInToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "read", Text: `{"__tool_use_purpose":"Read plan","operations":[{"mode":"Line","path":"/Users/benedikt/workspace/.substrate/sessions/plan-draft.md","limit":10}]}`},
+	}
+	output := RenderTranscript(st, entries, 100, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "plan-draft.md") {
+		t.Errorf("expected ACP read operation path in tool card, got: %q", plain)
+	}
+	if !strings.Contains(plain, "10 lines") {
+		t.Errorf("expected ACP read operation limit in tool card, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptACPSearchArgsShownInToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "search", Intent: "glob", Text: `{"__tool_use_purpose":"Find files","pattern":"**/*","path":"/Users/benedikt/workspace/.substrate/sessions","max_depth":3,"include":"*.md"}`},
+	}
+	output := RenderTranscript(st, entries, 100, false, true)
+	plain := ansi.Strip(output)
+	for _, want := range []string{"**/*", "/Users/benedikt/workspace/.substrate/sessions", "*.md", "depth 3"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("expected %q in ACP search tool card, got: %q", want, plain)
+		}
+	}
+}
+
+func TestRenderTranscriptACPExecuteArgsShownInToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "execute", Intent: "shell", Text: `{"__tool_use_purpose":"Check workspace","command":"cd /Users/benedikt/workspace && ls -la"}`},
+	}
+	output := RenderTranscript(st, entries, 120, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "cd /Users/benedikt/workspace && ls -la") {
+		t.Errorf("expected ACP execute command in tool card, got: %q", plain)
+	}
+}
+
 func TestRenderTranscriptToolCardWidthBounded(t *testing.T) {
 	t.Parallel()
 	const width = 60

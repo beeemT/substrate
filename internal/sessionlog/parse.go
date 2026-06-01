@@ -128,6 +128,17 @@ func (e sessionLogEvent) entry() Entry {
 		if entry.Intent == "" {
 			entry.Intent, _ = e.Metadata["intent"].(string)
 		}
+		if entry.Intent == "" {
+			entry.Intent, _ = e.Metadata["title"].(string)
+		}
+		if entry.Kind == KindToolStart {
+			if rawInput, _ := e.Metadata["raw_input"].(string); strings.TrimSpace(rawInput) != "" {
+				text := strings.TrimSpace(entry.Text)
+				if text == "" || !strings.HasPrefix(text, "{") {
+					entry.Text = rawInput
+				}
+			}
+		}
 		if !entry.IsError {
 			entry.IsError, _ = e.Metadata["is_error"].(bool)
 		}
@@ -256,7 +267,7 @@ func parseACPUpdate(raw json.RawMessage) (Entry, bool, bool) {
 		if err := json.Unmarshal(raw, &u); err != nil {
 			return Entry{}, false, true
 		}
-		return Entry{Kind: KindToolStart, Tool: u.Kind, Intent: u.Title, Text: rawJSONText(u.RawInput)}, true, true
+		return Entry{Kind: KindToolStart, Tool: firstNonEmpty(u.Kind, u.Title), Intent: u.Title, Text: rawJSONText(u.RawInput)}, true, true
 	case "tool_call_update":
 		var u acpToolCallUpdate
 		if err := json.Unmarshal(raw, &u); err != nil {
@@ -270,7 +281,7 @@ func parseACPUpdate(raw json.RawMessage) (Entry, bool, bool) {
 		if text == "" {
 			text = acpContentPayload(u.RawOutput)
 		}
-		return Entry{Kind: kind, Tool: u.Kind, Intent: u.Title, Text: text, IsError: u.Status == "failed"}, true, true
+		return Entry{Kind: kind, Tool: firstNonEmpty(u.Kind, u.Title), Intent: u.Title, Text: text, IsError: u.Status == "failed"}, true, true
 	case "tool_call_chunk", "available_commands_update", "current_mode_update", "config_option_update", "session_info_update":
 		return Entry{}, false, true
 	default:

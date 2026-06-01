@@ -487,6 +487,132 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
 }
 
+func toolStringArg(args map[string]any, key string) string {
+	if v, ok := args[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func toolIntArg(args map[string]any, key string) int {
+	if v, ok := args[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		}
+	}
+	return 0
+}
+
+func firstToolOperation(args map[string]any) map[string]any {
+	ops, ok := args["operations"].([]any)
+	if !ok || len(ops) == 0 {
+		return nil
+	}
+	op, _ := ops[0].(map[string]any)
+	return op
+}
+
+func toolOperationCount(args map[string]any) int {
+	ops, ok := args["operations"].([]any)
+	if !ok {
+		return 0
+	}
+	return len(ops)
+}
+
+func toolNestedStringArg(args map[string]any, key string) string {
+	if value := toolStringArg(args, key); value != "" {
+		return value
+	}
+	if op := firstToolOperation(args); op != nil {
+		return toolStringArg(op, key)
+	}
+	return ""
+}
+
+func toolNestedIntArg(args map[string]any, key string) int {
+	if value := toolIntArg(args, key); value > 0 {
+		return value
+	}
+	if op := firstToolOperation(args); op != nil {
+		return toolIntArg(op, key)
+	}
+	return 0
+}
+
+func toolPathArg(args map[string]any) string {
+	if path := toolNestedStringArg(args, "path"); path != "" {
+		return path
+	}
+	if paths, ok := args["paths"].([]any); ok {
+		if len(paths) == 1 {
+			if path, ok := paths[0].(string); ok {
+				return path
+			}
+		}
+		if len(paths) > 1 {
+			return fmt.Sprintf("%d paths", len(paths))
+		}
+	}
+	if count := toolOperationCount(args); count > 1 {
+		return fmt.Sprintf("%d operations", count)
+	}
+	return ""
+}
+
+func toolPatternArg(args map[string]any) string {
+	if value := toolStringArg(args, "pattern"); value != "" {
+		return value
+	}
+	if value := toolStringArg(args, "query"); value != "" {
+		return value
+	}
+	if value := toolStringArg(args, "glob"); value != "" {
+		return value
+	}
+	return toolStringArg(args, "include")
+}
+
+func toolCommandArg(args map[string]any) string {
+	if value := toolStringArg(args, "command"); value != "" {
+		return value
+	}
+	if value := toolStringArg(args, "cmd"); value != "" {
+		return value
+	}
+	return toolStringArg(args, "script")
+}
+
+func toolContentSummaryParts(st styles.Styles, content string) []string {
+	if content == "" {
+		return nil
+	}
+	dim := func(v string) string { return st.Muted.Render(v) }
+	lines := strings.Split(content, "\n")
+	n := len(lines)
+	// A trailing \n produces a final empty element — don't count it.
+	if n > 0 && lines[n-1] == "" {
+		n--
+	}
+	parts := make([]string, 0, 2)
+	if n > 0 {
+		parts = append(parts, dim(fmt.Sprintf("%d lines", n)))
+	}
+	// First non-empty line gives context on what is being written.
+	for _, l := range lines {
+		if trimmed := strings.TrimSpace(l); trimmed != "" {
+			parts = append(parts, dim(singleLine(trimmed)))
+			break
+		}
+	}
+	return parts
+}
+
 // toolPrimaryArg returns the primary single-line label for a tool call,
 // shown in the title after " — ". Returns "" for unknown tools or when no
 // meaningful label can be derived from the args.
@@ -495,29 +621,26 @@ func toolPrimaryArg(toolName, argsJSON string) string {
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return ""
 	}
-	stringArg := func(key string) string {
-		if v, ok := args[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-		return ""
-	}
 	switch toolName {
 	case "read", "write", "edit", "ast_edit":
-		return stringArg("path")
+		return toolPathArg(args)
 	case "grep":
-		if p := stringArg("pattern"); p != "" {
+		if p := toolStringArg(args, "pattern"); p != "" {
 			return "/" + p + "/"
 		}
+	case "search", "glob":
+		return singleLine(toolPatternArg(args))
 	case "find":
-		return stringArg("pattern")
-	case "bash":
-		if cmd := stringArg("command"); cmd != "" {
+		if pattern := toolStringArg(args, "pattern"); pattern != "" {
+			return pattern
+		}
+		return toolPathArg(args)
+	case "bash", "execute", "shell":
+		if cmd := toolCommandArg(args); cmd != "" {
 			return singleLine(cmd)
 		}
 	case "lsp":
-		return stringArg("action")
+		return toolStringArg(args, "action")
 	case "ast_grep":
 		if pats, ok := args["pat"]; ok {
 			switch v := pats.(type) {
@@ -532,9 +655,9 @@ func toolPrimaryArg(toolName, argsJSON string) string {
 			}
 		}
 	case "fetch":
-		return singleLine(stringArg("url"))
+		return singleLine(toolStringArg(args, "url"))
 	case "web_search":
-		return singleLine(stringArg("query"))
+		return singleLine(toolStringArg(args, "query"))
 	case "task":
 		if tasks, ok := args["tasks"]; ok {
 			if taskSlice, ok := tasks.([]any); ok && len(taskSlice) > 0 {
@@ -556,34 +679,14 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		return st.SectionLabel.Render("Args:") + " " + ansi.Truncate(singleLine(argsJSON), max(1, innerW-6), "…")
 	}
 
-	stringArg := func(key string) string {
-		if v, ok := args[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-		return ""
-	}
-	intArg := func(key string) int {
-		if v, ok := args[key]; ok {
-			switch n := v.(type) {
-			case float64:
-				return int(n)
-			case int:
-				return n
-			}
-		}
-		return 0
-	}
-
 	dim := func(v string) string { return st.Muted.Render(v) }
 
 	var parts []string
 
 	switch toolName {
 	case "read":
-		// path is in the title; show range info only
-		offset, limit := intArg("offset"), intArg("limit")
+		// path is in the title; show range, mode, and depth details.
+		offset, limit := toolNestedIntArg(args, "offset"), toolNestedIntArg(args, "limit")
 		if offset > 0 && limit > 0 {
 			parts = append(parts, dim(fmt.Sprintf("L%d +%d lines", offset, limit)))
 		} else if offset > 0 {
@@ -591,67 +694,65 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		} else if limit > 0 {
 			parts = append(parts, dim(fmt.Sprintf("%d lines", limit)))
 		}
+		if mode := toolNestedStringArg(args, "mode"); mode != "" && mode != "Line" {
+			parts = append(parts, dim(mode))
+		}
+		if depth := toolNestedIntArg(args, "depth"); depth > 0 {
+			parts = append(parts, dim(fmt.Sprintf("depth %d", depth)))
+		}
 
-	case "grep":
-		// pattern is in the title; show path and glob
-		if path := stringArg("path"); path != "" {
+	case "grep", "search", "glob":
+		// pattern is in the title; show where and how the search is scoped.
+		if path := toolStringArg(args, "path"); path != "" {
 			parts = append(parts, dim(path))
 		}
-		if glob := stringArg("glob"); glob != "" {
+		if glob := toolStringArg(args, "glob"); glob != "" {
 			parts = append(parts, dim(glob))
+		}
+		if include := toolStringArg(args, "include"); include != "" {
+			parts = append(parts, dim(include))
+		}
+		if depth := toolIntArg(args, "max_depth"); depth > 0 {
+			parts = append(parts, dim(fmt.Sprintf("depth %d", depth)))
 		}
 
 	case "lsp":
-		// action is in the title; show file and symbol
-		if file := stringArg("file"); file != "" {
+		// action is in the title; show file and symbol.
+		if file := toolStringArg(args, "file"); file != "" {
 			parts = append(parts, dim(file))
 		}
-		if sym := stringArg("symbol"); sym != "" {
+		if sym := toolStringArg(args, "symbol"); sym != "" {
 			parts = append(parts, dim(sym))
 		}
 
 	case "ast_grep":
-		// first pattern is in the title; show additional patterns and path
+		// first pattern is in the title; show additional patterns and path.
 		if pats, ok := args["pat"]; ok {
 			if v, ok := pats.([]any); ok && len(v) > 1 {
 				parts = append(parts, dim(fmt.Sprintf("+%d patterns", len(v)-1)))
 			}
 		}
-		if path := stringArg("path"); path != "" {
+		if path := toolStringArg(args, "path"); path != "" {
 			parts = append(parts, dim(path))
 		}
 
 	case "ast_edit":
-		// path is in the title; show op count
+		// path is in the title; show op count.
 		if ops, ok := args["ops"]; ok {
 			if opSlice, ok := ops.([]any); ok && len(opSlice) > 0 {
 				parts = append(parts, dim(fmt.Sprintf("%d op(s)", len(opSlice))))
 			}
 		}
 
-	case "write":
-		// path is in the title; show content line count and a first-line preview
-		if content := stringArg("content"); content != "" {
-			lines := strings.Split(content, "\n")
-			n := len(lines)
-			// A trailing \n produces a final empty element — don't count it.
-			if n > 0 && lines[n-1] == "" {
-				n--
-			}
-			if n > 0 {
-				parts = append(parts, dim(fmt.Sprintf("%d lines", n)))
-			}
-			// First non-empty line gives context on what is being written.
-			for _, l := range lines {
-				if trimmed := strings.TrimSpace(l); trimmed != "" {
-					parts = append(parts, dim(singleLine(trimmed)))
-					break
-				}
-			}
+	case "write", "edit":
+		// path is in the title; show content line count and a first-line preview.
+		parts = append(parts, toolContentSummaryParts(st, toolStringArg(args, "content"))...)
+		if command := toolStringArg(args, "command"); command != "" && command != "create" {
+			parts = append(parts, dim(command))
 		}
 
-	case "find", "edit", "bash", "fetch", "web_search", "task", "ask_foreman", "mcp__substrate__ask_foreman":
-	// no summary — primary arg or dedicated event rendering is sufficient
+	case "find", "bash", "execute", "shell", "fetch", "web_search", "task", "ask_foreman", "mcp__substrate__ask_foreman", "mcp__substrate-foreman__ask_foreman":
+		// no summary — primary arg or dedicated event rendering is sufficient.
 
 	default:
 		// Unknown tool: show a single-line truncated raw args summary.

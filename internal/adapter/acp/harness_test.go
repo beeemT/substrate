@@ -128,6 +128,35 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 }
 
+func TestMapSessionUpdateToolCallRawInput(t *testing.T) {
+	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"read","kind":"read","status":"pending","rawInput":{"operations":[{"mode":"Line","path":"/tmp/plan.md","limit":10}]}}`))
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %#v", len(events), events)
+	}
+	if events[0].Type != "tool_start" {
+		t.Fatalf("event type = %q, want tool_start", events[0].Type)
+	}
+	if events[0].Payload == "" || events[0].Payload[0] != '{' {
+		t.Fatalf("payload = %q, want raw JSON args", events[0].Payload)
+	}
+	if got, _ := events[0].Metadata["tool"].(string); got != "read" {
+		t.Fatalf("metadata tool = %q, want read", got)
+	}
+	if got, _ := events[0].Metadata["intent"].(string); got != "read" {
+		t.Fatalf("metadata intent = %q, want read", got)
+	}
+}
+
+func TestMapSessionUpdateToolCallTitleFallback(t *testing.T) {
+	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"ask_foreman","status":"pending","rawInput":{"question":"Proceed?"}}`))
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %#v", len(events), events)
+	}
+	if got, _ := events[0].Metadata["tool"].(string); got != "ask_foreman" {
+		t.Fatalf("metadata tool = %q, want ask_foreman", got)
+	}
+}
+
 func TestMapSessionUpdateToolCallRawOutput(t *testing.T) {
 	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"tc1","kind":"read","status":"completed","rawOutput":{"items":[{"Text":"User id: 502\n-rw-r--r-- file.yaml"}]}}`))
 	if len(events) != 1 {

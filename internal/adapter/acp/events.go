@@ -72,7 +72,10 @@ func mapSessionUpdate(raw json.RawMessage) []adapter.AgentEvent {
 		if err := json.Unmarshal(raw, &u); err != nil {
 			return []adapter.AgentEvent{{Type: "error", Timestamp: now, Payload: err.Error()}}
 		}
-		payload := u.Title
+		payload := rawJSONPayload(u.RawInput)
+		if payload == "" {
+			payload = u.Title
+		}
 		if payload == "" {
 			payload = u.ToolCallID
 		}
@@ -111,14 +114,24 @@ func toolMetadata(u toolCallUpdate) map[string]any {
 	if u.Kind != "" {
 		meta["kind"] = u.Kind
 		meta["tool"] = u.Kind
+	} else if u.Title != "" {
+		meta["tool"] = u.Title
 	}
 	if u.Title != "" {
 		meta["title"] = u.Title
+		meta["intent"] = u.Title
 	}
-	if len(u.RawInput) > 0 {
-		meta["raw_input"] = string(u.RawInput)
+	if rawInput := rawJSONPayload(u.RawInput); rawInput != "" {
+		meta["raw_input"] = rawInput
 	}
 	return meta
+}
+
+func rawJSONPayload(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	return string(raw)
 }
 
 func contentPayload(raw json.RawMessage) string {

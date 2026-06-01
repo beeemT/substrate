@@ -51,6 +51,35 @@ func TestRenderPlanningPromptIncludesSessionDraftPath(t *testing.T) {
 	}
 }
 
+func TestBuildCorrectionMessageIncludesSpecificPlanExamples(t *testing.T) {
+	templates, err := NewPlanningTemplates()
+	if err != nil {
+		t.Fatalf("NewPlanningTemplates(): %v", err)
+	}
+
+	svc := &PlanningService{templates: templates}
+	prompt := svc.buildCorrectionMessage(domain.ParseErrors{
+		MissingBlock:         true,
+		MissingOrchestration: true,
+		MissingSubPlans:      []string{"repo-a"},
+		IncompleteSubPlans:   []string{domain.FormatIncompleteSubPlanIssue("repo-a", "missing ### Scope")},
+	}, []string{"repo-a", "repo-b"}, "/tmp/plan-draft.md")
+
+	for _, want := range []string{
+		"Plan parsing failed: missing substrate-plan YAML block",
+		"Specific fixes:",
+		"```substrate-plan\nexecution_groups:\n  - [repo-a]\n```",
+		"## Orchestration\nCoordinate the repo changes",
+		"## SubPlan: repo-a\n### Goal",
+		"### Scope\n- List concrete files",
+		"Valid repos in this workspace:\n  - repo-a\n  - repo-b",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("correction prompt missing %q\nprompt:\n%s", want, prompt)
+		}
+	}
+}
+
 type planningHarnessSpy struct {
 	lastOpts adapter.SessionOpts
 	planText string
@@ -946,7 +975,7 @@ func TestRunPlanningWithCorrectionLoop_StoresResumeInfoOnSuccess(t *testing.T) {
 		ID:          "plan-omp-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-1",
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		HarnessName: "mock",
 		Status:      domain.AgentSessionRunning,
 	}

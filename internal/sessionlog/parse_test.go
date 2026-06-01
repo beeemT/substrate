@@ -130,6 +130,37 @@ func TestParseLine_ACPAgentMessageChunk(t *testing.T) {
 	}
 }
 
+func TestParseLine_ACPToolCallRawInput(t *testing.T) {
+	line := `2026-06-01T12:09:48.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"read","kind":"read","rawInput":{"operations":[{"mode":"Line","path":"/tmp/plan-draft.md","limit":10}]}}}}`
+	entry, ok := ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP rawInput")
+	}
+	if entry.Kind != KindToolStart {
+		t.Fatalf("entry.Kind = %q, want %q", entry.Kind, KindToolStart)
+	}
+	if entry.Tool != "read" {
+		t.Fatalf("entry.Tool = %q, want read", entry.Tool)
+	}
+	if entry.Intent != "read" {
+		t.Fatalf("entry.Intent = %q, want read", entry.Intent)
+	}
+	if entry.Text == "" || entry.Text[0] != '{' {
+		t.Fatalf("entry.Text = %q, want raw JSON args", entry.Text)
+	}
+}
+
+func TestParseLine_ACPToolCallTitleFallback(t *testing.T) {
+	line := `2026-06-01T12:09:48.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"ask_foreman","rawInput":{"question":"Proceed?"}}}}`
+	entry, ok := ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP title-only tool")
+	}
+	if entry.Tool != "ask_foreman" {
+		t.Fatalf("entry.Tool = %q, want ask_foreman", entry.Tool)
+	}
+}
+
 func TestParseLine_ACPToolCallRawOutput(t *testing.T) {
 	line := `2026-06-01T12:09:48.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","kind":"read","status":"completed","rawOutput":{"items":[{"Text":"User id: 502\n-rw-r--r-- file.yaml"}]}}}}`
 	entry, ok := ParseLine(line)
