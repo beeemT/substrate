@@ -181,6 +181,36 @@ func TestRenderTranscriptWidthBounded(t *testing.T) {
 	}
 }
 
+func TestRenderTranscriptSessionContextInput(t *testing.T) {
+	t.Parallel()
+	const width = 32
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindInput, InputKind: "session_context", Text: strings.Repeat("session instructions ", 8)},
+		{Kind: sessionlog.KindInput, InputKind: "prompt", Text: "Begin planning."},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 input blocks, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].kind != blockKindPrompt || blocks[0].label != "Session context" {
+		t.Fatalf("first block = %+v, want session context prompt block", blocks[0])
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "Session context") {
+		t.Fatalf("rendered transcript missing Session context label: %q", plain)
+	}
+	if !strings.Contains(plain, "Prompt") {
+		t.Fatalf("rendered transcript missing Prompt label: %q", plain)
+	}
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
+	}
+}
+
 func TestGroupEntriesThinkingBlock(t *testing.T) {
 	t.Parallel()
 	entries := []sessionlog.Entry{

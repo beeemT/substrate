@@ -13,6 +13,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 func TestSessionEmitEventBlocksTerminalEventsWhenChannelFull(t *testing.T) {
@@ -176,11 +177,13 @@ exit 1
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	h := NewHarness(config.CodexConfig{})
+	logDir := t.TempDir()
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
-		SessionID:    "s1",
-		WorktreePath: t.TempDir(),
-		SystemPrompt: "Be helpful",
-		UserPrompt:   "hello world",
+		SessionID:     "s1",
+		WorktreePath:  t.TempDir(),
+		SessionLogDir: logDir,
+		SystemPrompt:  "Be helpful",
+		UserPrompt:    "hello world",
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -200,6 +203,19 @@ exit 1
 	}
 	if !strings.Contains(got, "hello world") {
 		t.Fatalf("stdin = %q; want it to contain the user prompt", got)
+	}
+	entries, err := sessionlog.ReadFile(filepath.Join(logDir, "s1.log"))
+	if err != nil {
+		t.Fatalf("read session log: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("entries = %+v, want synthetic input entries", entries)
+	}
+	if entries[0].InputKind != "session_context" || entries[0].Text != "Be helpful" {
+		t.Fatalf("first entry = %+v, want session context", entries[0])
+	}
+	if entries[1].InputKind != "prompt" || entries[1].Text != "hello world" {
+		t.Fatalf("second entry = %+v, want prompt", entries[1])
 	}
 }
 

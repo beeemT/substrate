@@ -162,6 +162,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		return nil, fmt.Errorf("start acp command: %w", err)
 	}
 	s := newSession(opts.SessionID, opts.Mode, absRoot, cmd, logFile, logPath, sessionLogDir, h.cfg)
+	s.sessionContext = opts.SystemPrompt
 	client := newRPCClient(stdin, stdout, stderr, s.writeProtocolLog)
 	s.client = client
 	s.questions = newQuestionBroker(opts.SessionID, opts.Mode, s.emit)

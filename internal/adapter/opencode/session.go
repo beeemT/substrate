@@ -364,6 +364,13 @@ func (s *session) startSSEReader(ctx context.Context) {
 	}()
 }
 
+func (s *session) writeInputLog(inputKind, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	s.writeLogEvent(adapter.AgentEvent{Type: "input", Timestamp: time.Now(), Payload: text, Metadata: map[string]any{"input_kind": inputKind}})
+}
+
 // writeLogEvent writes an AgentEvent to the session log file in JSON-line format.
 func (s *session) writeLogEvent(evt adapter.AgentEvent) {
 	s.mu.Lock()

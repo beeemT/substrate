@@ -2,11 +2,13 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,11 +50,13 @@ type Session struct {
 	compact       compactStrategy
 	compactMu     sync.Mutex // protects compact field
 
-	promptMu     sync.Mutex
-	promptActive bool
-	foremanText  string
-	steerCancel  chan struct{} // closed to signal current prompt to abort for steering
-	steerDone    chan struct{} // closed when steer-aborter prompt has finished
+	promptMu                sync.Mutex
+	promptActive            bool
+	sessionContext          string
+	sessionContextDelivered bool
+	foremanText             string
+	steerCancel             chan struct{} // closed to signal current prompt to abort for steering
+	steerDone               chan struct{} // closed when steer-aborter prompt has finished
 
 	questions     *questionBroker
 	terminals     *terminalManager
@@ -94,7 +98,7 @@ func (s *Session) Wait(ctx context.Context) error {
 }
 
 func (s *Session) SendMessage(ctx context.Context, msg string) error {
-	return s.runPrompt(ctx, msg, true)
+	return s.runPromptWithInputLog(ctx, msg, "message", true, true)
 }
 
 func (s *Session) Steer(ctx context.Context, msg string) error {
@@ -250,17 +254,30 @@ func findConfigOption(options []configOption, category string) configOption {
 
 func (s *Session) startPrompt(text string) {
 	go func() {
-		if err := s.runPrompt(context.Background(), text, true); err != nil {
+		if err := s.runPromptWithInputLog(context.Background(), text, "prompt", true, true); err != nil {
 			slog.Warn("acp: initial prompt failed", "error", err)
 		}
 	}()
 }
 
 func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool) error {
+	return s.runPromptWithInputLog(ctx, text, "", false, finishOnDone)
+}
+
+func (s *Session) runPromptWithInputLog(ctx context.Context, text, inputKind string, consumeSessionContext, finishOnDone bool) error {
 	s.promptMu.Lock()
 	if s.promptActive {
 		s.promptMu.Unlock()
 		return errors.New("acp prompt already active")
+	}
+	sessionContext := ""
+	if consumeSessionContext && !s.sessionContextDelivered {
+		sessionContext = s.sessionContext
+		s.sessionContextDelivered = true
+	}
+	promptText := text
+	if consumeSessionContext {
+		promptText = combineSessionContextAndPrompt(sessionContext, text)
 	}
 	s.promptActive = true
 	// Capture the steer channels. steerCancel is always non-nil (initialized in newSession).
@@ -296,8 +313,12 @@ func (s *Session) runPrompt(ctx context.Context, text string, finishOnDone bool)
 			cancelMerge() // abort the prompt's Call
 		}
 	}()
+	if inputKind != "" {
+		s.writeCanonicalInputLog("session_context", sessionContext)
+		s.writeCanonicalInputLog(inputKind, text)
+	}
 	var resp promptResponse
-	err := s.client.Call(mergedCtx, "session/prompt", promptParams{SessionID: s.acpSessionID, Prompt: []contentBlock{{Type: "text", Text: text}}}, &resp)
+	err := s.client.Call(mergedCtx, "session/prompt", promptParams{SessionID: s.acpSessionID, Prompt: []contentBlock{{Type: "text", Text: promptText}}}, &resp)
 	if err != nil {
 		// If cancelled due to steering, don't finalize the session.
 		if wasSteerCancelled.Load() {
@@ -419,6 +440,57 @@ func (s *Session) reapProcess() {
 	} else {
 		// Process exited cleanly. Signal completion to unblock Wait().
 		s.finish(nil)
+	}
+}
+
+func combineSessionContextAndPrompt(contextText, prompt string) string {
+	contextText = strings.TrimSpace(contextText)
+	prompt = strings.TrimSpace(prompt)
+	switch {
+	case contextText != "" && prompt != "":
+		return contextText + "\n\n" + prompt
+	case contextText != "":
+		return contextText
+	default:
+		return prompt
+	}
+}
+
+func (s *Session) writeCanonicalInputLog(inputKind, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	record := struct {
+		Type  string `json:"type"`
+		Event struct {
+			Type      string `json:"type"`
+			InputKind string `json:"input_kind"`
+			Text      string `json:"text"`
+		} `json:"event"`
+	}{
+		Type: "event",
+	}
+	record.Event.Type = "input"
+	record.Event.InputKind = inputKind
+	record.Event.Text = text
+	data, err := json.Marshal(record)
+	if err != nil {
+		slog.Warn("acp: marshal input log failed", "error", err)
+		return
+	}
+	line := append(data, '\n')
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	if s.logFile == nil {
+		return
+	}
+	if s.logBytes+int64(len(line)) > acpLogMaxBytes {
+		s.rotateLogLocked()
+	}
+	if _, err := s.logFile.Write(line); err != nil {
+		slog.Warn("acp: write input log failed", "error", err)
+	} else {
+		s.logBytes += int64(len(line))
 	}
 }
 

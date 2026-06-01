@@ -3,10 +3,13 @@ package opencode
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 func TestSession_ID(t *testing.T) {
@@ -146,6 +149,33 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestSessionWriteInputLogSeparatesSessionContextAndPrompt(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "session.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	s := &session{logFile: logFile}
+	s.writeInputLog("session_context", "system")
+	s.writeInputLog("prompt", "user")
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close log: %v", err)
+	}
+	entries, err := sessionlog.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v, want 2", entries)
+	}
+	if entries[0].InputKind != "session_context" || entries[0].Text != "system" {
+		t.Fatalf("first entry = %+v, want session context", entries[0])
+	}
+	if entries[1].InputKind != "prompt" || entries[1].Text != "user" {
+		t.Fatalf("second entry = %+v, want prompt", entries[1])
+	}
 }
 
 func TestSession_VariantCarried(t *testing.T) {

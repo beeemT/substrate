@@ -1,6 +1,9 @@
 package sessionlog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseLine_SessionMetaDropped(t *testing.T) {
 	// session_meta lines are internal harness metadata and must be dropped.
@@ -27,6 +30,45 @@ func TestParseLine_EventParsed(t *testing.T) {
 	}
 	if entry.Text != "hello" {
 		t.Errorf("entry.Text = %q, want %q", entry.Text, "hello")
+	}
+}
+
+func TestParseLine_SessionContextInput(t *testing.T) {
+	line := `{"type":"event","event":{"type":"input","input_kind":"session_context","text":"full context"}}`
+	entry, ok := ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for session context input")
+	}
+	if entry.Kind != KindInput {
+		t.Fatalf("entry.Kind = %q, want %q", entry.Kind, KindInput)
+	}
+	if entry.InputKind != "session_context" {
+		t.Fatalf("entry.InputKind = %q, want session_context", entry.InputKind)
+	}
+	if entry.Text != "full context" {
+		t.Fatalf("entry.Text = %q, want full context", entry.Text)
+	}
+}
+
+func TestScanEntriesSuppressesMatchingACPHistoryEcho(t *testing.T) {
+	log := strings.Join([]string{
+		`{"type":"event","event":{"type":"input","input_kind":"session_context","text":"ctx"}}`,
+		`{"type":"event","event":{"type":"input","input_kind":"prompt","text":"begin"}}`,
+		`2026-06-01T12:09:45Z in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"ctx\n\nbegin"}}}}`,
+		`2026-06-01T12:09:46Z in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"remote history"}}}}`,
+	}, "\n")
+	entries, err := ScanEntries(strings.NewReader(log))
+	if err != nil {
+		t.Fatalf("ScanEntries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("got %d entries, want 3: %+v", len(entries), entries)
+	}
+	if entries[0].InputKind != "session_context" || entries[1].InputKind != "prompt" {
+		t.Fatalf("synthetic inputs not preserved: %+v", entries)
+	}
+	if entries[2].InputKind != "history" || entries[2].Text != "remote history" {
+		t.Fatalf("unrelated history not preserved: %+v", entries[2])
 	}
 }
 

@@ -92,6 +92,8 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		}
 		return nil, err
 	}
+	s.writeInputLog("session_context", opts.SystemPrompt)
+	s.writeInputLog("prompt", opts.UserPrompt)
 	s.launchProcess(cmd, stdoutR, stderrR)
 
 	return s, nil
@@ -879,6 +881,36 @@ func (s *session) writeLogLine(line string) {
 	}
 	if _, writeErr := s.logFile.WriteString(line + "\n"); writeErr != nil {
 		slog.Warn("failed to write session log line", "error", writeErr)
+	}
+}
+
+func (s *session) writeInputLog(inputKind, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	s.writeLogEvent(adapter.AgentEvent{Type: "input", Timestamp: time.Now(), Payload: text, Metadata: map[string]any{"input_kind": inputKind}})
+}
+
+func (s *session) writeLogEvent(evt adapter.AgentEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logFile == nil {
+		return
+	}
+	logEntry := struct {
+		Type  string             `json:"type"`
+		Event adapter.AgentEvent `json:"event"`
+	}{
+		Type:  "event",
+		Event: evt,
+	}
+	data, err := json.Marshal(logEntry)
+	if err != nil {
+		slog.Warn("failed to marshal session log event", "error", err)
+		return
+	}
+	if _, writeErr := s.logFile.Write(append(data, '\n')); writeErr != nil {
+		slog.Warn("failed to write session log event", "error", writeErr)
 	}
 }
 

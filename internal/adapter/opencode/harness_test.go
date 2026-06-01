@@ -52,6 +52,15 @@ func TestSupportsCompact(t *testing.T) {
 	}
 }
 
+func TestBuildInitialPromptFoldsSystemAndUser(t *testing.T) {
+	if got := buildInitialPrompt("system", "user"); got != "system\n\nuser" {
+		t.Fatalf("buildInitialPrompt with system = %q", got)
+	}
+	if got := buildInitialPrompt("", "user"); got != "user" {
+		t.Fatalf("buildInitialPrompt without system = %q", got)
+	}
+}
+
 func TestValidateReadiness_BinaryNotFound(t *testing.T) {
 	// Use a BinaryPath pointing to a binary that definitely doesn't exist.
 	err := ValidateReadiness(config.OpenCodeConfig{

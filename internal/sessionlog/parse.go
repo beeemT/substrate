@@ -339,17 +339,49 @@ func joinACPContentItems(items []acpContentItem) string {
 // It uses a 10 MB scanner buffer to handle large log lines.
 func ScanEntries(r io.Reader) ([]Entry, error) {
 	var entries []Entry
+	pendingSessionContext := ""
+	localPromptEchoes := make(map[string]int)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 	for scanner.Scan() {
-		if entry, ok := ParseLine(scanner.Text()); ok {
-			entries = append(entries, entry)
+		entry, ok := ParseLine(scanner.Text())
+		if !ok {
+			continue
 		}
+		if entry.Kind == KindInput && entry.InputKind == "history" {
+			if localPromptEchoes[entry.Text] > 0 {
+				localPromptEchoes[entry.Text]--
+				continue
+			}
+		}
+		if entry.Kind == KindInput {
+			switch entry.InputKind {
+			case "session_context":
+				pendingSessionContext = entry.Text
+			case "prompt", "message":
+				localPromptEchoes[combineInputParts(pendingSessionContext, entry.Text)]++
+				pendingSessionContext = ""
+			}
+		}
+		entries = append(entries, entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return entries, nil
+}
+
+func combineInputParts(contextText, prompt string) string {
+	contextText = strings.TrimSpace(contextText)
+	prompt = strings.TrimSpace(prompt)
+	switch {
+	case contextText != "" && prompt != "":
+		return contextText + "\n\n" + prompt
+	case contextText != "":
+		return contextText
+	default:
+		return prompt
+	}
 }
 
 // ReadFile reads all log entries from a file path.

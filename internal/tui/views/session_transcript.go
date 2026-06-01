@@ -118,6 +118,8 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 				label = "Feedback"
 			case "answer":
 				label = "Answer"
+			case "session_context":
+				label = "Session context"
 			}
 			blocks = append(blocks, transcriptBlock{kind: blockKindPrompt, text: e.Text, label: label})
 

@@ -9,12 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
+	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 func TestHelperACPProcess(t *testing.T) {
@@ -47,6 +49,10 @@ func TestHelperACPProcess(t *testing.T) {
 		case "session/set_config_option":
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"configOptions": []map[string]any{{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "new", "options": []map[string]any{{"value": "new", "name": "New"}}}}}})
 		case "session/prompt":
+			captureHelperPrompt(msg)
+			if os.Getenv("ACP_ECHO_USER_MESSAGE") == "1" {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": helperPromptText(msg)}}}})
+			}
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []map[string]any{{"name": "compact", "description": "compact session"}}}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "hello"}}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "tc1", "title": "Read file", "kind": "read", "status": "pending"}}})
@@ -96,6 +102,35 @@ func writeHelper(v any) {
 	fmt.Println(string(data))
 }
 
+func captureHelperPrompt(msg map[string]any) {
+	path := os.Getenv("ACP_PROMPT_CAPTURE")
+	if path == "" {
+		return
+	}
+	text := helperPromptText(msg)
+	data, err := json.Marshal(text)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, string(data))
+}
+
+func helperPromptText(msg map[string]any) string {
+	params, _ := msg["params"].(map[string]any)
+	blocks, _ := params["prompt"].([]any)
+	if len(blocks) == 0 {
+		return ""
+	}
+	block, _ := blocks[0].(map[string]any)
+	text, _ := block["text"].(string)
+	return text
+}
+
 func helperACPConfig(t *testing.T) config.ACPConfig {
 	t.Helper()
 	return config.ACPConfig{Command: os.Args[0], Args: []string{"-test.run=TestHelperACPProcess", "--"}, Env: map[string]string{"GO_WANT_ACP_HELPER": "1", "ACP_AGENT_NAME": "Kilo", "ACP_AUTH_ID": "kilo-login"}, ClientFS: boolPtr(true), ClientTerminal: boolPtr(true)}
@@ -125,6 +160,132 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 	if err := sess.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestStartSessionFoldsSessionContextIntoInitialPrompt(t *testing.T) {
+	cfg := helperACPConfig(t)
+	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
+	cfg.Env["ACP_PROMPT_CAPTURE"] = capturePath
+	cfg.Env["ACP_ECHO_USER_MESSAGE"] = "1"
+	logDir := t.TempDir()
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-fold", WorktreePath: t.TempDir(), SessionLogDir: logDir, SystemPrompt: "system context", UserPrompt: "begin"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	collectUntilDone(t, sess)
+	prompts := readCapturedPrompts(t, capturePath)
+	if len(prompts) != 1 || prompts[0] != "system context\n\nbegin" {
+		t.Fatalf("captured prompts = %#v, want folded context+prompt", prompts)
+	}
+	entries := readACPLogEntries(t, logDir, "s-fold")
+	if len(entries) < 3 {
+		t.Fatalf("entries = %+v, want synthetic inputs and assistant output", entries)
+	}
+	if entries[0].InputKind != "session_context" || entries[0].Text != "system context" {
+		t.Fatalf("first entry = %+v, want session context", entries[0])
+	}
+	if entries[1].InputKind != "prompt" || entries[1].Text != "begin" {
+		t.Fatalf("second entry = %+v, want prompt", entries[1])
+	}
+	if slices.ContainsFunc(entries, func(e sessionlog.Entry) bool { return e.InputKind == "history" && e.Text == "system context\n\nbegin" }) {
+		t.Fatalf("matching ACP history echo was not suppressed: %+v", entries)
+	}
+}
+
+func TestStartSessionWithOnlySystemContextDoesNotAutoPrompt(t *testing.T) {
+	cfg := helperACPConfig(t)
+	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
+	cfg.Env["ACP_PROMPT_CAPTURE"] = capturePath
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-idle", WorktreePath: t.TempDir(), SessionLogDir: t.TempDir(), SystemPrompt: "system context"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	if _, err := os.Stat(capturePath); !os.IsNotExist(err) {
+		t.Fatalf("capture file exists or stat failed: %v", err)
+	}
+}
+
+func TestSendMessageFoldsPendingSessionContextOnce(t *testing.T) {
+	cfg := helperACPConfig(t)
+	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
+	cfg.Env["ACP_PROMPT_CAPTURE"] = capturePath
+	logDir := t.TempDir()
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-message", Mode: adapter.SessionModeForeman, WorktreePath: t.TempDir(), SessionLogDir: logDir, SystemPrompt: "system context"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	if err := sess.SendMessage(context.Background(), "first"); err != nil {
+		t.Fatalf("SendMessage first: %v", err)
+	}
+	collectUntilEventType(t, sess, "foreman_proposed")
+	if err := sess.SendMessage(context.Background(), "second"); err != nil {
+		t.Fatalf("SendMessage second: %v", err)
+	}
+	collectUntilEventType(t, sess, "foreman_proposed")
+	prompts := readCapturedPrompts(t, capturePath)
+	want := []string{"system context\n\nfirst", "second"}
+	if !slices.Equal(prompts, want) {
+		t.Fatalf("captured prompts = %#v, want %#v", prompts, want)
+	}
+	entries, err := sessionlog.ReadFile(filepath.Join(logDir, "s-message.log"))
+	if err != nil {
+		t.Fatalf("read session log: %v", err)
+	}
+	var inputs []sessionlog.Entry
+	for _, entry := range entries {
+		if entry.Kind == sessionlog.KindInput {
+			inputs = append(inputs, entry)
+		}
+	}
+	if len(inputs) != 3 {
+		t.Fatalf("input entries = %+v, want session_context + two messages", inputs)
+	}
+	if inputs[0].InputKind != "session_context" || inputs[1].InputKind != "message" || inputs[2].InputKind != "message" {
+		t.Fatalf("input entries = %+v, want session_context/message/message", inputs)
+	}
+}
+
+func TestSteerAndCompactDoNotConsumePendingSessionContext(t *testing.T) {
+	cfg := helperACPConfig(t)
+	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
+	cfg.Env["ACP_PROMPT_CAPTURE"] = capturePath
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-no-consume", Mode: adapter.SessionModeForeman, WorktreePath: t.TempDir(), SessionLogDir: t.TempDir(), SystemPrompt: "system context"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	if err := sess.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	collectUntilEventType(t, sess, "foreman_proposed")
+	if err := sess.Steer(context.Background(), "steer note"); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	collectUntilEventType(t, sess, "foreman_proposed")
+	if err := sess.SendMessage(context.Background(), "after controls"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	collectUntilEventType(t, sess, "foreman_proposed")
+	prompts := readCapturedPrompts(t, capturePath)
+	if len(prompts) != 3 {
+		t.Fatalf("captured prompts = %#v, want compact, steer, and message", prompts)
+	}
+	if prompts[0] != "/compact" {
+		t.Fatalf("compact prompt = %q, want /compact", prompts[0])
+	}
+	if prompts[1] != "Steering update from operator:\n\nsteer note" {
+		t.Fatalf("steer prompt = %q, want steer prompt", prompts[1])
+	}
+	if prompts[2] != "system context\n\nafter controls" {
+		t.Fatalf("message prompt = %q, want folded context", prompts[2])
 	}
 }
 
@@ -392,6 +553,73 @@ func collectUntilDone(t *testing.T, sess adapter.AgentSession) []adapter.AgentEv
 			t.Fatalf("timed out waiting for done; events=%#v", events)
 		}
 	}
+}
+
+func collectUntilEventType(t *testing.T, sess adapter.AgentSession, eventType string) adapter.AgentEvent {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("session closed before %s", eventType)
+			}
+			if e.Type == eventType {
+				return e
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", eventType)
+		}
+	}
+}
+
+func readCapturedPrompts(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read prompt capture: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	prompts := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var prompt string
+		if err := json.Unmarshal([]byte(line), &prompt); err != nil {
+			t.Fatalf("decode prompt capture %q: %v", line, err)
+		}
+		prompts = append(prompts, prompt)
+	}
+	return prompts
+}
+
+func readACPLogEntries(t *testing.T, logDir, sessionID string) []sessionlog.Entry {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		candidates := []string{filepath.Join(logDir, sessionID+".log")}
+		matches, err := filepath.Glob(filepath.Join(logDir, sessionID+".log.*.gz"))
+		if err != nil {
+			t.Fatalf("glob compressed logs: %v", err)
+		}
+		candidates = append(candidates, matches...)
+		for _, path := range candidates {
+			entries, err := sessionlog.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				t.Fatalf("read session log %s: %v", path, err)
+			}
+			if len(entries) > 0 {
+				return entries
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no ACP log entries for %s", sessionID)
+	return nil
 }
 
 func strPtr(s string) *string { return &s }

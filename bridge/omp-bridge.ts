@@ -78,7 +78,7 @@ function emitLifecycle(
   emit({ type: "lifecycle", stage, ...payload });
 }
 
-function emitInput(inputKind: "prompt" | "message" | "answer", text: string): void {
+function emitInput(inputKind: "session_context" | "prompt" | "message" | "answer", text: string): void {
   if (text.trim() === "") return;
   emit({ type: "input", input_kind: inputKind, text });
 }
@@ -740,6 +740,7 @@ async function main(): Promise<void> {
         parsed.type === "init"
       ) {
         systemPrompt = parsed.system_prompt || undefined;
+        emitInput("session_context", systemPrompt ?? "");
         if (typeof parsed.answer_timeout_ms === "number" && parsed.answer_timeout_ms >= 0) {
           answerTimeoutMs = parsed.answer_timeout_ms;
         }

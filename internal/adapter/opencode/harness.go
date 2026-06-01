@@ -389,10 +389,9 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 
 	// Send the initial prompt for agent mode.
 	if opts.Mode == adapter.SessionModeAgent && opts.UserPrompt != "" {
-		prompt := opts.UserPrompt
-		if opts.SystemPrompt != "" {
-			prompt = opts.SystemPrompt + "\n\n" + opts.UserPrompt
-		}
+		prompt := buildInitialPrompt(opts.SystemPrompt, opts.UserPrompt)
+		s.writeInputLog("session_context", opts.SystemPrompt)
+		s.writeInputLog("prompt", opts.UserPrompt)
 		if sendErr := s.SendMessage(ctx, prompt); sendErr != nil {
 			slog.Warn("opencode: failed to send initial prompt", "error", sendErr)
 			s.Abort(ctx) //nolint:errcheck // best-effort cleanup
@@ -401,6 +400,13 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	}
 
 	return s, nil
+}
+
+func buildInitialPrompt(systemPrompt, userPrompt string) string {
+	if systemPrompt != "" {
+		return systemPrompt + "\n\n" + userPrompt
+	}
+	return userPrompt
 }
 
 // detectServerURL reads stdout until the "Server running on ..." line appears

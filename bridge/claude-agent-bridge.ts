@@ -48,7 +48,7 @@ function emitLifecycle(
   emit({ type: "lifecycle", stage, ...payload });
 }
 
-function emitInput(inputKind: "prompt" | "message" | "steer" | "answer", text: string): void {
+function emitInput(inputKind: "session_context" | "prompt" | "message" | "steer" | "answer", text: string): void {
   if (text.trim() === "") return;
   emit({ type: "input", input_kind: inputKind, text });
 }
@@ -411,6 +411,7 @@ async function main(): Promise<void> {
   const mode = String(initMsg.mode ?? "agent");
   const systemPromptText =
     typeof initMsg.system_prompt === "string" ? initMsg.system_prompt : undefined;
+  emitInput("session_context", systemPromptText ?? "");
   const resumeSessionId =
     typeof initMsg.resume_session_id === "string" ? initMsg.resume_session_id : undefined;
   const model = typeof initMsg.model === "string" && initMsg.model ? initMsg.model : undefined;

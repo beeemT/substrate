@@ -181,6 +181,19 @@ func TestMapBridgeEvent(t *testing.T) {
 			checkPayload: "text",
 		},
 		{
+			name:      "input with input_kind session_context",
+			rawType:   "event",
+			eventJSON: `{"type":"input","input_kind":"session_context","text":"context"}`,
+			wantType:  "input",
+			checkMeta: func(t *testing.T, meta map[string]any) {
+				t.Helper()
+				if k, _ := meta["input_kind"].(string); k != "session_context" {
+					t.Errorf("input_kind = %v, want session_context", meta["input_kind"])
+				}
+			},
+			checkPayload: "context",
+		},
+		{
 			name:         "assistant_output",
 			rawType:      "event",
 			eventJSON:    `{"type":"assistant_output","text":"hello"}`,
