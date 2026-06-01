@@ -595,6 +595,74 @@ func TestLoadSessionInteractionCmd_ReadsCompressedHistory(t *testing.T) {
 	}
 }
 
+func TestTailSessionLogCmd_LoadsFinalCompressedACPLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const sessionID = "acp-final"
+	compressedPath := filepath.Join(dir, sessionID+".log.gz")
+	compressedFile, err := os.Create(compressedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(compressedFile)
+	line := `2026-06-01T12:09:45.518652+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"persisted ACP output"}}}}`
+	if _, err := gz.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressedFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(filepath.Join(dir, sessionID+".log"), sessionID, 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if len(got.Entries) != 1 {
+		t.Fatalf("Entries: want 1, got %d (%v)", len(got.Entries), got.Entries)
+	}
+	if got.Entries[0].Kind != sessionlog.KindAssistant || got.Entries[0].Text != "persisted ACP output" {
+		t.Fatalf("Entries[0] = %+v, want persisted ACP assistant output", got.Entries[0])
+	}
+}
+
+func TestLoadSessionInteractionCmd_LoadsFinalCompressedACPLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const sessionID = "acp-history"
+	compressedPath := filepath.Join(dir, sessionID+".log.gz")
+	compressedFile, err := os.Create(compressedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(compressedFile)
+	line := `2026-06-01T12:09:45.518652+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"historical ACP output"}}}}`
+	if _, err := gz.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressedFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.LoadSessionInteractionCmd(dir, sessionID)()
+	got, ok := msg.(views.SessionInteractionLoadedMsg)
+	if !ok {
+		t.Fatalf("expected SessionInteractionLoadedMsg, got %T", msg)
+	}
+	if len(got.Entries) != 1 {
+		t.Fatalf("Entries: want 1, got %d (%v)", len(got.Entries), got.Entries)
+	}
+	if got.Entries[0].Kind != sessionlog.KindAssistant || got.Entries[0].Text != "historical ACP output" {
+		t.Fatalf("Entries[0] = %+v, want historical ACP assistant output", got.Entries[0])
+	}
+}
+
 // TestTailSessionLogCmd_ArchivesOnly_NoActiveLog verifies that when only gzipped
 // rotations exist (no active .log file), TailSessionLogCmd returns a non-zero
 // NextOffset so that subsequent polls enter the continuation path instead of

@@ -559,6 +559,12 @@ func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 	}
 	sort.Strings(compressed)
 	paths := append([]string(nil), compressed...)
+	finalArchive := filepath.Join(sessionsDir, sessionID+".log.gz")
+	if _, err := os.Stat(finalArchive); err == nil {
+		paths = append(paths, finalArchive)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat session log archive: %w", err)
+	}
 	active := filepath.Join(sessionsDir, sessionID+".log")
 	if _, err := os.Stat(active); err == nil {
 		paths = append(paths, active)

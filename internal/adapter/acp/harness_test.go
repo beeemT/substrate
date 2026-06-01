@@ -128,6 +128,44 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 }
 
+func TestStartSessionArchivesACPLogWithDiscoverableSegmentName(t *testing.T) {
+	cfg := helperACPConfig(t)
+	h := NewHarness(cfg, t.TempDir())
+	logDir := t.TempDir()
+	const sessionID = "s1"
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: sessionID, WorktreePath: t.TempDir(), SessionLogDir: logDir, UserPrompt: "do work"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	events := collectUntilDone(t, sess)
+	if !slices.ContainsFunc(events, func(e adapter.AgentEvent) bool { return e.Type == "text_delta" }) {
+		t.Fatalf("missing text_delta in %#v", events)
+	}
+	if err := sess.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	pattern := filepath.Join(logDir, sessionID+".log.*.gz")
+	deadline := time.Now().Add(2 * time.Second)
+	var matches []string
+	for time.Now().Before(deadline) {
+		matches, err = filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("glob archived ACP logs: %v", err)
+		}
+		if len(matches) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("archived logs matching %q: none", pattern)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, sessionID+".log.gz")); !os.IsNotExist(err) {
+		t.Fatalf("legacy final archive exists or stat failed: %v", err)
+	}
+}
+
 func TestMapSessionUpdateToolCallRawInput(t *testing.T) {
 	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"read","kind":"read","status":"pending","rawInput":{"operations":[{"mode":"Line","path":"/tmp/plan.md","limit":10}]}}`))
 	if len(events) != 1 {

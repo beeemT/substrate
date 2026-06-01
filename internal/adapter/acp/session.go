@@ -394,8 +394,9 @@ func (s *Session) cleanup() {
 				slog.Warn("acp: close log failed", "error", err)
 			}
 			s.logFile = nil
+			compressedPath := fmt.Sprintf("%s.%d.gz", s.logPath, time.Now().Unix())
 			go func() {
-				if err := bridge.CompressFile(s.logPath, s.logPath+".gz"); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := bridge.CompressFile(s.logPath, compressedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 					slog.Warn("acp: compress log failed", "error", err)
 				}
 				bridge.CleanupOldSegments(s.logDir, s.id)
