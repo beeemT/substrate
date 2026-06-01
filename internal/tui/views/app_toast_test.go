@@ -140,9 +140,26 @@ func TestAppView_RendersStartupIntegrationToastUntilReady(t *testing.T) {
 		t.Fatalf("startup integrations toast rendered legacy ASCII spinner: %q", view)
 	}
 
-	updated := updateToastTestApp(t, app, StartupIntegrationsSpinnerTickMsg{})
-	if updated.startupIntegrationSpinner != 1 {
-		t.Fatalf("startup spinner frame = %d, want 1", updated.startupIntegrationSpinner)
+	spinnerMsg, ok := StartupIntegrationsSpinnerTickCmd(app.startupIntegrationSpinner)().(StartupIntegrationsSpinnerTickMsg)
+	if !ok {
+		t.Fatalf("startup spinner tick command returned %T, want StartupIntegrationsSpinnerTickMsg", spinnerMsg)
+	}
+	*app.cachedBase = strings.Join([]string{
+		"cached startup base",
+		strings.Repeat(".", 80),
+		strings.Repeat(".", 80),
+		strings.Repeat(".", 80),
+	}, "\n")
+	model, nextSpinnerCmd := app.Update(spinnerMsg)
+	updated, ok := model.(*App)
+	if !ok {
+		t.Fatalf("model = %T, want *App", model)
+	}
+	if nextSpinnerCmd == nil {
+		t.Fatal("startup spinner tick did not schedule the next frame")
+	}
+	if rendered := stripToastANSI(updated.View()); !strings.Contains(rendered, "cached startup base") {
+		t.Fatalf("startup spinner frame rebuilt the full base instead of reusing cached base: %q", rendered)
 	}
 	view = stripToastANSI(updated.toasts.StackView(updated.pinnedToasts()...))
 	if !strings.Contains(view, components.SpinnerFrame(1)) || !strings.Contains(view, "Starting") || !strings.Contains(view, "integrations") {

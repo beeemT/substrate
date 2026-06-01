@@ -118,3 +118,43 @@ func TestParseLine_EmptyEventKindBecomesPlain(t *testing.T) {
 		t.Errorf("entry.Kind = %q, want %q", entry.Kind, KindPlain)
 	}
 }
+
+func TestParseLine_ACPAgentMessageChunk(t *testing.T) {
+	line := `2026-06-01T12:09:45.518652+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":" understand"}}}}`
+	entry, ok := ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP agent chunk")
+	}
+	if entry.Kind != KindAssistant || entry.Text != " understand" {
+		t.Fatalf("entry = %+v, want assistant chunk", entry)
+	}
+}
+
+func TestParseLine_ACPToolCallRawOutput(t *testing.T) {
+	line := `2026-06-01T12:09:48.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","kind":"read","status":"completed","rawOutput":{"items":[{"Text":"User id: 502\n-rw-r--r-- file.yaml"}]}}}}`
+	entry, ok := ParseLine(line)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP rawOutput")
+	}
+	if entry.Kind != KindToolResult {
+		t.Fatalf("entry.Kind = %q, want %q", entry.Kind, KindToolResult)
+	}
+	if entry.Tool != "read" {
+		t.Fatalf("entry.Tool = %q, want read", entry.Tool)
+	}
+	if entry.Text != "User id: 502\n-rw-r--r-- file.yaml" {
+		t.Fatalf("entry.Text = %q", entry.Text)
+	}
+}
+
+func TestParseLine_ACPControlFramesDropped(t *testing.T) {
+	lines := []string{
+		`2026-06-01T12:09:45.851972+02:00 in {"jsonrpc":"2.0","method":"_kiro.dev/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_chunk","toolCallId":"tc1","title":"read","kind":"read"}}}`,
+		`2026-06-01T12:09:45.851972+02:00 out {"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"s1"}}`,
+	}
+	for _, line := range lines {
+		if entry, ok := ParseLine(line); ok {
+			t.Fatalf("ParseLine(%q) = %+v, true; want dropped", line, entry)
+		}
+	}
+}

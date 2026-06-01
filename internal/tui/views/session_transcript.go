@@ -122,16 +122,24 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 			blocks = append(blocks, transcriptBlock{kind: blockKindPrompt, text: e.Text, label: label})
 
 		case sessionlog.KindAssistant:
-			if strings.TrimSpace(e.Text) == "" {
+			if e.Text == "" {
 				continue
 			}
-			blocks = append(blocks, transcriptBlock{kind: blockKindAssistant, text: e.Text})
+			if len(blocks) > 0 && blocks[len(blocks)-1].kind == blockKindAssistant {
+				blocks[len(blocks)-1].text += e.Text
+			} else {
+				blocks = append(blocks, transcriptBlock{kind: blockKindAssistant, text: e.Text})
+			}
 
 		case sessionlog.KindThinking:
-			if strings.TrimSpace(e.Text) == "" {
+			if e.Text == "" {
 				continue
 			}
-			blocks = append(blocks, transcriptBlock{kind: blockKindThinking, text: e.Text})
+			if len(blocks) > 0 && blocks[len(blocks)-1].kind == blockKindThinking {
+				blocks[len(blocks)-1].text += e.Text
+			} else {
+				blocks = append(blocks, transcriptBlock{kind: blockKindThinking, text: e.Text})
+			}
 
 		case sessionlog.KindQuestion:
 			if strings.TrimSpace(e.Question) == "" {

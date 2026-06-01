@@ -20,10 +20,8 @@ import (
 const foremanSocketEnv = "SUBSTRATE_FOREMAN_SOCKET"
 
 type pendingQuestion struct {
-	id      string
-	source  adapter.AgentQuestionSource
-	options []permissionOption
-	answer  chan string
+	id     string
+	answer chan string
 }
 
 type questionBroker struct {
@@ -39,11 +37,11 @@ func newQuestionBroker(sessionID string, mode adapter.SessionMode, emit func(ada
 	return &questionBroker{sessionID: sessionID, mode: mode, emit: emit, pending: make(map[string]*pendingQuestion)}
 }
 
-func (b *questionBroker) ask(ctx context.Context, source adapter.AgentQuestionSource, text string, structured *adapter.StructuredQuestionSet, meta map[string]any, options []permissionOption) (string, error) {
+func (b *questionBroker) ask(ctx context.Context, source adapter.AgentQuestionSource, text string, structured *adapter.StructuredQuestionSet, meta map[string]any) (string, error) {
 	b.mu.Lock()
 	b.next++
 	id := fmt.Sprintf("acp_q_%d", b.next)
-	pq := &pendingQuestion{id: id, source: source, options: options, answer: make(chan string, 1)}
+	pq := &pendingQuestion{id: id, answer: make(chan string, 1)}
 	b.pending[id] = pq
 	b.mu.Unlock()
 	question := &adapter.AgentQuestion{ID: id, SessionID: b.sessionID, Stage: b.mode, Source: source, FreeText: text, Structured: structured, PendingAnswerHandle: id, Metadata: meta}
@@ -133,49 +131,73 @@ func (s *Session) handleClientRequest(ctx context.Context, method string, params
 }
 
 func (s *Session) handlePermissionRequest(ctx context.Context, raw json.RawMessage) (permissionResponse, error) {
+	select {
+	case <-ctx.Done():
+		return cancelledPermissionResponse(), nil
+	default:
+	}
 	var p requestPermissionParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return permissionResponse{}, fmt.Errorf("decode permission params: %w", err)
 	}
-	questions := make([]adapter.StructuredQuestion, 0, 1)
-	options := make([]adapter.QuestionOption, 0, len(p.Options))
-	ids := make([]string, 0, len(p.Options))
-	for _, opt := range p.Options {
-		label := opt.Name
-		if label == "" {
-			label = opt.ID
-		}
-		options = append(options, adapter.QuestionOption{Label: label, Description: opt.Description})
-		ids = append(ids, opt.ID)
-	}
-	questionText := p.Title
-	if questionText == "" {
-		questionText = "Agent requests permission to continue."
-	}
-	questions = append(questions, adapter.StructuredQuestion{ID: p.ToolCallID, Question: questionText, Options: options})
-	structured := &adapter.StructuredQuestionSet{Questions: questions, SupportsCustomAnswer: false, NativeResponseFormat: "acp_permission_option_id"}
-	meta := map[string]any{"tool_call_id": p.ToolCallID, "option_ids": ids}
-	answer, err := s.questions.ask(ctx, adapter.AgentQuestionSourceFutureHarnessQuestion, questionText, structured, meta, p.Options)
-	if err != nil || answer == "" {
-		return permissionResponse{Outcome: "cancelled"}, nil
-	}
-	optionID := selectPermissionOption(answer, p.Options)
+	optionID := autoAllowPermissionOptionID(p.Options)
 	if optionID == "" {
-		return permissionResponse{Outcome: "cancelled"}, nil
+		return cancelledPermissionResponse(), nil
 	}
-	return permissionResponse{Outcome: "selected", OptionID: optionID}, nil
+	return selectedPermissionResponse(optionID), nil
 }
 
-func selectPermissionOption(answer string, options []permissionOption) string {
-	answer = strings.TrimSpace(answer)
+func cancelledPermissionResponse() permissionResponse {
+	return permissionResponse{Outcome: permissionOutcome{Outcome: "cancelled"}}
+}
+
+func selectedPermissionResponse(optionID string) permissionResponse {
+	return permissionResponse{Outcome: permissionOutcome{Outcome: "selected", OptionID: optionID}}
+}
+
+func autoAllowPermissionOptionID(options []permissionOption) string {
+	if id := permissionOptionIDByKind(options, "allow_always"); id != "" {
+		return id
+	}
+	if id := permissionOptionIDByKind(options, "allow_once"); id != "" {
+		return id
+	}
 	for _, opt := range options {
-		if answer == opt.ID || strings.EqualFold(answer, opt.Name) || strings.EqualFold(answer, opt.Description) {
+		if isLegacyAllowPermissionOption(opt) {
 			return opt.ID
 		}
 	}
-	// No option matched. Since SupportsCustomAnswer is false, return empty
-	// string so the caller returns {Outcome: "cancelled"}.
 	return ""
+}
+
+func permissionOptionIDByKind(options []permissionOption, kind string) string {
+	for _, opt := range options {
+		if opt.ID != "" && opt.Kind == kind {
+			return opt.ID
+		}
+	}
+	return ""
+}
+
+func isLegacyAllowPermissionOption(opt permissionOption) bool {
+	if opt.ID == "" {
+		return false
+	}
+	for _, value := range []string{opt.ID, opt.Name, opt.Description} {
+		if isAllowPermissionLabel(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowPermissionLabel(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "allow", "approve", "accept", "yes", "continue", "allow once", "allow always", "allow_once", "allow_always", "allow-once", "allow-always", "approved", "accepted":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Session) handleReadTextFile(raw json.RawMessage) (fsReadTextFileResponse, error) {
@@ -365,7 +387,7 @@ func (s *foremanSocket) handleConn(conn net.Conn) {
 	// Use a timeout to prevent indefinite blocking if the question is never answered.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	answer, err := s.broker.ask(ctx, adapter.AgentQuestionSourceAskForeman, req.Question, nil, map[string]any{"context": req.Context}, nil)
+	answer, err := s.broker.ask(ctx, adapter.AgentQuestionSourceAskForeman, req.Question, nil, map[string]any{"context": req.Context})
 	if err != nil {
 		slog.Warn("acp: foreman question failed", "error", err)
 		return

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -135,10 +136,11 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	styles                      styles.Styles
 
 	// Toasts
-	toasts                        components.ToastModel
-	startupIntegrationsInProgress bool
-	startupIntegrationSpinner     int
-	inputBlocked                  bool
+	toasts                             components.ToastModel
+	startupIntegrationsInProgress      bool
+	startupIntegrationSpinner          spinner.Model
+	startupIntegrationSpinnerFrameOnly bool
+	inputBlocked                       bool
 
 	// State cache (refreshed by DB poll)
 	workItems []domain.Session
@@ -239,6 +241,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		worktreePicker:                 NewWorktreePickerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		toasts:                         components.NewToastModel(st),
 		startupIntegrationsInProgress:  runtimeCtx.StartupIntegrationsInProgress,
+		startupIntegrationSpinner:      components.NewSpinner(st),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
 		questions:                      make(map[string]map[string]domain.Question),
@@ -300,7 +303,7 @@ func (a *App) Init() tea.Cmd {
 	cmds = append(cmds, tea.ClearScreen, PollTickCmd(), HeartbeatTickCmd(), components.ToastTickCmd(), WaitForLogToastCmd(a.runtimeCtx.LogToasts), StartupWarningsCmd(a.provider.StartupWarnings()))
 	if a.runtimeCtx.StartupIntegrationsInProgress {
 		a.inputBlocked = true
-		cmds = append(cmds, StartupIntegrationsStartCmd(), StartupIntegrationsSpinnerTickCmd())
+		cmds = append(cmds, StartupIntegrationsStartCmd(), StartupIntegrationsSpinnerTickCmd(a.startupIntegrationSpinner))
 	} else {
 		// Non-workspace startup: schedule diagnostics if still pending.
 		snapshot := a.provider.Settings().Snapshot()
@@ -1204,8 +1207,7 @@ func (a App) startupIntegrationsToast() (components.Toast, bool) {
 	if !a.startupIntegrationsInProgress {
 		return components.Toast{}, false
 	}
-	spinner := components.SpinnerFrame(a.startupIntegrationSpinner)
-	return components.Toast{Message: spinner + " Starting integrations…", Level: components.ToastInfo}, true
+	return components.Toast{Message: a.startupIntegrationSpinner.View() + "Starting integrations…", Level: components.ToastInfo}, true
 }
 
 func (a App) pinnedToasts() []components.Toast {
@@ -1263,6 +1265,8 @@ func (a *App) loadHistoryEntry(entry SidebarEntry) tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
+
+	a.startupIntegrationSpinnerFrameOnly = false
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1548,8 +1552,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !a.startupIntegrationsInProgress {
 			return a, nil
 		}
-		a.startupIntegrationSpinner++
-		return a, StartupIntegrationsSpinnerTickCmd()
+		a.startupIntegrationSpinner, cmd = a.startupIntegrationSpinner.Update(msg.Tick)
+		a.startupIntegrationSpinnerFrameOnly = true
+		return a, wrapStartupIntegrationsSpinnerTickCmd(cmd)
 
 	case SessionsLoadedMsg:
 		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
@@ -4122,6 +4127,13 @@ func (a App) View() string {
 			return a.applyToasts(renderOverlay(overlay, a.windowWidth, a.windowHeight))
 		}
 		return a.applyToasts(renderCenteredOverlay(base, overlay, a.windowWidth, a.windowHeight))
+	}
+
+	if a.startupIntegrationSpinnerFrameOnly && a.startupIntegrationsInProgress {
+		base := *a.cachedBase
+		if base != "" {
+			return a.applyToasts(base)
+		}
 	}
 
 	hints := a.currentHints()

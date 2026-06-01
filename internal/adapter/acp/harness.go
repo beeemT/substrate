@@ -13,6 +13,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/adapter/bridge"
+	"github.com/beeemT/substrate/internal/buildinfo"
 	"github.com/beeemT/substrate/internal/config"
 )
 
@@ -214,7 +215,7 @@ func (h *Harness) initialize(ctx context.Context, client *rpcClient) (initialize
 		caps.Terminal = true
 	}
 	var resp initializeResponse
-	req := initializeRequest{ProtocolVersion: protocolVersion, ClientCapabilities: caps, ClientInfo: implementationInfo{Name: "substrate", Title: "Substrate"}}
+	req := initializeRequest{ProtocolVersion: protocolVersion, ClientCapabilities: caps, ClientInfo: implementationInfo{Name: "substrate", Title: "Substrate", Version: buildinfo.Version}}
 	if err := client.Call(ctx, "initialize", req, &resp); err != nil {
 		return resp, fmt.Errorf("initialize acp agent: %w", err)
 	}
@@ -312,42 +313,58 @@ func authMethodIDs(methods []authMethod) string {
 	return strings.Join(ids, ", ")
 }
 
-func resolveForemanMCPBridge() (string, []string) {
+func resolveForemanMCPBridge(configured string) (string, []string, error) {
 	execPath, err := os.Executable()
 	if err != nil {
-		return "", nil
+		return "", nil, fmt.Errorf("locate substrate executable: %w", err)
 	}
-	for _, c := range bridge.BridgeCandidates("", execPath, "foreman-mcp") {
-		if c == "" {
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	return resolveForemanMCPBridgeFrom(configured, execPath)
+}
+
+func resolveForemanMCPBridgeFrom(configured, execPath string) (string, []string, error) {
+	candidates := bridge.BridgeCandidates(configured, execPath, "foreman-mcp")
+	if strings.TrimSpace(configured) == "" {
+		candidates = append(candidates,
+			filepath.Join(filepath.Dir(execPath), "bridge", "foreman-mcp", "index.ts"),
+			filepath.Join("bridge", "foreman-mcp", "index.ts"),
+		)
+	}
+	checked := make([]string, 0, len(candidates))
+	for _, c := range bridge.DedupePaths(candidates) {
+		checked = append(checked, c)
+		st, err := os.Stat(c)
+		if err != nil || st.IsDir() {
 			continue
 		}
-		if st, err := os.Stat(c); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
-			return c, nil
+		abs, err := filepath.Abs(c)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve foreman MCP bridge path %q: %w", c, err)
 		}
-	}
-	rootCandidates := []string{
-		filepath.Join(filepath.Dir(execPath), "bridge", "foreman-mcp", "index.ts"),
-		filepath.Join("bridge", "foreman-mcp", "index.ts"),
-	}
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		return "", nil
-	}
-	for _, c := range rootCandidates {
-		if _, err := os.Stat(c); err == nil {
-			return bun, []string{c}
+		if bridge.IsBridgeScript(abs) {
+			bun, err := bridge.ResolveBunExecutable("")
+			if err != nil {
+				return "", nil, err
+			}
+			return bun, []string{abs}, nil
 		}
+		if st.Mode()&0o111 == 0 {
+			continue
+		}
+		return abs, nil, nil
 	}
-	return "", nil
+	return "", nil, fmt.Errorf("resolve foreman MCP bridge: no bridge binary or script found; checked %s", strings.Join(bridge.DedupePaths(checked), ", "))
 }
 
 func (s *Session) buildMCPServers() []mcpServer {
 	if s.mode == adapter.SessionModeForeman {
 		return nil
 	}
-	cmd, args := resolveForemanMCPBridge()
-	if cmd == "" {
-		slog.Warn("acp: foreman MCP bridge not found; ask_foreman unavailable")
+	cmd, args, err := resolveForemanMCPBridge(s.acpCfg.ForemanBridgePath)
+	if err != nil || cmd == "" {
+		slog.Warn("acp: foreman MCP bridge not found; ask_foreman unavailable", "error", err)
 		return nil
 	}
 	fs, err := startForemanSocket(s.questions)

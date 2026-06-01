@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -195,6 +196,10 @@ func (c *rpcClient) readStderr() {
 		slog.Debug("acp stderr", "line", string(line))
 	}
 	if err := scanner.Err(); err != nil {
+		if errors.Is(err, os.ErrClosed) || c.closed.Load() {
+			slog.Debug("acp stderr reader stopped after close", "error", err)
+			return
+		}
 		slog.Warn("acp stderr reader failed", "error", err)
 	}
 }

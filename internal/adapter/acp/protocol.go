@@ -1,6 +1,9 @@
 package acp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
 
 const protocolVersion = 1
 
@@ -120,7 +123,7 @@ type envVar struct {
 type sessionCreateParams struct {
 	SessionID  string      `json:"sessionId,omitempty"`
 	CWD        string      `json:"cwd"`
-	MCPServers []mcpServer `json:"mcpServers,omitempty"`
+	MCPServers []mcpServer `json:"mcpServers"`
 	Agent      string      `json:"agent,omitempty"`
 	RegistryID string      `json:"registryId,omitempty"`
 }
@@ -130,10 +133,44 @@ type sessionIDParams struct {
 }
 
 type sessionResponse struct {
-	SessionID     string         `json:"sessionId,omitempty"`
-	Modes         []sessionMode  `json:"modes,omitempty"`
-	CurrentMode   string         `json:"currentMode,omitempty"`
-	ConfigOptions []configOption `json:"configOptions,omitempty"`
+	SessionID     string           `json:"sessionId,omitempty"`
+	Modes         sessionModeState `json:"modes,omitempty"`
+	CurrentMode   string           `json:"currentMode,omitempty"`
+	ConfigOptions []configOption   `json:"configOptions,omitempty"`
+}
+
+type sessionModeState struct {
+	CurrentModeID  string        `json:"currentModeId,omitempty"`
+	AvailableModes []sessionMode `json:"availableModes,omitempty"`
+}
+
+func (s *sessionModeState) UnmarshalJSON(data []byte) error {
+	for _, b := range data {
+		switch b {
+		case ' ', '\n', '\r', '\t':
+			continue
+		case 'n':
+			return nil
+		case '{':
+			type modeState sessionModeState
+			var state modeState
+			if err := json.Unmarshal(data, &state); err != nil {
+				return err
+			}
+			*s = sessionModeState(state)
+			return nil
+		case '[':
+			var modes []sessionMode
+			if err := json.Unmarshal(data, &modes); err != nil {
+				return err
+			}
+			s.AvailableModes = modes
+			return nil
+		default:
+			return errors.New("acp session modes must be object, array, or null")
+		}
+	}
+	return nil
 }
 
 type sessionMode struct {
@@ -225,6 +262,7 @@ type toolCallUpdate struct {
 	Status        string          `json:"status,omitempty"`
 	Content       json.RawMessage `json:"content,omitempty"`
 	RawInput      json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
 }
 
 type availableCommandsUpdate struct {
@@ -239,21 +277,44 @@ type availableCommand struct {
 }
 
 type requestPermissionParams struct {
-	SessionID  string             `json:"sessionId"`
-	ToolCallID string             `json:"toolCallId,omitempty"`
-	Title      string             `json:"title,omitempty"`
-	Options    []permissionOption `json:"options"`
+	SessionID string             `json:"sessionId"`
+	Options   []permissionOption `json:"options"`
 }
 
 type permissionOption struct {
-	ID          string          `json:"id"`
+	ID          string          `json:"optionId"`
 	Name        string          `json:"name,omitempty"`
 	Kind        string          `json:"kind,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Meta        json.RawMessage `json:"_meta,omitempty"`
 }
 
+func (o *permissionOption) UnmarshalJSON(data []byte) error {
+	type rawPermissionOption struct {
+		OptionID    string          `json:"optionId"`
+		LegacyID    string          `json:"id"`
+		Name        string          `json:"name,omitempty"`
+		Kind        string          `json:"kind,omitempty"`
+		Description string          `json:"description,omitempty"`
+		Meta        json.RawMessage `json:"_meta,omitempty"`
+	}
+	var raw rawPermissionOption
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id := raw.OptionID
+	if id == "" {
+		id = raw.LegacyID
+	}
+	*o = permissionOption{ID: id, Name: raw.Name, Kind: raw.Kind, Description: raw.Description, Meta: raw.Meta}
+	return nil
+}
+
 type permissionResponse struct {
+	Outcome permissionOutcome `json:"outcome"`
+}
+
+type permissionOutcome struct {
 	Outcome  string `json:"outcome"`
 	OptionID string `json:"optionId,omitempty"`
 }

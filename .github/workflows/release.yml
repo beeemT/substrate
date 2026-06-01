@@ -92,7 +92,7 @@ jobs:
           mkdir -p dist/bridge
 
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-            -ldflags="-s -w -X main.Version=${VERSION_NUM}" \
+            -ldflags="-s -w -X github.com/beeemT/substrate/internal/buildinfo.Version=${VERSION_NUM}" \
             -o "dist/substrate" \
             ./cmd/substrate
 

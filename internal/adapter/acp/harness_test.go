@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -30,6 +31,10 @@ func TestHelperACPProcess(t *testing.T) {
 		id, hasID := msg["id"]
 		switch method {
 		case "initialize":
+			if err := validateHelperInitializeParams(msg); err != nil {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32602, "message": err.Error()}})
+				continue
+			}
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": os.Getenv("ACP_AGENT_NAME"), "version": "test"}, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"resume": map[string]any{}, "close": map[string]any{}, "setConfigOption": map[string]any{}}}, "authMethods": []map[string]any{{"id": os.Getenv("ACP_AUTH_ID")}}}})
 		case "session/new":
 			if err := validateHelperSessionParams(msg); err != nil {
@@ -58,8 +63,21 @@ func TestHelperACPProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func validateHelperInitializeParams(msg map[string]any) error {
+	params, _ := msg["params"].(map[string]any)
+	clientInfo, _ := params["clientInfo"].(map[string]any)
+	version, _ := clientInfo["version"].(string)
+	if version == "" {
+		return fmt.Errorf("clientInfo.version is required")
+	}
+	return nil
+}
+
 func validateHelperSessionParams(msg map[string]any) error {
 	params, _ := msg["params"].(map[string]any)
+	if _, ok := params["mcpServers"].([]any); !ok {
+		return fmt.Errorf("mcpServers must be present as an array")
+	}
 	for _, field := range []struct{ env, key string }{{"ACP_EXPECT_AGENT", "agent"}, {"ACP_EXPECT_REGISTRY_ID", "registryId"}} {
 		want := os.Getenv(field.env)
 		if want == "" {
@@ -107,6 +125,68 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 	if err := sess.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestMapSessionUpdateToolCallRawOutput(t *testing.T) {
+	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"tc1","kind":"read","status":"completed","rawOutput":{"items":[{"Text":"User id: 502\n-rw-r--r-- file.yaml"}]}}`))
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %#v", len(events), events)
+	}
+	if events[0].Type != "tool_result" {
+		t.Fatalf("event type = %q, want tool_result", events[0].Type)
+	}
+	if events[0].Payload != "User id: 502\n-rw-r--r-- file.yaml" {
+		t.Fatalf("payload = %q", events[0].Payload)
+	}
+}
+
+func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
+	cfg := helperACPConfig(t)
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s1", Mode: adapter.SessionModeForeman, WorktreePath: t.TempDir(), SessionLogDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+}
+
+func TestResolveForemanMCPBridgeUsesConfiguredExecutable(t *testing.T) {
+	dir := t.TempDir()
+	bridgePath := filepath.Join(dir, "custom-foreman")
+	if err := os.WriteFile(bridgePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write bridge: %v", err)
+	}
+	cmd, args, err := resolveForemanMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
+	if err != nil {
+		t.Fatalf("resolveForemanMCPBridgeFrom: %v", err)
+	}
+	if cmd != bridgePath || len(args) != 0 {
+		t.Fatalf("resolved cmd=%q args=%v, want configured executable with no args", cmd, args)
+	}
+}
+
+func TestResolveForemanMCPBridgeUsesConfiguredScript(t *testing.T) {
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skipf("bun not on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	bridgePath := filepath.Join(dir, "foreman-mcp", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(bridgePath), 0o755); err != nil {
+		t.Fatalf("create bridge dir: %v", err)
+	}
+	if err := os.WriteFile(bridgePath, []byte("console.log('foreman')\n"), 0o644); err != nil {
+		t.Fatalf("write bridge script: %v", err)
+	}
+	cmd, args, err := resolveForemanMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
+	if err != nil {
+		t.Fatalf("resolveForemanMCPBridgeFrom: %v", err)
+	}
+	if cmd != bun || len(args) != 1 || args[0] != bridgePath {
+		t.Fatalf("resolved cmd=%q args=%v, want bun %q with configured script", cmd, args, bun)
 	}
 }
 
@@ -190,6 +270,31 @@ func TestTerminalRingTruncatesAtUTF8Boundary(t *testing.T) {
 	}
 	if !utf8.Valid(r.buf) {
 		t.Fatalf("buffer is not valid UTF-8: %q", string(r.buf))
+	}
+}
+
+func TestSessionResponseDecodesSpecModeState(t *testing.T) {
+	data := []byte(`{"sessionId":"acp-sess-1","modes":{"currentModeId":"code","availableModes":[{"id":"code","name":"Code","description":"write code"}]}}`)
+	var resp sessionResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("Unmarshal sessionResponse: %v", err)
+	}
+	if resp.Modes.CurrentModeID != "code" {
+		t.Fatalf("CurrentModeID = %q, want code", resp.Modes.CurrentModeID)
+	}
+	if len(resp.Modes.AvailableModes) != 1 || resp.Modes.AvailableModes[0].ID != "code" {
+		t.Fatalf("AvailableModes = %#v, want code mode", resp.Modes.AvailableModes)
+	}
+}
+
+func TestSessionResponseDecodesLegacyModeList(t *testing.T) {
+	data := []byte(`{"sessionId":"acp-sess-1","modes":[{"id":"ask","name":"Ask"}]}`)
+	var resp sessionResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("Unmarshal legacy sessionResponse: %v", err)
+	}
+	if len(resp.Modes.AvailableModes) != 1 || resp.Modes.AvailableModes[0].ID != "ask" {
+		t.Fatalf("AvailableModes = %#v, want ask mode", resp.Modes.AvailableModes)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -31,7 +32,6 @@ import (
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
 	"github.com/beeemT/substrate/internal/terminal"
-	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tuilog"
 )
 
@@ -1606,11 +1606,23 @@ func StartupIntegrationsStartCmd() tea.Cmd {
 	})
 }
 
-// StartupIntegrationsSpinnerTickCmd advances the startup integrations toast spinner.
-func StartupIntegrationsSpinnerTickCmd() tea.Cmd {
-	return tea.Tick(components.SpinnerFrameInterval(), func(time.Time) tea.Msg {
-		return StartupIntegrationsSpinnerTickMsg{}
-	})
+// StartupIntegrationsSpinnerTickCmd starts the startup integrations toast spinner.
+func StartupIntegrationsSpinnerTickCmd(model spinner.Model) tea.Cmd {
+	return wrapStartupIntegrationsSpinnerTickCmd(model.Tick)
+}
+
+func wrapStartupIntegrationsSpinnerTickCmd(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg := cmd()
+		tick, ok := msg.(spinner.TickMsg)
+		if !ok {
+			return msg
+		}
+		return StartupIntegrationsSpinnerTickMsg{Tick: tick}
+	}
 }
 
 // StartupIntegrationsCmd completes the deferred startup service graph in the background.

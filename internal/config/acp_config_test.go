@@ -17,6 +17,7 @@ adapters:
     model: model-1
     mode: agent
     thought_level: high
+    foreman_bridge_path: /tmp/foreman-mcp/index.ts
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -45,6 +46,9 @@ adapters:
 	}
 	if cfg.Adapters.ACP.Env == nil || cfg.Adapters.ACP.Env["FOO"] != "bar" {
 		t.Fatalf("ACP env = %#v, want map[FOO:bar]", cfg.Adapters.ACP.Env)
+	}
+	if cfg.Adapters.ACP.ForemanBridgePath != "/tmp/foreman-mcp/index.ts" {
+		t.Fatalf("ACP foreman_bridge_path = %q, want configured path", cfg.Adapters.ACP.ForemanBridgePath)
 	}
 	if cfg.Adapters.ACP.ClientFS == nil || !*cfg.Adapters.ACP.ClientFS || cfg.Adapters.ACP.ClientTerminal == nil || !*cfg.Adapters.ACP.ClientTerminal {
 		t.Fatalf("ACP client capabilities defaulted to off; got fs=%v terminal=%v", cfg.Adapters.ACP.ClientFS, cfg.Adapters.ACP.ClientTerminal)

@@ -223,6 +223,7 @@ adapters:
     model: ""
     mode: ""
     thought_level: ""
+    foreman_bridge_path: ""  # optional non-standard path to foreman-mcp binary or index.ts
     client_fs: true
     client_terminal: true
 ```
@@ -276,6 +277,8 @@ adapters:
     thinking_level: xhigh
     # bun_path: /opt/homebrew/bin/bun
     # bridge_path: /custom/path/to/omp-bridge
+  acp:
+    # foreman_bridge_path: /custom/path/to/foreman-mcp/index.ts
 
 foreman:
   question_timeout: "0"         # "0" = wait indefinitely

@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Session) handleNotification(method string, params json.RawMessage) {
-	if method != "session/update" {
+	if method != "session/update" && !strings.HasSuffix(method, "/session/update") {
 		s.emit(adapter.AgentEvent{Type: "tool_output", Timestamp: time.Now(), Payload: method, Metadata: map[string]any{"acp_notification": method}})
 		return
 	}
@@ -86,7 +86,13 @@ func mapSessionUpdate(raw json.RawMessage) []adapter.AgentEvent {
 		if u.Status == "completed" || u.Status == "failed" || u.Status == "cancelled" {
 			eventType = "tool_result"
 		}
-		return []adapter.AgentEvent{{Type: eventType, Timestamp: now, Payload: contentPayload(u.Content), Metadata: toolMetadata(u)}}
+		payload := contentPayload(u.Content)
+		if payload == "" {
+			payload = contentPayload(u.RawOutput)
+		}
+		return []adapter.AgentEvent{{Type: eventType, Timestamp: now, Payload: payload, Metadata: toolMetadata(u)}}
+	case "tool_call_chunk":
+		return nil
 	case "available_commands_update":
 		var u availableCommandsUpdate
 		if err := json.Unmarshal(raw, &u); err != nil {
@@ -119,22 +125,18 @@ func contentPayload(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	var items []struct {
-		Type    string      `json:"type"`
-		Content textContent `json:"content"`
-		Text    string      `json:"text"`
-	}
+	var items []contentItem
 	if err := json.Unmarshal(raw, &items); err == nil {
-		var b strings.Builder
-		for _, item := range items {
-			if item.Text != "" {
-				b.WriteString(item.Text)
-			} else if item.Content.Text != "" {
-				b.WriteString(item.Content.Text)
-			}
+		if text := joinContentItems(items); text != "" {
+			return text
 		}
-		if b.Len() > 0 {
-			return b.String()
+	}
+	var wrapped struct {
+		Items []contentItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		if text := joinContentItems(wrapped.Items); text != "" {
+			return text
 		}
 	}
 	var single textContent
@@ -159,4 +161,26 @@ func contentPayload(raw json.RawMessage) string {
 		return "…"
 	}
 	return string(raw)
+}
+
+type contentItem struct {
+	Type      string      `json:"type"`
+	Content   textContent `json:"content"`
+	Text      string      `json:"text"`
+	TextUpper string      `json:"Text"`
+}
+
+func joinContentItems(items []contentItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		switch {
+		case item.Text != "":
+			b.WriteString(item.Text)
+		case item.TextUpper != "":
+			b.WriteString(item.TextUpper)
+		case item.Content.Text != "":
+			b.WriteString(item.Content.Text)
+		}
+	}
+	return b.String()
 }

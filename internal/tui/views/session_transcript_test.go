@@ -140,6 +140,27 @@ func TestGroupEntriesOrphanedToolResultRendersAsTool(t *testing.T) {
 	}
 }
 
+func TestGroupEntriesMergesContiguousAssistantChunks(t *testing.T) {
+	t.Parallel()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindAssistant, Text: "understand"},
+		{Kind: sessionlog.KindAssistant, Text: " the actual"},
+		{Kind: sessionlog.KindAssistant, Text: " changes"},
+		{Kind: sessionlog.KindToolStart, Tool: "read"},
+		{Kind: sessionlog.KindAssistant, Text: "done"},
+	}
+	blocks := groupEntries(entries)
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d: %+v", len(blocks), blocks)
+	}
+	if blocks[0].kind != blockKindAssistant || blocks[0].text != "understand the actual changes" {
+		t.Fatalf("first block = %+v, want merged assistant text", blocks[0])
+	}
+	if blocks[2].kind != blockKindAssistant || blocks[2].text != "done" {
+		t.Fatalf("last block = %+v, want separate assistant text after tool", blocks[2])
+	}
+}
+
 func TestRenderTranscriptWidthBounded(t *testing.T) {
 	t.Parallel()
 	const width = 40
@@ -1042,7 +1063,6 @@ func TestRenderTranscriptNonForemanQuestion(t *testing.T) {
 		t.Errorf("non-foreman question should not contain 'Foreman', got: %q", plain)
 	}
 }
-
 
 func TestRenderTranscriptLifecycleStartedHasSeparator(t *testing.T) {
 	t.Parallel()

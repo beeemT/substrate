@@ -18,6 +18,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
+	"github.com/beeemT/substrate/internal/buildinfo"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -46,8 +47,6 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
-var Version = "dev"
 
 type workspaceContext struct {
 	ID   string
@@ -177,7 +176,7 @@ func handleCLIArgs(args []string) bool {
 		printUsage()
 		return true
 	case "--version", "-v", "version":
-		fmt.Println(Version)
+		fmt.Println(buildinfo.Version)
 		return true
 	default:
 		return false
@@ -639,6 +638,8 @@ func initializeGlobalConfig(cfgPath string) error {
 		"#     thinking_level: high",
 		"#     bun_path: /opt/homebrew/bin/bun",
 		"#     bridge_path: /custom/path/to/omp-bridge",
+		"#   acp:",
+		"#     foreman_bridge_path: /custom/path/to/foreman-mcp/index.ts",
 		"",
 	}, "\n")
 	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o600); err != nil {

@@ -3,6 +3,7 @@ package views
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/adapter"
@@ -598,7 +599,7 @@ type WorkspaceServicesReloadedMsg struct {
 type StartupIntegrationsStartMsg struct{}
 
 // StartupIntegrationsSpinnerTickMsg advances the startup integrations activity spinner.
-type StartupIntegrationsSpinnerTickMsg struct{}
+type StartupIntegrationsSpinnerTickMsg struct{ Tick spinner.TickMsg }
 
 // StartupIntegrationsReadyMsg is sent after deferred startup integrations finish loading.
 type StartupIntegrationsReadyMsg struct {
