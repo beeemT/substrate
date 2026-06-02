@@ -381,6 +381,28 @@ func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 	}
 }
 
+func TestAbortAfterSessionFinished(t *testing.T) {
+	cfg := helperACPConfig(t)
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-finished", WorktreePath: t.TempDir(), SessionLogDir: t.TempDir(), UserPrompt: "do work"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	collectUntilDone(t, sess)
+	// Wait for the agent process to exit so the rpc client closes via EOF.
+	// Without this, the Abort below could race against a still-running agent.
+	if err := sess.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	// Abort on a fully-finished session must be a silent no-op: the rpc
+	// client is already closed, the process is reaped, and any further
+	// cancel/close attempt would just produce a noisy "acp rpc client
+	// closed" error up the stack.
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort after finished: %v", err)
+	}
+}
+
 func TestResolveForemanMCPBridgeUsesConfiguredExecutable(t *testing.T) {
 	dir := t.TempDir()
 	bridgePath := filepath.Join(dir, "custom-foreman")

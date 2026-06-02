@@ -146,7 +146,12 @@ func (s *Session) Compact(ctx context.Context) error {
 
 func (s *Session) Abort(ctx context.Context) error {
 	var outErr error
-	if s.client != nil && s.acpSessionID != "" {
+	// Skip the cancel/close notifications when the rpc client is already
+	// closed — typically because the agent exited on its own and the stdout
+	// reader hit EOF. The cancel/close are best-effort by design; if the
+	// client is gone there's nothing to notify, and the writes only produce
+	// noisy "acp rpc client closed" errors up the stack.
+	if s.acpSessionID != "" && !s.client.Closed() {
 		if err := s.client.Notify(ctx, "session/cancel", sessionIDParams{SessionID: s.acpSessionID}); err != nil {
 			outErr = errors.Join(outErr, fmt.Errorf("cancel acp session: %w", err))
 		}
@@ -160,10 +165,8 @@ func (s *Session) Abort(ctx context.Context) error {
 		}
 	}
 	s.cleanup()
-	if s.cmd != nil && s.cmd.Process != nil {
-		if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			outErr = errors.Join(outErr, fmt.Errorf("kill acp process: %w", err))
-		}
+	if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		outErr = errors.Join(outErr, fmt.Errorf("kill acp process: %w", err))
 	}
 	s.finish(context.Canceled)
 	return outErr
@@ -388,6 +391,13 @@ func (s *Session) finish(err error) {
 		s.finished.Store(true)
 		s.doneErr = err
 		s.cleanup()
+		// Guarantee the rpc client is closed before we signal done. closeWithError
+		// is idempotent via closeOnce, so this races safely against readStdout
+		// hitting EOF first. Without this, callers that synchronize on Done()
+		// (e.g. Abort) can observe s.done closed while s.client.Closed() is
+		// still false, and the best-effort cancel/close block in Abort would
+		// race against the in-flight close and return a spurious "EOF" error.
+		s.client.closeWithError(nil)
 		close(s.events)
 		close(s.done)
 	})

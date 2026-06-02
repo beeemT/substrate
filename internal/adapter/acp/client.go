@@ -91,6 +91,11 @@ func (c *rpcClient) Err() error {
 	}
 }
 
+// Closed reports whether the rpc client has been shut down. Once true, all
+// further Notify/Call attempts fail with "acp rpc client closed". Teardown
+// paths use this to skip best-effort writes against an already-gone agent.
+func (c *rpcClient) Closed() bool { return c.closed.Load() }
+
 func (c *rpcClient) Call(ctx context.Context, method string, params any, result any) error {
 	id := c.nextID.Add(1)
 	idRaw := json.RawMessage(strconv.FormatInt(id, 10))
