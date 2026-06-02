@@ -144,11 +144,12 @@ func (r PlanRepo) AppendFAQ(ctx context.Context, entry domain.FAQEntry) error {
 	result, err := r.remote.NamedExecContext(ctx,
 		`UPDATE plans SET
 			faq = json_insert(COALESCE(NULLIF(faq, ''), '[]'), '$[#]', json(:entry)),
-			updated_at = datetime('now')
+			updated_at = :updated_at
 		WHERE id = :id`,
 		map[string]any{
-			"entry": string(entryJSON),
-			"id":    entry.PlanID,
+			"entry":      string(entryJSON),
+			"id":         entry.PlanID,
+			"updated_at": formatTime(domain.Now()),
 		})
 	if err != nil {
 		return fmt.Errorf("append faq to plan %s: %w", entry.PlanID, err)

@@ -9,18 +9,24 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 )
 
+var sqliteTimestampLayouts = [...]string{
+	domain.TimeFormat,
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05",
+}
+
 func parseTime(s string) (time.Time, error) {
-	t, err := domain.ParseTime(s)
-	if err == nil {
-		return t, nil
-	}
-	// Fall back to RFC3339Nano
-	t, err = time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse timestamp %q: %w", s, err)
+	var parseErr error
+	for _, layout := range sqliteTimestampLayouts {
+		t, err := time.Parse(layout, s)
+		if err == nil {
+			return t, nil
+		}
+		parseErr = err
 	}
 
-	return t, nil
+	return time.Time{}, fmt.Errorf("parse timestamp %q: %w", s, parseErr)
 }
 
 func parseTimePtr(s *string) (*time.Time, error) {

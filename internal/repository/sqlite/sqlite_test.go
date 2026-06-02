@@ -356,6 +356,42 @@ func TestPlanCRUD(t *testing.T) {
 	}
 }
 
+func TestPlanAppendFAQStoresCanonicalTimestamp(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+
+	entry := domain.FAQEntry{
+		ID:             domain.NewID(),
+		PlanID:         plan.ID,
+		AgentSessionID: domain.NewID(),
+		RepoName:       "test-repo",
+		Question:       "Question?",
+		Answer:         "Answer.",
+		AnsweredBy:     "foreman",
+		CreatedAt:      now(),
+	}
+	if err := reposqlite.NewPlanRepo(tx).AppendFAQ(ctx, entry); err != nil {
+		t.Fatalf("append faq: %v", err)
+	}
+
+	var stored string
+	if err := tx.GetContext(ctx, &stored, `SELECT updated_at FROM plans WHERE id = ?`, plan.ID); err != nil {
+		t.Fatalf("get updated_at: %v", err)
+	}
+	if !strings.Contains(stored, "T") || !strings.HasSuffix(stored, "Z") {
+		t.Fatalf("updated_at = %q, want RFC3339-style UTC timestamp", stored)
+	}
+
+	if _, err := reposqlite.NewPlanRepo(tx).Get(ctx, plan.ID); err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SubPlan CRUD
 // ---------------------------------------------------------------------------
@@ -396,6 +432,29 @@ func TestSubPlanCRUD(t *testing.T) {
 
 	if err := repo.Delete(ctx, sp.ID); err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestSubPlanGetParsesSQLiteCurrentTimestampFormat(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+
+	if _, err := tx.ExecContext(ctx, `UPDATE sub_plans SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, sp.ID); err != nil {
+		t.Fatalf("set sqlite timestamp: %v", err)
+	}
+
+	got, err := reposqlite.NewSubPlanRepo(tx).Get(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("get sub-plan: %v", err)
+	}
+	if got.UpdatedAt.IsZero() {
+		t.Fatal("updated_at parsed as zero time")
 	}
 }
 
