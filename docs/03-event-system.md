@@ -80,6 +80,8 @@ Events are organized by domain area. Constants follow a `category.action` naming
 - `critique.status_changed` — individual critique status changed
 - `reimplementation.started`
 
+**Review cycle statuses:** `reviewing` → `passed` | `critiques_found` | `failed`. Once in a terminal status, the cycle is immutable — the transition table rejects any attempt to re-enter it. This prevents a crashed harness (e.g. SIGKILL between `CreateCycle` and `makeDecision`) from leaving a stale non-terminal cycle that masks outstanding critiques on prior cycles. Cycle counting for the max-cycles budget counts only terminal-status cycles; non-terminal cycles left by crashes do not consume the budget.
+
 ### PR/MR
 
 - `pr.review_state_changed` — reviewer state transition detected by refresh loop

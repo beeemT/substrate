@@ -139,6 +139,27 @@ Notes:
 - `Phase` discriminates the session kind: `planning`, `implementation`, `review`, or `manual`.
 - A `PlanID` links planning sessions to the plan they produced, enabling plan inspection from the task sidebar.
 - Follow-up restarts (manual retry or review-driven reimplementation) create new `Task` rows; the prior row is retained for audit.
+- `ParentAgentSessionID` links a task to its predecessor in the agent-session graph (parent → child direction). It is populated for retries, resumes, reviews of implementations, reimplementations after critique, and follow-ups. It is empty for the first task in a chain. A **leaf** is any task with no children (no other task points to it as its parent). See "Agent-Session Graph" below.
+
+### Agent-Session Graph
+
+Tasks form a directed graph via `ParentAgentSessionID`. The child row stores its parent's ID.
+
+The graph captures all lifecycle edges within a sub-plan:
+
+| Scenario | Parent |
+|---|---|
+| Initial implementation | empty |
+| Review created for implementation | implementation task ID |
+| Reimplementation from review critique | review task ID |
+| Review created for reimplementation | reimplementation task ID |
+| Retry failed implementation/review | failed task ID |
+| Resume interrupted implementation/review | interrupted task ID |
+| Follow-up of failed/completed task | original task ID |
+
+A **leaf** is any task that has no children. Work-item status labels (`HasInterrupted`, `HasOpenQuestion`, etc.) are derived from leaf tasks only — a historical interrupted task that has a running child is not surfaced to the user. Manual tasks (`phase = manual`) are excluded from the graph; they are user-driven side conversations that must not influence work-item-level status.
+
+**Legacy fallback:** tasks with no graph edges (pre-migration rows) fall back to the newest-by-created-at heuristic per `(kind, sub_plan_id, repository_name)` group. As soon as any task in a group participates in a graph edge, the graph becomes authoritative and all leaves in the group are kept verbatim.
 
 ### Question
 

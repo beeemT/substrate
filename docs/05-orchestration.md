@@ -61,7 +61,7 @@ Triggered by plan approval.
 
 **3a. Build execution waves.** Sub-plans group by execution order; completed sub-plans are excluded. Sub-plans with equal order run in parallel (same wave); later orders form later waves that start only after the previous wave reaches a terminal status.
 
-**3b. Per-sub-plan lifecycle.** Before wave execution, any failed sub-plans reset to pending, enabling retry without manual intervention. For each ready sub-plan: derive a shared branch name from the work item, create or reuse the feature worktree, emit worktree creating/created events, start an implementation harness session, stream events to orchestration state and the UI. On success, enter the per-repo review loop — the sub-plan reaches completed only after review passes. On failure, emit AgentSessionFailed and pause/escalate per policy. On review escalation, mark the sub-plan failed (not escalated) so the work item reaches the correct terminal state.
+**3b. Per-sub-plan lifecycle.** Before wave execution, any failed sub-plans reset to pending, enabling retry without manual intervention. For each ready sub-plan: derive a shared branch name from the work item, create or reuse the feature worktree, emit worktree creating/created events, start an implementation harness session, stream events to orchestration state and the UI. On success, enter the per-repo review loop — the sub-plan reaches completed only after review passes. On failure, emit AgentSessionFailed and pause/escalate per policy. On review escalation, mark the sub-plan failed (not escalated) so the work item reaches the correct terminal state. The implementation task's `ParentAgentSessionID` is set to the ID of the most recent task for this sub-plan (empty for the first implementation; set to the failed or review task ID for retries and reimplementations respectively).
 
 **3c. Session deletion.** When a session or work item is deleted: cancel the pipeline context (cascading through wave execution, sub-plan execution, and harness abort), stop the Foreman if running, abort remaining running sessions via the registry (covers resumed and follow-up sessions using fire-and-forget goroutines), delete the session and work item from the database. Abort is idempotent.
 
@@ -95,7 +95,7 @@ The Foreman handles unresolved questions during implementation. It is a persiste
 
 The orchestrator owns the full per-repo lifecycle: implement → review → reimplement → re-review → ... → pass/escalate/fail. The UI observes state via events and only intervenes on escalation or override. The work item stays in implementing throughout; automated review runs within that state.
 
-**Review session.** A review harness session starts in the same repository worktree with read-only review-oriented behavior. It explores the worktree relative to main and evaluates against the repo sub-plan, cross-repo orchestration notes, and accumulated FAQ. The orchestrator does not provide a precomputed diff as canonical truth. Unparseable review output treats as no critiques rather than triggering a correction loop.
+**Review session.** A review harness session starts in the same repository worktree with read-only review-oriented behavior. It explores the worktree relative to main and evaluates against the repo sub-plan, cross-repo orchestration notes, and accumulated FAQ. The orchestrator does not provide a precomputed diff as canonical truth. Unparseable review output treats as no critiques rather than triggering a correction loop. The review task's `ParentAgentSessionID` is set to the implementation task's ID.
 
 **Structured output.** Review output must be exactly `NO_CRITIQUES` or one or more structured critique blocks. Unparseable output triggers a correction message to the same session, retrying up to the configured maximum.
 
@@ -103,7 +103,13 @@ The orchestrator owns the full per-repo lifecycle: implement → review → reim
 
 **Decision logic.** Pass immediately if critiques absent or below pass threshold. Start re-implementation if any critique meets or exceeds blocking severity. Escalate to human when cycle count exceeds maximum.
 
-**Re-implementation.** Creates a fresh task row. The session receives the original sub-plan, cross-repo context, and critique feedback as a follow-up message so the model retains full history. When prior session exposes resume data, the new session resumes from it. When no resume data exists, starts fresh with critiques appended to system prompt.
+**Re-implementation.** Creates a fresh task row with `ParentAgentSessionID` set to the review task's ID. The session receives the original sub-plan, cross-repo context, and critique feedback as a follow-up message so the model retains full history. When prior session exposes resume data, the new session resumes from it. When no resume data exists, starts fresh with critiques appended to system prompt.
+
+**Orientation on resume without critique.** When re-implementation resumes a prior session with resume data and the compaction path is taken, the orchestrator sends an explicit continuation message after compacting — either the critique feedback (auto-reimpl path) or a generic orientation message (bulk retry, review-crash recovery, escalation reset). Without this, the SDK bridge sits idle with no user turn to drive the agent loop, leaving the session stranded until the session timeout fires.
+
+**Crash-recovery: skip re-impl when impl is already complete.** If the most recent agent session for a sub-plan is a completed implementation (e.g. an interrupted bulk-retry from an earlier attempt) and that impl has no outstanding critique and no passed review, the orchestrator skips re-implementation and runs review directly against the existing impl. This handles the case where a prior review crashed or never ran: the impl is already done, so retrying it is wasteful and would resume with an empty critique, triggering the idle bridge hang. A second crash-recovery branch also fires when the most recent session is a *review* that crashed — it retries review directly against the latest completed impl.
+
+**Cycle counting filters to terminal statuses.** Review cycle counting for the max-cycles budget counts only cycles in `passed`, `critiques_found`, or `failed`. Non-terminal cycles (`reviewing`, `reimplementing`) left behind by harness crashes (e.g. SIGKILL between `CreateCycle` and `makeDecision`) do not consume the budget. This prevents premature escalation when a review process dies before reaching a decision.
 
 **Review configuration:**
 - **Pass threshold** — critiques at or below this severity pass without re-implementation
@@ -127,7 +133,7 @@ The `reviewing` state means human attention needed due to escalation, not that a
 
 **Startup reconciliation.** On startup and workspace reload: resolve current workspace from marker file, reconcile moved paths against persisted identity, reconcile orphaned tasks, inspect instance heartbeats and interrupt tasks owned by absent or stale instances, surface interrupted sessions to the UI.
 
-**Resume.** Keep old session as audit history, assign ownership to current instance, start new session in same worktree, pass original sub-plan plus session log tail as resume context, instruct harness to inspect partial changes, emit session resumed event.
+**Resume.** Keep old session as audit history, assign ownership to current instance, start new session in same worktree, pass original sub-plan plus session log tail as resume context, instruct harness to inspect partial changes, emit session resumed event. The new task's `ParentAgentSessionID` is set to the interrupted task's ID so the agent-session graph records the lifecycle edge.
 
 **Abandon.** Mark session failed; leave recovery choices to operator (manual fix, reset, or worktree removal).
 
@@ -137,9 +143,9 @@ The `reviewing` state means human attention needed due to escalation, not that a
 
 **Session logs.** Per-agent-session durable output streams for: live observation and tailing across instances; review and output extraction; resume context (log tail into replacement run); audit history behind work-item-centric session browser; rotated storage for long-running sessions.
 
-**Follow-up on completed sessions.** Validate completed state, create new task row (completed task preserved as audit), build follow-up prompt from sub-plan, session log tail, and operator feedback, start harness session with native resume, register for steering.
+**Follow-up on completed sessions.** Validate completed state, create new task row (completed task preserved as audit), build follow-up prompt from sub-plan, session log tail, and operator feedback, start harness session with native resume, register for steering. The new task's `ParentAgentSessionID` is set to the original completed task's ID.
 
-**Follow-up on failed sessions.** Same pattern but targets failed tasks. Creates new task row, optionally resumes harness, sends feedback as follow-up message, transitions work item back to implementing with sub-plan reset to pending.
+**Follow-up on failed sessions.** Same pattern but targets failed tasks. Creates new task row with `ParentAgentSessionID` set to the failed task's ID, optionally resumes harness, sends feedback as follow-up message, transitions work item back to implementing with sub-plan reset to pending.
 
 ---
 

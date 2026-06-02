@@ -38,21 +38,46 @@ Press `→` to drill into `{externalID} · Tasks`: work-item overview, optional 
 
 **Filters/sort:** `Ctrl+F` cycles filter (All, Active, Needs Attention, Completed); `Ctrl+G` cycles grouping (flat, by status, by source); `Ctrl+D` toggles sort. Active filter/direction shown below title.
 
-### 1c. Content Panel
+### 1c. Leaf-Based Status Derivation
+
+Work-item status labels (sidebar subtitle, status icon, `HasInterrupted`, `HasOpenQuestion`) are derived from the **leaf tasks** of the agent-session graph rather than scanning the full session history. A leaf is any task with no children (no other task points to it via `ParentAgentSessionID`).
+
+Manual tasks (`phase = manual`) are excluded from the graph and do not influence status labels.
+
+**Per-sub-plan leaf projection:**
+
+| Leaf status | Label |
+|---|---|
+| `waiting_for_answer` | Waiting for answer |
+| `pending` / `running` | (active — no special label) |
+| `interrupted` | Interrupted |
+| `failed` | Failed |
+| `completed` | Completed |
+
+**Work-item display priority:**
+1. Any leaf `waiting_for_answer` with an open question → `Waiting for answer`
+2. Else any leaf `interrupted` → `Interrupted`
+3. Else derive from work-item state (`Implementing`, `Under review`, etc.)
+
+A historical `interrupted` or `failed` task that has been replaced by a child task (retry, follow-up, reimplementation) does not affect labels.
+
+**Legacy fallback:** pre-migration tasks with no graph edges are grouped by `(kind, sub_plan_id, repository_name)`; the newest by `created_at` is treated as the leaf. As soon as any task in a group participates in a graph edge, the graph is authoritative for that group.
+
+### 1d. Content Panel
 
 | Selection / state | Mode |
-|-------------------|------|
-| nothing selected | Empty |
-| work item selected | Overview |
-| `Source details` row | Source Details |
-| planning child session selected | Planning |
-| task-session row or historical result | Session Interaction |
+||-------------------|
+|| nothing selected | Empty |
+|| work item selected | Overview |
+|| `Source details` row | Source Details |
+|| planning child session selected | Planning |
+|| task-session row or historical result | Session Interaction |
 
 ---
 
 ## 2. Content Panel Modes
 
-### 2a. Planning Mode
+### 2e. Planning Mode
 
 Live session log tailing as the planning agent runs.
 
@@ -67,7 +92,7 @@ Live session log tailing as the planning agent runs.
 
 **Keys:** `↑`/`↓` scroll, `p` pause/unpause.
 
-### 2b. Plan Review Mode
+### 2f. Plan Review Mode
 
 Full reconstructed plan in a scrollable viewport: YAML block, orchestrator section, and all repo sub-plans.
 
@@ -90,7 +115,7 @@ Full reconstructed plan in a scrollable viewport: YAML block, orchestrator secti
 
 **Keys:** `↑`/`↓` scroll, `a` approve, `c` copy, `e` edit, `i` request changes / inspect.
 
-### 2c. Session Interaction Mode
+### 2g. Session Interaction Mode
 
 Live task log tailing (from tasks sidebar) or historical transcript/summary (from session-history search). Header shows task status, harness, and session ID.
 
@@ -107,7 +132,7 @@ Live task log tailing (from tasks sidebar) or historical transcript/summary (fro
 
 **Keys:** `↑`/`↓` scroll, `p` steer/follow up (context-dependent), `Esc` cancel/navigate back.
 
-### 2d. Overview Mode
+### 2h. Overview Mode
 
 Canonical root-session control surface. Shown when a work item is selected in sessions sidebar or `Overview` row in tasks sidebar.
 
@@ -126,7 +151,7 @@ Canonical root-session control surface. Shown when a work item is selected in se
 
 **Keys:** `↑`/`↓` scroll, action card keys, `Enter` open overlays, `f` follow-up re-plan (completed), `o` review artifacts / override accept (under review).
 
-### 2e. Transcript Rendering
+### 2i. Transcript Rendering
 
 Groups session log entries into: assistant prose (markdown), thinking (muted, collapsed to single-line preview), prompt/feedback/answer (labeled callout), tool execution (grouped cards with state chrome), lifecycle events (muted status), question/Foreman (warning callout).
 
@@ -136,7 +161,7 @@ Groups session log entries into: assistant prose (markdown), thinking (muted, co
 
 **Keys:** `↑`/`↓` scroll, `o` toggle verbose.
 
-### 2f. Artifacts Mode
+### 2j. Artifacts Mode
 
 PR/MR accordion from the `Artifacts` row in tasks sidebar. Single artifact renders directly.
 
@@ -160,7 +185,7 @@ Expanded:
 
 **Keys:** `↑`/`↓` move; `→`/`Space` expand; `Space` collapse; `←` return to sidebar; `o` open PR in browser; `O` open links dialog; `f` review-comment follow-up (completed or under review).
 
-### 2g. SessionMerged Handling
+### 2k. SessionMerged Handling
 
 Sidebar shows `✓` with `merged` badge. Follow-up re-plan keybind is hidden. `i` (inspect) remains available.
 
