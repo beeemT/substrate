@@ -6,6 +6,17 @@ Two remaining edge cases from the code review of the `agent_end` watchdog (Tier 
 
 ## A — `stopReason: "length"` should compact + continue
 
+### Review result
+
+**Needs revision before implementation.** The retry-loop direction is right, but the proposed `session.compact()` call must reuse the existing redundant-compaction pre-check from the manual compact path. Current bridge code documents that `session.compact()` can preemptively disconnect/abort the agent before discovering a redundant compact; after that, a follow-up prompt may fail even when the error is a benign `Already compacted` skip. Treating the thrown message as benign is therefore too late.
+
+Required implementation shape:
+
+1. Before calling `session.compact()`, check `isCompactionRedundant(session.sessionManager.getBranch())`.
+2. If redundant, emit the length-continuation lifecycle event with a skip message and continue without calling the SDK compact method.
+3. If not redundant, call `session.compact()` best-effort and log non-benign failures, then continue anyway.
+4. Add a test that proves the continuation path does **not** call `compact()` when the branch already ends in `compaction`.
+
 ### Problem
 
 When the model hits `max_tokens`, the SDK emits `agent_end` with `stopReason: "length"` and exits the agent loop. The bridge currently treats this as non-terminal (watchdog doesn't fire) and `session.prompt()` resolves normally — so the bridge exits with `lifecycle.completed`.
@@ -32,11 +43,20 @@ while (true) {
     lengthContinuations++;
     emit({ type: "lifecycle", stage: "length_continuation",
            message: `Model hit token limit; compacting and continuing (${lengthContinuations}/${MAX_LENGTH_CONTINUATIONS})` });
-    try { await session.compact(); }
-    catch (err) {
-      if (!isBenignCompactSkip(err instanceof Error ? err.message : String(err))) {
-        emit({ type: "lifecycle", stage: "length_continuation_compact_failed",
-               message: String(err) });
+    if (isCompactionRedundant(session.sessionManager.getBranch())) {
+      emit({ type: "lifecycle", stage: "length_continuation_compact_skipped",
+             message: "Already compacted — skipping" });
+    } else {
+      try { await session.compact(); }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isBenignCompactSkip(message)) {
+          emit({ type: "lifecycle", stage: "length_continuation_compact_skipped",
+                 message });
+        } else {
+          emit({ type: "lifecycle", stage: "length_continuation_compact_failed",
+                 message });
+        }
       }
     }
     resetAgentEndWatchdog(watchdogState);
@@ -51,13 +71,19 @@ while (true) {
 ### Design decisions
 
 - **Foreman mode excluded** — foreman is single-turn Q&A; length there means the answer didn't fit, which the orchestrator handles by escalating.
-- **Compact is best-effort** — `Already compacted` and similar benign skips are tolerated via the existing `isBenignCompactSkip` helper. A real compact failure logs but doesn't block the continuation attempt.
+- **Compact is best-effort, but must be pre-checked** — `Already compacted` and similar benign skips are tolerated via `isBenignCompactSkip`, but the implementation must first use `isCompactionRedundant(session.sessionManager.getBranch())` and skip `session.compact()` entirely when redundant. The existing manual compact path has this guard because `session.compact()` can disconnect/abort the agent before discovering the no-op.
 - **3 retries** — matches the SDK's default `retry.maxRetries`. After 3 length stops, the model is likely genuinely stuck and a fresh session (via orchestrator review → reimpl) is more productive than a 4th continuation with the same context.
-- **Tests**: single length → continue → stop; three lengths in a row → falls through to exit; length with compact-failure → still continues.
+- **Tests**: single length → continue → stop; three lengths in a row → falls through to exit; length with non-benign compact failure → still continues; redundant branch ending in `compaction` → skips `session.compact()` and still continues.
 
 ---
 
 ## B — TTSR (Time-Travel Stream Rules) false-positive risk
+
+### Review result
+
+**Needs small state-shape revision before implementation.** The proposed state-machine direction matches current SDK behavior: TTSR sets `#ttsrAbortPending`, calls `agent.abort()`, fire-and-forget emits `ttsr_triggered`, and schedules a tracked post-prompt task with `delayMs: 50` that calls `agent.continue()`. Because `session.prompt()` waits for post-prompt recovery, the bridge watchdog should gate itself while that recovery is in flight.
+
+However, do not overload the existing `postTurnWorkInFlight` boolean for both retry/compaction and TTSR. The proposed snippet still clears that boolean on `auto_retry_end` / `auto_compaction_end`; if either event is emitted during a TTSR cycle, the watchdog can become armed before the final non-aborted `agent_end`. Add a separate `ttsrContinuationInFlight` (or equivalent) flag and make `shouldFireAgentEndWatchdog` gate on both flags. Only a non-aborted `agent_end` should clear the TTSR flag.
 
 ### Problem
 
@@ -75,7 +101,7 @@ The ordering between steps 2 and 3 is non-deterministic — both are async. We c
 
 ### Proposed solution
 
-Add `ttsr_triggered` as a third "post-turn work in flight" trigger. Additionally, only clear `postTurnWorkInFlight` on non-aborted `agent_end` events (since an aborted `agent_end` during TTSR has a continuation coming):
+Add `ttsr_triggered` as a separate continuation-in-flight trigger. Keep retry/compaction tracking independent so their end events cannot accidentally clear a TTSR continuation:
 
 ```ts
 // In updateAgentEndWatchdog:
@@ -90,18 +116,13 @@ if (e.type === "agent_end") {
     state.agentEndTerminalAt = null;
   }
 
-  // Clear post-turn work flag on any non-aborted agent_end. An aborted
-  // agent_end may be a mid-TTSR-cycle interrupt with a continuation imminent
-  // — keep the flag set so the watchdog stays gated until the retry's
-  // agent_end arrives.
+  // A non-aborted agent_end is the only explicit TTSR completion signal.
   if (last?.stopReason !== "aborted") {
-    state.postTurnWorkInFlight = false;
+    state.ttsrContinuationInFlight = false;
   }
 }
 
-if (e.type === "auto_retry_start"
- || e.type === "auto_compaction_start"
- || e.type === "ttsr_triggered") {          // ← NEW
+if (e.type === "auto_retry_start" || e.type === "auto_compaction_start") {
   state.postTurnWorkInFlight = true;
   state.agentEndTerminalAt = null;
 }
@@ -109,29 +130,37 @@ if (e.type === "auto_retry_start"
 if (e.type === "auto_retry_end" || e.type === "auto_compaction_end") {
   state.postTurnWorkInFlight = false;
 }
+
+if (e.type === "ttsr_triggered") {
+  state.ttsrContinuationInFlight = true;
+  state.agentEndTerminalAt = null;
+}
+
+// shouldFireAgentEndWatchdog must return false while either
+// postTurnWorkInFlight or ttsrContinuationInFlight is true.
 ```
 
 ### Trace verification
 
 **Order A: `ttsr_triggered` arrives first**
 
-| # | Event | `agentEndTerminalAt` | `postTurnWorkInFlight` | Watchdog fires? |
+| # | Event | `agentEndTerminalAt` | `ttsrContinuationInFlight` | Watchdog fires? |
 |---|---|---|---|---|
 | 1 | `ttsr_triggered` | null | **true** | No |
-| 2 | `agent_end (aborted)` | now | true (aborted doesn't clear) | No — `inFlight` gates it |
+| 2 | `agent_end (aborted)` | now | true (aborted doesn't clear) | No — TTSR gate blocks it |
 | 3 | TTSR retry runs (50ms+) | — | — | — |
 | 4 | `agent_end (stop)` | now | **false** (non-aborted clears) | After 2s grace ✓ |
 
 **Order B: `agent_end (aborted)` arrives first**
 
-| # | Event | `agentEndTerminalAt` | `postTurnWorkInFlight` | Watchdog fires? |
+| # | Event | `agentEndTerminalAt` | `ttsrContinuationInFlight` | Watchdog fires? |
 |---|---|---|---|---|
-| 1 | `agent_end (aborted)` | now | false (was already false) | Potentially — but within 50ms… |
-| 2 | `ttsr_triggered` (within 50ms) | **null** | **true** | No — both fields cancel |
+| 1 | `agent_end (aborted)` | now | false (was already false) | Potentially — but within grace… |
+| 2 | `ttsr_triggered` (within grace) | **null** | **true** | No — both fields cancel |
 | 3 | TTSR retry runs | — | — | — |
 | 4 | `agent_end (stop)` | now | **false** | After 2s grace ✓ |
 
-In order B, there's a brief window (~50ms between steps 1 and 2) where `terminalAt` is set and `inFlight` is false. The 2 s grace period is much larger than 50ms, so the watchdog cannot fire in this window. Safe.
+In order B, there's a brief window between steps 1 and 2 where `terminalAt` is set and the TTSR gate is false. The watchdog grace period is much larger than the SDK's scheduled `delayMs: 50`, so the watchdog cannot fire in this window. Safe.
 
 **User abort (no TTSR)**:
 
@@ -144,7 +173,7 @@ Unchanged — `auto_retry_start` sets `inFlight=true`, `auto_retry_end` clears i
 
 ### Remaining question
 
-TTSR has no explicit "end" event. We rely on the next non-aborted `agent_end` to clear `postTurnWorkInFlight`. If the TTSR retry itself is also aborted (cascading TTSR matches), `inFlight` stays true through multiple cycles until a non-aborted `agent_end` arrives. This is correct — the work genuinely isn't done yet. On the pathological case where the model infinite-loops on TTSR aborts, `session.prompt()` would still eventually reject or resolve (the SDK's own safeguards cap TTSR retries), and the catch/resolve branch handles that.
+TTSR has no explicit "end" event. We rely on the next non-aborted `agent_end` to clear `ttsrContinuationInFlight`. If the TTSR retry itself is also aborted (cascading TTSR matches), the TTSR gate stays true through multiple cycles until a non-aborted `agent_end` arrives. This is correct — the work genuinely isn't done yet. On the pathological case where the model infinite-loops on TTSR aborts, `session.prompt()` should still eventually reject or resolve via the SDK's own safeguards, and the catch/resolve branch handles that.
 
 ### Tests to add
 
@@ -153,6 +182,7 @@ TTSR has no explicit "end" event. We rely on the next non-aborted `agent_end` to
 - `ttsr_triggered` with two cascading aborted cycles → only fires on final `agent_end (stop)`
 - Standard retry/compaction cycles still work (regression)
 - Aborted `agent_end` without preceding `ttsr_triggered` → terminal timestamp set, `inFlight` unchanged
+- `ttsr_triggered` → `agent_end (aborted)` → `auto_retry_end` / `auto_compaction_end` must keep `ttsrContinuationInFlight=true`; only the final non-aborted `agent_end` clears it
 
 ---
 
@@ -178,5 +208,5 @@ Already applied. Tests pass. No behavioral change — purely suppresses a cosmet
 | Item | Status |
 |---|---|
 | C — unhandled rejection | **Shipped** |
-| B — TTSR state machine | Proposed above; pending review |
-| A — length → compact + continue | Proposed above; pending review |
+| B — TTSR state machine | **Reviewed: revise with separate TTSR in-flight flag** |
+| A — length → compact + continue | **Reviewed: revise compact pre-check before implementation** |
